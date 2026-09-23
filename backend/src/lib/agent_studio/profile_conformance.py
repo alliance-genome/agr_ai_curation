@@ -12,6 +12,12 @@ import math
 import re
 from typing import Any
 
+from src.lib.domain_packs.resolvable_values import (
+    CONTRACT_KEYS, LOOKUP_OUTCOME_KEY, LOOKUP_OUTCOMES, MENTION_KEY, RESOLUTION_STATE_KEY,
+    RESOLUTION_STATES, VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY,
+    OVERRULED_KEY_PREFIX, ResolvableSpec, ResolvableValueError, apply_curator_identity,
+    check_resolvable_value, has_resolution_state, overruled_key, unresolved_value,
+)
 from src.lib.openai_agents.config import (
     get_generic_profile_max_issues,
     get_generic_profile_max_record_bytes,
@@ -19,9 +25,114 @@ from src.lib.openai_agents.config import (
 )
 from src.schemas.agent_execution_revision import GenericProfilePin
 from src.schemas.generic_extraction_profile import (
-    GenericProfileContract, ObjectValueSchema, ProfileField, ValueSchema,
+    ArrayValueSchema, GenericProfileContract, ObjectValueSchema, ProfileField, ValueSchema,
     canonical_json,
 )
+
+
+# Resolution keys a validator writes into a resolvable value; never the extractor.
+RESOLUTION_KEYS = tuple(key for key in CONTRACT_KEYS if key != MENTION_KEY)
+_VOCABULARIES = {RESOLUTION_STATE_KEY: RESOLUTION_STATES, LOOKUP_OUTCOME_KEY: LOOKUP_OUTCOMES}
+
+
+def declared_value_path(path: str) -> str:
+    """A concrete attributes path with its array indexes as ``[]`` (e.g. ``attributes.genes[]``)."""
+    return re.sub(r"\[[0-9]+\]", "[]", path)
+
+
+def _mapped_paths(contract: GenericProfileContract) -> tuple[dict[str, list[str]], set[str]]:
+    """({destination: [output slot names]}, {field paths mappings read}), in declared ``[]`` notation."""
+    destinations: dict[str, list[str]] = {}
+    reads: set[str] = set()
+    for mapping in contract.validator_mappings:
+        for slot, destination in mapping.outputs.items():
+            destinations.setdefault(destination, []).append(slot)
+        reads.update(item.field_path for item in mapping.inputs.values()
+                     if item.source == "field" and item.field_path)
+    return destinations, reads
+
+
+def validator_owned_paths(contract: GenericProfileContract) -> set[str]:
+    """Mapped destinations the extractor never writes: validation fills them in.
+
+    A destination a mapping also reads stays the extractor's to write, so
+    saved profiles keep their validator input.
+    """
+    destinations, reads = _mapped_paths(contract)
+    return {destination for destination in destinations if destination not in reads}
+
+
+def resolvable_objects(contract: GenericProfileContract) -> dict[str, tuple[str, ...]]:
+    """The profile's resolvable values: {declared object path: identity keys}.
+
+    An object is resolvable when it declares a string ``mention`` field (the
+    paper wording) and validator mappings write into it without reading what
+    they write; the keys they write are its identity (ALL-1283). Other mapped
+    destinations stay plain.
+    """
+    destinations, reads = _mapped_paths(contract)
+    objects: dict[str, list[str]] = {}
+    shared: set[str] = set()
+    for destination in destinations:
+        parent, _, key = destination.rpartition(".")
+        schema = _declared_schema(contract.fields, parent)
+        if not isinstance(schema, ObjectValueSchema):
+            continue
+        mention = next((field for field in schema.fields if field.key == MENTION_KEY), None)
+        if mention is None or mention.value_schema.kind != "string":
+            continue
+        if destination in reads or key == MENTION_KEY:
+            shared.add(parent)
+        keys = objects.setdefault(parent, [])
+        if key not in keys:
+            keys.append(key)
+    return {path: tuple(keys) for path, keys in objects.items() if path not in shared}
+
+
+_IDENTIFIER_SLOTS = frozenset({"curie", "identifier", "id"})
+_IDENTIFIER_NAME = re.compile(r"(?:^|_)(?:id|curie|identifier)$")
+
+
+def resolvable_specs(contract: GenericProfileContract) -> dict[str, ResolvableSpec]:
+    """Each resolvable value's display roles: its identifier key and its label key.
+
+    The identifier is the identity key written by an output slot named exactly
+    ``curie``, ``identifier`` or ``id``; failing that, the key whose name or
+    writing slot names an identifier (``..._id``). The label is the first
+    other identity key.
+    """
+    destinations, _ = _mapped_paths(contract)
+    specs: dict[str, ResolvableSpec] = {}
+    for path, identity in resolvable_objects(contract).items():
+        def slots(key: str) -> list[str]:
+            return destinations.get(f"{path}.{key}", [])
+        id_key = next((key for key in identity if _IDENTIFIER_SLOTS.intersection(slots(key))), None)
+        if id_key is None:
+            id_key = next((key for key in identity
+                           if any(_IDENTIFIER_NAME.search(name) for name in [key, *slots(key)])), None)
+        label_key = next((key for key in identity if key != id_key), None)
+        specs[path] = ResolvableSpec(id_key=id_key, label_key=label_key)
+    return specs
+
+
+def _declared_schema(fields: list[ProfileField], path: str) -> ValueSchema | None:
+    """The value schema at a declared ``attributes...`` path (``[]`` steps into array items)."""
+    if not path.startswith("attributes."):
+        return None
+    schema: ValueSchema = ObjectValueSchema(kind="object", fields=fields)
+    for part in path.split(".")[1:]:
+        key = part.removesuffix("[]")
+        if not isinstance(schema, ObjectValueSchema):
+            return None
+        field = next((field for field in schema.fields if field.key == key), None)
+        if field is None:
+            return None
+        schema = field.value_schema
+        if part.endswith("[]"):
+            if not isinstance(schema, ArrayValueSchema):
+                return None
+            schema = schema.items
+    return schema
 
 
 class ProfileIdentityError(ValueError):
@@ -84,6 +195,47 @@ class ResolvedGenericProfile:
         # Consumers receive copies, so editing a draft cannot mutate a bound run.
         return GenericProfileContract.model_validate_json(self._contract_json)
 
+    def resolvable_objects(self) -> dict[str, tuple[str, ...]]:
+        return resolvable_objects(self.contract)
+
+    def resolvable_specs(self) -> dict[str, ResolvableSpec]:
+        return resolvable_specs(self.contract)
+
+    def validator_owned_paths(self) -> set[str]:
+        return validator_owned_paths(self.contract)
+
+    def _extractor_shape(self) -> "_ExtractorShape":
+        return _ExtractorShape(self.resolvable_objects(), self.validator_owned_paths())
+
+    def resolvable_container(self, destination: str) -> tuple[str, str] | None:
+        """(concrete container path, identity key) when a mapped destination sits in a resolvable value."""
+        parent, _, key = destination.rpartition(".")
+        identity = self.resolvable_objects().get(declared_value_path(parent))
+        return (parent, key) if identity is not None and key in identity else None
+
+    def unresolved_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
+        """Stage each resolvable value's paper wording as unresolved and not yet validated.
+
+        Values that already carry a resolution state are kept as they are.
+        """
+        resolvable = self.resolvable_objects()
+
+        def expand(value: Any, path: str) -> Any:
+            if isinstance(value, list):
+                return [expand(item, f"{path}[]") for item in value]
+            if not isinstance(value, dict):
+                return value
+            expanded = {key: expand(item, f"{path}.{key}") for key, item in value.items()}
+            identity = resolvable.get(path)
+            if identity is None or has_resolution_state(expanded):
+                return expanded
+            mention = expanded.pop(MENTION_KEY, None)
+            if not isinstance(mention, str) or not mention.strip():
+                return value
+            return unresolved_value(mention, identity_keys=identity, **expanded)
+
+        return expand(deepcopy(attributes), "attributes")
+
     def require_receipt(self, receipt: dict[str, Any]) -> None:
         try:
             supplied = GenericProfilePin.model_validate(receipt).model_dump(mode="json")
@@ -93,15 +245,20 @@ class ResolvedGenericProfile:
             raise ProfileIdentityError("Profile receipt does not match the bound revision")
 
     def attributes_schema(self) -> dict[str, Any]:
-        """Canonical fields only; aliases are recognition prose, never properties."""
-        return _object_schema(self.contract.fields)
+        """Canonical fields only; aliases are recognition prose, never properties.
+
+        A resolvable value takes only what the extractor writes: its paper
+        wording and its other declared fields, never its identity or state.
+        """
+        return _object_schema(self.contract.fields, "attributes", self._extractor_shape())
 
     def patch_schema(self) -> dict[str, Any]:
         """Typed canonical paths, including array index and subtree replacements."""
         variants = []
+        shape = self._extractor_shape()
 
-        def add(path_pattern: str, schema: ValueSchema, nullable: bool = False) -> None:
-            value = _value_schema(schema)
+        def add(path_pattern: str, declared: str, schema: ValueSchema, nullable: bool = False) -> None:
+            value = _value_schema(schema, declared, shape)
             if nullable:
                 value = {"anyOf": [value, {"type": "null"}]}
             variants.append({"type": "object", "additionalProperties": False,
@@ -110,12 +267,13 @@ class ResolvedGenericProfile:
                                  "value": value,
                              }})
             if schema.kind == "object":
-                for field in schema.fields:
-                    add(path_pattern + r"\." + re.escape(field.key), field.value_schema, field.nullable)
+                for field in shape.fields(schema.fields, declared):
+                    add(path_pattern + r"\." + re.escape(field.key), declared + "." + field.key,
+                        field.value_schema, field.nullable)
             elif schema.kind == "array":
-                add(path_pattern + r"\[(?:0|[1-9][0-9]*)\]", schema.items)
+                add(path_pattern + r"\[(?:0|[1-9][0-9]*)\]", declared + "[]", schema.items)
 
-        add("attributes", ObjectValueSchema(kind="object", fields=self.contract.fields))
+        add("attributes", "attributes", ObjectValueSchema(kind="object", fields=self.contract.fields))
         variants.append({"type": "object", "additionalProperties": False,
                          "required": ["field_path", "value"], "properties": {
                              "field_path": {"type": "string", "const": "validation_guidance"},
@@ -128,8 +286,18 @@ class ResolvedGenericProfile:
                          }})
         return {"type": "array", "minItems": 1, "items": {"anyOf": variants}}
 
-    def validate_attributes(self, attributes: Any, *, candidate_id: str | None = None) -> list[dict[str, Any]]:
+    def validate_attributes(self, attributes: Any, *, candidate_id: str | None = None,
+                            extractor_input: bool = False) -> list[dict[str, Any]]:
+        """Check a record against the closed profile.
+
+        A stored record's resolvable values may carry their resolution state,
+        checked against the shared vocabularies and invariant. Extractor input
+        (``extractor_input``) may not: it writes only a resolvable value's
+        paper wording and other declared fields.
+        """
         issues: list[dict[str, Any]] = []
+        resolvable = self.resolvable_objects()
+        validator_owned = self.validator_owned_paths()
         issue_limit = get_generic_profile_max_issues()
         value_limit = get_generic_profile_max_record_values()
         visited = 0
@@ -179,12 +347,33 @@ class ResolvedGenericProfile:
                       "Choose one of the declared values: " + ", ".join(schema.values))
             elif schema.kind == "object" and isinstance(value, dict):
                 fields = {field.key: field for field in schema.fields}
+                declared = declared_value_path(path)
+                identity = resolvable.get(declared)
+                owned = {key for key in fields if f"{declared}.{key}" in validator_owned}
+                # A validator that overrules a resolution keeps its identity, read-only, as overruled_<key>.
+                hints = {overruled_key(key): key for key in identity or () if key in fields}
+                system_keys = owned | (set(RESOLUTION_KEYS) | set(hints) if identity is not None else set())
+                if identity is not None:
+                    check_resolvable(value, identity, path)
                 for key in value:
-                    if key not in fields:
+                    if key in system_keys and extractor_input:
+                        issue(f"{path}.{key}", "validator_owned_field", "paper wording", _kind(value[key]),
+                              "Validation fills this in; do not write it. Write the paper's wording "
+                              "in the value's mention field.")
+                    elif key not in fields and key not in system_keys:
                         issue(f"{path}.{key}", "undeclared_field", "declared canonical field", _kind(value[key]),
                               "Remove the undeclared field; source labels are not output keys.")
                 for field in schema.fields:
                     field_path = f"{path}.{field.key}"
+                    if field.key in system_keys and (extractor_input or field.key in RESOLUTION_KEYS):
+                        continue
+                    if field.key in owned and value.get(field.key) is None:
+                        continue  # Filled in by validation; empty until it resolves.
+                    if identity is not None and extractor_input and field.key == MENTION_KEY and (
+                            not isinstance(value.get(MENTION_KEY), str) or not value[MENTION_KEY].strip()):
+                        issue(field_path, "missing_paper_wording", "string", _kind(value.get(MENTION_KEY)),
+                              "Write the paper's wording for this value.")
+                        continue
                     if field.key not in value:
                         if field.required:
                             issue(field_path, "missing_required", field.value_schema.kind, "missing",
@@ -193,11 +382,34 @@ class ResolvedGenericProfile:
                         continue
                     else:
                         visit(value[field.key], field.value_schema, field_path)
+                if not extractor_input:
+                    for hint, key in hints.items():
+                        if value.get(hint) is not None:
+                            visit(value[hint], fields[key].value_schema, f"{path}.{hint}")
             elif schema.kind == "array" and isinstance(value, list):
                 for index, item in enumerate(value):
                     if visited > value_limit or len(issues) >= issue_limit:
                         break
                     visit(item, schema.items, f"{path}[{index}]")
+
+        def check_resolvable(value: dict[str, Any], identity: tuple[str, ...], path: str) -> None:
+            if extractor_input:
+                return
+            for key, allowed in _VOCABULARIES.items():
+                if key in value and value[key] not in allowed:
+                    issue(f"{path}.{key}", "invalid_enum", "enum", _kind(value[key]),
+                          "Use one of the declared values: " + ", ".join(allowed))
+                    return
+            for key in (VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY):
+                if value.get(key) is not None and not isinstance(value[key], str):
+                    issue(f"{path}.{key}", "wrong_type", "string", _kind(value[key]),
+                          "Validator text is a string or null.")
+                    return
+            if RESOLUTION_STATE_KEY in value or LOOKUP_OUTCOME_KEY in value:
+                try:
+                    check_resolvable_value(value, identity_keys=identity)
+                except ResolvableValueError as exc:
+                    issue(path, "invalid_resolution", "resolvable value", "object", str(exc))
 
         visit(attributes, ObjectValueSchema(kind="object", fields=self.contract.fields), "attributes")
         return issues
@@ -207,7 +419,8 @@ class ResolvedGenericProfile:
         if issues:
             raise ProfileConformanceError(issues)
 
-    def validate_candidate(self, candidate: dict[str, Any], *, candidate_id: str | None = None) -> list[dict[str, Any]]:
+    def validate_candidate(self, candidate: dict[str, Any], *, candidate_id: str | None = None,
+                           extractor_input: bool = False) -> list[dict[str, Any]]:
         allowed = {"domain_pack_id", "object_type", "class_key", "label", "classification_notes",
                    "payload", "pending_ref_id", "source_label", "description", "confidence",
                    "semantic_class", "attributes", "evidence_record_ids", "validation_guidance",
@@ -237,7 +450,8 @@ class ResolvedGenericProfile:
                          "reason": "profile_identity_violation", "expected": expected,
                          "actual_kind": _kind(candidate.get(key)),
                          "message": "The saved profile fixes this identity; it cannot be changed during extraction."}]
-        return self.validate_attributes(candidate.get("attributes", {}), candidate_id=candidate_id)
+        return self.validate_attributes(candidate.get("attributes", {}), candidate_id=candidate_id,
+                                        extractor_input=extractor_input)
 
     def require_candidate(self, candidate: dict[str, Any], *, candidate_id: str | None = None) -> None:
         issues = self.validate_candidate(candidate, candidate_id=candidate_id)
@@ -299,6 +513,59 @@ class ResolvedGenericProfile:
         if issues:
             raise ProfileConformanceError(issues[:get_generic_profile_max_issues()])
 
+    def apply_curator_edit(self, attributes: dict[str, Any], field_path: str, value: Any, *,
+                           actor_id: str, at: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """One curator edit of a profile record; an identity edit is a validation override.
+
+        Editing a resolvable value's identity (one identity key, or the whole
+        value with changed identity keys) goes through ``apply_curator_identity``:
+        the value becomes resolved as ``curator_override`` with who and when,
+        or unresolved again when the identity is cleared. Returns the record
+        and the override audit (None for an ordinary edit). The paper wording
+        and the validation state are never curator-editable.
+        """
+        parent, _, key = field_path.rpartition(".")
+        resolvable = self.resolvable_objects()
+        whole = resolvable.get(declared_value_path(field_path))
+        identity = whole if whole is not None else resolvable.get(declared_value_path(parent))
+        if whole is None and identity is not None and _not_curator_editable(key):
+            raise ProfileConformanceError([_patch_issue(
+                None, field_path, "The paper wording and validation state are not editable; edit the identity.")])
+        if identity is None or (whole is None and key not in identity):
+            return self.patch_attributes(attributes, [{"field_path": field_path, "value": value}]), None
+        value_path = field_path if whole is not None else parent
+        result = deepcopy(attributes)
+        container = _attribute_container(result, value_path)
+        if not isinstance(container, dict):
+            raise ProfileConformanceError([_patch_issue(None, field_path, "Edit an existing value.")])
+        if whole is not None:
+            # A whole-value override changes only the identity; every other key passes through unchanged.
+            if not isinstance(value, dict) or any(
+                item_key not in identity and item != container.get(item_key)
+                for item_key, item in value.items()
+            ):
+                raise ProfileConformanceError([_patch_issue(
+                    None, field_path, "Only the identifier and name can be changed in a curator override.")])
+            # Every identity key the value carries goes to the override, as for pack values.
+            edits = {item_key: deepcopy(value[item_key]) for item_key in identity if item_key in value}
+            if all(item == container.get(item_key) for item_key, item in edits.items()):
+                edits = {}
+        else:
+            edits = {key: deepcopy(value)}
+        audit = None
+        if edits:
+            spec = self.resolvable_specs()[declared_value_path(value_path)]
+            try:
+                audit = apply_curator_identity(
+                    container, edits, identity_keys=identity, id_key=spec.id_key, label_key=spec.label_key,
+                    actor_id=actor_id, at=at,
+                )
+            except ResolvableValueError as exc:
+                raise ProfileConformanceError([_patch_issue(None, field_path, str(exc))]) from exc
+            audit = {**audit, "value_path": value_path}
+        self.require_attributes(result)
+        return result, audit
+
     def patch_attributes(self, attributes: dict[str, Any], updates: list[dict[str, Any]],
                          *, candidate_id: str | None = None) -> dict[str, Any]:
         """Apply whole-subtree or parsed-index replacements atomically to a copy.
@@ -349,15 +616,46 @@ class ResolvedGenericProfile:
         return result
 
 
+def _not_curator_editable(key: str) -> bool:
+    """The paper wording, validation state and overruled identities are never curator edits."""
+    return key == MENTION_KEY or key in RESOLUTION_KEYS or key.startswith(OVERRULED_KEY_PREFIX)
+
+
+def _attribute_container(attributes: dict[str, Any], path: str) -> Any:
+    value: Any = {"attributes": attributes}
+    for key, index in re.findall(r"([a-z][a-z0-9_]*)|\[([0-9]+)\]", path):
+        if key:
+            value = value.get(key) if isinstance(value, dict) else None
+        else:
+            value = value[int(index)] if isinstance(value, list) and int(index) < len(value) else None
+    return value
+
+
 def _patch_issue(candidate_id: str | None, path: str, message: str) -> dict[str, Any]:
     return {"candidate_id": candidate_id, "field_path": path, "reason": "invalid_patch_path",
             "expected": "declared path", "actual_kind": "path", "message": message}
 
 
-def _object_schema(fields: list[ProfileField]) -> dict[str, Any]:
+class _ExtractorShape:
+    """What the extractor writes: never a validator-owned field or a resolvable value's state."""
+
+    def __init__(self, resolvable: dict[str, tuple[str, ...]], owned: set[str]):
+        self.resolvable = resolvable
+        self.owned = owned
+
+    def fields(self, fields: list[ProfileField], path: str) -> list[ProfileField]:
+        excluded = set(RESOLUTION_KEYS) if path in self.resolvable else set()
+        return [field for field in fields
+                if field.key not in excluded and f"{path}.{field.key}" not in self.owned]
+
+
+def _object_schema(fields: list[ProfileField], path: str = "attributes",
+                   shape: _ExtractorShape | None = None) -> dict[str, Any]:
+    resolvable = path in shape.resolvable if shape is not None else False
+    fields = shape.fields(fields, path) if shape is not None else fields
     properties = {}
     for field in fields:
-        schema: dict[str, Any] = _value_schema(field.value_schema)
+        schema: dict[str, Any] = _value_schema(field.value_schema, f"{path}.{field.key}", shape)
         if field.nullable:
             schema = {"anyOf": [schema, {"type": "null"}]}
         description = field.description
@@ -367,14 +665,16 @@ def _object_schema(fields: list[ProfileField]) -> dict[str, Any]:
             schema["description"] = description.strip()
         properties[field.key] = schema
     return {"type": "object", "properties": properties, "additionalProperties": False,
-            "required": [field.key for field in fields if field.required]}
+            "required": [field.key for field in fields
+                         if field.required or (resolvable and field.key == MENTION_KEY)]}
 
 
-def _value_schema(schema: ValueSchema) -> dict[str, Any]:
+def _value_schema(schema: ValueSchema, path: str = "attributes",
+                  shape: _ExtractorShape | None = None) -> dict[str, Any]:
     if schema.kind == "object":
-        return _object_schema(schema.fields)
+        return _object_schema(schema.fields, path, shape)
     if schema.kind == "array":
-        return {"type": "array", "items": _value_schema(schema.items)}
+        return {"type": "array", "items": _value_schema(schema.items, path + "[]", shape)}
     if schema.kind == "enum":
         return {"type": "string", "enum": list(schema.values)}
     return {"type": schema.kind}

@@ -39,6 +39,17 @@ from agr_ai_curation_alliance.domain_packs.go import (
     GO_OBJECT_TYPE,
     materialize_go_builder_state,
 )
+from agr_ai_curation_alliance.domain_packs.go.values import (
+    BUILDER_OWNED_KEYS,
+    evidence_code_value,
+    is_resolved,
+    gene_product_value,
+    qualifier_values,
+    record_holds,
+    go_term_value,
+    reference_value,
+    with_from_value,
+)
 
 from .agr_curation import (
     AgrQueryResult,
@@ -59,7 +70,6 @@ _GO_PATCH_FIELD_PATHS = frozenset(
         "gene_product",
         "go_term",
         "evidence_code",
-        "evidence_eco_curie",
         "reference_curie",
         "with_from",
         "qualifiers",
@@ -67,7 +77,6 @@ _GO_PATCH_FIELD_PATHS = frozenset(
         "negated",
         "rationale",
         "provider_context",
-        "resolution_state",
         "blocking_reasons",
         "evidence_record_ids",
     }
@@ -77,6 +86,13 @@ _IDENTITY_TOOLS = {"resolve_gene_product"}
 _TERM_TOOLS = {"quickgo_api_call"}
 _ANNOTATION_TOOLS = {"go_api_call"}
 _REFERENCE_TOOLS = {"agr_literature_reference_lookup"}
+# A With/From identifier is confirmed only by a lookup, never by document text.
+_WITH_FROM_TOOLS = {
+    *_IDENTITY_TOOLS,
+    *_TERM_TOOLS,
+    *_ANNOTATION_TOOLS,
+    *_REFERENCE_TOOLS,
+}
 _CONTROLLED_VALUE_TOOLS = {
     *_IDENTITY_TOOLS,
     *_TERM_TOOLS,
@@ -87,10 +103,142 @@ _CONTROLLED_VALUE_TOOLS = {
     "read_subsection",
     "record_evidence",
 }
+_GO_ASPECT_VALUES = frozenset(
+    {"molecular_function", "biological_process", "cellular_component"}
+)
 
 
 class _StrictToolModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+def _clean_required(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("value must be non-empty")
+    return cleaned
+
+
+def _clean_optional(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+class GOWithFromEntry(_StrictToolModel):
+    """One With/From entry: the paper's wording and, when a lookup returned it, its identifier."""
+
+    mention: StrictStr = Field(
+        description="The With/From entry as the paper words it, for example the partner gene or allele name."
+    )
+    curie: Optional[StrictStr] = Field(
+        default=None,
+        description="Identifier for the entry exactly as a lookup tool returned it; leave it out when no lookup confirmed one.",
+    )
+
+    @field_validator("mention")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        return _clean_required(value)
+
+    @field_validator("curie")
+    @classmethod
+    def _optional_text(cls, value: Optional[str]) -> Optional[str]:
+        return _clean_optional(value)
+
+
+class GOGeneProductInput(_StrictToolModel):
+    mention: StrictStr
+    entity_type: StrictStr
+    taxon_curie: StrictStr
+    curie: Optional[StrictStr] = None
+    label: Optional[StrictStr] = None
+
+    @field_validator("mention", "entity_type", "taxon_curie")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        return _clean_required(value)
+
+    @field_validator("curie", "label")
+    @classmethod
+    def _optional_text(cls, value: Optional[str]) -> Optional[str]:
+        return _clean_optional(value)
+
+    @model_validator(mode="after")
+    def _label_needs_curie(self) -> "GOGeneProductInput":
+        if self.label and not self.curie:
+            raise ValueError(
+                "a gene-product label comes only with the CURIE the resolver returned"
+            )
+        return self
+
+    def value(self) -> dict[str, Any]:
+        return gene_product_value(
+            self.mention,
+            curie=self.curie,
+            label=self.label,
+            entity_type=self.entity_type,
+            taxon_curie=self.taxon_curie,
+        )
+
+
+class GOTermInput(_StrictToolModel):
+    mention: StrictStr
+    aspect: StrictStr
+    curie: Optional[StrictStr] = None
+    label: Optional[StrictStr] = None
+
+    @field_validator("mention", "aspect")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        return _clean_required(value)
+
+    @field_validator("curie", "label")
+    @classmethod
+    def _optional_text(cls, value: Optional[str]) -> Optional[str]:
+        return _clean_optional(value)
+
+    @model_validator(mode="after")
+    def _term_identity(self) -> "GOTermInput":
+        if self.aspect not in _GO_ASPECT_VALUES:
+            raise ValueError("go_term_aspect is not a canonical GO aspect")
+        if bool(self.curie) != bool(self.label):
+            raise ValueError(
+                "a GO term CURIE and its label come together from quickgo_api_call"
+            )
+        return self
+
+    def value(self) -> dict[str, Any]:
+        return go_term_value(
+            self.mention, curie=self.curie, label=self.label, aspect=self.aspect
+        )
+
+
+class GOReferenceInput(_StrictToolModel):
+    mention: StrictStr
+    curie: Optional[StrictStr] = None
+
+    @field_validator("mention")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        return _clean_required(value)
+
+    @field_validator("curie")
+    @classmethod
+    def _optional_text(cls, value: Optional[str]) -> Optional[str]:
+        return _clean_optional(value)
+
+    def value(self) -> dict[str, Any]:
+        return reference_value(self.mention, curie=self.curie)
+
+
+def _with_from_values(entries: Sequence[GOWithFromEntry]) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    for entry in entries:
+        value = with_from_value(entry.mention, curie=entry.curie)
+        if value not in values:
+            values.append(value)
+    return values
 
 
 class GOStageInput(_StrictToolModel):
@@ -99,21 +247,13 @@ class GOStageInput(_StrictToolModel):
         description="One short advisory sentence conveying relevant configured validation rules and evidence-backed context for this finding; not source evidence or a resolved identity",
     )
     pending_ref_id: StrictStr
-    gene_product_mention: StrictStr
-    gene_product_label: StrictStr
-    gene_product_entity_type: StrictStr
-    gene_product_taxon_curie: StrictStr
-    gene_product_curie: Optional[StrictStr] = None
-    resolution_state: StrictStr
-    go_term_curie: StrictStr
-    go_term_label: StrictStr
-    go_term_aspect: StrictStr
+    gene_product: GOGeneProductInput
+    go_term: GOTermInput
     evidence_code: StrictStr
-    evidence_eco_curie: StrictStr
-    reference_curie: StrictStr
+    reference: GOReferenceInput
     rationale: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1)
-    with_from: List[StrictStr] = Field(default_factory=list)
+    with_from: List[GOWithFromEntry] = Field(default_factory=list)
     qualifiers: List[StrictStr] = Field(default_factory=list)
     annotation_extensions: List[StrictStr] = Field(default_factory=list)
     negated: StrictBool = False
@@ -128,25 +268,12 @@ class GOStageInput(_StrictToolModel):
 
     @field_validator(
         "pending_ref_id",
-        "gene_product_mention",
-        "gene_product_label",
-        "gene_product_entity_type",
-        "gene_product_taxon_curie",
-        "resolution_state",
-        "go_term_curie",
-        "go_term_label",
-        "go_term_aspect",
         "evidence_code",
-        "evidence_eco_curie",
-        "reference_curie",
         "existing_annotation_status",
     )
     @classmethod
     def _non_empty_string(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("value must be non-empty")
-        return cleaned
+        return _clean_required(value)
 
     @field_validator("rationale")
     @classmethod
@@ -155,7 +282,6 @@ class GOStageInput(_StrictToolModel):
 
     @field_validator(
         "evidence_record_ids",
-        "with_from",
         "qualifiers",
         "annotation_extensions",
         "blocking_reasons",
@@ -175,14 +301,6 @@ class GOStageInput(_StrictToolModel):
 
     @model_validator(mode="after")
     def _validate_identity_and_context(self) -> "GOStageInput":
-        if self.resolution_state not in {"resolved", "unresolved"}:
-            raise ValueError("resolution_state must be resolved or unresolved")
-        if self.go_term_aspect not in {
-            "molecular_function",
-            "biological_process",
-            "cellular_component",
-        }:
-            raise ValueError("go_term_aspect is not a canonical GO aspect")
         if self.existing_annotation_status not in {
             "available",
             "not_found",
@@ -191,12 +309,10 @@ class GOStageInput(_StrictToolModel):
             raise ValueError(
                 "existing_annotation_status must be available, not_found, or unavailable"
             )
-        if self.resolution_state == "resolved" and not self.gene_product_curie:
-            raise ValueError("resolved identity requires gene_product_curie")
-        if self.resolution_state == "unresolved" and self.gene_product_curie:
-            raise ValueError("unresolved identity must not include gene_product_curie")
-        if self.resolution_state == "unresolved" and not self.blocking_reasons:
-            raise ValueError("unresolved identity requires blocking_reasons")
+        if not self.gene_product.curie and not self.blocking_reasons:
+            raise ValueError(
+                "a gene product without a resolver-confirmed CURIE requires blocking_reasons"
+            )
         if (
             self.existing_annotation_status == "unavailable"
             and not self.existing_annotation_note
@@ -327,37 +443,26 @@ def _go_candidate_id(workspace: Any, pending_ref_id: str) -> str:
 
 
 def _stage_payload(stage_input: GOStageInput) -> dict[str, Any]:
-    gene_product = {
-        "mention": stage_input.gene_product_mention,
-        "label": stage_input.gene_product_label,
-        "entity_type": stage_input.gene_product_entity_type,
-        "taxon_curie": stage_input.gene_product_taxon_curie,
-    }
-    if stage_input.gene_product_curie:
-        gene_product["curie"] = stage_input.gene_product_curie
     return {
         "domain_pack_id": GO_DOMAIN_PACK_ID,
         "object_type": GO_OBJECT_TYPE,
         "pending_ref_id": stage_input.pending_ref_id,
         "validation_guidance": stage_input.validation_guidance,
         "payload": {
-            "gene_product": gene_product,
-            "go_term": {
-                "curie": stage_input.go_term_curie,
-                "label": stage_input.go_term_label,
-                "aspect": stage_input.go_term_aspect,
-            },
-            "evidence_code": stage_input.evidence_code,
-            "evidence_eco_curie": stage_input.evidence_eco_curie,
-            "reference_curie": stage_input.reference_curie,
-            "with_from": list(stage_input.with_from),
-            "qualifiers": list(stage_input.qualifiers),
+            "gene_product": stage_input.gene_product.value(),
+            "go_term": stage_input.go_term.value(),
+            "evidence_code": evidence_code_value(stage_input.evidence_code),
+            "reference_curie": stage_input.reference.value(),
+            "with_from": _with_from_values(stage_input.with_from),
+            "qualifiers": qualifier_values(
+                stage_input.qualifiers, aspect=stage_input.go_term.aspect
+            ),
             "annotation_extensions": list(stage_input.annotation_extensions),
             "negated": stage_input.negated,
             "rationale": stage_input.rationale,
             "provider_context": {
                 "provider_key": "RGD",
-                "taxon_curie": stage_input.gene_product_taxon_curie,
+                "taxon_curie": stage_input.gene_product.taxon_curie,
                 "review_lane": "rgd_go_curator_review",
                 "existing_annotation_context": {
                     "status": stage_input.existing_annotation_status,
@@ -369,7 +474,6 @@ def _stage_payload(stage_input: GOStageInput) -> dict[str, Any]:
                 "hierarchy_limitations": list(stage_input.hierarchy_limitations),
                 "section_limitations": list(stage_input.section_limitations),
             },
-            "resolution_state": stage_input.resolution_state,
             "blocking_reasons": list(stage_input.blocking_reasons),
         },
         "evidence_record_ids": list(stage_input.evidence_record_ids),
@@ -407,20 +511,56 @@ def _append_grounding_requirements(
             requirements.append(requirement)
 
 
+def _resolved_identity(value: Any, keys: Mapping[str, str]) -> dict[str, Any]:
+    """The identity a resolved value claims came from a lookup, by record role; never its mention.
+
+    ``keys`` maps each record role (identifier, label, aspect) to the value's key.
+    """
+
+    if not is_resolved(value):
+        return {}
+    return {
+        role: value.get(key) for role, key in keys.items() if value.get(key) not in (None, "")
+    }
+
+
+def _append_record_requirement(
+    requirements: list[dict[str, Any]],
+    *,
+    field_path: str,
+    tool_names: set[str],
+    identity: Mapping[str, Any],
+) -> None:
+    """A resolved value's identifier, label and aspect must come from ONE lookup record."""
+
+    if not identity:
+        return
+    if set(identity) == {"identifier"}:
+        _append_grounding_requirements(
+            requirements,
+            field_path=field_path,
+            tool_names=tool_names,
+            values=identity["identifier"],
+        )
+        return
+    requirements.append(
+        {"field_path": field_path, "tool_names": sorted(tool_names), "record": dict(identity)}
+    )
+
+
 def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     gene_product = payload.get("gene_product") or {}
-    go_term = payload.get("go_term") or {}
     provider_context = payload.get("provider_context") or {}
     existing = provider_context.get("existing_annotation_context") or {}
     identity = provider_context.get("identity_resolution") or {}
     requirements: list[dict[str, Any]] = []
 
-    identity_value = gene_product.get("curie") or gene_product.get("mention")
-    _append_grounding_requirements(
+    gene_identity = _resolved_identity(gene_product, {"identifier": "curie", "label": "label"})
+    _append_record_requirement(
         requirements,
         field_path="gene_product",
         tool_names=_IDENTITY_TOOLS,
-        values=identity_value,
+        identity=gene_identity,
     )
     if identity:
         _append_grounding_requirements(
@@ -429,49 +569,63 @@ def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
             tool_names=_IDENTITY_TOOLS,
             values=identity,
         )
-    _append_grounding_requirements(
+    _append_record_requirement(
         requirements,
         field_path="go_term",
         tool_names=_TERM_TOOLS,
-        values=go_term,
+        identity=_resolved_identity(
+            payload.get("go_term"), {"identifier": "curie", "label": "label", "aspect": "aspect"}
+        ),
     )
-    if gene_product.get("curie"):
-        annotation_values = [
-            identity_value,
-            existing.get("annotations"),
-            existing.get("provenance"),
-        ]
+    if gene_identity:
         _append_grounding_requirements(
             requirements,
             field_path="provider_context.existing_annotation_context",
             tool_names=_ANNOTATION_TOOLS,
-            values=annotation_values,
+            values=[
+                gene_product.get("curie"),
+                existing.get("annotations"),
+                existing.get("provenance"),
+            ],
         )
-    reference_curie = payload.get("reference_curie")
-    if reference_curie:
+    _append_grounding_requirements(
+        requirements,
+        field_path="reference_curie",
+        tool_names=_REFERENCE_TOOLS,
+        values=list(_resolved_identity(payload.get("reference_curie"), {"identifier": "curie"}).values()),
+    )
+    with_from = payload.get("with_from")
+    for index, entry in enumerate(with_from if isinstance(with_from, list) else []):
         _append_grounding_requirements(
             requirements,
-            field_path="reference_curie",
-            tool_names=_REFERENCE_TOOLS,
-            values=reference_curie,
+            field_path=f"with_from[{index}]",
+            tool_names=_WITH_FROM_TOOLS,
+            values=list(_resolved_identity(entry, {"identifier": "curie"}).values()),
         )
-    for field_path in (
-        "evidence_code",
-        "evidence_eco_curie",
-        "with_from",
-        "qualifiers",
-        "annotation_extensions",
-    ):
-        value = payload.get(field_path)
-        if value in (None, "", []):
-            continue
+    annotation_extensions = payload.get("annotation_extensions")
+    if annotation_extensions not in (None, "", []):
         _append_grounding_requirements(
             requirements,
-            field_path=field_path,
+            field_path="annotation_extensions",
             tool_names=_CONTROLLED_VALUE_TOOLS,
-            values=value,
+            values=annotation_extensions,
         )
     return requirements
+
+
+def _matching_tool_output(ledger: Any, requirement: Mapping[str, Any]) -> Any:
+    tool_names = set(requirement["tool_names"])
+    if "record" not in requirement:
+        return ledger.find_tool_output_containing(
+            tool_names=tool_names, value=requirement["value"]
+        )
+    for tool_call_id in ledger.snapshot()["tool_output_ids"]:
+        entry = ledger.get_tool_output(tool_call_id)
+        if entry.tool_name in tool_names and record_holds(
+            entry.raw_output, requirement["record"]
+        ):
+            return entry
+    return None
 
 
 def _ground_payload(
@@ -496,17 +650,17 @@ def _ground_payload(
     refs: list[str] = []
     issues: list[dict[str, Any]] = []
     for requirement in requirements:
-        entry = ledger.find_tool_output_containing(
-            tool_names=set(requirement["tool_names"]), value=requirement["value"]
-        )
+        entry = _matching_tool_output(ledger, requirement)
         if entry is None:
             issues.append(
                 {
                     "field_path": requirement["field_path"],
                     "reason": "unobserved_tool_value",
                     "message": (
-                        "The staged value does not match a run-scoped output from an "
-                        "authoritative read-only tool."
+                        "The staged identifier does not match one record of a lookup "
+                        "result from this run. Copy the identifier and its label together, "
+                        "exactly as one lookup result returned them. Stage a value without "
+                        "an identifier only when no lookup returned one for it."
                     ),
                 }
             )
@@ -519,21 +673,21 @@ def _ground_payload(
 def _stage_go_recommendation_impl(
     pending_ref_id: str,
     gene_product_mention: str,
-    gene_product_label: str,
     gene_product_entity_type: str,
     gene_product_taxon_curie: str,
-    resolution_state: str,
-    go_term_curie: str,
-    go_term_label: str,
+    go_term_mention: str,
     go_term_aspect: str,
     evidence_code: str,
-    evidence_eco_curie: str,
-    reference_curie: str,
+    reference_mention: str,
     rationale: str,
     existing_annotation_status: str,
     evidence_record_ids: List[str],
     gene_product_curie: Optional[str] = None,
-    with_from: Optional[List[str]] = None,
+    gene_product_label: Optional[str] = None,
+    go_term_curie: Optional[str] = None,
+    go_term_label: Optional[str] = None,
+    reference_curie: Optional[str] = None,
+    with_from: Optional[List[GOWithFromEntry]] = None,
     qualifiers: Optional[List[str]] = None,
     annotation_extensions: Optional[List[str]] = None,
     negated: bool = False,
@@ -548,10 +702,50 @@ def _stage_go_recommendation_impl(
 ) -> AgrQueryResult:
     """Stage one evidence-backed GO recommendation for canonical finalization.
 
+    Each GO value keeps the paper's wording apart from the identifier a lookup
+    confirmed. Always give the paper wording. Give an identifier only when a
+    lookup tool returned it in this run; the value is then recorded as matched.
+    Without an identifier the value is still kept, marked unresolved and not yet
+    validated, so curators see it as UNRESOLVED next to the paper wording.
+
     For IMP annotations, the rationale must name the perturbation and the phenotype in
     the paper's exact wording.
 
     Args:
+        pending_ref_id: Stable reference for this recommendation; evidence records
+            attach to it.
+        gene_product_mention: The gene or gene product exactly as the paper words it.
+        gene_product_entity_type: The kind of product the paper describes, for example
+            protein, gene, or mature_miRNA.
+        gene_product_taxon_curie: The NCBI Taxon CURIE of the organism.
+        go_term_mention: The GO process, function, or location as the paper words it.
+        go_term_aspect: The GO aspect: molecular_function, biological_process, or
+            cellular_component.
+        evidence_code: The GO experimental evidence code for the experiment, for
+            example IDA, IPI, IMP, IGI, IEP, or EXP. Its ECO class is looked up for you.
+        reference_mention: How you identified the paper for the reference lookup, for
+            example its PMID or title.
+        existing_annotation_status: Whether the existing-annotation lookup returned
+            annotations (available), returned none (not_found), or could not run
+            (unavailable).
+        evidence_record_ids: Verified evidence record IDs supporting this recommendation.
+        gene_product_curie: The RGD CURIE exactly as resolve_gene_product returned it;
+            leave it out when the identity is unresolved or ambiguous.
+        gene_product_label: The gene-product symbol resolve_gene_product returned with
+            that CURIE; leave it out without a CURIE.
+        go_term_curie: The GO term CURIE exactly as quickgo_api_call returned it; leave
+            it out when no term was confirmed.
+        go_term_label: The GO term name quickgo_api_call returned with that CURIE.
+        reference_curie: The reference CURIE exactly as agr_literature_reference_lookup
+            returned it; leave it out when the paper could not be matched.
+        with_from: With/From entries, each with the paper's wording and, when a lookup
+            returned one, its identifier.
+        qualifiers: GO relation qualifiers as the paper supports them, for example
+            enables, involved_in, located_in, colocalizes_with, or contributes_to.
+            Each is looked up in the GO relation vocabulary for the term's aspect; one
+            that does not fit stays unresolved. Negation is its own field.
+        blocking_reasons: Concrete reasons a curator must resolve before acceptance;
+            required when the gene product has no confirmed CURIE.
         validation_guidance: Optional short sentence forwarding relevant rules from your
             configured prompt and case-specific paper context to this finding's validators.
             Distinguish domain rules from paper facts. Do not copy whole prompts, quote
@@ -562,7 +756,7 @@ def _stage_go_recommendation_impl(
         "stage_go_recommendation",
         pending_ref_id=pending_ref_id,
         gene_product_mention=gene_product_mention,
-        go_term_curie=go_term_curie,
+        go_term_mention=go_term_mention,
         evidence_record_ids=evidence_record_ids,
     )
     _emit_go_builder_event(
@@ -572,18 +766,21 @@ def _stage_go_recommendation_impl(
         stage_input = GOStageInput(
             validation_guidance=validation_guidance,
             pending_ref_id=pending_ref_id,
-            gene_product_mention=gene_product_mention,
-            gene_product_label=gene_product_label,
-            gene_product_entity_type=gene_product_entity_type,
-            gene_product_taxon_curie=gene_product_taxon_curie,
-            gene_product_curie=gene_product_curie,
-            resolution_state=resolution_state,
-            go_term_curie=go_term_curie,
-            go_term_label=go_term_label,
-            go_term_aspect=go_term_aspect,
+            gene_product={
+                "mention": gene_product_mention,
+                "entity_type": gene_product_entity_type,
+                "taxon_curie": gene_product_taxon_curie,
+                "curie": gene_product_curie,
+                "label": gene_product_label,
+            },
+            go_term={
+                "mention": go_term_mention,
+                "aspect": go_term_aspect,
+                "curie": go_term_curie,
+                "label": go_term_label,
+            },
             evidence_code=evidence_code,
-            evidence_eco_curie=evidence_eco_curie,
-            reference_curie=reference_curie,
+            reference={"mention": reference_mention, "curie": reference_curie},
             rationale=rationale,
             evidence_record_ids=evidence_record_ids,
             with_from=with_from or [],
@@ -638,7 +835,7 @@ def _stage_go_recommendation_impl(
         "status": candidate.status,
         "pending_ref_ids": candidate.pending_ref_ids,
         "evidence_record_ids": candidate.evidence_record_ids,
-        "resolution_state": stage_input.resolution_state,
+        "resolution": _resolution_summary(staged_fields["payload"]),
         "builder": _builder_summary(workspace),
     }
     _emit_go_builder_event(
@@ -650,6 +847,73 @@ def _stage_go_recommendation_impl(
     return _ok(data=summary, count=1, lookup_status=LOOKUP_STATUS_SUCCESS)
 
 
+def _resolution_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Each GO value's resolution state, so the extractor sees what stayed unresolved."""
+
+    summary: dict[str, Any] = {
+        field_path: payload[field_path].get("resolution_state")
+        for field_path in ("gene_product", "go_term", "evidence_code", "reference_curie")
+        if isinstance(payload.get(field_path), Mapping)
+    }
+    for field_path in ("with_from", "qualifiers"):
+        summary[field_path] = [
+            entry.get("resolution_state")
+            for entry in payload.get(field_path) or []
+            if isinstance(entry, Mapping)
+        ]
+    return summary
+
+
+class _PatchValueError(ValueError):
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def _patched_resolvable_value(field_path: str, value: Any) -> Any:
+    """Rebuild a resolvable GO value from staging-shaped input.
+
+    The builder derives the resolution state again from the supplied
+    identifier, so a patch can never mark a value resolved on its own.
+    """
+
+    entries = value if field_path == "with_from" else [value]
+    if not isinstance(entries, list):
+        raise _PatchValueError("invalid_type", "with_from takes a list of entries")
+    for entry in entries:
+        if isinstance(entry, Mapping) and BUILDER_OWNED_KEYS.intersection(entry):
+            raise _PatchValueError(
+                "builder_owned_resolution_state",
+                "The builder derives resolution state; give the paper wording and, "
+                "when a lookup returned one, the identifier only.",
+            )
+    try:
+        if field_path == "gene_product":
+            return GOGeneProductInput.model_validate(value).value()
+        if field_path == "go_term":
+            return GOTermInput.model_validate(value).value()
+        if field_path == "reference_curie":
+            return GOReferenceInput.model_validate(value).value()
+        if field_path == "evidence_code":
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("evidence_code takes the evidence code as a non-empty string")
+            return evidence_code_value(value.strip())
+        return _with_from_values(
+            [GOWithFromEntry.model_validate(entry) for entry in entries]
+        )
+    except ValidationError as exc:
+        raise _PatchValueError(
+            "invalid_value", "; ".join(str(error.get("msg")) for error in exc.errors())
+        ) from exc
+    except ValueError as exc:
+        raise _PatchValueError("invalid_value", str(exc)) from exc
+
+
+_RESOLVABLE_PATCH_FIELDS = frozenset(
+    {"gene_product", "go_term", "evidence_code", "reference_curie", "with_from"}
+)
+
+
 def _patch_go_recommendation_impl(
     candidate_id: str,
     updates: List[Mapping[str, Any]],
@@ -659,6 +923,12 @@ def _patch_go_recommendation_impl(
     Args:
         candidate_id: The staged candidate to correct.
         updates: Field corrections, each with field_path and value (or evidence_record_ids).
+            qualifiers takes the qualifiers as the paper supports them; the builder
+            looks each one up again against the GO term's aspect.
+            A GO value (gene_product, go_term, reference_curie, each with_from entry) takes the
+            same shape as staging: the paper wording as `mention` plus the identifier only
+            when a lookup returned it; evidence_code takes the code. The builder works out
+            again whether each value is matched or unresolved.
             A `rationale` update must be non-empty; it cannot be cleared.
     """
 
@@ -700,6 +970,9 @@ def _patch_go_recommendation_impl(
     staged_fields = dict(candidate.staged_fields)
     payload = dict(staged_fields.get("payload") or {})
     evidence_ids = list(candidate.evidence_record_ids)
+    qualifier_mentions = [
+        entry["mention"] for entry in payload.get("qualifiers") or [] if isinstance(entry, Mapping)
+    ]
     for update in patch_input.updates:
         if update.field_path == "evidence_record_ids":
             evidence_ids = [
@@ -747,10 +1020,52 @@ def _patch_go_recommendation_impl(
                     method="patch_go_recommendation",
                     attempted_query=attempted_query,
                 )
+        elif update.field_path == "qualifiers":
+            if not isinstance(update.value, list) or not all(
+                isinstance(item, str) and item.strip() for item in update.value
+            ):
+                return _go_validation_result(
+                    message="patch_go_recommendation rejected a GO value update.",
+                    issues=[
+                        {
+                            "field_path": "qualifiers",
+                            "reason": "invalid_value",
+                            "message": (
+                                "qualifiers takes the qualifiers as the paper supports them, "
+                                "a list of non-empty strings; the builder looks each one up."
+                            ),
+                        }
+                    ],
+                    method="patch_go_recommendation",
+                    attempted_query=attempted_query,
+                )
+            qualifier_mentions = [item.strip() for item in update.value]
+        elif update.field_path in _RESOLVABLE_PATCH_FIELDS:
+            try:
+                payload[update.field_path] = _patched_resolvable_value(
+                    update.field_path, update.value
+                )
+            except _PatchValueError as exc:
+                return _go_validation_result(
+                    message="patch_go_recommendation rejected a GO value update.",
+                    issues=[
+                        {
+                            "field_path": update.field_path,
+                            "reason": exc.reason,
+                            "message": str(exc),
+                        }
+                    ],
+                    method="patch_go_recommendation",
+                    attempted_query=attempted_query,
+                )
         elif update.value in (None, ""):
             payload.pop(update.field_path, None)
         else:
             payload[update.field_path] = update.value
+    go_term = payload.get("go_term")
+    if isinstance(go_term, Mapping):
+        # Qualifiers are looked up again against the term's aspect, which a patch may change.
+        payload["qualifiers"] = qualifier_values(qualifier_mentions, aspect=go_term.get("aspect"))
     staged_fields["payload"] = payload
     grounding_refs, grounding_requirements, grounding_issues = _ground_payload(payload)
     if grounding_issues:
@@ -775,6 +1090,7 @@ def _patch_go_recommendation_impl(
     summary = {
         "candidate_id": patch_input.candidate_id,
         "patched_field_count": len(patch_input.updates),
+        "resolution": _resolution_summary(payload),
         "builder": _builder_summary(workspace),
     }
     _emit_go_builder_event(

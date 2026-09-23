@@ -577,16 +577,35 @@
           "label": "Synth7",
           "curie": "RGD:0000007",
           "entity_type": "protein_coding_gene",
-          "taxon_curie": "NCBITaxon:10116"
+          "taxon_curie": "NCBITaxon:10116",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
         },
         "go_term": {
+          "mention": "nucleus",
           "curie": "GO:0005634",
           "label": "nucleus",
-          "aspect": "cellular_component"
+          "aspect": "cellular_component",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
         },
-        "evidence_code": "IDA",
-        "evidence_eco_curie": "ECO:0000314",
-        "reference_curie": "PMID:10000007",
+        "evidence_code": {
+          "mention": "IDA",
+          "code": "IDA",
+          "eco_curie": "ECO:0000314",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
+        "reference": {
+          "mention": "PMID:10000007",
+          "curie": "PMID:10000007",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
         "with_from": [],
         "qualifiers": [
           "located_in"
@@ -610,7 +629,6 @@
           "hierarchy_limitations": [],
           "section_limitations": []
         },
-        "resolution_state": "resolved",
         "blocking_reasons": []
       }
     },
@@ -621,18 +639,38 @@
       "payload": {
         "gene_product": {
           "mention": "miR-synth",
-          "label": "miR-synth",
+          "label": null,
           "entity_type": "miRNA",
-          "taxon_curie": "NCBITaxon:10116"
+          "taxon_curie": "NCBITaxon:10116",
+          "curie": null,
+          "resolution_state": "unresolved",
+          "lookup_outcome": "not_validated",
+          "validator_explanation": "Not validated yet."
         },
         "go_term": {
+          "mention": "biological_process",
           "curie": "GO:0008150",
           "label": "biological_process",
-          "aspect": "biological_process"
+          "aspect": "biological_process",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
         },
-        "evidence_code": "IMP",
-        "evidence_eco_curie": "ECO:0000315",
-        "reference_curie": "PMID:10000008",
+        "evidence_code": {
+          "mention": "IMP",
+          "code": "IMP",
+          "eco_curie": "ECO:0000315",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
+        "reference": {
+          "mention": "PMID:10000008",
+          "curie": "PMID:10000008",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
         "with_from": [],
         "qualifiers": [],
         "annotation_extensions": [],
@@ -641,7 +679,6 @@
         "provider_context": {
           "provider_key": "RGD"
         },
-        "resolution_state": "unresolved",
         "blocking_reasons": [
           "identity unresolved"
         ]

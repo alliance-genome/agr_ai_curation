@@ -475,3 +475,126 @@ def test_genuine_profile_violation_keeps_curator_wording(example):
         )
 
     assert str(exc.value) == "Record does not conform to its saved output structure"
+
+
+# --- ALL-1302: write-back into a profile's resolvable value --------------------
+
+def resolvable(example):
+    raw, cap, pack = example
+    raw["fields"] = [{"key": "gene", "required": True, "value_schema": {"kind": "object", "fields": [
+        {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+        {"key": "gene_id", "value_schema": {"kind": "string"}},
+    ]}}]
+    raw["validator_mappings"][0].update(inputs={"mention": {"field_path": "attributes.gene.mention"}},
+                                        outputs={"identifier": "attributes.gene.gene_id"})
+    staged = {"gene": {"mention": "daf-16", "gene_id": None, "resolution_state": "unresolved",
+                       "lookup_outcome": "not_validated", "validator_explanation": "Not validated yet."}}
+    return prepared(example, attributes=staged)
+
+
+def test_resolved_result_marks_the_value_resolved_and_keeps_its_paper_wording(example):
+    source, context = resolvable(example)
+    output = materialize_profile_validator_results(source, context, results(source, context, [{"identifier": "EX:1"}]))
+    assert output.envelope.extracted_objects[0].payload["attributes"]["gene"] == {
+        "mention": "daf-16", "gene_id": "EX:1", "resolution_state": "resolved", "lookup_outcome": "matched",
+        "validator_explanation": "Fixture lookup", "validator_curator_message": None,
+    }
+    assert output.appended_findings[0].details["materialization"] == "accepted"
+
+
+def test_unresolved_result_records_why_without_touching_identity_or_wording(example):
+    source, context = resolvable(example)
+    output = materialize_profile_validator_results(
+        source, context, results(source, context, [{}], status="unresolved"))
+    gene = output.envelope.extracted_objects[0].payload["attributes"]["gene"]
+    assert gene == {"mention": "daf-16", "gene_id": None, "resolution_state": "unresolved",
+                    "lookup_outcome": "not_found", "validator_explanation": "Fixture lookup",
+                    "validator_curator_message": None}
+    assert output.appended_findings[0].code == "domain_pack.validator_unresolved"
+
+
+def test_resolved_result_without_its_identity_stays_unresolved(example):
+    source, context = resolvable(example)
+    output = materialize_profile_validator_results(source, context, results(source, context, [{}]))
+    gene = output.envelope.extracted_objects[0].payload["attributes"]["gene"]
+    assert (gene["gene_id"], gene["resolution_state"], gene["lookup_outcome"]) == (
+        None, "unresolved", "missing_expected_result_field")
+
+
+def test_profile_write_back_is_the_coverage_the_legacy_rule_reads(example):
+    """ALL-1302 with core (h): the audit event profile write-back records covers the value it wrote."""
+
+    from src.lib.domain_packs.resolvable_values import validator_event_covers
+
+    source, context = resolvable(example)
+    output = materialize_profile_validator_results(source, context, results(source, context, [{"identifier": "EX:1"}]))
+    metadata = output.envelope.extracted_objects[0].metadata
+    assert validator_event_covers(metadata, "attributes.gene")
+    assert not validator_event_covers(metadata, "attributes.other")
+
+
+def test_validator_overrules_an_earlier_resolution_keeping_its_identity_as_overruled(example):
+    """ALL-1302 with core aadd93a03: re-validation that comes back unresolved demotes the value."""
+
+    source, context = resolvable(example)
+    resolved = materialize_profile_validator_results(
+        source, context, results(source, context, [{"identifier": "EX:1"}])).envelope
+    output = materialize_profile_validator_results(
+        resolved, context, results(resolved, context, [{}], status="unresolved"))
+
+    gene = output.envelope.extracted_objects[0].payload["attributes"]["gene"]
+    assert gene == {"mention": "daf-16", "gene_id": None, "overruled_gene_id": "EX:1",
+                    "resolution_state": "unresolved", "lookup_outcome": "not_found",
+                    "validator_explanation": "Fixture lookup", "validator_curator_message": None}
+    context.profile.require_attributes(output.envelope.extracted_objects[0].payload["attributes"])
+
+
+def test_a_curator_override_stands_and_a_disagreeing_validator_adds_a_warning(example):
+    """ALL-1302 with core ec1c320c6: profile write-back never changes a curator override."""
+
+    source, context = resolvable(example)
+    attributes, _ = context.profile.apply_curator_edit(
+        source.extracted_objects[0].payload["attributes"], "attributes.gene.gene_id", "EX:7",
+        actor_id="curator-1", at="2026-09-23T20:00:00+00:00",
+    )
+    source.extracted_objects[0].payload["attributes"] = attributes
+    overridden = attributes["gene"]
+
+    output = materialize_profile_validator_results(source, context, results(source, context, [{"identifier": "EX:1"}]))
+    assert output.envelope.extracted_objects[0].payload["attributes"]["gene"] == overridden
+    codes = [finding.code for finding in output.appended_findings]
+    assert codes == ["domain_pack.curator_override", "domain_pack.validator_disagrees_with_curator_override"]
+    assert "EX:1" in output.appended_findings[1].message
+
+    agreeing = materialize_profile_validator_results(source, context, results(source, context, [{"identifier": "EX:7"}]))
+    assert [finding.code for finding in agreeing.appended_findings] == ["domain_pack.curator_override"]
+
+
+def test_one_disagreement_per_value_ignoring_empty_slots_with_the_validator_words():
+    """ALL-1302 core review 2-4: grouped per value, empty slots skipped, curator message and revision kept."""
+
+    from types import SimpleNamespace
+
+    from src.lib.domain_packs.profile_materialization import _override_disagreements
+    from src.schemas.domain_envelope import CuratableObjectEnvelope
+
+    override = {"mention": "daf-16", "gene_id": "EX:7", "symbol": "daf-16x", "resolution_state": "resolved",
+                "lookup_outcome": "curator_override"}
+    item = SimpleNamespace(
+        request=SimpleNamespace(expected_result_fields={
+            "curie": "attributes.gene.gene_id", "symbol": "attributes.gene.symbol", "taxon": "attributes.gene.taxon"}),
+        result=SimpleNamespace(status="resolved", resolved_values={"curie": "EX:1", "symbol": "daf-16", "taxon": ""},
+                               validator_binding_id="lookup", request_id="request-1",
+                               explanation="Exact symbol match.", curator_message="Check the symbol."),
+    )
+    overrides = {"attributes.gene.gene_id": override, "attributes.gene.symbol": override,
+                 "attributes.gene.taxon": override}
+    target = CuratableObjectEnvelope(object_type="generic_object", object_id="one", payload={})
+
+    finding, = _override_disagreements(item, overrides, target, source_envelope_revision=4)
+
+    assert finding.message == ("Validator disagrees with the curator override: "
+                               "it resolved gene_id 'EX:1', symbol 'daf-16'.")
+    assert finding.field_ref.field_path == "attributes.gene"
+    assert finding.details["validator_curator_message"] == "Check the symbol."
+    assert finding.details["source_envelope_revision"] == 4

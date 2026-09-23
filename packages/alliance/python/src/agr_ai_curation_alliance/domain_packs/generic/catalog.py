@@ -8,6 +8,10 @@ from typing import Any, Mapping
 
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.capabilities import object_capabilities
+from src.lib.domain_packs.resolvable_values import (
+    ResolvableSpec,
+    declared_resolvable_fields,
+)
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
@@ -34,6 +38,7 @@ from agr_ai_curation_alliance.domain_packs.loader import get_alliance_domain_pac
 from agr_ai_curation_alliance.domain_packs.loader import load_alliance_domain_packs
 
 from .constants import GENERIC_DOMAIN_PACK_ID, GENERIC_PROXY_PREFIX
+from .values import EVIDENCE_SOURCE_FIELDS, builder_owned_keys
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,33 @@ class GenericClassCatalogEntry:
     task_hints: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
     capabilities: dict[str, Any] = field(default_factory=dict)
+    # Declared resolvable values by payload path ("" for the object root).
+    resolvable_fields: Mapping[str, ResolvableSpec] = field(default_factory=dict)
+    # Payload paths a validator binding writes back; the extractor never writes them.
+    validator_owned_fields: tuple[str, ...] = ()
+
+    @property
+    def paper_wording_fields(self) -> tuple[str, ...]:
+        """Where the extractor writes each resolvable value's paper wording."""
+
+        return tuple(
+            f"{field_path}.{spec.mention_key}" if field_path else spec.mention_key
+            for field_path, spec in sorted(self.resolvable_fields.items())
+        )
+
+    @property
+    def system_written_payload_fields(self) -> tuple[str, ...]:
+        """Payload fields validation, the builder or the evidence record fill in; never the extractor."""
+
+        builder_owned = [
+            f"{field_path}.{key}" if field_path else key
+            for field_path, spec in sorted(self.resolvable_fields.items())
+            for key in builder_owned_keys(spec)
+        ]
+        evidence_owned = [
+            field_path for field_path in EVIDENCE_SOURCE_FIELDS if field_path in self.payload_fields
+        ]
+        return tuple(dict.fromkeys([*self.validator_owned_fields, *builder_owned, *evidence_owned]))
 
     @property
     def validator_state(self) -> str:
@@ -101,6 +133,8 @@ class GenericClassCatalogEntry:
             ],
             "payload_fields": list(self.payload_fields),
             "required_payload_fields": list(self.required_payload_fields),
+            "paper_wording_fields": list(self.paper_wording_fields),
+            "system_written_payload_fields": list(self.system_written_payload_fields),
             "field_summaries": list(self.field_summaries),
             "validator_input_fields": sorted(
                 {
@@ -352,7 +386,40 @@ def _entry_from_object_definition(
             source_pack.metadata, object_definition,
             active_validators=len(active), development_validators=len(under_dev),
         ),
+        resolvable_fields=declared_resolvable_fields(
+            source_pack.metadata, object_definition.object_type
+        ),
+        validator_owned_fields=_validator_owned_fields(
+            registry, source_pack_id=source_pack.pack_id, object_definition=object_definition
+        ),
     )
+
+
+def _validator_owned_fields(
+    registry: DomainPackValidationRegistry,
+    *,
+    source_pack_id: str,
+    object_definition: DomainPackObjectDefinition,
+) -> tuple[str, ...]:
+    """Payload fields a binding writes back; one it also reads stays the extractor's input."""
+
+    owned: list[str] = []
+    for binding in registry.bindings:
+        if not _binding_applies_to_object(
+            binding, source_pack_id=source_pack_id, object_definition=object_definition
+        ):
+            continue
+        reads = {
+            selector.path
+            for selector in binding.input_fields.values()
+            if selector.source == "payload"
+        }
+        owned.extend(
+            str(field_path)
+            for field_path in binding.expected_result_fields.values()
+            if field_path not in reads
+        )
+    return tuple(dict.fromkeys(owned))
 
 
 def _binding_summary(binding: ValidatorBinding) -> GenericValidatorBindingSummary:

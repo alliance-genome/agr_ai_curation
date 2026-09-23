@@ -4014,7 +4014,7 @@
           "type": "string"
         },
         {
-          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA `rationale` update must be non-empty; it cannot be cleared.",
+          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nqualifiers takes the qualifiers as the paper supports them; the builder\nlooks each one up again against the GO term's aspect.\nA GO value (gene_product, go_term, reference_curie, each with_from entry) takes the\nsame shape as staging: the paper wording as `mention` plus the identifier only\nwhen a lookup returned it; evidence_code takes the code. The builder works out\nagain whether each value is matched or unresolved.\nA `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5716,7 +5716,7 @@
           "type": "string"
         },
         {
-          "description": "The source-paper label or mention when it differs from label.",
+          "description": "The paper's own wording for this object. It is kept as the paper wording; the label is never used in its place.",
           "name": "source_label",
           "required": false,
           "type": "string"
@@ -5740,7 +5740,7 @@
           "type": "string"
         },
         {
-          "description": "Class-specific evidence-backed payload fields.",
+          "description": "Class-specific evidence-backed payload fields. Write each value's paper wording in the class's paper_wording_fields; never write its system_written_payload_fields, which validation, the builder or the verified evidence record fill in.",
           "name": "payload",
           "required": false,
           "type": "object"
@@ -5777,62 +5777,50 @@
     "documentation": {
       "parameters": [
         {
+          "description": "Stable reference for this recommendation; evidence records\nattach to it.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The gene or gene product exactly as the paper words it.",
           "name": "gene_product_mention",
           "required": true,
           "type": "string"
         },
         {
-          "name": "gene_product_label",
-          "required": true,
-          "type": "string"
-        },
-        {
+          "description": "The kind of product the paper describes, for example\nprotein, gene, or mature_miRNA.",
           "name": "gene_product_entity_type",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The NCBI Taxon CURIE of the organism.",
           "name": "gene_product_taxon_curie",
           "required": true,
           "type": "string"
         },
         {
-          "name": "resolution_state",
+          "description": "The GO process, function, or location as the paper words it.",
+          "name": "go_term_mention",
           "required": true,
           "type": "string"
         },
         {
-          "name": "go_term_curie",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "name": "go_term_label",
-          "required": true,
-          "type": "string"
-        },
-        {
+          "description": "The GO aspect: molecular_function, biological_process, or\ncellular_component.",
           "name": "go_term_aspect",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The GO experimental evidence code for the experiment, for\nexample IDA, IPI, IMP, IGI, IEP, or EXP. Its ECO class is looked up for you.",
           "name": "evidence_code",
           "required": true,
           "type": "string"
         },
         {
-          "name": "evidence_eco_curie",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "name": "reference_curie",
+          "description": "How you identified the paper for the reference lookup, for\nexample its PMID or title.",
+          "name": "reference_mention",
           "required": true,
           "type": "string"
         },
@@ -5843,29 +5831,62 @@
           "type": "string"
         },
         {
+          "description": "Whether the existing-annotation lookup returned\nannotations (available), returned none (not_found), or could not run\n(unavailable).",
           "name": "existing_annotation_status",
           "required": true,
           "type": "string"
         },
         {
+          "description": "Verified evidence record IDs supporting this recommendation.",
           "name": "evidence_record_ids",
           "required": true,
           "type": "array"
         },
         {
           "default": null,
+          "description": "The RGD CURIE exactly as resolve_gene_product returned it;\nleave it out when the identity is unresolved or ambiguous.",
           "name": "gene_product_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The gene-product symbol resolve_gene_product returned with\nthat CURIE; leave it out without a CURIE.",
+          "name": "gene_product_label",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "description": "The GO term CURIE exactly as quickgo_api_call returned it; leave\nit out when no term was confirmed.",
+          "name": "go_term_curie",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "description": "The GO term name quickgo_api_call returned with that CURIE.",
+          "name": "go_term_label",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "description": "The reference CURIE exactly as agr_literature_reference_lookup\nreturned it; leave it out when the paper could not be matched.",
+          "name": "reference_curie",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "description": "With/From entries, each with the paper's wording and, when a lookup\nreturned one, its identifier.",
           "name": "with_from",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "GO relation qualifiers as the paper supports them, for example\nenables, involved_in, located_in, colocalizes_with, or contributes_to.\nEach is looked up in the GO relation vocabulary for the term's aspect; one\nthat does not fit stays unresolved. Negation is its own field.",
           "name": "qualifiers",
           "required": false,
           "type": "any"
@@ -5884,6 +5905,7 @@
         },
         {
           "default": null,
+          "description": "Concrete reasons a curator must resolve before acceptance;\nrequired when the gene product has no confirmed CURIE.",
           "name": "blocking_reasons",
           "required": false,
           "type": "any"
@@ -5932,7 +5954,7 @@
           "type": "any"
         }
       ],
-      "summary": "Stages one typed GOCuratableObject recommendation with verified evidence, resolved or explicitly ambiguous identity, current-annotation context, and curator-visible limitations."
+      "summary": "Stages one typed GOCuratableObject recommendation with verified evidence, the paper's wording for each GO value next to any identifier a lookup confirmed (unconfirmed values stay unresolved), current-annotation context, and curator-visible limitations."
     },
     "methods": null,
     "name": "Stage GO Recommendation",

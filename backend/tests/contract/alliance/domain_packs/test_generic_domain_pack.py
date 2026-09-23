@@ -14,6 +14,7 @@ import yaml
 
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
+from src.lib.domain_packs.resolvable_values import ResolvableSpec
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
@@ -59,6 +60,8 @@ from agr_ai_curation_alliance.domain_packs.generic.catalog import (  # noqa: E40
     _binding_applies_to_object,
     _proxy_field_definition,
 )
+from agr_ai_curation_alliance.domain_packs.generic import conversion as generic_conversion  # noqa: E402
+from agr_ai_curation_alliance.tools import generic_builder_tools  # noqa: E402
 from agr_ai_curation_alliance.tools.builder_finalization import (  # noqa: E402
     finalize_builder_extraction,
 )
@@ -872,6 +875,7 @@ def test_generic_proxy_materializer_hydrates_required_evidence_fields_and_schema
             "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The paper-backed mention is a gene symbol."],
             "payload": {
+                "mention": "daf-16",
                 "identity_resolution_notes": [
                     "The paper reports this symbol in C. elegans."
                 ],
@@ -1034,6 +1038,282 @@ def test_non_stageable_catalog_entry_cannot_be_required():
         non_stageable_catalog.require_stageable("generic:temporarily_non_stageable")
 
 
+# --- ALL-1302: extracted vs validated values in generic classes ---------------
+
+_DAF16_EVIDENCE = [
+    {
+        "evidence_record_id": "evidence-generic-1",
+        "entity": "daf-16",
+        "verified_quote": "DAF-16 translocated to nuclei after heat shock.",
+        "page": 4,
+        "section": "Results",
+        "chunk_id": "chunk-daf16-1",
+    }
+]
+
+
+def _gene_proxy_staged(**payload_overrides: Any) -> dict[str, Any]:
+    payload = {
+        "mention": "daf-16",
+        "identity_resolution_notes": ["The paper reports this symbol in C. elegans."],
+        "taxon_hint": "NCBITaxon:6239",
+    }
+    payload.update(payload_overrides)
+    return {
+        "class_key": "gene:gene_mention_evidence",
+        "label": "daf-16",
+        "confidence": "high",
+        "rationale": "The paper names this item in its Results.",
+        "classification_notes": ["The paper-backed mention is a gene symbol."],
+        "payload": {key: value for key, value in payload.items() if value is not None},
+    }
+
+
+def _materialize(staged_fields: Mapping[str, Any], evidence=None):
+    return materialize_generic_builder_state(
+        workspace=_generic_workspace(staged_fields),
+        candidate_ids=["generic-candidate-1"],
+        evidence_records=_DAF16_EVIDENCE if evidence is None else evidence,
+        resolver_entry_lookup=None,
+    )
+
+
+def test_generic_mention_is_never_filled_from_label_or_source_label():
+    staged = _gene_proxy_staged(mention=None)
+    staged["source_label"] = "daf-16"
+
+    result = _materialize(staged)
+
+    assert not result.ok
+    assert ("payload.mention", "missing_required_payload_field") in {
+        (issue["field_path"], issue["reason"]) for issue in result.issues
+    }
+
+
+def test_generic_raw_mention_is_the_paper_wording_never_the_label():
+    staged = {
+        "class_key": "generic:generic_object",
+        "label": "Curator-facing name",
+        "rationale": "The paper names this item in its Results.",
+        "classification_notes": ["No more specific class fits."],
+    }
+    without_wording = _materialize(staged, evidence=_evidence_records())
+    assert without_wording.ok, without_wording.summary()
+    assert without_wording.payload["metadata"]["raw_mentions"] == []
+    assert all(
+        ref["role"] != "source_mention"
+        for ref in without_wording.payload["curatable_objects"][0]["metadata_refs"]
+    )
+
+    with_wording = _materialize({**staged, "source_label": "TRiP.HMS00001"}, evidence=_evidence_records())
+    assert with_wording.ok, with_wording.summary()
+    assert [item["mention"] for item in with_wording.payload["metadata"]["raw_mentions"]] == [
+        "TRiP.HMS00001"
+    ]
+
+    gene = _materialize(_gene_proxy_staged())
+    assert gene.ok, gene.summary()
+    assert [item["mention"] for item in gene.payload["metadata"]["raw_mentions"]] == ["daf-16"]
+
+
+def test_generic_claim_text_is_never_filled_from_description():
+    result = _materialize(
+        {
+            "class_key": "generic:generic_claim",
+            "label": "principal finding",
+            "description": "The screen identified TRiP.HMS00001.",
+            "rationale": "The paper names this item in its Results.",
+            "classification_notes": ["This is a paper-level result claim."],
+        },
+        evidence=_evidence_records(),
+    )
+
+    assert not result.ok
+    assert ("payload.claim_text", "missing_required_payload_field") in {
+        (issue["field_path"], issue["reason"]) for issue in result.issues
+    }
+
+
+def test_generic_identity_notes_are_never_filled_from_classification_notes():
+    result = _materialize(_gene_proxy_staged(identity_resolution_notes=None))
+
+    assert not result.ok
+    assert ("payload.identity_resolution_notes", "missing_required_payload_field") in {
+        (issue["field_path"], issue["reason"]) for issue in result.issues
+    }
+
+
+def test_generic_evidence_fields_come_only_from_the_verified_evidence_record():
+    typed = _materialize(_gene_proxy_staged(verified_quote="A typed quote."))
+    assert not typed.ok
+    assert ("payload.verified_quote", "evidence_owned_field") in {
+        (issue["field_path"], issue["reason"]) for issue in typed.issues
+    }
+
+    result = _materialize(_gene_proxy_staged())
+    assert result.ok, result.summary()
+    payload = result.payload["curatable_objects"][0]["payload"]
+    assert payload["verified_quote"] == "DAF-16 translocated to nuclei after heat shock."
+    assert payload["chunk_id"] == "chunk-daf16-1"
+
+
+def test_generic_extractor_cannot_write_validator_owned_fields(active_generic_builder_workspace):
+    materialized = _materialize(_gene_proxy_staged(primary_external_id="WB:WBGene00000912"))
+    assert not materialized.ok
+    assert ("payload.primary_external_id", "validator_owned_field") in {
+        (issue["field_path"], issue["reason"]) for issue in materialized.issues
+    }
+
+    staged = _gene_proxy_staged(primary_external_id="WB:WBGene00000912")
+    stage = generic_builder_tools._stage_generic_object_impl(
+        class_key=staged["class_key"],
+        label=staged["label"],
+        evidence_record_ids=["evidence-generic-1"],
+        classification_notes=staged["classification_notes"],
+        rationale=staged["rationale"],
+        payload=staged["payload"],
+    )
+    assert stage.status == "error"
+    assert stage.data["validation_issues"][0]["reason"] == "validator_owned_field"
+
+    catalog_entry = load_generic_class_catalog().entries_by_class_key["gene:gene_mention_evidence"]
+    system_written = catalog_entry.compact_tool_dict()["system_written_payload_fields"]
+    assert {"primary_external_id", "gene_symbol", "taxon", "verified_quote"} <= set(system_written)
+    assert "mention" not in system_written
+
+
+def _resolvable_fixture_entry() -> Any:
+    base = load_generic_class_catalog().entries_by_class_key["generic:generic_object"]
+    return replace(
+        base,
+        class_key="generic:resolvable_fixture",
+        payload_fields=(*base.payload_fields, "term", "term.mention", "term.curie", "term.name",
+                        "term.resolution_state", "term.lookup_outcome", "term.validator_explanation",
+                        "codes"),
+        resolvable_fields={
+            "term": ResolvableSpec(id_key="curie", label_key="name"),
+            "codes": ResolvableSpec(id_key="curie"),
+        },
+    )
+
+
+@pytest.fixture
+def resolvable_fixture_catalog(monkeypatch):
+    entry = _resolvable_fixture_entry()
+    catalog = GenericClassCatalog(entries=(entry,), generated_domain_pack=get_generated_generic_domain_pack())
+    monkeypatch.setattr(generic_conversion, "load_generic_class_catalog", lambda: catalog)
+    monkeypatch.setattr(generic_builder_tools, "load_generic_class_catalog", lambda: catalog)
+    return entry
+
+
+@pytest.fixture
+def active_generic_builder_workspace(monkeypatch):
+    from src.lib.openai_agents import extraction_builder_workspace as builder
+
+    monkeypatch.setattr(generic_builder_tools, "write_extraction_trace_event", lambda **event: event)
+    monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **event: event)
+    workspace = ExtractionBuilderWorkspace(
+        run_id="generic-resolvable", domain_pack_id=GENERIC_DOMAIN_PACK_ID, agent_id="pdf_extraction",
+    )
+    token = builder.set_active_extraction_builder_workspace(workspace)
+    try:
+        yield workspace
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)
+
+
+def _stage_fixture(payload: dict[str, Any]):
+    return generic_builder_tools._stage_generic_object_impl(
+        class_key="generic:resolvable_fixture",
+        label="Fixture",
+        evidence_record_ids=["evidence-generic-1"],
+        classification_notes=["Fixture class."],
+        rationale="The paper names this item in its Results.",
+        payload=payload,
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        ({"term": {"mention": "wing disc", "curie": "EX:1"}}, "builder_owned_field"),
+        ({"term": {"mention": "wing disc", "resolution_state": "resolved"}}, "builder_owned_field"),
+        ({"term": {"name": "wing disc"}}, "builder_owned_field"),
+        ({"term": {}}, "missing_paper_wording"),
+        ({"codes": [{"mention": "IMP", "lookup_outcome": "matched"}]}, "builder_owned_field"),
+        ({"codes": ["IMP"]}, "invalid_resolvable_value"),
+    ],
+)
+def test_generic_extractor_cannot_write_a_resolvable_values_identity_or_state(
+    resolvable_fixture_catalog, active_generic_builder_workspace, payload, reason,
+):
+    result = _stage_fixture(payload)
+
+    assert result.status == "error"
+    assert reason in {issue["reason"] for issue in result.data["validation_issues"]}
+
+
+def test_generic_staged_paper_wording_materializes_unresolved_not_validated(
+    resolvable_fixture_catalog, active_generic_builder_workspace,
+):
+    stage = _stage_fixture({
+        "term": {"mention": "structures near the residual body"},
+        "codes": [{"mention": "IMP"}, {"mention": "XYZ"}],
+    })
+    assert stage.status == "ok", stage
+
+    result = materialize_generic_builder_state(
+        workspace=active_generic_builder_workspace,
+        candidate_ids=[stage.data["candidate_id"]],
+        evidence_records=_evidence_records(),
+        resolver_entry_lookup=None,
+    )
+
+    assert result.ok, result.summary()
+    payload = result.payload["curatable_objects"][0]["payload"]
+    assert payload["term"] == {
+        "mention": "structures near the residual body",
+        "curie": None,
+        "name": None,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+    assert [code["mention"] for code in payload["codes"]] == ["IMP", "XYZ"]
+    assert all(
+        code["resolution_state"] == "unresolved" and code["curie"] is None for code in payload["codes"]
+    )
+
+
+
+def test_generic_required_fields_are_checked_when_staged(active_generic_builder_workspace):
+    """ALL-1302 review #5: a missing required field fails at staging, not only at finalize."""
+
+    claim = generic_builder_tools._stage_generic_object_impl(
+        class_key="generic:generic_claim",
+        label="principal finding",
+        description="The screen identified TRiP.HMS00001.",
+        evidence_record_ids=["evidence-generic-1"],
+        classification_notes=["This is a paper-level result claim."],
+        rationale="The paper names this item in its Results.",
+    )
+    assert claim.status == "error"
+    assert ("payload.claim_text", "missing_required_payload_field") in {
+        (issue["field_path"], issue["reason"]) for issue in claim.data["validation_issues"]
+    }
+
+    staged = _gene_proxy_staged()
+    gene = generic_builder_tools._stage_generic_object_impl(
+        class_key=staged["class_key"],
+        label=staged["label"],
+        confidence=staged["confidence"],
+        evidence_record_ids=["evidence-generic-1"],
+        classification_notes=staged["classification_notes"],
+        rationale=staged["rationale"],
+        payload=staged["payload"],
+    )
+    assert gene.status == "ok", gene
+
 
 def test_proxy_keeps_a_resolvable_object_root_and_nested_resolvable_models():
     """ALL-1283: the generic view reads the same resolvable values as the source pack."""
@@ -1105,3 +1385,15 @@ def test_proxy_keeps_a_resolvable_object_root_and_nested_resolvable_models():
         {"symbol": "unc-54"}, "symbol",
         resolvable_fields=declared_resolvable_fields(generic, proxy.object_type),
     ) == f"unc-54 {LEGACY_UNVERIFIED_SUFFIX}"
+
+
+def test_generated_view_declares_every_value_the_generic_builder_stages():
+    """ALL-1302 declaration guard: each class's staged resolvable values are declared in the generic view."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    catalog = load_generic_class_catalog()
+    metadata = catalog.generated_domain_pack.metadata
+    for entry in catalog.entries:
+        declared = declared_resolvable_fields(metadata, entry.generic_object_type)
+        assert set(entry.resolvable_fields) <= set(declared), entry.class_key

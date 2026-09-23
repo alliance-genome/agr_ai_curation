@@ -211,7 +211,7 @@ class PackagedExportSource:
         value shape by the pack's registered legacy display mapper; values
         stored before ALL-1283 then read through the legacy rule
         (``resolvable_values.effective_payload``); overruled identities are
-        left out; nothing is written back.
+        left out. Nothing is written back.
         """
 
         from src.lib.domain_packs.resolvable_values import effective_payload, without_overruled

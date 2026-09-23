@@ -37,6 +37,15 @@ if str(ALLIANCE_PYTHON_SRC) not in sys.path:
 from agr_ai_curation_alliance.domain_packs.go import (  # noqa: E402
     materialize_go_builder_state,
 )
+from agr_ai_curation_alliance.domain_packs.go.values import (  # noqa: E402
+    evidence_code_value,
+    gene_product_value,
+    go_term_value,
+    qualifier_value,
+    reference_value,
+    record_holds,
+    with_from_value,
+)
 from agr_ai_curation_alliance.tools import go_builder_tools  # noqa: E402
 
 
@@ -56,35 +65,35 @@ def _candidate(*, resolution_state: str = "resolved", evidence_ids=None):
     retained_evidence_ids = (
         ["go-evidence-1"] if evidence_ids is None else list(evidence_ids)
     )
-    gene_product = {
-        "mention": "Cttn",
-        "label": "Cttn",
-        "entity_type": "protein_coding_gene",
-        "taxon_curie": "NCBITaxon:10116",
-    }
     blockers = []
     if resolution_state == "resolved":
-        gene_product["curie"] = "RGD:619839"
+        gene_product = gene_product_value(
+            "Cttn",
+            curie="RGD:619839",
+            label="Cttn",
+            entity_type="protein_coding_gene",
+            taxon_curie="NCBITaxon:10116",
+        )
     else:
-        gene_product.update(
-            {
-                "mention": "miR-124-3p",
-                "label": "miR-124-3p",
-                "entity_type": "mature_miRNA",
-            }
+        gene_product = gene_product_value(
+            "miR-124-3p",
+            curie=None,
+            label=None,
+            entity_type="mature_miRNA",
+            taxon_curie="NCBITaxon:10116",
         )
         blockers = ["Mature product maps to more than one possible precursor locus."]
     payload = {
         "gene_product": gene_product,
-        "go_term": {
-            "curie": "GO:0005515",
-            "label": "protein binding",
-            "aspect": "molecular_function",
-        },
-        "evidence_code": "IPI",
-        "evidence_eco_curie": "ECO:0000353",
-        "reference_curie": "AGRKB:101000000400377",
-        "with_from": ["RGD:621255"],
+        "go_term": go_term_value(
+            "binds",
+            curie="GO:0005515",
+            label="protein binding",
+            aspect="molecular_function",
+        ),
+        "evidence_code": evidence_code_value("IPI"),
+        "reference_curie": reference_value("PMID:12345678", curie="AGRKB:101000000400377"),
+        "with_from": [with_from_value("Ago2", curie="RGD:621255")],
         "qualifiers": [],
         "annotation_extensions": [],
         "negated": False,
@@ -105,7 +114,6 @@ def _candidate(*, resolution_state: str = "resolved", evidence_ids=None):
             "hierarchy_limitations": [],
             "section_limitations": [],
         },
-        "resolution_state": resolution_state,
         "blocking_reasons": blockers,
     }
     return SimpleNamespace(
@@ -144,8 +152,8 @@ def _ground_candidate(candidate, ledger):
             "resolve_gene_product",
             {
                 "gene_product": {
-                    "mention": payload["gene_product"]["mention"],
                     "curie": payload["gene_product"].get("curie"),
+                    "symbol": payload["gene_product"].get("label"),
                 },
                 "resolution": payload["provider_context"]["identity_resolution"],
             },
@@ -153,11 +161,13 @@ def _ground_candidate(candidate, ledger):
         "call-term": (
             "quickgo_api_call",
             {
-                "results": [payload["go_term"]],
-                "evidence": {
-                    "code": payload["evidence_code"],
-                    "eco_curie": payload["evidence_eco_curie"],
-                },
+                "results": [
+                    {
+                        "id": payload["go_term"]["curie"],
+                        "name": payload["go_term"]["label"],
+                        "aspect": payload["go_term"]["aspect"],
+                    }
+                ],
             },
         ),
         "call-annotations": (
@@ -170,12 +180,12 @@ def _ground_candidate(candidate, ledger):
                 "provenance": payload["provider_context"][
                     "existing_annotation_context"
                 ]["provenance"],
-                "with_from": payload["with_from"],
+                "with_from": [entry["curie"] for entry in payload["with_from"]],
             },
         ),
         "call-reference": (
             "agr_literature_reference_lookup",
-            {"match": {"reference_curie": payload["reference_curie"]}},
+            {"match": {"reference_curie": payload["reference_curie"]["curie"]}},
         ),
     }
     for call_id, (tool_name, output) in outputs.items():
@@ -272,16 +282,16 @@ def test_go_stage_and_finalize_tools_emit_typed_extraction_result(
         gene_product_entity_type="protein_coding_gene",
         gene_product_taxon_curie="NCBITaxon:10116",
         gene_product_curie="RGD:619839",
-        resolution_state="resolved",
+        go_term_mention="binds",
         go_term_curie="GO:0005515",
         go_term_label="protein binding",
         go_term_aspect="molecular_function",
         evidence_code="IPI",
-        evidence_eco_curie="ECO:0000353",
+        reference_mention="PMID:12345678",
         reference_curie="AGRKB:101000000400377",
         rationale="The Results interaction assay directly supports protein binding.",
         evidence_record_ids=["go-evidence-1"],
-        with_from=["RGD:621255"],
+        with_from=[{"mention": "Ago2", "curie": "RGD:621255"}],
         existing_annotation_status="available",
         existing_annotations=[],
         existing_annotation_provenance={
@@ -334,16 +344,16 @@ def test_go_builder_emits_complete_decision_lifecycle_events(
         gene_product_entity_type="protein_coding_gene",
         gene_product_taxon_curie="NCBITaxon:10116",
         gene_product_curie="RGD:619839",
-        resolution_state="resolved",
+        go_term_mention="binds",
         go_term_curie="GO:0005515",
         go_term_label="protein binding",
         go_term_aspect="molecular_function",
         evidence_code="IPI",
-        evidence_eco_curie="ECO:0000353",
+        reference_mention="PMID:12345678",
         reference_curie="AGRKB:101000000400377",
         rationale="The Results interaction assay directly supports protein binding.",
         evidence_record_ids=["go-evidence-1"],
-        with_from=["RGD:621255"],
+        with_from=[{"mention": "Ago2", "curie": "RGD:621255"}],
         existing_annotation_status="available",
         existing_annotations=[],
         existing_annotation_provenance={
@@ -491,8 +501,8 @@ def test_go_builder_rejects_invented_or_malformed_identifiers():
     candidate = _candidate()
     candidate.staged_fields["payload"]["gene_product"]["curie"] = "RGD-GUESSED"
     candidate.staged_fields["payload"]["go_term"]["curie"] = "GO:123"
-    candidate.staged_fields["payload"]["evidence_eco_curie"] = "ECO:guess"
-    candidate.staged_fields["payload"]["with_from"] = ["Ago2"]
+    candidate.staged_fields["payload"]["evidence_code"]["eco_curie"] = "ECO:guess"
+    candidate.staged_fields["payload"]["with_from"][0]["curie"] = "Ago2"
     result = _materialize(candidate)
 
     reasons = {issue["reason"] for issue in result.issues}
@@ -509,9 +519,9 @@ def test_go_builder_rejects_invented_or_malformed_identifiers():
     [
         ("gene_product.curie", "RGD:999999999"),
         ("go_term.curie", "GO:9999999"),
-        ("evidence_eco_curie", "ECO:9999999"),
-        ("reference_curie", "PMID:99999999"),
-        ("with_from", ["RGD:999999998"]),
+        ("evidence_code.eco_curie", "ECO:9999999"),
+        ("reference_curie.curie", "PMID:99999999"),
+        ("with_from", [with_from_value("Ago1", curie="RGD:999999998")]),
         (
             "provider_context.existing_annotation_context.provenance",
             {"source": "invented source", "request_gene_id": "RGD:619839"},
@@ -553,16 +563,16 @@ def test_go_stage_rejects_well_formed_unobserved_gene_identity(
         gene_product_entity_type="protein_coding_gene",
         gene_product_taxon_curie="NCBITaxon:10116",
         gene_product_curie="RGD:999999999",
-        resolution_state="resolved",
+        go_term_mention="binds",
         go_term_curie="GO:0005515",
         go_term_label="protein binding",
         go_term_aspect="molecular_function",
         evidence_code="IPI",
-        evidence_eco_curie="ECO:0000353",
+        reference_mention="PMID:12345678",
         reference_curie="AGRKB:101000000400377",
         rationale="The Results interaction assay directly supports protein binding.",
         evidence_record_ids=["go-evidence-1"],
-        with_from=["RGD:621255"],
+        with_from=[{"mention": "Ago2", "curie": "RGD:621255"}],
         existing_annotation_status="available",
         existing_annotation_provenance={
             "source": "GO Consortium API",
@@ -585,16 +595,16 @@ def _stage_with_rationale(rationale):
         gene_product_entity_type="protein_coding_gene",
         gene_product_taxon_curie="NCBITaxon:10116",
         gene_product_curie="RGD:619839",
-        resolution_state="resolved",
+        go_term_mention="binds",
         go_term_curie="GO:0005515",
         go_term_label="protein binding",
         go_term_aspect="molecular_function",
         evidence_code="IPI",
-        evidence_eco_curie="ECO:0000353",
+        reference_mention="PMID:12345678",
         reference_curie="AGRKB:101000000400377",
         rationale=rationale,
         evidence_record_ids=["go-evidence-1"],
-        with_from=["RGD:621255"],
+        with_from=[{"mention": "Ago2", "curie": "RGD:621255"}],
         existing_annotation_status="available",
         existing_annotation_provenance={
             "source": "GO Consortium API",
@@ -697,8 +707,9 @@ def test_mature_product_ambiguity_survives_typed_materialization():
     obj = payload["curatable_objects"][0]
 
     assert obj["status"] == "needs_review"
-    assert "curie" not in obj["payload"]["gene_product"]
-    assert obj["payload"]["resolution_state"] == "unresolved"
+    assert obj["payload"]["gene_product"]["curie"] is None
+    assert obj["payload"]["gene_product"]["resolution_state"] == "unresolved"
+    assert obj["payload"]["gene_product"]["lookup_outcome"] == "not_validated"
     assert obj["payload"]["blocking_reasons"]
     assert payload["metadata"]["ambiguities"][0]["mention"] == "miR-124-3p"
 
@@ -765,3 +776,379 @@ def test_evidence_anchor_survives_result_reference_envelope_and_workspace_projec
         "The Results interaction assay directly supports protein binding."
     )
     assert rows[0].metadata["evidence_record_ids"] == ["go-evidence-1"]
+
+
+def _stage_unresolved_mirna(**overrides):
+    kwargs = {
+        "pending_ref_id": "go-recommendation-1",
+        "gene_product_mention": "miR-124-3p",
+        "gene_product_entity_type": "mature_miRNA",
+        "gene_product_taxon_curie": "NCBITaxon:10116",
+        "go_term_mention": "binds",
+        "go_term_curie": "GO:0005515",
+        "go_term_label": "protein binding",
+        "go_term_aspect": "molecular_function",
+        "evidence_code": "IPI",
+        "reference_mention": "PMID:12345678",
+        "reference_curie": "AGRKB:101000000400377",
+        "rationale": "The Results interaction assay directly supports protein binding.",
+        "evidence_record_ids": ["go-evidence-1"],
+        "blocking_reasons": ["Mature product maps to more than one precursor locus."],
+        "existing_annotation_status": "unavailable",
+        "existing_annotation_note": "No resolved gene product to look up.",
+        "identity_resolution": {"status": "resolved"},
+    }
+    kwargs.update(overrides)
+    return go_builder_tools._stage_go_recommendation_impl(**kwargs)
+
+
+def test_go_stage_never_grounds_paper_wording(active_go_builder_context):
+    """Regression for the old ``curie or mention`` grounding (go_builder_tools.py:418)."""
+
+    workspace, _events = active_go_builder_context
+    staged = _stage_unresolved_mirna(gene_product_mention="a wording no tool returned")
+
+    assert staged.status == "ok", staged.model_dump(mode="json")
+    payload = workspace.get_candidate(staged.data["candidate_id"]).staged_fields["payload"]
+    assert payload["gene_product"]["mention"] == "a wording no tool returned"
+    assert payload["gene_product"]["resolution_state"] == "unresolved"
+    assert payload["gene_product"]["lookup_outcome"] == "not_validated"
+    assert payload["gene_product"]["curie"] is None
+    assert payload["gene_product"]["label"] is None
+    requirements = workspace.get_candidate(staged.data["candidate_id"]).staged_fields[
+        "source_grounding"
+    ]["requirements"]
+    assert all(
+        "a wording no tool returned" not in [requirement.get("value"), *requirement.get("record", [])]
+        for requirement in requirements
+    )
+    assert "resolution_state" not in payload
+    assert staged.data["resolution"]["gene_product"] == "unresolved"
+
+
+def test_go_stage_resolves_only_looked_up_identifiers(active_go_builder_context):
+    workspace, _events = active_go_builder_context
+    staged = _stage_with_rationale("The IPI assay binds Cttn directly.")
+
+    payload = workspace.get_candidate(staged.data["candidate_id"]).staged_fields["payload"]
+    assert payload["gene_product"] == {
+        "curie": "RGD:619839",
+        "label": "Cttn",
+        "entity_type": "protein_coding_gene",
+        "taxon_curie": "NCBITaxon:10116",
+        "mention": "Cttn",
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": None,
+    }
+    assert payload["go_term"]["mention"] == "binds"
+    assert payload["evidence_code"]["code"] == "IPI"
+    assert payload["evidence_code"]["eco_curie"] == "ECO:0000353"
+    assert payload["reference_curie"]["resolution_state"] == "resolved"
+    assert payload["with_from"][0]["mention"] == "Ago2"
+    assert payload["with_from"][0]["resolution_state"] == "resolved"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field_path"),
+    [
+        ({"go_term_curie": "GO:0009999", "go_term_label": "invented"}, "go_term"),
+        ({"reference_curie": "AGRKB:999"}, "reference_curie"),
+        ({"with_from": [{"mention": "Ago1", "curie": "RGD:999999998"}]}, "with_from[0]"),
+    ],
+)
+def test_go_stage_rejects_identifiers_no_lookup_returned(
+    active_go_builder_context, overrides, field_path
+):
+    result = _stage_unresolved_mirna(**overrides)
+
+    assert result.status == "error"
+    assert (field_path, "unobserved_tool_value") in {
+        (issue["field_path"], issue["reason"])
+        for issue in result.data["validation_issues"]
+    }
+
+
+def test_go_stage_with_from_identifier_is_not_confirmed_by_document_text(
+    active_go_builder_context,
+):
+    from src.lib.openai_agents import resolver_call_ledger as ledger_module
+
+    ledger = ledger_module.get_active_resolver_call_ledger()
+    ledger.record_tool_output(
+        tool_call_id="call-read",
+        tool_name="read_chunk",
+        output={"text": "partner RGD:777777 in the paper"},
+    )
+
+    result = _stage_unresolved_mirna(
+        with_from=[{"mention": "partner", "curie": "RGD:777777"}]
+    )
+
+    assert result.status == "error"
+    assert "with_from[0]" in {
+        issue["field_path"] for issue in result.data["validation_issues"]
+    }
+
+
+def test_go_stage_keeps_unmatched_values_unresolved(active_go_builder_context):
+    workspace, _events = active_go_builder_context
+    staged = _stage_unresolved_mirna(
+        go_term_curie=None,
+        go_term_label=None,
+        evidence_code="TAS",
+        reference_curie=None,
+        with_from=[{"mention": "Ago2 partner"}],
+    )
+
+    assert staged.status == "ok", staged.model_dump(mode="json")
+    payload = workspace.get_candidate(staged.data["candidate_id"]).staged_fields["payload"]
+    assert payload["go_term"]["resolution_state"] == "unresolved"
+    assert payload["go_term"]["lookup_outcome"] == "not_validated"
+    assert payload["go_term"]["aspect"] == "molecular_function"
+    assert payload["evidence_code"] == {
+        "code": None,
+        "eco_curie": None,
+        "mention": "TAS",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_found",
+        "validator_explanation": (
+            "GO evidence code not supported by this workflow's ECO table."
+        ),
+    }
+    assert payload["reference_curie"]["curie"] is None
+    assert payload["with_from"] == [
+        {
+            "curie": None,
+            "mention": "Ago2 partner",
+            "resolution_state": "unresolved",
+            "lookup_outcome": "not_validated",
+            "validator_explanation": "Not validated yet.",
+        }
+    ]
+
+    finalized = go_builder_tools._finalize_go_extraction_impl([staged.data["candidate_id"]])
+    assert finalized.status == "ok", finalized.model_dump(mode="json")
+    obj = workspace.finalization.payload["curatable_objects"][0]
+    assert obj["status"] == "needs_review"
+
+
+def test_go_stage_rejects_a_label_without_its_identifier(active_go_builder_context):
+    result = _stage_unresolved_mirna(gene_product_label="Mir124")
+
+    assert result.status == "error"
+    assert any(
+        "label comes only with the CURIE" in issue["message"]
+        for issue in result.data["validation_issues"]
+    )
+
+
+def test_go_patch_rederives_resolution_and_rejects_state_keys(active_go_builder_context):
+    workspace, _events = active_go_builder_context
+    staged = _stage_with_rationale("The IPI assay binds Cttn directly.")
+    candidate_id = staged.data["candidate_id"]
+
+    rejected = go_builder_tools._patch_go_recommendation_impl(
+        candidate_id,
+        [
+            {
+                "field_path": "go_term",
+                "value": {
+                    "mention": "binds",
+                    "aspect": "molecular_function",
+                    "resolution_state": "resolved",
+                    "lookup_outcome": "matched",
+                },
+            }
+        ],
+    )
+    assert rejected.status == "error"
+    assert rejected.data["validation_issues"][0]["reason"] == (
+        "builder_owned_resolution_state"
+    )
+
+    patched = go_builder_tools._patch_go_recommendation_impl(
+        candidate_id,
+        [
+            {
+                "field_path": "go_term",
+                "value": {"mention": "binding partner", "aspect": "molecular_function"},
+            },
+            {"field_path": "evidence_code", "value": "IDA"},
+        ],
+    )
+    assert patched.status == "ok", patched.model_dump(mode="json")
+    payload = workspace.get_candidate(candidate_id).staged_fields["payload"]
+    assert payload["go_term"]["resolution_state"] == "unresolved"
+    assert payload["go_term"]["curie"] is None
+    assert payload["evidence_code"]["eco_curie"] == "ECO:0000314"
+    assert patched.data["resolution"]["go_term"] == "unresolved"
+
+    ungrounded = go_builder_tools._patch_go_recommendation_impl(
+        candidate_id,
+        [
+            {
+                "field_path": "reference_curie",
+                "value": {"mention": "PMID:1", "curie": "AGRKB:invented"},
+            }
+        ],
+    )
+    assert ungrounded.status == "error"
+    assert payload["reference_curie"]["curie"] == "AGRKB:101000000400377"
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value", "message"),
+    [
+        (
+            "gene_product",
+            {
+                "mention": "Cttn",
+                "label": None,
+                "curie": None,
+                "entity_type": "protein_coding_gene",
+                "taxon_curie": "NCBITaxon:10116",
+                "resolution_state": "resolved",
+                "lookup_outcome": "matched",
+                "validator_explanation": None,
+            },
+            "needs the identity",
+        ),
+        (
+            "gene_product",
+            {
+                "mention": "Cttn",
+                "label": "Cttn",
+                "curie": "RGD:619839",
+                "entity_type": "protein_coding_gene",
+                "taxon_curie": "NCBITaxon:10116",
+                "resolution_state": "unresolved",
+                "lookup_outcome": "not_validated",
+                "validator_explanation": None,
+            },
+            "never carries an identity",
+        ),
+        (
+            "go_term",
+            {"curie": "GO:0005515", "label": "protein binding", "aspect": "molecular_function"},
+            "resolution_state must be one of",
+        ),
+    ],
+)
+def test_go_conversion_rejects_values_breaking_the_resolution_invariant(
+    field_path, value, message
+):
+    candidate = _candidate()
+    candidate.staged_fields["payload"][field_path] = value
+    candidate.staged_fields["payload"]["blocking_reasons"] = ["Curator review needed."]
+
+    result = _materialize(candidate, ground=False)
+
+    matching = [
+        issue
+        for issue in result.issues
+        if issue["field_path"] == f"payload.{field_path}"
+        and issue["reason"] == "invalid_resolvable_value"
+    ]
+    assert matching, result.issues
+    assert message in matching[0]["message"]
+
+
+def test_go_conversion_rejects_a_resolved_evidence_code_with_another_eco_class():
+    candidate = _candidate()
+    candidate.staged_fields["payload"]["evidence_code"]["eco_curie"] = "ECO:0000314"
+
+    result = _materialize(candidate, ground=False)
+
+    assert "eco_mapping_mismatch" in {issue["reason"] for issue in result.issues}
+
+
+def test_go_term_curie_and_label_must_come_from_one_lookup_record():
+    """ALL-1302 review #8: a CURIE from one candidate and a label from another is rejected."""
+
+    ledger = resolver_call_ledger.ResolverCallLedger(trace_id="go-same-record")
+    ledger.record_tool_output(
+        tool_call_id="call-term",
+        tool_name="quickgo_api_call",
+        output={"results": [
+            {"id": "GO:0005515", "name": "protein binding", "aspect": "molecular_function"},
+            {"id": "GO:0005634", "name": "nucleus", "aspect": "cellular_component"},
+        ]},
+    )
+    token = resolver_call_ledger.set_active_resolver_call_ledger(ledger)
+    try:
+        mixed = {"go_term": go_term_value("binds", curie="GO:0005515", label="nucleus",
+                                          aspect="molecular_function")}
+        _, requirements, issues = go_builder_tools._ground_payload(mixed)
+        assert requirements == [{
+            "field_path": "go_term",
+            "tool_names": ["quickgo_api_call"],
+            "record": {"identifier": "GO:0005515", "label": "nucleus", "aspect": "molecular_function"},
+        }]
+        assert [issue["reason"] for issue in issues] == ["unobserved_tool_value"]
+        assert "Stage a value without an identifier only when no lookup returned one" in issues[0]["message"]
+        assert "leave the identifier out to stage" not in issues[0]["message"]
+
+        matched = {"go_term": go_term_value("binds", curie="GO:0005515", label="protein binding",
+                                            aspect="molecular_function")}
+        refs, _, issues = go_builder_tools._ground_payload(matched)
+        assert (refs, issues) == (["call-term"], [])
+    finally:
+        resolver_call_ledger.reset_active_resolver_call_ledger(token)
+
+
+def test_finalization_rechecks_that_the_identity_comes_from_one_record():
+    output = {"gene_product": {"curie": "RGD:619839", "symbol": "Cttn"}, "other": {"symbol": "Ago2"}}
+    assert record_holds(output, {"identifier": "RGD:619839", "label": "Cttn"})
+    assert not record_holds(output, {"identifier": "RGD:619839", "label": "Ago2"})
+
+
+@pytest.mark.parametrize(
+    ("aspect", "mention", "expected"),
+    [
+        ("biological_process", "Involved in", ("resolved", "matched", "involved_in")),
+        ("cellular_component", "colocalizes-with", ("resolved", "matched", "colocalizes_with")),
+        ("molecular_function", "located_in", ("unresolved", "conflict", None)),
+        ("molecular_function", "strongly required for", ("unresolved", "not_found", None)),
+    ],
+)
+def test_go_qualifiers_resolve_only_through_the_aspect_vocabulary(aspect, mention, expected):
+    """ALL-1302: qualifiers are resolvable values; the builder's GO relation table is the lookup."""
+
+    value = qualifier_value(mention, aspect=aspect)
+
+    assert value["mention"] == mention
+    assert (value["resolution_state"], value["lookup_outcome"], value["name"]) == expected
+
+
+def test_go_patch_looks_qualifiers_up_again_against_the_terms_aspect(active_go_builder_context):
+    workspace, _events = active_go_builder_context
+    staged = _stage_with_rationale("The IPI assay binds Cttn directly.")
+    candidate_id = staged.data["candidate_id"]
+
+    patched = go_builder_tools._patch_go_recommendation_impl(
+        candidate_id, [{"field_path": "qualifiers", "value": ["contributes to", "made up"]}]
+    )
+
+    assert patched.status == "ok", patched.model_dump(mode="json")
+    qualifiers = workspace.get_candidate(candidate_id).staged_fields["payload"]["qualifiers"]
+    assert [(entry["mention"], entry["name"], entry["resolution_state"]) for entry in qualifiers] == [
+        ("contributes to", "contributes_to", "resolved"),
+        ("made up", None, "unresolved"),
+    ]
+    rejected = go_builder_tools._patch_go_recommendation_impl(
+        candidate_id, [{"field_path": "qualifiers", "value": [{"mention": "enables", "name": "enables"}]}]
+    )
+    assert rejected.status == "error"
+
+
+def test_record_holds_never_matches_a_label_echoed_as_the_query():
+    """ALL-1302 re-review: the resolver echoes the paper wording as ``query``; that is not a label."""
+
+    output = {
+        "query": "Cttn",
+        "resolved_gene_id": "RGD:619839",
+        "candidate_mappings": [{"gene_id": "RGD:619839", "symbol": "Cttn2"}],
+    }
+    assert not record_holds(output, {"identifier": "RGD:619839", "label": "Cttn"})
+    assert record_holds(output, {"identifier": "RGD:619839", "label": "Cttn2"})

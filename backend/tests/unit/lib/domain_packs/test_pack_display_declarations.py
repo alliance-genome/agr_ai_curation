@@ -188,10 +188,11 @@ def _compose_path(entry: Any) -> str | None:
 
 
 def _display_leaves(spec: dict[str, Any]) -> list[str]:
-    """Paths a spec reads: its label/id leaves, or its compose parts' paths."""
+    """Paths a spec reads: its label/id leaves (and a resolvable value's paper
+    wording, shown beside UNRESOLVED), or its compose parts' paths."""
 
     if "compose" not in spec:
-        return [spec[role] for role in ("label", "id") if role in spec]
+        return [spec[role] for role in ("label", "id", "mention") if role in spec]
     return [
         leaf
         for entry in spec["compose"]
