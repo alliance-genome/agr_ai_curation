@@ -195,7 +195,7 @@ def test_validator_writes_never_change_an_overridden_value():
     assert is_curator_override(value)
 
 
-def _metadata(display=DISPLAY, name_editable=True) -> DomainPackMetadata:
+def _metadata(display=DISPLAY, name_editable=True, site_metadata=None) -> DomainPackMetadata:
     return DomainPackMetadata(
         pack_id="fixture.override",
         display_name="Fixture Override",
@@ -215,7 +215,7 @@ def _metadata(display=DISPLAY, name_editable=True) -> DomainPackMetadata:
             object_type="Observation", display_name="Observation", metadata={"object_role": "curatable_unit"},
             fields=[
                 DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT,
-                                          metadata={"display": display}),
+                                          metadata={"display": display, **(site_metadata or {})}),
                 DomainPackFieldDefinition(field_path="site.curie", field_type=DomainPackFieldType.STRING,
                                           metadata={"editable": True}),
                 DomainPackFieldDefinition(field_path="site.name", field_type=DomainPackFieldType.STRING,
@@ -231,8 +231,8 @@ def _metadata(display=DISPLAY, name_editable=True) -> DomainPackMetadata:
     )
 
 
-def _pack(display=DISPLAY, name_editable=True) -> LoadedDomainPack:
-    metadata = _metadata(display, name_editable)
+def _pack(display=DISPLAY, name_editable=True, site_metadata=None) -> LoadedDomainPack:
+    metadata = _metadata(display, name_editable, site_metadata)
     return LoadedDomainPack(
         pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
         pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
@@ -555,6 +555,26 @@ def test_draft_edits_of_one_value_identity_become_one_patch_step():
     steps = _draft_patch_steps(["a", "b", "c"], fields, domain_pack=_root_pack(), object_type="Mention",
                                profile=None)
     assert steps == [[("a", "curie"), ("c", "symbol")], [("b", None)]]
+
+
+@pytest.mark.parametrize("operation", [EnvelopeFieldPatchOperation.REPLACE, IDENTITY])
+def test_a_protected_value_field_blocks_a_whole_value_override(operation):
+    staged = _staged_envelope()
+    before = staged.extracted_objects[0].payload["site"]
+    field_path, value, patch_before = (
+        ("site", {**before, "curie": "ONT:1", "name": "epidermis"}, before)
+        if operation is EnvelopeFieldPatchOperation.REPLACE
+        else ("site.curie", {"curie": "ONT:1", "name": "epidermis"}, {"curie": None, "name": None})
+    )
+
+    blocked = _patch(staged, field_path, value, before=patch_before, operation=operation,
+                     pack=_pack(site_metadata={"protected": True}))
+    assert blocked.status is EnvelopeFieldPatchStatus.REJECTED
+    assert blocked.errors == ("field_path 'site' is protected",)
+    # An editable flag on the value's field is harmless.
+    harmless = _patch(staged, field_path, value, before=patch_before, operation=operation,
+                      pack=_pack(site_metadata={"editable": True}))
+    assert harmless.status is EnvelopeFieldPatchStatus.ACCEPTED
 
 
 def _list_pack() -> LoadedDomainPack:
