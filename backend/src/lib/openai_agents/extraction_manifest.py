@@ -8,7 +8,11 @@ from typing import Any, Mapping
 
 from pydantic import ValidationError
 
-from src.lib.domain_packs.resolvable_values import unresolved_header_text
+from src.lib.domain_packs.resolvable_values import (
+    ResolvableSpec,
+    declared_resolvable_fields,
+    unresolved_header_text,
+)
 from src.lib.domain_packs.supervisor_manifest import (
     SupervisorManifestField,
     SupervisorManifestPolicy,
@@ -350,6 +354,7 @@ def _manifest_object(
         domain_object.object_type,
     )
     object_ref = _object_ref(domain_object)
+    resolvable_fields = declared_resolvable_fields(metadata, domain_object.object_type)
     scoped_findings = [
         finding
         for finding in validation_findings
@@ -362,14 +367,16 @@ def _manifest_object(
         "display_label": _policy_label(
             domain_object,
             policy.primary_label_field,
+            resolvable_fields,
             limit=get_supervisor_text_preview_limit(),
         ) or _truncate(object_ref, limit=get_supervisor_text_preview_limit()),
         "secondary_label": _policy_label(
             domain_object,
             policy.secondary_label_field,
+            resolvable_fields,
             limit=get_supervisor_text_preview_limit(),
         ),
-        "fields": _policy_fields(domain_object, policy),
+        "fields": _policy_fields(domain_object, policy, resolvable_fields),
         "validation": _validation_counts(scoped_findings),
         "evidence_count": len(domain_object.evidence_record_ids),
     }
@@ -378,12 +385,14 @@ def _manifest_object(
 def _policy_fields(
     domain_object: CuratableObjectEnvelope,
     policy: SupervisorManifestPolicy,
+    resolvable_fields: Mapping[str, ResolvableSpec],
 ) -> list[dict[str, Any]]:
     fields: list[dict[str, Any]] = []
     for field in policy.summary_fields:
         value = _policy_label(
             domain_object,
             field,
+            resolvable_fields,
             limit=get_supervisor_field_text_limit(),
         )
         if value is None:
@@ -395,6 +404,7 @@ def _policy_fields(
 def _policy_label(
     domain_object: CuratableObjectEnvelope,
     field: SupervisorManifestField | None,
+    resolvable_fields: Mapping[str, ResolvableSpec],
     *,
     limit: int,
 ) -> str | None:
@@ -403,7 +413,10 @@ def _policy_label(
     if field is None:
         return None
     paper_wording = unresolved_header_text(
-        domain_object.payload, field.path, object_metadata=domain_object.metadata,
+        domain_object.payload,
+        field.path,
+        object_metadata=domain_object.metadata,
+        resolvable_fields=resolvable_fields,
     )
     if paper_wording is not None:
         return _truncate(paper_wording, limit=limit)

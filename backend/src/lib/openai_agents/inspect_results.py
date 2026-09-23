@@ -26,14 +26,11 @@ from src.lib.chat_state import document_state
 from src.lib.context import get_current_session_id, get_current_user_id
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.domain_packs.resolvable_values import (
-    LEGACY_EXPLANATION,
     LOOKUP_OUTCOME_KEY,
-    OUTCOME_LEGACY_UNVERIFIED,
     RESOLUTION_STATE_KEY,
-    UNRESOLVED,
-    VALIDATOR_EXPLANATION_KEY,
-    has_resolution_state,
+    declared_resolvable_fields,
     holds_resolution,
+    stated_value,
     unresolved_header_text,
 )
 from src.lib.domain_packs.supervisor_manifest import (
@@ -983,10 +980,11 @@ def _descriptor(value: Any, *, read: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _with_resolution_states(value: Any) -> Any:
-    """Every resolvable value carries its state, so a mention never reads as the item.
+    """Every resolvable value states a valid resolution, so a mention never reads as the item.
 
-    A value stored before ALL-1283 (no contract state) is marked unresolved
-    with lookup outcome legacy_unverified; nothing here can verify it.
+    A value stored before ALL-1283 reads unresolved/legacy_unverified and an
+    invalid stored one unresolved/invalid_schema (``stated_value``); nothing
+    here can verify either.
     """
 
     if isinstance(value, list):
@@ -994,11 +992,7 @@ def _with_resolution_states(value: Any) -> Any:
     if not isinstance(value, Mapping):
         return value
     annotated = {key: _with_resolution_states(item) for key, item in value.items()}
-    if holds_resolution(value) and not has_resolution_state(value):
-        annotated[RESOLUTION_STATE_KEY] = UNRESOLVED
-        annotated[LOOKUP_OUTCOME_KEY] = OUTCOME_LEGACY_UNVERIFIED
-        annotated[VALIDATOR_EXPLANATION_KEY] = LEGACY_EXPLANATION
-    return annotated
+    return stated_value(annotated)
 
 
 def _value_view(value: Any, *, read: Mapping[str, Any], payload_value: bool = False) -> Any:
@@ -1430,6 +1424,7 @@ def _object_row(
     result: _Result,
     obj: CuratableObjectEnvelope,
     *,
+    metadata: DomainPackMetadata,
     policy: SupervisorManifestPolicy,
     findings: Sequence[ValidationFinding],
     selected: Sequence[str],
@@ -1451,7 +1446,12 @@ def _object_row(
     ):
         if field is None:
             continue
-        paper_wording = unresolved_header_text(obj.payload, field.path, object_metadata=obj.metadata)
+        paper_wording = unresolved_header_text(
+            obj.payload,
+            field.path,
+            object_metadata=obj.metadata,
+            resolvable_fields=declared_resolvable_fields(metadata, obj.object_type),
+        )
         if paper_wording is not None:
             row[key] = paper_wording
             continue
@@ -1526,7 +1526,7 @@ def _objects_response(
         obj, findings = item
         policy = policies[obj.object_type]
         return _object_row(
-            result, obj, policy=policy, findings=findings, selected=selected_paths(policy)
+            result, obj, metadata=metadata, policy=policy, findings=findings, selected=selected_paths(policy)
         )
 
     def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:

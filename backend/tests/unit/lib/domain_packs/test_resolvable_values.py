@@ -252,9 +252,9 @@ def test_legacy_values_are_resolved_only_with_an_identity_and_a_covering_event()
     stored = {"curie": None, "mention": "x", "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_FOUND}
     assert effective_resolution(stored, identity_keys=TERM_KEYS, covered_by_validator=True) == (
         UNRESOLVED, OUTCOME_NOT_FOUND)
-    with pytest.raises(ResolvableValueError, match="controlled vocabulary"):
-        effective_resolution({**stored, "lookup_outcome": "whatever"}, identity_keys=TERM_KEYS,
-                             covered_by_validator=True)
+    # A stored word outside the vocabulary reads as unresolved/invalid_schema; nothing raises.
+    assert effective_resolution({**stored, "lookup_outcome": "whatever"}, identity_keys=TERM_KEYS,
+                                covered_by_validator=True) == (UNRESOLVED, "invalid_schema")
 
 
 @pytest.mark.parametrize("covered", [True, False])
@@ -565,3 +565,306 @@ def test_workspace_candidate_matches_read_each_part_from_its_own_key():
     # No label: the label stays missing, never the identifier or another field.
     unlabeled = _candidate_match_from_mapping({"value": "ONT:2", "name": "skin", "symbol": "sk"})
     assert (unlabeled.identifier, unlabeled.label) == ("ONT:2", None)
+
+
+# --- Object-root resolvable values and declared legacy values -------------------
+
+
+def _root_pack(*, state_values=None, outcome_values=None):
+    from src.schemas.domain_pack_metadata import DomainPackModelDefinition
+
+    return DomainPackMetadata(
+        pack_id="fixture.root", display_name="Root", version="0.1.0", metadata_api_version="1.0.0",
+        enum_definitions=[
+            DomainPackEnumDefinition(enum_id="ResolutionState", display_name="State",
+                                     values=[{"value": value} for value in (state_values or RESOLUTION_STATES)]),
+            DomainPackEnumDefinition(enum_id="LookupOutcome", display_name="Outcome",
+                                     values=[{"value": value} for value in (outcome_values or LOOKUP_OUTCOMES)]),
+        ],
+        model_definitions=[DomainPackModelDefinition(
+            model_id="MentionPayload", display_name="Mention payload",
+            metadata={"display": {"label": "symbol", "id": "curie", "mention": "mention"}},
+        )],
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="Mention", display_name="Gene mention", model_ref="MentionPayload",
+                metadata={"object_role": "curatable_unit",
+                          "workspace_display": {"primary_label_field": "symbol"}},
+                fields=[
+                    DomainPackFieldDefinition(field_path="symbol", field_type=DomainPackFieldType.STRING),
+                    DomainPackFieldDefinition(field_path="curie", field_type=DomainPackFieldType.STRING),
+                    DomainPackFieldDefinition(field_path="mention", field_type=DomainPackFieldType.STRING),
+                    DomainPackFieldDefinition(field_path="resolution_state",
+                                              field_type=DomainPackFieldType.ENUM, enum_ref="ResolutionState"),
+                    DomainPackFieldDefinition(field_path="lookup_outcome",
+                                              field_type=DomainPackFieldType.ENUM, enum_ref="LookupOutcome"),
+                ],
+            ),
+            # Not resolvable: a lookup_outcome field here is someone else's word.
+            DomainPackObjectDefinition(
+                object_type="Note", display_name="Note",
+                fields=[DomainPackFieldDefinition(field_path="lookup_outcome",
+                                                  field_type=DomainPackFieldType.STRING)],
+            ),
+        ],
+    )
+
+
+def test_object_root_vocabulary_leaves_are_checked_and_other_objects_are_not():
+    _root_pack()
+    with pytest.raises(ValueError, match="Mention.fields.lookup_outcome must be an enum field"):
+        _root_pack(outcome_values=["matched", "other"])
+    with pytest.raises(ValueError, match="Mention.fields.resolution_state must be an enum field"):
+        _root_pack(state_values=["resolved", "pending"])
+
+
+def test_object_root_leaves_export_with_their_headers_and_plain_words():
+    from types import SimpleNamespace
+
+    from src.lib.flows.export_fields import PackagedExportSource, _pack_export_fields
+    from src.lib.flows.value_display import display_text
+
+    pack = SimpleNamespace(metadata=_root_pack())
+    labels = {field["ref"]: field["label"] for field in _pack_export_fields(pack)}
+    assert labels["object.pack.Mention.mention"] == "Gene mention (paper wording)"
+    assert labels["object.pack.Mention.resolution_state"] == "Gene mention (status)"
+    assert labels["object.pack.Mention.lookup_outcome"] == "Gene mention (lookup result)"
+    enum_values = {field["ref"]: field.get("enum_values") for field in _pack_export_fields(pack)}
+    assert enum_values["object.pack.Mention.lookup_outcome"] == list(LOOKUP_OUTCOMES)
+    specs = PackagedExportSource(pack).display_specs
+    assert display_text("not_validated", specs["object.pack.Mention.lookup_outcome"]) == "Not validated yet"
+    assert display_text("resolved", specs["object.pack.Mention.resolution_state"]) == "Resolved"
+    assert "object.pack.Note.lookup_outcome" not in specs
+
+
+def test_declared_legacy_values_get_the_legacy_rule_in_labels():
+    """A legacy root value with neither a state nor a mention is still declared resolvable."""
+
+    from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, unresolved_header_text
+
+    metadata = _root_pack()
+    specs = declared_resolvable_fields(metadata, "Mention")
+    assert set(specs) == {""}
+    legacy = {"symbol": "unc-54 myosin", "curie": None}
+    # Without the declaration nothing marks it; with it, the legacy rule applies.
+    assert unresolved_header_text(legacy, "symbol") is None
+    assert unresolved_header_text(legacy, "symbol", resolvable_fields=specs) == (
+        f"unc-54 myosin {LEGACY_UNVERIFIED_SUFFIX}")
+    covered = {"validator_resolved_value_materialization": [{"materialized_field_paths": ["curie"]}]}
+    assert unresolved_header_text({"symbol": "unc-54", "curie": "X:1"}, "symbol", object_metadata=covered,
+                                  resolvable_fields=specs) is None
+
+    envelope = DomainEnvelope(
+        envelope_id="root-env", domain_pack_id="fixture.root",
+        extracted_objects=[CuratableObjectEnvelope(object_type="Mention", pending_ref_id="m-1", payload=legacy)],
+    )
+    [row] = DomainPackMetadataReviewRowMaterializer(metadata).materialize(envelope, envelope_revision=1)
+    assert row.display_label == f"unc-54 myosin {LEGACY_UNVERIFIED_SUFFIX}"
+
+
+def test_effective_payload_annotates_explicitly_indexed_declared_paths():
+    spec = ResolvableSpec(id_key="curie", label_key="label")
+    payload = {"terms": [{"curie": "ONT:1", "label": "short"}, {"curie": "ONT:2", "label": "long"}]}
+    covered = {"validator_resolved_value_materialization": [{"materialized_field_paths": ["terms[1].curie"]}]}
+
+    effective = effective_payload(payload, {"terms[0]": spec, "terms[1]": spec}, object_metadata=covered)
+
+    assert (effective["terms"][0]["resolution_state"], effective["terms"][0]["lookup_outcome"]) == (
+        UNRESOLVED, OUTCOME_LEGACY_UNVERIFIED)
+    assert effective["terms"][0]["mention"] == f"short (ONT:1) {LEGACY_UNVERIFIED_SUFFIX}"
+    assert (effective["terms"][1]["resolution_state"], effective["terms"][1]["lookup_outcome"]) == (
+        RESOLVED, OUTCOME_MATCHED)
+    # Only the named element: an index past the end changes nothing.
+    assert effective_payload(payload, {"terms[5]": spec}, object_metadata=None) == payload
+    assert "resolution_state" not in payload["terms"][0]
+
+
+def test_header_text_recognises_explicitly_indexed_declared_values():
+    from src.lib.domain_packs.resolvable_values import unresolved_header_text
+
+    specs = {"terms[0]": ResolvableSpec(id_key="curie", label_key="label")}
+    payload = {"terms": [{"curie": None, "label": "slow growth"}]}
+    assert unresolved_header_text(payload, "terms[0].label", resolvable_fields=specs) == (
+        f"slow growth {LEGACY_UNVERIFIED_SUFFIX}")
+
+
+
+@pytest.mark.parametrize("broken", [
+    {"lookup_outcome": "whatever"},
+    {"lookup_outcome": None},
+    {"resolution_state": "validated"},
+    {"lookup_outcome": "not_found"},  # resolved but not matched
+    {"validator_explanation": ["not", "text"]},
+    {"curie": None, "name": None},  # resolved without an identity
+])
+def test_invalid_stored_values_read_as_unresolved_with_a_marker_and_never_raise(broken, caplog):
+    from src.lib.domain_packs.resolvable_values import (
+        INVALID_RECORD_EXPLANATION,
+        INVALID_RECORD_SUFFIX,
+        stated_value,
+    )
+    from src.lib.flows.value_display import display_text
+
+    stored = {**resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"}), **broken}
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+
+    with caplog.at_level("WARNING"):
+        effective = effective_value(stored, spec, covered_by_validator=True)
+    assert effective["resolution_state"] == UNRESOLVED
+    assert effective["lookup_outcome"] == "invalid_schema"
+    assert effective["validator_explanation"] == INVALID_RECORD_EXPLANATION
+    assert (effective["curie"], effective["name"]) == (None, None)
+    assert effective["mention"] == f"skin {INVALID_RECORD_SUFFIX}"
+    assert "breaks the contract" in caplog.text
+    # The effective copy satisfies the invariant; the stored value is untouched.
+    check_resolvable_value(effective, identity_keys=TERM_KEYS)
+    assert stored != effective
+
+    payload = effective_payload({"site": stored}, {"site": spec}, object_metadata=None)
+    assert payload["site"]["lookup_outcome"] == "invalid_schema"
+    assert display_text(stored, {"label": "name", "id": "curie", "mention": "mention"}) == "UNRESOLVED"
+    assert stated_value(stored)["lookup_outcome"] in ("invalid_schema", "matched")
+
+
+def test_write_paths_enforce_the_vocabulary():
+    value = unresolved_value("skin", identity_keys=TERM_KEYS)
+    with pytest.raises(ResolvableValueError):
+        mark_unresolved(value, "whatever", explanation=None)
+    with pytest.raises(ResolvableValueError, match="validator_explanation"):
+        mark_unresolved(value, OUTCOME_NOT_FOUND, explanation=["not", "text"])
+    with pytest.raises(ResolvableValueError):
+        mark_resolved(value, {"curie": "ONT:1"}, explanation={"not": "text"})
+
+
+def test_a_stored_vocabulary_word_outside_the_vocabulary_is_marked_not_raised():
+    from src.lib.flows.value_display import display_text
+
+    assert display_text("whatever", {"value_labels": LOOKUP_OUTCOME_LABELS}) == "Invalid value (whatever)"
+
+
+# --- Re-validating containers stored before the contract ------------------------
+
+_OLD_PHENOTYPE_TERM = {"curie": "WBPhenotype:0000154", "label": "reduced brood size",
+                       "resolution_state": "pending_ontology_resolution"}
+_OLD_DISEASE_TERM = {"curie": "DOID:10652", "name": "Alzheimer's disease",
+                     "resolution_state": "pending_ontology_resolution"}
+
+
+def _legacy_metadata(label_key):
+    return _metadata(expected={"curie": "site.curie", "label": f"site.{label_key}"}, input_path=f"site.{label_key}")
+
+
+@pytest.mark.parametrize(("old", "label_key"), [(_OLD_PHENOTYPE_TERM, "label"), (_OLD_DISEASE_TERM, "name")])
+def test_old_containers_revalidate_resolved_and_unresolved_without_raising(old, label_key):
+    from src.lib.domain_packs.resolvable_values import unresolved_header_text
+
+    metadata = _legacy_metadata(label_key)
+    if label_key == "label":
+        metadata = metadata.model_copy(update={"object_definitions": [
+            metadata.object_definitions[0].model_copy(update={"fields": [
+                *metadata.object_definitions[0].fields,
+                DomainPackFieldDefinition(field_path="site.label", field_type=DomainPackFieldType.STRING),
+            ]})
+        ]})
+    spec = ResolvableSpec(id_key="curie", label_key=label_key)
+
+    envelope = _envelope({"site": dict(old)})
+    resolved_item = _item(metadata, envelope, values={"curie": old["curie"], "label": old[label_key]})
+    resolved = materialize_validator_results_into_envelope(envelope, metadata, [resolved_item])
+    site = resolved.envelope.extracted_objects[0].payload["site"]
+    assert (site["resolution_state"], site["lookup_outcome"]) == (RESOLVED, OUTCOME_MATCHED)
+    assert "mention" not in site
+    assert effective_value(site, spec, covered_by_validator=False) is site
+
+    unresolved_item = _item(metadata, envelope, status="unresolved", outcome="not_found")
+    once = materialize_validator_results_into_envelope(envelope, metadata, [unresolved_item])
+    # Re-validating the re-validated container again must not raise either.
+    twice = materialize_validator_results_into_envelope(once.envelope, metadata, [unresolved_item])
+    site = twice.envelope.extracted_objects[0].payload["site"]
+    assert (site["resolution_state"], site["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_FOUND)
+    # The old identity is kept in storage but reads as unverified paper wording.
+    assert site["curie"] == old["curie"]
+    effective = effective_value(site, spec, covered_by_validator=False)
+    assert (effective["curie"], effective[label_key]) == (None, None)
+    assert effective["mention"] == f"{old[label_key]} ({old['curie']}) {LEGACY_UNVERIFIED_SUFFIX}"
+    assert effective["lookup_outcome"] == OUTCOME_NOT_FOUND
+    check_resolvable_value(effective, identity_keys=spec.identity_keys)
+    assert unresolved_header_text({"site": site}, f"site.{label_key}", resolvable_fields={"site": spec}) == (
+        f"{old[label_key]} ({old['curie']}) {LEGACY_UNVERIFIED_SUFFIX}")
+
+
+def test_a_contract_value_still_needs_non_empty_paper_wording():
+    with pytest.raises(ResolvableValueError, match="paper wording"):
+        check_resolvable_value({"curie": None, "mention": "  ", "resolution_state": "unresolved",
+                                "lookup_outcome": "not_found"}, identity_keys=TERM_KEYS)
+
+
+# --- Validator-filled keys beyond id/label (``validated``) ----------------------
+
+GENE_DISPLAY = {"label": "gene_symbol", "id": "primary_external_id", "mention": "mention", "validated": ["taxon"]}
+
+
+def test_validated_keys_are_part_of_the_identity():
+    spec = resolvable_spec_from_display(GENE_DISPLAY)
+    assert spec.validated_keys == ("taxon",)
+    assert spec.identity_keys == ("primary_external_id", "gene_symbol", "taxon")
+
+    staged = unresolved_value("unc-54", identity_keys=spec.identity_keys)
+    assert staged["taxon"] is None
+    # An unresolved value never carries a validator-filled taxon.
+    with pytest.raises(ResolvableValueError, match="taxon"):
+        check_resolvable_value({**staged, "taxon": "NCBITaxon:6239"}, identity_keys=spec.identity_keys)
+    mark_resolved(staged, {"primary_external_id": "G:1", "gene_symbol": "unc-54", "taxon": "NCBITaxon:6239"},
+                  explanation=None)
+    check_resolvable_value(staged, identity_keys=spec.identity_keys)
+
+
+def test_the_legacy_rule_empties_validated_keys_and_the_cell_stays_label_and_id():
+    from src.lib.flows.value_display import display_text
+
+    spec = resolvable_spec_from_display(GENE_DISPLAY)
+    legacy = {"gene_symbol": "unc-54", "primary_external_id": "G:1", "taxon": "NCBITaxon:6239"}
+    effective = effective_value(legacy, spec, covered_by_validator=False)
+    assert (effective["gene_symbol"], effective["primary_external_id"], effective["taxon"]) == (None, None, None)
+    covered = effective_value(legacy, spec, covered_by_validator=True)
+    assert covered["taxon"] == "NCBITaxon:6239"
+    assert display_text(covered, GENE_DISPLAY) == "unc-54 (G:1)"
+    # A resolved value missing its taxon still reads resolved: the identity is present.
+    resolved = resolved_value("unc-54", {"gene_symbol": "unc-54", "primary_external_id": "G:1", "taxon": None})
+    assert display_text(resolved, GENE_DISPLAY) == "unc-54 (G:1)"
+
+
+def test_validated_must_be_declared_leaves_of_a_resolvable_value():
+    from src.schemas.domain_pack_metadata import DomainPackModelDefinition
+
+    DomainPackFieldDefinition(field_path="gene", metadata={"display": GENE_DISPLAY})
+    for bad in (["taxon", "taxon"], ["gene_symbol"], ["organism.taxon"], [], "taxon"):
+        with pytest.raises(ValueError, match="validated"):
+            DomainPackFieldDefinition(field_path="gene", metadata={"display": {**GENE_DISPLAY, "validated": bad}})
+    with pytest.raises(ValueError, match="only for a resolvable value"):
+        DomainPackFieldDefinition(field_path="gene", metadata={"display": {"label": "name", "validated": ["taxon"]}})
+
+    def pack(root_fields, field_fields):
+        return DomainPackMetadata(
+            pack_id="fixture.validated", display_name="V", version="0.1.0", metadata_api_version="1.0.0",
+            model_definitions=[DomainPackModelDefinition(model_id="Gene", display_name="Gene",
+                                                         metadata={"display": GENE_DISPLAY})],
+            object_definitions=[DomainPackObjectDefinition(
+                object_type="GeneMention", display_name="Gene mention", model_ref="Gene",
+                fields=[
+                    *(DomainPackFieldDefinition(field_path=path, field_type=DomainPackFieldType.STRING)
+                      for path in root_fields),
+                    DomainPackFieldDefinition(field_path="allele", field_type=DomainPackFieldType.OBJECT,
+                                              metadata={"display": GENE_DISPLAY}),
+                    *(DomainPackFieldDefinition(field_path=path, field_type=DomainPackFieldType.STRING)
+                      for path in field_fields),
+                ],
+            )],
+        )
+
+    pack(["taxon"], ["allele.taxon"])
+    with pytest.raises(ValueError, match="validated key 'taxon' of '<object root>'"):
+        pack([], ["allele.taxon"])
+    with pytest.raises(ValueError, match="validated key 'taxon' of 'allele'"):
+        pack(["taxon"], [])
