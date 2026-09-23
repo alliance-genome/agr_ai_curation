@@ -25,13 +25,30 @@ fixtures:
               curie: RGD:3020
               entity_type: protein
               taxon_curie: NCBITaxon:10116
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             go_term:
+              mention: extracellular fraction
               curie: GO:0005615
               label: extracellular space
               aspect: cellular_component
-            evidence_code: IDA
-            evidence_eco_curie: ECO:0000314
-            reference_curie: AGRKB:101000000400377
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
+            evidence_code:
+              mention: IDA
+              code: IDA
+              eco_curie: ECO:0000314
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
+            reference:
+              mention: PMID:12345678
+              curie: AGRKB:101000000400377
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             with_from: []
             qualifiers: []
             annotation_extensions: []
@@ -41,7 +58,6 @@ fixtures:
               provider_key: RGD
               taxon_curie: NCBITaxon:10116
               review_lane: rgd_go_curator_review
-            resolution_state: resolved
             blocking_reasons: []
           evidence_record_ids:
             - go-evidence-rgd-lta-1
@@ -92,16 +108,34 @@ fixtures:
           payload:
             gene_product:
               mention: rno-miR-21-5p
-              label: rno-miR-21-5p
+              label: null
+              curie: null
               entity_type: mature_miRNA
               taxon_curie: NCBITaxon:10116
+              resolution_state: unresolved
+              lookup_outcome: not_validated
+              validator_explanation: Not validated yet.
             go_term:
+              mention: Nuclear
               curie: GO:0005634
               label: nucleus
               aspect: cellular_component
-            evidence_code: IDA
-            evidence_eco_curie: ECO:0000314
-            reference_curie: AGRKB:101000000400377
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
+            evidence_code:
+              mention: IDA
+              code: IDA
+              eco_curie: ECO:0000314
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
+            reference:
+              mention: PMID:23456789
+              curie: AGRKB:101000000400377
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             with_from: []
             qualifiers: []
             annotation_extensions: []
@@ -112,7 +146,6 @@ fixtures:
               taxon_curie: NCBITaxon:10116
               review_lane: rgd_go_curator_review
               identity_hint: rno-miR-21-5p
-            resolution_state: unresolved
             blocking_reasons:
               - Durable RGD gene-product identity is unresolved for the mature miRNA mention.
               - Curator review must distinguish the mature product from its precursor gene before acceptance.

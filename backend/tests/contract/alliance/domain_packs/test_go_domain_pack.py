@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
@@ -18,6 +19,12 @@ from src.lib.domain_packs.materialization import (
     project_evidence_anchor_projections,
 )
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+from src.lib.domain_packs.resolvable_values import (
+    LEGACY_UNVERIFIED_SUFFIX,
+    OUTCOME_LEGACY_UNVERIFIED,
+    effective_payload,
+    resolvable_spec_from_display,
+)
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorRuntimeContext,
     dispatch_active_validator_bindings,
@@ -248,7 +255,8 @@ def test_protein_fixture_survives_review_row_candidate_and_evidence_projection()
     assert row.display_label == "Lta"
     assert row.secondary_label == "extracellular space"
     assert row.validation_state == "clear"
-    assert payload["resolution_state"] == "resolved"
+    assert payload["gene_product"]["resolution_state"] == "resolved"
+    assert payload["gene_product"]["lookup_outcome"] == "matched"
 
     candidate_fields = {
         field.field_key: field.value
@@ -256,9 +264,9 @@ def test_protein_fixture_survives_review_row_candidate_and_evidence_projection()
     }
     assert candidate_fields["gene_product.curie"] == "RGD:3020"
     assert candidate_fields["go_term.curie"] == "GO:0005615"
-    assert candidate_fields["evidence_code"] == "IDA"
-    assert candidate_fields["evidence_eco_curie"] == "ECO:0000314"
-    assert candidate_fields["reference_curie"] == "AGRKB:101000000400377"
+    assert candidate_fields["evidence_code.code"] == "IDA"
+    assert candidate_fields["evidence_code.eco_curie"] == "ECO:0000314"
+    assert candidate_fields["reference.curie"] == "AGRKB:101000000400377"
     assert candidate_fields["with_from"] == []
     assert candidate_fields["qualifiers"] == []
     assert candidate_fields["annotation_extensions"] == []
@@ -286,8 +294,9 @@ def test_ambiguous_mature_mirna_remains_unresolved_and_blocking_in_projection():
     payload = envelope.extracted_objects[0].payload
 
     assert payload["gene_product"]["mention"] == "rno-miR-21-5p"
-    assert "curie" not in payload["gene_product"]
-    assert payload["resolution_state"] == "unresolved"
+    assert payload["gene_product"]["curie"] is None
+    assert payload["gene_product"]["resolution_state"] == "unresolved"
+    assert payload["gene_product"]["lookup_outcome"] == "not_validated"
     assert len(payload["blocking_reasons"]) == 2
     assert envelope.validation_findings[0].severity.value == "blocker"
 
@@ -297,12 +306,15 @@ def test_ambiguous_mature_mirna_remains_unresolved_and_blocking_in_projection():
     )
     row = rows[0]
     assert row.validation_state == "blocked"
+    # The unresolved gene product is labelled as paper wording, never as the item.
+    assert row.display_label == "rno-miR-21-5p (paper wording)"
     candidate_fields = {
         field.field_key: field.value
         for field in workspace_pipeline._draft_fields_from_review_row(row)
     }
     assert candidate_fields["gene_product.mention"] == "rno-miR-21-5p"
-    assert candidate_fields["resolution_state"] == "unresolved"
+    assert candidate_fields["gene_product.resolution_state"] == "unresolved"
+    assert candidate_fields["gene_product.lookup_outcome"] == "not_validated"
     assert "gene_product.curie" in candidate_fields
     assert candidate_fields["gene_product.curie"] is None
     assert candidate_fields["blocking_reasons"] == payload["blocking_reasons"]
@@ -317,3 +329,55 @@ def test_ambiguous_mature_mirna_remains_unresolved_and_blocking_in_projection():
         "go_term",
         "rationale",
     }
+
+
+def _legacy_go_payload() -> dict:
+    """A GO proposal stored before ALL-1283: values without paper wording or contract state."""
+
+    _, fixtures = _contracts()
+    payload = copy.deepcopy(fixtures.fixtures[0].envelope.extracted_objects[0].payload)
+    payload["gene_product"] = {
+        "mention": "Lta protein",
+        "label": "Lta",
+        "curie": "RGD:3020",
+        "entity_type": "protein",
+        "taxon_curie": "NCBITaxon:10116",
+    }
+    payload["go_term"] = {
+        "curie": "GO:0005615",
+        "label": "extracellular space",
+        "aspect": "cellular_component",
+    }
+    payload["evidence_code"] = "IDA"
+    payload["evidence_eco_curie"] = "ECO:0000314"
+    payload.pop("reference")
+    payload["reference_curie"] = "AGRKB:101000000400377"
+    payload["resolution_state"] = "resolved"
+    return payload
+
+
+def test_legacy_gene_product_reads_as_legacy_unverified_without_a_validator_event():
+    metadata, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    legacy_object = envelope.extracted_objects[0].model_copy(
+        update={"payload": _legacy_go_payload()}
+    )
+    legacy_envelope = envelope.model_copy(update={"extracted_objects": [legacy_object]})
+
+    rows = DomainPackMetadataReviewRowMaterializer(metadata).materialize(
+        legacy_envelope, envelope_revision=1
+    )
+
+    assert rows[0].display_label == f"Lta protein {LEGACY_UNVERIFIED_SUFFIX}"
+    field = next(
+        item
+        for item in metadata.object_definitions[0].fields
+        if item.field_path == "gene_product"
+    )
+    spec = resolvable_spec_from_display(field.metadata["display"])
+    effective = effective_payload(
+        legacy_object.payload, {"gene_product": spec}, object_metadata=legacy_object.metadata
+    )
+    assert effective["gene_product"]["resolution_state"] == "unresolved"
+    assert effective["gene_product"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+    assert effective["gene_product"]["curie"] is None

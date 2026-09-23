@@ -41,6 +41,18 @@ def _reset_loader_caches(monkeypatch):
     schema_discovery.reset_cache()
 
 
+def _with_from_entry(curie):
+    """A With/From entry as the GO candidate stores it (ALL-1283)."""
+
+    return {
+        "mention": curie.removeprefix("RGD:"),
+        "curie": curie,
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": None,
+    }
+
+
 def _result_payload(**overrides):
     violations = list(overrides.pop("policy_violations", []))
     insufficient = "insufficient_primary_evidence" in violations
@@ -165,7 +177,7 @@ def test_rgd_go_evidence_policy_prompt_encodes_only_the_approved_profile():
                 "evidence_basis": "physical_interaction",
                 "proposed_evidence_code": "IPI",
                 "proposed_evidence_eco_curie": "ECO:0000353",
-                "proposed_with_from": ["RGD:partner"],
+                "proposed_with_from": [_with_from_entry("RGD:partner")],
                 "proposed_go_term_curie": "GO:0005515",
             },
         ),
@@ -180,7 +192,7 @@ def test_rgd_go_evidence_policy_prompt_encodes_only_the_approved_profile():
                 "proposed_evidence_code": "IMP",
                 "proposed_evidence_eco_curie": "ECO:0000315",
                 "proposed_aspect": "biological_process",
-                "proposed_with_from": ["RGD:allele"],
+                "proposed_with_from": [_with_from_entry("RGD:allele")],
                 "proposed_rationale": (
                     "Cttn knockdown caused the reduced migration phenotype."
                 ),
@@ -195,7 +207,7 @@ def test_rgd_go_evidence_policy_prompt_encodes_only_the_approved_profile():
                 "proposed_evidence_code": "IGI",
                 "proposed_evidence_eco_curie": "ECO:0000316",
                 "proposed_aspect": "biological_process",
-                "proposed_with_from": ["RGD:interacting-gene"],
+                "proposed_with_from": [_with_from_entry("RGD:interacting-gene")],
             },
         ),
         (
@@ -246,7 +258,7 @@ def test_approved_submit_ready_rows_validate(fixture_name, overrides, monkeypatc
                 "evidence_basis": "physical_interaction",
                 "proposed_evidence_code": "IPI",
                 "proposed_evidence_eco_curie": "ECO:0000353",
-                "proposed_with_from": ["RGD:partner"],
+                "proposed_with_from": [_with_from_entry("RGD:partner")],
                 "go_term_is_catalytic_activity_or_descendant": True,
             },
             ["ipi_catalytic_activity_unsupported"],
@@ -262,7 +274,7 @@ def test_approved_submit_ready_rows_validate(fixture_name, overrides, monkeypatc
         ),
         (
             "ida_forbids_with_from",
-            {"proposed_with_from": ["RGD:partner"]},
+            {"proposed_with_from": [_with_from_entry("RGD:partner")]},
             ["with_from_forbidden"],
         ),
         (
@@ -498,6 +510,47 @@ def test_compact_policy_assembles_request_facts_and_computes_consequences(monkey
         assert result.curator_message == INSUFFICIENT_EVIDENCE_MESSAGE
 
 
+def test_compact_policy_reads_with_from_entries_and_an_unmatched_evidence_code(monkeypatch):
+    """ALL-1283: With/From entries are stored objects; an unknown code has no ECO class."""
+
+    from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
+    from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)["RGDGOEvidencePolicyValidationResult"]
+    partner = {
+        "mention": "Ago2 partner",
+        "curie": None,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+    original = _result_payload(
+        proposed_evidence_code="TAS",
+        proposed_evidence_eco_curie=None,
+        proposed_with_from=[partner],
+    )
+    request = DomainValidationRequest(
+        request_id=original["request_id"], validator_binding_id=original["validator_binding_id"],
+        validator_agent=original["validator_agent"], target=original["target"],
+        selected_inputs=_selected_inputs_for_result(original),
+    )
+    contract = policy_decision_contract(request, schema)
+    scientific = {name: original[name] for name in _SCIENTIFIC_FIELDS}
+    decision = contract.decision_schema(
+        request_id=request.request_id, status="unresolved",
+        explanation="Assessment of the supplied evidence.", scientific=scientific,
+    )
+
+    result = ValidatorDecisionWorkspace([contract]).assemble(decision)
+
+    assert result.policy_violations == [
+        "evidence_code_mismatch", "eco_mapping_mismatch", "with_from_forbidden",
+    ]
+    assert result.proposed_evidence_eco_curie is None
+    assert [entry.model_dump(mode="json", exclude_unset=True) for entry in result.proposed_with_from] == [partner]
+
+
 def test_compact_policy_cannot_supply_proposal_copies_or_foreign_evidence(monkeypatch):
     from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
     from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
@@ -560,7 +613,7 @@ def test_validator_finalization_applies_the_typed_policy_schema(monkeypatch):
         ("proposed_evidence_eco_curie", "ECO:0000353"),
         ("proposed_aspect", "cellular_component"),
         ("proposed_go_term_curie", "GO:0005515"),
-        ("proposed_with_from", ["RGD:partner"]),
+        ("proposed_with_from", [_with_from_entry("RGD:partner")]),
         ("proposed_qualifiers", ["contributes_to"]),
         ("proposed_annotation_extensions", ["occurs_in(CL:0000000)"]),
         ("proposed_negated", True),

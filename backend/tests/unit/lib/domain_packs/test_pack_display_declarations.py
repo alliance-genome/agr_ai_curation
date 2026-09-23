@@ -50,7 +50,8 @@ PACK_PATHS = {
 }
 SHAPES_PATH = REPO_ROOT / "backend" / "tests" / "fixtures" / "flows" / "display_value_shapes.json"
 
-ROLE_KEYS = {"label", "id", "state"}
+# ``mention`` names a resolvable value's paper wording (ALL-1283).
+ROLE_KEYS = {"label", "id", "state", "mention"}
 SPEC_KEYS = ROLE_KEYS | {"resolved_states", "compose", "separator"}
 
 # Models no display can be declared for yet, each with the reason. Keep this list short:
@@ -190,10 +191,11 @@ def _compose_path(entry: Any) -> str | None:
 
 
 def _display_leaves(spec: dict[str, Any]) -> list[str]:
-    """Paths a spec reads: its label/id leaves, or its compose parts' paths."""
+    """Paths a spec reads: its label/id leaves (and a resolvable value's paper
+    wording, shown beside UNRESOLVED), or its compose parts' paths."""
 
     if "compose" not in spec:
-        return [spec[role] for role in ("label", "id") if role in spec]
+        return [spec[role] for role in ("label", "id", "mention") if role in spec]
     return [
         leaf
         for entry in spec["compose"]

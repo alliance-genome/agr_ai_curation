@@ -2674,7 +2674,7 @@ tools:
       audit:
         display_name: Stage GO Recommendation
       documentation:
-        summary: Stages one typed GOCuratableObject recommendation with verified evidence, resolved or explicitly ambiguous identity, current-annotation context, and curator-visible limitations.
+        summary: Stages one typed GOCuratableObject recommendation with verified evidence, the paper's wording for each GO value next to any identifier a lookup confirmed (unconfirmed values stay unresolved), current-annotation context, and curator-visible limitations.
   - tool_id: patch_go_recommendation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.go_builder_tools:patch_go_recommendation

@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import Field, StrictBool, StrictStr, ValidationInfo, model_validator
 
 from src.schemas.domain_validator import (  # type: ignore[reportMissingImports]
+    DomainValidatorBaseModel,
     DomainValidatorResultBase,
 )
 
@@ -69,6 +70,27 @@ INSUFFICIENT_EVIDENCE_MESSAGE = (
 )
 
 
+class RGDGOWithFromEntry(DomainValidatorBaseModel):
+    """One With/From entry as the candidate stores it: paper wording and, when matched, its identifier."""
+
+    mention: StrictStr = Field(description="With/From entry as the paper words it")
+    curie: StrictStr | None = Field(
+        default=None, description="Identifier a lookup matched; null while unresolved"
+    )
+    resolution_state: Literal["resolved", "unresolved"] | None = Field(
+        default=None, description="Whether a lookup matched the entry"
+    )
+    lookup_outcome: StrictStr | None = Field(
+        default=None, description="Lookup result recorded for the entry"
+    )
+    validator_explanation: StrictStr | None = Field(
+        default=None, description="Explanation recorded with the entry's lookup result"
+    )
+    validator_curator_message: StrictStr | None = Field(
+        default=None, description="Curator message recorded with the entry's lookup result"
+    )
+
+
 COMPACT_VALIDATOR_RUNTIME = ("agr.alliance", "agr_ai_curation_alliance.compact_adapter:build_compact_validator_runtime")
 
 
@@ -84,10 +106,10 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
         description="Evidence class supported by the cited primary paper evidence"
     )
     proposed_evidence_code: StrictStr = Field(
-        description="GO evidence code copied from the candidate"
+        description="GO evidence code proposed for the candidate"
     )
-    proposed_evidence_eco_curie: StrictStr = Field(
-        description="ECO CURIE copied from the candidate"
+    proposed_evidence_eco_curie: StrictStr | None = Field(
+        description="ECO CURIE the builder matched to the proposed code; null when the code has no known ECO class"
     )
     proposed_aspect: RGDGOAspect = Field(
         description="GO aspect copied from the candidate term"
@@ -95,8 +117,8 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
     proposed_go_term_curie: StrictStr = Field(
         description="GO CURIE copied from the candidate term"
     )
-    proposed_with_from: list[StrictStr] = Field(
-        description="With/From identifiers copied from the candidate"
+    proposed_with_from: list[RGDGOWithFromEntry] = Field(
+        description="With/From entries copied from the candidate"
     )
     proposed_qualifiers: list[StrictStr] = Field(
         description="Qualifiers copied from the candidate"
@@ -320,7 +342,7 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
         drifted = [
             field_name
             for field_name, expected in expected_values.items()
-            if getattr(self, field_name) != expected
+            if self._canonical_copy(field_name) != expected
         ]
         if drifted:
             raise ValueError(
@@ -343,6 +365,18 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
             raise ValueError(
                 "primary_evidence_record_ids must reference supplied exact evidence"
             )
+
+    def _canonical_copy(self, field_name: str) -> object:
+        value = getattr(self, field_name)
+        if field_name == "proposed_with_from":
+            # Entries compare as the stored candidate objects they were copied from.
+            return [
+                entry.model_dump(mode="json", exclude_unset=True)
+                if isinstance(entry, RGDGOWithFromEntry)
+                else entry
+                for entry in value
+            ]
+        return value
 
     def _imp_support_is_recorded(self, info: ValidationInfo) -> bool:
         perturbation = (self.imp_perturbation or "").strip()
@@ -376,6 +410,7 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
 
 __all__ = [
     "EVIDENCE_POLICY",
+    "RGDGOWithFromEntry",
     "INSUFFICIENT_EVIDENCE_MESSAGE",
     "PRIMARY_EVIDENCE_LOCATIONS",
     "RGDGOEvidencePolicyValidationResult",
