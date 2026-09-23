@@ -96,8 +96,36 @@ trace event, which is mirrored to Langfuse as an EVENT observation.
 | `deferred_tools` | definitions transported for hosted tool search; `loaded_status=provider_managed` because the provider decides what it loads during the response |
 | `provider_managed` | components this process cannot observe: `previous_response_history`, `stored_conversation_history`, `prompt_template`, `hosted_tool_search_loaded_definitions_this_response` |
 | `provider_usage` | `status=reported` with provider input, cached input, output and reasoning tokens, or `not_reported` (never zero-filled), `not_sent` for a blocked request |
+| `prompt_cache` | `key` (the `prompt_cache_key` sent), `source` (`application`, `agents_sdk_generated`, `unrecognized`, `not_set`), `tool_surface` (digest of the tool definitions an application key is bound to, else null) and `cached_input_share` (provider cached input tokens / input tokens, null until usage is reported) |
 | `outcome` | `completed`, `incomplete`, `failed`, `provider_error`, `cancelled`, `consumer_closed`, `stream_closed_without_terminal_event`, `blocked_before_send` |
 | correlation | `trace_id`, `session_id`, cost-context `run_id` / `workflow_id` / `job_id` / `node_id` / `activity` / `document_id`, `agent_name` / `agent_id` / `agent_role`, `attempt`, SDK `sdk_trace_id` / `sdk_span_id`, `provider_response_id`, `provider_request_id` |
+
+## Prompt cache key (ALL-1284)
+
+Every native OpenAI runtime (supervisor, flow supervisor, specialists,
+validators, formatters including chat output, the figure-locator and hierarchy
+classifiers, the structured-output retry agent and Agent Studio) sets
+`ModelSettings.extra_args["prompt_cache_key"]` through
+`config.build_model_settings(..., prompt_cache=PromptCacheIdentity(...))` or
+`config.prompt_cache_extra_args`, so the Agents SDK never derives its own
+per-session or per-run key for them. The key is
+`<agent key>:p<prompt digest>t<tool surface digest>`:
+
+- the prompt digest covers the agent key, the model id and the static prompt
+  layers (`PromptLayerBundle.static_prefix()`: every layer before the per-run
+  runtime context), so runs, sessions and documents of one agent share it and a
+  prompt or model change moves it. The flow supervisor's instructions are
+  generated in code from the saved flow, so its static basis is the saved
+  flow's id, name and definition: editing the flow moves the key, a code-only
+  change to the generated wording does not (that costs one cache miss);
+- `MeasuredModel` binds the tool surface digest per request from the tool and
+  handoff definitions actually sent (name, description, parameter schema,
+  strictness, deferred loading, namespace and its description, hosted tool
+  search presence), independent of order. Validator batch and single-item tool
+  surfaces therefore get different keys, and tools rebuilt per run with
+  identical schemas keep the same key.
+
+OpenAI-compatible providers get no application key.
 
 Cost is not recorded here. It stays on the SDK response/generation span
 (`observability/cost_tracing.py`), which TraceReview counts once per provider

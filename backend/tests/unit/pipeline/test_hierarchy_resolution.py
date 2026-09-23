@@ -185,9 +185,10 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
     agents_module = types.ModuleType("agents")
 
     class FakeModelSettings:
-        def __init__(self, temperature=None, reasoning=None):
+        def __init__(self, temperature=None, reasoning=None, extra_args=None):
             captured["temperature"] = temperature
             captured["reasoning"] = reasoning
+            captured["extra_args"] = extra_args
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -267,7 +268,7 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
 
     monkeypatch.setattr(hierarchy, "gen_ai_invoke_agent_span", _fake_sentry_span)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.6-terra")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "medium")
     monkeypatch.setenv("HIERARCHY_RESOLUTION_MAX_TURNS", "6")
 
@@ -284,6 +285,8 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
     assert captured["max_turns"] == 6
     assert isinstance(captured["reasoning"], fake_reasoning_cls)
     assert captured["reasoning"].effort == "medium"
+    # ALL-1284: one stable native OpenAI prompt cache key for every paper.
+    assert captured["extra_args"]["prompt_cache_key"].startswith("hierarchy_classifier:")
     assert "Intro" in captured["user_prompt"]
     span_call = next(call for call in sentry_calls if call[0] == "span")
     assert span_call[1]["workflow"] == "hierarchy_resolution"
@@ -293,10 +296,33 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_hierarchy_prompt_cache_key_does_not_require_a_catalogued_model(monkeypatch):
+    """The string model always runs on native OpenAI, catalogued or not."""
+    output = hierarchy.HierarchyOutput(
+        sections=[hierarchy.SectionClassification(idx=0, is_top_level=True)],
+        abstract_idx=0,
+    )
+    captured, _ = _install_fake_agent_modules(monkeypatch, final_output=output)
+    monkeypatch.setattr(
+        hierarchy, "gen_ai_invoke_agent_span", lambda **_kwargs: _FakeContextManager(None)
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5-uncatalogued-test")
+    monkeypatch.setenv("HIERARCHY_LLM_REASONING", "medium")
+
+    sections, _, _ = await hierarchy._call_llm_for_hierarchy(
+        [{"title": "Intro", "preview": "overview"}]
+    )
+
+    assert len(sections) == 1
+    assert captured["extra_args"]["prompt_cache_key"].startswith("hierarchy_classifier:")
+
+
+@pytest.mark.asyncio
 async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
     captured, _ = _install_fake_agent_modules(monkeypatch, final_output=None)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.6-terra")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "low")
 
     sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
@@ -306,7 +332,7 @@ async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
     assert sections == []
     assert abstract_title is None
     assert raw is not None
-    assert raw["model"] == "gpt-5.4-mini"
+    assert raw["model"] == "gpt-5.6-terra"
     assert captured["temperature"] is None
 
 

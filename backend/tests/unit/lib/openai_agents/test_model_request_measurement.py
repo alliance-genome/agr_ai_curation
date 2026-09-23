@@ -46,6 +46,12 @@ from src.lib.observability import runtime as observability_runtime
 from src.lib.observability import sentry as observability_sentry
 from src.lib.observability.cost_context import cost_scope
 from src.lib.openai_agents import model_request_measurement as measurement_module
+from src.lib.openai_agents.config import (
+    PROMPT_CACHE_KEY_MAX_CHARS,
+    PromptCacheIdentity,
+    build_model_settings,
+    build_prompt_cache_key,
+)
 from src.lib.openai_agents.model_request_measurement import (
     ModelRequestBlockedError,
     call_measured_direct_request,
@@ -175,6 +181,7 @@ class _RecordingMixin:
             {
                 "instructions": system_instructions,
                 "input": copy.deepcopy(input),
+                "model_settings": model_settings,
                 "tools": tools,
                 "output_schema": output_schema,
             }
@@ -186,6 +193,7 @@ class _RecordingMixin:
             {
                 "instructions": system_instructions,
                 "input": copy.deepcopy(input),
+                "model_settings": model_settings,
                 "tools": tools,
                 "output_schema": output_schema,
             }
@@ -958,7 +966,12 @@ def test_agent_studio_run_measures_visible_and_deferred_tools(monkeypatch, publi
                 session_id="studio-session",
                 user_id="curator",
                 max_turns=2,
-                model_settings=studio.build_agent_studio_model_settings(max_output_tokens=100),
+                model_settings=studio.build_agent_studio_model_settings(
+                    max_output_tokens=100,
+                    prompt_cache=PromptCacheIdentity(
+                        agent_key="agent_studio_authoring", static_prompt="Studio template"
+                    ),
+                ),
             )
         ]
 
@@ -1013,3 +1026,248 @@ def test_flatten_loaded_tool_definitions_counts_namespace_members():
         {"type": "namespace", "name": "empty", "description": "E", "tools": []},
         {"type": "function", "name": "three"},
     ])] == ["one", "two", "three"]
+
+
+# ---------------------------------------------------------------------------
+# ALL-1284: stable prompt cache key bound to the tool surface; cached-token share
+# ---------------------------------------------------------------------------
+
+_MODEL = "gpt-5.6-terra"
+_PROMPT_KEY = build_prompt_cache_key(
+    PromptCacheIdentity(agent_key="allele_validation", static_prompt="Validate alleles."),
+    model=_MODEL,
+)
+
+
+def _keyed_settings(key=_PROMPT_KEY):
+    return ModelSettings(extra_args={"prompt_cache_key": key})
+
+
+def _validator_tools(names):
+    """Rebuilt per run: new closures, identical names, descriptions and schemas."""
+    return [_function_tool(name, "{}") for name in names]
+
+
+_BATCH_TOOLS = [f"batch_tool_{index}" for index in range(7)]
+_SINGLE_TOOLS = [f"single_tool_{index}" for index in range(13)]
+
+
+def _sent_key(model):
+    return model.calls[0]["model_settings"].extra_args["prompt_cache_key"]
+
+
+def _run_validator(tool_names, *, session, tools_order=None):
+    model = FakeResponsesHTTPModel([_final()])
+    tools = _validator_tools(tool_names)
+    if tools_order == "reversed":
+        tools = list(reversed(tools))
+    asyncio.run(
+        Runner.run(
+            Agent(
+                name="Allele Validation",
+                instructions="Validate alleles.",
+                model=model,
+                model_settings=_keyed_settings(),
+                tools=tools,
+            ),
+            "validate",
+            run_config=RunConfig(tracing_disabled=True, group_id=session),
+        )
+    )
+    return model
+
+
+def test_same_tool_surface_keeps_one_key_across_runs_and_sessions(published):
+    """The official-OpenAI SDK auto-key is not applied when the agent carries ours."""
+    first = _run_validator(_BATCH_TOOLS, session="session-a")
+    second = _run_validator(_BATCH_TOOLS, session="session-b", tools_order="reversed")
+
+    assert _sent_key(first) == _sent_key(second)
+    assert _sent_key(first).startswith(_PROMPT_KEY + "t")
+    assert not _sent_key(first).startswith("agents-sdk:")
+    assert len(_sent_key(first)) <= PROMPT_CACHE_KEY_MAX_CHARS
+    assert [record["prompt_cache"]["key"] for record in published] == [_sent_key(first)] * 2
+    assert {record["prompt_cache"]["source"] for record in published} == {"application"}
+    assert published[0]["prompt_cache"]["tool_surface"] == published[1]["prompt_cache"]["tool_surface"]
+    assert published[0]["prompt_cache"]["cached_input_share"] == 0.25
+
+
+def test_batch_and_single_tool_surfaces_get_different_keys(published):
+    batch = _run_validator(_BATCH_TOOLS, session="session-a")
+    single = _run_validator(_SINGLE_TOOLS, session="session-a")
+    changed_schema = FakeResponsesHTTPModel([_final()])
+    tool = _function_tool(_BATCH_TOOLS[0], "{}")
+    tool.params_json_schema = {
+        "type": "object",
+        "properties": {"page": {"type": "integer"}},
+        "additionalProperties": False,
+    }
+    _run(
+        Agent(
+            name="Allele Validation",
+            instructions="Validate alleles.",
+            model=changed_schema,
+            model_settings=_keyed_settings(),
+            tools=[tool, *_validator_tools(_BATCH_TOOLS[1:])],
+        )
+    )
+
+    keys = {_sent_key(batch), _sent_key(single), _sent_key(changed_schema)}
+    assert len(keys) == 3
+    assert all(key.startswith(_PROMPT_KEY + "t") for key in keys)
+
+
+def test_tool_search_and_namespaces_are_part_of_the_tool_surface(published):
+    from agents import tool_namespace
+
+    def surface(tools):
+        model = FakeResponsesHTTPModel([_final()])
+        _run(
+            Agent(
+                name="studio",
+                instructions="Help",
+                model=model,
+                model_settings=_keyed_settings(),
+                tools=tools,
+            )
+        )
+        return _sent_key(model)
+
+    def deferred():
+        return FunctionTool(
+            name="get_trace",
+            description="Deferred trace tool",
+            params_json_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            on_invoke_tool=lambda *_: "{}",
+            defer_loading=True,
+        )
+
+    plain = surface([_function_tool("visible", "{}")])
+    with_search = surface([ToolSearchTool(execution="server"), _function_tool("visible", "{}"), deferred()])
+    same_search = surface([ToolSearchTool(execution="server"), _function_tool("visible", "{}"), deferred()])
+    namespaced = surface(
+        [
+            ToolSearchTool(execution="server"),
+            _function_tool("visible", "{}"),
+            *tool_namespace(name="traces", description="Trace tools", tools=[deferred()]),
+        ]
+    )
+    renamed_namespace = surface(
+        [
+            ToolSearchTool(execution="server"),
+            _function_tool("visible", "{}"),
+            *tool_namespace(name="traces", description="Trace inspection tools", tools=[deferred()]),
+        ]
+    )
+
+    assert with_search == same_search
+    assert len({plain, with_search, namespaced, renamed_namespace}) == 4
+
+
+def test_retried_request_keeps_its_bound_key(published):
+    tools = _validator_tools(_BATCH_TOOLS)
+    once, _ = measurement_module.bind_prompt_cache_tool_surface(_keyed_settings(), tools, [])
+    twice, surface = measurement_module.bind_prompt_cache_tool_surface(once, tools, [])
+
+    assert twice.extra_args == once.extra_args
+    assert twice.extra_args["prompt_cache_key"] == f"{_PROMPT_KEY}t{surface}"
+
+
+def test_sdk_generated_prompt_cache_key_is_labelled(published):
+    """Without an application key the SDK derives one per run; the record says so."""
+    model = FakeResponsesHTTPModel([_final()])
+
+    _run(Agent(name="Figure Locator Classifier", instructions="static", model=model))
+
+    generated = _sent_key(model)
+    assert generated.startswith("agents-sdk:")
+    assert published[0]["prompt_cache"] == {
+        "key": generated,
+        "source": "agents_sdk_generated",
+        "tool_surface": None,
+        "cached_input_share": 0.25,
+    }
+
+
+def test_alternate_provider_request_is_not_keyed(published):
+    model = FakeChatCompletionsModel([_final()], provider_id="openrouter")
+    model._client = AsyncOpenAI(api_key="test-key", base_url="https://openrouter.ai/api/v1")
+
+    _run(
+        Agent(
+            name="specialist",
+            instructions="static",
+            model=model,
+            model_settings=build_model_settings(
+                model="deepseek/deepseek-v4-pro-0813",
+                prompt_cache=PromptCacheIdentity(agent_key="specialist", static_prompt="static"),
+            ),
+        )
+    )
+
+    assert model.calls[0]["model_settings"].extra_args is None
+    assert published[0]["prompt_cache"] == {
+        "key": None,
+        "source": "not_set",
+        "tool_surface": None,
+        "cached_input_share": 0.25,
+    }
+
+
+def test_streamed_request_records_cached_share_from_terminal_usage(published):
+    model = FakeResponsesHTTPModel([_final()])
+
+    async def consume():
+        result = Runner.run_streamed(
+            Agent(
+                name="specialist",
+                instructions="short",
+                model=model,
+                model_settings=_keyed_settings(),
+            ),
+            "hi",
+            run_config=RunConfig(tracing_disabled=True),
+        )
+        async for _event in result.stream_events():
+            pass
+
+    asyncio.run(consume())
+
+    [record] = published
+    assert record["prompt_cache"]["key"] == _sent_key(model)
+    assert record["prompt_cache"]["key"].startswith(_PROMPT_KEY + "t")
+    assert record["prompt_cache"]["source"] == "application"
+    assert record["prompt_cache"]["cached_input_share"] == round(100 / 900, 4)
+
+
+def test_cached_share_is_unobserved_without_provider_usage(published):
+    model = FakeResponsesHTTPModel(
+        [ModelResponse(output=[_message("ok")], usage=Usage(), response_id="r")]
+    )
+
+    _run(Agent(name="helper", instructions="short", model=model, model_settings=_keyed_settings()))
+
+    assert published[0]["prompt_cache"]["source"] == "application"
+    assert published[0]["prompt_cache"]["cached_input_share"] is None
+
+
+def test_direct_request_without_key_records_not_set(published):
+    async def call(**_kwargs):
+        return SimpleNamespace(usage=None, id="resp_direct", _request_id=None)
+
+    asyncio.run(
+        call_measured_direct_request(
+            surface="abstract_extraction",
+            provider="openai",
+            api="chat_completions",
+            kwargs={"model": "gpt-test", "messages": [{"role": "user", "content": "hi"}]},
+            call=call,
+        )
+    )
+
+    assert published[0]["prompt_cache"] == {
+        "key": None,
+        "source": "not_set",
+        "tool_surface": None,
+        "cached_input_share": None,
+    }

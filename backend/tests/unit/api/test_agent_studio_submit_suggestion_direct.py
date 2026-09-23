@@ -9,6 +9,16 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 
+@pytest.fixture(autouse=True)
+def _installed_studio_prompt_template(monkeypatch):
+    """The suggestion run keys its prompt cache on the installed Studio template."""
+    import src.api.agent_studio as api_module
+
+    monkeypatch.setattr(
+        api_module, "_load_agent_studio_system_prompt_template", lambda: "system prompt template"
+    )
+
+
 def test_submit_suggestion_direct_requires_openai_key(monkeypatch):
     import src.api.agent_studio as api_module
 
@@ -201,6 +211,7 @@ def test_process_suggestion_background_uses_openai_agents_sdk_contract(monkeypat
 
     request = captured["request"]
     assert request["instructions"] == "system"
+    assert request["static_prompt"] == "system prompt template"
     assert request["input_items"] == [{"role": "user", "content": "hello"}]
     assert request["tool_definition"] == api_module.SUGGESTION_TOOL
     assert request["max_turns"] == api_module.get_agent_studio_suggestion_max_turns()

@@ -29,7 +29,17 @@ value as zero:
   ``status="not_reported"``. It is correlation only, never a second cost record:
   cost stays on the SDK response/generation span keyed by the provider response id.
   That span's ``cost_context.model_request_id`` is this record's ``measurement_id``
-  (also for cancelled and failed attempts, which have no provider response id).
+  (also for cancelled and failed attempts, which have no provider response id);
+- ``prompt_cache``: the ``prompt_cache_key`` the request carries and who set it
+  (``application`` for the stable per-agent key, ``agents_sdk_generated`` for a
+  key the SDK derived, ``unrecognized``, ``not_set``), the digest of the tool
+  surface an application key is bound to, and the provider-reported cached
+  share of input tokens once usage arrives (``None`` while unobserved).
+
+``MeasuredModel`` also binds the application's stable prompt cache key to the
+tool definitions each request actually sends (after per-run tool filtering and
+rebuilding), so different tool surfaces of one agent never share a key and the
+same surface keeps one key across runs, sessions and documents.
 
 Application-stored data sizes stay with ``runtime_payload_budget.provider_context_preflight``
 (``measurement_scope="application_payload"``).
@@ -373,6 +383,8 @@ def build_measurement(
     conversation_id: str | None = None,
     prompt: Any = None,
     identity: Mapping[str, Any] | None = None,
+    prompt_cache_key: str | None = None,
+    prompt_cache_tool_surface: str | None = None,
 ) -> dict[str, Any]:
     """Measure one outbound model request without copying its content."""
 
@@ -447,7 +459,119 @@ def build_measurement(
         "provider_managed": provider_managed,
         "warnings": [],
         "provider_usage": {"status": "pending"},
+        "prompt_cache": _prompt_cache_record(prompt_cache_key, prompt_cache_tool_surface),
     }
+
+
+def _prompt_cache_record(prompt_cache_key: Any, tool_surface: str | None) -> dict[str, Any]:
+    from src.lib.openai_agents.config import (
+        SDK_GENERATED_PROMPT_CACHE_KEY_PREFIX,
+        is_application_prompt_cache_key,
+    )
+
+    if not isinstance(prompt_cache_key, str) or not prompt_cache_key:
+        source = "not_set"
+        prompt_cache_key = None
+    elif prompt_cache_key.startswith(SDK_GENERATED_PROMPT_CACHE_KEY_PREFIX):
+        source = "agents_sdk_generated"
+    elif is_application_prompt_cache_key(prompt_cache_key):
+        source = "application"
+    else:
+        source = "unrecognized"
+    return {
+        "key": prompt_cache_key,
+        "source": source,
+        "tool_surface": tool_surface,
+        "cached_input_share": None,
+    }
+
+
+def _prompt_cache_key_from_settings(model_settings: Any) -> Any:
+    from src.lib.openai_agents.config import PROMPT_CACHE_KEY_FIELD
+
+    for extras in (
+        getattr(model_settings, "extra_args", None),
+        getattr(model_settings, "extra_body", None),
+    ):
+        if isinstance(extras, Mapping) and PROMPT_CACHE_KEY_FIELD in extras:
+            return extras[PROMPT_CACHE_KEY_FIELD]
+    return None
+
+
+def _tool_surface_definitions(tools: Any, handoffs: Any) -> list[dict[str, Any]]:
+    """Return what identifies each tool and handoff one request sends."""
+
+    from agents.tool import FunctionTool
+
+    definitions: list[dict[str, Any]] = []
+    for tool in list(tools or []):
+        definition, is_deferred, _ = _tool_definition(tool)
+        definition = {**definition, "defer_loading": is_deferred}
+        if isinstance(tool, FunctionTool) and getattr(tool, "_tool_namespace", None):
+            definition["namespace_description"] = getattr(
+                tool, "_tool_namespace_description", None
+            )
+        definitions.append(definition)
+    for handoff in list(handoffs or []):
+        definitions.append(
+            {
+                "type": "handoff",
+                "name": getattr(handoff, "tool_name", None),
+                "description": getattr(handoff, "tool_description", None),
+                "parameters": getattr(handoff, "input_json_schema", None),
+            }
+        )
+    return definitions
+
+
+def bind_prompt_cache_tool_surface(
+    model_settings: Any,
+    tools: Any,
+    handoffs: Any,
+) -> tuple[Any, str | None]:
+    """Bind the application's prompt cache key to the tool surface this request sends.
+
+    Returns the settings to send and the tool-surface digest, or the settings
+    unchanged and None when the request carries no application key (alternate
+    providers, SDK-generated keys).
+    """
+
+    from dataclasses import replace
+
+    from src.lib.openai_agents.config import (
+        PROMPT_CACHE_KEY_FIELD,
+        bind_prompt_cache_key_to_tool_surface,
+        is_application_prompt_cache_key,
+        tool_surface_digest,
+    )
+
+    extra_args = getattr(model_settings, "extra_args", None)
+    prompt_cache_key = (
+        extra_args.get(PROMPT_CACHE_KEY_FIELD) if isinstance(extra_args, Mapping) else None
+    )
+    if not isinstance(prompt_cache_key, str) or not is_application_prompt_cache_key(
+        prompt_cache_key
+    ):
+        return model_settings, None
+    tool_surface = tool_surface_digest(_tool_surface_definitions(tools, handoffs))
+    bound_settings = replace(
+        model_settings,
+        extra_args={
+            **extra_args,
+            PROMPT_CACHE_KEY_FIELD: bind_prompt_cache_key_to_tool_surface(
+                prompt_cache_key, tool_surface
+            ),
+        },
+    )
+    return bound_settings, tool_surface
+
+
+def _cached_input_share(usage: Mapping[str, Any]) -> float | None:
+    input_tokens = usage.get("input_tokens")
+    cached_tokens = usage.get("cached_input_tokens")
+    if usage.get("status") != "reported" or not input_tokens or cached_tokens is None:
+        return None
+    return round(cached_tokens / input_tokens, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -692,6 +816,9 @@ def record_outcome(
         return
     measurement["outcome"] = outcome
     measurement["provider_usage"] = dict(usage or {"status": "not_reported"})
+    measurement["prompt_cache"]["cached_input_share"] = _cached_input_share(
+        measurement["provider_usage"]
+    )
     if response_id:
         measurement["provider_response_id"] = response_id
     if provider_request_id:
@@ -712,7 +839,9 @@ def _publish(measurement: dict[str, Any]) -> None:
         "input_items=%s tool_results=%s tool_results_chars=%s visible_tools=%s "
         "visible_tool_chars=%s deferred_tools=%s deferred_tool_chars=%s "
         "output_schema_chars=%s estimated_tokens=%s usage_status=%s "
-        "provider_input_tokens=%s provider_cached_input_tokens=%s trace_id=%s",
+        "provider_input_tokens=%s provider_cached_input_tokens=%s "
+        "prompt_cache_key=%s prompt_cache_source=%s prompt_cache_tool_surface=%s "
+        "cached_input_share=%s trace_id=%s",
         record["runtime"],
         record.get("agent_name"),
         record["provider"],
@@ -735,6 +864,10 @@ def _publish(measurement: dict[str, Any]) -> None:
         usage.get("status"),
         usage.get("input_tokens"),
         usage.get("cached_input_tokens"),
+        record["prompt_cache"]["key"],
+        record["prompt_cache"]["source"],
+        record["prompt_cache"]["tool_surface"],
+        record["prompt_cache"]["cached_input_share"],
         record.get("trace_id"),
         extra={"model_request_measurement": record},
     )
@@ -878,12 +1011,14 @@ class MeasuredModel(Model):
         self,
         system_instructions: Any,
         input: Any,
+        model_settings: Any,
         tools: Any,
         output_schema: Any,
         handoffs: Any,
         previous_response_id: str | None,
         conversation_id: str | None,
         prompt: Any,
+        prompt_cache_tool_surface: str | None,
     ) -> dict[str, Any]:
         self._attempts += 1
         provider, api, transport = describe_model(self._inner, provider_hint=self._provider_hint)
@@ -904,6 +1039,8 @@ class MeasuredModel(Model):
             conversation_id=conversation_id,
             prompt=prompt,
             identity=identity,
+            prompt_cache_key=_prompt_cache_key_from_settings(model_settings),
+            prompt_cache_tool_surface=prompt_cache_tool_surface,
         )
         enforce_and_announce(measurement)
         return measurement
@@ -922,15 +1059,20 @@ class MeasuredModel(Model):
         conversation_id=None,
         prompt=None,
     ):
+        model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
+            model_settings, tools, handoffs
+        )
         measurement = self._measure(
             system_instructions,
             input,
+            model_settings,
             tools,
             output_schema,
             handoffs,
             previous_response_id,
             conversation_id,
             prompt,
+            prompt_cache_tool_surface,
         )
         try:
             with model_request_scope(_span_identity(measurement)):
@@ -972,15 +1114,20 @@ class MeasuredModel(Model):
         conversation_id=None,
         prompt=None,
     ) -> AsyncIterator[Any]:
+        model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
+            model_settings, tools, handoffs
+        )
         measurement = self._measure(
             system_instructions,
             input,
+            model_settings,
             tools,
             output_schema,
             handoffs,
             previous_response_id,
             conversation_id,
             prompt,
+            prompt_cache_tool_surface,
         )
         stream = self._inner.stream_response(
             system_instructions,
@@ -1163,6 +1310,7 @@ def measure_direct_request(
         output_schema=schema_payload,
         previous_response_id=kwargs.get("previous_response_id"),
         identity=identity,
+        prompt_cache_key=kwargs.get("prompt_cache_key"),
     )
     measurement["operation"] = api
     tools = kwargs.get("tools")

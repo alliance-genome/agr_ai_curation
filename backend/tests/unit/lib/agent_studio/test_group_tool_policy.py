@@ -178,6 +178,7 @@ def test_create_custom_db_agent_enforces_inherited_group_tool_policy(
         "_build_runtime_instructions",
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "instructions",
+            static_prefix=lambda: "instructions",
             hash="hash",
             to_manifest=lambda: {},
         ),

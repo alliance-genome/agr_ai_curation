@@ -9,6 +9,9 @@ import pytest
 from agents import FunctionTool, ToolSearchTool
 
 from src.lib.agent_studio import openai_runtime as runtime
+from src.lib.openai_agents.config import PromptCacheIdentity, build_prompt_cache_key
+
+_STUDIO_CACHE = PromptCacheIdentity(agent_key="agent_studio_authoring", static_prompt="Studio template")
 
 
 def _tool_definition(name: str) -> dict:
@@ -27,6 +30,7 @@ def test_model_settings_pin_openai_reasoning_serial_tools_and_shared_retry():
     settings = runtime.build_agent_studio_model_settings(
         max_output_tokens=8192,
         tool_choice="save_flow",
+        prompt_cache=_STUDIO_CACHE,
     )
 
     assert settings.reasoning.effort == "medium"
@@ -326,7 +330,7 @@ def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch):
                 session_id="session-1",
                 user_id="user-1",
                 max_turns=5,
-                model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=1024),
+                model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=1024, prompt_cache=_STUDIO_CACHE),
             )
         ]
 
@@ -385,7 +389,7 @@ def test_stream_closes_owned_resources_when_runtime_construction_fails(monkeypat
                 session_id="session-1",
                 user_id="user-1",
                 max_turns=1,
-                model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100),
+                model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100, prompt_cache=_STUDIO_CACHE),
             )
         ]
 
@@ -441,6 +445,7 @@ def test_forced_tool_run_uses_sdk_runner_and_stops_after_submission(monkeypatch)
     execution = asyncio.run(
         runtime.run_forced_agent_studio_tool(
             instructions="submit feedback",
+            static_prompt="Studio template",
             input_items=[{"role": "user", "content": "feedback"}],
             tool_definition=_tool_definition("submit_prompt_suggestion"),
             executor=execute,
@@ -457,6 +462,15 @@ def test_forced_tool_run_uses_sdk_runner_and_stops_after_submission(monkeypatch)
     assert captured["agent"].tool_use_behavior == "stop_on_first_tool"
     assert captured["agent"].model_settings.tool_choice == "submit_prompt_suggestion"
     assert captured["agent"].model_settings.parallel_tool_calls is False
+    # ALL-1284: every suggestion run shares one stable key, not the per-run session id.
+    assert captured["agent"].model_settings.extra_args == {
+        "prompt_cache_key": build_prompt_cache_key(
+            PromptCacheIdentity(
+                agent_key="agent_studio_suggestion", static_prompt="Studio template"
+            ),
+            model=runtime.AGENT_STUDIO_OPENAI_MODEL,
+        )
+    }
     assert captured["run_config"].model_provider is provider
     assert captured["max_turns"] == 2
     assert state.response_id == "resp-suggestion"
@@ -487,6 +501,7 @@ def test_forced_tool_run_closes_owned_resources_when_runtime_construction_fails(
         asyncio.run(
             runtime.run_forced_agent_studio_tool(
                 instructions="submit feedback",
+                static_prompt="Studio template",
                 input_items=[],
                 tool_definition=_tool_definition("submit_prompt_suggestion"),
                 executor=execute,
@@ -605,7 +620,7 @@ def test_streamed_invalid_then_valid_proposal_finishes_on_last_turn(monkeypatch)
         return [event async for event in runtime.stream_agent_studio_run(
             instructions="Prepare one change", input_items=[{"role":"user","content":"Stocks and source"}],
             tools=[tool], state=state, session_id="test", user_id="test", max_turns=2,
-            model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100),
+            model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100, prompt_cache=_STUDIO_CACHE),
         )]
     events = asyncio.run(collect())
     results = [event for event in events if event['type'] == 'TOOL_RESULT']
@@ -669,7 +684,7 @@ def test_stop_cancels_sdk_while_waiting_and_finishes_cleanup(monkeypatch):
             return [event async for event in runtime.stream_agent_studio_run(
                 instructions='help', input_items=[], tools=[], state=runtime.AgentStudioRunState(trace_id='a' * 32),
                 session_id='session', user_id='owner', max_turns=2,
-                model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100), cancel_event=stop,
+                model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100, prompt_cache=_STUDIO_CACHE), cancel_event=stop,
             )]
         task = asyncio.create_task(consume())
         await asyncio.wait_for(started.wait(), timeout=2)

@@ -334,8 +334,10 @@ async def _call_llm_for_hierarchy(
     from agents import Agent, ModelSettings
     from openai.types.shared import Reasoning
     from src.lib.openai_agents.config import (
+        PromptCacheIdentity,
         get_hierarchy_resolution_contract_retries,
         get_hierarchy_resolution_max_turns,
+        prompt_cache_extra_args,
     )
     from src.lib.openai_agents.runner import run_agent_with_owned_openai_resources
 
@@ -433,6 +435,16 @@ Common abstract locations when not explicitly labeled:
         model_settings = ModelSettings(
             temperature=None if is_gpt5 else 0.0,
             reasoning=reasoning,
+            # A string model always runs on the native OpenAI client (owned
+            # resources), catalogued or not, so the provider is fixed here.
+            extra_args=prompt_cache_extra_args(
+                PromptCacheIdentity(
+                    agent_key="hierarchy_classifier",
+                    static_prompt=system_prompt,
+                ),
+                model=model_name,
+                provider_override="openai",
+            ),
         )
 
         # Create a one-shot agent for hierarchy classification

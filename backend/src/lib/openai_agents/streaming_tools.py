@@ -43,6 +43,9 @@ from pydantic import ValidationError
 from .audit_labels import build_specialist_internal_friendly_name
 from .langfuse_client import is_openai_agents_tracing_enabled
 from .config import (
+    PROMPT_CACHE_KEY_FIELD,
+    PromptCacheIdentity,
+    build_prompt_cache_key,
     get_batching_nudge_threshold,
     get_layer2_force_tool_finalization_enabled,
     get_max_turns,
@@ -3815,6 +3818,35 @@ def _agent_runtime_curation_adapter_key(agent: Agent) -> Optional[str]:
     return adapter_key or None
 
 
+def _structured_retry_model_settings(
+    agent: Agent,
+    *,
+    agent_key: str,
+    instructions: str,
+) -> ModelSettings:
+    """Model settings for the output-synthesis retry of a structured specialist.
+
+    The retry runs with default settings. When the specialist sends the stable
+    native OpenAI prompt cache key, the retry sends its own stable key too, so
+    the SDK never generates a per-run key for it.
+    """
+
+    source_extra_args = getattr(getattr(agent, "model_settings", None), "extra_args", None) or {}
+    if PROMPT_CACHE_KEY_FIELD not in source_extra_args:
+        return ModelSettings()
+    return ModelSettings(
+        extra_args={
+            PROMPT_CACHE_KEY_FIELD: build_prompt_cache_key(
+                PromptCacheIdentity(
+                    agent_key=f"{agent_key}.structured_retry",
+                    static_prompt=instructions,
+                ),
+                model=str(agent.model),
+            )
+        }
+    )
+
+
 def _agent_runtime_canonical_agent_key(agent: Agent) -> Optional[str]:
     """Return the canonical DB/config agent key attached during runtime creation."""
 
@@ -6087,15 +6119,21 @@ async def run_specialist_with_events(
                             f"specialist agent has no model configured."
                         )
 
+                    retry_instructions = (
+                        f"You are completing the work of the {specialist_name}. "
+                        f"You have already gathered information through tool calls (shown in the conversation history). "
+                        f"Your ONLY task now is to synthesize this information into the required {output_type_name} structured output. "
+                        f"Do NOT attempt to call any tools. Just analyze the previous tool results and produce the output."
+                    )
                     retry_agent = Agent(
                         name=f"{specialist_name} (Retry)",
-                        instructions=(
-                            f"You are completing the work of the {specialist_name}. "
-                            f"You have already gathered information through tool calls (shown in the conversation history). "
-                            f"Your ONLY task now is to synthesize this information into the required {output_type_name} structured output. "
-                            f"Do NOT attempt to call any tools. Just analyze the previous tool results and produce the output."
-                        ),
+                        instructions=retry_instructions,
                         model=retry_model,
+                        model_settings=_structured_retry_model_settings(
+                            agent,
+                            agent_key=runtime_canonical_agent_key or specialist_name,
+                            instructions=retry_instructions,
+                        ),
                         output_type=output_type,
                         # NO tools - we don't want new searches, just synthesis
                         tools=[],
