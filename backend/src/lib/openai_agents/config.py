@@ -1378,6 +1378,29 @@ def get_hierarchy_resolution_max_turns() -> int:
     return _get_single_shot_output_agent_max_turns("HIERARCHY_RESOLUTION_MAX_TURNS")
 
 
+def get_hierarchy_resolution_contract_retries() -> int:
+    """Correction attempts for the hierarchy section-number contract (HIERARCHY_RESOLUTION_CONTRACT_RETRIES).
+
+    The hierarchy classifier answers with input section numbers instead of
+    echoed titles. A missing, duplicate, or out-of-range number, or a parent
+    chain that does not reach a top-level section, triggers a correction retry;
+    after the budget is spent the result is rejected. Provider failures are not
+    retried. Default 2, matching FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES.
+    """
+    return max(0, _get_env_int_with_fallback("HIERARCHY_RESOLUTION_CONTRACT_RETRIES", 2))
+
+
+def get_hierarchy_resolution_preview_max_chars() -> int:
+    """Body-text preview length per section for the hierarchy classifier (HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS).
+
+    Each section title is sent with the opening of the first body text under
+    it, never the heading repeated. Longer text is cut and marked with "...";
+    stored document text is unaffected. 0 sends titles only. Default 100,
+    matching the preview length used before previews skipped headings.
+    """
+    return max(0, _get_env_int_with_fallback("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", 100))
+
+
 def get_figure_locator_resolution_max_turns() -> int:
     """Turn budget for the one-shot figure locator classifier.
 
