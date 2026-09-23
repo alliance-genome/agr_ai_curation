@@ -28,7 +28,7 @@ import json
 import logging
 import re
 import time
-from typing import Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequence
 
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, function_tool
 
@@ -59,6 +59,9 @@ from src.lib.openai_agents.supervisor_context_tools import (
 from src.lib.prompts.assembly import build_agent_prompt_layers, prompt_templates_for_bundle
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
 from src.schemas.curation_workspace import CurationExtractionSourceKind
+
+if TYPE_CHECKING:
+    from ..config import PromptCacheIdentity
 
 # Note: Answer model not used here - supervisor streams plain text for better UX
 
@@ -1052,6 +1055,8 @@ def _build_model_settings(
     temperature: Optional[float] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     provider_override: Optional[str] = None,
+    *,
+    prompt_cache: "PromptCacheIdentity",
 ) -> Optional[ModelSettings]:
     """
     Build ModelSettings with optional reasoning for models that support it.
@@ -1073,6 +1078,7 @@ def _build_model_settings(
         model: The model name (e.g., "gpt-5.6-sol", "gpt-5.6-terra", "gemini-3-pro-preview")
         temperature: Optional temperature override (0.0-1.0)
         reasoning_effort: Optional reasoning effort for models that support it
+        prompt_cache: The supervisor's static prompt identity (stable cache key)
 
     Returns:
         ModelSettings instance or None if no settings needed
@@ -1086,6 +1092,7 @@ def _build_model_settings(
         temperature=temperature,
         reasoning_effort=reasoning_effort,
         provider_override=provider_override,
+        prompt_cache=prompt_cache,
     )
 
 
@@ -1522,6 +1529,7 @@ def create_supervisor_agent(
         An Agent instance configured as a supervisor with specialist tools
     """
     from ..config import (
+        PromptCacheIdentity,
         get_agent_config,
         log_agent_config,
         get_model_for_agent,
@@ -1545,14 +1553,6 @@ def create_supervisor_agent(
 
     # Resolve a concrete SDK model for compatible providers or a name for native OpenAI.
     model = get_model_for_agent(effective_model, provider_override=model_provider)
-
-    # Build model settings for supervisor
-    supervisor_settings = _build_model_settings(
-        model=effective_model,
-        temperature=effective_temperature,
-        reasoning_effort=effective_reasoning,
-        provider_override=model_provider,
-    )
 
     # Configure guardrails if enabled
     input_guardrails = []
@@ -1857,6 +1857,18 @@ def create_supervisor_agent(
         None,
     )
     instructions = prompt_bundle.render()
+
+    # Build model settings for supervisor; its cache key follows the static layers.
+    supervisor_settings = _build_model_settings(
+        model=effective_model,
+        temperature=effective_temperature,
+        reasoning_effort=effective_reasoning,
+        provider_override=model_provider,
+        prompt_cache=PromptCacheIdentity(
+            agent_key="supervisor",
+            static_prompt=prompt_bundle.static_prefix(),
+        ),
+    )
 
     logger.info(
         "Creating Supervisor agent, model=%s prompt_v=%s groups=%s",

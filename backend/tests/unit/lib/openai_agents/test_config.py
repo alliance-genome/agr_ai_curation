@@ -11,6 +11,7 @@ from openai import InternalServerError
 
 from src.lib.openai_agents.config import (
     AgentConfig,
+    PromptCacheIdentity,
     build_default_model_retry,
     build_model_settings,
     get_agent_config,
@@ -85,6 +86,8 @@ from src.lib.openai_agents.config import (
     supports_reasoning,
     supports_temperature,
 )
+
+_PROMPT_CACHE = PromptCacheIdentity(agent_key="test_agent", static_prompt="Static test prompt.")
 
 
 def test_sentry_log_event_level_is_bounded_and_environment_configurable(
@@ -709,7 +712,7 @@ def test_build_model_settings_uses_provider_parallel_tool_policy(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="gemini", supports_parallel_tool_calls=False)
+            SimpleNamespace(provider_id="gemini", driver="openai_compatible", supports_parallel_tool_calls=False)
             if provider_id == "gemini"
             else None
         ),
@@ -717,6 +720,7 @@ def test_build_model_settings_uses_provider_parallel_tool_policy(monkeypatch):
 
     settings = build_model_settings(
         model="gemini-3-pro-preview",
+        prompt_cache=_PROMPT_CACHE,
         parallel_tool_calls=True,
     )
     assert settings is not None
@@ -748,7 +752,7 @@ def test_build_model_settings_drops_invalid_reasoning_without_crashing(monkeypat
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="openai", supports_parallel_tool_calls=True)
+            SimpleNamespace(provider_id="openai", driver="openai_native", supports_parallel_tool_calls=True)
             if provider_id == "openai"
             else None
         ),
@@ -756,6 +760,7 @@ def test_build_model_settings_drops_invalid_reasoning_without_crashing(monkeypat
 
     settings = build_model_settings(
         model="gpt-5.4-mini",
+        prompt_cache=_PROMPT_CACHE,
         reasoning_effort="disabled",  # type: ignore[arg-type]  # deliberately invalid
     )
     assert settings is not None
@@ -774,7 +779,7 @@ def test_build_model_settings_applies_groq_safety_defaults(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="groq", supports_parallel_tool_calls=True)
+            SimpleNamespace(provider_id="groq", driver="openai_compatible", supports_parallel_tool_calls=True)
             if provider_id == "groq"
             else None
         ),
@@ -784,6 +789,7 @@ def test_build_model_settings_applies_groq_safety_defaults(monkeypatch):
 
     settings = build_model_settings(
         model="stub-groq-model",
+        prompt_cache=_PROMPT_CACHE,
         temperature=0.9,
         parallel_tool_calls=True,
     )
@@ -804,7 +810,7 @@ def test_build_model_settings_allows_groq_parallel_when_enabled(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="groq", supports_parallel_tool_calls=True)
+            SimpleNamespace(provider_id="groq", driver="openai_compatible", supports_parallel_tool_calls=True)
             if provider_id == "groq"
             else None
         ),
@@ -813,6 +819,7 @@ def test_build_model_settings_allows_groq_parallel_when_enabled(monkeypatch):
 
     settings = build_model_settings(
         model="stub-groq-model",
+        prompt_cache=_PROMPT_CACHE,
         temperature=0.2,
         parallel_tool_calls=True,
     )
@@ -833,7 +840,7 @@ def test_build_model_settings_keeps_openai_behavior_unchanged(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="openai", supports_parallel_tool_calls=True)
+            SimpleNamespace(provider_id="openai", driver="openai_native", supports_parallel_tool_calls=True)
             if provider_id == "openai"
             else None
         ),
@@ -843,6 +850,7 @@ def test_build_model_settings_keeps_openai_behavior_unchanged(monkeypatch):
 
     settings = build_model_settings(
         model="gpt-4o",
+        prompt_cache=_PROMPT_CACHE,
         temperature=0.8,
         parallel_tool_calls=True,
     )
@@ -863,7 +871,7 @@ def _patch_openai_model(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="openai", supports_parallel_tool_calls=True)
+            SimpleNamespace(provider_id="openai", driver="openai_native", supports_parallel_tool_calls=True)
             if provider_id == "openai"
             else None
         ),
@@ -874,7 +882,7 @@ def test_build_model_settings_enables_model_retry_by_default(monkeypatch):
     monkeypatch.delenv("OPENAI_MODEL_MAX_RETRIES", raising=False)
     _patch_openai_model(monkeypatch)
 
-    settings = build_model_settings(model="gpt-5.5")
+    settings = build_model_settings(model="gpt-5.5", prompt_cache=_PROMPT_CACHE)
 
     assert settings.retry is not None
     assert settings.retry.max_retries == 3
@@ -887,7 +895,7 @@ def test_build_model_settings_retry_disabled_when_max_retries_zero(monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "0")
     _patch_openai_model(monkeypatch)
 
-    settings = build_model_settings(model="gpt-5.5")
+    settings = build_model_settings(model="gpt-5.5", prompt_cache=_PROMPT_CACHE)
 
     assert settings.retry is None
 
@@ -907,6 +915,7 @@ def test_build_model_settings_disables_runner_retry_for_openrouter(monkeypatch):
         lambda provider_id: (
             SimpleNamespace(
                 provider_id="openrouter",
+                driver="openai_compatible",
                 supports_parallel_tool_calls=True,
                 telemetry_adapter="openrouter",
             )
@@ -915,7 +924,7 @@ def test_build_model_settings_disables_runner_retry_for_openrouter(monkeypatch):
         ),
     )
 
-    settings = build_model_settings(model="deepseek/deepseek-v4-pro-0813")
+    settings = build_model_settings(model="deepseek/deepseek-v4-pro-0813", prompt_cache=_PROMPT_CACHE)
 
     assert settings.retry is None
 

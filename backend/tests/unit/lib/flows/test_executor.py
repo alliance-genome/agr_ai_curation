@@ -5603,6 +5603,49 @@ class TestBackwardCompatibility:
 # ===========================================================================
 
 
+class TestFlowSupervisorPromptCacheKey:
+    """ALL-1284: one stable prompt cache key per saved flow, not per run."""
+
+    @patch("src.lib.flows.executor.build_model_settings")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.6-sol")
+    @patch("src.lib.flows.executor.get_agent_config")
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_key_is_stable_across_documents_and_differs_per_flow(
+        self,
+        mock_get_agent,
+        mock_streaming,
+        mock_config,
+        mock_model,
+        mock_settings,
+    ):
+        from src.lib.openai_agents.config import build_prompt_cache_key
+
+        mock_config.return_value = MagicMock(model="gpt-5.6-sol", temperature=None, reasoning="low")
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        mock_streaming.return_value = MagicMock()
+        mock_settings.return_value = ModelSettings()
+
+        def key_for(flow, **kwargs):
+            create_flow_supervisor(flow, **kwargs)
+            identity = mock_settings.call_args.kwargs["prompt_cache"]
+            assert identity.agent_key == "flow_supervisor"
+            return build_prompt_cache_key(identity, model="gpt-5.6-sol")
+
+        nodes = [_task_input_node(), _agent_node("n1", "gene", step_goal="Extract genes")]
+        first = key_for(_make_flow(nodes), document_id="doc-1", document_name="paper-1.pdf")
+        second = key_for(_make_flow(nodes), document_id="doc-2", document_name="paper-2.pdf")
+        edited_flow = _make_flow(
+            [_task_input_node(), _agent_node("n1", "gene", step_goal="Extract alleles")]
+        )
+        other_flow = _make_flow(nodes)
+        other_flow.id = "22222222-2222-2222-2222-222222222222"
+
+        assert first == second
+        assert key_for(edited_flow, document_id="doc-1") != first
+        assert key_for(other_flow, document_id="doc-1") != first
+
+
 class TestCreateFlowSupervisorNoTools:
     """Unavailable steps remain visible for the executor's structured preflight failure."""
 

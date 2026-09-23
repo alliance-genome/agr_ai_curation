@@ -187,6 +187,7 @@ async def _call_figure_locator_classifier(
 ) -> FigureLocatorBatchOutput:
     from agents import Agent  # pyright: ignore[reportMissingImports]
     from src.lib.openai_agents.config import (
+        PromptCacheIdentity,
         build_model_settings,
         get_figure_locator_resolution_contract_retries,
         get_figure_locator_resolution_max_turns,
@@ -201,6 +202,10 @@ async def _call_figure_locator_classifier(
         model_name,
         temperature=0.0,
         reasoning_effort=reasoning_effort,
+        prompt_cache=PromptCacheIdentity(
+            agent_key="figure_locator_classifier",
+            static_prompt=_CLASSIFIER_INSTRUCTIONS,
+        ),
     )
     agent = Agent(
         name="Figure Locator Classifier",

@@ -143,6 +143,7 @@ from src.lib.agent_studio.catalog_service import (
     get_active_visible_agent_metadata as get_agent_metadata,
 )
 from src.lib.openai_agents.config import (
+    PromptCacheIdentity,
     get_agent_config,
     get_model_for_agent,
     build_model_settings,
@@ -4101,6 +4102,20 @@ def create_flow_supervisor(
         reasoning_effort=config.reasoning,
         provider_override=model_provider,
         parallel_tool_calls=get_flow_supervisor_parallel_tool_calls_enabled(),
+        # The instructions are rendered from the saved flow; the document name and
+        # per-run step availability do not change which flow this supervisor runs.
+        prompt_cache=PromptCacheIdentity(
+            agent_key="flow_supervisor",
+            static_prompt=json.dumps(
+                {
+                    "flow_id": str(flow.id),
+                    "flow_name": flow.name,
+                    "flow_definition": flow.flow_definition,
+                },
+                sort_keys=True,
+                default=str,
+            ),
+        ),
     )
 
     # Get all tools with flow-based is_enabled
