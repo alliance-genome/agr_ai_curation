@@ -1,0 +1,319 @@
+"""A curator's validation override of a resolvable value (ALL-1283)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from src.lib.domain_envelopes.patches import (
+    EnvelopeFieldPatch,
+    EnvelopeFieldPatchStatus,
+    apply_curator_field_patch,
+)
+from src.lib.domain_packs.input_selectors import build_domain_validation_request
+from src.lib.domain_packs.materialization import (
+    ValidatorResultMaterializationInput,
+    materialize_validator_results_into_envelope,
+)
+from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.resolvable_values import (
+    CURATOR_OVERRIDE_METADATA_KEY,
+    LOOKUP_OUTCOME_LABELS,
+    LOOKUP_OUTCOMES,
+    OUTCOME_CURATOR_OVERRIDE,
+    OUTCOME_MATCHED,
+    OUTCOME_NOT_FOUND,
+    OUTCOME_NOT_VALIDATED,
+    RESOLVED,
+    UNRESOLVED,
+    ResolvableSpec,
+    ResolvableValueError,
+    apply_curator_identity,
+    check_resolvable_value,
+    effective_value,
+    is_curator_override,
+    mark_resolved,
+    mark_unresolved,
+    resolved_value,
+    unresolved_value,
+)
+from src.lib.domain_packs.validation_registry import (
+    DomainPackValidationRegistry,
+    ValidationBindingState,
+)
+from src.lib.flows.value_display import display_text
+from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+from src.schemas.domain_pack_metadata import (
+    DomainPackEnumDefinition,
+    DomainPackFieldDefinition,
+    DomainPackFieldType,
+    DomainPackMetadata,
+    DomainPackObjectDefinition,
+)
+from src.schemas.domain_validator import DomainValidatorResultBase, ValidatorFieldResolution
+
+
+KEYS = ("curie", "name")
+DISPLAY = {"label": "name", "id": "curie", "mention": "mention"}
+AT = "2026-09-23T20:00:00+00:00"
+
+
+def _override(value, **edits):
+    return apply_curator_identity(value, edits, identity_keys=KEYS, actor_id="curator-7", at=AT)
+
+
+# --- The vocabulary ----------------------------------------------------------------
+
+
+def test_curator_override_is_the_last_lookup_outcome_and_a_resolved_one():
+    assert LOOKUP_OUTCOMES[-1] == OUTCOME_CURATOR_OVERRIDE == "curator_override"
+    assert LOOKUP_OUTCOME_LABELS[OUTCOME_CURATOR_OVERRIDE] == "Curator override"
+    value = unresolved_value("skin", identity_keys=KEYS)
+    _override(value, curie="ONT:1", name="epidermis")
+    check_resolvable_value(value, identity_keys=KEYS)
+    # Only a curator records an override: validators can neither claim it nor lose it.
+    with pytest.raises(ResolvableValueError, match="records who"):
+        check_resolvable_value({**value, "curator_override": None}, identity_keys=KEYS)
+    with pytest.raises(ResolvableValueError):
+        check_resolvable_value({**value, "lookup_outcome": OUTCOME_MATCHED}, identity_keys=KEYS)
+    with pytest.raises(ValidationError):
+        ValidatorFieldResolution.model_validate({"status": "resolved", "lookup_outcome": "curator_override"})
+    with pytest.raises(ValidationError):
+        ValidatorFieldResolution.model_validate({"status": "unresolved", "lookup_outcome": "curator_override"})
+
+
+# --- Applying, clearing and restoring --------------------------------------------------
+
+
+def test_an_unresolved_value_is_overridden():
+    value = unresolved_value("skin", identity_keys=KEYS)
+    audit = _override(value, curie="ONT:1", name="epidermis")
+
+    assert (value["resolution_state"], value["lookup_outcome"]) == (RESOLVED, OUTCOME_CURATOR_OVERRIDE)
+    assert (value["curie"], value["name"], value["mention"]) == ("ONT:1", "epidermis", "skin")
+    assert value["validator_explanation"] == "Not validated yet."
+    assert value["curator_override"]["actor_id"] == "curator-7"
+    assert value["curator_override"]["at"] == AT
+    assert audit["action"] == "override"
+    assert display_text(value, DISPLAY) == "epidermis (ONT:1)"
+    assert effective_value(value, ResolvableSpec(id_key="curie", label_key="name"),
+                           covered_by_validator=False) is value
+
+
+def test_a_resolved_value_is_overridden_and_its_validator_identity_set_aside():
+    value = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"}, explanation="Matched.",
+                           proposed_curie="ONT:9")
+    _override(value, curie="ONT:2")
+
+    assert (value["curie"], value["name"]) == ("ONT:2", None)
+    assert (value["overruled_curie"], value["overruled_name"]) == ("ONT:1", "epidermis")
+    assert value["proposed_curie"] == "ONT:9"
+    assert value["validator_explanation"] == "Matched."
+    # A second edit refines the curator's own identity; nothing more is set aside.
+    _override(value, name="skin cell")
+    assert (value["curie"], value["name"], value["overruled_curie"]) == ("ONT:2", "skin cell", "ONT:1")
+
+
+def test_clearing_the_identity_withdraws_the_override():
+    value = unresolved_value("skin", identity_keys=KEYS, outcome=OUTCOME_NOT_FOUND, explanation="No match.")
+    _override(value, curie="ONT:1", name="epidermis")
+    audit = _override(value, curie=None, name="")
+
+    assert (value["resolution_state"], value["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_FOUND)
+    assert (value["curie"], value["name"]) == (None, None)
+    assert "curator_override" not in value
+    assert audit["action"] == "cleared"
+    fresh = unresolved_value("skin", identity_keys=KEYS)
+    _override(fresh, curie="ONT:1")
+    _override(fresh, curie=None)
+    assert fresh["lookup_outcome"] == OUTCOME_NOT_VALIDATED
+
+
+def test_entering_the_previous_identity_restores_the_previous_state():
+    value = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"}, explanation="Matched.")
+    original = dict(value)
+    _override(value, curie="ONT:2", name="other")
+    audit = _override(value, curie="ONT:1", name="epidermis")
+
+    assert value == original
+    assert audit["action"] == "restored"
+
+
+def test_only_identity_keys_take_an_override():
+    value = unresolved_value("skin", identity_keys=KEYS)
+    with pytest.raises(ResolvableValueError, match="Only identity keys"):
+        _override(value, mention="new words")
+
+
+# --- Later validator runs ---------------------------------------------------------------
+
+
+def test_validator_writes_never_change_an_overridden_value():
+    value = unresolved_value("skin", identity_keys=KEYS)
+    _override(value, curie="ONT:1", name="epidermis")
+    snapshot = dict(value)
+    mark_resolved(value, {"curie": "ONT:9", "name": "other"}, explanation="x", identity_keys=KEYS)
+    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="x", identity_keys=KEYS)
+    assert value == snapshot
+    assert is_curator_override(value)
+
+
+def _metadata() -> DomainPackMetadata:
+    return DomainPackMetadata(
+        pack_id="fixture.override",
+        display_name="Fixture Override",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        enum_definitions=[DomainPackEnumDefinition(enum_id="LookupOutcome", display_name="Lookup outcome",
+                                                   values=[{"value": value} for value in LOOKUP_OUTCOMES])],
+        metadata={"validator_bindings": {"active": [{
+            "binding_id": "fixture.site_lookup",
+            "display_name": "Site lookup",
+            "validator_agent": {"package_id": "fixture.validators", "agent_id": "term_validator"},
+            "applies_to": {"domain_pack_id": "fixture.override", "object_types": ["Observation"]},
+            "input_fields": {"mention": {"source": "payload", "path": "site.mention"}},
+            "expected_result_fields": {"curie": "site.curie", "name": "site.name"},
+        }], "under_development": []}},
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Observation", display_name="Observation", metadata={"object_role": "curatable_unit"},
+            fields=[
+                DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT,
+                                          metadata={"display": DISPLAY}),
+                DomainPackFieldDefinition(field_path="site.curie", field_type=DomainPackFieldType.STRING,
+                                          metadata={"editable": True}),
+                DomainPackFieldDefinition(field_path="site.name", field_type=DomainPackFieldType.STRING,
+                                          metadata={"editable": True}),
+                DomainPackFieldDefinition(field_path="site.mention", field_type=DomainPackFieldType.STRING,
+                                          metadata={"editable": True}),
+                DomainPackFieldDefinition(field_path="site.lookup_outcome", field_type=DomainPackFieldType.ENUM,
+                                          enum_ref="LookupOutcome", metadata={"editable": True}),
+            ],
+        )],
+    )
+
+
+def _pack() -> LoadedDomainPack:
+    metadata = _metadata()
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    )
+
+
+def _overridden_envelope() -> DomainEnvelope:
+    site = unresolved_value("skin", identity_keys=KEYS)
+    _override(site, curie="ONT:1", name="epidermis")
+    return DomainEnvelope(
+        envelope_id="override-env", domain_pack_id="fixture.override",
+        extracted_objects=[CuratableObjectEnvelope(object_type="Observation", object_id="obs-1",
+                                                   payload={"site": site})],
+    )
+
+
+def _validate(envelope, *, status, values=None, outcome="success"):
+    metadata = _metadata()
+    registry = DomainPackValidationRegistry.from_domain_pack(_pack())
+    match = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])[0]
+    request = build_domain_validation_request(match).request
+    result = DomainValidatorResultBase.model_validate({
+        "status": status, "request_id": request.request_id,
+        "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
+        "target": request.target, "resolved_values": values or {}, "resolved_objects": [],
+        "missing_expected_fields": [], "candidates": [],
+        "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 1, "outcome": outcome}],
+        "curator_message": None, "explanation": "Validator words.",
+    })
+    return materialize_validator_results_into_envelope(
+        envelope, metadata, [ValidatorResultMaterializationInput(match=match, request=request, result=result)],
+    )
+
+
+def _disagreements(result):
+    return [finding for finding in result.appended_findings
+            if finding.code == "domain_pack.validator_disagrees_with_curator_override"]
+
+
+def test_an_agreeing_validator_leaves_the_override_and_opens_nothing():
+    envelope = _overridden_envelope()
+    result = _validate(envelope, status="resolved", values={"curie": "ONT:1", "name": "epidermis"})
+
+    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
+    assert _disagreements(result) == []
+    assert all(finding.status.value == "resolved" for finding in result.appended_findings)
+
+
+@pytest.mark.parametrize(("status", "values", "outcome", "detail"), [
+    ("resolved", {"curie": "ONT:9", "name": "other"}, "success", "it resolved curie 'ONT:9'"),
+    ("unresolved", None, "not_found", "its lookup result is Not found"),
+])
+def test_a_disagreeing_validator_opens_a_finding_and_leaves_the_override(status, values, outcome, detail):
+    envelope = _overridden_envelope()
+    result = _validate(envelope, status=status, values=values, outcome=outcome)
+
+    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
+    [finding] = _disagreements(result)
+    assert finding.status.value == "open"
+    assert finding.message.startswith("Validator disagrees with the curator override:")
+    assert detail in finding.message
+    assert finding.field_ref.field_path == "site"
+    # The validator's own outcome is not an open problem: the override wins.
+    others = [f for f in result.appended_findings if f is not finding]
+    assert all(f.status.value == "resolved" for f in others)
+
+
+def test_a_non_decisive_validator_outcome_is_no_disagreement():
+    envelope = _overridden_envelope()
+    result = _validate(envelope, status="unresolved", outcome="error")
+
+    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
+    assert _disagreements(result) == []
+
+
+# --- The curator edit path ----------------------------------------------------------------
+
+
+def _patch(envelope, field_path, value, *, before):
+    return apply_curator_field_patch(
+        envelope, _pack(),
+        EnvelopeFieldPatch(envelope_id=envelope.envelope_id, expected_revision=1, object_id="obs-1",
+                           field_path=field_path, before=before, value=value),
+        current_revision=1, actor_id="curator-7",
+    )
+
+
+def _staged_envelope():
+    return DomainEnvelope(
+        envelope_id="override-env", domain_pack_id="fixture.override",
+        extracted_objects=[CuratableObjectEnvelope(object_type="Observation", object_id="obs-1",
+                                                   payload={"site": unresolved_value("skin", identity_keys=KEYS)})],
+    )
+
+
+def test_a_curator_edit_of_an_identity_key_is_an_override_with_an_audit_event():
+    result = _patch(_staged_envelope(), "site.curie", "ONT:1", before=None)
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED
+    obj = result.envelope.extracted_objects[0]
+    site = obj.payload["site"]
+    assert (site["curie"], site["lookup_outcome"], site["curator_override"]["actor_id"]) == (
+        "ONT:1", OUTCOME_CURATOR_OVERRIDE, "curator-7")
+    [event] = obj.metadata[CURATOR_OVERRIDE_METADATA_KEY]
+    assert (event["action"], event["value_path"], event["field_path"]) == ("override", "site", "site.curie")
+    assert event["previous"]["lookup_outcome"] == OUTCOME_NOT_VALIDATED
+
+    cleared = _patch(result.envelope, "site.curie", None, before="ONT:1")
+    site = cleared.envelope.extracted_objects[0].payload["site"]
+    assert (site["resolution_state"], site["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_VALIDATED)
+
+
+@pytest.mark.parametrize(("field_path", "value", "before"), [
+    ("site.lookup_outcome", "matched", "not_validated"),
+    ("site.mention", "other words", "skin"),
+])
+def test_curators_cannot_edit_the_paper_wording_or_the_validation_state(field_path, value, before):
+    result = _patch(_staged_envelope(), field_path, value, before=before)
+
+    assert result.status is EnvelopeFieldPatchStatus.REJECTED
+    assert "set by validation" in result.errors[0]

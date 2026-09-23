@@ -375,7 +375,7 @@ def test_resolved_value_vocabularies_are_closed():
         (
             {"mention": "gut", "curie": "ONT:1", "name": "gut", "resolution_state": "resolved",
              "lookup_outcome": "not_found"},
-            "lookup_outcome is matched",
+            "A resolved value's lookup_outcome is one of",
         ),
         (
             {"mention": "gut", "curie": None, "name": None, "resolution_state": "unresolved",

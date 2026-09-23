@@ -31,7 +31,7 @@ from src.schemas.domain_validator import ValidatorOutputProjection
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
 from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
-from src.lib.domain_packs.resolvable_values import holds_resolution, without_overruled
+from src.lib.domain_packs.resolvable_values import has_resolution_state, without_overruled
 from src.lib.flows.value_display import (
     LIST_SEPARATOR,
     display_text,
@@ -604,11 +604,11 @@ def _scalar_attribute_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
             continue
         # Resolvable values (ALL-1283) are selectable too; they read "label (ID)"
         # or UNRESOLVED like any other structured value.
-        if _is_scalar_attribute_value(value) or holds_resolution(value) or (
+        if _is_scalar_attribute_value(value) or has_resolution_state(value) or (
             isinstance(value, list)
             and (
                 all(_is_scalar_attribute_value(item) for item in value)
-                or all(holds_resolution(item) for item in value)
+                or all(has_resolution_state(item) for item in value)
             )
         ):
             fields.setdefault(normalized_key, value)

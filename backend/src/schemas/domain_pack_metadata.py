@@ -970,6 +970,15 @@ class DomainPackObjectDefinition(DomainPackMetadataBaseModel):
     @field_validator("metadata")
     @classmethod
     def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        for key in ("workspace_display", "supervisor_manifest"):
+            config = value.get(key)
+            if isinstance(config, dict) and "primary_label_fields" in config:
+                # A label chain fills an item's label from another field when the
+                # first is empty; the label is one declared field (ALL-1283).
+                raise ValueError(
+                    f"metadata.{key} declares primary_label_fields; "
+                    "declare a single primary_label_field instead"
+                )
         return _validate_metadata_mapping(value)
 
     @model_validator(mode="after")

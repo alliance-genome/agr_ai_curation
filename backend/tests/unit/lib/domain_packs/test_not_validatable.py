@@ -128,3 +128,24 @@ def test_a_resolved_flag_no_longer_skips_the_object():
         _envelope(flagged_status=ValidationFindingStatus.RESOLVED), _pack(),
     )
     assert _object_ids(result.appended_findings) == {"old-1", "old-2"}
+
+
+def test_a_package_validator_rerun_supersedes_its_own_stale_flag():
+    from src.lib.domain_packs.not_validatable import supersede_not_validatable_findings
+
+    envelope = _envelope()
+    still_flagged = [envelope.validation_findings[0].model_copy(update={"finding_id": None})]
+
+    # The record is no longer in the previous format: the fresh run raises no flag.
+    refreshed = supersede_not_validatable_findings(envelope, [], actor_id="fixture.package_validator")
+    assert refreshed.validation_findings[0].status is ValidationFindingStatus.RESOLVED
+    assert not_validatable_object_keys(refreshed) == set()
+    # The resolution is recorded in the envelope history like any other.
+    assert len(refreshed.history) == len(envelope.history) + 1
+    event = refreshed.history[-1]
+    assert (event.actor_id, event.details["finding_id"], event.details["new_status"]) == (
+        "fixture.package_validator", envelope.validation_findings[0].finding_id, "resolved")
+    # Still in the previous format: the flag stays open and nothing is recorded.
+    kept = supersede_not_validatable_findings(envelope, still_flagged, actor_id="fixture.package_validator")
+    assert kept.validation_findings[0].status is ValidationFindingStatus.OPEN
+    assert kept.history == envelope.history
