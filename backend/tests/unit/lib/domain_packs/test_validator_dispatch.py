@@ -442,10 +442,9 @@ def _gene_expression_envelope() -> DomainEnvelope:
                         "lookup_outcome": "matched",
                         "validator_explanation": None,
                     },
-                    "expression_annotation_subject": {
-                        "primary_external_id": "Tmem67",
-                        "gene_symbol": "Tmem67",
-                    },
+                    "expression_annotation_subject": _staged_value(
+                        "Tmem67", "primary_external_id", "gene_symbol"
+                    ),
                     "when_expressed_stage_name": "TS26",
                     "expression_pattern": {
                         "when_expressed": {
@@ -1738,8 +1737,8 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
             "explanation": "Fixture validator resolved this field.",
         }
         if binding.binding_id == "subject_gene_validation":
+            # The gene lookup reads the subject's paper wording.
             assert request.selected_inputs == {
-                "gene_id": "Tmem67",
                 "gene_symbol": "Tmem67",
                 "data_provider": "MGI",
             }
@@ -1868,10 +1867,13 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
         "subject_gene_validation",
     }
     annotation = result.envelope.extracted_objects[0]
-    assert annotation.payload["expression_annotation_subject"] == {
+    subject = annotation.payload["expression_annotation_subject"]
+    assert {key: subject[key] for key in ("primary_external_id", "gene_symbol", "mention")} == {
         "primary_external_id": "MGI:1923928",
         "gene_symbol": "Tmem67",
+        "mention": "Tmem67",
     }
+    assert (subject["resolution_state"], subject["lookup_outcome"]) == ("resolved", "matched")
     assert annotation.payload["single_reference"] == {
         "pmid": "PMID:203506",
         "title": "Resolved literature title",
@@ -1885,10 +1887,10 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
     assert patch_events["source_reference_validation"]["original_values"] == {
         "single_reference.title": "Paper supplied title"
     }
-    assert patch_events["subject_gene_validation"]["original_values"] == {
-        "expression_annotation_subject.primary_external_id": "Tmem67",
-        "expression_annotation_subject.gene_symbol": "Tmem67",
-    }
+    assert patch_events["subject_gene_validation"]["materialized_field_paths"] == [
+        "expression_annotation_subject.primary_external_id",
+        "expression_annotation_subject.gene_symbol",
+    ]
     field_paths = [
         finding.field_ref.field_path
         for finding in result.appended_findings
@@ -2043,9 +2045,15 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
     )
 
     annotation = result.envelope.extracted_objects[0]
+    # The unresolved gene keeps its paper wording and records why; no identity is written.
     assert annotation.payload["expression_annotation_subject"] == {
-        "primary_external_id": "Tmem67",
-        "gene_symbol": "Tmem67",
+        "primary_external_id": None,
+        "gene_symbol": None,
+        "mention": "Tmem67",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "missing_expected_result_field",
+        "validator_explanation": "Multiple provider candidates matched.",
+        "validator_curator_message": "Subject gene lookup is ambiguous.",
     }
     assert annotation.payload["single_reference"] == {
         "pmid": "PMID:203506",

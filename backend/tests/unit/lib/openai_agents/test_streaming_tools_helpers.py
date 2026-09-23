@@ -3244,7 +3244,11 @@ def _chat_dispatch_domain_cases():
                                 "validator_explanation": "Not validated yet.",
                             },
                             "expression_annotation_subject": {
-                                "gene_symbol": "flcn",
+                                "primary_external_id": None, "gene_symbol": None,
+                                "mention": "flcn",
+                                "resolution_state": "unresolved",
+                                "lookup_outcome": "not_validated",
+                                "validator_explanation": "Not validated yet.",
                             },
                             "single_reference": {
                                 "pmid": "PMID:27528223",

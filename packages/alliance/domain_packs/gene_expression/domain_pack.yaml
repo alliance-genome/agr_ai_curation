@@ -2812,7 +2812,7 @@ metadata:
             required: false
           gene_symbol:
             source: payload
-            path: expression_annotation_subject.gene_symbol
+            path: expression_annotation_subject.mention
             required: false
           data_provider:
             source: payload
@@ -3054,6 +3054,7 @@ metadata:
             context_only: true
         expected_result_fields:
           curie: expression_pattern.when_expressed.stage_uberon_slim_terms.curie
+          name: expression_pattern.when_expressed.stage_uberon_slim_terms.name
         required: true
         blocking: false
         allow_opt_out: true
@@ -3183,6 +3184,7 @@ metadata:
             context_only: true
         expected_result_fields:
           curie: expression_pattern.where_expressed.anatomical_structure_uberon_terms.curie
+          name: expression_pattern.where_expressed.anatomical_structure_uberon_terms.name
         required: true
         blocking: false
         allow_opt_out: true

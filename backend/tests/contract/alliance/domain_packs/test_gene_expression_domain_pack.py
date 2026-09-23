@@ -866,7 +866,8 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
         "unresolved_allowed_term_labels": STAGE_UBERON_SLIM_UNRESOLVED_LABELS,
     }
     assert stage_uberon_request.expected_result_fields == {
-        "curie": "expression_pattern.when_expressed.stage_uberon_slim_terms[0].curie"
+        "curie": "expression_pattern.when_expressed.stage_uberon_slim_terms[0].curie",
+        "name": "expression_pattern.when_expressed.stage_uberon_slim_terms[0].name",
     }
 
     anatomical_uberon_match = _active_binding_match(
@@ -885,7 +886,8 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
         "allowed_term_curies": ANATOMICAL_UBERON_SLIM_ALLOWED_CURIES,
     }
     assert anatomical_uberon_request.expected_result_fields == {
-        "curie": "expression_pattern.where_expressed.anatomical_structure_uberon_terms[0].curie"
+        "curie": "expression_pattern.where_expressed.anatomical_structure_uberon_terms[0].curie",
+        "name": "expression_pattern.where_expressed.anatomical_structure_uberon_terms[0].name",
     }
 
     qualifier_match = _active_binding_match(
@@ -1434,7 +1436,7 @@ def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_re
                 result=_validator_result(
                     stage_request,
                     status="resolved",
-                    resolved_values={"curie": "UBERON:0000068"},
+                    resolved_values={"curie": "UBERON:0000068", "name": "embryo stage"},
                 ),
             ),
             ValidatorResultMaterializationInput(
@@ -1443,7 +1445,7 @@ def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_re
                 result=_validator_result(
                     anatomy_request,
                     status="resolved",
-                    resolved_values={"curie": "UBERON:0001008"},
+                    resolved_values={"curie": "UBERON:0001008", "name": "renal system"},
                 ),
             ),
             ValidatorResultMaterializationInput(
@@ -1462,10 +1464,10 @@ def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_re
     payload = result.envelope.extracted_objects[0].payload
     assert payload["expression_pattern"]["when_expressed"][
         "stage_uberon_slim_terms"
-    ] == [_validated("embryonic stage", curie="UBERON:0000068", name=None)]
+    ] == [_validated("embryonic stage", curie="UBERON:0000068", name="embryo stage")]
     assert payload["expression_pattern"]["where_expressed"][
         "anatomical_structure_uberon_terms"
-    ] == [_validated("renal system", curie="UBERON:0001008", name=None)]
+    ] == [_validated("renal system", curie="UBERON:0001008", name="renal system")]
     assert payload["expression_pattern"]["where_expressed"][
         "cellular_component_qualifiers"
     ] == [_validated("nuclear lumen", curie="GO:0031981", name="nuclear lumen")]
@@ -1492,12 +1494,12 @@ def test_gene_expression_stage_uberon_slim_rejects_out_of_slim_materialization()
         envelope,
         "expression_stage_uberon_slim_validation",
         status="resolved",
-        resolved_values={"curie": "UBERON:0000113"},
+        resolved_values={"curie": "UBERON:0000113", "name": "post-embryonic stage"},
     )
 
     assert result.envelope.extracted_objects[0].payload["expression_pattern"]["when_expressed"][
         "stage_uberon_slim_terms"
-    ] == [_validated("adult", curie="UBERON:0000113", name=None)]
+    ] == [_validated("adult", curie="UBERON:0000113", name="post-embryonic stage")]
     finding = result.appended_findings[0]
     assert finding.code == "domain_pack.validator_resolved"
 
@@ -1505,7 +1507,7 @@ def test_gene_expression_stage_uberon_slim_rejects_out_of_slim_materialization()
         envelope,
         "expression_stage_uberon_slim_validation",
         status="resolved",
-        resolved_values={"curie": "UBERON:0000105"},
+        resolved_values={"curie": "UBERON:0000105", "name": "life cycle stage"},
     )
 
     # The out-of-slim term is never written; the element records why it stays UNRESOLVED.
@@ -1528,7 +1530,7 @@ def test_gene_expression_anatomical_uberon_slim_rejects_out_of_slim_materializat
         envelope,
         "expression_anatomical_uberon_slim_validation",
         status="resolved",
-        resolved_values={"curie": "UBERON:0002113"},
+        resolved_values={"curie": "UBERON:0002113", "name": "kidney"},
     )
 
     assert result.envelope.extracted_objects[0].payload["expression_pattern"][
@@ -3206,11 +3208,11 @@ def test_non_pinned_bindings_read_the_paper_wording_and_pinned_bindings_are_unch
     }
     for binding_id, (input_name, path) in wording_inputs.items():
         assert bindings[binding_id]["input_fields"][input_name]["path"] == path
-    # Hash-pinned for saved profile mappings: write-back reaches them through their
-    # parent value's mention, so their inputs stay the identity leaves.
+    # The subject gene lookup reads the paper wording too (its saved-profile hash changes).
     assert bindings["subject_gene_validation"]["input_fields"]["gene_symbol"]["path"] == (
-        "expression_annotation_subject.gene_symbol"
+        "expression_annotation_subject.mention"
     )
+    # Hash-pinned and unchanged: it reads its pmid/doi lookup inputs.
     assert bindings["source_reference_validation"]["input_fields"]["pmid"]["path"] == (
         "single_reference.pmid"
     )
@@ -3264,3 +3266,41 @@ def test_export_term_lookup_matches_only_the_validated_curie():
     }
     assert _term_lookup(staged_value(_ANATOMY, "cilia")) is None
     assert _term_lookup({"name": "cilium"}) is None
+
+
+def test_builder_staged_subject_is_looked_up_from_its_paper_wording_and_written_back():
+    envelope = _converted_tmem67_envelope()
+    subject = envelope.extracted_objects[0].payload["expression_annotation_subject"]
+    assert (subject["mention"], subject["gene_symbol"]) == ("Tmem67", None)
+    matches = [
+        match
+        for match in _gene_expression_validation_registry().match_bindings(
+            envelope, states=[ValidationBindingState.ACTIVE]
+        )
+        if match.binding.binding_id == "subject_gene_validation"
+    ]
+    request = build_domain_validation_request(matches[0]).request
+    assert request is not None
+    assert request.selected_inputs == {"gene_symbol": "Tmem67", "data_provider": "MGI"}
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=matches[0],
+                request=request,
+                result=_validator_result(
+                    request,
+                    status="resolved",
+                    resolved_values={"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"},
+                ),
+            )
+        ],
+    )
+
+    payload = result.envelope.extracted_objects[0].payload
+    validated = _validated("Tmem67", primary_external_id="MGI:1923928", gene_symbol="Tmem67")
+    assert payload["expression_annotation_subject"] == validated
+    # The experiment's copy of the subject takes the same identity and state.
+    assert payload["expression_experiment"]["entity_assayed"] == validated
