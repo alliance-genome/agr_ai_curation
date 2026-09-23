@@ -43,16 +43,15 @@ to the value (tuples of keys and list indexes).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS,
-    RESOLUTION_STATE_KEY,
-    RESOLVED,
     UNRESOLVED_DISPLAY,
-    has_resolution_state,
     holds_resolution,
+    is_resolved,
 )
 from src.schemas.domain_envelope import parse_field_path
 
@@ -62,6 +61,10 @@ LIST_SEPARATOR = "; "
 RECORD_SEPARATOR = " | "
 NESTED_SEPARATOR = ", "
 UNRESOLVED = "unresolved"
+# Cell text for a stored controlled-vocabulary word outside its vocabulary.
+INVALID_VOCABULARY_VALUE = "Invalid value"
+
+_log = logging.getLogger(__name__)
 
 PathToken = str | int
 FindingPaths = frozenset[tuple[PathToken, ...]]
@@ -287,7 +290,12 @@ def _resolvable_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None) -
     an unresolved value never reads as if it were the validated item.
     """
 
-    if not (has_resolution_state(value) and value[RESOLUTION_STATE_KEY] == RESOLVED):
+    # A declared resolvable value (mention role) is checked against its own id/label keys.
+    identity_keys = tuple(
+        str(spec[role]) for role in ("id", "label") if spec and spec.get("mention") and spec.get(role)
+    )
+    if not is_resolved(value, identity_keys=identity_keys):
+        # Unresolved, stored before the contract, or a stored record that breaks it.
         return UNRESOLVED_DISPLAY
     if spec and (spec.get("label") or spec.get("id")):
         label = _first(value, [spec["label"]]) if spec.get("label") else ""
@@ -357,10 +365,12 @@ def _render(
         return _mapping_text(value, spec, paths, marked)
     text = _scalar_text(value)
     if spec and spec.get("value_labels"):
-        # A controlled-vocabulary leaf (e.g. a lookup outcome) reads in plain words.
+        # A controlled-vocabulary leaf (e.g. a lookup outcome) reads in plain words;
+        # a stored word outside the vocabulary is marked, never raised on.
         labels = spec["value_labels"]
         if text not in labels:
-            raise ValueError(f"{text!r} is not a value of this field's controlled vocabulary")
+            _log.warning("Stored value %r is outside its controlled vocabulary", text)
+            return f"{INVALID_VOCABULARY_VALUE} ({text})"
         return labels[text]
     return f"{text} ({UNRESOLVED})" if marked and paths and text else text
 
