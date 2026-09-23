@@ -198,11 +198,17 @@ def test_mark_writes_validator_words_and_never_touches_identity_or_mention():
     assert value["mention"] == "skin"
     assert (value["resolution_state"], value["lookup_outcome"]) == (RESOLVED, OUTCOME_MATCHED)
     assert (value["validator_explanation"], value["validator_curator_message"]) == ("Exact synonym.", None)
-    # A later failure cannot un-resolve a value an earlier validator resolved.
-    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="x")
-    assert value["resolution_state"] == RESOLVED
     with pytest.raises(ResolvableValueError):
-        mark_unresolved(value, "legacy_unverified", explanation=None)
+        mark_unresolved(value, "legacy_unverified", explanation=None, identity_keys=TERM_KEYS)
+    # The validator is the authority: un-resolving keeps the identity only as hints.
+    with pytest.raises(ResolvableValueError, match="identity keys"):
+        mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="x")
+    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="No longer matches.", identity_keys=TERM_KEYS)
+    assert value == {"mention": "skin", "curie": None, "name": None,
+                     "proposed_curie": "ONT:1", "proposed_name": "epidermis",
+                     "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_FOUND,
+                     "validator_explanation": "No longer matches.", "validator_curator_message": None}
+    check_resolvable_value(value, identity_keys=TERM_KEYS)
 
 
 def test_list_helpers_keep_each_element_separate():
@@ -936,3 +942,166 @@ def declared_resolvable_fields_for_test(metadata):
     from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
 
     return declared_resolvable_fields(metadata, "Annotation")
+
+
+# --- Legacy coverage: mirrors, list-level writes, re-validation upgrades --------
+
+_TERM_DISPLAY = {"label": "name", "id": "curie", "mention": "mention"}
+_GENE_DISPLAY = {"label": "gene_symbol", "id": "primary_external_id", "mention": "mention"}
+
+
+def _expression_metadata():
+    def field(path, **kwargs):
+        return DomainPackFieldDefinition(field_path=path, field_type=kwargs.pop("field_type",
+                                         DomainPackFieldType.STRING), **kwargs)
+
+    return DomainPackMetadata(
+        pack_id="fixture.expression",
+        display_name="Fixture Expression",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        metadata={"validator_bindings": {"active": [
+            {
+                "binding_id": "fixture.subject_lookup",
+                "display_name": "Subject lookup",
+                "validator_agent": {"package_id": "fixture.validators", "agent_id": "gene_validator"},
+                "applies_to": {"domain_pack_id": "fixture.expression", "object_types": ["Expression"]},
+                "input_fields": {"symbol": {"source": "payload", "path": "subject.gene_symbol"}},
+                "expected_result_fields": {"primary_external_id": "subject.primary_external_id",
+                                           "gene_symbol": "subject.gene_symbol"},
+            },
+            {
+                "binding_id": "fixture.slim_lookup",
+                "display_name": "Slim lookup",
+                "validator_agent": {"package_id": "fixture.validators", "agent_id": "term_validator"},
+                "applies_to": {"domain_pack_id": "fixture.expression", "object_types": ["Expression"]},
+                "input_fields": {"terms": {"source": "payload", "path": "slim_terms", "allow_multiple": True}},
+                "expected_result_fields": {"terms": "slim_terms"},
+            },
+        ], "under_development": []}},
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Expression", display_name="Expression",
+            metadata={"object_role": "curatable_unit"},
+            fields=[
+                field("subject", field_type=DomainPackFieldType.OBJECT, metadata={"display": _GENE_DISPLAY}),
+                field("subject.primary_external_id",
+                      metadata={"materializes_to_field_paths": ["experiment.entity_assayed.primary_external_id"]}),
+                field("subject.gene_symbol",
+                      metadata={"materializes_to_field_paths": ["experiment.entity_assayed.gene_symbol"]}),
+                field("experiment", field_type=DomainPackFieldType.OBJECT),
+                field("experiment.entity_assayed", field_type=DomainPackFieldType.OBJECT,
+                      metadata={"display": _GENE_DISPLAY}),
+                field("experiment.entity_assayed.primary_external_id"),
+                field("experiment.entity_assayed.gene_symbol"),
+                field("slim_terms", field_type=DomainPackFieldType.ARRAY, metadata={"display": _TERM_DISPLAY}),
+            ],
+        )],
+    )
+
+
+def _legacy_expression_payload():
+    # Stored before the contract: no mention, no state, no lookup outcome.
+    gene = {"primary_external_id": "G:1", "gene_symbol": "tmem-67"}
+    return {"subject": dict(gene), "experiment": {"entity_assayed": dict(gene)},
+            "slim_terms": [{"curie": "U:1", "name": "embryo"}, {"curie": "U:2", "name": "adult"}]}
+
+
+def test_mirror_sources_and_list_level_writes_cover_legacy_values():
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    specs = declared_resolvable_fields(_expression_metadata(), "Expression")
+    assert specs["experiment.entity_assayed"].covered_by == (
+        "subject.primary_external_id", "subject.gene_symbol")
+    # An old event recorded only the source subject paths and the whole slim list.
+    metadata = {"validator_resolved_value_materialization": [
+        {"original_values": {"subject.primary_external_id": "G:1", "slim_terms": []}},
+    ]}
+    effective = effective_payload(_legacy_expression_payload(), specs, object_metadata=metadata)
+    assert effective["subject"]["lookup_outcome"] == OUTCOME_MATCHED
+    assert effective["experiment"]["entity_assayed"]["lookup_outcome"] == OUTCOME_MATCHED
+    assert [term["lookup_outcome"] for term in effective["slim_terms"]] == [OUTCOME_MATCHED] * 2
+    # Without an event they stay unverified.
+    unverified = effective_payload(_legacy_expression_payload(), specs, object_metadata={})
+    assert unverified["experiment"]["entity_assayed"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+
+
+def test_revalidating_a_legacy_record_upgrades_declared_values_and_records_the_event():
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    metadata = _expression_metadata()
+    envelope = DomainEnvelope(
+        envelope_id="legacy-expression", domain_pack_id="fixture.expression",
+        extracted_objects=[CuratableObjectEnvelope(
+            object_type="Expression", pending_ref_id="expression-1",
+            status=CuratableObjectStatus.VALIDATED, payload=_legacy_expression_payload(),
+        )],
+    )
+    registry = DomainPackValidationRegistry.from_domain_pack(LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    ))
+    items = []
+    for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE]):
+        request = build_domain_validation_request(match).request
+        values = (
+            {"primary_external_id": "G:1", "gene_symbol": "tmem-67"}
+            if request.validator_binding_id == "fixture.subject_lookup"
+            else {"terms": [{"curie": "U:1", "name": "embryo"}, {"curie": "U:2", "name": "adult"}]}
+        )
+        result = DomainValidatorResultBase.model_validate({
+            "status": "resolved", "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
+            "target": request.target, "resolved_values": values, "resolved_objects": [],
+            "missing_expected_fields": [], "candidates": [],
+            "lookup_attempts": [{"provider": "fixture", "method": "exact", "query": {}, "result_count": 1,
+                                 "outcome": "success"}],
+            "curator_message": None, "explanation": "Matched the stored identity.",
+        })
+        items.append(ValidatorResultMaterializationInput(match=match, request=request, result=result))
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, items)
+
+    patched = result.envelope.extracted_objects[0]
+    # The declared subject took the contract shape, and its mirror too.
+    assert (patched.payload["subject"]["resolution_state"], patched.payload["subject"]["lookup_outcome"]) == (
+        RESOLVED, OUTCOME_MATCHED)
+    assert patched.payload["subject"]["validator_explanation"] == "Matched the stored identity."
+    assert patched.payload["experiment"]["entity_assayed"]["lookup_outcome"] == OUTCOME_MATCHED
+    # Unchanged but uncovered values still get an event, so the legacy rule sees them.
+    events = patched.metadata["validator_resolved_value_materialization"]
+    assert {path for event in events for path in event["materialized_field_paths"]} >= {
+        "subject.primary_external_id", "slim_terms"}
+    effective = effective_payload(
+        patched.payload, declared_resolvable_fields(metadata, "Expression"), object_metadata=patched.metadata,
+    )
+    assert all(term["lookup_outcome"] == OUTCOME_MATCHED for term in effective["slim_terms"])
+
+    # A second identical re-validation adds no further event.
+    again = materialize_validator_results_into_envelope(result.envelope, metadata, items)
+    assert len(again.envelope.extracted_objects[0].metadata["validator_resolved_value_materialization"]) == len(
+        events)
+
+
+
+def test_a_validator_overrules_a_builder_resolved_value():
+    """The builder's deterministic lookup resolved it; the validator says no."""
+
+    metadata = _metadata(mirror=True)
+    builder_resolved = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"},
+                                      explanation="Matched by the builder's lookup.")
+    envelope = _envelope({"site": dict(builder_resolved), "copy": dict(builder_resolved)})
+    item = _item(metadata, envelope, status="unresolved", outcome="not_found")
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    payload = result.envelope.extracted_objects[0].payload
+    for key in ("site", "copy"):
+        value = payload[key]
+        assert (value["resolution_state"], value["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_FOUND)
+        assert (value["curie"], value["name"]) == (None, None)
+        assert (value["proposed_curie"], value["proposed_name"]) == ("ONT:1", "epidermis")
+        assert value["validator_explanation"] == "Fixture validator decision."
+        assert value["mention"] == "skin"
+        check_resolvable_value(value, identity_keys=TERM_KEYS)
+    assert effective_value(payload["site"], ResolvableSpec(id_key="curie", label_key="name"),
+                           covered_by_validator=True) is payload["site"]
