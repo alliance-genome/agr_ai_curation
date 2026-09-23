@@ -44,9 +44,12 @@ def openinference_trace_config() -> TraceConfig:
     stores it as the observation input). The flattened per-message copies add
     several span attributes per history item, so long tool-loop turns overflowed
     the OpenTelemetry span attribute limit (128, oldest evicted first) and lost
-    model, usage and cost context.
+    model, usage and cost context. ``output.value`` likewise carries the full
+    response, so the flattened output copies (several attributes per function
+    call) are hidden too; otherwise turns with many tools and parallel calls
+    still overflow and evict ``output.value``.
     """
-    return TraceConfig(hide_input_messages=True)
+    return TraceConfig(hide_input_messages=True, hide_output_messages=True)
 
 
 def _usage_mapping(usage) -> dict[str, Any] | None:

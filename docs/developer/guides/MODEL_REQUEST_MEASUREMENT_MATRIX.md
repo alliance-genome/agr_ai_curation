@@ -128,6 +128,10 @@ context (695 of 712 usage-less production generations, Sep 16-22 2026). Cost
 attributes and span-start identity are also written last before the span ends,
 so a large payload can no longer evict them.
 
+Both flattened copies are hidden (`hide_input_messages` and `hide_output_messages`): `input.value` and `output.value` already carry the full request and response, and Langfuse stores those as the observation input and output.
+
+A streamed turn that fails or is left incomplete after the provider returned usage raises inside the SDK before the span's usage is set, so the generation reports `failed` while the ALL-1279 measurement record holds the provider usage. Join them on `model_request_id` (= `measurement_id`) to recover it.
+
 ## Limits and warnings
 
 | Setting | Default | Effect |

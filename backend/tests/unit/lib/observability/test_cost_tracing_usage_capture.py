@@ -79,7 +79,7 @@ def published(monkeypatch):
     return records
 
 
-def _response(*, response_id="resp_1", usage=USAGE, tools=()):
+def _response(*, response_id="resp_1", usage=USAGE, tools=(), output_messages=1):
     return Response.model_validate({
         "id": response_id, "created_at": 1, "object": "response", "model": "gpt-test-2026-09",
         "status": "completed", "parallel_tool_calls": False, "tool_choice": "auto",
@@ -88,10 +88,13 @@ def _response(*, response_id="resp_1", usage=USAGE, tools=()):
              "strict": False}
             for name in tools
         ],
-        "output": [{
-            "id": "msg_1", "type": "message", "role": "assistant", "status": "completed",
-            "content": [{"type": "output_text", "text": "done", "annotations": []}],
-        }],
+        "output": [
+            {
+                "id": f"msg_{index}", "type": "message", "role": "assistant", "status": "completed",
+                "content": [{"type": "output_text", "text": "done", "annotations": []}],
+            }
+            for index in range(1, output_messages + 1)
+        ],
         "usage": usage,
     })
 
@@ -179,6 +182,17 @@ def test_cost_attributes_survive_when_other_payload_overflows_the_span(exporter,
     assert span.dropped_attributes > 0
     _assert_recorded(span, published[0])
     assert span.attributes["session.id"] == "session-A"
+
+
+def test_many_output_items_keep_output_value_and_cost(exporter, published):
+    # Flattened output copies (several attributes per item) must not evict
+    # output.value; the full response is already exported there.
+    _run_streamed(_agent(_FakeResponsesModel([_response(output_messages=60)])))
+
+    [span] = _generations(exporter)
+    _assert_recorded(span, published[0])
+    assert "output.value" in span.attributes
+    assert not [key for key in span.attributes if key.startswith("llm.output_messages")]
 
 
 def test_non_streamed_turn_records_model_and_usage(exporter, published):
