@@ -983,7 +983,7 @@ def _materialized_gene_expression_payload(
                 reason="missing_rationale",
                 message=(
                     "Finalized gene-expression candidates require a rationale; "
-                    "patch the candidate with the curator-facing reason it was selected."
+                    "patch the candidate with a rationale saying why you selected it."
                 ),
                 candidate_id=candidate_id,
             )

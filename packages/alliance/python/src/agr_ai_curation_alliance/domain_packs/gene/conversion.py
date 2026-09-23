@@ -865,7 +865,10 @@ def materialize_gene_builder_state(
                 _gene_materialization_issue(
                     field_path="rationale",
                     reason="missing_rationale",
-                    message="Finalized gene candidates require a non-empty rationale.",
+                    message=(
+                        "Finalized gene candidates require a rationale; "
+                        "patch the candidate with a rationale saying why you selected it."
+                    ),
                     candidate_id=getattr(candidate, "candidate_id", None),
                 )
             )

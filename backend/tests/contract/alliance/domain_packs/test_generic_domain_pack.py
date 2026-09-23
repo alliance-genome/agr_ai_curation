@@ -415,6 +415,7 @@ def test_generic_materializer_rejects_new_candidate_without_rationale(rationale)
     assert [(issue["field_path"], issue["reason"]) for issue in result.issues] == [
         ("rationale", "missing_rationale")
     ]
+    assert result.issues[0]["message"].endswith("patch the candidate with a rationale saying why you selected it.")
 
 
 _GENERIC_DETAILS_FIELDS = {

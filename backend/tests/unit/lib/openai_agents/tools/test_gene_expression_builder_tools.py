@@ -920,6 +920,9 @@ def test_finalize_rejects_new_candidate_without_rationale(active_builder_context
     assert {issue["reason"] for issue in result.data["validation_issues"]} == {
         "missing_rationale"
     }
+    assert result.data["validation_issues"][0]["message"].endswith(
+        "patch the candidate with a rationale saying why you selected it."
+    )
 
 
 # ---------------------------------------------------------------------------------------

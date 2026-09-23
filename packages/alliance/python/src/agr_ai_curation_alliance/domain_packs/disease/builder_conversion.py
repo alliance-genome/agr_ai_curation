@@ -633,7 +633,10 @@ def materialize_disease_builder_state(
                 _materialization_issue(
                     field_path="rationale",
                     reason="missing_rationale",
-                    message="Finalized disease candidates require a curator-facing rationale.",
+                    message=(
+                        "Finalized disease candidates require a rationale; "
+                        "patch the candidate with a rationale saying why you selected it."
+                    ),
                     candidate_id=getattr(candidate, "candidate_id", None),
                 )
             )

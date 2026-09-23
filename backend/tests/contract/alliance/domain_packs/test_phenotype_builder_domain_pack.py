@@ -595,7 +595,10 @@ def test_phenotype_builder_rejects_new_candidate_without_rationale():
     result = _materialize_one_candidate(staged_fields=staged_fields)
 
     assert not result.ok
-    assert any(issue["reason"] == "missing_rationale" for issue in result.issues)
+    assert any(
+        issue["reason"] == "missing_rationale" and issue["message"].endswith("patch the candidate with a rationale saying why you selected it.")
+        for issue in result.issues
+    )
 
 
 def test_phenotype_annotation_declares_optional_rationale_in_rationale_group():
