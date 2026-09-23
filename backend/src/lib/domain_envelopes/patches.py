@@ -52,6 +52,11 @@ class EnvelopeFieldPatchOperation(str, Enum):
     """Supported curator edit operations against one object payload field."""
 
     REPLACE = "replace"
+    # One atomic curator override of a declared resolvable value's identity:
+    # ``field_path`` names one identity field of the value (at the object root
+    # too), ``value`` maps identity keys to their new values and ``before``
+    # maps the same keys to their current values.
+    REPLACE_IDENTITY = "replace_identity"
 
 
 class EnvelopeFieldPatchStatus(str, Enum):
@@ -150,9 +155,6 @@ def apply_curator_field_patch(
     except ValueError as exc:
         errors.append(f"field_path is invalid: {exc}")
 
-    if patch.operation is not EnvelopeFieldPatchOperation.REPLACE:
-        errors.append(f"operation '{patch.operation.value}' is not supported")
-
     if domain_object is None or object_index is None:
         errors.append(f"object_id '{patch.object_id}' was not found in the envelope")
     elif not errors:
@@ -161,10 +163,22 @@ def apply_curator_field_patch(
             domain_object.object_type,
             patch.field_path,
         )
+        resolvable_fields = declared_resolvable_fields(domain_pack.metadata, domain_object.object_type)
+        override = _override_target(patch, resolvable_fields)
         if profile is not None and is_generic_attribute_path(patch.field_path):
             # The saved closed profile, not the global generic pack, owns these
             # paths. Validate the replacement below before any history mutation.
+            if patch.operation is EnvelopeFieldPatchOperation.REPLACE_IDENTITY:
+                errors.append(f"operation '{patch.operation.value}' is not supported for profile fields")
             profile.require_receipt(domain_object.metadata.get("generic_profile_ref", {}))
+        elif patch.operation is EnvelopeFieldPatchOperation.REPLACE_IDENTITY and override is None:
+            errors.append(
+                f"field_path '{patch.field_path}' is not an identity field of a declared resolvable value"
+            )
+        elif override is not None:
+            errors.extend(
+                _override_errors(domain_object, patch, *override, registry=validation_registry)
+            )
         elif field_definition is None:
             errors.append(
                 f"field_path '{patch.field_path}' is not declared for object_type "
@@ -179,17 +193,11 @@ def apply_curator_field_patch(
                     f"field_path '{patch.field_path}' is not declared editable"
                 )
             else:
-                errors.extend(
-                    _resolvable_edit_errors(
-                        domain_object,
-                        patch,
-                        declared_resolvable_fields(domain_pack.metadata, domain_object.object_type),
-                    )
-                )
+                errors.extend(_resolvable_edit_errors(patch, resolvable_fields))
 
-        before_value = _payload_value(domain_object.payload, patch.field_path)
-        current_before = None if before_value is _MISSING else before_value
-        if current_before != patch.before:
+        current_before = _current_before(domain_object.payload, patch, override)
+        identity_without_value = patch.operation is EnvelopeFieldPatchOperation.REPLACE_IDENTITY and override is None
+        if not identity_without_value and current_before != patch.before:
             errors.append(
                 f"before does not match current value for field_path '{patch.field_path}'"
             )
@@ -352,8 +360,85 @@ def _set_by_validation(key: str) -> bool:
     return key in CONTRACT_KEYS or key.startswith((OVERRULED_KEY_PREFIX, EXTRACTOR_PROPOSAL_PREFIX))
 
 
-def _resolvable_edit_errors(
+# Which identity a whole-value curator override may change, by the keys the value declares.
+_OVERRIDE_SCOPE_MESSAGE = {
+    (True, True): "only the identifier and name can be changed in a curator override",
+    (True, False): "only the identifier can be changed in a curator override",
+    (False, True): "only the name can be changed in a curator override",
+}
+
+
+def resolvable_identity_field(
+    domain_pack: LoadedDomainPack, object_type: str, field_path: str,
+) -> tuple[str, str] | None:
+    """(value path, identity key) when ``field_path`` is an identity field of a declared resolvable value."""
+
+    target = _resolvable_target(field_path, declared_resolvable_fields(domain_pack.metadata, object_type))
+    if target is None:
+        return None
+    value_path, spec, key = target
+    return (value_path, key) if key in spec.identity_keys else None
+
+
+def _override_target(
+    patch: EnvelopeFieldPatch, resolvable_fields: Mapping[str, ResolvableSpec],
+) -> tuple[str, ResolvableSpec] | None:
+    """(value path, spec) when a patch overrides a declared resolvable value as a whole.
+
+    That is a whole-value replace of the value, or a ``replace_identity``
+    patch naming one of its identity fields.
+    """
+
+    target = _resolvable_target(patch.field_path, resolvable_fields)
+    if target is None:
+        return None
+    value_path, spec, key = target
+    if patch.operation is EnvelopeFieldPatchOperation.REPLACE_IDENTITY:
+        return (value_path, spec) if key in spec.identity_keys else None
+    return (value_path, spec) if key is None else None
+
+
+def _override_errors(
     domain_object: CuratableObjectEnvelope,
+    patch: EnvelopeFieldPatch,
+    value_path: str,
+    spec: ResolvableSpec,
+    *,
+    registry: DomainPackValidationRegistry,
+) -> list[str]:
+    """A whole-value override needs every identity field editable and changes only the identity."""
+
+    closed = []
+    for key in spec.identity_keys:
+        leaf = f"{value_path}.{key}" if value_path else key
+        definition = _field_definition_for(registry, domain_object.object_type, leaf)
+        if definition is None or not _field_editability(definition)[0]:
+            closed.append(leaf)
+    if closed:
+        return [
+            f"field_path '{patch.field_path}' takes no curator override: "
+            f"{', '.join(closed)} not declared editable"
+        ]
+    if not isinstance(patch.value, Mapping) or not patch.value:
+        return [f"field_path '{patch.field_path}' is a resolvable value; send its identity keys"]
+    if patch.operation is EnvelopeFieldPatchOperation.REPLACE_IDENTITY:
+        changed = sorted(str(key) for key in patch.value if key not in spec.identity_keys)
+    else:
+        current = _payload_value(domain_object.payload, value_path)
+        current = current if isinstance(current, Mapping) else {}
+        changed = sorted(
+            str(item_key) for item_key, item in patch.value.items()
+            if item_key not in spec.identity_keys and item != current.get(item_key)
+        )
+    if changed:
+        return [
+            f"field_path '{patch.field_path}' cannot change {', '.join(changed)}; "
+            f"{_OVERRIDE_SCOPE_MESSAGE[(bool(spec.id_key), bool(spec.label_key))]}"
+        ]
+    return []
+
+
+def _resolvable_edit_errors(
     patch: EnvelopeFieldPatch,
     resolvable_fields: Mapping[str, ResolvableSpec],
 ) -> list[str]:
@@ -362,28 +447,32 @@ def _resolvable_edit_errors(
     target = _resolvable_target(patch.field_path, resolvable_fields)
     if target is None:
         return []
-    value_path, _spec, key = target
-    if key is not None:
-        if _set_by_validation(key):
-            return [
-                f"field_path '{patch.field_path}' is set by extraction or validation; "
-                "edit the value's identity instead"
-            ]
-        return []
-    if not isinstance(patch.value, Mapping):
-        return [f"field_path '{patch.field_path}' is a resolvable value; edit its identity keys"]
-    current = _payload_value(domain_object.payload, value_path)
-    current = current if isinstance(current, Mapping) else {}
-    changed = sorted(
-        str(item_key) for item_key, item in patch.value.items()
-        if _set_by_validation(str(item_key)) and item != current.get(item_key)
-    )
-    if changed:
+    _value_path, _spec, key = target
+    if key is not None and _set_by_validation(key):
         return [
-            f"field_path '{patch.field_path}' cannot change {', '.join(changed)}; "
-            "those are set by extraction or validation"
+            f"field_path '{patch.field_path}' is set by extraction or validation; "
+            "edit the value's identity instead"
         ]
     return []
+
+
+def _current_before(
+    payload: Mapping[str, Any], patch: EnvelopeFieldPatch, override: tuple[str, ResolvableSpec] | None,
+) -> Any:
+    """The current value a patch's ``before`` must match.
+
+    For ``replace_identity`` that is the current value of each identity key
+    the patch names; otherwise the value at ``field_path`` (None when absent).
+    """
+
+    if patch.operation is EnvelopeFieldPatchOperation.REPLACE_IDENTITY:
+        if override is None or not isinstance(patch.value, Mapping):
+            return None
+        container = _payload_value(payload, override[0]) if override[0] else payload
+        container = container if isinstance(container, Mapping) else {}
+        return {key: container.get(key) for key in patch.value}
+    before_value = _payload_value(payload, patch.field_path)
+    return None if before_value is _MISSING else before_value
 
 
 def _apply_resolvable_edit(
@@ -397,8 +486,8 @@ def _apply_resolvable_edit(
     """Apply a curator's edit of a declared resolvable value's identity as a validation override.
 
     Returns (handled, override audit record). Not handled means an ordinary
-    field edit the caller sets; handled without a record means only a
-    value's other keys changed. Declared mirror copies follow an override.
+    field edit the caller sets; handled without a record means a whole-value
+    edit that changed nothing. Declared mirror copies follow an override.
     """
 
     resolvable_fields = declared_resolvable_fields(domain_pack.metadata, object_type)
@@ -406,19 +495,18 @@ def _apply_resolvable_edit(
     if target is None:
         return False, None
     value_path, spec, key = target
-    if key is not None and key not in spec.identity_keys:
+    whole = patch.operation is EnvelopeFieldPatchOperation.REPLACE_IDENTITY or key is None
+    if not whole and key not in spec.identity_keys:
         return False, None
     container = _payload_value(payload, value_path) if value_path else payload
     if not isinstance(container, dict):
         set_payload_value(payload, value_path, {})
         container = _payload_value(payload, value_path)
-    if key is not None:
+    if not whole:
         edits = {key: copy.deepcopy(patch.value)}
     else:
+        # Other keys cannot change (_override_errors); only the identity is applied.
         new_value = dict(patch.value)
-        for item_key, item in new_value.items():
-            if item_key not in spec.identity_keys and not _set_by_validation(str(item_key)):
-                container[item_key] = copy.deepcopy(item)
         edits = {
             identity_key: copy.deepcopy(new_value[identity_key])
             for identity_key in spec.identity_keys
