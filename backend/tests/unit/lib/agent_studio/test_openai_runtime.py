@@ -244,7 +244,20 @@ def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch):
         SimpleNamespace(
             type="run_item_stream_event",
             name="tool_search_output_created",
-            item=SimpleNamespace(raw_item={"tools": [{"name": "save_flow"}]}),
+            # Hosted tool search returns namespaces; the loaded count is their
+            # member definitions, not the number of namespaces.
+            item=SimpleNamespace(raw_item={
+                "type": "tool_search_output",
+                "tools": [{
+                    "type": "namespace",
+                    "name": "flow_authoring",
+                    "description": "Flow authoring tools",
+                    "tools": [
+                        {"type": "function", "name": "save_flow", "parameters": {}},
+                        {"type": "function", "name": "validate_flow", "parameters": {}},
+                    ],
+                }],
+            }),
         ),
         SimpleNamespace(
             type="run_item_stream_event",
@@ -340,7 +353,8 @@ def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch):
     assert state.response_id == "resp-1"
     assert (state.input_tokens, state.output_tokens) == (11, 7)
     assert (state.cached_input_tokens, state.reasoning_tokens) == (3, 2)
-    assert (state.tool_search_calls, state.tool_search_outputs, state.tool_search_loaded_tools) == (1, 1, 1)
+    assert translated[2]["loaded_tool_count"] == 2
+    assert (state.tool_search_calls, state.tool_search_outputs, state.tool_search_loaded_tools) == (1, 1, 2)
     assert closed == [(resources, {"trace_id": "trace-1", "user_id": "user-1"})]
 
 
