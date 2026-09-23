@@ -132,6 +132,13 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Standard display rendering is checked against the installed Alliance
     # gene-expression pack and production value shapes (ALL-1282).
     Path("backend/tests/unit/lib/flows/test_value_display.py"),
+    # Every phenotype term exports through the installed Alliance phenotype
+    # pack's phenotype_terms list field (ALL-1289).
+    Path("backend/tests/unit/lib/flows/test_phenotype_terms_export.py"),
+    # Custom-agent contract lookup exercises Alliance group visibility and
+    # packaged validator bindings (ALL-1295).
+    Path("backend/tests/unit/lib/test_agent_contract_custom_agents.py"),
+    Path("backend/tests/integration/persistence/test_agent_contract_custom_visibility_persistence.py"),
     # Immutable execution migrations preserve the shipped Alliance group prompts
     # and packaged builder identities, including historical access boundaries.
     Path("backend/tests/integration/persistence/test_agent_execution_revision_persistence.py"),

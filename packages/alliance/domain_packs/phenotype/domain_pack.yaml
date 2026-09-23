@@ -291,6 +291,30 @@ object_definitions:
                 - genephenotypeannotation.phenotypeannotationsubject_id
                 - allelephenotypeannotation.phenotypeannotationsubject_id
                 - agmphenotypeannotation.phenotypeannotationsubject_id
+      # phenotype_terms is the whole term list, so exports reach every term (joined cell or
+      # split columns) through the PhenotypeTerm display. It is a multivalued object_ref so
+      # the open findings on each term's PhenotypeTerm support object (where the ontology
+      # validator records them) mark that term: the n-th PhenotypeTerm in the annotation's
+      # object_refs is the n-th list element. Edge case: identical terms on one annotation
+      # share one support object and one object_ref, which shifts the positions of the
+      # terms after the duplicate. The phenotype_terms[0] declarations below stay for saved
+      # export layouts and the review workspace.
+      - field_path: phenotype_terms
+        field_type: object_ref
+        display_name: Phenotype terms
+        description: Every phenotype ontology term on the annotation, in extraction order.
+        object_type_ref: PhenotypeTerm
+        metadata:
+          multivalued: true
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: PhenotypeAnnotation
+              slot: phenotype_terms
+              range: PhenotypeTerm
+              db_table: phenotypeannotation_ontologyterm
       - field_path: phenotype_terms[0]
         field_type: object_ref
         display_name: First phenotype ontology term
