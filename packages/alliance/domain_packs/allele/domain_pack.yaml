@@ -304,13 +304,16 @@ object_definitions:
         metadata:
           validation_result_binding_id: allele_mention_reference_validation
           validation_result_field: symbol
-          curator_action_note: Validated allele symbol and the primary review-row label; an unresolved allele's row reads as its paper wording.
+          editable: true
+          curator_action_note: 'Validated allele symbol and the review-row label. Curator override: typing an ID marks this value as a curator override.'
       - field_path: allele_identifier
         field_type: string
         display_name: Allele identifier
         required: false
         metadata:
           render_as: chip
+          editable: true
+          curator_action_note: 'Curator override: typing an ID marks this value as a curator override.'
           validation_result_binding_id: allele_mention_reference_validation
           validation_result_field: curie
           provider_refs:
@@ -516,14 +519,23 @@ object_definitions:
         field_type: string
         display_name: Validated allele ID
         description: Alliance allele primary external identifier written by the allele validator; empty while the allele is unresolved.
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID marks this value as a curator override.'
       - field_path: allele.allele_symbol
         field_type: string
         display_name: Validated allele symbol
         description: Allele symbol written by the allele validator; empty while the allele is unresolved.
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID marks this value as a curator override.'
       - field_path: allele.taxon
         field_type: string
         display_name: Validated allele taxon
         description: NCBI Taxon CURIE written by the allele validator; empty while the allele is unresolved.
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID marks this value as a curator override.'
       - field_path: allele.resolution_state
         field_type: enum
         display_name: Allele (status)

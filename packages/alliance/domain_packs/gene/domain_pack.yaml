@@ -284,6 +284,7 @@ object_definitions:
           validator_binding_id: alliance_gene_reference_lookup
           validation_result_field: curie
           editable: true
+          curator_action_note: 'Curator override: typing an ID marks this value as a curator override.'
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -302,6 +303,7 @@ object_definitions:
           validator_binding_id: alliance_gene_reference_lookup
           validation_result_field: symbol
           editable: true
+          curator_action_note: 'Curator override: typing an ID marks this value as a curator override.'
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -320,6 +322,7 @@ object_definitions:
           validator_binding_id: alliance_gene_reference_lookup
           validation_result_field: taxon
           editable: true
+          curator_action_note: 'Curator override: typing an ID marks this value as a curator override.'
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:

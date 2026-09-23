@@ -875,3 +875,65 @@ def test_every_staged_gene_contract_value_is_a_declared_resolvable_value():
             key for key, value in payload.items()
             if isinstance(value, dict) and ("resolution_state" in value or "lookup_outcome" in value)
         ]
+
+
+def _curator_patch(envelope, field_path, value, *, before):
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    return apply_curator_field_patch(
+        envelope,
+        pack,
+        EnvelopeFieldPatch(
+            envelope_id=envelope.envelope_id,
+            expected_revision=1,
+            object_id="gene-object-1",
+            field_path=field_path,
+            before=before,
+            value=value,
+        ),
+        current_revision=1,
+        actor_id="curator-7",
+    )
+
+
+def _staged_gene_object_envelope() -> DomainEnvelope:
+    staged = _staged_gene_envelope()
+    obj = staged.extracted_objects[0].model_copy(update={"object_id": "gene-object-1"})
+    return staged.model_copy(update={"extracted_objects": [obj]})
+
+
+def test_curators_override_the_gene_identity_including_taxon():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _staged_gene_object_envelope()
+    for field_path, value in (
+        ("primary_external_id", "WB:WBGene00000912"),
+        ("gene_symbol", "daf-16"),
+        ("taxon", "NCBITaxon:6239"),
+    ):
+        result = _curator_patch(envelope, field_path, value, before=None)
+        assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+        obj = result.envelope.extracted_objects[0]
+        assert obj.payload[field_path] == value
+        assert obj.payload["resolution_state"] == "resolved"
+        assert obj.payload["lookup_outcome"] == "curator_override"
+        assert obj.payload["curator_override"]["actor_id"] == "curator-7"
+        assert obj.payload["mention"] == "daf-16"
+        [event] = obj.metadata["curator_resolution_overrides"]
+        assert (event["action"], event["field_path"]) == ("override", field_path)
+
+
+def test_curators_cannot_edit_the_gene_paper_wording_or_validation_state():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _staged_gene_object_envelope()
+    for field_path, value, before in (
+        ("mention", "DAF16", "daf-16"),
+        ("resolution_state", "resolved", "unresolved"),
+        ("lookup_outcome", "matched", "not_validated"),
+        ("validator_explanation", "Looks right.", "Not validated yet."),
+        ("rationale", "Other reason.", _staged_fields()["rationale"]),
+    ):
+        result = _curator_patch(envelope, field_path, value, before=before)
+        assert result.status is EnvelopeFieldPatchStatus.REJECTED, field_path

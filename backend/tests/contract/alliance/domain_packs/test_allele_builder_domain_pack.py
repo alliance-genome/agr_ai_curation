@@ -1158,3 +1158,89 @@ def test_every_staged_contract_value_is_a_declared_resolvable_value():
                 seen.add((obj.object_type, path))
                 assert path in declared, (obj.object_type, path)
     assert {(ALLELE_ASSOCIATION_OBJECT_TYPE, ""), (ALLELE_MENTION_OBJECT_TYPE, "allele")} <= seen
+
+
+def _allele_curator_patch(envelope, object_id, field_path, value, *, before):
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    return apply_curator_field_patch(
+        envelope,
+        pack,
+        EnvelopeFieldPatch(
+            envelope_id=envelope.envelope_id,
+            expected_revision=1,
+            object_id=object_id,
+            field_path=field_path,
+            before=before,
+            value=value,
+        ),
+        current_revision=1,
+        actor_id="curator-7",
+    )
+
+
+def _staged_allele_envelope_with_ids():
+    staged = _staged_allele_envelope()
+    return staged.model_copy(
+        update={
+            "extracted_objects": [
+                obj.model_copy(update={"object_id": obj.pending_ref_id})
+                for obj in staged.extracted_objects
+            ]
+        }
+    )
+
+
+def test_curators_override_the_allele_identity_on_the_association_and_the_mention():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _staged_allele_envelope_with_ids()
+    for object_id, field_path, value in (
+        ("allele-paper-evidence-association-1", "allele_identifier", "WB:WBVar00000190"),
+        ("allele-paper-evidence-association-1", "allele_label", "e190"),
+        ("allele-mention-1", "allele.primary_external_id", "WB:WBVar00000190"),
+        ("allele-mention-1", "allele.allele_symbol", "e190"),
+        ("allele-mention-1", "allele.taxon", "NCBITaxon:6239"),
+    ):
+        result = _allele_curator_patch(envelope, object_id, field_path, value, before=None)
+        assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, (field_path, result.errors)
+        obj = next(item for item in result.envelope.extracted_objects if item.object_id == object_id)
+        value_node = obj.payload["allele"] if field_path.startswith("allele.") else obj.payload
+        assert value_node["resolution_state"] == "resolved"
+        assert value_node["lookup_outcome"] == "curator_override"
+        assert value_node["mention"] == "unc-54(e190)"
+        [event] = obj.metadata["curator_resolution_overrides"]
+        assert (event["action"], event["field_path"]) == ("override", field_path)
+
+
+def test_allele_paper_wording_validation_state_and_routing_stay_protected():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _staged_allele_envelope_with_ids()
+    association = "allele-paper-evidence-association-1"
+    for object_id, field_path, value, before in (
+        (association, "mention", "e190", "unc-54(e190)"),
+        (association, "lookup_outcome", "matched", "not_validated"),
+        (association, "association_kind", "other", ALLELE_ASSOCIATION_KIND),
+        (association, "rationale", "Other reason.", _staged_fields()["rationale"]),
+        ("allele-mention-1", "allele.mention", "e190", "unc-54(e190)"),
+        ("allele-mention-1", "allele.resolution_state", "resolved", "unresolved"),
+    ):
+        result = _allele_curator_patch(envelope, object_id, field_path, value, before=before)
+        assert result.status is EnvelopeFieldPatchStatus.REJECTED, field_path
+
+
+def test_editable_identity_metadata_does_not_change_the_export_fingerprint():
+    # The export catalog (and so its fingerprint) carries no field metadata.
+    from src.lib.flows.export_fields import _pack_export_fields
+
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    stripped = pack.metadata.model_copy(deep=True)
+    for obj in stripped.object_definitions:
+        for field in obj.fields:
+            field.metadata.pop("editable", None)
+            field.metadata.pop("curator_action_note", None)
+    with_editable = _pack_export_fields(pack)
+    without_editable = _pack_export_fields(type(pack)(**{**pack.__dict__, "metadata": stripped}))
+    assert with_editable == without_editable
