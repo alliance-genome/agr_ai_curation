@@ -677,3 +677,14 @@ def test_a_curator_edit_never_makes_a_current_go_record_the_previous_format():
     current["with_from"] = ["RGD:619839"]  # e.g. a hand-typed list entry
     assert not is_previous_format(current)
     assert is_previous_format(_legacy_go_payload())
+
+
+def test_no_overridable_go_value_has_a_protected_container():
+    """Core 73c6805fb: a protected container blocks curator overrides; GO's resolvable values stay overridable."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    metadata, _ = _contracts()
+    fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
+    for value_path in declared_resolvable_fields(metadata, "GOCuratableObject"):
+        assert not fields[value_path].metadata.get("protected"), value_path
