@@ -124,12 +124,37 @@ export interface DomainEnvelopeValidationSummaryProjection {
   findings: DomainEnvelopeValidationFindingProjection[]
 }
 
+export type ResolutionState = 'resolved' | 'unresolved'
+
+/** One validated value behind a review field: the paper's wording and the validation result. */
+export interface DomainEnvelopeReviewResolvedValue {
+  value_path: string
+  /** "label (ID)" when resolved, otherwise the literal UNRESOLVED. */
+  display_text: string
+  /** Paper wording; a legacy value reads "... (legacy, unverified)". */
+  mention?: string | null
+  resolution_state: ResolutionState
+  /** Backend-owned lookup outcome code (resolvable_values.LookupOutcome). */
+  lookup_outcome: string
+  /** The lookup outcome in plain words, e.g. "Not found". */
+  lookup_result: string
+  validator_explanation?: string | null
+  validator_curator_message?: string | null
+}
+
+export interface DomainEnvelopeReviewFieldResolution {
+  /** Main cell text: the validated value or UNRESOLVED, never paper wording. */
+  display_text: string
+  values: DomainEnvelopeReviewResolvedValue[]
+}
+
 export interface DomainEnvelopeReviewRowSummaryField {
   field_path: string
   label: string
   value?: unknown | null
   field_type?: string | null
   metadata: Record<string, unknown>
+  resolution?: DomainEnvelopeReviewFieldResolution | null
 }
 
 export interface DomainEnvelopeReviewRow {
@@ -162,7 +187,7 @@ export interface DomainEnvelopeReviewRowsResponse {
 }
 
 export interface ValidationCandidateMatch {
-  label: string
+  label: string | null
   identifier?: string | null
   matched_value?: string | null
   score?: number | null

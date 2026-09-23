@@ -35,7 +35,7 @@ import HorizontalGridEvidencePopover, {
 } from './HorizontalGridEvidencePopover'
 import HorizontalGridFieldEditorDialog from './HorizontalGridFieldEditorDialog'
 import HorizontalGridValidationPreviewRowActions from './HorizontalGridValidationPreviewRowActions'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import { HORIZONTAL_GRID_UNRESOLVED_TEXT } from './horizontalGridFormatting'
 import type { HorizontalGridModel } from './horizontalGridModel'
 import {
   applyHorizontalGridValidationPreview,
@@ -214,12 +214,14 @@ export default function InteractiveHorizontalCurationGrid({
           }
           setEvidenceTarget({
             anchorEl,
-            canonicalFieldValue: field && args.cell.extractorComparison?.outcome !== 'unresolved'
-              ? formatHorizontalGridValue(field.value)
+            canonicalFieldValue: field
+              && args.cell.extractorComparison?.outcome !== 'unresolved'
+              && args.cell.displayText !== HORIZONTAL_GRID_UNRESOLVED_TEXT
+              ? args.cell.displayText
               : null,
             extractorComparison: args.cell.extractorComparison,
             fieldLabel: field?.label ?? args.column.label,
-            fieldValue: formatHorizontalGridValue(args.cell.value) ?? '—',
+            fieldValue: args.cell.displayText ?? '—',
             onEvidence: navigateEvidence,
             projections: args.cell.evidence,
             sourceMention: args.row.contextCell.value.identityLabel,

@@ -12,6 +12,8 @@ export {
 export type {
   DomainEnvelopeEvidenceAnchorProjection,
   DomainEnvelopeProjectionRef,
+  DomainEnvelopeReviewFieldResolution,
+  DomainEnvelopeReviewResolvedValue,
   DomainEnvelopeReviewRow,
   DomainEnvelopeReviewRowsResponse,
   DomainEnvelopeReviewRowSummaryField,
@@ -24,6 +26,7 @@ export type {
   EvidenceSupportsDecision,
   FieldValidationResult,
   FieldValidationStatus,
+  ResolutionState,
   SubmissionDomainAdapter,
   SubmissionMode,
   SubmissionPayloadContract,

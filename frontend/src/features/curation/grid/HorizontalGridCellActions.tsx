@@ -9,7 +9,6 @@ import {
 
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
 import type { CurationDraftField } from '@/features/curation/types'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
 import type { HorizontalGridFieldCell } from './horizontalGridModel'
 
 export interface HorizontalGridCellActionsProps {
@@ -40,7 +39,7 @@ export default function HorizontalGridCellActions({
   }
 
   const mutationDisabled = field.read_only || isSaving
-  const fieldValue = formatHorizontalGridValue(cell.value) ?? 'Not available'
+  const fieldValue = cell.displayText ?? 'Not available'
   const actionContext = `${field.label}: ${fieldValue} in ${recordLabel}`
 
   return (

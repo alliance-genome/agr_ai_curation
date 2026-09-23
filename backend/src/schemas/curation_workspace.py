@@ -984,6 +984,61 @@ class DomainEnvelopeValidationSummaryProjection(CurationWorkspaceBaseModel):
     findings: list[DomainEnvelopeValidationFindingProjection] = Field(default_factory=list)
 
 
+class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
+    """One validated value a review field shows: the paper's wording and the validation result.
+
+    Read from the stored value with the shared resolvable-value rules
+    (``src.lib.domain_packs.resolvable_values``), including the read-time
+    legacy rule for values stored before resolution tracking (ALL-1283).
+    """
+
+    value_path: str = Field(description="Payload path of the value; empty for the object itself")
+    display_text: str = Field(description='The value as validated: "label (ID)", or UNRESOLVED')
+    mention: str | None = Field(
+        default=None,
+        description='Paper wording; a legacy value\'s stored text reads "... (legacy, unverified)"',
+    )
+    resolution_state: str = Field(description="resolved or unresolved")
+    lookup_outcome: str = Field(description="Code of the lookup outcome")
+    lookup_result: str = Field(description='The lookup outcome in plain words, e.g. "Not found"')
+    validator_explanation: str | None = Field(
+        default=None,
+        description="The validator's own explanation, or the fixed not-validated/legacy sentence",
+    )
+    validator_curator_message: str | None = Field(
+        default=None,
+        description="The validator's curator message, kept apart from its explanation",
+    )
+
+    @model_validator(mode="after")
+    def _check_vocabularies(self) -> "DomainEnvelopeReviewResolvedValue":
+        from src.lib.domain_packs.resolvable_values import (
+            LOOKUP_OUTCOME_LABELS,
+            LOOKUP_OUTCOMES,
+            RESOLUTION_STATES,
+        )
+
+        if self.resolution_state not in RESOLUTION_STATES:
+            raise ValueError(f"resolution_state must be one of {RESOLUTION_STATES}")
+        if self.lookup_outcome not in LOOKUP_OUTCOMES:
+            raise ValueError(f"lookup_outcome must be one of {LOOKUP_OUTCOMES}")
+        if self.lookup_result != LOOKUP_OUTCOME_LABELS[self.lookup_outcome]:
+            raise ValueError("lookup_result must be the plain words for lookup_outcome")
+        return self
+
+
+class DomainEnvelopeReviewFieldResolution(CurationWorkspaceBaseModel):
+    """What a review field shows for the validated values it is, belongs to, or contains."""
+
+    display_text: str = Field(
+        description='Main cell text: the validated value, "label (ID)", or UNRESOLVED; never paper wording',
+    )
+    values: list[DomainEnvelopeReviewResolvedValue] = Field(
+        min_length=1,
+        description="Each validated value behind the field, in payload order",
+    )
+
+
 class DomainEnvelopeReviewRowSummaryField(CurationWorkspaceBaseModel):
     """One provider-neutral summary field projected from a domain envelope object."""
 
@@ -997,6 +1052,13 @@ class DomainEnvelopeReviewRowSummaryField(CurationWorkspaceBaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Domain-pack-owned metadata for this projected field",
+    )
+    resolution: DomainEnvelopeReviewFieldResolution | None = Field(
+        default=None,
+        description=(
+            "Extracted vs validated reading when the field is, belongs to, or contains "
+            "declared resolvable values"
+        ),
     )
 
 
@@ -2623,6 +2685,8 @@ __all__ = [
     "CurationWorkspaceResponse",
     "DomainEnvelopeEvidenceAnchorProjection",
     "DomainEnvelopeProjectionRef",
+    "DomainEnvelopeReviewFieldResolution",
+    "DomainEnvelopeReviewResolvedValue",
     "DomainEnvelopeReviewRow",
     "DomainEnvelopeReviewRowSummaryField",
     "DomainEnvelopeReviewRowsResponse",

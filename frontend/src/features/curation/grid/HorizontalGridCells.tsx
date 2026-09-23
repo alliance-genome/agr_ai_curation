@@ -14,7 +14,13 @@ import type {
   HorizontalGridContextCell,
   HorizontalGridFieldCell,
 } from './horizontalGridModel'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import {
+  formatHorizontalGridValue,
+  HORIZONTAL_GRID_UNRESOLVED_TEXT,
+  horizontalGridLookupResult,
+  horizontalGridPaperWording,
+  horizontalGridValidationDetails,
+} from './horizontalGridFormatting'
 
 export function contextEvidenceFieldPath(
   projection: DomainEnvelopeEvidenceAnchorProjection,
@@ -59,6 +65,75 @@ export function HorizontalGridRationaleLine({
         <Box component="span" sx={{ fontStyle: 'italic' }}>Not recorded</Box>
       )}
     </Typography>
+  )
+}
+
+const RESOLUTION_LINE_SX = {
+  display: '-webkit-box',
+  fontSize: 11,
+  lineHeight: 1.25,
+  overflow: 'hidden',
+  overflowWrap: 'anywhere',
+  WebkitBoxOrient: 'vertical',
+  WebkitLineClamp: 1,
+} as const
+
+/**
+ * The paper wording and the lookup result under a validated value (ALL-1283).
+ * Each is its own labelled line; the validator's explanation and message are
+ * in the lookup line's tooltip. A curator edit keeps the paper wording but
+ * drops the lookup result, which described the seeded value.
+ */
+export function HorizontalGridResolutionLines({ cell }: { cell: HorizontalGridFieldCell }) {
+  if (!cell.resolution) {
+    return null
+  }
+
+  const paperWording = horizontalGridPaperWording(cell.resolution)
+  const lookupResult = horizontalGridLookupResult(cell.resolution)
+  const details = horizontalGridValidationDetails(cell.resolution)
+
+  return (
+    <>
+      {paperWording ? (
+        <Typography
+          color="text.secondary"
+          data-slot="field-paper-wording"
+          title={paperWording}
+          sx={RESOLUTION_LINE_SX}
+        >
+          <Box component="span" sx={{ fontWeight: 700 }}>Paper wording: </Box>
+          {paperWording}
+        </Typography>
+      ) : null}
+      {cell.dirty ? null : (
+        <Tooltip
+          arrow
+          title={(
+            <Stack spacing={0.75}>
+              {details.map((lines, index) => (
+                <Stack key={index} spacing={0.25}>
+                  {lines.map((line) => (
+                    <Typography key={line} variant="caption">{line}</Typography>
+                  ))}
+                </Stack>
+              ))}
+            </Stack>
+          )}
+        >
+          <Typography
+            aria-label={details.map((lines) => lines.join('. ')).join(' | ')}
+            color="text.secondary"
+            data-slot="field-lookup-result"
+            tabIndex={0}
+            sx={RESOLUTION_LINE_SX}
+          >
+            <Box component="span" sx={{ fontWeight: 700 }}>Lookup result: </Box>
+            {lookupResult}
+          </Typography>
+        </Tooltip>
+      )}
+    </>
   )
 }
 
@@ -196,12 +271,15 @@ export function HorizontalGridFieldCellContent({
     )
   }
 
-  const value = formatHorizontalGridValue(cell.value)
+  const value = cell.displayText
   const validationMessages = cell.validation.summaries.flatMap((summary) => summary.messages)
+  const extractorValue = cell.extractorComparison
+    ? formatHorizontalGridValue(cell.extractorComparison.value)
+    : null
   const comparisonMessage = cell.extractorComparison?.outcome === 'different'
-    ? `Extractor proposed ${formatHorizontalGridValue(cell.extractorComparison.value)}; validator resolved ${value}. Curator review is needed.`
+    ? `Extractor proposed ${extractorValue}; validator resolved ${value}. Curator review is needed.`
     : cell.extractorComparison?.outcome === 'unresolved'
-      ? `Extractor found ${value}, but the validator did not resolve a canonical value.`
+      ? `Extractor proposed ${extractorValue}, but the validator did not resolve a canonical value.`
       : null
   const stateMessages = comparisonMessage ? [comparisonMessage] : validationMessages
   const stateLabel = state === 'resolved'
@@ -235,6 +313,7 @@ export function HorizontalGridFieldCellContent({
         <Stack direction="row" minWidth={0} width="100%">
           <Typography
             aria-label={value === null ? 'Empty value' : undefined}
+            color={value === HORIZONTAL_GRID_UNRESOLVED_TEXT ? 'error.main' : undefined}
             data-slot="field-value"
             title={value ?? undefined}
             sx={{
@@ -250,10 +329,10 @@ export function HorizontalGridFieldCellContent({
             }}
           >
             {value ?? '—'}
-            {cell.valueSource === 'extractor' ? ' · Extractor value' : ''}
           </Typography>
         </Stack>
       </ButtonBase>
+      <HorizontalGridResolutionLines cell={cell} />
       {state === 'needs-review' || state === 'ai-unconfirmed' ? (
         <Tooltip
           arrow

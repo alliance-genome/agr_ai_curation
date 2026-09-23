@@ -11,6 +11,7 @@ import type {
   CurationDraftField,
   DomainEnvelopeEvidenceAnchorProjection,
   DomainEnvelopeProjectionRef,
+  DomainEnvelopeReviewFieldResolution,
   DomainEnvelopeReviewRow,
   DomainEnvelopeReviewRowSummaryField,
   DomainEnvelopeValidationStatus,
@@ -20,7 +21,10 @@ import type {
 import type { WorkspaceEnvelopeObjectReviewRow } from '@/features/curation/workspace/envelopeObjectReviewRows'
 import { objectSelectorLabel } from '@/features/curation/workspace/objectSelector'
 import { resolveEnvelopeFieldPath } from '@/features/curation/workspace/workspaceState'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import {
+  formatHorizontalGridValue,
+  HORIZONTAL_GRID_UNRESOLVED_TEXT,
+} from './horizontalGridFormatting'
 import {
   HORIZONTAL_GRID_RATIONALE_FIELD_PATH,
   isHorizontalGridDecisionField,
@@ -80,16 +84,23 @@ export interface HorizontalGridFieldCell {
   fieldKey: string | null
   fieldPath: string
   hasField: boolean
+  // The canonical field's stored value; never replaced by the extractor's.
   value: unknown
+  // Main cell text: the validated value, UNRESOLVED, or the curator's own edit.
+  displayText: string | null
+  // The field's values as extracted vs as validated, from the review row
+  // regenerated for this revision (ALL-1283); null for fields without any.
+  resolution: DomainEnvelopeReviewFieldResolution | null
   required: boolean | null
   readOnly: boolean | null
+  // Whether the curator changed the field from its AI seed value.
+  dirty: boolean | null
   staleValidation: boolean | null
   state: FieldStateKind | null
   fieldValidation: FieldValidationResult | null
   evidence: DomainEnvelopeEvidenceAnchorProjection[]
   validation: HorizontalGridValidationProjection
   extractorComparison: HorizontalGridExtractorComparison | null
-  valueSource: 'canonical' | 'extractor'
 }
 
 export interface HorizontalGridExtractorComparison {
@@ -167,6 +178,7 @@ function extractorComparison(
   candidate: CurationCandidate,
   canonicalField: CurationDraftField,
   canonicalPath: string,
+  canonicalUnresolved: boolean,
 ): HorizontalGridExtractorComparison | null {
   const extractorField = divergenceFieldForCanonicalPath(candidate, canonicalPath)
   const extractorValue = extractorField?.value
@@ -175,7 +187,11 @@ function extractorComparison(
     return null
   }
 
-  const formattedCanonicalValue = formatHorizontalGridValue(canonicalField.value)
+  // A stored canonical value that its resolution reads as unresolved (e.g. a
+  // legacy, unverified value) is not a validator result to compare against.
+  const formattedCanonicalValue = canonicalUnresolved
+    ? null
+    : formatHorizontalGridValue(canonicalField.value)
   return {
     fieldKey: extractorField.field_key,
     fieldPath: resolveEnvelopeFieldPath(extractorField),
@@ -392,6 +408,54 @@ function fieldsByCanonicalPath(candidate: CurationCandidate): Map<string, Curati
   return fieldsByPath
 }
 
+function reviewRowFields(reviewRow: DomainEnvelopeReviewRow): DomainEnvelopeReviewRowSummaryField[] {
+  // The same field list the backend seeds draft fields from: the pack's
+  // workspace fields when declared, otherwise its summary fields.
+  if (!('workspace_fields' in reviewRow.metadata)) {
+    return reviewRow.summary_fields
+  }
+  const workspaceFields = reviewRow.metadata.workspace_fields
+  if (!Array.isArray(workspaceFields)) {
+    throw new Error(
+      `Review row '${reviewRow.object_id}' metadata.workspace_fields must be a list`,
+    )
+  }
+  return workspaceFields as DomainEnvelopeReviewRowSummaryField[]
+}
+
+function resolutionsByFieldPath(
+  reviewRow: DomainEnvelopeReviewRow | null,
+): Map<string, DomainEnvelopeReviewFieldResolution> {
+  const resolutions = new Map<string, DomainEnvelopeReviewFieldResolution>()
+  for (const field of reviewRow ? reviewRowFields(reviewRow) : []) {
+    if (field.resolution) {
+      resolutions.set(field.field_path, field.resolution)
+    }
+  }
+  return resolutions
+}
+
+function cellDisplayText(
+  field: CurationDraftField | null,
+  resolution: DomainEnvelopeReviewFieldResolution | null,
+  comparison: HorizontalGridExtractorComparison | null,
+): string | null {
+  if (!field) {
+    return null
+  }
+  if (field.dirty) {
+    // The curator's own edit replaces the seeded reading.
+    return formatHorizontalGridValue(field.value)
+  }
+  if (resolution) {
+    return resolution.display_text || null
+  }
+  if (comparison?.outcome === 'unresolved') {
+    return HORIZONTAL_GRID_UNRESOLVED_TEXT
+  }
+  return formatHorizontalGridValue(field.value)
+}
+
 function rationaleForCandidate(candidate: CurationCandidate): HorizontalGridRowContext['rationale'] {
   const field = candidate.draft.fields.find(
     (item) => resolveEnvelopeFieldPath(item) === HORIZONTAL_GRID_RATIONALE_FIELD_PATH,
@@ -442,6 +506,7 @@ function projectRow(
     fieldColumns.flatMap((column) => column.fieldPath === null ? [] : [column.fieldPath]),
   )
   const context = contextForRow(row)
+  const resolutions = resolutionsByFieldPath(row.reviewRow)
   const objectValidation = validationSummaries.filter((projection) =>
     isObjectLevelProjection(projection.field_path),
   )
@@ -472,7 +537,13 @@ function projectRow(
     )
 
     const baseState = field ? fieldState(field, cellValidation) : null
-    const projectedComparison = field ? extractorComparison(row.candidate, field, fieldPath) : null
+    const resolution = field ? resolutions.get(fieldPath) ?? null : null
+    const canonicalUnresolved = !field?.dirty && (resolution?.values.some(
+      (value) => value.resolution_state === 'unresolved',
+    ) ?? false)
+    const projectedComparison = field
+      ? extractorComparison(row.candidate, field, fieldPath, canonicalUnresolved)
+      : null
     const validatorResolved = !field?.stale_validation
       && cellValidation.some((summary) => summary.status === 'resolved')
       && cellValidation.every((summary) => (
@@ -490,7 +561,6 @@ function projectRow(
             ? { ...projectedComparison, outcome: 'overridden' as const }
             : { ...projectedComparison, outcome: 'unresolved' as const }
       : null
-    const valueSource = comparison?.outcome === 'unresolved' ? 'extractor' : 'canonical'
     const projectedState = field
       ? comparison?.outcome === 'different'
         ? 'needs-review'
@@ -504,16 +574,18 @@ function projectRow(
       fieldKey: field?.field_key ?? null,
       fieldPath,
       hasField: field !== null,
-      value: valueSource === 'extractor' ? comparison?.value ?? null : field?.value ?? null,
+      value: field?.value ?? null,
+      displayText: cellDisplayText(field, resolution, comparison),
+      resolution,
       required: field?.required ?? null,
       readOnly: field?.read_only ?? null,
+      dirty: field?.dirty ?? null,
       staleValidation: field?.stale_validation ?? null,
       state: projectedState,
       fieldValidation: field?.validation_result ?? null,
       evidence: cellEvidence,
       validation: validationProjection(cellValidation),
       extractorComparison: comparison,
-      valueSource,
     }
   })
 

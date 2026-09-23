@@ -342,8 +342,11 @@ function buildModel({
             fieldPath: 'citation.authors',
             hasField: true,
             value: ['Ada Lovelace', 'Grace Hopper'],
+            displayText: 'Ada Lovelace, Grace Hopper',
+            resolution: null,
             required: true,
             readOnly: false,
+            dirty: false,
             staleValidation: false,
             state: authorsValidation.statuses.length > 0
               && authorsValidation.statuses.every((status) => status === 'resolved' || status === 'waived')
@@ -353,7 +356,6 @@ function buildModel({
             evidence: authorsEvidence,
             validation: authorsValidation,
             extractorComparison: null,
-            valueSource: 'canonical',
           },
           {
             columnKey: 'field:locked',
@@ -361,15 +363,17 @@ function buildModel({
             fieldPath: 'identifiers.pmid',
             hasField: true,
             value: 'PMID:1',
+            displayText: 'PMID:1',
+            resolution: null,
             required: false,
             readOnly: true,
+            dirty: false,
             staleValidation: false,
             state: 'ai-unconfirmed',
             fieldValidation: null,
             evidence: [],
             validation: emptyValidation,
             extractorComparison: null,
-            valueSource: 'canonical',
           },
           {
             columnKey: 'field:missing',
@@ -377,15 +381,17 @@ function buildModel({
             fieldPath: 'citation.title',
             hasField: false,
             value: null,
+            displayText: null,
+            resolution: null,
             required: null,
             readOnly: null,
+            dirty: null,
             staleValidation: null,
             state: null,
             fieldValidation: null,
             evidence: [],
             validation: emptyValidation,
             extractorComparison: null,
-            valueSource: 'canonical',
           },
         ],
         evidence: [...objectEvidence, ...authorsEvidence],
@@ -857,6 +863,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const taxonCell = model.rows[0].cells[0]
     taxonCell.fieldPath = 'taxon'
     taxonCell.value = 'NCBITaxon:7227'
+    taxonCell.displayText = 'NCBITaxon:7227'
     taxonCell.extractorComparison = {
       fieldKey: 'proposed_taxon',
       fieldPath: 'proposed_taxon',
@@ -898,6 +905,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const symbolCell = model.rows[0].cells[0]
     symbolCell.fieldPath = 'symbol'
     symbolCell.value = 'abc'
+    symbolCell.displayText = 'abc'
     symbolCell.state = 'needs-review'
     symbolCell.extractorComparison = {
       fieldKey: 'proposed_symbol',
@@ -927,7 +935,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(within(details).getByLabelText('Current status: Needs review')).toBeInTheDocument()
   })
 
-  it('labels an extractor fallback without attributing an unvalidated draft value to the validator', async () => {
+  it('shows UNRESOLVED, never the extractor proposal, in the validated slot', async () => {
     const user = userEvent.setup()
     const candidate = buildCandidate()
     const symbolField = candidate.draft.fields[0]
@@ -940,8 +948,8 @@ describe('InteractiveHorizontalCurationGrid', () => {
     model.columns[1].label = 'Symbol'
     const symbolCell = model.rows[0].cells[0]
     symbolCell.fieldPath = 'symbol'
-    symbolCell.value = 'extracted-symbol'
-    symbolCell.valueSource = 'extractor'
+    symbolCell.value = null
+    symbolCell.displayText = 'UNRESOLVED'
     symbolCell.state = 'needs-review'
     symbolCell.extractorComparison = {
       fieldKey: 'proposed_symbol',
@@ -952,7 +960,13 @@ describe('InteractiveHorizontalCurationGrid', () => {
     }
 
     renderGrid({ model, workspace: buildWorkspace(candidate) })
-    expect(screen.getByText('extracted-symbol · Extractor value')).toBeInTheDocument()
+    const symbolValue = within(screen.getByTestId(`horizontal-grid-field-${symbolField.field_key}`))
+      .getByText('UNRESOLVED')
+    expect(symbolValue).toHaveAttribute('data-slot', 'field-value')
+    expect(screen.queryByText(/Extractor value/)).not.toBeInTheDocument()
+    expect(screen.getByRole('img', {
+      name: /Extractor proposed extracted-symbol, but the validator did not resolve a canonical value/,
+    })).toBeInTheDocument()
     await user.click(screen.getByRole('button', {
       name: /^Show evidence and validation details for Symbol:/,
     }))
@@ -960,6 +974,51 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const comparison = screen.getByTestId('horizontal-grid-extractor-comparison')
     expect(within(comparison).getByText('Not resolved')).toBeInTheDocument()
     expect(within(comparison).queryByText('draft-seed')).not.toBeInTheDocument()
+  })
+
+  it('shows paper wording and the lookup result apart from the validated value', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = null
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const model = buildModel({ authorsEvidence: [] })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = null
+    symbolCell.displayText = 'UNRESOLVED'
+    symbolCell.resolution = {
+      display_text: 'UNRESOLVED',
+      values: [{
+        value_path: '',
+        display_text: 'UNRESOLVED',
+        mention: 'abc-1',
+        resolution_state: 'unresolved',
+        lookup_outcome: 'rejected_candidates',
+        lookup_result: 'Candidates rejected',
+        validator_explanation: 'Every candidate was a different species.',
+        validator_curator_message: null,
+      }],
+    }
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    const cell = screen.getByTestId(`horizontal-grid-field-${symbolField.field_key}`).parentElement!
+    expect(within(cell).getByText('UNRESOLVED')).toHaveAttribute('data-slot', 'field-value')
+    expect(cell.querySelector('[data-slot="field-paper-wording"]')).toHaveTextContent('Paper wording: abc-1')
+    expect(within(cell).getByLabelText(
+      'Lookup result: Candidates rejected. Validator explanation: Every candidate was a different species.',
+    )).toHaveTextContent('Lookup result: Candidates rejected')
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol: UNRESOLVED/,
+    }))
+    const details = screen.getByRole('dialog', { name: /Symbol:/ })
+    expect(within(details).getByText('Symbol: UNRESOLVED')).toBeInTheDocument()
+    expect(within(details).queryByText(/abc-1/)).not.toBeInTheDocument()
   })
 
   it('attributes a waived comparison to curator override rather than validator resolution', async () => {
@@ -985,6 +1044,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const symbolCell = model.rows[0].cells[0]
     symbolCell.fieldPath = 'symbol'
     symbolCell.value = 'curator-symbol'
+    symbolCell.displayText = 'curator-symbol'
     symbolCell.state = 'resolved'
     symbolCell.extractorComparison = {
       fieldKey: 'proposed_symbol',
@@ -1031,8 +1091,8 @@ describe('InteractiveHorizontalCurationGrid', () => {
     model.columns[1].label = 'Symbol'
     const symbolCell = model.rows[0].cells[0]
     symbolCell.fieldPath = 'symbol'
-    symbolCell.value = 'extracted-symbol'
-    symbolCell.valueSource = 'extractor'
+    symbolCell.value = 'edited-symbol'
+    symbolCell.displayText = 'UNRESOLVED'
     symbolCell.staleValidation = true
     symbolCell.state = 'ai-unconfirmed'
     symbolCell.extractorComparison = {

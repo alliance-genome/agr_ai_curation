@@ -416,6 +416,59 @@ def test_draft_fields_use_summary_fields_only_when_workspace_metadata_is_absent(
     assert fields[0].group_label == "Gene"
 
 
+def test_draft_fields_carry_the_extracted_vs_validated_reading():
+    resolution = {
+        "display_text": "UNRESOLVED",
+        "values": [
+            {
+                "value_path": "gene",
+                "display_text": "UNRESOLVED",
+                "mention": "abc one",
+                "resolution_state": "unresolved",
+                "lookup_outcome": "not_found",
+                "lookup_result": "Not found",
+                "validator_explanation": "No gene matched the wording.",
+                "validator_curator_message": None,
+            }
+        ],
+    }
+    review_row = DomainEnvelopeReviewRow(
+        envelope_id="env-review-1",
+        object_id="object-1",
+        envelope_revision=1,
+        domain_pack_id="fixture.pack",
+        domain_pack_version="0.1.0",
+        object_type="GeneAssertion",
+        object_role="curatable_unit",
+        status="pending",
+        validation_state="clear",
+        projection_type="workspace_review_row",
+        projection_key="object-1",
+        display_label="abc one (paper wording)",
+        summary_fields=[
+            DomainEnvelopeReviewRowSummaryField(
+                field_path="gene.symbol",
+                label="Gene symbol",
+                value=None,
+                field_type="string",
+                resolution=resolution,
+            ),
+            DomainEnvelopeReviewRowSummaryField(
+                field_path="note",
+                label="Note",
+                value="plain",
+                field_type="string",
+            ),
+        ],
+    )
+
+    fields = module._draft_fields_from_review_row(review_row)
+
+    assert fields[0].value is None
+    assert fields[0].metadata["resolution"] == resolution
+    assert "resolution" not in fields[1].metadata
+
+
 def test_draft_fields_do_not_fall_back_to_summary_fields_when_workspace_fields_empty():
     review_row = DomainEnvelopeReviewRow(
         envelope_id="env-review-1",
