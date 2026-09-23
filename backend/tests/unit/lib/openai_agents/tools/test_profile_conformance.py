@@ -893,3 +893,20 @@ def test_a_profile_curator_override_needs_both_the_identifier_and_the_name(resol
     again, _ = resolvable_profile.apply_curator_edit(
         edited, "attributes.genes[0].gene_id", "EX:10", actor_id="curator-1", at=at)
     assert (again["genes"][0]["gene_id"], again["genes"][0]["symbol"]) == ("EX:10", "daf-16")
+
+
+def test_a_whole_value_override_changes_only_the_identity(resolvable_profile):
+    """ALL-1302 with core cbb92a769: any changed non-identity key rejects a whole-value override."""
+
+    staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16", "role": "subject"}]})
+    at = "2026-09-23T22:00:00+00:00"
+    full = {**staged["genes"][0], "gene_id": "EX:9", "symbol": "daf-16"}
+    for changed in ({"role": "object"}, {"mention": "other"}, {"lookup_outcome": "matched"},
+                    {"overruled_gene_id": "EX:0"}):
+        with pytest.raises(ProfileConformanceError) as rejected:
+            resolvable_profile.apply_curator_edit(
+                staged, "attributes.genes[0]", {**full, **changed}, actor_id="curator-1", at=at)
+        assert "Only the identifier and name can be changed" in rejected.value.issues[0]["message"]
+    edited, audit = resolvable_profile.apply_curator_edit(
+        staged, "attributes.genes[0]", full, actor_id="curator-1", at=at)
+    assert audit is not None and edited["genes"][0]["role"] == "subject"

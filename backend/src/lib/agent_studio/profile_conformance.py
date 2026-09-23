@@ -539,15 +539,13 @@ class ResolvedGenericProfile:
         if not isinstance(container, dict):
             raise ProfileConformanceError([_patch_issue(None, field_path, "Edit an existing value.")])
         if whole is not None:
+            # A whole-value override changes only the identity; every other key passes through unchanged.
             if not isinstance(value, dict) or any(
-                _not_curator_editable(item_key) and item != container.get(item_key)
+                item_key not in identity and item != container.get(item_key)
                 for item_key, item in value.items()
             ):
                 raise ProfileConformanceError([_patch_issue(
-                    None, field_path, "The paper wording and validation state are not editable; edit the identity.")])
-            for item_key, item in value.items():
-                if item_key not in identity and not _not_curator_editable(item_key):
-                    container[item_key] = deepcopy(item)
+                    None, field_path, "Only the identifier and name can be changed in a curator override.")])
             # Every identity key the value carries goes to the override, as for pack values.
             edits = {item_key: deepcopy(value[item_key]) for item_key in identity if item_key in value}
             if all(item == container.get(item_key) for item_key, item in edits.items()):
