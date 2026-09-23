@@ -437,6 +437,21 @@ def test_generic_classes_declare_optional_rationale_as_a_summary_field(object_ty
     assert workspace_display["summary_fields"][-1] == "rationale"
 
 
+@pytest.mark.parametrize(
+    "object_type", ["generic_object", "generic_claim", "generic_reagent_candidate"]
+)
+def test_generic_rationale_stays_out_of_supervisor_manifest_summaries(object_type):
+    from src.lib.domain_packs.supervisor_manifest import supervisor_manifest_policy_for_object
+
+    # Each generic class declares its own supervisor_manifest, which wins over
+    # workspace_display, so the review-only rationale never reaches supervisor
+    # result summaries or inspect_results.
+    policy = supervisor_manifest_policy_for_object(
+        get_generated_generic_domain_pack().metadata, object_type
+    )
+    assert "rationale" not in policy.field_paths
+
+
 def _generic_reagent_draft_fields(metadata: Any, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     from src.lib.curation_workspace.pipeline import _draft_fields_from_review_row
     from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
