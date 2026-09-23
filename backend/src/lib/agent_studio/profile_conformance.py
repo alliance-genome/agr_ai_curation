@@ -15,8 +15,8 @@ from typing import Any
 from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS, LOOKUP_OUTCOME_KEY, LOOKUP_OUTCOMES, MENTION_KEY, RESOLUTION_STATE_KEY,
     RESOLUTION_STATES, VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY,
-    ResolvableSpec, ResolvableValueError, check_resolvable_value, has_resolution_state, overruled_key,
-    unresolved_value,
+    ResolvableSpec, ResolvableValueError, apply_curator_identity, check_resolvable_value,
+    has_resolution_state, overruled_key, unresolved_value,
 )
 from src.lib.openai_agents.config import (
     get_generic_profile_max_issues,
@@ -513,6 +513,55 @@ class ResolvedGenericProfile:
         if issues:
             raise ProfileConformanceError(issues[:get_generic_profile_max_issues()])
 
+    def apply_curator_edit(self, attributes: dict[str, Any], field_path: str, value: Any, *,
+                           actor_id: str, at: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """One curator edit of a profile record; an identity edit is a validation override.
+
+        Editing a resolvable value's identity (one identity key, or the whole
+        value with changed identity keys) goes through ``apply_curator_identity``:
+        the value becomes resolved as ``curator_override`` with who and when,
+        or unresolved again when the identity is cleared. Returns the record
+        and the override audit (None for an ordinary edit). The paper wording
+        and the validation state are never curator-editable.
+        """
+        parent, _, key = field_path.rpartition(".")
+        resolvable = self.resolvable_objects()
+        whole = resolvable.get(declared_value_path(field_path))
+        identity = whole if whole is not None else resolvable.get(declared_value_path(parent))
+        if whole is None and identity is not None and key in (MENTION_KEY, *RESOLUTION_KEYS):
+            raise ProfileConformanceError([_patch_issue(
+                None, field_path, "The paper wording and validation state are not editable; edit the identity.")])
+        if identity is None or (whole is None and key not in identity):
+            return self.patch_attributes(attributes, [{"field_path": field_path, "value": value}]), None
+        value_path = field_path if whole is not None else parent
+        result = deepcopy(attributes)
+        container = _attribute_container(result, value_path)
+        if not isinstance(container, dict):
+            raise ProfileConformanceError([_patch_issue(None, field_path, "Edit an existing value.")])
+        if whole is not None:
+            if not isinstance(value, dict) or any(
+                item_key in (MENTION_KEY, *RESOLUTION_KEYS) and item != container.get(item_key)
+                for item_key, item in value.items()
+            ):
+                raise ProfileConformanceError([_patch_issue(
+                    None, field_path, "The paper wording and validation state are not editable; edit the identity.")])
+            for item_key, item in value.items():
+                if item_key not in identity and item_key not in (MENTION_KEY, *RESOLUTION_KEYS):
+                    container[item_key] = deepcopy(item)
+            edits = {item_key: value[item_key] for item_key in identity
+                     if item_key in value and value[item_key] != container.get(item_key)}
+        else:
+            edits = {key: value}
+        audit = None
+        if edits:
+            try:
+                audit = apply_curator_identity(container, edits, identity_keys=identity, actor_id=actor_id, at=at)
+            except ResolvableValueError as exc:
+                raise ProfileConformanceError([_patch_issue(None, field_path, str(exc))]) from exc
+            audit = {**audit, "value_path": value_path}
+        self.require_attributes(result)
+        return result, audit
+
     def patch_attributes(self, attributes: dict[str, Any], updates: list[dict[str, Any]],
                          *, candidate_id: str | None = None) -> dict[str, Any]:
         """Apply whole-subtree or parsed-index replacements atomically to a copy.
@@ -561,6 +610,16 @@ class ResolvedGenericProfile:
                         raise ProfileConformanceError([_patch_issue(candidate_id, path, "Replace the absent containing subtree first.")]) from exc
         self.require_attributes(result, candidate_id=candidate_id)
         return result
+
+
+def _attribute_container(attributes: dict[str, Any], path: str) -> Any:
+    value: Any = {"attributes": attributes}
+    for key, index in re.findall(r"([a-z][a-z0-9_]*)|\[([0-9]+)\]", path):
+        if key:
+            value = value.get(key) if isinstance(value, dict) else None
+        else:
+            value = value[int(index)] if isinstance(value, list) and int(index) < len(value) else None
+    return value
 
 
 def _patch_issue(candidate_id: str | None, path: str, message: str) -> dict[str, Any]:

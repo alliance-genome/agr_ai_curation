@@ -468,3 +468,31 @@ def test_previous_format_record_gets_exactly_the_one_clear_finding_on_revalidati
     assert [finding.code for finding in findings] == [PREVIOUS_FORMAT_FINDING_CODE]
     assert findings[0].message == "Recorded in the previous GO format; re-run extraction to validate."
     assert dispatched.validator_agent_run_count == 0
+
+
+def test_every_go_value_the_builder_stages_is_declared_resolvable():
+    """ALL-1302 declaration guard: core writes only into declared resolvable values (H1/F2)."""
+
+    from agr_ai_curation_alliance.domain_packs.go.values import (
+        RESOLVABLE_LIST_FIELDS,
+        RESOLVABLE_VALUE_FIELDS,
+    )
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    metadata, fixtures = _contracts()
+    declared = declared_resolvable_fields(metadata, "GOCuratableObject")
+    assert set(declared) == {*RESOLVABLE_VALUE_FIELDS, *RESOLVABLE_LIST_FIELDS}
+
+    def contract_paths(node, path=""):
+        if isinstance(node, list):
+            for item in node:
+                yield from contract_paths(item, path)
+        elif isinstance(node, dict):
+            if "resolution_state" in node and "lookup_outcome" in node:
+                yield path
+            for key, item in node.items():
+                yield from contract_paths(item, f"{path}.{key}" if path else key)
+
+    for fixture in fixtures.fixtures:
+        for obj in fixture.envelope.extracted_objects:
+            assert set(contract_paths(obj.payload)) <= set(declared)

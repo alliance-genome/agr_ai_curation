@@ -547,3 +547,24 @@ def test_validator_overrules_an_earlier_resolution_keeping_its_identity_as_overr
                     "resolution_state": "unresolved", "lookup_outcome": "not_found",
                     "validator_explanation": "Fixture lookup", "validator_curator_message": None}
     context.profile.require_attributes(output.envelope.extracted_objects[0].payload["attributes"])
+
+
+def test_a_curator_override_stands_and_a_disagreeing_validator_adds_a_warning(example):
+    """ALL-1302 with core ec1c320c6: profile write-back never changes a curator override."""
+
+    source, context = resolvable(example)
+    attributes, _ = context.profile.apply_curator_edit(
+        source.extracted_objects[0].payload["attributes"], "attributes.gene.gene_id", "EX:7",
+        actor_id="curator-1", at="2026-09-23T20:00:00+00:00",
+    )
+    source.extracted_objects[0].payload["attributes"] = attributes
+    overridden = attributes["gene"]
+
+    output = materialize_profile_validator_results(source, context, results(source, context, [{"identifier": "EX:1"}]))
+    assert output.envelope.extracted_objects[0].payload["attributes"]["gene"] == overridden
+    codes = [finding.code for finding in output.appended_findings]
+    assert codes == ["domain_pack.curator_override", "domain_pack.validator_disagrees_with_curator_override"]
+    assert "EX:1" in output.appended_findings[1].message
+
+    agreeing = materialize_profile_validator_results(source, context, results(source, context, [{"identifier": "EX:7"}]))
+    assert [finding.code for finding in agreeing.appended_findings] == ["domain_pack.curator_override"]

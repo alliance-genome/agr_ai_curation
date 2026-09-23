@@ -219,13 +219,16 @@ def apply_curator_field_patch(
     assert object_ref is not None
 
     staged_payload = copy.deepcopy(domain_object.payload)
-    if profile is not None and is_generic_attribute_path(patch.field_path):
-        staged_payload["attributes"] = profile.patch_attributes(
-            staged_payload.get("attributes", {}),
-            [{"field_path": patch.field_path, "value": patch.value}],
-            candidate_id=patch.object_id,
-        )
     override_audit: dict[str, Any] | None = None
+    if profile is not None and is_generic_attribute_path(patch.field_path):
+        # A profile value's identity edit is a curator override, like a pack value's.
+        staged_payload["attributes"], override_audit = profile.apply_curator_edit(
+            staged_payload.get("attributes", {}),
+            patch.field_path,
+            patch.value,
+            actor_id=actor_id,
+            at=datetime.now(timezone.utc).isoformat(),
+        )
     try:
         if profile is None or not is_generic_attribute_path(patch.field_path):
             handled, override_audit = _apply_resolvable_edit(

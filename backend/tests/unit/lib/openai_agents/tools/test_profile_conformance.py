@@ -828,3 +828,28 @@ def test_an_overruled_identity_is_stored_record_only(resolvable_profile):
     issues = resolvable_profile.validate_attributes(
         {"genes": [{"mention": "daf-16", "overruled_gene_id": "EX:1"}]}, extractor_input=True)
     assert [issue["reason"] for issue in issues] == ["validator_owned_field"]
+
+
+def test_a_curator_identity_edit_on_a_profile_value_is_a_curator_override(resolvable_profile):
+    """ALL-1302 with core ec1c320c6: profile values take the same curator override as pack values."""
+
+    staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16", "role": "subject"}]})
+    edited, audit = resolvable_profile.apply_curator_edit(
+        staged, "attributes.genes[0].gene_id", "EX:9", actor_id="curator-1", at="2026-09-23T20:00:00+00:00",
+    )
+    gene = edited["genes"][0]
+    assert (gene["gene_id"], gene["resolution_state"], gene["lookup_outcome"]) == (
+        "EX:9", "resolved", "curator_override")
+    assert gene["curator_override"]["actor_id"] == "curator-1"
+    assert gene["mention"] == "daf-16"
+    assert audit["value_path"] == "attributes.genes[0]"
+    resolvable_profile.require_attributes(edited)
+
+    other, audit = resolvable_profile.apply_curator_edit(
+        edited, "attributes.genes[0].role", "object", actor_id="curator-1", at="2026-09-23T20:01:00+00:00",
+    )
+    assert audit is None and other["genes"][0]["role"] == "object"
+    for path, value in [("attributes.genes[0].mention", "other wording"),
+                        ("attributes.genes[0].lookup_outcome", "matched")]:
+        with pytest.raises(ProfileConformanceError):
+            resolvable_profile.apply_curator_edit(edited, path, value, actor_id="curator-1", at="2026-09-23T20:02:00+00:00")

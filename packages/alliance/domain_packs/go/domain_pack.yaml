@@ -57,6 +57,8 @@ enum_definitions:
         label: Not validated yet
       - value: legacy_unverified
         label: Legacy, unverified
+      - value: curator_override
+        label: Curator override
 object_definitions:
   - object_type: GOCuratableObject
     display_name: Proposed GO annotation

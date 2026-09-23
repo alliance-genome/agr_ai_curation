@@ -1385,3 +1385,15 @@ def test_proxy_keeps_a_resolvable_object_root_and_nested_resolvable_models():
         {"symbol": "unc-54"}, "symbol",
         resolvable_fields=declared_resolvable_fields(generic, proxy.object_type),
     ) == f"unc-54 {LEGACY_UNVERIFIED_SUFFIX}"
+
+
+def test_generated_view_declares_every_value_the_generic_builder_stages():
+    """ALL-1302 declaration guard: each class's staged resolvable values are declared in the generic view."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    catalog = load_generic_class_catalog()
+    metadata = catalog.generated_domain_pack.metadata
+    for entry in catalog.entries:
+        declared = declared_resolvable_fields(metadata, entry.generic_object_type)
+        assert set(entry.resolvable_fields) <= set(declared), entry.class_key

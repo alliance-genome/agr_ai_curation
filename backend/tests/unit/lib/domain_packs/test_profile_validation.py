@@ -496,6 +496,12 @@ def test_overlay_declares_a_resolvable_values_paper_wording_and_resolution_leave
     assert fields["attributes.gene.validator_explanation"].field_type.value == "string"
     assert "attributes.gene.validator_curator_message" in fields
     assert "attributes.gene.overruled_gene_id" not in fields  # Stripped by every reader, never a column.
+    # Declaration guard: every value the profile stages and validation writes into is declared (H1/F2).
+    from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOME_KEY as _key, declared_resolvable_fields as _declared
+    assert set(_declared(metadata, "generic_object")) == {
+        path.replace("[]", "") for path in profile.resolvable_objects()
+    }
+    assert enums[fields[f"attributes.gene.{_key}"].enum_ref][-1] == "curator_override"
     # A value stored before the contract goes through the shared legacy rule.
     from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, effective_payload
     from src.lib.flows.value_display import display_text

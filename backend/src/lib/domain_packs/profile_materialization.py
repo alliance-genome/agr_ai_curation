@@ -17,18 +17,21 @@ from src.lib.curation_workspace.execution_contracts import require_resolved_prof
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import (
     ValidatorResultMaterializationInput, ValidatorResultMaterializationResult,
-    _finding_for_materialization_problem, _finding_for_validator_result,
+    _as_curator_override_finding, _finding_for_materialization_problem, _finding_for_validator_result,
 )
 from src.lib.domain_packs.profile_validation import ProfileValidationContext
 from src.lib.domain_packs.resolvable_values import (
-    OUTCOME_MISSING_EXPECTED_RESULT_FIELD, lookup_outcome_for_failure, mark_resolved, mark_unresolved,
+    DECISIVE_OUTCOMES, LOOKUP_OUTCOME_LABELS, OUTCOME_MISSING_EXPECTED_RESULT_FIELD, is_curator_override,
+    lookup_outcome_for_failure, mark_resolved, mark_unresolved,
 )
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_result_policies import allowed_term_policy_violations
 from src.lib.domain_packs.validator_result_classification import validator_failure_classification
 from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.schemas.agent_execution_revision import GenericProfilePin
-from src.schemas.domain_envelope import DomainEnvelope, ValidationFinding, ValidationFindingSeverity, parse_field_path
+from src.schemas.domain_envelope import (
+    DomainEnvelope, FieldRef, ValidationFinding, ValidationFindingSeverity, ValidationFindingStatus, parse_field_path,
+)
 from src.schemas.generic_extraction_profile import GenericProfileContract, ProfileField
 
 
@@ -101,7 +104,13 @@ def materialize_profile_validator_results(
                 finding = finding.model_copy(update={"message": "Profile write-back rejected: " + "; ".join(dict.fromkeys(problems))})
             else:
                 finding = _finding_for_validator_result(item, source_envelope_revision=source_envelope_revision)
-            findings.append(profile_result_finding(finding, item, context, failed=bool(problems)))
+            finding = profile_result_finding(finding, item, context, failed=bool(problems))
+            overrides = {} if problems else _curator_overrides(item, context, target)
+            if overrides and len(overrides) == len(item.request.expected_result_fields):
+                # Every value this result writes is a curator override, which stands.
+                finding = _as_curator_override_finding(finding)
+            findings.append(finding)
+            findings.extend(_override_disagreements(item, overrides, target))
     updated = envelope.model_copy(update={"extracted_objects": [
         replacements.get(_object_key(obj), obj) for obj in envelope.extracted_objects
     ]})
@@ -205,6 +214,50 @@ def _resolution_updates(expected, result, context, target, *, unresolved):
                             identity_keys=context.profile.resolvable_objects()[declared_value_path(path)])
         updates.append({"field_path": path, "value": value})
     return [*plain, *updates]
+
+
+def _curator_overrides(item, context, target):
+    """{destination: container} for each value this result writes that a curator override sets."""
+    attributes = target.payload.get("attributes") if target is not None else None
+    overrides = {}
+    for destination in item.request.expected_result_fields.values():
+        container = context.profile.resolvable_container(destination)
+        if container is None:
+            continue
+        value = _attribute_value(attributes, container[0])
+        if is_curator_override(value):
+            overrides[destination] = value
+    return overrides
+
+
+def _override_disagreements(item, overrides, target):
+    """Open warnings where the validator disagrees with a curator override (the override stands)."""
+    if not overrides:
+        return []
+    result = item.result
+    if result.status == "resolved":
+        slot_by_destination = {path: slot for slot, path in item.request.expected_result_fields.items()}
+        differing = {
+            destination: result.resolved_values[slot_by_destination[destination]]
+            for destination, value in overrides.items()
+            if slot_by_destination[destination] in result.resolved_values
+            and result.resolved_values[slot_by_destination[destination]] != value.get(destination.rpartition(".")[2])
+        }
+        details = {destination: f"it resolved {resolved!r}" for destination, resolved in differing.items()}
+        outcome = "matched"
+    else:
+        outcome = lookup_outcome_for_failure(validator_failure_classification(result, error_type=ValueError))
+        details = ({destination: f"its lookup result is {LOOKUP_OUTCOME_LABELS[outcome]}" for destination in overrides}
+                   if outcome in DECISIVE_OUTCOMES else {})
+    object_ref = target.to_object_ref()
+    return [ValidationFinding(
+        severity=ValidationFindingSeverity.WARNING, status=ValidationFindingStatus.OPEN,
+        code="domain_pack.validator_disagrees_with_curator_override",
+        message=f"Validator disagrees with the curator override: {detail}.",
+        field_ref=FieldRef(object_ref=object_ref, field_path=destination.rpartition(".")[0]),
+        details={"validator_binding_id": result.validator_binding_id, "request_id": result.request_id,
+                 "lookup_outcome": outcome, "validator_explanation": result.explanation},
+    ) for destination, detail in details.items()]
 
 
 def _attribute_value(attributes, path):
