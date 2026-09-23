@@ -513,7 +513,12 @@ def _patch_disease_observation_impl(
     pending_ref_id: str,
     updates: List[Mapping[str, Any]],
 ) -> AgrQueryResult:
-    """Patch enumerated fields on one staged disease candidate."""
+    """Patch enumerated fields on one staged disease candidate.
+
+    Args:
+        updates: Field updates, each a ``field_path`` plus its new value. A `rationale`
+            update must be non-empty and at most 300 characters; it cannot be cleared.
+    """
 
     attempted_query = _attempt_query(
         "patch_disease_observation",

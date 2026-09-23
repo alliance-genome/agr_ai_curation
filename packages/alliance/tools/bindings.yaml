@@ -1702,7 +1702,7 @@ tools:
           - name: rationale
             type: string
             required: true
-            description: The agent's short reason (up to 300 characters) for selecting this finding, grounded in the supporting quotes and written when the draft is created. Curators see it in review, CSV/TSV exports, and chat.
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: subject_identifier
             type: any
             required: false
@@ -1780,7 +1780,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value. The rationale can be rewritten but not cleared.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_phenotype_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:discard_phenotype_observation
@@ -1967,7 +1967,7 @@ tools:
           - name: rationale
             type: string
             required: true
-            description: The agent's short reason (up to 300 characters) for selecting this finding, grounded in the supporting quotes and written when the draft is created. Curators see it in review, CSV/TSV exports, and chat.
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: disease_curie
             type: any
             required: false
@@ -2050,7 +2050,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value. The rationale can be rewritten but not cleared.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_disease_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:discard_disease_observation

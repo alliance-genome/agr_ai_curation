@@ -676,11 +676,18 @@ def _builder_tools_with_workspace(monkeypatch: Any) -> tuple[Any, ExtractionBuil
 
 def test_stage_disease_tool_requires_rationale_with_shared_description():
     from agr_ai_curation_alliance.tools.builder_rationale import RATIONALE_ARG_DESCRIPTION
-    from agr_ai_curation_alliance.tools.disease_builder_tools import stage_disease_observation
+    from agr_ai_curation_alliance.tools.disease_builder_tools import (
+        patch_disease_observation,
+        stage_disease_observation,
+    )
 
     schema = stage_disease_observation.params_json_schema
     assert "rationale" in schema["required"]
     assert schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+    patch_updates = patch_disease_observation.params_json_schema["properties"]["updates"]
+    assert "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared." in (
+        " ".join(patch_updates["description"].split())
+    )
 
 
 def test_stage_disease_observation_stores_stripped_rationale(monkeypatch):
