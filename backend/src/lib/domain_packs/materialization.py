@@ -804,7 +804,9 @@ def _patch_target_object_from_field_resolutions(
     with its own lookup outcome; its explanation and curator message are the
     validator's own. Values not listed get no write, and the overall result
     status never overwrites a value with its own decision. Plain fields
-    still take the overall resolved values.
+    still take the overall resolved values. Each resolved decision obeys the
+    request's allowed-term list: a violation leaves the value unresolved
+    (``invalid_schema``, never touching a resolved one) and is reported.
     """
 
     result = item.result
@@ -816,6 +818,7 @@ def _patch_target_object_from_field_resolutions(
         return envelope, problem
 
     written: list[str] = []
+    policy_problems: list[str] = []
     for key, (container_path, fields) in targets.items():
         resolution = result.field_resolutions[key]
         container = _payload_container(payload, container_path)
@@ -823,7 +826,18 @@ def _patch_target_object_from_field_resolutions(
             materialized_field_path: resolution.resolved_values.get(result_field)
             for result_field, materialized_field_path in fields
         }
-        if resolution.status == "resolved" and not any(
+        violated = False
+        if resolution.status == "resolved":
+            # Each decision obeys the request's allowed-term list, like a whole result.
+            violations = allowed_term_policy_violations(
+                result.model_copy(
+                    update={"status": "resolved", "resolved_values": dict(resolution.resolved_values)}
+                ),
+                request=item.request,
+            )
+            policy_problems.extend(violation.message for violation in violations)
+            violated = bool(violations)
+        if resolution.status == "resolved" and not violated and not any(
             missing_resolved_value(value) for value in values.values()
         ):
             mark_resolved(
@@ -843,7 +857,9 @@ def _patch_target_object_from_field_resolutions(
         mark_unresolved(
             container,
             (
-                resolution.lookup_outcome
+                OUTCOME_INVALID_SCHEMA
+                if violated
+                else resolution.lookup_outcome
                 if resolution.status == "unresolved"
                 else OUTCOME_MISSING_EXPECTED_RESULT_FIELD
             ),
@@ -861,10 +877,11 @@ def _patch_target_object_from_field_resolutions(
                 resolvable_fields=resolvable_fields,
             )
 
-    if result.status == "resolved":
-        policy_violations = allowed_term_policy_violations(result, request=item.request)
-        if policy_violations:
-            return envelope, "; ".join(violation.message for violation in policy_violations)
+    overall_violations = (
+        allowed_term_policy_violations(result, request=item.request) if result.status == "resolved" else []
+    )
+    policy_problems.extend(violation.message for violation in overall_violations)
+    if result.status == "resolved" and not overall_violations:
         for result_field, raw_field_path in item.request.expected_result_fields.items():
             materialized_field_path = _materialized_field_path(
                 raw_field_path,
@@ -887,7 +904,7 @@ def _patch_target_object_from_field_resolutions(
                 )
             written.append(materialized_field_path)
 
-    return _with_patched_target(
+    patched, _ = _with_patched_target(
         envelope,
         item,
         target,
@@ -898,6 +915,8 @@ def _patch_target_object_from_field_resolutions(
         materialized_field_paths=written,
         source_envelope_revision=source_envelope_revision,
     )
+    # The other decisions are written; an allowed-term violation is reported.
+    return patched, ("; ".join(dict.fromkeys(policy_problems)) if policy_problems else None)
 
 
 def _field_resolution_for(
