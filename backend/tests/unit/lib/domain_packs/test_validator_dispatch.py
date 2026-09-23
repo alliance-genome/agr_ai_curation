@@ -4116,3 +4116,32 @@ def test_an_update_leaves_the_object_reference_intact():
     )
 
     assert updated.extracted_objects[0].evidence_record_ids == ["evidence-1"]
+
+
+def test_allowed_term_list_checks_identifier_fields_not_per_element_labels():
+    """A slim element's name comes back as a plain label; only its CURIE is checked."""
+
+    from src.lib.domain_packs.validator_result_policies import allowed_term_policy_violations
+
+    base_request = _array_terms_validation_request()
+    request = base_request.model_copy(
+        update={
+            "selected_inputs": {**base_request.selected_inputs, "allowed_term_curies": ["UBERON:0000068"]},
+            "expected_result_fields": {
+                "curie": "stage_uberon_slim_terms[1].curie",
+                "name": "stage_uberon_slim_terms[1].name",
+            },
+        }
+    )
+
+    def violations(values):
+        result = DomainValidatorResultBase.model_validate(
+            _result_payload(request, resolved_values=values)
+        )
+        return [violation.field_name for violation in allowed_term_policy_violations(result, request=request)]
+
+    assert violations({"curie": "UBERON:0000068", "name": "embryo stage"}) == []
+    assert violations({"curie": "UBERON:0000092", "name": "embryo stage"}) == ["curie"]
+    # A result field named as an identifier is checked even when its write leaf is not.
+    request = request.model_copy(update={"expected_result_fields": {"id": "stage_term_ref"}})
+    assert violations({"id": "UBERON:0000092"}) == ["id"]

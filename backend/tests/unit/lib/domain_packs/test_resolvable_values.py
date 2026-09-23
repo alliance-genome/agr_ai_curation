@@ -565,3 +565,125 @@ def test_workspace_candidate_matches_read_each_part_from_its_own_key():
     # No label: the label stays missing, never the identifier or another field.
     unlabeled = _candidate_match_from_mapping({"value": "ONT:2", "name": "skin", "symbol": "sk"})
     assert (unlabeled.identifier, unlabeled.label) == ("ONT:2", None)
+
+
+# --- Object-root resolvable values and declared legacy values -------------------
+
+
+def _root_pack(*, state_values=None, outcome_values=None):
+    from src.schemas.domain_pack_metadata import DomainPackModelDefinition
+
+    return DomainPackMetadata(
+        pack_id="fixture.root", display_name="Root", version="0.1.0", metadata_api_version="1.0.0",
+        enum_definitions=[
+            DomainPackEnumDefinition(enum_id="ResolutionState", display_name="State",
+                                     values=[{"value": value} for value in (state_values or RESOLUTION_STATES)]),
+            DomainPackEnumDefinition(enum_id="LookupOutcome", display_name="Outcome",
+                                     values=[{"value": value} for value in (outcome_values or LOOKUP_OUTCOMES)]),
+        ],
+        model_definitions=[DomainPackModelDefinition(
+            model_id="MentionPayload", display_name="Mention payload",
+            metadata={"display": {"label": "symbol", "id": "curie", "mention": "mention"}},
+        )],
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="Mention", display_name="Gene mention", model_ref="MentionPayload",
+                metadata={"object_role": "curatable_unit",
+                          "workspace_display": {"primary_label_field": "symbol"}},
+                fields=[
+                    DomainPackFieldDefinition(field_path="symbol", field_type=DomainPackFieldType.STRING),
+                    DomainPackFieldDefinition(field_path="curie", field_type=DomainPackFieldType.STRING),
+                    DomainPackFieldDefinition(field_path="mention", field_type=DomainPackFieldType.STRING),
+                    DomainPackFieldDefinition(field_path="resolution_state",
+                                              field_type=DomainPackFieldType.ENUM, enum_ref="ResolutionState"),
+                    DomainPackFieldDefinition(field_path="lookup_outcome",
+                                              field_type=DomainPackFieldType.ENUM, enum_ref="LookupOutcome"),
+                ],
+            ),
+            # Not resolvable: a lookup_outcome field here is someone else's word.
+            DomainPackObjectDefinition(
+                object_type="Note", display_name="Note",
+                fields=[DomainPackFieldDefinition(field_path="lookup_outcome",
+                                                  field_type=DomainPackFieldType.STRING)],
+            ),
+        ],
+    )
+
+
+def test_object_root_vocabulary_leaves_are_checked_and_other_objects_are_not():
+    _root_pack()
+    with pytest.raises(ValueError, match="Mention.fields.lookup_outcome must be an enum field"):
+        _root_pack(outcome_values=["matched", "other"])
+    with pytest.raises(ValueError, match="Mention.fields.resolution_state must be an enum field"):
+        _root_pack(state_values=["resolved", "pending"])
+
+
+def test_object_root_leaves_export_with_their_headers_and_plain_words():
+    from types import SimpleNamespace
+
+    from src.lib.flows.export_fields import PackagedExportSource, _pack_export_fields
+    from src.lib.flows.value_display import display_text
+
+    pack = SimpleNamespace(metadata=_root_pack())
+    labels = {field["ref"]: field["label"] for field in _pack_export_fields(pack)}
+    assert labels["object.pack.Mention.mention"] == "Gene mention (paper wording)"
+    assert labels["object.pack.Mention.resolution_state"] == "Gene mention (status)"
+    assert labels["object.pack.Mention.lookup_outcome"] == "Gene mention (lookup result)"
+    enum_values = {field["ref"]: field.get("enum_values") for field in _pack_export_fields(pack)}
+    assert enum_values["object.pack.Mention.lookup_outcome"] == list(LOOKUP_OUTCOMES)
+    specs = PackagedExportSource(pack).display_specs
+    assert display_text("not_validated", specs["object.pack.Mention.lookup_outcome"]) == "Not validated yet"
+    assert display_text("resolved", specs["object.pack.Mention.resolution_state"]) == "Resolved"
+    assert "object.pack.Note.lookup_outcome" not in specs
+
+
+def test_declared_legacy_values_get_the_legacy_rule_in_labels():
+    """A legacy root value with neither a state nor a mention is still declared resolvable."""
+
+    from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, unresolved_header_text
+
+    metadata = _root_pack()
+    specs = declared_resolvable_fields(metadata, "Mention")
+    assert set(specs) == {""}
+    legacy = {"symbol": "unc-54 myosin", "curie": None}
+    # Without the declaration nothing marks it; with it, the legacy rule applies.
+    assert unresolved_header_text(legacy, "symbol") is None
+    assert unresolved_header_text(legacy, "symbol", resolvable_fields=specs) == (
+        f"unc-54 myosin {LEGACY_UNVERIFIED_SUFFIX}")
+    covered = {"validator_resolved_value_materialization": [{"materialized_field_paths": ["curie"]}]}
+    assert unresolved_header_text({"symbol": "unc-54", "curie": "X:1"}, "symbol", object_metadata=covered,
+                                  resolvable_fields=specs) is None
+
+    envelope = DomainEnvelope(
+        envelope_id="root-env", domain_pack_id="fixture.root",
+        extracted_objects=[CuratableObjectEnvelope(object_type="Mention", pending_ref_id="m-1", payload=legacy)],
+    )
+    [row] = DomainPackMetadataReviewRowMaterializer(metadata).materialize(envelope, envelope_revision=1)
+    assert row.display_label == f"unc-54 myosin {LEGACY_UNVERIFIED_SUFFIX}"
+
+
+def test_effective_payload_annotates_explicitly_indexed_declared_paths():
+    spec = ResolvableSpec(id_key="curie", label_key="label")
+    payload = {"terms": [{"curie": "ONT:1", "label": "short"}, {"curie": "ONT:2", "label": "long"}]}
+    covered = {"validator_resolved_value_materialization": [{"materialized_field_paths": ["terms[1].curie"]}]}
+
+    effective = effective_payload(payload, {"terms[0]": spec, "terms[1]": spec}, object_metadata=covered)
+
+    assert (effective["terms"][0]["resolution_state"], effective["terms"][0]["lookup_outcome"]) == (
+        UNRESOLVED, OUTCOME_LEGACY_UNVERIFIED)
+    assert effective["terms"][0]["mention"] == f"short (ONT:1) {LEGACY_UNVERIFIED_SUFFIX}"
+    assert (effective["terms"][1]["resolution_state"], effective["terms"][1]["lookup_outcome"]) == (
+        RESOLVED, OUTCOME_MATCHED)
+    # Only the named element: an index past the end changes nothing.
+    assert effective_payload(payload, {"terms[5]": spec}, object_metadata=None) == payload
+    assert "resolution_state" not in payload["terms"][0]
+
+
+def test_header_text_recognises_explicitly_indexed_declared_values():
+    from src.lib.domain_packs.resolvable_values import unresolved_header_text
+
+    specs = {"terms[0]": ResolvableSpec(id_key="curie", label_key="label")}
+    payload = {"terms": [{"curie": None, "label": "slow growth"}]}
+    assert unresolved_header_text(payload, "terms[0].label", resolvable_fields=specs) == (
+        f"slow growth {LEGACY_UNVERIFIED_SUFFIX}")

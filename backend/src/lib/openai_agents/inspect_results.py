@@ -32,6 +32,7 @@ from src.lib.domain_packs.resolvable_values import (
     RESOLUTION_STATE_KEY,
     UNRESOLVED,
     VALIDATOR_EXPLANATION_KEY,
+    declared_resolvable_fields,
     has_resolution_state,
     holds_resolution,
     unresolved_header_text,
@@ -1430,6 +1431,7 @@ def _object_row(
     result: _Result,
     obj: CuratableObjectEnvelope,
     *,
+    metadata: DomainPackMetadata,
     policy: SupervisorManifestPolicy,
     findings: Sequence[ValidationFinding],
     selected: Sequence[str],
@@ -1451,7 +1453,12 @@ def _object_row(
     ):
         if field is None:
             continue
-        paper_wording = unresolved_header_text(obj.payload, field.path, object_metadata=obj.metadata)
+        paper_wording = unresolved_header_text(
+            obj.payload,
+            field.path,
+            object_metadata=obj.metadata,
+            resolvable_fields=declared_resolvable_fields(metadata, obj.object_type),
+        )
         if paper_wording is not None:
             row[key] = paper_wording
             continue
@@ -1526,7 +1533,7 @@ def _objects_response(
         obj, findings = item
         policy = policies[obj.object_type]
         return _object_row(
-            result, obj, policy=policy, findings=findings, selected=selected_paths(policy)
+            result, obj, metadata=metadata, policy=policy, findings=findings, selected=selected_paths(policy)
         )
 
     def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
