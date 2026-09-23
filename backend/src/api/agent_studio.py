@@ -148,6 +148,7 @@ from src.lib.agent_studio.openai_runtime import (
 )
 from src.lib.openai_agents.config import get_domain_reference_max_values
 from src.lib.openai_agents.config import (
+    PromptCacheIdentity,
     get_api_key,
     get_agent_studio_chat_history_page_size,
     get_agent_studio_chat_recall_chunk_max_chars,
@@ -4478,6 +4479,10 @@ async def chat_with_opus(
             model_settings = build_agent_studio_model_settings(
                 max_output_tokens=get_agent_studio_openai_max_output_tokens(),
                 tool_choice=forced_tool_name,
+                prompt_cache=PromptCacheIdentity(
+                    agent_key="agent_studio_authoring",
+                    static_prompt=_load_agent_studio_system_prompt_template(),
+                ),
             )
             async for runtime_event in stream_agent_studio_run(
                 instructions=system_prompt,
@@ -4837,6 +4842,7 @@ async def _process_suggestion_background(
     try:
         execution = await run_forced_agent_studio_tool(
             instructions=system_prompt,
+            static_prompt=_load_agent_studio_system_prompt_template(),
             input_items=messages,
             tool_definition=SUGGESTION_TOOL,
             executor=execute_tool,

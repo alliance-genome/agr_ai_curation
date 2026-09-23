@@ -42,6 +42,7 @@ from src.lib.flows.output_projection import (
     apply_projection_plan,
     bundle_row_for_ref,
     default_columns_for_row_source,
+    default_object_filters,
     default_projection_plan,
     finalize_output_projection,
     projection_plan_allows_empty_bundle,
@@ -1150,6 +1151,7 @@ def _default_projection_plan_for_formatter(
             available_refs=available_refs,
             rows=rows,
         ),
+        filters=default_object_filters(bundle, rows) if row_source == "object" else [],
         source_extraction_result_ids=source_update.get(
             "source_extraction_result_ids", []
         ),
@@ -1249,7 +1251,8 @@ def _capabilities_payload(
                 "field_ref is an element-aligned selector whose value picks a template from "
                 "mapping (for example a per-value resolution status). Lists must have equal "
                 "lengths, scalars broadcast, empty placeholders render missing_value, and "
-                "elements are joined with separator."
+                "elements are joined with separator. A template that writes its own "
+                "\"(unresolved)\" gets the value text without the application's marker."
             ),
         },
         "overrides": (
@@ -1260,7 +1263,8 @@ def _capabilities_payload(
         ),
         "split_list": (
             "To put list items in separate columns (never extra rows), add split_list to a "
-            "column whose field_ref is a list: {\"header_template\": \"Anatomy Term {n}\"} "
+            "field_ref column (a single value counts as a one-item list, giving one numbered "
+            "column; do not invent more): {\"header_template\": \"Anatomy Term {n}\"} "
             "or {\"headers\": [\"First\", \"Second\"]} (not both), optional max_columns. "
             "The application sizes it to the longest list, renders each item as display "
             "text and uses missing_value for shorter rows. Too few headers or more items "
@@ -1270,9 +1274,12 @@ def _capabilities_payload(
         "value_display": (
             "CSV, TSV and chat cells render structured values as display text: "
             "\"label (ID)\" from the pack's declared roles (generic curie/id plus "
-            "name/label otherwise), lists joined with \"; \", and unresolved values "
+            "name/label otherwise), lists joined with \"; \" (lists of structured records "
+            "with \" | \", lists inside a record with \", \"), and unresolved values "
             "marked \"(unresolved)\" from declared resolution state, open validation "
-            "findings on that field, or a declared ID that is missing. Select the parent "
+            "findings on that field or on the object it references, or a declared ID "
+            "that is missing. map_value matches a structured value by that display text "
+            "without the marker. Select the parent "
             "structured field instead of composing leaves. JSON keeps raw values."
         ),
         "detail_access": (
@@ -1952,7 +1959,10 @@ def build_output_formatter_tools(
         name_override="build_default_projection_plan",
         description_override=(
             "Build and validate the default projection plan for this bound "
-            "format, optionally selecting row source, object row strategy, or source ref."
+            "format, optionally selecting row source, object row strategy, or source ref. "
+            "Default object plans list each source's curatable-unit rows through an "
+            "explicit object.object_type filter; drop that filter only when supporting "
+            "objects (subjects, terms, references) are wanted as rows."
         ),
         strict_mode=False,
     )

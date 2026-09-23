@@ -143,6 +143,7 @@ from src.lib.agent_studio.catalog_service import (
     get_active_visible_agent_metadata as get_agent_metadata,
 )
 from src.lib.openai_agents.config import (
+    PromptCacheIdentity,
     get_agent_config,
     get_model_for_agent,
     build_model_settings,
@@ -4101,6 +4102,20 @@ def create_flow_supervisor(
         reasoning_effort=config.reasoning,
         provider_override=model_provider,
         parallel_tool_calls=get_flow_supervisor_parallel_tool_calls_enabled(),
+        # The instructions are rendered from the saved flow; the document name and
+        # per-run step availability do not change which flow this supervisor runs.
+        prompt_cache=PromptCacheIdentity(
+            agent_key="flow_supervisor",
+            static_prompt=json.dumps(
+                {
+                    "flow_id": str(flow.id),
+                    "flow_name": flow.name,
+                    "flow_definition": flow.flow_definition,
+                },
+                sort_keys=True,
+                default=str,
+            ),
+        ),
     )
 
     # Get all tools with flow-based is_enabled
@@ -4145,7 +4160,10 @@ def create_flow_supervisor(
                 "Inspect one server-authorized persisted result from the immediately "
                 "available same-flow context. Supply only a result_ref listed in the "
                 "supervisor instructions. This tool cannot browse or authorize any "
-                "other result."
+                "other result. Start with action=\"summary\" (counts), then filter "
+                "action=\"objects\", \"validation\" or \"validator_results\"; "
+                "responses are size-bounded, so pass next_call exactly to continue "
+                "and use each withheld value's read call for its exact content."
             ),
         )
         async def inspect_bound_preferred_flow_result(
@@ -4156,6 +4174,15 @@ def create_flow_supervisor(
             field_path: str | None = None,
             limit: int | None = None,
             cursor: str | None = None,
+            object_type: str | None = None,
+            status: str | None = None,
+            validation_state: str | None = None,
+            severity: str | None = None,
+            fields: list[str] | None = None,
+            finding_ref: str | None = None,
+            validator_result_key: str | None = None,
+            detail_path: str | None = None,
+            result_sha256: str | None = None,
         ) -> str:
             normalized_ref = str(result_ref or "").strip()
             if normalized_ref not in bound_refs:
@@ -4178,6 +4205,15 @@ def create_flow_supervisor(
                 field_path=field_path,
                 limit=limit,
                 cursor=cursor,
+                object_type=object_type,
+                status=status,
+                validation_state=validation_state,
+                severity=severity,
+                fields=fields,
+                finding_ref=finding_ref,
+                validator_result_key=validator_result_key,
+                detail_path=detail_path,
+                result_sha256=result_sha256,
             )
             try:
                 payload = json.loads(output)

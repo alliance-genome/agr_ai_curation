@@ -217,3 +217,29 @@ def test_export_default_preserves_historical_snapshot_fingerprint(monkeypatch):
     direct = saved.model_copy(update={"default_export_execution_mode": "direct"})
     assert direct.fingerprint() != expected
     assert AgentExecutionSnapshot.model_validate(direct.model_dump()).default_export_execution_mode == "direct"
+
+
+@pytest.mark.parametrize("tool_ids", [["get_agent_contract"], []])
+def test_pinned_build_names_its_own_contract_agent_id_per_run(monkeypatch, tool_ids):
+    from src.lib.agent_studio import catalog_service, custom_agent_service
+    from src.lib.openai_agents import config, langfuse_client
+
+    monkeypatch.setattr(custom_agent_service, "_system_managed_tool_ids", lambda *_: [])
+    monkeypatch.setattr(catalog_service, "_inherited_curation_definition_for_db_agent", lambda _: None)
+    head = agent()
+    head.tool_ids = tool_ids
+    saved = capture_execution_snapshot(None, head, AgentOutputContract(output_state="none"))
+    identity = SimpleNamespace(name="Display label", agent_key=head.agent_key, visibility="private")
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda *_args: [])
+    monkeypatch.setattr(config, "resolve_model_provider", lambda *_args, **_kwargs: "openai")
+    monkeypatch.setattr(config, "get_model_for_agent", lambda model, **_kwargs: model)
+    monkeypatch.setattr(config, "build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(langfuse_client, "log_agent_config", lambda **_kwargs: None)
+
+    built = catalog_service._create_db_agent(identity, execution_snapshot=saved)
+
+    note = f"Call get_agent_contract with agent_id={head.agent_key}"
+    assert (note in built.instructions) is bool(tool_ids)
+    # The note is per-run context; the saved revision bytes are unchanged.
+    assert built.execution_snapshot_fingerprint == saved.fingerprint()

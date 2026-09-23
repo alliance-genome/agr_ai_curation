@@ -67,6 +67,9 @@ class _FakePromptBundle:
     def render(self):
         return "instructions"
 
+    def static_prefix(self):
+        return "instructions"
+
     def to_manifest(self):
         return {"agent_id": "fake", "layers": [], "hash": self.hash}
 

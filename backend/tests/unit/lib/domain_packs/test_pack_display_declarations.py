@@ -7,6 +7,9 @@ pack-declared display roles instead of JSON text. The declaration contract is:
   where each value except ``resolved_states`` is a payload path relative to the value.
 * ``fields[].metadata.display`` overrides the model spec for that field, either with
   the same role keys or with ``{compose: [child paths], separator}``.
+* A ``compose`` entry is a child path, or ``{path, display}``; an entry without a path
+  reads the value itself with its own ``display`` roles (ALL-1290), and a child path may
+  name the parent of declared leaves (e.g. ``condition_chemical`` over its ``.curie``).
 
 These tests keep every structured field (object, object_ref, arrays of objects) and every
 model a field can reach covered, and keep the referenced leaves in line with the pack's
@@ -72,7 +75,7 @@ EXEMPT_MODELS = {
     ),
     ("agr.alliance.phenotype", "PhenotypeAnnotationPayload"): (
         "curatable-unit row whose only own label leaf is the free-text statement; the "
-        "resolved phenotype terms render through the phenotype_terms[0] field"
+        "phenotype terms render through the phenotype_terms list field"
     ),
     ("agr.alliance.disease", "VocabularyTermSnapshotPayload"): (
         "declared but referenced by no field (condition_relation_type leaves are declared directly)"
@@ -180,6 +183,30 @@ def _structured_fields(
                 yield obj, field
 
 
+def _compose_path(entry: Any) -> str | None:
+    """A compose entry's child path; None for an entry that reads the value itself."""
+
+    return entry.get("path") if isinstance(entry, dict) else entry
+
+
+def _display_leaves(spec: dict[str, Any]) -> list[str]:
+    """Paths a spec reads: its label/id leaves, or its compose parts' paths."""
+
+    if "compose" not in spec:
+        return [spec[role] for role in ("label", "id") if role in spec]
+    return [
+        leaf
+        for entry in spec["compose"]
+        for leaf in (
+            [_compose_path(entry)] if _compose_path(entry) is not None else _display_leaves(entry["display"])
+        )
+    ]
+
+
+def _is_child_path(path: str, children: dict[str, DomainPackFieldDefinition]) -> bool:
+    return path in children or any(child.startswith(path + ".") for child in children)
+
+
 def _spec_errors(
     pack: DomainPackMetadata,
     spec: Any,
@@ -197,11 +224,12 @@ def _spec_errors(
             return [*errors, f"{where}: compose must be a non-empty list"]
         if not isinstance(spec.get("separator"), str) or not spec["separator"]:
             errors.append(f"{where}: compose needs a non-empty separator")
-        errors.extend(
-            f"{where}: compose child {child!r} is not a declared child path"
-            for child in compose
-            if child not in children
-        )
+        for entry in compose:
+            path = _compose_path(entry)
+            if path is not None and not _is_child_path(path, children):
+                errors.append(f"{where}: compose child {path!r} is not a declared child path")
+            if isinstance(entry, dict) and path is None:
+                errors.extend(_spec_errors(pack, entry.get("display"), children, f"{where}.compose[self]"))
         return errors
     if "separator" in spec:
         errors.append(f"{where}: separator is only valid with compose")
@@ -253,7 +281,8 @@ def test_every_structured_field_resolves_to_a_valid_display_spec(pack_id: str) -
         if "display" in field.metadata:
             # Model specs are checked against every usage of the model below.
             errors.extend(_spec_errors(pack, spec, children, where))
-        for child in spec.get("compose", []):
+        for entry in spec.get("compose", []):
+            child = _compose_path(entry) or ""
             child_field = children.get(child)
             if (
                 child_field is not None
@@ -372,7 +401,7 @@ def test_production_shapes_expose_a_declared_display_leaf(shape: dict[str, Any])
             if spec is None:
                 errors.append(f"{where}: structured value without a display spec")
                 continue
-            paths = spec.get("compose") or [spec[role] for role in ("label", "id") if role in spec]
+            paths = _display_leaves(spec)
             if not any(_leaf_present(value, path) for path in paths):
                 errors.append(f"{where}: none of {paths} is present in {sorted(value)}")
     assert errors == []

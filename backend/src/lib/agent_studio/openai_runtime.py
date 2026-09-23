@@ -37,7 +37,7 @@ from src.lib.observability.sentry import (
     set_sentry_span_status,
 )
 from src.lib.openai_agents.config import (
-    ReasoningEffort, build_model_settings, get_agent_studio_openai_model,
+    PromptCacheIdentity, ReasoningEffort, build_model_settings, get_agent_studio_openai_model,
     get_agent_studio_reasoning_effort, require_model_reasoning_effort,
 )
 from src.lib.openai_agents.langfuse_client import get_langfuse, is_openai_agents_tracing_enabled
@@ -270,9 +270,14 @@ def build_agent_studio_tools(
 def build_agent_studio_model_settings(
     *,
     max_output_tokens: int,
+    prompt_cache: PromptCacheIdentity,
     tool_choice: str | None = None,
 ) -> ModelSettings:
-    """Return the exact OpenAI Responses settings required by Agent Studio."""
+    """Return the exact OpenAI Responses settings required by Agent Studio.
+
+    ``prompt_cache`` names the Studio assistant and its installed system prompt
+    template, so every Studio session shares one stable prompt cache key.
+    """
 
     shared_settings = build_model_settings(
         model=AGENT_STUDIO_OPENAI_MODEL,
@@ -281,6 +286,7 @@ def build_agent_studio_model_settings(
         parallel_tool_calls=False,
         include_usage=True,
         provider_override="openai",
+        prompt_cache=prompt_cache,
     )
     return replace(
         shared_settings,
@@ -570,6 +576,7 @@ async def stream_agent_studio_run(
 async def run_forced_agent_studio_tool(
     *,
     instructions: str,
+    static_prompt: str,
     input_items: list[dict[str, Any]],
     tool_definition: Mapping[str, Any],
     executor: ToolExecutor,
@@ -579,7 +586,11 @@ async def run_forced_agent_studio_tool(
     max_turns: int,
     max_output_tokens: int,
 ) -> ExecutedTool | None:
-    """Run a bounded SDK turn that must execute one named application tool."""
+    """Run a bounded SDK turn that must execute one named application tool.
+
+    ``static_prompt`` is the installed Studio system prompt template the
+    instructions are rendered from; it keys the stable prompt cache.
+    """
 
     tool_name = str(tool_definition.get("name") or "").strip()
     tools, _ = build_agent_studio_tools(
@@ -604,6 +615,10 @@ async def run_forced_agent_studio_tool(
             model_settings=build_agent_studio_model_settings(
                 max_output_tokens=max_output_tokens,
                 tool_choice=tool_name,
+                prompt_cache=PromptCacheIdentity(
+                    agent_key="agent_studio_suggestion",
+                    static_prompt=static_prompt,
+                ),
             ),
             tools=tools,
             tool_use_behavior="stop_on_first_tool",

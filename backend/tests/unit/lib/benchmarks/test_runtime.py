@@ -85,7 +85,7 @@ def test_default_service_wires_configured_adjudication_model(monkeypatch):
 
 def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch):
     captured = {}
-    flow = SimpleNamespace(name="Canary", flow_definition={"nodes": []})
+    flow = SimpleNamespace(id="flow-canary", name="Canary", flow_definition={"nodes": []})
 
     monkeypatch.setattr(
         flow_executor,

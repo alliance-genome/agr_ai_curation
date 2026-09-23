@@ -2497,7 +2497,7 @@
     "documentation": {
       "parameters": [
         {
-          "description": "Which agent's setup you want to look at.",
+          "description": "Which agent's setup you want to look at. A custom agent built in the Agent Workshop can always look up its own saved setup; other custom agents are only shown to curators who can already see them.",
           "name": "agent_id",
           "required": true,
           "type": "string"
