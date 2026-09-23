@@ -136,6 +136,8 @@ object_definitions:
         display_name: Gene product
         required: true
         metadata:
+          editable: true
+          curator_action_note: "Curator override: enter the identifier and the name together; typing them marks this value as a curator override."
           display:
             label: label
             id: curie
@@ -198,6 +200,8 @@ object_definitions:
         display_name: GO term
         required: true
         metadata:
+          editable: true
+          curator_action_note: "Curator override: enter the identifier and the name together; typing them marks this value as a curator override."
           display:
             label: label
             id: curie
@@ -255,6 +259,8 @@ object_definitions:
         display_name: Evidence code
         required: true
         metadata:
+          editable: true
+          curator_action_note: "Curator override: enter the identifier and the name together; typing them marks this value as a curator override."
           display:
             label: code
             id: eco_curie

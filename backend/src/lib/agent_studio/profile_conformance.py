@@ -548,14 +548,20 @@ class ResolvedGenericProfile:
             for item_key, item in value.items():
                 if item_key not in identity and not _not_curator_editable(item_key):
                     container[item_key] = deepcopy(item)
-            edits = {item_key: value[item_key] for item_key in identity
-                     if item_key in value and value[item_key] != container.get(item_key)}
+            # Every identity key the value carries goes to the override, as for pack values.
+            edits = {item_key: deepcopy(value[item_key]) for item_key in identity if item_key in value}
+            if all(item == container.get(item_key) for item_key, item in edits.items()):
+                edits = {}
         else:
-            edits = {key: value}
+            edits = {key: deepcopy(value)}
         audit = None
         if edits:
+            spec = self.resolvable_specs()[declared_value_path(value_path)]
             try:
-                audit = apply_curator_identity(container, edits, identity_keys=identity, actor_id=actor_id, at=at)
+                audit = apply_curator_identity(
+                    container, edits, identity_keys=identity, id_key=spec.id_key, label_key=spec.label_key,
+                    actor_id=actor_id, at=at,
+                )
             except ResolvableValueError as exc:
                 raise ProfileConformanceError([_patch_issue(None, field_path, str(exc))]) from exc
             audit = {**audit, "value_path": value_path}
