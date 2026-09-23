@@ -255,6 +255,8 @@ def _with_tmem67_validator_results(envelope):
     ]
     for value, identity in resolved:
         mark_resolved(value, identity, explanation="Fixture validator result.")
+    # The stage validator also fills the stage name from the resolved term.
+    payload["when_expressed_stage_name"] = "TS26"
     return envelope.model_copy(
         update={"extracted_objects": [annotation.model_copy(update={"payload": payload})]}
     )

@@ -1265,8 +1265,10 @@ def test_resolver_instructions_tell_the_model_to_stage_unmatched_wording(status)
     )
     text = " ".join(lines)
     assert "metadata" not in text
-    assert f"{_RESIDUAL_BODY!r} as its paper wording (mention) and selected_value null" in text
-    assert "its validator will check it" in text
+    # Shared with every builder: no builder-specific parameter names.
+    assert "selected_value" not in text
+    assert f"{_RESIDUAL_BODY!r} as the paper's wording (its mention), leaving the identifier empty" in text
+    assert "the validator will check it" in text
 
 
 def test_resolver_selection_reads_only_the_selected_terms_own_keys():

@@ -454,10 +454,8 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                     "datecreated": payload["date_created"],
                     "internal": payload["internal"],
                     "obsolete": payload.get("obsolete"),
-                    # The MOD stage name: the validated stage term's name, never paper wording.
-                    "whenexpressedstagename": _mapping(
-                        when_expressed.get("developmental_stage_start")
-                    )["name"],
+                    # Filled by validation from the stage term's name, or by a curator.
+                    "whenexpressedstagename": payload["when_expressed_stage_name"],
                     "whereexpressedstatement": payload["where_expressed_statement"],
                     "negated": payload.get("negated"),
                     "uncertain": payload.get("uncertain"),

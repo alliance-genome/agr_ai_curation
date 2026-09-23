@@ -48,6 +48,7 @@ from ..schema_refs import (
 )
 from ._payload_terms import term_present as _term_present
 from ._payload_terms import value_missing_or_blank as _value_missing_or_blank
+from .legacy import is_previous_format_annotation, previous_format_finding
 from .resolvable import (
     GENE_EXPRESSION_RESOLVABLE_VALUES,
     is_resolved,
@@ -87,10 +88,9 @@ REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
         "expression_experiment.entity_assayed.gene_symbol",
         "expression_experiment.expression_assay_used",
         "expression_experiment.expression_assay_used.curie",
-        # The export's stage name (LinkML when_expressed_stage_name) is the validated
-        # stage term's name; the paper's stage wording is that term's mention.
-        "expression_pattern.when_expressed.developmental_stage_start",
-        "expression_pattern.when_expressed.developmental_stage_start.name",
+        # The stage name the export writes. Validation fills it from the stage term's
+        # name, or a curator enters it; the extraction never writes it.
+        "when_expressed_stage_name",
         "where_expressed_statement",
         "expression_pattern",
         "expression_pattern.where_expressed",
@@ -113,7 +113,7 @@ MATERIALIZER_RESOLVABLE_EXTRACTION_FIELDS = frozenset(
             if field_path in _VALIDATOR_OWNED_IDENTITY_FIELDS
         ),
         "expression_pattern.where_expressed",
-        "expression_pattern.when_expressed.developmental_stage_start",
+        "when_expressed_stage_name",
     }
 )
 # Required fields with their own pending-envelope finding (the rest report
@@ -1424,13 +1424,25 @@ def _selector_integrity_findings(
             message="GeneExpressionAnnotation requires a source reference.",
             expected_selector="PMID or Alliance reference identifier",
         ),
-        _required_selector_finding(
+        # A staged stage term fills the stage name when it validates; without one, a
+        # curator enters the stage name.
+        None
+        if _term_present(
+            _payload_value(
+                expression_object.payload,
+                "expression_pattern.when_expressed.developmental_stage_start",
+            )
+        )
+        else _required_selector_finding(
             expression_object=expression_object,
             object_ref=object_ref,
-            field_path="expression_pattern.when_expressed.developmental_stage_start",
+            field_path="when_expressed_stage_name",
             code="alliance.gene_expression.expression_context_missing",
-            message="GeneExpressionAnnotation requires a developmental stage.",
-            expected_selector="the stage as the paper words it",
+            message=(
+                "GeneExpressionAnnotation requires when_expressed_stage_name: the paper states "
+                "no stage term, so a curator enters the stage name."
+            ),
+            expected_selector="stage name",
         ),
         _required_selector_finding(
             expression_object=expression_object,
@@ -1876,6 +1888,10 @@ def validate_pending_gene_expression_envelope(
     evidence_records_by_id = _evidence_records_by_id(envelope)
 
     for expression_object in expression_objects:
+        if is_previous_format_annotation(expression_object):
+            # Not validatable: this one finding stands for the whole record.
+            findings.append(previous_format_finding(expression_object))
+            continue
         object_ref = _object_ref(expression_object)
         # NOTE: status is intentionally NOT asserted here. PENDING means "not yet validated by
         # the automated validator"; automated validation legitimately advances resolved objects to

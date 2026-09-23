@@ -380,7 +380,7 @@ object_definitions:
         primary_label_field: expression_annotation_subject.gene_symbol
         secondary_label_field: where_expressed_statement
         summary_fields:
-          - expression_pattern.when_expressed.developmental_stage_start.name
+          - when_expressed_stage_name
           - relation.name
           - expression_experiment.expression_assay_used.name
       workspace_display:
@@ -389,7 +389,7 @@ object_definitions:
         summary_fields:
           - expression_annotation_subject.gene_symbol
           - where_expressed_statement
-          - expression_pattern.when_expressed.developmental_stage_start.name
+          - when_expressed_stage_name
           - relation.name
           - expression_experiment.expression_assay_used.name
         groups:
@@ -424,7 +424,7 @@ object_definitions:
           - id: stage_relation
             label: Stage & relation
             fields:
-              - expression_pattern.when_expressed.developmental_stage_start.name
+              - when_expressed_stage_name
               - expression_pattern.when_expressed.developmental_stage_start.curie
               - expression_pattern.when_expressed.developmental_stage_start.mention
               - expression_pattern.when_expressed.stage_uberon_slim_terms
@@ -1727,10 +1727,11 @@ object_definitions:
       - field_path: when_expressed_stage_name
         field_type: string
         display_name: When expressed stage name
-        description: The curation DB stage name column. The export writes it from the validated developmental_stage_start term's name; the paper's stage wording is that term's mention, and the extraction does not store it here.
+        description: The stage name the curation DB export writes (LinkML-required). It is filled from the validated developmental_stage_start term's name, or entered by a curator when the paper states no stage; the extraction never writes it.
+        required: true
         metadata:
-          protected: true
-          source_of_truth: expression_pattern.when_expressed.developmental_stage_start.name
+          editable: true
+          source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1801,7 +1802,6 @@ object_definitions:
       - field_path: expression_pattern.when_expressed.developmental_stage_start
         field_type: object
         display_name: Developmental stage start
-        required: true
         model_ref: OntologyTermSnapshotPayload
         metadata:
           validatable: true
@@ -1895,9 +1895,10 @@ object_definitions:
       - field_path: expression_pattern.when_expressed.developmental_stage_start.name
         field_type: string
         display_name: Developmental stage start name
-        description: The validated stage term's name; the export's stage name (when_expressed_stage_name).
-        required: true
+        description: The validated stage term's name; validation copies it into when_expressed_stage_name.
         metadata:
+          materializes_to_field_paths:
+            - when_expressed_stage_name
           editable: true
           validatable: true
           validator_binding_id: expression_stage_ontology_validation

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import lru_cache
+from types import MappingProxyType
 from typing import Any
 
 from src.lib.domain_packs.resolvable_values import (
@@ -22,10 +24,13 @@ from src.lib.domain_packs.resolvable_values import (
     RESOLUTION_STATE_KEY,
     RESOLVED,
     ResolvableSpec,
+    declared_resolvable_fields,
     effective_payload,
     resolved_value,
     unresolved_value,
 )
+
+from .constants import GENE_EXPRESSION_DOMAIN_PACK_ID, GENE_EXPRESSION_OBJECT_TYPE
 
 
 @dataclass(frozen=True)
@@ -165,9 +170,6 @@ GENE_EXPRESSION_RESOLVABLE_VALUES: tuple[GeneExpressionResolvableValue, ...] = (
         exported=False,
     ),
 )
-GENE_EXPRESSION_RESOLVABLE_SPECS: dict[str, ResolvableSpec] = {
-    value.field_path: value.spec for value in GENE_EXPRESSION_RESOLVABLE_VALUES
-}
 
 
 _VALUES_BY_PATH = {value.field_path: value for value in GENE_EXPRESSION_RESOLVABLE_VALUES}
@@ -252,13 +254,32 @@ def effective_gene_expression_payload(
     """The payload with every declared value's read-time resolution state.
 
     Values stored with the contract state read as stored; values stored
-    before it go through the shared legacy rule.
+    before it go through the shared legacy rule. The value specs are the
+    pack's own declarations (including the mirror sources that also cover a
+    copy such as entity_assayed).
     """
 
     return effective_payload(
         payload,
-        GENE_EXPRESSION_RESOLVABLE_SPECS,
+        declared_gene_expression_values(),
         object_metadata=object_metadata,
+    )
+
+
+@lru_cache(maxsize=1)
+def declared_gene_expression_values() -> Mapping[str, ResolvableSpec]:
+    """The resolvable values the bundled gene-expression pack declares, by field path.
+
+    Read once: the bundled pack does not change while the process runs.
+    """
+
+    from ..loader import get_alliance_domain_pack
+
+    return MappingProxyType(
+        declared_resolvable_fields(
+            get_alliance_domain_pack(GENE_EXPRESSION_DOMAIN_PACK_ID).metadata,
+            GENE_EXPRESSION_OBJECT_TYPE,
+        )
     )
 
 
@@ -274,7 +295,6 @@ def unresolved_value_message(label: str, value: Mapping[str, Any]) -> str:
 __all__ = [
     "CONDITION_TERM_IDENTITY_KEYS",
     "DATA_PROVIDER_IDENTITY_KEYS",
-    "GENE_EXPRESSION_RESOLVABLE_SPECS",
     "GENE_EXPRESSION_RESOLVABLE_VALUES",
     "GeneExpressionResolvableValue",
     "REFERENCE_IDENTITY_KEYS",
@@ -282,6 +302,7 @@ __all__ = [
     "SUBJECT_IDENTITY_KEYS",
     "TERM_IDENTITY_KEYS",
     "data_provider_value",
+    "declared_gene_expression_values",
     "effective_gene_expression_payload",
     "is_resolved",
     "resolvable_value_for",

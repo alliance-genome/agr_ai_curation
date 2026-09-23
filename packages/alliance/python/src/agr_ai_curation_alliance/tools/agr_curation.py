@@ -3801,11 +3801,12 @@ def _resolver_candidates_from_helper_payload(
 
 
 def _unmatched_staging_instruction(field_path: str, source_phrase: Optional[str]) -> str:
+    # Shared by every builder, so it names no builder-specific parameter.
     phrase = repr(source_phrase) if source_phrase else "the paper's wording"
     return (
-        f"If no term matches, still stage {field_path} with {phrase} as its paper wording "
-        "(mention) and selected_value null: it is kept UNRESOLVED and its validator will "
-        "check it. Never drop the finding or fill the term from memory."
+        f"If no term matches, still stage {field_path} with {phrase} as the paper's wording "
+        "(its mention), leaving the identifier empty: the value stays UNRESOLVED and the "
+        "validator will check it. Never drop the finding or fill the identifier from memory."
     )
 
 
@@ -3820,7 +3821,7 @@ def _resolver_instruction(
     if resolution_status == "resolved":
         return [
             f"Set only the controlled selector for {field_path} from the selected candidate.",
-            "When you stage this controlled selector, pass the paper's wording as mention and the resolved value as selected_value; provenance is verified automatically against this resolve call. Do not author metadata.provenance.helper_selections.",
+            "When you stage this value, pass the resolved value together with the paper's wording you resolved; provenance is verified automatically against this resolve call. Do not author metadata.provenance.helper_selections.",
         ]
     if resolution_status == "ambiguous":
         return [

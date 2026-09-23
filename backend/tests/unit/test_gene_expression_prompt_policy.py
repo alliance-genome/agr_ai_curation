@@ -140,8 +140,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "`expression_pattern.where_expressed`" in content
     assert "`expression_experiment.expression_assay_used`" in content
     assert "`expression_pattern.when_expressed.developmental_stage_start` controlled field" in content
-    assert "The exported stage name comes from the validated term" in content
-    assert "`when_expressed_stage_name`" not in content
+    assert "Never write the stage name (`when_expressed_stage_name`) yourself" in content
     assert "with that same wording as `source_phrase`" in content
     assert "metadata.provenance.helper_selections[]" in content
     assert "do not author" in content

@@ -216,8 +216,9 @@ def _lta_candidate() -> dict:
             ),
         },
         "where_expressed_statement": "extracellular space",
+        # Filled from the validated stage term's name (declared mirror).
+        "when_expressed_stage_name": "adult",
         "expression_pattern": {
-            # The export's stage name comes from the validated stage term.
             "when_expressed": {
                 "developmental_stage_start": _grounded(
                     "adult", curie="FIXTURE_STAGE:00001", name="adult"

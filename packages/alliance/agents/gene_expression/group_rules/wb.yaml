@@ -59,7 +59,7 @@ content: |
 
   ### Incomplete annotation handling
   - When expression is mentioned but key details (anatomy, life stage) are missing from the text:
-    - Still stage the annotation. Leave out a field the paper does not state (for example no developmental stage controlled field); stage a field the paper states but no term matches with its paper wording as `mention` and `selected_value` null.
+    - Still stage the annotation. Leave out a field the paper does not state (for example no developmental stage controlled field; a curator then enters the stage name); stage a field the paper states but no term matches with its paper wording as `mention` and `selected_value` null.
     - Leave the incomplete fields for the validator and note in your staged evidence which fields are missing and may require curator review of figures.
     - Example: "Expression pattern of the acox-1.1 gene." -> capture with gene but null anatomy.
   - When neuron or tissue identities are stated as uncertain ("possibly M3, AWB, and ASJ"):

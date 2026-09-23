@@ -2446,7 +2446,8 @@ def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
                     "status": "validated",
                     "payload": {
                         "expression_annotation_subject": {"gene_symbol": "rpm-1"},
-                        # The summary stage is the validated stage term's name (ALL-1283).
+                        # Filled from the validated stage term's name (ALL-1283).
+                        "when_expressed_stage_name": "L4",
                         "expression_pattern": {
                             "when_expressed": {
                                 "developmental_stage_start": {
