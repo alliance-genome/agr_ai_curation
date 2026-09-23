@@ -40,6 +40,12 @@ class GeneExpressionResolvableValue:
     multivalued: bool = False
     # False for context the curation DB handoff does not export (audit only).
     exported: bool = True
+    # The keys the curation DB export joins on; empty means the value's id, else its label.
+    export_keys: tuple[str, ...] = ()
+
+    @property
+    def join_keys(self) -> tuple[str, ...]:
+        return self.export_keys or ((self.spec.id_key or self.spec.label_key),)
 
 
 TERM_IDENTITY_KEYS = ("curie", "name")
@@ -48,6 +54,7 @@ SUBJECT_IDENTITY_KEYS = ("primary_external_id", "gene_symbol")
 _SUBJECT = ResolvableSpec(id_key="primary_external_id", label_key="gene_symbol")
 REFERENCE_IDENTITY_KEYS = ("reference_id", "curie", "title")
 _REFERENCE = ResolvableSpec(id_key="reference_id", label_key="title")
+# A controlled-vocabulary term: its name, vocabulary and internal id.
 RELATION_IDENTITY_KEYS = ("name", "vocabulary", "id")
 _VOCABULARY_TERM = ResolvableSpec(label_key="name")
 DATA_PROVIDER_IDENTITY_KEYS = ("abbreviation",)
@@ -87,12 +94,14 @@ GENE_EXPRESSION_RESOLVABLE_VALUES: tuple[GeneExpressionResolvableValue, ...] = (
         _TERM,
         TERM_IDENTITY_KEYS,
     ),
+    # LinkML range VocabularyTerm (the Stage Uberon Slim Terms vocabulary).
     GeneExpressionResolvableValue(
         "expression_pattern.when_expressed.stage_uberon_slim_terms",
         "Stage UBERON slim term",
-        _TERM,
-        TERM_IDENTITY_KEYS,
+        _VOCABULARY_TERM,
+        RELATION_IDENTITY_KEYS,
         multivalued=True,
+        export_keys=("vocabulary", "name"),
     ),
     GeneExpressionResolvableValue(
         "expression_pattern.where_expressed.anatomical_structure",

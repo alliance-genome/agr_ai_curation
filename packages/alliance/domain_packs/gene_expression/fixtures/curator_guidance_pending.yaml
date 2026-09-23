@@ -119,9 +119,10 @@ fixtures:
                   lookup_outcome: matched
                   validator_explanation: null
                 stage_uberon_slim_terms:
-                  - curie: UBERON:0000068
-                    name: embryo stage
-                    mention: embryo stage
+                  - name: UBERON:0000068
+                    vocabulary: Stage Uberon Slim Terms
+                    id: 200006300
+                    mention: UBERON:0000068
                     resolution_state: resolved
                     lookup_outcome: matched
                     validator_explanation: null

@@ -1916,7 +1916,8 @@ object_definitions:
       - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms
         field_type: array
         display_name: Stage UBERON slim terms
-        model_ref: OntologyTermSnapshotPayload
+        description: Broad life-stage terms chosen from the Stage Uberon Slim Terms vocabulary (UBERON:0000068, UBERON:0000113, or post embryonic, pre-adult); a fixed choice, so each term's mention is the chosen term name.
+        model_ref: VocabularyTermSnapshotPayload
         metadata:
           render_as: chip
           hide_when_empty: true
@@ -1925,9 +1926,11 @@ object_definitions:
           validatable: true
           validator_binding_id: expression_stage_uberon_slim_validation
           validator_state: active
+          # LinkML range VocabularyTerm: the curation DB stores these as terms of the
+          # Stage Uberon Slim Terms vocabulary (the UBERON ones named by their CURIE).
           term_helper:
             field_path: expression_pattern.when_expressed.stage_uberon_slim_terms
-            authority: selector_evidence
+            authority: live_validated_option
             resolver:
               primary_tool: resolve_domain_field_term
               search_tool: search_domain_field_terms
@@ -1940,20 +1943,12 @@ object_definitions:
                 - configured_mapping
                 - current_api_label_or_synonym_search
             term_source:
-              kind: ontology
-              ontology_family: uberon
-              ontology_term_type: UBERONTerm
-              slim_membership:
-                source: alliance_linkml
-                allowed_term_curies:
-                  - UBERON:0000068
-                  - UBERON:0000113
-                unresolved_allowed_term_labels:
-                  - post embryonic, pre-adult
+              kind: controlled_vocabulary
+              vocabulary: Stage Uberon Slim Terms
             lookup:
               package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: selector_evidence
+              method: search_vocabulary_terms
+              candidate_authority: live_validated_option
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1963,15 +1958,19 @@ object_definitions:
               slot: stage_uberon_slim_terms
               range: VocabularyTerm
               db_table: temporalcontext_stageuberonslimterms
-      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.curie
-        field_type: string
-        display_name: Stage UBERON slim term CURIE
-        metadata:
-          render_as: curie-chip
-          source_of_truth: alliance_linkml
       - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.name
         field_type: string
         display_name: Stage UBERON slim term name
+        metadata:
+          source_of_truth: alliance_linkml
+      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.vocabulary
+        field_type: string
+        display_name: Stage UBERON slim term vocabulary
+        metadata:
+          source_of_truth: alliance_linkml
+      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.id
+        field_type: integer
+        display_name: Stage UBERON slim term internal ID
         metadata:
           source_of_truth: alliance_linkml
       - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.mention
@@ -2652,10 +2651,10 @@ metadata:
           - Runs through the ontology-term package validator binding (ontology family assay, MMOTerm, lookup method search_ontology_terms); original labels are preserved in materialization metadata.
       - validator_id: expression_stage_uberon_slim_validation
         display_name: Stage UBERON slim lookup
-        curator_label: Confirm each stage slim term against the allowed UBERON life-stage terms
-        description: Checks that each broad life-stage term on the annotation is one of the allowed UBERON slim terms, such as embryo stage or post-embryonic stage.
+        curator_label: Confirm each stage slim term against the Stage Uberon Slim Terms vocabulary
+        description: Checks that each broad life-stage term on the annotation is a term of the Stage Uberon Slim Terms vocabulary, such as embryo stage (UBERON:0000068), post-juvenile adult stage (UBERON:0000113), or post embryonic, pre-adult.
         definition_notes:
-          - Runs through the ontology-term package validator binding (ontology family uberon, UBERONTerm) with allowed_term_curies UBERON:0000068 and UBERON:0000113; the label 'post embryonic, pre-adult' is accepted unresolved. Materializes the stage UBERON slim term array through ontology lookup evidence.
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Stage Uberon Slim Terms, LinkML range VocabularyTerm), one lookup per slim term.
       - validator_id: expression_anatomical_structure_validation
         display_name: Anatomical structure ontology lookup
         curator_label: Confirm the anatomical structure against the anatomy ontology for the species
@@ -2994,14 +2993,14 @@ metadata:
           allowed: false
       - binding_id: expression_stage_uberon_slim_validation
         display_name: Stage UBERON slim lookup
-        curator_label: Confirm each stage slim term against the allowed UBERON life-stage terms
-        description: Checks that each broad life-stage term on the annotation is one of the allowed UBERON slim terms, such as embryo stage or post-embryonic stage.
+        curator_label: Confirm each stage slim term against the Stage Uberon Slim Terms vocabulary
+        description: Checks that each broad life-stage term on the annotation is a term of the Stage Uberon Slim Terms vocabulary, such as embryo stage (UBERON:0000068), post-juvenile adult stage (UBERON:0000113), or post embryonic, pre-adult.
         when_off: Stage slim terms stay as the extractor wrote them, and review rows show them unconfirmed.
         definition_notes:
-          - Runs through the ontology-term package validator binding (ontology family uberon, UBERONTerm) with allowed_term_curies UBERON:0000068 and UBERON:0000113; the label 'post embryonic, pre-adult' is accepted unresolved. Materializes the stage UBERON slim term array through ontology lookup evidence.
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Stage Uberon Slim Terms, LinkML range VocabularyTerm), one lookup per slim term; the curation DB names the UBERON terms by their CURIE.
         validator_agent:
           package_id: agr.alliance
-          agent_id: ontology_term_validation
+          agent_id: controlled_vocabulary_validation
         applies_to:
           domain_pack_id: agr.alliance.gene_expression
           object_types:
@@ -3009,43 +3008,20 @@ metadata:
           field_paths:
             - expression_pattern.when_expressed.stage_uberon_slim_terms
         input_fields:
-          # expression_pattern.when_expressed.stage_uberon_slim_terms is multivalued: the engine fans out one lookup per element.
-          curie:
-            source: payload
-            path: expression_pattern.when_expressed.stage_uberon_slim_terms.curie
-            required: false
-          label:
+          vocabulary:
+            source: literal
+            value: Stage Uberon Slim Terms
+          # expression_pattern.when_expressed.stage_uberon_slim_terms is multivalued: the engine
+          # fans out one lookup per element. A slim term is a fixed choice, so its mention is the
+          # term name the extractor chose.
+          term_name:
             source: payload
             path: expression_pattern.when_expressed.stage_uberon_slim_terms.mention
             required: false
-          ontology_family:
-            source: literal
-            value: uberon
-          ontology_term_type:
-            source: literal
-            value: UBERONTerm
-          lookup_method:
-            source: literal
-            value: search_ontology_terms
-          allowed_term_curies:
-            source: literal
-            value:
-              - UBERON:0000068
-              - UBERON:0000113
-          unresolved_allowed_term_labels:
-            source: literal
-            value:
-              - post embryonic, pre-adult
-          evidence_quotes:
-            source: evidence_record
-            output: quote_bundle
-            field_path: expression_pattern.when_expressed.stage_uberon_slim_terms
-            allow_multiple: true
-            required: false
-            context_only: true
         expected_result_fields:
-          curie: expression_pattern.when_expressed.stage_uberon_slim_terms.curie
-          name: expression_pattern.when_expressed.stage_uberon_slim_terms.name
+          term_name: expression_pattern.when_expressed.stage_uberon_slim_terms.name
+          vocabulary: expression_pattern.when_expressed.stage_uberon_slim_terms.vocabulary
+          internal_id: expression_pattern.when_expressed.stage_uberon_slim_terms.id
         required: true
         blocking: false
         allow_opt_out: true

@@ -280,7 +280,8 @@ class GeneExpressionControlledFieldInput(_StrictToolModel):
     mention: StrictStr = Field(
         description=(
             "The paper's own wording for this value (for example 'structures associated "
-            "with the residual body'). Always required, whether or not a term matched."
+            "with the residual body'); for a fixed-choice field such as a stage slim term, "
+            "the term name you chose. Always required, whether or not a term matched."
         )
     )
     selected_value: Optional[StrictStr] = Field(

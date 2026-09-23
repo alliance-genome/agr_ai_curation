@@ -315,9 +315,8 @@ def gene_expression_export_blockers(
             if declared.multivalued and isinstance(stored, list)
             else [(declared.field_path, stored)]
         )
-        # The key the curation DB joins on: the value's id, or its label when it has no id.
-        # Required join keys are reported with the other required fields below.
-        join_key = declared.spec.id_key or declared.spec.label_key
+        # The keys the curation DB joins on (declared.join_keys). Required join keys are
+        # reported with the other required fields below.
         for field_path, value in elements:
             if not isinstance(value, Mapping):
                 continue
@@ -330,17 +329,19 @@ def gene_expression_export_blockers(
                         unresolved_value_message(declared.label, value),
                     )
                 )
-            elif (
-                f"{declared.field_path}.{join_key}" not in REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS
-                and _value_missing_or_blank(value.get(join_key))
-            ):
-                blockers.append(
-                    blocker(
-                        f"{field_path}.{join_key}",
-                        "alliance.gene_expression.required_field_missing",
-                        f"Required gene-expression export field is missing: {field_path}.{join_key}.",
+                continue
+            for join_key in declared.join_keys:
+                if (
+                    f"{declared.field_path}.{join_key}" not in REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS
+                    and _value_missing_or_blank(value.get(join_key))
+                ):
+                    blockers.append(
+                        blocker(
+                            f"{field_path}.{join_key}",
+                            "alliance.gene_expression.required_field_missing",
+                            f"Required gene-expression export field is missing: {field_path}.{join_key}.",
+                        )
                     )
-                )
 
     for field_path in sorted(REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS):
         if field_path.rpartition(".")[0] in unresolved_values:
@@ -413,7 +414,7 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
         ),
         "relationships": _drop_empty(
             {
-                "temporalcontext_stageuberonslimterms": _term_list(
+                "temporalcontext_stageuberonslimterms": _vocabulary_term_lookups(
                     when_expressed.get("stage_uberon_slim_terms")
                 ),
             }
@@ -582,9 +583,12 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                     "developmental_stage_start": _term_payload(
                         when_expressed.get("developmental_stage_start")
                     ),
-                    "stage_uberon_slim_terms": _term_list(
-                        when_expressed.get("stage_uberon_slim_terms")
-                    ),
+                    "stage_uberon_slim_terms": [
+                        lookup["match"]
+                        for lookup in _vocabulary_term_lookups(
+                            when_expressed.get("stage_uberon_slim_terms")
+                        )
+                    ],
                     "anatomical_structure": _term_payload(
                         where_expressed.get("anatomical_structure")
                     ),
@@ -671,6 +675,21 @@ def _term_lookup(value: Any) -> dict[str, Any] | None:
     if not term:
         return None
     return {"table": "ontologyterm", "match": {"curie": term["curie"]}, "projection": term}
+
+
+def _vocabulary_term_lookups(values: Any) -> list[dict[str, Any]]:
+    """vocabularyterm lookups for resolved vocabulary terms, matched by vocabulary and name."""
+
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        return []
+    return [
+        {
+            "table": "vocabularyterm",
+            "match": {"vocabulary": value["vocabulary"], "name": value["name"]},
+        }
+        for value in values
+        if is_resolved(value)
+    ]
 
 
 def _readiness_blocker_from_export_blocker(

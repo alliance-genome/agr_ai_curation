@@ -91,8 +91,6 @@ GENE_EXPRESSION_OUTPUT_FIXTURE_PATH = (
     / "gene_expression"
     / "tmem67_gene_expression_output.yaml"
 )
-STAGE_UBERON_SLIM_ALLOWED_CURIES = ["UBERON:0000068", "UBERON:0000113"]
-STAGE_UBERON_SLIM_UNRESOLVED_LABELS = ["post embryonic, pre-adult"]
 ANATOMICAL_UBERON_SLIM_ALLOWED_CURIES = [
     "UBERON:0001009",
     "UBERON:0005409",
@@ -859,16 +857,13 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
     ).request
     assert stage_uberon_request is not None
     assert stage_uberon_request.selected_inputs == {
-        "label": "embryonic stage",
-        "ontology_family": "uberon",
-        "ontology_term_type": "UBERONTerm",
-        "lookup_method": "search_ontology_terms",
-        "allowed_term_curies": STAGE_UBERON_SLIM_ALLOWED_CURIES,
-        "unresolved_allowed_term_labels": STAGE_UBERON_SLIM_UNRESOLVED_LABELS,
+        "vocabulary": "Stage Uberon Slim Terms",
+        "term_name": "embryonic stage",
     }
     assert stage_uberon_request.expected_result_fields == {
-        "curie": "expression_pattern.when_expressed.stage_uberon_slim_terms[0].curie",
-        "name": "expression_pattern.when_expressed.stage_uberon_slim_terms[0].name",
+        "term_name": "expression_pattern.when_expressed.stage_uberon_slim_terms[0].name",
+        "vocabulary": "expression_pattern.when_expressed.stage_uberon_slim_terms[0].vocabulary",
+        "internal_id": "expression_pattern.when_expressed.stage_uberon_slim_terms[0].id",
     }
 
     anatomical_uberon_match = _active_binding_match(
@@ -1194,13 +1189,13 @@ def test_gene_expression_uberon_slim_metadata_carries_linkml_allowlists():
         for field in _gene_expression_pack().metadata.object_definitions[0].fields
     }
 
-    stage_helper = fields_by_path[
-        "expression_pattern.when_expressed.stage_uberon_slim_terms"
-    ].metadata["term_helper"]
-    assert stage_helper["term_source"]["slim_membership"] == {
-        "source": "alliance_linkml",
-        "allowed_term_curies": STAGE_UBERON_SLIM_ALLOWED_CURIES,
-        "unresolved_allowed_term_labels": STAGE_UBERON_SLIM_UNRESOLVED_LABELS,
+    # LinkML range VocabularyTerm: stage slims are terms of the Stage Uberon Slim Terms
+    # vocabulary (UBERON:0000068, UBERON:0000113, post embryonic, pre-adult), not UBERON terms.
+    stage_field = fields_by_path["expression_pattern.when_expressed.stage_uberon_slim_terms"]
+    assert stage_field.model_ref == "VocabularyTermSnapshotPayload"
+    assert stage_field.metadata["term_helper"]["term_source"] == {
+        "kind": "controlled_vocabulary",
+        "vocabulary": _STAGE_SLIM_VOCABULARY,
     }
 
     anatomical_helper = fields_by_path[
@@ -1377,6 +1372,13 @@ def _slim(field_path: str, mention: str) -> dict[str, Any]:
 
 
 _STAGE_SLIM = "expression_pattern.when_expressed.stage_uberon_slim_terms"
+_STAGE_SLIM_VOCABULARY = "Stage Uberon Slim Terms"
+
+
+def _stage_slim_term(name: str, internal_id: int) -> dict[str, Any]:
+    """A Stage Uberon Slim Terms result: the curation DB names UBERON terms by their CURIE."""
+
+    return {"term_name": name, "vocabulary": _STAGE_SLIM_VOCABULARY, "internal_id": internal_id}
 _ANATOMY_SLIM = "expression_pattern.where_expressed.anatomical_structure_uberon_terms"
 _QUALIFIERS = "expression_pattern.where_expressed.cellular_component_qualifiers"
 
@@ -1402,7 +1404,7 @@ def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_re
     envelope = _converted_tmem67_envelope()
     payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["expression_pattern"]["when_expressed"] = {
-        "stage_uberon_slim_terms": [_slim(_STAGE_SLIM, "embryonic stage")]
+        "stage_uberon_slim_terms": [_slim(_STAGE_SLIM, "UBERON:0000068")]
     }
     payload["expression_pattern"]["where_expressed"][
         "cellular_component_qualifiers"
@@ -1438,7 +1440,7 @@ def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_re
                 result=_validator_result(
                     stage_request,
                     status="resolved",
-                    resolved_values={"curie": "UBERON:0000068", "name": "embryo stage"},
+                    resolved_values=_stage_slim_term("UBERON:0000068", 200006300),
                 ),
             ),
             ValidatorResultMaterializationInput(
@@ -1466,7 +1468,14 @@ def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_re
     payload = result.envelope.extracted_objects[0].payload
     assert payload["expression_pattern"]["when_expressed"][
         "stage_uberon_slim_terms"
-    ] == [_validated("embryonic stage", curie="UBERON:0000068", name="embryo stage")]
+    ] == [
+        _validated(
+            "UBERON:0000068",
+            name="UBERON:0000068",
+            vocabulary=_STAGE_SLIM_VOCABULARY,
+            id=200006300,
+        )
+    ]
     assert payload["expression_pattern"]["where_expressed"][
         "anatomical_structure_uberon_terms"
     ] == [_validated("renal system", curie="UBERON:0001008", name="renal system")]
@@ -1485,7 +1494,7 @@ def _out_of_slim(element: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def test_gene_expression_stage_uberon_slim_rejects_out_of_slim_materialization():
+def test_gene_expression_stage_slim_outside_the_vocabulary_stays_unresolved():
     envelope = _converted_tmem67_envelope()
     payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     staged = _slim(_STAGE_SLIM, "adult")
@@ -1495,30 +1504,20 @@ def test_gene_expression_stage_uberon_slim_rejects_out_of_slim_materialization()
     result = _materialize_one(
         envelope,
         "expression_stage_uberon_slim_validation",
-        status="resolved",
-        resolved_values={"curie": "UBERON:0000113", "name": "post-embryonic stage"},
+        status="unresolved",
+        missing_expected_fields=[],
+        lookup_outcome="not_found",
+        curator_message="No Stage Uberon Slim Terms term matches this wording.",
     )
 
-    assert result.envelope.extracted_objects[0].payload["expression_pattern"]["when_expressed"][
+    # No identity is written; the element records why it stays UNRESOLVED.
+    [element] = result.envelope.extracted_objects[0].payload["expression_pattern"]["when_expressed"][
         "stage_uberon_slim_terms"
-    ] == [_validated("adult", curie="UBERON:0000113", name="post-embryonic stage")]
-    finding = result.appended_findings[0]
-    assert finding.code == "domain_pack.validator_resolved"
-
-    bad_result = _materialize_one(
-        envelope,
-        "expression_stage_uberon_slim_validation",
-        status="resolved",
-        resolved_values={"curie": "UBERON:0000105", "name": "life cycle stage"},
-    )
-
-    # The out-of-slim term is never written; the element records why it stays UNRESOLVED.
-    assert bad_result.envelope.extracted_objects[0].payload["expression_pattern"][
-        "when_expressed"
-    ]["stage_uberon_slim_terms"] == [_out_of_slim(staged)]
-    bad_finding = bad_result.appended_findings[0]
-    assert bad_finding.code == "domain_pack.validator_materialization_invalid"
-    assert "UBERON:0000105" in bad_finding.details["materialization_error"]
+    ]
+    assert {key: element[key] for key in ("name", "vocabulary", "id", "mention")} == {
+        "name": None, "vocabulary": None, "id": None, "mention": "adult",
+    }
+    assert (element["resolution_state"], element["lookup_outcome"]) == ("unresolved", "not_found")
 
 
 def test_gene_expression_anatomical_uberon_slim_rejects_out_of_slim_materialization():
@@ -1543,26 +1542,57 @@ def test_gene_expression_anatomical_uberon_slim_rejects_out_of_slim_materializat
     assert "UBERON:0002113" in finding.details["materialization_error"]
 
 
-def test_gene_expression_stage_uberon_slim_schema_allowed_non_uberon_stays_unresolved():
+@pytest.mark.parametrize(
+    ("name", "internal_id"),
+    [
+        ("post embryonic, pre-adult", 200008800),
+        ("UBERON:0000068", 200006300),
+        ("UBERON:0000113", 200006250),
+    ],
+)
+def test_gene_expression_every_stage_slim_vocabulary_term_resolves_and_exports(name, internal_id):
+    """Review #4: the WB larval slim "post embryonic, pre-adult" is a real vocabulary term."""
+
+    from agr_ai_curation_alliance.domain_packs.gene_expression.export import (
+        _gene_expression_annotation_payload,
+    )
+
     envelope = _converted_tmem67_envelope()
     payload = copy.deepcopy(envelope.extracted_objects[0].payload)
-    staged = _slim(_STAGE_SLIM, "post embryonic, pre-adult")
-    payload["expression_pattern"]["when_expressed"] = {"stage_uberon_slim_terms": [staged]}
+    payload["expression_pattern"]["when_expressed"]["stage_uberon_slim_terms"] = [
+        _slim(_STAGE_SLIM, name)
+    ]
     envelope = _with_payload(envelope, payload)
 
     result = _materialize_one(
         envelope,
         "expression_stage_uberon_slim_validation",
         status="resolved",
-        resolved_values={"curie": "post embryonic, pre-adult"},
+        resolved_values=_stage_slim_term(name, internal_id),
     )
 
-    assert result.envelope.extracted_objects[0].payload["expression_pattern"][
-        "when_expressed"
-    ]["stage_uberon_slim_terms"] == [_out_of_slim(staged)]
-    finding = result.appended_findings[0]
-    assert finding.code == "domain_pack.validator_materialization_invalid"
-    assert "post embryonic, pre-adult" in finding.details["materialization_error"]
+    annotation = result.envelope.extracted_objects[0]
+    [element] = annotation.payload["expression_pattern"]["when_expressed"]["stage_uberon_slim_terms"]
+    assert element == _validated(
+        name, name=name, vocabulary=_STAGE_SLIM_VOCABULARY, id=internal_id
+    )
+    candidate = _export_candidate(annotation)
+    assert not {
+        blocker.field_path
+        for blocker in gene_expression_export_blockers(candidate)
+        if blocker.field_path.startswith(_STAGE_SLIM)
+    }
+    candidate.update(
+        {
+            "envelope_revision": 1,
+            "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
+            "projection_ref": {"envelope_id": "envelope-1", "object_id": candidate["object_id"]},
+        }
+    )
+    temporal = _gene_expression_annotation_payload(candidate)["target_rows"]["temporalcontext"]
+    assert temporal["relationships"]["temporalcontext_stageuberonslimterms"] == [
+        {"table": "vocabularyterm", "match": {"vocabulary": _STAGE_SLIM_VOCABULARY, "name": name}}
+    ]
 
 
 @pytest.mark.parametrize(

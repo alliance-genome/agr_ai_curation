@@ -134,11 +134,15 @@ FIELD_SPECIFIC_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
 GENE_EXPRESSION_LINKML_CONTRACT_VALIDATOR_ID = (
     "gene_expression.linkml_extraction_contract"
 )
+# Controlled-vocabulary list fields the builder resolves only through
+# resolve_domain_field_term (by term name).
+_RESOLVER_BACKED_VOCABULARY_FIELDS = (
+    "expression_pattern.when_expressed.stage_uberon_slim_terms",
+)
 # Ontology-term fields the builder resolves only through resolve_domain_field_term.
 _RESOLVER_BACKED_TERM_FIELDS = (
     "expression_experiment.expression_assay_used",
     "expression_pattern.when_expressed.developmental_stage_start",
-    "expression_pattern.when_expressed.stage_uberon_slim_terms",
     "expression_pattern.where_expressed.anatomical_structure",
     "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
     "expression_pattern.where_expressed.cellular_component",
@@ -475,6 +479,17 @@ def validate_gene_expression_extraction_objects(
                     )
                 )
         # A term the builder staged as resolved carries the resolver call that matched it.
+        for field_path in _RESOLVER_BACKED_VOCABULARY_FIELDS:
+            for value_path, value in _values_at(obj.payload, field_path):
+                for term in value if isinstance(value, list) else [value]:
+                    if is_resolved(term) and not _has_helper_selection(
+                        output,
+                        field_path=field_path,
+                        selected_value=str(term.get("name") or ""),
+                    ):
+                        errors.append(
+                            _resolver_provenance_error(location=location, field_path=value_path)
+                        )
         for field_path in _RESOLVER_BACKED_TERM_FIELDS:
             for value_path, value in _values_at(obj.payload, field_path):
                 terms = value if isinstance(value, list) else [value]

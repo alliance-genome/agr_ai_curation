@@ -1092,27 +1092,30 @@ def test_stage_resolves_data_provider_only_by_exact_provider_match(active_builde
 
 
 def test_stage_keeps_every_slim_term_as_its_own_value(active_builder_context):
+    """Stage slims are Stage Uberon Slim Terms vocabulary terms, each its own value."""
+
     workspace, ledger, _events = active_builder_context
+    output = _resolved_output(
+        field_path="expression_pattern.when_expressed.stage_uberon_slim_terms",
+        selected_value="post embryonic, pre-adult",
+        term_source={"kind": "controlled_vocabulary", "vocabulary": "Stage Uberon Slim Terms"},
+        source_phrase="post embryonic, pre-adult",
+    )
+    output["data"]["helper_selection"].update(
+        {"vocabulary": "Stage Uberon Slim Terms", "selected_internal_id": 200008800}
+    )
     ledger.record_tool_output(
         tool_call_id="call_slim",
         tool_name="resolve_domain_field_term",
-        output=_resolved_output(
-            field_path="expression_pattern.when_expressed.stage_uberon_slim_terms",
-            selected_value="UBERON:0000113",
-            selected_name="post-juvenile adult stage",
-            selected_curie="UBERON:0000113",
-            instruction_value={"curie": "UBERON:0000113", "name": "post-juvenile adult stage"},
-            term_source={"kind": "ontology", "ontology_family": "uberon"},
-            source_phrase="adult",
-        ),
+        output=output,
     )
 
     result = _stage_materializable_observation(
         ledger,
         {
             "field_path": "expression_pattern.when_expressed.stage_uberon_slim_terms",
-            "mention": "adult",
-            "selected_value": "UBERON:0000113",
+            "mention": "post embryonic, pre-adult",
+            "selected_value": "post embryonic, pre-adult",
         },
         {
             "field_path": "expression_pattern.when_expressed.stage_uberon_slim_terms",
@@ -1125,9 +1128,12 @@ def test_stage_keeps_every_slim_term_as_its_own_value(active_builder_context):
     slims = workspace.candidates["gex-candidate-1"].staged_fields["expression_pattern"][
         "when_expressed"
     ]["stage_uberon_slim_terms"]
-    assert [(term["mention"], term["curie"], term["resolution_state"]) for term in slims] == [
-        ("adult", "UBERON:0000113", "resolved"),
-        ("late larval", None, "unresolved"),
+    assert [
+        (term["mention"], term["name"], term["vocabulary"], term["id"], term["resolution_state"])
+        for term in slims
+    ] == [
+        ("post embryonic, pre-adult", "post embryonic, pre-adult", "Stage Uberon Slim Terms", 200008800, "resolved"),
+        ("late larval", None, None, None, "unresolved"),
     ]
 
 
