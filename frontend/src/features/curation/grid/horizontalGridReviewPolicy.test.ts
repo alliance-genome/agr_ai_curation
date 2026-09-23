@@ -59,7 +59,7 @@ describe('horizontal grid review policy', () => {
 
     const go = candidate(configuredDomainPackId('GOCuratableObject'), 'GOCuratableObject')
     expect(isHorizontalGridDecisionField(go, field('go_term.curie', 'annotation'))).toBe(true)
-    expect(isHorizontalGridDecisionField(go, field('rationale', 'evidence'))).toBe(false)
+    expect(isHorizontalGridDecisionField(go, field('rationale', 'rationale'))).toBe(false)
     expect(isHorizontalGridDecisionField(go, field('provider_context', 'provider'))).toBe(false)
   })
 
@@ -78,7 +78,7 @@ describe('horizontal grid review policy', () => {
     for (const key of Object.keys(HORIZONTAL_GRID_REVIEW_POLICIES)) {
       const separator = key.indexOf(':')
       const typed = candidate(key.slice(0, separator), key.slice(separator + 1))
-      expect(isHorizontalGridDecisionField(typed, field('rationale', 'evidence')), key).toBe(false)
+      expect(isHorizontalGridDecisionField(typed, field('rationale', 'rationale')), key).toBe(false)
     }
     const future = candidate('future.pack', 'FutureObject')
     expect(isHorizontalGridDecisionField(future, field('rationale', null))).toBe(false)

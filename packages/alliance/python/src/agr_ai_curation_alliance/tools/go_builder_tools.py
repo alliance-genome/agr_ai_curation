@@ -222,14 +222,6 @@ class GOPatchUpdateInput(_StrictToolModel):
             )
         return cleaned
 
-    @model_validator(mode="after")
-    def _validate_rationale_value(self) -> "GOPatchUpdateInput":
-        if self.field_path == "rationale":
-            if not isinstance(self.value, str):
-                raise ValueError("rationale patch value must be a string")
-            self.value = normalize_rationale(self.value)
-        return self
-
 
 class GOPatchInput(_StrictToolModel):
     candidate_id: StrictStr
@@ -664,8 +656,8 @@ def _patch_go_recommendation_impl(
     Args:
         candidate_id: The staged candidate to correct.
         updates: Field corrections, each with field_path and value (or evidence_record_ids).
-            A rationale update must be a non-empty string of at most 300 characters; it
-            replaces the stored reason and cannot clear it.
+            A `rationale` update must be non-empty and at most 300 characters; it cannot
+            be cleared.
     """
 
     attempted_query = _attempt_query(
@@ -735,6 +727,24 @@ def _patch_go_recommendation_impl(
                     attempted_query=attempted_query,
                 )
             staged_fields["validation_guidance"] = update.value
+        elif update.field_path == "rationale":
+            try:
+                if not isinstance(update.value, str):
+                    raise ValueError("rationale must be a non-empty string")
+                payload["rationale"] = normalize_rationale(update.value)
+            except ValueError as exc:
+                return _go_validation_result(
+                    message="patch_go_recommendation rejected the rationale update.",
+                    issues=[
+                        {
+                            "field_path": "rationale",
+                            "reason": "invalid_rationale",
+                            "message": str(exc),
+                        }
+                    ],
+                    method="patch_go_recommendation",
+                    attempted_query=attempted_query,
+                )
         elif update.value in (None, ""):
             payload.pop(update.field_path, None)
         else:

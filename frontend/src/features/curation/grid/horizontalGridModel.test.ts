@@ -322,8 +322,8 @@ describe('buildHorizontalGridModel', () => {
         order: 1,
         value,
         readOnly: true,
-        groupKey: 'evidence',
-        groupLabel: 'Evidence and rationale',
+        groupKey: 'rationale',
+        groupLabel: 'Rationale',
       }),
     ]
     const recorded = candidate({

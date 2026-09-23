@@ -4014,7 +4014,7 @@
           "type": "string"
         },
         {
-          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA rationale update must be a non-empty string of at most 300 characters; it\nreplaces the stored reason and cannot clear it.",
+          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA `rationale` update must be non-empty and at most 300 characters; it cannot\nbe cleared.",
           "name": "updates",
           "required": true,
           "type": "array"

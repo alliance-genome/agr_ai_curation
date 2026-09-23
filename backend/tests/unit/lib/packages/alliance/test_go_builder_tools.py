@@ -7,6 +7,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -397,6 +398,17 @@ def test_go_builder_rejects_evidence_less_finalization():
     }
 
 
+def test_go_builder_rejects_finalization_without_rationale():
+    candidate = _candidate()
+    del candidate.staged_fields["payload"]["rationale"]
+    result = _materialize(candidate)
+
+    assert not result.ok
+    assert {
+        (issue["field_path"], issue["reason"]) for issue in result.issues
+    } == {("payload.rationale", "missing_rationale")}
+
+
 def test_go_builder_rejects_excluded_section_only_evidence():
     candidate = _candidate()
     evidence = {**_evidence(), "section": "Discussion"}
@@ -621,7 +633,7 @@ def test_go_stage_stores_stripped_rationale_at_the_cap(active_go_builder_context
 @pytest.mark.parametrize(
     ("value", "message"),
     [
-        (None, "rationale patch value must be a string"),
+        (None, "rationale must be a non-empty string"),
         ("", "rationale must be non-empty"),
         ("  ", "rationale must be non-empty"),
         ("z" * 301, "shorten it to at most 300 characters"),
@@ -639,7 +651,10 @@ def test_go_patch_cannot_clear_or_overfill_rationale(
     )
 
     assert result.status == "error"
-    assert any(message in issue["message"] for issue in result.data["validation_issues"])
+    assert result.data["validation_issues"] == [
+        {"field_path": "rationale", "reason": "invalid_rationale", "message": mock.ANY}
+    ]
+    assert message in result.data["validation_issues"][0]["message"]
     payload = workspace.get_candidate(candidate_id).staged_fields["payload"]
     assert payload["rationale"] == "The IPI assay binds Cttn directly, not a complex partner."
 
@@ -652,7 +667,10 @@ def test_go_stage_tool_schema_carries_the_shared_rationale_description():
     patch_updates = go_builder_tools.patch_go_recommendation.params_json_schema[
         "properties"
     ]["updates"]
-    assert "cannot clear it" in patch_updates["description"]
+    assert (
+        "A `rationale` update must be non-empty and at most 300 characters; it cannot "
+        "be cleared." in " ".join(patch_updates["description"].split())
+    )
 
 
 def test_go_builder_requires_explicit_blocker_for_unresolved_identity():
