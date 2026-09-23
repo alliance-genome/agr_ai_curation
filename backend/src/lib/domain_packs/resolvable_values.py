@@ -549,8 +549,17 @@ def _overrule_identity(value: MutableMapping[str, Any], identity_keys: Sequence[
             value[key] = None
 
 
-def copy_resolution(source: Mapping[str, Any], target: MutableMapping[str, Any]) -> None:
-    """Give a mirror copy its source value's state, outcome and validator text."""
+def copy_resolution(
+    source: Mapping[str, Any],
+    target: MutableMapping[str, Any],
+    *,
+    identity_keys: Sequence[str] = (),
+) -> None:
+    """Give a mirror copy its source value's state, outcome and validator text.
+
+    ``identity_keys`` are the mirror's own declared identity keys; the
+    source's own keys are added to them.
+    """
 
     if source.get(RESOLUTION_STATE_KEY) == RESOLVED:
         target[RESOLUTION_STATE_KEY] = RESOLVED
@@ -566,14 +575,17 @@ def copy_resolution(source: Mapping[str, Any], target: MutableMapping[str, Any])
             source[LOOKUP_OUTCOME_KEY],
             explanation=source.get(VALIDATOR_EXPLANATION_KEY),
             curator_message=source.get(VALIDATOR_CURATOR_MESSAGE_KEY),
-            # The mirror holds the source's own keys (never its proposals).
-            identity_keys=tuple(dict.fromkeys(
-                key.removeprefix(OVERRULED_KEY_PREFIX)
-                for key in source
-                if isinstance(key, str)
-                and key not in CONTRACT_KEYS
-                and not key.startswith(_EXTRACTOR_PROPOSAL_PREFIX)
-            )),
+            # The mirror's declared keys plus the source's own keys (never its proposals).
+            identity_keys=tuple(dict.fromkeys([
+                *identity_keys,
+                *(
+                    key.removeprefix(OVERRULED_KEY_PREFIX)
+                    for key in source
+                    if isinstance(key, str)
+                    and key not in CONTRACT_KEYS
+                    and not key.startswith(_EXTRACTOR_PROPOSAL_PREFIX)
+                ),
+            ])),
         )
 
 

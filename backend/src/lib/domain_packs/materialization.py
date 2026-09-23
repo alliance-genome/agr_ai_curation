@@ -68,6 +68,7 @@ from src.lib.domain_packs.resolvable_values import (
     OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
     VALIDATOR_MATERIALIZATION_METADATA_KEY,
     ResolvableSpec,
+    ResolvableValueError,
     copy_resolution,
     declared_resolvable_fields,
     declared_spec_for,
@@ -422,68 +423,28 @@ def materialize_validator_results_into_envelope(
     }
 
     for item in items:
-        target_type = (
-            item.match.object_envelope.object_type if item.match.object_envelope is not None else None
-        )
-        (
-            working_envelope,
-            patch_problem,
-        ) = _patch_target_object_from_resolved_values(
-            working_envelope,
-            item,
-            object_definitions=object_definitions,
-            source_envelope_revision=source_envelope_revision,
-            resolvable_fields=resolvable_fields_by_type.get(target_type or "", {}),
-        )
-        if patch_problem is not None:
-            findings.append(
-                _finding_for_materialization_problem(
-                    item,
-                    patch_problem,
-                    source_envelope_revision=source_envelope_revision,
-                )
-            )
-            continue
-
-        new_objects, materialization_problem = _materialized_objects_for_result(
-            working_envelope,
-            item,
-            object_definitions=object_definitions,
-            object_role_key=object_role_key,
-            source_envelope_revision=source_envelope_revision,
-        )
-        if materialization_problem is None:
-            working_envelope, linked_objects = _append_materialized_objects(
+        try:
+            working_envelope, item_findings, linked_objects = _materialize_one_result(
                 working_envelope,
                 item,
-                new_objects,
-            )
-            materialized_objects.extend(linked_objects)
-            validator_finding = _finding_for_validator_result(
-                item,
+                object_definitions=object_definitions,
+                object_role_key=object_role_key,
                 source_envelope_revision=source_envelope_revision,
+                resolvable_fields_by_type=resolvable_fields_by_type,
             )
-            findings.append(validator_finding)
-            findings.extend(
-                _field_findings_for_expected_result_fields(
-                    working_envelope,
+        except ResolvableValueError as exc:
+            # One value that cannot be written never aborts the run or loses the
+            # other results: it becomes this item's finding, nothing is written.
+            item_findings = [
+                _finding_for_materialization_problem(
                     item,
-                    validator_finding=validator_finding,
-                    object_definitions=object_definitions,
-                    materialized_objects=new_objects,
+                    f"A validated value could not be written: {exc}",
                     source_envelope_revision=source_envelope_revision,
-                    resolvable_fields_by_type=resolvable_fields_by_type,
                 )
-            )
-            continue
-
-        findings.append(
-            _finding_for_materialization_problem(
-                item,
-                materialization_problem,
-                source_envelope_revision=source_envelope_revision,
-            )
-        )
+            ]
+            linked_objects = ()
+        findings.extend(item_findings)
+        materialized_objects.extend(linked_objects)
 
     from .validation_findings import append_validation_findings_to_envelope
 
@@ -497,6 +458,82 @@ def materialize_validator_results_into_envelope(
         appended_findings=appended_findings,
         materialized_objects=tuple(materialized_objects),
     )
+
+
+def _materialize_one_result(
+    working_envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    object_role_key: str,
+    source_envelope_revision: int | None,
+    resolvable_fields_by_type: Mapping[str, Mapping[str, ResolvableSpec]],
+) -> tuple[DomainEnvelope, list[ValidationFinding], tuple[CuratableObjectEnvelope, ...]]:
+    """One validator result's write-back, findings and linked reference objects."""
+
+    findings: list[ValidationFinding] = []
+    target_type = (
+        item.match.object_envelope.object_type if item.match.object_envelope is not None else None
+    )
+    (
+        working_envelope,
+        patch_problem,
+    ) = _patch_target_object_from_resolved_values(
+        working_envelope,
+        item,
+        object_definitions=object_definitions,
+        source_envelope_revision=source_envelope_revision,
+        resolvable_fields=resolvable_fields_by_type.get(target_type or "", {}),
+    )
+    if patch_problem is not None:
+        findings.append(
+            _finding_for_materialization_problem(
+                item,
+                patch_problem,
+                source_envelope_revision=source_envelope_revision,
+            )
+        )
+        return working_envelope, findings, ()
+
+    new_objects, materialization_problem = _materialized_objects_for_result(
+        working_envelope,
+        item,
+        object_definitions=object_definitions,
+        object_role_key=object_role_key,
+        source_envelope_revision=source_envelope_revision,
+    )
+    if materialization_problem is None:
+        working_envelope, linked_objects = _append_materialized_objects(
+            working_envelope,
+            item,
+            new_objects,
+        )
+        validator_finding = _finding_for_validator_result(
+            item,
+            source_envelope_revision=source_envelope_revision,
+        )
+        findings.append(validator_finding)
+        findings.extend(
+            _field_findings_for_expected_result_fields(
+                working_envelope,
+                item,
+                validator_finding=validator_finding,
+                object_definitions=object_definitions,
+                materialized_objects=new_objects,
+                source_envelope_revision=source_envelope_revision,
+                resolvable_fields_by_type=resolvable_fields_by_type,
+            )
+        )
+        return working_envelope, findings, tuple(linked_objects)
+
+    findings.append(
+        _finding_for_materialization_problem(
+            item,
+            materialization_problem,
+            source_envelope_revision=source_envelope_revision,
+        )
+    )
+    return working_envelope, findings, ()
 
 
 def _patch_target_object_from_resolved_values(
@@ -1562,7 +1599,15 @@ def _propagate_materialized_resolution_state(
         )
         if mirror_container_path is None:
             continue
-        copy_resolution(source, _payload_container(payload, mirror_container_path))
+        mirror_spec = declared_spec_for(
+            resolvable_fields or {},
+            parse_field_path(mirror_container_path) if mirror_container_path else (),
+        )
+        copy_resolution(
+            source,
+            _payload_container(payload, mirror_container_path),
+            identity_keys=mirror_spec.identity_keys if mirror_spec is not None else (),
+        )
 
 
 def _append_materialized_objects(

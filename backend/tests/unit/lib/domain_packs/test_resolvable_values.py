@@ -1317,3 +1317,65 @@ def test_a_partial_or_policy_rejected_result_never_touches_a_resolved_value():
         envelope, metadata, [partial]).envelope.extracted_objects[0].payload
 
     assert payload["site"] == _validated_gene_site()
+
+
+# --- M2: one value that cannot be written never aborts the run ------------------
+
+
+def test_a_value_that_cannot_be_written_becomes_a_finding_and_the_rest_are_written():
+    metadata = _metadata()
+    envelope = DomainEnvelope(
+        envelope_id="two-objects", domain_pack_id="fixture.resolvable",
+        extracted_objects=[
+            CuratableObjectEnvelope(object_type="Observation", pending_ref_id="broken",
+                                    # A blank paper wording breaks the contract on any write.
+                                    payload={"site": {"mention": "  ", "curie": None, "name": None,
+                                                      "resolution_state": "unresolved",
+                                                      "lookup_outcome": "not_validated"}}),
+            CuratableObjectEnvelope(object_type="Observation", pending_ref_id="fine",
+                                    payload={"site": _staged_site()}),
+        ],
+    )
+    registry = DomainPackValidationRegistry.from_domain_pack(LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    ))
+    items = []
+    for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE]):
+        request = build_domain_validation_request(match).request
+        result = DomainValidatorResultBase.model_validate({
+            "status": "unresolved", "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
+            "target": request.target, "resolved_values": {}, "resolved_objects": [],
+            "missing_expected_fields": [], "candidates": [],
+            "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 0,
+                                 "outcome": "not_found"}],
+            "curator_message": None, "explanation": "e",
+        })
+        items.append(ValidatorResultMaterializationInput(match=match, request=request, result=result))
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, items)
+
+    broken, fine = result.envelope.extracted_objects
+    assert broken.payload == envelope.extracted_objects[0].payload
+    assert fine.payload["site"]["lookup_outcome"] == OUTCOME_NOT_FOUND
+    problem = [finding for finding in result.appended_findings
+               if finding.code == "domain_pack.validator_materialization_invalid"]
+    assert len(problem) == 1
+    assert "could not be written" in problem[0].details["materialization_error"]
+
+
+def test_a_resolved_mirror_of_a_never_resolved_source_is_overruled_with_its_own_keys():
+    metadata = _metadata(mirror=True)
+    source = {"mention": "skin", "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_VALIDATED,
+              "validator_explanation": NOT_VALIDATED_EXPLANATION}
+    envelope = _envelope({"site": source, "copy": _validated_gene_site()})
+
+    result = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="not_found")],
+    )
+
+    copy = result.envelope.extracted_objects[0].payload["copy"]
+    assert (copy["lookup_outcome"], copy["curie"], copy["overruled_curie"]) == (OUTCOME_NOT_FOUND, None, "G:1")
+    assert not any(finding.code == "domain_pack.validator_materialization_invalid"
+                   for finding in result.appended_findings)
