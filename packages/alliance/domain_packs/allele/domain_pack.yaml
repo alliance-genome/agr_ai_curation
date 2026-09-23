@@ -260,7 +260,7 @@ object_definitions:
               range: InformationContentEntity
       - field_path: mention
         field_type: string
-        display_name: Allele (paper wording)
+        display_name: Allele paper/evidence association (paper wording)
         description: The allele mention exactly as written in the paper; not a validated allele. The source AlleleMention stays linked through the association's object refs.
         required: true
         metadata:
@@ -268,28 +268,28 @@ object_definitions:
           curator_action_note: Paper wording is the source evidence anchor, not a normalized edit target.
       - field_path: resolution_state
         field_type: enum
-        display_name: Allele (status)
+        display_name: Allele paper/evidence association (status)
         description: Resolved only when the allele validator confirmed this allele; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
       - field_path: lookup_outcome
         field_type: enum
-        display_name: Allele (lookup result)
+        display_name: Allele paper/evidence association (lookup result)
         description: What the allele lookup found; not validated yet until the validator runs.
         enum_ref: LookupOutcome
         metadata:
           protected: true
       - field_path: validator_explanation
         field_type: string
-        display_name: Allele (validator explanation)
+        display_name: Allele paper/evidence association (validator explanation)
         description: The allele validator's own explanation of its result.
         metadata:
           protected: true
           hide_when_empty: true
       - field_path: validator_curator_message
         field_type: string
-        display_name: Allele (validator message)
+        display_name: Allele paper/evidence association (validator message)
         description: The allele validator's message for curators, kept apart from its explanation.
         metadata:
           protected: true
@@ -494,7 +494,7 @@ object_definitions:
         display_name: First source mention
       - field_path: allele
         field_type: object
-        display_name: Validated allele
+        display_name: Allele
         description: The allele this mention names. The builder stages it unresolved with the mention text as its paper wording; only the allele validator fills its ID, symbol and taxon and marks it resolved.
         metadata:
           display:

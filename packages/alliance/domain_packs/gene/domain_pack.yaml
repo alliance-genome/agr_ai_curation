@@ -264,7 +264,7 @@ object_definitions:
     fields:
       - field_path: mention
         field_type: string
-        display_name: Gene (paper wording)
+        display_name: Gene mention (paper wording)
         description: Gene mention exactly as written in the paper. It is the extracted wording, not a validated gene.
         required: true
         metadata:
@@ -327,28 +327,28 @@ object_definitions:
               range: NCBITaxonTerm
       - field_path: resolution_state
         field_type: enum
-        display_name: Gene (status)
+        display_name: Gene mention (status)
         description: Resolved only when the gene lookup validator confirmed the gene ID, symbol and taxon; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
       - field_path: lookup_outcome
         field_type: enum
-        display_name: Gene (lookup result)
+        display_name: Gene mention (lookup result)
         description: What the gene lookup found; not validated yet until the validator runs.
         enum_ref: LookupOutcome
         metadata:
           protected: true
       - field_path: validator_explanation
         field_type: string
-        display_name: Gene (validator explanation)
+        display_name: Gene mention (validator explanation)
         description: The gene validator's own explanation of its result.
         metadata:
           protected: true
           hide_when_empty: true
       - field_path: validator_curator_message
         field_type: string
-        display_name: Gene (validator message)
+        display_name: Gene mention (validator message)
         description: The gene validator's message for curators, kept apart from its explanation.
         metadata:
           protected: true

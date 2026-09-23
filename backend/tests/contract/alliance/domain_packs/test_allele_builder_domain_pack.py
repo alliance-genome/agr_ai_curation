@@ -913,3 +913,38 @@ def test_stored_association_before_the_contract_reads_as_legacy_unverified():
     assert effective["allele_label"] is None
     assert effective["mention"] == "unc-54(e190) (legacy, unverified)"
     assert "alliance.allele.allele_unresolved" in _blocker_codes(legacy)
+    # The review row never shows the stored label as a validated allele.
+    assert _association_label(legacy) == "unc-54(e190) (legacy, unverified)"
+
+
+def test_allele_leaf_columns_match_the_shared_resolvable_headers():
+    from src.lib.flows.export_fields import _pack_export_fields
+
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    entries = [
+        entry
+        for entry in _pack_export_fields(pack)
+        if entry["object_type"] in {ALLELE_ASSOCIATION_OBJECT_TYPE, ALLELE_MENTION_OBJECT_TYPE}
+        and "payload_path" in entry
+    ]
+    display_names = {
+        (obj.object_type, field.field_path): field.display_name
+        for obj in pack.metadata.object_definitions
+        for field in obj.fields
+    }
+    labels = {(entry["object_type"], entry["payload_path"]): entry["label"] for entry in entries}
+
+    for object_type, prefix, parent in (
+        (ALLELE_ASSOCIATION_OBJECT_TYPE, "", "Allele paper/evidence association"),
+        (ALLELE_MENTION_OBJECT_TYPE, "allele.", "Allele"),
+    ):
+        for key, suffix in (
+            ("mention", "(paper wording)"),
+            ("resolution_state", "(status)"),
+            ("lookup_outcome", "(lookup result)"),
+            ("validator_explanation", "(validator explanation)"),
+            ("validator_curator_message", "(validator message)"),
+        ):
+            header = f"{parent} {suffix}"
+            assert labels[(object_type, f"{prefix}{key}")] == header
+            assert display_names[(object_type, f"{prefix}{key}")] == header

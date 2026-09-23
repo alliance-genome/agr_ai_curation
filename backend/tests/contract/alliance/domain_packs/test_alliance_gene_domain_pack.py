@@ -521,11 +521,25 @@ def test_gene_export_reads_a_legacy_record_as_unverified_unless_a_validator_wrot
     assert validated["primary_external_id"] == "WB:WBGene00000912"
 
 
-def test_gene_pack_leaf_columns_read_as_the_gene_value():
-    labels = {field.field_path: field.display_name for field in _gene_object_definition().fields}
+def test_gene_pack_leaf_columns_match_the_shared_resolvable_headers():
+    from src.lib.flows.export_fields import _pack_export_fields
 
-    assert labels["mention"] == "Gene (paper wording)"
-    assert labels["resolution_state"] == "Gene (status)"
-    assert labels["lookup_outcome"] == "Gene (lookup result)"
-    assert labels["validator_explanation"] == "Gene (validator explanation)"
-    assert labels["validator_curator_message"] == "Gene (validator message)"
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    labels = {
+        entry["payload_path"]: entry["label"]
+        for entry in _pack_export_fields(pack)
+        if entry["object_type"] == GENE_MENTION_EVIDENCE_OBJECT_TYPE
+    }
+    display_names = {field.field_path: field.display_name for field in _gene_object_definition().fields}
+
+    expected = {
+        "mention": "Gene mention (paper wording)",
+        "resolution_state": "Gene mention (status)",
+        "lookup_outcome": "Gene mention (lookup result)",
+        "validator_explanation": "Gene mention (validator explanation)",
+        "validator_curator_message": "Gene mention (validator message)",
+    }
+    for path, header in expected.items():
+        assert labels[path] == header
+        # The review screen's field name is the same column header.
+        assert display_names[path] == header
