@@ -180,7 +180,8 @@ def compile_profile_validation(
             object_type="generic_object", display_name=contract.name,
             fields=fields, metadata={"generic_profile_ref": profile.receipt,
                 "workspace_display": {"groups": [{"id": "profile", "label": contract.name,
-                    "fields": ["attributes." + field.key for field in contract.fields]}]}},
+                    "fields": ["attributes." + field.key for field in contract.fields]},
+                    {"id": "rationale", "label": "Rationale", "fields": ["rationale"]}]}},
         )],
         "enum_definitions": enums,
         "model_definitions": [], "schema_refs": [], "fixture_packs": [],
@@ -299,7 +300,10 @@ def profile_validation_attachment_metadata(context: ProfileValidationContext) ->
 
 def _profile_fields(profile_fields: list[ProfileField], fanout_paths: set[str]):
     fields = [DomainPackFieldDefinition(field_path="semantic_class", field_type=DomainPackFieldType.STRING, required=True),
-              DomainPackFieldDefinition(field_path="attributes", field_type=DomainPackFieldType.OBJECT, required=True)]
+              DomainPackFieldDefinition(field_path="attributes", field_type=DomainPackFieldType.OBJECT, required=True),
+              # Optional so records staged before the builder required a rationale still load.
+              DomainPackFieldDefinition(field_path="rationale", field_type=DomainPackFieldType.STRING,
+                                        display_name="Rationale", required=False)]
     enums = []
 
     def visit(field: ProfileField, prefix: str):

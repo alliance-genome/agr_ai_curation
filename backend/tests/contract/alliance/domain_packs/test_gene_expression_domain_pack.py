@@ -343,9 +343,18 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
                     "data_provider.abbreviation",
                 ],
             },
+            {
+                "id": "rationale",
+                "label": "Rationale",
+                "fields": ["rationale"],
+            },
         ],
     }
     fields_by_path = {field.field_path: field for field in curatable_unit.fields}
+    assert fields_by_path["rationale"].field_type is DomainPackFieldType.STRING
+    assert fields_by_path["rationale"].display_name == "Rationale"
+    # Optional on read: annotations stored before the builder required a rationale still load.
+    assert fields_by_path["rationale"].required is False
     assert fields_by_path["relation.vocabulary"].field_type is (
         DomainPackFieldType.STRING
     )
@@ -2600,6 +2609,7 @@ def _gene_expression_builder_staged_fields(**overrides: Any) -> dict[str, Any]:
         "object_type": GENE_EXPRESSION_OBJECT_TYPE,
         "pending_ref_id": "gene-expression-annotation-pef-1",
         "where_expressed_statement": "PEF-1::GFP expression in the cilium",
+        "rationale": "Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         "relation": {"name": "is_expressed_in"},
         "when_expressed_stage_name": "L2 larva",
         "expression_annotation_subject": {

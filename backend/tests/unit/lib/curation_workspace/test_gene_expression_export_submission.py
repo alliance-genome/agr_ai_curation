@@ -308,6 +308,37 @@ def test_gene_expression_export_maps_tmem67_fixture_to_target_db_shape():
     assert annotation["export_diagnostics"]["warnings"] == []
 
 
+def test_gene_expression_annotation_stored_without_rationale_is_export_ready():
+    candidate = _candidate_from_fixture()
+    assert "rationale" not in candidate["payload"]
+
+    assert not GeneExpressionExportAdapter().domain_envelope_readiness_blockers(
+        candidate=candidate,
+    )
+    payload = GeneExpressionExportAdapter().build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key=GENE_EXPRESSION_TARGET_KEY,
+        payload_context=_payload_context(candidate),
+    )
+    assert payload.payload_json["gene_expression_annotations"][0]["target_rows"]
+
+
+def test_gene_expression_rationale_is_audit_context_not_a_target_row_column():
+    candidate = copy.deepcopy(_candidate_from_fixture())
+    candidate["payload"]["rationale"] = "Whole-mount in situ signal is confined to the metanephros."
+
+    payload = GeneExpressionExportAdapter().build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key=GENE_EXPRESSION_TARGET_KEY,
+        payload_context=_payload_context(candidate),
+    )
+
+    annotation = payload.payload_json["gene_expression_annotations"][0]
+    assert annotation["source_payload"]["rationale"] == candidate["payload"]["rationale"]
+    assert "rationale" not in repr(annotation["target_rows"]).lower()
+    assert candidate["payload"]["rationale"] not in repr(annotation["target_rows"])
+
+
 def test_gene_expression_export_preserves_specimen_genomic_model_as_warning():
     candidate = copy.deepcopy(_candidate_from_fixture())
     candidate["payload"]["expression_experiment"]["specimen_genomic_model"] = {
