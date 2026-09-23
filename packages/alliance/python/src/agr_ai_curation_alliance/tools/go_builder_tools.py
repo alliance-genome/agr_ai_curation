@@ -50,6 +50,7 @@ from .agr_curation import (
     _search_builder_candidates,
 )
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import document_rationale_arg, normalize_rationale
 
 
 _GO_PATCH_FIELD_PATHS = frozenset(
@@ -138,7 +139,6 @@ class GOStageInput(_StrictToolModel):
         "evidence_code",
         "evidence_eco_curie",
         "reference_curie",
-        "rationale",
         "existing_annotation_status",
     )
     @classmethod
@@ -147,6 +147,11 @@ class GOStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("value must be non-empty")
         return cleaned
+
+    @field_validator("rationale")
+    @classmethod
+    def _rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
     @field_validator(
         "evidence_record_ids",
@@ -216,6 +221,14 @@ class GOPatchUpdateInput(_StrictToolModel):
                 f"field_path must be one of {sorted(_GO_PATCH_FIELD_PATHS)}"
             )
         return cleaned
+
+    @model_validator(mode="after")
+    def _validate_rationale_value(self) -> "GOPatchUpdateInput":
+        if self.field_path == "rationale":
+            if not isinstance(self.value, str):
+                raise ValueError("rationale patch value must be a string")
+            self.value = normalize_rationale(self.value)
+        return self
 
 
 class GOPatchInput(_StrictToolModel):
@@ -510,6 +523,7 @@ def _ground_payload(
     return refs, requirements, issues
 
 
+@document_rationale_arg
 def _stage_go_recommendation_impl(
     pending_ref_id: str,
     gene_product_mention: str,
@@ -645,6 +659,15 @@ def _patch_go_recommendation_impl(
     candidate_id: str,
     updates: List[Mapping[str, Any]],
 ) -> AgrQueryResult:
+    """Correct allowed fields on one staged GO recommendation.
+
+    Args:
+        candidate_id: The staged candidate to correct.
+        updates: Field corrections, each with field_path and value (or evidence_record_ids).
+            A rationale update must be a non-empty string of at most 300 characters; it
+            replaces the stored reason and cannot clear it.
+    """
+
     attempted_query = _attempt_query(
         "patch_go_recommendation",
         candidate_id=candidate_id,

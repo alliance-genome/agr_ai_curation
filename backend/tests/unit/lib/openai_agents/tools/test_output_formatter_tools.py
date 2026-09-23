@@ -1413,3 +1413,62 @@ async def test_finalize_rejects_literal_only_files_without_saved_rows():
     assert result["status"] == "invalid"
     assert "literal-only files" in result["errors"][0]
     assert saved == []
+
+
+@pytest.mark.asyncio
+async def test_chat_capabilities_route_explanations_to_stored_rationale_and_sections_to_group_by():
+    async def _deliver(*_args, **_kwargs):
+        return {}
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="chat",
+        formatter_agent_id="chat_output_formatter",
+        deliver_chat_output=_deliver,
+    )
+
+    capabilities = await _invoke(_tool_by_name(tools, "explain_formatter_capabilities"))
+    chat_rules = capabilities["format_rules"]
+    assert "never table rows or explanations" in chat_rules
+    assert "object.payload.rationale" in chat_rules
+    assert "formatter_cannot_complete naming it" in chat_rules
+    assert "group_by splits rows into headed groups" in chat_rules
+    assert "different columns are not supported" in chat_rules
+
+
+def test_chat_group_by_renders_separate_sections_with_the_stored_rationale():
+    from src.lib.flows.output_projection import FlowOutputProjectionPlan, apply_projection_plan
+
+    step = _completed_gene_step()
+    objects = step["candidate"].payload_json["extracted_objects"]
+    objects[0]["payload"]["rationale"] = "Loss of BRCA1 abolished the repair phenotype."
+    objects[1]["payload"]["rationale"] = "Only TP53 knockdown changed the reporter."
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Formatter Tool Flow",
+        flow_run_id="flow-run-1",
+        document_id="doc-1",
+        output_format="chat",
+    )
+    plan = FlowOutputProjectionPlan.model_validate(
+        {
+            "format": "chat",
+            "row_source": "object",
+            "columns": [
+                {"key": "symbol", "header": "Gene", "field_ref": "object.payload.symbol"},
+                {"key": "why", "header": "Rationale", "field_ref": "object.payload.rationale"},
+            ],
+            "group_by": ["object.status"],
+            "missing_value": "Not recorded",
+        }
+    )
+
+    result = apply_projection_plan(bundle, plan)
+
+    assert result.chat_output is not None
+    sections = result.chat_output.split("## ")[1:]
+    assert len(sections) == 2
+    rendered = result.chat_output
+    assert "| BRCA1 | Loss of BRCA1 abolished the repair phenotype. |" in rendered
+    assert "| TP53 | Only TP53 knockdown changed the reporter. |" in rendered
+    assert "| MAPK | Not recorded |" in rendered
