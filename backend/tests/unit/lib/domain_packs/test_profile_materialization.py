@@ -519,3 +519,15 @@ def test_resolved_result_without_its_identity_stays_unresolved(example):
     gene = output.envelope.extracted_objects[0].payload["attributes"]["gene"]
     assert (gene["gene_id"], gene["resolution_state"], gene["lookup_outcome"]) == (
         None, "unresolved", "missing_expected_result_field")
+
+
+def test_profile_write_back_is_the_coverage_the_legacy_rule_reads(example):
+    """ALL-1302 with core (h): the audit event profile write-back records covers the value it wrote."""
+
+    from src.lib.domain_packs.resolvable_values import validator_event_covers
+
+    source, context = resolvable(example)
+    output = materialize_profile_validator_results(source, context, results(source, context, [{"identifier": "EX:1"}]))
+    metadata = output.envelope.extracted_objects[0].metadata
+    assert validator_event_covers(metadata, "attributes.gene")
+    assert not validator_event_covers(metadata, "attributes.other")

@@ -505,3 +505,11 @@ def test_overlay_declares_a_resolvable_values_paper_wording_and_resolution_leave
     assert legacy["attributes"]["gene"]["lookup_outcome"] == "legacy_unverified"
     assert legacy["attributes"]["gene"]["gene_id"] is None
     assert display_text(legacy["attributes"]["gene"], fields["attributes.gene"].metadata["display"]) == "UNRESOLVED"
+    # A profile validator write-back recorded on the object counts as validator coverage (core h).
+    covered = effective_payload(
+        {"attributes": {"gene": {"mention": "daf-16", "gene_id": "EX:1"}}}, specs,
+        object_metadata={"profile_validator_materialization": [{"field_paths": ["attributes.gene.gene_id"]}]},
+    )
+    assert (covered["attributes"]["gene"]["resolution_state"], covered["attributes"]["gene"]["gene_id"]) == (
+        "resolved", "EX:1")
+    assert display_text(covered["attributes"]["gene"], fields["attributes.gene"].metadata["display"]) == "EX:1"
