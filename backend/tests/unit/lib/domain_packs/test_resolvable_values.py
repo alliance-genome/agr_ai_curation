@@ -1469,5 +1469,16 @@ def test_mark_resolved_clears_identity_keys_the_validator_did_not_supply():
              "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_VALIDATED}
     mark_resolved(value, {"curie": "ONT:1"}, explanation="Matched by CURIE.", identity_keys=TERM_KEYS)
     assert (value["curie"], value["name"]) == ("ONT:1", None)
-    assert "proposed_curie" not in value and "overruled_curie" not in value
+    assert "overruled_curie" not in value
+    # The extractor's own proposal is a validator input and survives resolution.
+    assert value["proposed_curie"] == "ONT:9"
     assert value["mention"] == "hypodermal cells"
+
+
+
+def test_a_resolved_cell_never_shows_proposals_or_overruled_identities():
+    from src.lib.flows.value_display import display_text
+
+    value = {"abbreviation": "XP", "proposed_abbreviation": "Example Provider", "overruled_abbreviation": "YP",
+             "mention": "Example Provider", "resolution_state": RESOLVED, "lookup_outcome": OUTCOME_MATCHED}
+    assert display_text(value) == "abbreviation: XP"

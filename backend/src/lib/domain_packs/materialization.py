@@ -1068,7 +1068,8 @@ def _with_unresolved_values(
 
     The state, lookup outcome and the validator's own words change; a value
     that read as resolved (e.g. a builder's deterministic lookup) keeps its
-    identity only as ``proposed_*`` hints (the validator is the authority).
+    identity only as informational ``overruled_*`` keys (a decisive outcome;
+    the validator is the authority).
     ``mention`` is untouched, and plain fields keep whatever the extractor staged.
     """
 

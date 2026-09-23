@@ -53,6 +53,7 @@ from typing import Any
 
 from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS,
+    EXTRACTOR_PROPOSAL_PREFIX,
     UNRESOLVED_DISPLAY,
     has_resolution_state,
     is_resolved,
@@ -316,8 +317,11 @@ def _resolvable_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None) -
     if label or identifier:
         return _labeled(label, identifier, False)
     # Undeclared identity keys: show the validated content, never the paper wording.
+    # Neither the extractor's proposals nor an overruled identity is the value.
     identity = {
-        key: item for key, item in without_overruled(value).items() if key not in CONTRACT_KEYS
+        key: item
+        for key, item in without_overruled(value).items()
+        if key not in CONTRACT_KEYS and not str(key).startswith(EXTRACTOR_PROPOSAL_PREFIX)
     }
     return _pairs_text(identity, frozenset(), False)
 

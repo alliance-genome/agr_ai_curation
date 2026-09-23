@@ -152,7 +152,7 @@ RESOLUTION_STATE_LABELS: dict[str, str] = {RESOLVED: "Resolved", UNRESOLVED: "Un
 # these keys: informational only (never the value, never exported, never a
 # validator input). ``proposed_*`` stays the extractor's own proposal.
 OVERRULED_KEY_PREFIX = "overruled_"
-_EXTRACTOR_PROPOSAL_PREFIX = "proposed_"
+EXTRACTOR_PROPOSAL_PREFIX = "proposed_"
 
 NOT_VALIDATED_EXPLANATION = "Not validated yet."
 LEGACY_EXPLANATION = "Recorded before validation tracking; not verified."
@@ -458,9 +458,9 @@ def mark_resolved(
     ``mention`` is untouched. ``explanation`` and ``curator_message`` come from
     the validator result and are stored apart, never merged. Any of the
     value's ``identity_keys`` the validator did not supply is cleared, so no
-    stale label (or other key) sits beside the new identity; the extractor's
-    proposals for those keys (``proposed_<key>``) and any overruled identity
-    are dropped too.
+    stale label (or other key) sits beside the new identity, and any
+    overruled identity is dropped. The extractor's own proposals
+    (``proposed_*``) are validator inputs and are always kept.
     """
 
     if not identity or all(_is_empty(item) for item in identity.values()):
@@ -468,9 +468,6 @@ def mark_resolved(
     for key in identity_keys:
         if key not in identity and key in value:
             value[key] = None
-        value.pop(f"{_EXTRACTOR_PROPOSAL_PREFIX}{key}", None)
-    for key in identity:
-        value.pop(f"{_EXTRACTOR_PROPOSAL_PREFIX}{key}", None)
     value.update(identity)
     _drop_overruled(value)
     value[RESOLUTION_STATE_KEY] = RESOLVED
@@ -594,7 +591,7 @@ def copy_resolution(
                     for key in source
                     if isinstance(key, str)
                     and key not in CONTRACT_KEYS
-                    and not key.startswith(_EXTRACTOR_PROPOSAL_PREFIX)
+                    and not key.startswith(EXTRACTOR_PROPOSAL_PREFIX)
                 ),
             ])),
         )
@@ -1219,6 +1216,7 @@ def unresolved_header_text(
 
 __all__ = [
     "CONTRACT_KEYS",
+    "EXTRACTOR_PROPOSAL_PREFIX",
     "DECISIVE_OUTCOMES",
     "INVALID_RECORD_EXPLANATION",
     "INVALID_RECORD_SUFFIX",
