@@ -665,8 +665,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          protected: true
-          curator_action_note: Edit the subject identifier or label to override the subject check; the subject type is set by that check.
+          editable: true
+          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the subject check set it.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2025,8 +2025,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          protected: true
-          curator_action_note: Edit the subject identifier or label to override the subject check; the subject type is set by that check.
+          editable: true
+          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the subject check set it.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -3376,8 +3376,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          protected: true
-          curator_action_note: Edit the subject identifier or label to override the subject check; the subject type is set by that check.
+          editable: true
+          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the subject check set it.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -4729,8 +4729,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          protected: true
-          curator_action_note: Edit the subject identifier or label to override the subject check; the subject type is set by that check.
+          editable: true
+          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the subject check set it.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
