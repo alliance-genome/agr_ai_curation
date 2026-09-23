@@ -9,10 +9,6 @@ from typing import Any, Mapping
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.capabilities import object_capabilities
 from src.lib.domain_packs.resolvable_values import (
-    LOOKUP_OUTCOME_KEY,
-    LOOKUP_OUTCOMES,
-    RESOLUTION_STATE_KEY,
-    RESOLUTION_STATES,
     ResolvableSpec,
     resolvable_spec_from_display,
 )
@@ -24,7 +20,6 @@ from src.lib.domain_packs.validation_registry import (
 from src.schemas.domain_pack_metadata import (
     DomainPackActiveValidatorBinding,
     DomainPackEnumDefinition,
-    DomainPackEnumValue,
     DomainPackValidatorGroupScope,
     DomainPackFieldType,
     DomainPackFieldDefinition,
@@ -43,14 +38,6 @@ from agr_ai_curation_alliance.domain_packs.loader import load_alliance_domain_pa
 
 from .constants import GENERIC_DOMAIN_PACK_ID, GENERIC_PROXY_PREFIX
 from .values import EVIDENCE_SOURCE_FIELDS, builder_owned_keys
-
-
-# Generated-view enums for the vocabulary leaves of proxied resolvable values;
-# their values are the shared controlled vocabularies.
-_VOCABULARY_ENUMS = {
-    RESOLUTION_STATE_KEY: ("GenericResolutionState", "Resolution state", RESOLUTION_STATES),
-    LOOKUP_OUTCOME_KEY: ("GenericLookupOutcome", "Lookup outcome", LOOKUP_OUTCOMES),
-}
 
 
 @dataclass(frozen=True)
@@ -228,6 +215,7 @@ def load_generic_class_catalog() -> GenericClassCatalog:
     generated_objects: list[DomainPackObjectDefinition] = []
     active_bindings: list[DomainPackActiveValidatorBinding] = []
     under_dev_bindings: list[DomainPackUnderDevelopmentValidatorBinding] = []
+    proxied_enums: dict[str, DomainPackEnumDefinition] = {}
 
     for object_definition in generic_pack.metadata.object_definitions:
         entry = _entry_from_object_definition(
@@ -257,7 +245,12 @@ def load_generic_class_catalog() -> GenericClassCatalog:
             )
             entries.append(entry)
             generated_objects.append(
-                _proxy_object_definition(object_definition, entry=entry)
+                _proxy_object_definition(
+                    object_definition,
+                    entry=entry,
+                    source_pack=source_pack,
+                    proxied_enums=proxied_enums,
+                )
             )
             for binding in registry.bindings:
                 if not _binding_applies_to_object(
@@ -278,7 +271,7 @@ def load_generic_class_catalog() -> GenericClassCatalog:
             "object_definitions": generated_objects,
             "enum_definitions": [
                 *generic_pack.metadata.enum_definitions,
-                *_vocabulary_enum_definitions(generated_objects),
+                *proxied_enums.values(),
             ],
             "metadata": {
                 **generic_pack.metadata.metadata,
@@ -491,6 +484,8 @@ def _proxy_object_definition(
     object_definition: DomainPackObjectDefinition,
     *,
     entry: GenericClassCatalogEntry,
+    source_pack: LoadedDomainPack,
+    proxied_enums: dict[str, DomainPackEnumDefinition],
 ) -> DomainPackObjectDefinition:
     metadata = {
         **object_definition.metadata,
@@ -508,7 +503,9 @@ def _proxy_object_definition(
             "model_ref": None,
             "fields": [
                 _proxy_field_definition(
-                    field_definition, resolvable_fields=entry.resolvable_fields
+                    field_definition,
+                    source_pack=source_pack,
+                    proxied_enums=proxied_enums,
                 )
                 for field_definition in object_definition.fields
             ],
@@ -521,7 +518,8 @@ def _proxy_object_definition(
 def _proxy_field_definition(
     field_definition: DomainPackFieldDefinition,
     *,
-    resolvable_fields: Mapping[str, ResolvableSpec],
+    source_pack: LoadedDomainPack,
+    proxied_enums: dict[str, DomainPackEnumDefinition],
 ) -> DomainPackFieldDefinition:
     source_refs: dict[str, str] = {}
     updates: dict[str, Any] = {}
@@ -533,10 +531,15 @@ def _proxy_field_definition(
             continue
         source_refs[ref_field] = value
         updates[ref_field] = None
-    vocabulary_enum = _vocabulary_enum_id(field_definition.field_path, resolvable_fields)
+    vocabulary_enum = _resolvable_vocabulary_enum(field_definition, source_pack)
     if vocabulary_enum is not None:
-        # A resolvable value's state and lookup outcome stay controlled vocabularies.
-        updates["enum_ref"] = vocabulary_enum
+        # A resolvable value's resolution_state / lookup_outcome stays a closed
+        # vocabulary (ALL-1283), under a proxied enum id.
+        proxied_id = _proxy_enum_id(source_pack.pack_id, vocabulary_enum.enum_id)
+        proxied_enums.setdefault(
+            proxied_id, vocabulary_enum.model_copy(update={"enum_id": proxied_id}, deep=True)
+        )
+        updates["enum_ref"] = proxied_id
     elif field_definition.field_type is DomainPackFieldType.ENUM:
         updates["field_type"] = DomainPackFieldType.STRING
     if source_refs:
@@ -545,33 +548,37 @@ def _proxy_field_definition(
     return field_definition.model_copy(update=updates, deep=True)
 
 
-def _vocabulary_enum_id(
-    field_path: str,
-    resolvable_fields: Mapping[str, ResolvableSpec],
-) -> str | None:
-    parent_path, _, key = field_path.rpartition(".")
-    if key not in _VOCABULARY_ENUMS or parent_path not in resolvable_fields:
+def _resolvable_vocabulary_enum(
+    field_definition: DomainPackFieldDefinition,
+    source_pack: LoadedDomainPack,
+) -> DomainPackEnumDefinition | None:
+    """The source enum of a resolvable value's resolution_state or lookup_outcome leaf."""
+
+    from src.lib.domain_packs.resolvable_values import (
+        LOOKUP_OUTCOME_KEY,
+        LOOKUP_OUTCOMES,
+        RESOLUTION_STATE_KEY,
+        RESOLUTION_STATES,
+    )
+
+    if field_definition.field_type is not DomainPackFieldType.ENUM or field_definition.enum_ref is None:
         return None
-    return _VOCABULARY_ENUMS[key][0]
+    vocabulary = {RESOLUTION_STATE_KEY: RESOLUTION_STATES, LOOKUP_OUTCOME_KEY: LOOKUP_OUTCOMES}.get(
+        field_definition.field_path.rpartition(".")[2]
+    )
+    if vocabulary is None:
+        return None
+    enum = next(
+        (item for item in source_pack.metadata.enum_definitions if item.enum_id == field_definition.enum_ref),
+        None,
+    )
+    if enum is None or [value.value for value in enum.values] != list(vocabulary):
+        return None
+    return enum
 
 
-def _vocabulary_enum_definitions(
-    object_definitions: list[DomainPackObjectDefinition],
-) -> list[DomainPackEnumDefinition]:
-    used = {
-        field_definition.enum_ref
-        for object_definition in object_definitions
-        for field_definition in object_definition.fields
-    }
-    return [
-        DomainPackEnumDefinition(
-            enum_id=enum_id,
-            display_name=display_name,
-            values=[DomainPackEnumValue(value=value) for value in values],
-        )
-        for enum_id, display_name, values in _VOCABULARY_ENUMS.values()
-        if enum_id in used
-    ]
+def _proxy_enum_id(source_domain_pack_id: str, enum_id: str) -> str:
+    return f"{GENERIC_PROXY_PREFIX}__{_safe_key(source_domain_pack_id)}__{_safe_key(enum_id)}"
 
 
 def _proxy_active_binding(

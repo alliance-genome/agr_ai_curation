@@ -65,15 +65,28 @@ def _field_label(field: Any) -> str:
     return field.display_name or field.field_path.replace("_", " ")
 
 
-def _resolvable_leaf_key(field: Any, by_path: dict[str, Any], models: dict, object_models: dict) -> tuple[Any, str, str] | None:
-    """(parent field, leaf key, mention key) when ``field`` is a resolvable value's own leaf."""
+def _resolvable_leaf_key(
+    field: Any, obj: Any, by_path: dict[str, Any], models: dict, object_models: dict,
+) -> tuple[str, str, str] | None:
+    """(parent label, leaf key, mention key) when ``field`` is a resolvable value's own leaf.
+
+    The parent is the declared field above it, or the object root (a top-level
+    leaf) when the object's model declares the root resolvable.
+    """
 
     parent_path, _, key = field.field_path.rpartition(".")
-    parent = by_path.get(parent_path)
-    parent_display = _declared_display(parent, models, object_models) if parent is not None else None
+    if parent_path:
+        parent = by_path.get(parent_path)
+        if parent is None:
+            return None
+        parent_display, parent_label = _declared_display(parent, models, object_models), _field_label(parent)
+    else:
+        model = models.get(obj.model_ref) if obj.model_ref else None
+        parent_display = model.metadata.get("display") if model is not None else None
+        parent_label = obj.display_name
     if not parent_display or not parent_display.get("mention"):
         return None
-    return parent, key, str(parent_display["mention"])
+    return parent_label, key, str(parent_display["mention"])
 
 
 def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
@@ -94,10 +107,10 @@ def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
             label = _field_label(field)
             # A resolvable value's paper wording, status, lookup result and
             # validator explanation are their own columns (ALL-1283).
-            leaf = _resolvable_leaf_key(field, by_path, models, object_models)
+            leaf = _resolvable_leaf_key(field, obj, by_path, models, object_models)
             if leaf is not None:
-                parent, key, mention_key = leaf
-                label = resolvable_leaf_header(_field_label(parent), key, mention_key=mention_key) or label
+                parent_label, key, mention_key = leaf
+                label = resolvable_leaf_header(parent_label, key, mention_key=mention_key) or label
             entry = {
                 "ref": f"object.pack.{obj.object_type}.{field.field_path}",
                 "label": label,
@@ -168,24 +181,16 @@ class PackagedExportSource:
         return _declared_display(field, self._models, self._object_models)
 
     def _resolvable_fields(self) -> dict[str, dict[str, Any]]:  # {object_type: {path: ResolvableSpec}}
-        """Declared resolvable values per object type: {field path ("" = root): spec}."""
+        """Declared resolvable values per object type ("" is the object root)."""
 
-        from src.lib.domain_packs.resolvable_values import resolvable_spec_from_display
+        from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
 
-        fields: dict[str, dict[str, Any]] = {}
-        for obj in self.domain_pack.metadata.object_definitions:
-            specs = {}
-            model = self._models.get(obj.model_ref) if obj.model_ref else None
-            root = resolvable_spec_from_display(model.metadata.get("display") if model is not None else None)
-            if root is not None:
-                specs[""] = root
-            for field in obj.fields:
-                spec = resolvable_spec_from_display(self._field_display(field))
-                if spec is not None:
-                    specs[field.field_path] = spec
-            if specs:
-                fields[obj.object_type] = specs
-        return fields
+        metadata = self.domain_pack.metadata
+        return {
+            obj.object_type: specs
+            for obj in metadata.object_definitions
+            if (specs := declared_resolvable_fields(metadata, obj.object_type))
+        }
 
     def effective_item(self, item: dict) -> dict:
         """An object row's item with the read-time resolution state of its declared values.
@@ -244,7 +249,7 @@ class PackagedExportSource:
                 if display is not None:
                     specs[ref] = self._resolved(display, field.field_path, by_path)
                     continue
-                leaf = _resolvable_leaf_key(field, by_path, self._models, self._object_models)
+                leaf = _resolvable_leaf_key(field, obj, by_path, self._models, self._object_models)
                 if leaf is not None and leaf[1] in LEAF_VALUE_LABELS:
                     # A resolvable value's status and lookup result read in plain words.
                     specs[ref] = {"value_labels": dict(LEAF_VALUE_LABELS[leaf[1]])}

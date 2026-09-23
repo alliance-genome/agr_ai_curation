@@ -10,6 +10,7 @@ from pydantic import (
     Field,
     StrictStr,
     field_validator,
+    model_validator,
 )
 
 DomainValidatorStatus = Literal["resolved", "unresolved"]
@@ -174,6 +175,53 @@ class ValidatorLookupAttempt(DomainValidatorBaseModel):
     )
 
 
+class ValidatorFieldResolution(DomainValidatorBaseModel):
+    """A composite validator's decision for one of the values it validated.
+
+    Keyed in ``DomainValidatorResultBase.field_resolutions`` by an
+    expected-result field or by the payload path of the resolvable value the
+    decision covers (ALL-1299). ``lookup_outcome`` is a value of the shared
+    ``LookupOutcome`` vocabulary: ``matched`` exactly when resolved.
+    """
+
+    status: DomainValidatorStatus = Field(description="Decision for this value")
+    resolved_values: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Resolved values for this value, keyed by binding expected-result field",
+    )
+    lookup_outcome: StrictStr = Field(description="Lookup outcome for this value")
+    explanation: Optional[StrictStr] = Field(
+        default=None, description="Validator explanation for this value",
+    )
+    curator_message: Optional[StrictStr] = Field(
+        default=None, description="Curator-facing message for this value",
+    )
+
+    @model_validator(mode="after")
+    def _validate_outcome(self) -> "ValidatorFieldResolution":
+        from src.lib.domain_packs.resolvable_values import (
+            LOOKUP_OUTCOMES,
+            OUTCOME_MATCHED,
+            STORED_UNRESOLVED_OUTCOMES,
+        )
+
+        if self.lookup_outcome not in LOOKUP_OUTCOMES:
+            raise ValueError(
+                f"lookup_outcome must be one of {LOOKUP_OUTCOMES}, got {self.lookup_outcome!r}"
+            )
+        if self.status == "resolved" and self.lookup_outcome != OUTCOME_MATCHED:
+            raise ValueError("a resolved field resolution has lookup_outcome 'matched'")
+        if self.status == "unresolved":
+            if self.lookup_outcome not in STORED_UNRESOLVED_OUTCOMES:
+                raise ValueError(
+                    "an unresolved field resolution has a lookup_outcome in "
+                    f"{STORED_UNRESOLVED_OUTCOMES}, got {self.lookup_outcome!r}"
+                )
+            if self.resolved_values:
+                raise ValueError("an unresolved field resolution carries no resolved_values")
+        return self
+
+
 class DomainValidatorResultBase(DomainValidatorBaseModel):
     """Dispatcher-required base shape for agent-backed domain validators."""
 
@@ -210,6 +258,13 @@ class DomainValidatorResultBase(DomainValidatorBaseModel):
     )
     explanation: StrictStr = Field(
         description="Validator reasoning and decision explanation"
+    )
+    field_resolutions: dict[str, ValidatorFieldResolution] = Field(
+        default_factory=dict,
+        description=(
+            "Per-value decisions of a composite validator, keyed by expected-result "
+            "field or resolvable-value payload path; values not listed are not written"
+        ),
     )
 
     @field_validator("status", mode="before")

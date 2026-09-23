@@ -14,7 +14,7 @@ import yaml
 
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
-from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOMES, RESOLUTION_STATES, ResolvableSpec
+from src.lib.domain_packs.resolvable_values import ResolvableSpec
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
@@ -59,7 +59,6 @@ from agr_ai_curation_alliance.domain_packs.generic import (  # noqa: E402
 from agr_ai_curation_alliance.domain_packs.generic.catalog import (  # noqa: E402
     _binding_applies_to_object,
     _proxy_field_definition,
-    _vocabulary_enum_definitions,
 )
 from agr_ai_curation_alliance.domain_packs.generic import conversion as generic_conversion  # noqa: E402
 from agr_ai_curation_alliance.tools import generic_builder_tools  # noqa: E402
@@ -275,10 +274,64 @@ def test_proxy_field_definition_strips_unproxied_field_validator_metadata():
         },
     )
 
-    proxy_field = _proxy_field_definition(field_definition, resolvable_fields={})
+    proxy_field = _proxy_field_definition(field_definition, source_pack=_source_pack(), proxied_enums={})
 
     assert "validator_bindings" not in proxy_field.metadata
     assert proxy_field.metadata["display"] == {"label": "symbol"}
+
+
+def _source_pack(enum_definitions=()):
+    from src.lib.domain_packs.registry import LoadedDomainPack
+    from src.schemas.domain_pack_metadata import DomainPackMetadata
+
+    metadata = DomainPackMetadata(
+        pack_id="fixture.source", display_name="Source", version="0.1.0", metadata_api_version="1.0.0",
+        enum_definitions=list(enum_definitions),
+    )
+    return LoadedDomainPack(
+        pack_id="fixture.source", display_name="Source", version="0.1.0",
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    )
+
+
+def test_proxy_keeps_resolvable_vocabulary_enums_and_flattens_other_enums():
+    """ALL-1283: resolution_state / lookup_outcome stay closed vocabularies in the generic view."""
+
+    from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOMES
+    from src.schemas.domain_pack_metadata import DomainPackEnumDefinition
+
+    outcome_enum = DomainPackEnumDefinition(
+        enum_id="LookupOutcome", display_name="Lookup outcome",
+        values=[{"value": value} for value in LOOKUP_OUTCOMES],
+    )
+    other_enum = DomainPackEnumDefinition(enum_id="Color", display_name="Color", values=[{"value": "red"}])
+    source_pack = _source_pack([outcome_enum, other_enum])
+    proxied: dict = {}
+
+    outcome = _proxy_field_definition(
+        DomainPackFieldDefinition(field_path="term.lookup_outcome", field_type=DomainPackFieldType.ENUM,
+                                  enum_ref="LookupOutcome"),
+        source_pack=source_pack, proxied_enums=proxied,
+    )
+    color = _proxy_field_definition(
+        DomainPackFieldDefinition(field_path="color", field_type=DomainPackFieldType.ENUM, enum_ref="Color"),
+        source_pack=source_pack, proxied_enums=proxied,
+    )
+
+    assert outcome.field_type is DomainPackFieldType.ENUM
+    assert outcome.enum_ref in proxied
+    assert [value.value for value in proxied[outcome.enum_ref].values] == list(LOOKUP_OUTCOMES)
+    assert (color.field_type, color.enum_ref) == (DomainPackFieldType.STRING, None)
+    assert list(proxied) == [outcome.enum_ref]
+
+
+def test_generated_generic_pack_carries_proxied_vocabulary_enums():
+    pack = get_generated_generic_domain_pack()
+    enum_ids = {enum.enum_id for enum in pack.metadata.enum_definitions}
+    for obj in pack.metadata.object_definitions:
+        for field in obj.fields:
+            if field.enum_ref is not None:
+                assert field.enum_ref in enum_ids
 
 
 def test_generated_generic_validator_dispatch_builds_source_validator_request():
@@ -1229,31 +1282,3 @@ def test_generic_staged_paper_wording_materializes_unresolved_not_validated(
         code["resolution_state"] == "unresolved" and code["curie"] is None for code in payload["codes"]
     )
 
-
-def test_generic_proxy_keeps_resolvable_vocabulary_leaves_as_controlled_enums():
-    spec = {"anatomy": ResolvableSpec(id_key="curie", label_key="name"), "": ResolvableSpec(id_key="curie")}
-    leaves = [
-        DomainPackFieldDefinition(field_path="anatomy.lookup_outcome", field_type=DomainPackFieldType.ENUM,
-                                  enum_ref="SourceLookupOutcome"),
-        DomainPackFieldDefinition(field_path="resolution_state", field_type=DomainPackFieldType.ENUM,
-                                  enum_ref="SourceResolutionState"),
-        DomainPackFieldDefinition(field_path="confidence", field_type=DomainPackFieldType.ENUM,
-                                  enum_ref="SourceConfidence"),
-    ]
-
-    proxied = [_proxy_field_definition(leaf, resolvable_fields=spec) for leaf in leaves]
-
-    assert [(field.field_type, field.enum_ref) for field in proxied] == [
-        (DomainPackFieldType.ENUM, "GenericLookupOutcome"),
-        (DomainPackFieldType.ENUM, "GenericResolutionState"),
-        (DomainPackFieldType.STRING, None),
-    ]
-    object_definition = DomainPackObjectDefinition(
-        object_type="proxy__fixture", display_name="Fixture", fields=proxied,
-    )
-    enums = {enum.enum_id: [value.value for value in enum.values]
-             for enum in _vocabulary_enum_definitions([object_definition])}
-    assert enums == {
-        "GenericResolutionState": list(RESOLUTION_STATES),
-        "GenericLookupOutcome": list(LOOKUP_OUTCOMES),
-    }
