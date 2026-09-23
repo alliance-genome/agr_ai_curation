@@ -25,6 +25,7 @@ def _configure_agent_studio_chat(monkeypatch, *, scenarios, tool_result=None, st
 
     monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
+    monkeypatch.setattr(api_module, "_load_agent_studio_system_prompt_template", lambda: "system prompt template")
     monkeypatch.setattr(
         api_module,
         "_get_all_opus_tools",
