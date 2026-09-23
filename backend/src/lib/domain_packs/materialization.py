@@ -2731,8 +2731,9 @@ class _ReviewValueReader:
         key such as a taxon) shows that key when the value is resolved and
         UNRESOLVED otherwise. A field that is one of the value's own leaves
         (paper wording, status, lookup result, validator text) shows that
-        leaf in plain words. Paper wording and ``proposed_<key>`` hints never
-        fill a validated value's text.
+        leaf in plain words. Paper wording, the extractor's ``proposed_*``
+        keys and a validator's ``overruled_*`` keys never fill a validated
+        value's text.
         """
 
         from src.lib.flows.value_display import display_text

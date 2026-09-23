@@ -15,8 +15,11 @@ const CONTRACT_KEYS = new Set([
   'validator_curator_message',
 ])
 
-// Keeps an identity a validator overruled (resolvable_values.PROPOSED_KEY_PREFIX).
-const PROPOSED_KEY_PREFIX = 'proposed_'
+// A validator's overruled identity (resolvable_values.OVERRULED_KEY_PREFIX):
+// informational only, never displayed. The extractor's own proposal
+// (proposed_*) is never read as the validated value either.
+const OVERRULED_KEY_PREFIX = 'overruled_'
+const EXTRACTOR_PROPOSAL_PREFIX = 'proposed_'
 
 // These readings follow the backend display rules (src/lib/flows/value_display.py)
 // for values that reach the grid without a backend reading, such as curator edits.
@@ -78,13 +81,17 @@ function formatRecord(value: Record<string, unknown>): string | null {
       return identity
     }
     // Undeclared identity keys: show the validated content, never the paper
-    // wording or the proposed_<key> hints an overruled identity leaves behind.
+    // wording or the extractor's proposal.
     return pairsText(value, Object.keys(value).filter(
-      (key) => !CONTRACT_KEYS.has(key) && !key.startsWith(PROPOSED_KEY_PREFIX),
+      (key) => !CONTRACT_KEYS.has(key)
+        && !key.startsWith(OVERRULED_KEY_PREFIX)
+        && !key.startsWith(EXTRACTOR_PROPOSAL_PREFIX),
     ))
   }
 
-  const presentKeys = Object.keys(value).filter((key) => !isEmpty(value[key]))
+  const presentKeys = Object.keys(value).filter(
+    (key) => !isEmpty(value[key]) && !key.startsWith(OVERRULED_KEY_PREFIX),
+  )
   const termKeys = new Set<string>([...LABEL_KEYS, ...ID_KEYS])
   if (
     presentKeys.length > 0

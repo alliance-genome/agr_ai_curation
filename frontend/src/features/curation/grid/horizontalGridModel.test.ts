@@ -1333,7 +1333,8 @@ describe('buildHorizontalGridModel', () => {
           value: {
             mention: 'gut lining',
             curie: null,
-            proposed_curie: 'ONT:1',
+            overruled_curie: 'ONT:1',
+            proposed_curie: 'ONT:2',
             resolution_state: 'unresolved',
             lookup_outcome: 'rejected_candidates',
           },
@@ -1345,10 +1346,17 @@ describe('buildHorizontalGridModel', () => {
           value: {
             abbreviation: 'XB',
             proposed_abbreviation: 'YB',
+            overruled_abbreviation: 'ZB',
             mention: 'Xenbase',
             resolution_state: 'resolved',
             lookup_outcome: 'matched',
           },
+        }),
+        draftField({
+          fieldKey: 'record',
+          label: 'Record',
+          order: 7,
+          value: { relation: 'has_condition', overruled_curie: 'ONT:3' },
         }),
         draftField({
           fieldKey: 'provider_ref',
@@ -1373,9 +1381,11 @@ describe('buildHorizontalGridModel', () => {
       'abbreviation: XB; tags: a, b | abbreviation: YB',
       'one; two',
       'abbreviation: XB',
-      // A validator's overruled identity survives only as a hint, never as the value.
+      // Neither a validator's overruled identity nor the extractor's proposal
+      // ever reads as the value.
       'UNRESOLVED',
       'abbreviation: XB',
+      'relation: has_condition',
     ])
   })
 

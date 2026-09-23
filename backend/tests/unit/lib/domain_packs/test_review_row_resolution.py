@@ -11,6 +11,7 @@ from src.lib.domain_packs.resolvable_values import (
     NOT_VALIDATED_EXPLANATION,
     UNRESOLVED_DISPLAY,
     VALIDATOR_MATERIALIZATION_METADATA_KEY,
+    mark_unresolved,
     resolved_value,
     unresolved_value,
 )
@@ -425,25 +426,30 @@ def test_validated_keys_read_like_the_identity():
     assert _workspace_field(resolved, "symbol").resolution.values[0].display_text == "abc-1 (GENE:1)"
 
 
-def test_a_demoted_value_never_shows_its_hints_as_the_value():
-    # A validator overruled a builder-resolved value: its identity is kept only as hints.
-    site = unresolved_value(
-        "gut lining",
-        identity_keys=TERM_KEYS,
-        outcome="rejected_candidates",
+def test_an_overruled_value_never_shows_its_old_identity_or_proposal_as_the_value():
+    # A validator overruled a builder-resolved value: the old identity is kept
+    # only under overruled_* keys; proposed_* is the extractor's own proposal.
+    site = resolved_value("gut lining", {"curie": "ONT:0000101", "name": "gut"}, proposed_curie="ONT:0000102")
+    mark_unresolved(
+        site,
+        "rejected_candidates",
         explanation="The lookup matched a different tissue.",
-        proposed_curie="ONT:0000101",
-        proposed_name="gut",
+        identity_keys=TERM_KEYS,
     )
+    assert site["overruled_curie"] == "ONT:0000101"
     row = _row({"site": site})
 
     whole = _summary_field(row, "site").resolution
     assert whole.display_text == UNRESOLVED_DISPLAY
-    assert whole.values[0].display_text == UNRESOLVED_DISPLAY
+    [value] = whole.values
+    assert value.display_text == UNRESOLVED_DISPLAY
+    assert value.lookup_result == "Candidates rejected"
     for path in ("site.curie", "site.name"):
         assert _workspace_field(row, path).resolution.display_text == UNRESOLVED_DISPLAY
-    # The hint is its own labelled field, never a reading of the value.
-    hint = _workspace_field(row, "site.proposed_curie")
-    assert hint.value == "ONT:0000101"
-    assert hint.resolution is None
+    # The extractor's proposal is its own labelled field, never a reading of the value.
+    proposal = _workspace_field(row, "site.proposed_curie")
+    assert proposal.value == "ONT:0000102"
+    assert proposal.resolution is None
+    readings = [whole.display_text, *(item.display_text for item in whole.values)]
+    assert not any("ONT:0000101" in text or "ONT:0000102" in text for text in readings)
     assert "ONT:0000101" not in row.display_label
