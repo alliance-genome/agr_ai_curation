@@ -55,6 +55,9 @@ def _usage_status(declared: Any, usage: Mapping[str, Any]) -> str:
     if declared == "recorded" and observed != "recorded":
         # Usage the span recorded but the observation does not hold is not zero.
         return "inconsistent"
+    if declared != "recorded" and (observed != "missing" or usage["total_cost_decimal"] is not None):
+        # A span without usable usage whose observation holds usage or cost.
+        return "inconsistent"
     return declared
 
 
@@ -220,8 +223,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         "missing_run_calls": sum(not e["run_id"] for e in events),
         "unpriced_calls": unpriced,
         "missing_usage_calls": sum(e["usage"]["usage_status"] == "missing" for e in events),
-        **{status + "_usage_calls": sum(e["usage_status"] == status for e in events) for status in USAGE_STATUSES},
-        "usage_complete": all(e["usage_status"] == "recorded" for e in events),
+        "inconsistent_usage_calls": sum(e["usage_status"] == "inconsistent" for e in events),
         "unknown_agent_calls": sum(not e["agent_id"] for e in events),
         "unknown_paper_calls": sum(e["paper_category"] == "unknown" for e in events),
         "measured_cost": str(measured),
@@ -234,6 +236,10 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         "currency": "USD",
         **{key: sum(e["usage"][key] for e in events) for key in TOKEN_FIELDS},
         "trace_references": sorted({str(e["trace_id"]) + "/" + str(e["span_id"]) for e in events}),
+        # Appended so existing CSV column positions are unchanged.
+        **{status + "_usage_calls": sum(e["usage_status"] == status for e in events)
+           for status in USAGE_STATUSES if status != "inconsistent"},
+        "usage_complete": all(e["usage_status"] == "recorded" for e in events),
     }
 
 

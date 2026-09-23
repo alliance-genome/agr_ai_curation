@@ -297,3 +297,35 @@ def test_model_request_id_deduplicates_attempts_without_provider_response_id():
     assert report["duplicate_observations"] == 1
     assert report["totals"]["calls"] == 2
     assert report["totals"]["cancelled_usage_calls"] == 2
+
+
+def test_declared_usage_less_status_with_retained_usage_is_inconsistent():
+    """A span that declares no usable usage while its observation holds usage
+    or cost contradicts itself; it is reported inconsistent, not as declared."""
+    failed = attempt("failed-with-usage", "failed", .25, attempt_outcome="error")
+    omitted = attempt("omitted-with-usage", "provider_omitted")
+    cost_only = attempt("cancelled-with-cost", "cancelled", .1, usage=False)
+    cost_only["internalModelId"] = "fixture-model"
+    report = build_report([{"observations": [failed, omitted, cost_only]}], start=START, end=END)
+    events = {e["span_id"]: e for e in report["events"]}
+    assert {k: e["usage_status"] for k, e in events.items()} == {
+        "failed-with-usage": "inconsistent", "omitted-with-usage": "inconsistent",
+        "cancelled-with-cost": "inconsistent",
+    }
+    assert events["failed-with-usage"]["usage_status_declared"] == "failed"
+    assert report["totals"]["inconsistent_usage_calls"] == 3
+    assert report["totals"]["failed_usage_calls"] == report["totals"]["provider_omitted_usage_calls"] == 0
+    assert report["totals"]["usage_complete"] is False
+
+
+def test_csv_keeps_existing_column_order_and_appends_status_columns():
+    header = report_csv(build_report(status_fixture(), start=START, end=END)).splitlines()[0].split(",")
+    assert header[:14] == [
+        "agent_id", "agent_name", "calls", "known_runs", "known_papers", "missing_run_calls",
+        "unpriced_calls", "missing_usage_calls", "inconsistent_usage_calls",
+        "unknown_agent_calls", "unknown_paper_calls", "measured_cost", "estimated_cost",
+        "estimated_cost_upper",
+    ]
+    tail = header[header.index("trace_references") + 1:header.index("start")]
+    assert tail == ["recorded_usage_calls", "provider_omitted_usage_calls", "failed_usage_calls",
+                    "cancelled_usage_calls", "missing_status_unknown_usage_calls", "usage_complete"]

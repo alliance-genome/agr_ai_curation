@@ -99,14 +99,21 @@ ALL-1288 the span's `cost_context.usage_status` says why usage is absent (see
 | `usage_status` | Meaning in the report |
 | --- | --- |
 | `recorded` | usage retained on the observation |
-| `inconsistent` | impossible token buckets, or the span declared `recorded` but the retained observation holds no usage |
+| `inconsistent` | impossible token buckets, or the declared status contradicts the retained observation: `recorded` without usage, or `provider_omitted`/`failed`/`cancelled`/`inconsistent` with usage or cost |
 | `provider_omitted` | terminal provider response without usage |
 | `failed` | the attempt errored before usage was returned |
 | `cancelled` | the stream ended before the provider's terminal event |
 | `missing_status_unknown` | older span without a declared status and without usage; the cause was not recorded |
 
-Older spans without a declared status keep the observed classification
-(`recorded`, `inconsistent` or `missing_status_unknown`). `missing_usage_calls`
+Spans before ALL-1288 already emitted `usage_status` as `recorded`,
+`inconsistent` or `missing`. Their `recorded` and `inconsistent` values are read
+as declared statuses and checked against the retained observation like new
+ones; only `missing` or an absent status becomes `missing_status_unknown` (when
+the observation holds usage, the observed `recorded`/`inconsistent` applies).
+Historical spans that declared `recorded` but whose usage was evicted from the
+span are therefore now `inconsistent`, so historical `inconsistent_usage_calls`
+can be higher than in earlier reports. The new status columns are appended after
+the existing CSV columns. `missing_usage_calls`
 still counts observations without usage. `usage_complete` is true only when every
 call is `recorded`; token totals are sums over retained usage, never zero-filled
 for other calls. Calls without usage stay unpriced and are never estimated, so
