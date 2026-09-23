@@ -798,3 +798,73 @@ def test_a_contract_value_still_needs_non_empty_paper_wording():
     with pytest.raises(ResolvableValueError, match="paper wording"):
         check_resolvable_value({"curie": None, "mention": "  ", "resolution_state": "unresolved",
                                 "lookup_outcome": "not_found"}, identity_keys=TERM_KEYS)
+
+
+# --- Validator-filled keys beyond id/label (``validated``) ----------------------
+
+GENE_DISPLAY = {"label": "gene_symbol", "id": "primary_external_id", "mention": "mention", "validated": ["taxon"]}
+
+
+def test_validated_keys_are_part_of_the_identity():
+    spec = resolvable_spec_from_display(GENE_DISPLAY)
+    assert spec.validated_keys == ("taxon",)
+    assert spec.identity_keys == ("primary_external_id", "gene_symbol", "taxon")
+
+    staged = unresolved_value("unc-54", identity_keys=spec.identity_keys)
+    assert staged["taxon"] is None
+    # An unresolved value never carries a validator-filled taxon.
+    with pytest.raises(ResolvableValueError, match="taxon"):
+        check_resolvable_value({**staged, "taxon": "NCBITaxon:6239"}, identity_keys=spec.identity_keys)
+    mark_resolved(staged, {"primary_external_id": "G:1", "gene_symbol": "unc-54", "taxon": "NCBITaxon:6239"},
+                  explanation=None)
+    check_resolvable_value(staged, identity_keys=spec.identity_keys)
+
+
+def test_the_legacy_rule_empties_validated_keys_and_the_cell_stays_label_and_id():
+    from src.lib.flows.value_display import display_text
+
+    spec = resolvable_spec_from_display(GENE_DISPLAY)
+    legacy = {"gene_symbol": "unc-54", "primary_external_id": "G:1", "taxon": "NCBITaxon:6239"}
+    effective = effective_value(legacy, spec, covered_by_validator=False)
+    assert (effective["gene_symbol"], effective["primary_external_id"], effective["taxon"]) == (None, None, None)
+    covered = effective_value(legacy, spec, covered_by_validator=True)
+    assert covered["taxon"] == "NCBITaxon:6239"
+    assert display_text(covered, GENE_DISPLAY) == "unc-54 (G:1)"
+    # A resolved value missing its taxon still reads resolved: the identity is present.
+    resolved = resolved_value("unc-54", {"gene_symbol": "unc-54", "primary_external_id": "G:1", "taxon": None})
+    assert display_text(resolved, GENE_DISPLAY) == "unc-54 (G:1)"
+
+
+def test_validated_must_be_declared_leaves_of_a_resolvable_value():
+    from src.schemas.domain_pack_metadata import DomainPackModelDefinition
+
+    DomainPackFieldDefinition(field_path="gene", metadata={"display": GENE_DISPLAY})
+    for bad in (["taxon", "taxon"], ["gene_symbol"], ["organism.taxon"], [], "taxon"):
+        with pytest.raises(ValueError, match="validated"):
+            DomainPackFieldDefinition(field_path="gene", metadata={"display": {**GENE_DISPLAY, "validated": bad}})
+    with pytest.raises(ValueError, match="only for a resolvable value"):
+        DomainPackFieldDefinition(field_path="gene", metadata={"display": {"label": "name", "validated": ["taxon"]}})
+
+    def pack(root_fields, field_fields):
+        return DomainPackMetadata(
+            pack_id="fixture.validated", display_name="V", version="0.1.0", metadata_api_version="1.0.0",
+            model_definitions=[DomainPackModelDefinition(model_id="Gene", display_name="Gene",
+                                                         metadata={"display": GENE_DISPLAY})],
+            object_definitions=[DomainPackObjectDefinition(
+                object_type="GeneMention", display_name="Gene mention", model_ref="Gene",
+                fields=[
+                    *(DomainPackFieldDefinition(field_path=path, field_type=DomainPackFieldType.STRING)
+                      for path in root_fields),
+                    DomainPackFieldDefinition(field_path="allele", field_type=DomainPackFieldType.OBJECT,
+                                              metadata={"display": GENE_DISPLAY}),
+                    *(DomainPackFieldDefinition(field_path=path, field_type=DomainPackFieldType.STRING)
+                      for path in field_fields),
+                ],
+            )],
+        )
+
+    pack(["taxon"], ["allele.taxon"])
+    with pytest.raises(ValueError, match="validated key 'taxon' of '<object root>'"):
+        pack([], ["allele.taxon"])
+    with pytest.raises(ValueError, match="validated key 'taxon' of 'allele'"):
+        pack(["taxon"], [])

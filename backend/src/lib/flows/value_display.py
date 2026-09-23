@@ -13,6 +13,9 @@ model definition or a field (``metadata.display``):
   resolved value renders "label (id)"; an unresolved one renders the literal
   ``UNRESOLVED`` with neither label nor paper wording in the cell. The paper
   wording is its own field (``<field>.mention``), never part of this cell.
+  An optional ``validated: [<key>, ...]`` names further keys only a
+  validator fills (e.g. a taxon); they count as identity, and the cell still
+  reads "label (id)".
 - ``{compose: [<child path>, ...], separator: "; "}`` joins the display text of
   child values (each child carries its own resolved spec). An entry may be a
   mapping ``{path, display}``; one without a path reads the value itself with
@@ -52,6 +55,7 @@ from src.lib.domain_packs.resolvable_values import (
     UNRESOLVED_DISPLAY,
     holds_resolution,
     is_resolved,
+    resolvable_spec_from_display,
 )
 from src.schemas.domain_envelope import parse_field_path
 
@@ -291,8 +295,10 @@ def _resolvable_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None) -
     """
 
     # A declared resolvable value (mention role) is checked against its own id/label keys.
-    identity_keys = tuple(
-        str(spec[role]) for role in ("id", "label") if spec and spec.get("mention") and spec.get(role)
+    identity_keys = (
+        resolvable_spec_from_display(spec).identity_keys
+        if spec and spec.get("mention")
+        else ()
     )
     if not is_resolved(value, identity_keys=identity_keys):
         # Unresolved, stored before the contract, or a stored record that breaks it.

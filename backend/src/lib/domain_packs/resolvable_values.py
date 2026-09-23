@@ -213,6 +213,8 @@ class ResolvableSpec:
     id_key: str | None = None
     label_key: str | None = None
     mention_key: str = MENTION_KEY
+    # Further keys only a validator fills (e.g. a taxon); part of the identity.
+    validated_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not (self.id_key or self.label_key):
@@ -220,14 +222,17 @@ class ResolvableSpec:
 
     @property
     def identity_keys(self) -> tuple[str, ...]:
-        return tuple(key for key in (self.id_key, self.label_key) if key)
+        """Every key a validator supplies: id, label and the declared ``validated`` keys."""
+
+        return tuple(key for key in (self.id_key, self.label_key, *self.validated_keys) if key)
 
 
 def resolvable_spec_from_display(display: Mapping[str, Any] | None) -> ResolvableSpec | None:
     """The resolvable spec a pack display declaration names, or None.
 
     A display spec declares a resolvable value by naming a ``mention`` role
-    next to its ``label``/``id`` roles (``src.lib.flows.value_display``).
+    next to its ``label``/``id`` roles (``src.lib.flows.value_display``); an
+    optional ``validated`` list names further keys only a validator fills.
     """
 
     if not isinstance(display, Mapping) or not display.get("mention"):
@@ -236,6 +241,7 @@ def resolvable_spec_from_display(display: Mapping[str, Any] | None) -> Resolvabl
         id_key=display.get("id") or None,
         label_key=display.get("label") or None,
         mention_key=str(display["mention"]),
+        validated_keys=tuple(str(key) for key in display.get("validated") or ()),
     )
 
 
