@@ -493,3 +493,206 @@ async def test_list_and_search_pages_fit_and_continue(monkeypatch):
     keys = [(m["result_ref"], m["object_ref"], m["match_type"], m.get("field_path"),
              m.get("evidence_record_id")) for m in matches]
     assert len(keys) == len(set(keys))
+
+
+@pytest.mark.asyncio
+async def test_oversized_caller_filters_are_invalid_requests_not_budget_escapes(
+    monkeypatch, reported
+):
+    payload = _payload(3)
+    payload["validation_findings"] = [_finding(0)]
+    _install(monkeypatch, _Record(payload))
+    huge = "x" * 40_000
+
+    for kwargs in (
+        {"action": "validation", "object_type": huge},
+        {"action": "validation", "field_path": huge},
+        {"action": "validator_results", "status": huge},
+        {"action": "validator_results", "object_type": huge},
+        {"action": "validator_results", "field_path": huge},
+        {"action": "objects", "object_type": huge},
+        {"action": "objects", "fields": ["curie", huge]},
+        {"action": "field", "object_ref": "obj-0", "field_path": huge},
+        {"action": "validation", "finding_ref": huge},
+        {"action": "evidence", "object_ref": "obj-0", "detail_path": huge},
+    ):
+        response = await _call(result_ref=RESULT_REF, **kwargs)
+        assert response["error_code"] == "invalid_request", kwargs
+        assert huge[:1000] not in json.dumps(response), kwargs
+
+    many = [f"not_a_field_{index}" for index in range(200)]
+    rejected = await _call(action="objects", result_ref=RESULT_REF, fields=many)
+    assert rejected["error_code"] == "field_not_supervisor_visible"
+    assert rejected["requested_count"] == 200
+    assert 0 < len(rejected["requested"]) < 200
+    assert rejected["requested_omitted_count"] == 200 - len(rejected["requested"])
+    assert rejected["requested"][0] == "not_a_field_0"
+
+    # Caller errors are never reported as tool-result budget escapes.
+    assert reported == []
+
+
+@pytest.mark.asyncio
+async def test_fields_on_a_result_without_visible_objects_are_rejected(monkeypatch, reported):
+    _install(monkeypatch, _Record(_payload(0)))
+
+    response = await _call(
+        action="objects",
+        result_ref=RESULT_REF,
+        fields=[f"field_{index}_{'y' * 400}" for index in range(200)],
+    )
+
+    assert response["error_code"] == "field_not_supervisor_visible"
+    assert response["requested_count"] == 200
+    assert reported == []
+
+
+@pytest.mark.asyncio
+async def test_paging_arguments_are_rejected_where_the_view_does_not_page(monkeypatch):
+    payload = _payload(3)
+    payload["validation_findings"] = [
+        _finding(
+            1,
+            details={
+                "validation_result": {
+                    "status": "resolved",
+                    "request_id": "req-1",
+                    "target": {"object_type": "Assertion", "object_id": "obj-1"},
+                }
+            },
+        )
+    ]
+    _install(monkeypatch, _Record(payload))
+
+    for kwargs in (
+        {"action": "summary", "cursor": "1"},
+        {"action": "summary", "limit": 5},
+        {"action": "summary", "result_sha256": "abc"},
+        {"action": "object", "object_ref": "obj-0", "limit": 5},
+        {"action": "object", "object_ref": "obj-0", "cursor": "1"},
+        {"action": "validation", "finding_ref": "finding-index:0", "cursor": "1"},
+        {"action": "validation", "finding_ref": "finding-index:0", "result_sha256": "abc"},
+        {"action": "validator_results", "validator_result_key": "request:req-1", "limit": 2},
+        {"action": "validator_results", "validator_result_key": "request:req-1", "cursor": "1"},
+        {"action": "field", "object_ref": "obj-0", "field_path": "curie", "limit": 2},
+        {"action": "evidence", "object_ref": "obj-0", "detail_path": "0.verified_quote", "limit": 2},
+        {"action": "validation", "detail_path": "details"},
+        {"action": "validator_results", "detail_path": "status"},
+    ):
+        response = await _call(result_ref=RESULT_REF, **kwargs)
+        assert response["error_code"] == "invalid_request", kwargs
+
+    # Exact chunk reads still accept their continuation arguments.
+    chunk = await _call(
+        action="validation",
+        result_ref=RESULT_REF,
+        finding_ref="finding-index:0",
+        detail_path="message",
+        cursor="0",
+    )
+    assert chunk["status"] == "ok"
+    assert chunk["value"] == "Finding for object 1."
+
+
+@pytest.mark.asyncio
+async def test_non_ascii_digit_cursors_are_invalid_result_cursors(monkeypatch):
+    _install(monkeypatch, _Record(_payload(3)))
+
+    for cursor in ("²", "٣", "9" * 5000):
+        response = await _call(action="objects", result_ref=RESULT_REF, cursor=cursor)
+        assert response["error_code"] == "invalid_result_cursor", cursor
+
+
+@pytest.mark.asyncio
+async def test_withheld_evidence_advertises_every_key_and_keeps_notes(monkeypatch):
+    quote = (UNICODE * 2000) + "END"
+    payload = _payload(2)
+    payload["metadata"]["evidence_records"][0].update(
+        verified_quote=quote,
+        figure_reference="Figure 2B",
+        confidence="high",
+    )
+    payload["extracted_objects"][0]["evidence_record_ids"] = ["missing-evidence", "evidence-0"]
+    _install(monkeypatch, _Record(payload))
+    runtime_reports = []
+    monkeypatch.setattr(
+        inspect_results_module,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append(kwargs),
+    )
+
+    first = await _call(action="evidence", result_ref=RESULT_REF, object_ref="obj-0")
+
+    # The evidence_unavailable override keeps the page's continuation note.
+    assert first["error_code"] == "evidence_unavailable"
+    assert [row["evidence_record_id"] for row in first["evidence"]] == ["missing-evidence"]
+    assert first["page_ended_by"] == "size_budget"
+    assert "do not rerun extraction" in first["message"]
+    assert "continue with next_call" in first["message"]
+    assert len(runtime_reports) == 1
+
+    second = await _call(**first["next_call"])
+    withheld = second["evidence"][0]
+    assert withheld["withheld"] is True
+    assert "withheld" in second["message"]
+    assert {read["detail_path"] for read in withheld["reads"]} == {
+        "1.verified_quote", "1.page", "1.section", "1.figure_reference", "1.confidence",
+    }
+    assert withheld["reads"][0]["detail_path"] == "1.verified_quote"
+    section = await _call(**next(r for r in withheld["reads"] if r["detail_path"] == "1.section"))
+    assert section["value"] == "Results"
+    assert (await _call(**withheld["reads"][-1]))["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_validator_results_object_filter_matches_pending_refs(monkeypatch):
+    payload = _payload(3)
+    payload["extracted_objects"][1]["object_id"] = "TEST-OBJ-1"
+
+    def decision(index: int, request_id: str, target: dict[str, Any]) -> dict[str, Any]:
+        return _finding(
+            index,
+            status="resolved",
+            details={
+                "validation_result": {
+                    "status": "resolved",
+                    "request_id": request_id,
+                    "target": {"object_type": "Assertion", **target},
+                }
+            },
+        )
+
+    payload["validation_findings"] = [
+        # Validated while obj-1 was still pending; now it also has an object_id.
+        decision(1, "req-1", {"object_id": "obj-1", "field_path": "curie"}),
+        # Target addressed only by its pending ref.
+        decision(2, "req-2", {"pending_ref_id": "obj-2", "field_path": "curie"}),
+        decision(0, "req-0", {"object_id": "obj-0", "field_path": "curie"}),
+    ]
+    _install(monkeypatch, _Record(payload))
+
+    async def keys(object_ref: str) -> list[str]:
+        page = await _call(action="validator_results", result_ref=RESULT_REF, object_ref=object_ref)
+        assert page["status"] == "ok", page
+        return [row["validator_result_key"] for row in page["validator_results"]]
+
+    assert await keys("TEST-OBJ-1") == ["request:req-1"]
+    assert await keys("obj-2") == ["request:req-2"]
+    assert await keys("obj-0") == ["request:req-0"]
+    missing = await _call(action="validator_results", result_ref=RESULT_REF, object_ref="nope")
+    assert missing["error_code"] == "object_not_found"
+
+
+@pytest.mark.asyncio
+async def test_help_documents_single_record_reads(monkeypatch):
+    help_response = await _call(action="help")
+
+    text = json.dumps(help_response)
+    for name in ("finding_ref", "validator_result_key", "detail_path"):
+        assert name in help_response["filters"]["validation"] + help_response["filters"][
+            "validator_results"
+        ] + help_response["filters"]["evidence"], name
+    assert any("finding_ref=" in example and "detail_path=" in example
+               for example in help_response["examples"])
+    assert any("validator_result_key=" in example for example in help_response["examples"])
+    assert "result_sha256" in text

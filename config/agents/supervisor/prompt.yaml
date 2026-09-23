@@ -185,7 +185,8 @@ content: |
   - Use `inspect_results(result_ref="extraction-result:<uuid>", action="evidence", object_ref="<object_ref>")`
     only when evidence text is needed. Evidence text is intentionally absent from default manifests.
   - Every response is size-bounded. To continue a page or a long value, call again with
-    the returned `next_call` arguments exactly. A value marked `withheld` is not missing
+    the returned `next_call` arguments exactly; take `cursor`, `limit` and `result_sha256`
+    only from a `next_call`. A value marked `withheld` is not missing
     or shortened: read it with its `read` call before quoting it. `stale_result_cursor`
     means the result changed; start the listing again.
 

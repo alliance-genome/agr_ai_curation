@@ -1683,7 +1683,8 @@ def create_supervisor_agent(
             "object_ref for evidence text; action=\"details\" with object_ref for saved "
             "generic/custom attributes; action=\"list\" and action=\"search\" with "
             "query/target to choose among results. Values shown withheld are read "
-            "exactly with their read call (detail_path/cursor). Address a specific "
+            "exactly with their read call (detail_path/cursor); pass cursor, limit and "
+            "result_sha256 only from a next_call. Address a specific "
             "result with result_ref in extraction-result:<uuid> form. This tool does not "
             "export, prepare for curation, inspect files or review sessions, or debug traces."
         ),

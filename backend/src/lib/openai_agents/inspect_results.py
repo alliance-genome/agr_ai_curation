@@ -147,8 +147,9 @@ _EVIDENCE_CONTEXT_KEYS = (
     "confidence",
 )
 # View arguments each action honors; any other one is rejected, never ignored.
-# result_ref, target, adapter_keys, flow_run_id, cursor, limit and
-# result_sha256 are accepted by every action.
+# result_ref, target, adapter_keys and flow_run_id are accepted by every action;
+# cursor, limit and result_sha256 only by views that continue (see
+# _continuation_arguments).
 _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
     "list": frozenset(),
     "search": frozenset({"query"}),
@@ -169,6 +170,8 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
          "validator_result_key", "detail_path"}
     ),
 }
+_PAGE_ARGUMENTS = frozenset({"cursor", "limit", "result_sha256"})
+_CHUNK_ARGUMENTS = frozenset({"cursor", "result_sha256"})
 _FINDING_IDENTITY_KEYS = frozenset(
     {"finding_ref", "finding_id", "severity", "status", "code", "object_ref",
      "object_type", "field_path"}
@@ -336,6 +339,41 @@ def _inspect(
             action=action,
             supported_arguments=sorted(_ACTION_ARGUMENTS[action]),
         )
+    continuation = _continuation_arguments(
+        action,
+        object_ref=_optional_text(object_ref),
+        finding_ref=_optional_text(finding_ref),
+        validator_result_key=_optional_text(validator_result_key),
+        detail_path=_optional_text(detail_path),
+    )
+    unused = sorted(
+        name
+        for name, value in {
+            "cursor": cursor,
+            "limit": limit,
+            "result_sha256": result_sha256,
+        }.items()
+        if value not in (None, "") and name not in continuation
+    )
+    if unused:
+        raise _RequestError(
+            "invalid_request",
+            f"This action=\"{action}\" view does not use: {', '.join(unused)}. "
+            "Single records (summary, object, finding_ref, validator_result_key) take "
+            "no continuation arguments and exact chunk reads take no limit; pass "
+            "cursor, limit and result_sha256 only from a next_call.",
+            action=action,
+            supported_continuation_arguments=sorted(continuation),
+        )
+    if action in {"validation", "validator_results"} and _optional_text(detail_path):
+        single = "finding_ref" if action == "validation" else "validator_result_key"
+        if not _optional_text(finding_ref if action == "validation" else validator_result_key):
+            raise _RequestError(
+                "invalid_request",
+                f"detail_path requires {single} for action=\"{action}\"; it reads one "
+                "value inside that single record.",
+                action=action,
+            )
 
     session_id = get_current_session_id()
     user_id = get_current_user_id()
@@ -363,15 +401,26 @@ def _inspect(
             action=action,
             target=_echo(normalized_target),
         )
+    # Model-supplied text is echoed into filters, next_call or head: an over-long
+    # value is a caller error, never a tool result budget escape.
+    _check_argument_lengths(
+        action,
+        {
+            "query": query,
+            "object_ref": object_ref,
+            "field_path": field_path,
+            "object_type": object_type,
+            "status": status,
+            "validation_state": validation_state,
+            "severity": severity,
+            "finding_ref": finding_ref,
+            "validator_result_key": validator_result_key,
+            "detail_path": detail_path,
+            "flow_run_id": flow_run_id,
+        },
+        lists={"fields": fields, "adapter_keys": adapter_keys},
+    )
     normalized_query = _optional_text(query)
-    if normalized_query and len(normalized_query) > _FIELD_TEXT_LIMIT:
-        # A caller input error, not a result-budget escape.
-        raise _RequestError(
-            "invalid_request",
-            f"query is longer than {_FIELD_TEXT_LIMIT} characters; search for a "
-            "shorter distinctive phrase.",
-            action=action,
-        )
 
     records, resolve_error = _authorized_records(
         result_id=parsed_ref,
@@ -535,6 +584,80 @@ def _inspect(
     )
 
 
+def _continuation_arguments(
+    action: str,
+    *,
+    object_ref: str | None,
+    finding_ref: str | None,
+    validator_result_key: str | None,
+    detail_path: str | None,
+) -> frozenset[str]:
+    """Continuation arguments the requested view uses; others are rejected.
+
+    Pages take cursor, limit and result_sha256; exact chunk reads take cursor
+    and result_sha256; single-record views take none.
+    """
+
+    if action in {"summary", "object"}:
+        return frozenset()
+    if action == "field":
+        return _CHUNK_ARGUMENTS
+    if (action == "validation" and finding_ref) or (
+        action == "validator_results" and validator_result_key
+    ):
+        return _CHUNK_ARGUMENTS if detail_path else frozenset()
+    if action == "evidence" and object_ref and detail_path:
+        return _CHUNK_ARGUMENTS
+    return _PAGE_ARGUMENTS
+
+
+def _check_argument_lengths(
+    action: str,
+    texts: Mapping[str, Any],
+    *,
+    lists: Mapping[str, Sequence[Any] | None],
+) -> None:
+    """Reject over-long model-supplied text as a caller error, without echoing it."""
+
+    too_long = [
+        name
+        for name, value in texts.items()
+        if value is not None and len(str(value).strip()) > _FIELD_TEXT_LIMIT
+    ]
+    too_long.extend(
+        name
+        for name, values in lists.items()
+        if values and any(len(str(item).strip()) > _FIELD_TEXT_LIMIT for item in values)
+    )
+    if too_long:
+        raise _RequestError(
+            "invalid_request",
+            f"{', '.join(too_long)} longer than {_FIELD_TEXT_LIMIT} characters. Pass "
+            "exact refs, field paths and filter values from earlier responses, or search "
+            "for a shorter distinctive phrase.",
+            action=action,
+            arguments_too_long=too_long,
+        )
+
+
+def _echo_list(values: Sequence[Any], name: str) -> dict[str, Any]:
+    """Echo a caller-supplied list: first entries within the preview limit plus counts."""
+
+    shown: list[str] = []
+    used = 0
+    for value in values:
+        text = _echo(value)
+        if shown and used + len(text) > _TEXT_PREVIEW_LIMIT:
+            break
+        shown.append(text)
+        used += len(text)
+    return {
+        name: shown,
+        f"{name}_count": len(values),
+        f"{name}_omitted_count": len(values) - len(shown),
+    }
+
+
 def _help_response() -> dict[str, Any]:
     return {
         "status": "ok",
@@ -551,13 +674,20 @@ def _help_response() -> dict[str, Any]:
             "severity, query (all terms), field_path (scope query or require a value), "
             "fields (select summary fields)",
             "validation": "object_ref, object_type, field_path, validation_state "
-            "(open|resolved), severity, query",
+            "(open|resolved), severity, query; finding_ref reads one finding and "
+            "detail_path (with finding_ref) one exact value inside it",
             "validator_results": "status (validator decision), validation_state, "
-            "object_ref, object_type, field_path",
+            "object_ref, object_type, field_path; validator_result_key reads one "
+            "result and detail_path (with validator_result_key) one exact value inside it",
+            "evidence": "object_ref for its evidence records; detail_path "
+            "(<index>.<key>, with object_ref) reads one exact evidence value",
         },
         "boundaries": [
             "Every response fits the tool result budget. Continue pages and chunks by "
             "passing next_call exactly; a changed result returns stale_result_cursor.",
+            "cursor, limit and result_sha256 come from next_call: pages take all three, "
+            "exact detail_path/field chunks take cursor and result_sha256, and single "
+            "records (summary, object, finding_ref, validator_result_key) take none.",
             "Values too long to show are withheld with total_chars, value_sha256 and a "
             "read call that returns them exactly; nothing is shortened silently.",
             "Object views use only domain-pack YAML supervisor_manifest fields.",
@@ -572,7 +702,10 @@ def _help_response() -> dict[str, Any]:
             'inspect_results(action="objects", result_ref="extraction-result:<uuid>", query="<terms>", fields=["<field>"])',
             'inspect_results(action="object", result_ref="extraction-result:<uuid>", object_ref="<object_ref>")',
             'inspect_results(action="validation", result_ref="extraction-result:<uuid>", validation_state="open", severity="error")',
+            'inspect_results(action="validation", result_ref="extraction-result:<uuid>", finding_ref="<finding_ref>")',
+            'inspect_results(action="validation", result_ref="extraction-result:<uuid>", finding_ref="<finding_ref>", detail_path="details")',
             'inspect_results(action="validator_results", result_ref="extraction-result:<uuid>")',
+            'inspect_results(action="validator_results", result_ref="extraction-result:<uuid>", validator_result_key="<validator_result_key>", detail_path="resolved_values")',
             'inspect_results(action="evidence", result_ref="extraction-result:<uuid>", object_ref="<object_ref>")',
             'inspect_results(action="search", target="current_document", query="<terms>")',
         ],
@@ -609,13 +742,18 @@ def _parse_cursor(cursor: Any, *, total: int, unit: str = "items") -> int:
     if cursor is None or (isinstance(cursor, str) and not cursor.strip()):
         return 0
     text = str(cursor).strip()
-    if isinstance(cursor, bool) or not text.isdigit():
+    # ASCII digits only: isdigit() admits superscripts that int() rejects, and
+    # int() rejects digit strings longer than Python's conversion limit.
+    try:
+        if isinstance(cursor, bool) or not (text.isascii() and text.isdecimal()):
+            raise ValueError(text)
+        value = int(text)
+    except ValueError:
         raise _RequestError(
             INVALID_RESULT_CURSOR,
             "cursor must be the next_cursor (or next_call cursor) from a previous response.",
             cursor=_echo(cursor),
-        )
-    value = int(text)
+        ) from None
     if value > total:
         raise _RequestError(
             INVALID_RESULT_CURSOR,
@@ -693,7 +831,12 @@ def _page(
             ),
         }
         if overrides is not None:
-            body.update(overrides(page))
+            extra = dict(overrides(page))
+            if "message" in extra:
+                # An override replaces the lead message, never the continuation
+                # and withheld-row notes.
+                extra["message"] += note
+            body.update(extra)
         return body
 
     response, _ = fit_page(
@@ -1225,7 +1368,13 @@ def _validate_field_selection(
     if filters.field_path is not None:
         requested.append(filters.field_path)
     if not scoped:
-        # No supervisor-visible objects: nothing is listed, so nothing to select.
+        if requested:
+            raise _RequestError(
+                "field_not_supervisor_visible",
+                "This result has no supervisor-visible objects, so it has no fields to "
+                "select or filter.",
+                **_echo_list(requested, "requested"),
+            )
         return
     hidden = [path for path in requested if path not in visible]
     if hidden:
@@ -1233,7 +1382,7 @@ def _validate_field_selection(
             "field_not_supervisor_visible",
             "fields and field_path must be domain-pack YAML supervisor_manifest fields "
             "of the objects being listed.",
-            requested=[_echo(path) for path in hidden],
+            **_echo_list(hidden, "requested"),
             visible_field_paths={
                 object_type: list(policy.field_paths)
                 for object_type, policy in sorted(scoped.items())
@@ -1668,19 +1817,21 @@ def _evidence_response(
 
     def oversized(row: dict[str, Any], index: int) -> dict[str, Any]:
         record = evidence[index]
-        long_keys = sorted(
-            (key for key in record if len(_value_text(record[key])) > _TEXT_PREVIEW_LIMIT),
+        identity = ("evidence_record_id", "id")
+        # Every withheld key gets an exact read, largest first.
+        withheld_keys = sorted(
+            (key for key in record if key not in identity),
             key=lambda key: len(_value_text(record[key])),
             reverse=True,
         )
         return {
             "index": index,
-            **{key: record[key] for key in ("evidence_record_id", "id") if key in record},
+            **{key: record[key] for key in identity if key in record},
             "withheld": True,
             "total_chars": len(canonical_json(record)),
             "reads": [
                 result.call("evidence", object_ref=object_ref, detail_path=f"{index}.{key}")
-                for key in long_keys
+                for key in withheld_keys
             ] or [result.call("evidence", object_ref=object_ref, detail_path=str(index))],
         }
 
@@ -1833,7 +1984,6 @@ def _validation_response(
                 cursor=cursor,
                 message="Exact validation finding value is ready.",
             )
-        _check_sha(expected_sha, sha)
         return _fit_record(
             full,
             render=lambda shown: {
@@ -1966,7 +2116,6 @@ def _validator_results_response(
                 cursor=cursor,
                 message="Exact validator result value is ready.",
             )
-        _check_sha(expected_sha, sha)
         return _fit_record(
             full,
             render=lambda shown: {
@@ -1986,6 +2135,23 @@ def _validator_results_response(
         target = entry.get("target")
         return target.get(name) if isinstance(target, Mapping) else None
 
+    object_ids: set[str] | None = None
+    if object_ref:
+        try:
+            # Targets name an object by object_id or, before one exists, by its
+            # pending ref; match either identity of the requested object.
+            object_ids = {
+                value for _kind, value in _resolve_object(result.envelope, object_ref).ref_keys()
+            }
+        except ValueError as exc:
+            raise _RequestError(
+                "object_not_found",
+                "No object matched object_ref.",
+                action="validator_results",
+                result_ref=result.result_ref,
+                object_ref=_echo(object_ref),
+            ) from exc
+
     matched = [
         (entry_key, entry)
         for entry_key, entry in entries
@@ -1994,7 +2160,11 @@ def _validator_results_response(
             validation_state is None
             or (validation_state == "open") == bool(entry.get("open_finding"))
         )
-        and (not object_ref or target_value(entry, "object_id") == object_ref)
+        and (
+            object_ids is None
+            or target_value(entry, "object_id") in object_ids
+            or target_value(entry, "pending_ref_id") in object_ids
+        )
         and (not object_type or target_value(entry, "object_type") == object_type)
         and (not field_path or target_value(entry, "field_path") == field_path)
     ]

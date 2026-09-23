@@ -483,7 +483,7 @@ def validator_result_entries(
         if isinstance(target, Mapping):
             entry["target"] = {
                 name: target[name]
-                for name in ("object_type", "object_id", "field_path")
+                for name in ("object_type", "object_id", "pending_ref_id", "field_path")
                 if target.get(name) is not None
             }
         # Per-field copies can include later rejection: never let the first result

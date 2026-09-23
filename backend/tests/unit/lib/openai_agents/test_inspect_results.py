@@ -682,7 +682,9 @@ async def test_custom_detail_navigation_preserves_parts_and_complete_text(monkey
     text = 'first line\n second line\tend'
     payload['extracted_objects'][0]['payload']['attributes'] = {'source': {'name': text, 'number': 0, 'known': False, 'unknown': None}, 'names': ['A', 'B']}
     _patch_records(monkeypatch, [_InspectRecord(payload_json=payload)])
-    monkeypatch.setattr(inspect_results_module, '_FIELD_TEXT_LIMIT', 8)
+    # Below the 27-char text (withheld) but above the refs and paths passed in,
+    # which share this limit as caller input.
+    monkeypatch.setattr(inspect_results_module, '_FIELD_TEXT_LIMIT', 24)
     async def read(**kw):
         return json.loads(await inspect_results_module.inspect_results(action='details', object_ref='assertion-1', **kw))
     root = await read(limit=1)
