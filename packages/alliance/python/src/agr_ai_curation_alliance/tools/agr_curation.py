@@ -73,6 +73,7 @@ from agr_ai_curation_runtime.tool_result_bounds import (
     tool_result_max_bytes,
 )
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import document_rationale_arg, normalize_rationale
 from .search_helpers import (
     enrich_with_match_context,
 )
@@ -122,6 +123,7 @@ GeneExpressionPatchFieldPath = Literal[
     "pending_ref_id",
     "evidence_record_ids",
     "where_expressed_statement",
+    "rationale",
     "subject.source_phrase",
     "subject.gene_symbol",
     "subject.primary_external_id",
@@ -237,6 +239,8 @@ class GeneExpressionPatchUpdateInput(_StrictToolModel):
             return self
         if not _clean_string(self.string_value):
             raise ValueError(f"{self.field_path} patch requires string_value")
+        if self.field_path == "rationale":
+            self.string_value = normalize_rationale(self.string_value)
         return self
 
 
@@ -244,6 +248,7 @@ class GeneExpressionStageInput(_StrictToolModel):
     pending_ref_id: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
     where_expressed_statement: StrictStr
+    rationale: StrictStr
     subject: GeneExpressionSubjectInput
     reference: GeneExpressionReferenceInput
     controlled_fields: List[GeneExpressionControlledFieldInput] = Field(min_length=1, max_length=20)
@@ -262,6 +267,11 @@ class GeneExpressionStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("value must be non-empty")
         return cleaned
+
+    @field_validator("rationale")
+    @classmethod
+    def _valid_rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
 
 class GeneExpressionPatchInput(_StrictToolModel):
@@ -5648,6 +5658,7 @@ def _stage_payload_from_gene_expression_input(
         "object_type": GENE_EXPRESSION_OBJECT_TYPE,
         "pending_ref_id": stage_input.pending_ref_id,
         "where_expressed_statement": stage_input.where_expressed_statement,
+        "rationale": stage_input.rationale,
         "expression_annotation_subject": {
             "source_phrase": stage_input.subject.source_phrase,
             "gene_symbol": stage_input.subject.gene_symbol,
@@ -5968,10 +5979,12 @@ def _search_builder_candidates(
     )
 
 
+@document_rationale_arg
 def _stage_gene_expression_observation_impl(
     pending_ref_id: str,
     evidence_record_ids: Annotated[List[str], Field(min_length=1, max_length=20)],
     where_expressed_statement: str,
+    rationale: str,
     subject: GeneExpressionSubjectInput,
     reference: GeneExpressionReferenceInput,
     controlled_fields: Annotated[List[GeneExpressionControlledFieldInput], Field(min_length=1, max_length=20)],
@@ -5982,6 +5995,8 @@ def _stage_gene_expression_observation_impl(
     ``condition_relations`` is required-but-nullable under the strict tool schema: pass ``null`` (or
     ``[]``) when the paper states no experimental conditions; otherwise pass the grounded nested
     ConditionRelation list (see ``<experimental_condition_rules>`` in the extractor prompt).
+
+    Args:
     """
 
     attempted_query = _attempt_query(
@@ -5989,6 +6004,7 @@ def _stage_gene_expression_observation_impl(
         pending_ref_id=pending_ref_id,
         evidence_record_ids=evidence_record_ids,
         where_expressed_statement=where_expressed_statement,
+        rationale=rationale,
         subject=subject.model_dump(mode="json") if hasattr(subject, "model_dump") else subject,
         reference=reference.model_dump(mode="json") if hasattr(reference, "model_dump") else reference,
         controlled_fields=[
@@ -6006,6 +6022,7 @@ def _stage_gene_expression_observation_impl(
             pending_ref_id=pending_ref_id,
             evidence_record_ids=evidence_record_ids,
             where_expressed_statement=where_expressed_statement,
+            rationale=rationale,
             subject=subject,
             reference=reference,
             controlled_fields=controlled_fields,
@@ -6075,7 +6092,12 @@ def _patch_gene_expression_observation_impl(
     pending_ref_id: str,
     updates: Annotated[List[GeneExpressionPatchUpdateInput], Field(min_length=1, max_length=25)],
 ) -> AgrQueryResult:
-    """Patch enumerated fields on one staged gene-expression observation."""
+    """Patch enumerated fields on one staged gene-expression observation.
+
+    Args:
+        updates: Field updates, each a field_path with its string_value or evidence_record_ids.
+            A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
+    """
 
     attempted_query = _attempt_query(
         "patch_gene_expression_observation",

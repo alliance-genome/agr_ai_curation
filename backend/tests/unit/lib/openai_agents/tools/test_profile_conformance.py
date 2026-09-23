@@ -171,6 +171,7 @@ def test_profile_stage_patch_and_materialization_share_contract(profile, record,
             class_key="generic:generic_object", semantic_class=profile.contract.semantic_class,
             label="hMETTL1", attributes=record, evidence_record_ids=["evidence-1"],
             classification_notes=["Paper names this reagent."],
+            rationale="The paper names this item in its Results.",
         )
         assert stage.status == "ok", stage
         candidate_id = stage.data["candidate_id"]
@@ -210,6 +211,7 @@ def test_profile_stage_patch_and_materialization_share_contract(profile, record,
         obj = result["curatable_objects"][0]
         assert obj["metadata"]["generic_profile_ref"] == profile.receipt
         assert obj["payload"]["attributes"] == candidate.staged_fields["attributes"]
+        assert obj["payload"]["rationale"] == "The paper names this item in its Results."
         # A malformed internal writer cannot bypass final materialization checks.
         candidate.staged_fields["attributes"]["synonym"] = "not canonical"
         rejected = materialize_generic_builder_state(
@@ -315,6 +317,7 @@ async def test_direct_runner_consumes_backend_profile_finalization(
                         SimpleNamespace(tool_name="stage_generic_object"), json.dumps({
                             "label": "hMETTL1", "attributes": record, "evidence_record_ids": ["evidence-1"],
                             "classification_notes": ["Paper-backed reagent"],
+                            "rationale": "The paper names this item in its Results.",
                         }),
                     )
                     assert staged.status == "ok", staged
@@ -393,6 +396,7 @@ def test_profile_rejects_malformed_stage_and_direct_workspace_mutations(profile,
             class_key="generic:generic_reagent_candidate", label="reagent",
             semantic_class=profile.contract.semantic_class, attributes=record,
             evidence_record_ids=["evidence-1"], classification_notes=["Paper evidence"],
+            rationale="The paper names this item in its Results.",
         )
         assert invalid.status == "error"
         assert invalid.data["validation_issues"][0]["reason"] == "profile_identity_violation"
@@ -439,6 +443,7 @@ async def test_final_profile_tool_schema_and_callable_survive_run_state_rebindin
     assert "class_key" not in final.params_json_schema["properties"]
     args = {"label": "hMETTL1", "attributes": record, "evidence_record_ids": ["evidence-1"],
             "classification_notes": ["Evidence-backed reagent"],
+            "rationale": "The paper names this item in its Results.",
             "validation_guidance": "Use the paper organism context when checking this reagent."}
     context = SimpleNamespace(tool_name=final.name)
     output = await final.on_invoke_tool(context, json.dumps(args))
@@ -485,6 +490,52 @@ def test_profile_configuration_narrows_installed_builder_without_adding_tools(pr
     assert narrowed[0].params_json_schema["properties"]["attributes"] == profile.attributes_schema()
     with pytest.raises(ValueError, match="requires saved generic"):
         configure_profile_tools([tools.stage_generic_object], profile)
+
+
+def test_profile_bound_tools_require_and_protect_rationale(profile, record, monkeypatch):
+    from agr_ai_curation_alliance.tools import generic_builder_tools as tools
+    from src.lib.agent_studio.profile_tools import profile_bound_tool
+    from src.lib.openai_agents import extraction_builder_workspace as builder
+
+    stage = profile_bound_tool(tools._stage_generic_object_impl, tools.stage_generic_object, profile)
+    schema = stage.params_json_schema
+    assert "rationale" in schema["required"]
+    # Saved custom agents run frozen prompts; the installed stage tool's own
+    # parameter description is the complete guidance they receive.
+    assert schema["properties"]["rationale"]["description"] == (
+        tools.stage_generic_object.params_json_schema["properties"]["rationale"]["description"]
+    )
+    patch = profile_bound_tool(tools._patch_generic_object_impl, tools.patch_generic_object, profile)
+    assert "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared." in patch.params_json_schema["properties"]["updates"]["description"]
+    rationale_patch = [
+        variant for variant in profile.patch_schema()["items"]["anyOf"]
+        if variant["properties"]["field_path"].get("const") == "rationale"
+    ]
+    assert rationale_patch and rationale_patch[0]["properties"]["value"] == {"type": "string", "minLength": 1}
+
+    monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_: None)
+    monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **_: None)
+    workspace = builder.ExtractionBuilderWorkspace(run_id="profile-test", generic_profile=profile)
+    token = builder.set_active_extraction_builder_workspace(workspace)
+    try:
+        staged = tools._stage_generic_object_impl(
+            class_key="generic:generic_object", semantic_class=profile.contract.semantic_class,
+            label="hMETTL1", attributes=record, evidence_record_ids=["evidence-1"],
+            classification_notes=["Paper names this reagent."], rationale="Stock number given in Methods.",
+        )
+        assert staged.status == "ok", staged
+        candidate_id = staged.data["candidate_id"]
+        rewritten = tools._patch_generic_object_impl(candidate_id, [
+            {"field_path": "rationale", "value": "BDSC stock is named for this construct."},
+        ])
+        assert rewritten.status == "ok", rewritten
+        cleared = tools._patch_generic_object_impl(candidate_id, [{"field_path": "rationale", "value": None}])
+        assert cleared.status == "error"
+        assert workspace.get_candidate(candidate_id).staged_fields["rationale"] == (
+            "BDSC stock is named for this construct."
+        )
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)
 
 
 def test_adapter_cannot_replace_profile_tool_with_open_signature(profile, monkeypatch):

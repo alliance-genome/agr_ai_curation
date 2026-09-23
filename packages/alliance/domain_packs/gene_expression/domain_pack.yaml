@@ -384,6 +384,10 @@ object_definitions:
               - expression_pattern.when_expressed.stage_uberon_slim_terms
               - relation.name
               - data_provider.abbreviation
+          - id: evidence
+            label: Evidence and rationale
+            fields:
+              - rationale
       controlled_field_helper_gaps:
         - field_path: expression_experiment.detection_reagents
           status: under_development
@@ -1919,6 +1923,11 @@ object_definitions:
               class: GeneExpressionAnnotation
               slot: uncertain
               range: boolean
+      - field_path: rationale
+        field_type: string
+        display_name: Rationale
+        required: false
+        description: Curator-facing reason the extractor selected this item, written at extraction time.
 fixture_packs:
   - fixture_pack_id: tmem67_pending
     display_name: tmem67 pending gene expression fixtures

@@ -39,6 +39,7 @@ def test_generic_guidance_patch_is_separate_from_attributes(monkeypatch):
     monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_: None)
     result = tools._stage_generic_object_impl(class_key="generic:generic_object", label="reagent",
         evidence_record_ids=["e1"], classification_notes=["fixture"],
+        rationale="The paper names this item in its Results.",
         validation_guidance="Check the supplied species context.")
     assert result.status == "ok"
     candidate_id = result.data["candidate_id"]

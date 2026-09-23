@@ -816,6 +816,10 @@ tools:
             type: string
             required: true
             description: A plain sentence describing where (and when) the gene was seen to be expressed, in the agent's words from the paper.
+          - name: rationale
+            type: string
+            required: true
+            description: The agent's short reason (up to 300 characters) for selecting this finding, grounded in the supporting quotes and written when the draft is created. Curators see it in review, CSV/TSV exports, and chat.
           - name: subject
             type: any
             required: true
@@ -859,7 +863,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. The rationale can be rewritten but not cleared.
   - tool_id: discard_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:discard_gene_expression_observation
@@ -1248,7 +1252,7 @@ tools:
       audit:
         display_name: Stage Generic Object
       documentation:
-        summary: Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, and classification notes.
+        summary: Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, classification notes, and a rationale.
         parameters:
           - name: class_key
             type: string
@@ -1266,6 +1270,10 @@ tools:
             type: array
             required: true
             description: Notes explaining why this class key fits the paper evidence.
+          - name: rationale
+            type: string
+            required: true
+            description: The agent's short reason (up to 300 characters) for selecting this object, grounded in the supporting quotes and written when the draft is created. Curators see it in review, CSV/TSV exports, and chat.
           - name: pending_ref_id
             type: string
             required: false
@@ -1317,7 +1325,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids.
+            description: Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids. The rationale can be rewritten but not cleared.
   - tool_id: discard_generic_object
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.generic_builder_tools:discard_generic_object

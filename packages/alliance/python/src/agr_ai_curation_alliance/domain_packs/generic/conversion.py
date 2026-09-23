@@ -161,6 +161,20 @@ def materialize_generic_builder_state(
                 )
             )
             continue
+        if _clean_text(staged_fields.get("rationale")) is None:
+            issues.append(
+                _issue(
+                    field_path="rationale",
+                    reason="missing_rationale",
+                    message=(
+                        "Finalized generic candidates require a rationale; patch the "
+                        "candidate with the curator-facing reason it was selected."
+                    ),
+                    candidate_id=candidate_id,
+                    class_key=class_key,
+                )
+            )
+            continue
 
         evidence_ids = _unique_strings(
             getattr(candidate, "evidence_record_ids", None)
@@ -431,6 +445,7 @@ def _payload_for_entry(
         "description",
         "confidence",
         "classification_notes",
+        "rationale",
         "semantic_class",
     ):
         value = staged_fields.get(key)

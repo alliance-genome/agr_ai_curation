@@ -974,6 +974,20 @@ def _materialized_gene_expression_payload(
     condition_relations = _condition_relations_payload(payload.pop("condition_relations", None))
     if condition_relations:
         payload["condition_relations"] = condition_relations
+    # Required for new candidates only: the pack field stays optional so annotations
+    # stored before the builder recorded a rationale still load and export.
+    if _value_missing_or_blank(payload.get("rationale")):
+        issues.append(
+            _materialization_issue(
+                field_path="rationale",
+                reason="missing_rationale",
+                message=(
+                    "Finalized gene-expression candidates require a rationale; "
+                    "patch the candidate with the curator-facing reason it was selected."
+                ),
+                candidate_id=candidate_id,
+            )
+        )
     if _value_missing_or_blank(payload.get("date_created")) and default_date_created is not None:
         payload["date_created"] = default_date_created
     payload.setdefault("internal", False)

@@ -138,6 +138,7 @@ def _stage_valid_observation(ledger: resolver_call_ledger.ResolverCallLedger):
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=["evidence-67598e5688f123c8"],
         where_expressed_statement="PEF-1::GFP expression in the cilium",
+        rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         subject={
             "source_phrase": "PEF-1::GFP",
             "gene_symbol": "pef-1",
@@ -195,6 +196,7 @@ def _stage_materializable_observation(ledger: resolver_call_ledger.ResolverCallL
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=["evidence-67598e5688f123c8"],
         where_expressed_statement="PEF-1::GFP expression in the cilium",
+        rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         subject={
             "source_phrase": "PEF-1::GFP",
             "gene_symbol": "pef-1",
@@ -360,6 +362,7 @@ def test_stage_rejects_missing_resolver_provenance(active_builder_context):
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=["evidence-1"],
         where_expressed_statement="expression in cilium",
+        rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         subject={
             "source_phrase": "PEF-1::GFP",
             "gene_symbol": "pef-1",
@@ -398,6 +401,7 @@ def test_stage_rejects_missing_evidence_ids(active_builder_context):
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=[],
         where_expressed_statement="expression in cilium",
+        rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         subject={
             "source_phrase": "PEF-1::GFP",
             "gene_symbol": "pef-1",
@@ -430,6 +434,7 @@ def test_stage_rejects_placeholder_reference(active_builder_context):
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=["evidence-1"],
         where_expressed_statement="expression in cilium",
+        rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         subject={
             "source_phrase": "PEF-1::GFP",
             "gene_symbol": "pef-1",
@@ -782,6 +787,138 @@ def test_finalize_rejects_placeholder_pmid(active_builder_context):
         event["event_type"] == "gene_expression_materializer.placeholder_reference_rejected"
         for event in events
     )
+
+
+def test_stage_schema_requires_rationale_with_shared_description():
+    from agr_ai_curation_alliance.tools.builder_rationale import RATIONALE_ARG_DESCRIPTION
+
+    stage_schema = agr_curation.stage_gene_expression_observation.params_json_schema
+    assert "rationale" in stage_schema["required"]
+    assert stage_schema["properties"]["rationale"]["type"] == "string"
+    assert stage_schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+
+    patch_schema = agr_curation.patch_gene_expression_observation.params_json_schema
+    update_schema = _defs_schema(patch_schema, "GeneExpressionPatchUpdateInput")
+    assert "rationale" in update_schema["properties"]["field_path"]["enum"]
+    assert "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared." in patch_schema["properties"]["updates"]["description"]
+
+
+@pytest.mark.parametrize(
+    ("rationale", "message"),
+    [("   ", "rationale must be non-empty"), ("x" * 301, "shorten it to at most 300")],
+)
+def test_stage_rejects_blank_or_overlong_rationale(active_builder_context, rationale, message):
+    _workspace, ledger, _events = active_builder_context
+    ledger.record_tool_output(
+        tool_call_id="call_relation",
+        tool_name="resolve_domain_field_term",
+        output=_resolved_output(),
+    )
+
+    result = _tool_fn(
+        agr_curation.stage_gene_expression_observation,
+        "stage_gene_expression_observation",
+    )(
+        pending_ref_id="gene-expression-annotation-pef-1",
+        evidence_record_ids=["evidence-67598e5688f123c8"],
+        where_expressed_statement="PEF-1::GFP expression in the cilium",
+        rationale=rationale,
+        subject={"source_phrase": "PEF-1::GFP", "gene_symbol": "pef-1", "primary_external_id": None},
+        reference={"source_phrase": "PMID 39550471", "reference_id": "PMID:39550471"},
+        controlled_fields=[{"field_path": "relation.name", "selected_value": "is_expressed_in"}],
+    )
+
+    assert result.status == "error"
+    issues = result.data["validation_issues"]
+    assert [issue["field_path"] for issue in issues] == ["rationale"]
+    assert message in issues[0]["message"]
+
+
+def test_stage_stores_stripped_rationale(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+    _stage_valid_observation(ledger)
+
+    assert workspace.candidates["gex-candidate-1"].staged_fields["rationale"] == (
+        "Anti-GFP staining localizes the reporter to the cilium, not the cell body."
+    )
+
+
+def _patch_rationale(value: Any):
+    return _tool_fn(
+        agr_curation.patch_gene_expression_observation,
+        "patch_gene_expression_observation",
+    )(
+        candidate_id="gex-candidate-1",
+        pending_ref_id="gene-expression-annotation-pef-1",
+        updates=[{"field_path": "rationale", "string_value": value, "evidence_record_ids": None}],
+    )
+
+
+def test_patch_rewrites_rationale(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+    _stage_valid_observation(ledger)
+
+    result = _patch_rationale("  Reporter signal is ciliary in every imaged neuron.  ")
+
+    assert result.status == "ok"
+    assert workspace.candidates["gex-candidate-1"].staged_fields["rationale"] == (
+        "Reporter signal is ciliary in every imaged neuron."
+    )
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "x" * 301])
+def test_patch_cannot_clear_or_overfill_rationale(active_builder_context, value):
+    workspace, ledger, _events = active_builder_context
+    _stage_valid_observation(ledger)
+
+    result = _patch_rationale(value)
+
+    assert result.status == "error"
+    assert workspace.candidates["gex-candidate-1"].staged_fields["rationale"] == (
+        "Anti-GFP staining localizes the reporter to the cilium, not the cell body."
+    )
+
+
+def test_finalize_carries_rationale_into_the_annotation_payload(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+    _stage_materializable_observation(ledger)
+
+    result = _tool_fn(
+        agr_curation.finalize_gene_expression_extraction,
+        "finalize_gene_expression_extraction",
+    )(candidate_ids=["gex-candidate-1"])
+
+    assert result.status == "ok"
+    annotation = workspace.finalization.payload["curatable_objects"][0]
+    assert annotation["payload"]["rationale"] == (
+        "Anti-GFP staining localizes the reporter to the cilium, not the cell body."
+    )
+
+
+def test_finalize_rejects_new_candidate_without_rationale(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+    _stage_materializable_observation(ledger)
+    candidate = workspace.get_candidate("gex-candidate-1")
+    staged_fields = dict(candidate.staged_fields)
+    staged_fields.pop("rationale")
+    workspace.upsert_candidate(
+        candidate_id="gex-candidate-1",
+        staged_fields=staged_fields,
+        pending_ref_ids=candidate.pending_ref_ids,
+        evidence_record_ids=candidate.evidence_record_ids,
+        resolver_selection_refs=candidate.resolver_selection_refs,
+        status=builder.CANDIDATE_STATUS_VALID,
+    )
+
+    result = _tool_fn(
+        agr_curation.finalize_gene_expression_extraction,
+        "finalize_gene_expression_extraction",
+    )(candidate_ids=["gex-candidate-1"])
+
+    assert result.status == "error"
+    assert {issue["reason"] for issue in result.data["validation_issues"]} == {
+        "missing_rationale"
+    }
 
 
 # ---------------------------------------------------------------------------------------

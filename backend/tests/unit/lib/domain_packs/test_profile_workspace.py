@@ -204,10 +204,16 @@ def test_persisted_profile_review_rows_use_closed_editable_fields_and_unavailabl
     assert review_row.object_role is None
     assert review_row.object_model_ref == {} and review_row.model_field_ref == {}
     fields = review_row.metadata["workspace_fields"]
-    assert [field["field_path"] for field in fields] == ["attributes.paper_name", "attributes.resolved_id"]
+    assert [field["field_path"] for field in fields] == [
+        "attributes.paper_name", "attributes.resolved_id", "rationale",
+    ]
     assert fields[0]["label"] == "Published name"
     assert fields[0]["value"] == "A" and fields[0]["metadata"]["editable"]
     assert fields[1]["value"] is None
+    # A record staged before rationale was required still loads; the absent value stays absent.
+    assert fields[2]["value"] is None and fields[2]["label"] == "Rationale"
+    assert fields[2]["metadata"]["workspace_group"]["label"] == "Evidence and rationale"
+    assert fields[2]["metadata"]["read_only"]
     assert review_row.metadata["generic_profile_ref"] == context.profile.receipt
     assert review_row.metadata["linkml_alignment"] == "not_assessed"
     unavailable, = review_row.metadata["unavailable_validator_capabilities"]
