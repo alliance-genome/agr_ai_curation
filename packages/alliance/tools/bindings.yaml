@@ -1028,6 +1028,10 @@ tools:
             type: string
             required: true
             description: How sure the agent is about this finding (high, medium, or low).
+          - name: rationale
+            type: string
+            required: true
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: species
             type: any
             required: false
@@ -1480,6 +1484,10 @@ tools:
             type: array
             required: true
             description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
+          - name: rationale
+            type: string
+            required: true
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: normalized_hint
             type: any
             required: false

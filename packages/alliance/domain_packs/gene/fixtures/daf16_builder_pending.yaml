@@ -43,6 +43,7 @@ fixtures:
             confidence: high
             identity_resolution_notes:
               - The paper reports a daf-16 nuclear translocation phenotype in C. elegans; WB provider context narrows the validator search.
+            rationale: This paper's heat-shock assay shows DAF-16 nuclear translocation, a new result rather than a cited pathway member.
             evidence_record_id: evidence-daf16-1
             verified_quote: DAF-16 translocated to nuclei after heat shock.
             page: 4

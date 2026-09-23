@@ -78,6 +78,7 @@ def _staged_fields() -> dict[str, Any]:
         "identity_resolution_notes": [
             "The paper reports a daf-16 nuclear translocation phenotype in C. elegans."
         ],
+        "rationale": "This paper's heat-shock assay shows DAF-16 nuclear translocation as a new result.",
         "species": "Caenorhabditis elegans",
         "taxon_hint": "NCBITaxon:6239",
         "data_provider_hint": "WB",
@@ -167,6 +168,8 @@ def test_gene_builder_materializer_produces_clean_extraction_output():
     assert obj["payload"]["verified_quote"] == (
         "DAF-16 translocated to nuclei after heat shock."
     )
+    assert obj["payload"]["rationale"] == _staged_fields()["rationale"]
+    assert obj["payload"]["identity_resolution_notes"] == _staged_fields()["identity_resolution_notes"]
     # No resolver/helper machinery: the gene validator owns identity.
     assert "helper_selections" not in payload["metadata"]["provenance"]
     assert payload["metadata"]["provenance"]["source"] == GENE_MATERIALIZER_ID
@@ -376,3 +379,173 @@ def test_gene_extractor_agent_has_no_output_schema_and_builder_tools():
     assert "finalize_gene_extraction" in tools
     # Builder agents must not carry an output schema (forbidden by the platform guard).
     assert "GeneExtractionResultEnvelope" not in str(agent.get("output_schema"))
+
+
+def test_gene_rationale_is_copied_onto_every_evidence_object():
+    records = _evidence_records() + [
+        {
+            **_evidence_records()[0],
+            "evidence_record_id": "evidence-daf16-2",
+            "verified_quote": "daf-16 mutants failed to extend lifespan.",
+            "chunk_id": "chunk-daf16-2",
+        }
+    ]
+    workspace = ExtractionBuilderWorkspace(
+        run_id="gene-builder-fanout",
+        domain_pack_id=GENE_DOMAIN_PACK_ID,
+        agent_id="gene_extractor",
+    )
+    workspace.upsert_candidate(
+        candidate_id="gene-candidate-1",
+        staged_fields=_staged_fields(),
+        pending_ref_ids=["gene-mention-evidence-1"],
+        evidence_record_ids=["evidence-daf16-1", "evidence-daf16-2"],
+        resolver_selection_refs=[],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    result = materialize_gene_builder_state(
+        workspace=workspace,
+        candidate_ids=["gene-candidate-1"],
+        evidence_records=records,
+        resolver_entry_lookup=None,
+    )
+    assert result.ok, result.summary()
+    objects = result.payload["curatable_objects"]
+    assert len(objects) == 2
+    assert {obj["payload"]["rationale"] for obj in objects} == {_staged_fields()["rationale"]}
+
+
+def test_gene_builder_rejects_missing_rationale():
+    staged = _staged_fields()
+    staged["rationale"] = "  "
+    workspace = ExtractionBuilderWorkspace(
+        run_id="gene-builder-no-rationale",
+        domain_pack_id=GENE_DOMAIN_PACK_ID,
+        agent_id="gene_extractor",
+    )
+    workspace.upsert_candidate(
+        candidate_id="gene-candidate-1",
+        staged_fields=staged,
+        pending_ref_ids=["gene-mention-evidence-1"],
+        evidence_record_ids=["evidence-daf16-1"],
+        resolver_selection_refs=[],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    result = materialize_gene_builder_state(
+        workspace=workspace,
+        candidate_ids=["gene-candidate-1"],
+        evidence_records=_evidence_records(),
+        resolver_entry_lookup=None,
+    )
+    assert not result.ok
+    assert any(
+        issue["reason"] == "missing_rationale" and issue["field_path"] == "rationale"
+        for issue in result.issues
+    )
+
+
+def _gene_rationale_tools(monkeypatch):
+    from agr_ai_curation_alliance.tools import gene_builder_tools as tools
+
+    workspace = ExtractionBuilderWorkspace(run_id="gene-rationale", domain_pack_id=GENE_DOMAIN_PACK_ID)
+    monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
+    monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_event: None)
+    return tools, workspace
+
+
+def _stage_daf16(tools, rationale):
+    return tools._stage_gene_mention_evidence_impl(
+        pending_ref_id="gene-mention-evidence-1",
+        mention="daf-16",
+        evidence_record_ids=["evidence-daf16-1"],
+        identity_resolution_notes=["C. elegans paper; WB provider context."],
+        confidence="high",
+        rationale=rationale,
+    )
+
+
+def test_stage_gene_tool_requires_rationale_with_shared_description():
+    from agr_ai_curation_alliance.tools import gene_builder_tools as tools
+    from agr_ai_curation_alliance.tools.builder_rationale import RATIONALE_ARG_DESCRIPTION
+
+    schema = tools.stage_gene_mention_evidence.params_json_schema
+    assert {"rationale", "identity_resolution_notes"} <= set(schema["required"])
+    assert schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+
+
+def test_stage_gene_rationale_is_staged_separately_from_identity_notes(monkeypatch):
+    tools, workspace = _gene_rationale_tools(monkeypatch)
+    staged = _stage_daf16(tools, " DAF-16 translocation is this paper's own finding. ")
+    assert staged.status == "ok"
+    fields = workspace.get_candidate(staged.data["candidate_id"]).staged_fields
+    assert fields["rationale"] == "DAF-16 translocation is this paper's own finding."
+    assert fields["identity_resolution_notes"] == ["C. elegans paper; WB provider context."]
+
+
+def test_stage_gene_rejects_blank_or_overlong_rationale(monkeypatch):
+    tools, workspace = _gene_rationale_tools(monkeypatch)
+    for bad_value, expected in (("", "non-empty"), ("x" * 301, "at most 300")):
+        result = _stage_daf16(tools, bad_value)
+        assert result.status == "error"
+        issues = result.data["validation_issues"]
+        assert [issue["field_path"] for issue in issues] == ["rationale"]
+        assert expected in issues[0]["message"]
+    assert not workspace.candidates
+
+
+def test_patch_gene_rationale_replaces_and_rejects_clearing(monkeypatch):
+    tools, workspace = _gene_rationale_tools(monkeypatch)
+    candidate_id = _stage_daf16(tools, "Original reason.").data["candidate_id"]
+
+    patched = tools._patch_gene_mention_evidence_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="gene-mention-evidence-1",
+        updates=[{"field_path": "rationale", "string_value": "Better reason."}],
+    )
+    assert patched.status == "ok"
+    assert workspace.get_candidate(candidate_id).staged_fields["rationale"] == "Better reason."
+
+    for cleared in ("", "   ", None, "y" * 301):
+        rejected = tools._patch_gene_mention_evidence_impl(
+            candidate_id=candidate_id,
+            pending_ref_id="gene-mention-evidence-1",
+            updates=[{"field_path": "rationale", "string_value": cleared}],
+        )
+        assert rejected.status == "error"
+        assert rejected.data["validation_issues"][0]["reason"] == "invalid_rationale"
+    assert workspace.get_candidate(candidate_id).staged_fields["rationale"] == "Better reason."
+
+
+def test_gene_pack_rationale_group_is_separate_from_identity_notes():
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    definition = next(
+        obj
+        for obj in pack.metadata.object_definitions
+        if obj.object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
+    )
+    field = next(item for item in definition.fields if item.field_path == "rationale")
+    assert field.required is False
+    assert field.display_name == "Rationale"
+    groups = {group["id"]: group for group in definition.metadata["workspace_display"]["groups"]}
+    assert groups["evidence"]["label"] == "Evidence and rationale"
+    assert groups["evidence"]["fields"] == ["rationale"]
+    assert "identity_resolution_notes" in groups["provenance"]["fields"]
+    assert "rationale" not in groups["provenance"]["fields"]
+
+
+def test_stored_gene_evidence_without_rationale_gets_no_new_findings():
+    from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+
+    envelope = load_domain_fixture_pack(BUILDER_FIXTURE_PATH).fixtures[0].envelope
+    assert envelope.extracted_objects[0].payload["rationale"]
+    stored = envelope.model_copy(deep=True)
+    for obj in stored.extracted_objects:
+        obj.payload.pop("rationale", None)
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+
+    with_rationale = run_domain_envelope_structural_checks(envelope, pack).appended_findings
+    without_rationale = run_domain_envelope_structural_checks(stored, pack).appended_findings
+    assert [finding.code for finding in without_rationale] == [
+        finding.code for finding in with_rationale
+    ]
+    assert not any("rationale" in str(finding.field_ref) for finding in without_rationale)

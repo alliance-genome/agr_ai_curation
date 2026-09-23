@@ -64,6 +64,10 @@ from .agr_curation import (
     _ok,
 )
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import (
+    document_rationale_arg,
+    normalize_rationale,
+)
 
 
 _GENE_CONFIDENCE_VALUES = frozenset({"high", "medium", "low"})
@@ -80,6 +84,7 @@ _GENE_PATCH_FIELD_PATHS = frozenset(
         "proposed_taxon",
         "confidence",
         "evidence_record_ids",
+        "rationale",
     }
 )
 
@@ -98,6 +103,7 @@ class GeneStageInput(_StrictToolModel):
     evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
     identity_resolution_notes: List[StrictStr] = Field(min_length=1, max_length=20)
     confidence: StrictStr
+    rationale: StrictStr
     species: Optional[StrictStr] = None
     taxon_hint: Optional[StrictStr] = None
     data_provider_hint: Optional[StrictStr] = None
@@ -128,6 +134,11 @@ class GeneStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("identity_resolution_notes must contain at least one non-empty value")
         return cleaned
+
+    @field_validator("rationale")
+    @classmethod
+    def _valid_rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
 
 class GenePatchUpdateInput(_StrictToolModel):
@@ -258,6 +269,7 @@ def _stage_payload_from_gene_input(stage_input: GeneStageInput) -> dict[str, Any
         "mention": stage_input.mention,
         "confidence": stage_input.confidence,
         "identity_resolution_notes": list(stage_input.identity_resolution_notes),
+        "rationale": stage_input.rationale,
     }
     for field_name in (
         "validation_guidance",
@@ -274,12 +286,14 @@ def _stage_payload_from_gene_input(stage_input: GeneStageInput) -> dict[str, Any
     return payload
 
 
+@document_rationale_arg
 def _stage_gene_mention_evidence_impl(
     pending_ref_id: str,
     mention: str,
     evidence_record_ids: List[str],
     identity_resolution_notes: List[str],
     confidence: str,
+    rationale: str,
     species: Optional[str] = None,
     taxon_hint: Optional[str] = None,
     data_provider_hint: Optional[str] = None,
@@ -315,6 +329,7 @@ def _stage_gene_mention_evidence_impl(
             evidence_record_ids=evidence_record_ids,
             identity_resolution_notes=identity_resolution_notes,
             confidence=confidence,
+            rationale=rationale,
             species=species,
             taxon_hint=taxon_hint,
             data_provider_hint=data_provider_hint,
@@ -426,6 +441,17 @@ def _patch_gene_mention_evidence_impl(
                     attempted_query=attempted_query,
                 )
             evidence_ids = new_ids
+            continue
+        if update.field_path == "rationale":
+            try:
+                payload["rationale"] = normalize_rationale(update.string_value or "")
+            except ValueError as exc:
+                return _gene_validation_result(
+                    message=f"rationale patch rejected: {exc}.",
+                    issues=[{"field_path": "rationale", "reason": "invalid_rationale", "message": str(exc)}],
+                    method="patch_gene_mention_evidence",
+                    attempted_query=attempted_query,
+                )
             continue
         _set_gene_patch_value(payload, update.field_path, update.string_value)
 
