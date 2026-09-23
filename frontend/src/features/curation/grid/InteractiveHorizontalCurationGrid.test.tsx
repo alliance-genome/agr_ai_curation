@@ -330,6 +330,7 @@ function buildModel({
             candidateMetadata: {},
             summaryFields: [],
             reviewRowMetadata: {},
+            rationale: null,
           },
           evidence: objectEvidence,
           validation: emptyValidation,
@@ -478,6 +479,16 @@ afterEach(() => {
 })
 
 describe('InteractiveHorizontalCurationGrid', () => {
+  it('shows an absent rationale as not recorded inside the selectable row context', () => {
+    const model = buildModel()
+    model.rows[0]!.contextCell.value.rationale = { value: null }
+    renderGrid({ model })
+
+    expect(
+      within(screen.getByTestId('horizontal-grid-context-candidate-1')).getByText('Not recorded'),
+    ).toBeInTheDocument()
+  })
+
   it('selects canonical candidates and dispatches exact field and context evidence commands', async () => {
     const user = userEvent.setup()
     const navigateEvidence = vi.fn()

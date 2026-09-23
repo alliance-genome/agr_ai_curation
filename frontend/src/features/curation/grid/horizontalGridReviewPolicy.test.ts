@@ -74,6 +74,16 @@ describe('horizontal grid review policy', () => {
     expect(isHorizontalGridDecisionField(reagent, field('source_label', null))).toBe(false)
   })
 
+  it('keeps the per-item rationale out of decision columns for every object type', () => {
+    for (const key of Object.keys(HORIZONTAL_GRID_REVIEW_POLICIES)) {
+      const separator = key.indexOf(':')
+      const typed = candidate(key.slice(0, separator), key.slice(separator + 1))
+      expect(isHorizontalGridDecisionField(typed, field('rationale', 'evidence')), key).toBe(false)
+    }
+    const future = candidate('future.pack', 'FutureObject')
+    expect(isHorizontalGridDecisionField(future, field('rationale', null))).toBe(false)
+  })
+
   it('keeps all configured fields for export-shaped envelopes and unknown future types', () => {
     const disease = candidate(configuredDomainPackId('DiseaseAnnotation'), 'DiseaseAnnotation')
     expect(isHorizontalGridDecisionField(

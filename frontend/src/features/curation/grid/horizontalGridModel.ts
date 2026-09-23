@@ -21,7 +21,10 @@ import type { WorkspaceEnvelopeObjectReviewRow } from '@/features/curation/works
 import { objectSelectorLabel } from '@/features/curation/workspace/objectSelector'
 import { resolveEnvelopeFieldPath } from '@/features/curation/workspace/workspaceState'
 import { formatHorizontalGridValue } from './horizontalGridFormatting'
-import { isHorizontalGridDecisionField } from './horizontalGridReviewPolicy'
+import {
+  HORIZONTAL_GRID_RATIONALE_FIELD_PATH,
+  isHorizontalGridDecisionField,
+} from './horizontalGridReviewPolicy'
 
 export const HORIZONTAL_GRID_CONTEXT_COLUMN_KEY = 'context'
 
@@ -59,6 +62,10 @@ export interface HorizontalGridRowContext {
   candidateMetadata: Record<string, unknown>
   summaryFields: DomainEnvelopeReviewRowSummaryField[] | null
   reviewRowMetadata: Record<string, unknown> | null
+  // Null when the object type declares no rationale field; a declared field
+  // without a stored value (records extracted before rationale existed) keeps
+  // `value: null` so review can say it was not recorded.
+  rationale: { value: string | null } | null
 }
 
 export interface HorizontalGridContextCell {
@@ -385,6 +392,18 @@ function fieldsByCanonicalPath(candidate: CurationCandidate): Map<string, Curati
   return fieldsByPath
 }
 
+function rationaleForCandidate(candidate: CurationCandidate): HorizontalGridRowContext['rationale'] {
+  const field = candidate.draft.fields.find(
+    (item) => resolveEnvelopeFieldPath(item) === HORIZONTAL_GRID_RATIONALE_FIELD_PATH,
+  )
+  if (!field) {
+    return null
+  }
+  return {
+    value: typeof field.value === 'string' && field.value.trim() ? field.value.trim() : null,
+  }
+}
+
 function contextForRow(row: HorizontalGridSourceRow): HorizontalGridRowContext {
   const candidate = row.candidate
 
@@ -402,6 +421,7 @@ function contextForRow(row: HorizontalGridSourceRow): HorizontalGridRowContext {
     candidateMetadata: candidate.metadata,
     summaryFields: row.reviewRow ? [...row.reviewRow.summary_fields] : null,
     reviewRowMetadata: row.reviewRow?.metadata ?? null,
+    rationale: rationaleForCandidate(candidate),
   }
 }
 

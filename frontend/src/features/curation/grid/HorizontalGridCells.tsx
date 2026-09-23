@@ -30,6 +30,38 @@ export function contextEvidenceLabel(
   return fieldPath ? `Field evidence (${fieldPath})` : 'Object evidence'
 }
 
+export function HorizontalGridRationaleLine({
+  rationale,
+}: {
+  rationale: HorizontalGridContextCell['value']['rationale']
+}) {
+  if (!rationale) {
+    return null
+  }
+
+  return (
+    <Typography
+      color={rationale.value === null ? 'text.disabled' : 'text.secondary'}
+      data-slot="row-rationale"
+      title={rationale.value ?? undefined}
+      sx={{
+        display: '-webkit-box',
+        fontSize: 11,
+        lineHeight: 1.25,
+        overflow: 'hidden',
+        overflowWrap: 'anywhere',
+        WebkitBoxOrient: 'vertical',
+        WebkitLineClamp: 2,
+      }}
+    >
+      <Box component="span" sx={{ fontWeight: 700 }}>Rationale: </Box>
+      {rationale.value ?? (
+        <Box component="span" sx={{ fontStyle: 'italic' }}>Not recorded</Box>
+      )}
+    </Typography>
+  )
+}
+
 export function HorizontalGridContextCellContent({
   active,
   cell,
@@ -74,6 +106,7 @@ export function HorizontalGridContextCellContent({
               {cell.value.secondaryLabel}
             </Typography>
           ) : null}
+          <HorizontalGridRationaleLine rationale={cell.value.rationale} />
         </Stack>
       </ButtonBase>
       {cell.evidence.length > 0 ? (
