@@ -74,6 +74,7 @@ def _staged_fields() -> dict[str, Any]:
         "term_label": "abnormal sensory cilium morphology",
         "data_provider": "WB",
         "term_taxon_id": "NCBITaxon:6239",
+        "rationale": "Amphid cilia were truncated in che-2 mutants, a morphology defect rather than a behaviour.",
         "negated": False,
     }
 
@@ -483,3 +484,156 @@ def test_phenotype_builder_omits_condition_relations_when_unstaged():
         if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
     )
     assert "condition_relations" not in annotation["payload"]
+
+
+# --- ALL-1298: per-item rationale -------------------------------------------------------------
+
+
+def _stage_kwargs(**overrides: Any) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "pending_ref_id": "phenotype-annotation-1",
+        "phenotype_annotation_object": "abnormal sensory cilia morphology",
+        "evidence_record_ids": ["evidence-cilia-1"],
+        "source_mentions": ["sensory cilia were truncated in mutant animals"],
+        "rationale": "  Amphid cilia were truncated in che-2 mutants, a morphology defect.  ",
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def _builder_tools_with_workspace(monkeypatch: Any) -> tuple[Any, ExtractionBuilderWorkspace]:
+    from agr_ai_curation_alliance.tools import phenotype_builder_tools as tools
+
+    workspace = ExtractionBuilderWorkspace(
+        run_id="phenotype-rationale-run",
+        domain_pack_id=PHENOTYPE_DOMAIN_PACK_ID,
+        agent_id="phenotype_extractor",
+    )
+    monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
+    monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_: None)
+    return tools, workspace
+
+
+def test_stage_phenotype_tool_requires_rationale_with_shared_description():
+    from agr_ai_curation_alliance.tools.builder_rationale import RATIONALE_ARG_DESCRIPTION
+    from agr_ai_curation_alliance.tools.phenotype_builder_tools import (
+        patch_phenotype_observation,
+        stage_phenotype_observation,
+    )
+
+    schema = stage_phenotype_observation.params_json_schema
+    assert "rationale" in schema["required"]
+    assert schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+    patch_updates = patch_phenotype_observation.params_json_schema["properties"]["updates"]
+    assert "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared." in (
+        " ".join(patch_updates["description"].split())
+    )
+
+
+def test_stage_phenotype_observation_stores_stripped_rationale(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(**_stage_kwargs())
+
+    assert result.status == "ok"
+    staged = workspace.candidates[result.data["candidate_id"]].staged_fields
+    assert staged["rationale"] == "Amphid cilia were truncated in che-2 mutants, a morphology defect."
+
+
+def test_stage_phenotype_observation_rejects_blank_or_overlong_rationale(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    blank = tools._stage_phenotype_observation_impl(**_stage_kwargs(rationale="   "))
+    overlong = tools._stage_phenotype_observation_impl(**_stage_kwargs(rationale="x" * 301))
+
+    for result in (blank, overlong):
+        assert result.status == "error"
+        assert result.data["validation_issues"][0]["field_path"] == "rationale"
+    assert "shorten it to at most 300 characters" in overlong.data["validation_issues"][0]["message"]
+    assert workspace.candidates == {}
+
+
+def test_patch_phenotype_observation_rewrites_but_never_clears_rationale(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    candidate_id = tools._stage_phenotype_observation_impl(**_stage_kwargs()).data["candidate_id"]
+
+    rewritten = tools._patch_phenotype_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="phenotype-annotation-1",
+        updates=[{"field_path": "rationale", "string_value": "Cilia were shortened, not absent."}],
+    )
+    assert rewritten.status == "ok"
+    assert workspace.candidates[candidate_id].staged_fields["rationale"] == (
+        "Cilia were shortened, not absent."
+    )
+
+    for value in ("  ", None):
+        cleared = tools._patch_phenotype_observation_impl(
+            candidate_id=candidate_id,
+            pending_ref_id="phenotype-annotation-1",
+            updates=[{"field_path": "rationale", "string_value": value}],
+        )
+        assert cleared.status == "error"
+        assert cleared.data["validation_issues"][0]["reason"] == "invalid_rationale"
+    assert workspace.candidates[candidate_id].staged_fields["rationale"] == (
+        "Cilia were shortened, not absent."
+    )
+
+
+def test_phenotype_builder_carries_rationale_onto_annotation_only():
+    result = _materialize_one_candidate()
+    assert result.ok, result.summary()
+
+    for obj in result.payload["curatable_objects"]:
+        if obj["object_type"] == PHENOTYPE_OBJECT_TYPE:
+            assert obj["payload"]["rationale"] == _staged_fields()["rationale"]
+        else:
+            assert "rationale" not in obj["payload"]
+
+
+def test_phenotype_builder_rejects_new_candidate_without_rationale():
+    staged_fields = _staged_fields()
+    del staged_fields["rationale"]
+
+    result = _materialize_one_candidate(staged_fields=staged_fields)
+
+    assert not result.ok
+    assert any(issue["reason"] == "missing_rationale" for issue in result.issues)
+
+
+def test_phenotype_annotation_declares_optional_rationale_in_rationale_group():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(PHENOTYPE_DOMAIN_PACK_ID)
+    assert pack is not None
+    definition = next(
+        definition
+        for definition in pack.metadata.object_definitions
+        if definition.object_type == PHENOTYPE_OBJECT_TYPE
+    )
+    rationale = next(field for field in definition.fields if field.field_path == "rationale")
+    assert rationale.field_type == "string"
+    assert rationale.required is False
+    groups = definition.metadata["workspace_display"]["groups"]
+    rationale_group = next(group for group in groups if group["id"] == "rationale")
+    assert rationale_group["label"] == "Rationale"
+    assert rationale_group["fields"] == ["rationale"]
+
+
+def test_stored_phenotype_annotation_without_rationale_validates_without_new_findings():
+    from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(PHENOTYPE_DOMAIN_PACK_ID)
+    assert pack is not None
+    current = load_domain_fixture_pack(BUILDER_FIXTURE_PATH).fixtures[0].envelope
+    stored_before_rationale = current.model_copy(deep=True)
+    for obj in stored_before_rationale.extracted_objects:
+        obj.payload.pop("rationale", None)
+    assert any("rationale" in obj.payload for obj in current.extracted_objects)
+
+    baseline = run_domain_envelope_structural_checks(current, pack)
+    legacy = run_domain_envelope_structural_checks(stored_before_rationale, pack)
+
+    assert [finding.code for finding in legacy.appended_findings] == [
+        finding.code for finding in baseline.appended_findings
+    ]

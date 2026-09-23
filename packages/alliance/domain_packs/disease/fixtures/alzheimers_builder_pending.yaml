@@ -164,6 +164,7 @@ fixtures:
           chunk_id: chunk-ad-1
         source_mentions:
         - a transgenic Drosophila model of Alzheimer's disease
+        rationale: Expressing human APP and BACE in this line reproduced core Alzheimer's features, so Appl is a model subject rather than a background mention.
         negated: false
       model_ref: PendingDiseaseAssertionPayload
       schema_ref:

@@ -474,6 +474,10 @@ class PhenotypeAnnotationPayload(BaseModel):
         min_length=1,
         description="Raw phenotype mentions supporting this assertion",
     )
+    rationale: StrictStr | None = Field(
+        default=None,
+        description="Curator-facing reason the extractor selected this item, written at extraction time",
+    )
     negated: bool = Field(
         default=False,
         description="True only when the paper explicitly reports the phenotype was not observed",

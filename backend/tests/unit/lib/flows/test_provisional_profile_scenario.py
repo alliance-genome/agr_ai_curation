@@ -83,7 +83,8 @@ def test_typed_candidate_mismatch_then_explicit_profile_bound_success(scenario, 
     monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **_: None)
     arguments = {"label": case["label"], "attributes": case["attributes"],
                  "evidence_record_ids": ["synthetic-evidence-1"],
-                 "classification_notes": ["Synthetic contract regression; no production content."]}
+                 "classification_notes": ["Synthetic contract regression; no production content."],
+                 "rationale": "Synthetic contract regression rationale."}
     exploratory = builder.ExtractionBuilderWorkspace(run_id="typed-mismatch", domain_pack_id="generic")
     token = builder.set_active_extraction_builder_workspace(exploratory)
     try:

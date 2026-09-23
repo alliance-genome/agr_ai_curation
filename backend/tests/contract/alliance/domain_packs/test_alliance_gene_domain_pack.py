@@ -137,6 +137,7 @@ def test_gene_mention_evidence_is_exporting_validated_reference():
     assert [group["id"] for group in workspace_display["groups"]] == [
         "identity",
         "ai_proposal",
+        "rationale",
         "evidence_location",
         "provenance",
     ]

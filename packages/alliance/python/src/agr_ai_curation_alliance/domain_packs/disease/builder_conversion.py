@@ -627,6 +627,18 @@ def materialize_disease_builder_state(
             )
             continue
 
+        rationale = _clean_text(staged_fields.get("rationale"))
+        if rationale is None:
+            issues.append(
+                _materialization_issue(
+                    field_path="rationale",
+                    reason="missing_rationale",
+                    message="Finalized disease candidates require a curator-facing rationale.",
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
+
         evidence_ids = _unique_strings(
             getattr(candidate, "evidence_record_ids", None)
             or staged_fields.get("evidence_record_ids")
@@ -818,6 +830,7 @@ def materialize_disease_builder_state(
             "evidence_record_ids": annotation_evidence_ids,
             "evidence_records": evidence_snapshot_records,
             "source_mentions": list(source_mentions),
+            "rationale": rationale,
             "negated": negated,
         }
         if relation_name is not None:

@@ -121,6 +121,11 @@ class ResolvedGenericProfile:
                              "field_path": {"type": "string", "const": "validation_guidance"},
                              "value": {"type": ["string", "null"]},
                          }})
+        variants.append({"type": "object", "additionalProperties": False,
+                         "required": ["field_path", "value"], "properties": {
+                             "field_path": {"type": "string", "const": "rationale"},
+                             "value": {"type": "string", "minLength": 1},
+                         }})
         return {"type": "array", "minItems": 1, "items": {"anyOf": variants}}
 
     def validate_attributes(self, attributes: Any, *, candidate_id: str | None = None) -> list[dict[str, Any]]:
@@ -205,7 +210,8 @@ class ResolvedGenericProfile:
     def validate_candidate(self, candidate: dict[str, Any], *, candidate_id: str | None = None) -> list[dict[str, Any]]:
         allowed = {"domain_pack_id", "object_type", "class_key", "label", "classification_notes",
                    "payload", "pending_ref_id", "source_label", "description", "confidence",
-                   "semantic_class", "attributes", "evidence_record_ids", "validation_guidance"}
+                   "semantic_class", "attributes", "evidence_record_ids", "validation_guidance",
+                   "rationale"}
         unknown = set(candidate) - allowed
         if unknown:
             return [{"candidate_id": candidate_id, "field_path": key,
@@ -269,7 +275,7 @@ class ResolvedGenericProfile:
             raise ProfileIdentityError("Envelope producer does not match the canonical agent")
         issues = []
         payload_keys = {"label", "class_key", "source_label", "description", "confidence",
-                        "classification_notes", "semantic_class", "attributes"}
+                        "classification_notes", "rationale", "semantic_class", "attributes"}
         for index, obj in enumerate(envelope.get("curatable_objects", [])):
             candidate_id = obj.get("pending_ref_id")
             self.require_receipt(obj.get("metadata", {}).get("generic_profile_ref"))

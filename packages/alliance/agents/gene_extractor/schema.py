@@ -144,6 +144,13 @@ class GeneMentionEvidencePayload(BaseModel):
     confidence: Literal["high", "medium", "low"] = Field(
         description="Extractor confidence in the gene mention, species context, and evidence match"
     )
+    rationale: StrictStr | None = Field(
+        default=None,
+        description=(
+            "Curator-facing reason the extractor selected this gene from the paper, "
+            "written at extraction time"
+        ),
+    )
     evidence_record_id: StrictStr = Field(
         description="Stable ID returned by the paper evidence verification tool"
     )
@@ -176,6 +183,7 @@ class GeneMentionEvidencePayload(BaseModel):
         "proposed_primary_external_id",
         "proposed_gene_symbol",
         "proposed_taxon",
+        "rationale",
         "subsection",
         "figure_reference",
         mode="before",

@@ -1679,6 +1679,7 @@ def _build_artifact_from_step(
         warnings.append("No canonical curation object rows are available for this artifact.")
 
     from src.lib.flows.export_fields import (
+        PROFILE_RATIONALE_EXPORT_FIELD,
         packaged_export_source,
         packaged_field_value,
         profile_export_fields,
@@ -1693,11 +1694,14 @@ def _build_artifact_from_step(
     declared_labels: list[Any] = [_declared_payload_label(item) for item in object_items]
     if profile_fields is not None:
         export_fields = profile_export_fields(profile_fields)
-        # Custom profiles: top-level contract fields in declaration order.
+        # Custom profiles: top-level contract fields in declaration order, then the rationale.
         default_object_refs = [
-            field.row_ref
-            for field in profile_fields
-            if "." not in field.profile_path.removeprefix("attributes.")
+            *(
+                field.row_ref
+                for field in profile_fields
+                if "." not in field.profile_path.removeprefix("attributes.")
+            ),
+            PROFILE_RATIONALE_EXPORT_FIELD["ref"],
         ]
     else:
         # A persisted envelope declares its pack independently of whether the

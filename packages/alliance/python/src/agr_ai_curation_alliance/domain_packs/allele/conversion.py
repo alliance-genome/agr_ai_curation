@@ -606,6 +606,17 @@ def materialize_allele_builder_state(
                 )
             )
             continue
+        rationale = _clean_text(staged_fields.get("rationale"))
+        if rationale is None:
+            issues.append(
+                _materialization_issue(
+                    field_path="rationale",
+                    reason="missing_rationale",
+                    message="Finalized allele candidates require a non-empty rationale.",
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
 
         evidence_ids = _unique_strings(
             getattr(candidate, "evidence_record_ids", None)
@@ -739,6 +750,7 @@ def materialize_allele_builder_state(
             "association_kind": ALLELE_ASSOCIATION_KIND,
             "allele_label": mention_text,
             "evidence_record_ids": association_evidence_ids,
+            "rationale": rationale,
         }
         if reference_paper_title is not None:
             association_payload["reference_title"] = reference_paper_title

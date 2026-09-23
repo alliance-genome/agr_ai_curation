@@ -816,6 +816,10 @@ tools:
             type: string
             required: true
             description: A plain sentence describing where (and when) the gene was seen to be expressed, in the agent's words from the paper.
+          - name: rationale
+            type: string
+            required: true
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: subject
             type: any
             required: true
@@ -859,7 +863,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:discard_gene_expression_observation
@@ -1028,6 +1032,10 @@ tools:
             type: string
             required: true
             description: How sure the agent is about this finding (high, medium, or low).
+          - name: rationale
+            type: string
+            required: true
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: species
             type: any
             required: false
@@ -1085,7 +1093,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_gene_mention_evidence
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:discard_gene_mention_evidence
@@ -1248,7 +1256,7 @@ tools:
       audit:
         display_name: Stage Generic Object
       documentation:
-        summary: Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, and classification notes.
+        summary: Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, classification notes, and a rationale.
         parameters:
           - name: class_key
             type: string
@@ -1266,6 +1274,10 @@ tools:
             type: array
             required: true
             description: Notes explaining why this class key fits the paper evidence.
+          - name: rationale
+            type: string
+            required: true
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: pending_ref_id
             type: string
             required: false
@@ -1317,7 +1329,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids.
+            description: Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_generic_object
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.generic_builder_tools:discard_generic_object
@@ -1480,6 +1492,10 @@ tools:
             type: array
             required: true
             description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
+          - name: rationale
+            type: string
+            required: true
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: normalized_hint
             type: any
             required: false
@@ -1532,7 +1548,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_allele_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:discard_allele_observation
@@ -1699,6 +1715,10 @@ tools:
             type: array
             required: true
             description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
+          - name: rationale
+            type: string
+            required: true
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: subject_identifier
             type: any
             required: false
@@ -1776,7 +1796,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_phenotype_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:discard_phenotype_observation
@@ -1960,6 +1980,10 @@ tools:
             type: array
             required: true
             description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
+          - name: rationale
+            type: string
+            required: true
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: disease_curie
             type: any
             required: false
@@ -2042,7 +2066,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_disease_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:discard_disease_observation

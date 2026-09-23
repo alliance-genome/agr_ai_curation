@@ -225,6 +225,20 @@ def test_gene_extractor_schema_requires_payload_metadata_evidence_alignment():
         _gene_extractor_schema().model_validate(payload)
 
 
+def test_gene_extractor_schema_accepts_payload_with_and_without_rationale():
+    stored = _validate_gene_extractor_payload(_valid_gene_extractor_payload())
+    assert stored.curatable_objects[0].payload.rationale is None
+
+    payload = _valid_gene_extractor_payload()
+    payload["curatable_objects"][0]["payload"]["rationale"] = (
+        "  DAF-16 nuclear translocation is this paper's own heat-shock result.  "
+    )
+    envelope = _validate_gene_extractor_payload(payload)
+    assert envelope.curatable_objects[0].payload.rationale == (
+        "DAF-16 nuclear translocation is this paper's own heat-shock result."
+    )
+
+
 @pytest.mark.parametrize("notes_value", [[], None])
 def test_gene_extractor_schema_requires_identity_resolution_notes(notes_value):
     payload = _valid_gene_extractor_payload()

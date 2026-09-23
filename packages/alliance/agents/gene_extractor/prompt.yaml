@@ -86,7 +86,7 @@ content: |
   1. Search/read the document for candidate mentions and context. Use `search_document` to sweep the paper, and `read_section`/`read_subsection` to inspect results, figure legends, tables, discussion, and methods context.
   2. For central-focus questions, build a provisional list of the focal genes the question calls for before selecting evidence; do not record every gene a broad search returns.
   3. Once a gene is both focal and experimentally supported, call `read_chunk(chunk_id)` on the relevant chunk, select the `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`. Multiple `span_ids` in one call make one evidence record; use separate calls for truly disjoint evidence units. Do not write, reconstruct, trim, or paraphrase source quote text yourself. If an existing active evidence record should stay attached but its source spans were wrong, call `record_evidence(entity=..., span_ids=[...], evidence_record_id=existing_id)` with current span IDs to update that same evidence record.
-  4. Stage each retained focal gene with `stage_gene_mention_evidence`, passing the verified `evidence_record_ids`, a stable `pending_ref_id`, the paper `mention`, `confidence`, `identity_resolution_notes`, and species/taxon/provider hints so the validator can resolve or leave the target unresolved.
+  4. Stage each retained focal gene with `stage_gene_mention_evidence`, passing the verified `evidence_record_ids`, a stable `pending_ref_id`, the paper `mention`, `confidence`, `identity_resolution_notes`, `rationale`, and species/taxon/provider hints so the validator can resolve or leave the target unresolved.
   5. Call `list_staged_gene_mention_evidence` to review, use `patch_gene_mention_evidence`/`discard_gene_mention_evidence` to fix issues, then call `finalize_gene_extraction(candidate_ids=[...])` exactly once with the candidate IDs your stage calls returned.
 
   Supporting evidence-workspace tools: `list_recorded_evidence`/`get_recorded_evidence` review queued active-run evidence. Attach every retained evidence record to the staged `pending_ref_id` and at least one concrete `field_path` it supports (for example `mention`, `species`, `taxon_hint`, `data_provider_hint`, `proposed_gene_symbol`, or `identity_resolution_notes`); do not leave new evidence object-level only. Use `attach_evidence_to_object`/`detach_evidence_from_object` only to correct concrete target fields, `discard_recorded_evidence` to remove wrong or weak evidence without deleting audit history, and `update_recorded_evidence_metadata` for editable agent-owned metadata such as entity, field_path, or agent_note. Source quote/provenance changes go through same-ID `record_evidence`, not metadata edits.
@@ -100,6 +100,7 @@ content: |
   Every evidence record carries an `evidence_record_id` plus backend-owned source quote/provenance fields from `record_evidence`; never type or copy those source fields yourself. Use the specific gene label as `entity`, not a generic "gene" and not a chemical, phenotype, or treatment term.
 
   For each retained gene/evidence pairing (the `<workflow>` tool sequence produces these), the staged payload is: a stable `pending_ref_id`, the returned `evidence_record_ids`, `mention`, `confidence`, and paper-backed identity/context hints (`species`, `taxon_hint`, `data_provider_hint`, `proposed_gene_symbol`, `proposed_taxon`, `identity_resolution_notes`).
+  - `rationale` (max 300 characters) is the curator-facing reason this gene is curatable from this paper (the finding that makes it focal), not how its identity was resolved; identity reasoning stays in `identity_resolution_notes`.
   - Include `proposed_primary_external_id` only when the paper itself supplies a specific identifier. Do not guess or look up IDs in the extractor.
   - When one gene needs two retained quotes, make two stage calls that share the same `mention` and identity hints but use a different `pending_ref_id` and different evidence IDs.
 
@@ -187,6 +188,7 @@ content: |
       "The paper presents crumb as a focal Drosophila gene and ties it to epithelial polarity evidence in the quoted Results passage."
     ],
     confidence="high",
+    rationale="crumb loss disrupts epithelial polarity in this paper's own mutant analysis, making it a focal gene rather than a pathway name.",
     species="Drosophila melanogaster",
     taxon_hint="NCBITaxon:7227",
     data_provider_hint="FB",
@@ -202,6 +204,7 @@ content: |
       "The same Drosophila gene label is used for a second verified phenotype passage, so this staged finding keeps the same identity hints with a different evidence record."
     ],
     confidence="high",
+    rationale="A second crumb experiment in this paper reports its own phenotype, so it supports curating crumb independently of the first.",
     species="Drosophila melanogaster",
     taxon_hint="NCBITaxon:7227",
     data_provider_hint="FB",
@@ -252,6 +255,7 @@ content: |
       "The paper reports a new mutant phenotype for yurt in Drosophila; nearby text distinguishes this retained gene from prior-work background mentions."
     ],
     confidence="medium",
+    rationale="yurt mutants lose apical junction continuity in this study; par-6 in the same sentence is only prior work.",
     species="Drosophila melanogaster",
     taxon_hint="NCBITaxon:7227",
     data_provider_hint="FB",

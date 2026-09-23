@@ -50,6 +50,7 @@ from .agr_curation import (
     _search_builder_candidates,
 )
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import document_rationale_arg, normalize_rationale
 
 
 _GENERIC_TOP_LEVEL_PATCH_FIELDS = frozenset(
@@ -63,6 +64,7 @@ _GENERIC_TOP_LEVEL_PATCH_FIELDS = frozenset(
         "confidence",
         "semantic_class",
         "classification_notes",
+        "rationale",
         "payload",
         "attributes",
         "evidence_record_ids",
@@ -214,6 +216,7 @@ class GenericStageInput(_StrictToolModel):
     label: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1)
     classification_notes: List[StrictStr] = Field(min_length=1)
+    rationale: StrictStr
     pending_ref_id: Optional[StrictStr] = None
     source_label: Optional[StrictStr] = None
     description: Optional[StrictStr] = None
@@ -254,6 +257,11 @@ class GenericStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("classification_notes must contain at least one non-empty value")
         return cleaned
+
+    @field_validator("rationale")
+    @classmethod
+    def _valid_rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
 
 class GenericPatchUpdateInput(_StrictToolModel):
@@ -400,6 +408,7 @@ def _stage_payload_from_generic_input(
         "class_key": entry.class_key,
         "label": stage_input.label,
         "classification_notes": list(stage_input.classification_notes),
+        "rationale": stage_input.rationale,
         "payload": dict(stage_input.payload),
     }
     if stage_input.pending_ref_id:
@@ -460,11 +469,13 @@ def _list_generic_object_classes_impl(
     )
 
 
+@document_rationale_arg
 def _stage_generic_object_impl(
     class_key: str,
     label: str,
     evidence_record_ids: List[str],
     classification_notes: List[str],
+    rationale: str,
     pending_ref_id: Optional[str] = None,
     source_label: Optional[str] = None,
     description: Optional[str] = None,
@@ -502,6 +513,7 @@ def _stage_generic_object_impl(
             label=label,
             evidence_record_ids=evidence_record_ids,
             classification_notes=classification_notes,
+            rationale=rationale,
             pending_ref_id=pending_ref_id,
             source_label=source_label,
             description=description,
@@ -636,7 +648,12 @@ def _patch_generic_object_impl(
     candidate_id: str,
     updates: List[Mapping[str, Any]],
 ) -> AgrQueryResult:
-    """Patch allowed fields on one staged generic candidate."""
+    """Patch allowed fields on one staged generic candidate.
+
+    Args:
+        updates: Field updates, each a field_path with its value (or evidence_record_ids).
+            A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
+    """
 
     workspace = get_active_extraction_builder_workspace()
     profile = getattr(workspace, "generic_profile", None)
@@ -701,6 +718,19 @@ def _patch_generic_object_impl(
                     attempted_query=attempted_query,
                 )
             evidence_ids = new_ids
+            continue
+        if update.field_path == "rationale":
+            try:
+                if not isinstance(update.value, str):
+                    raise ValueError("rationale must be a non-empty string; it cannot be cleared")
+                staged_payload["rationale"] = normalize_rationale(update.value)
+            except ValueError as exc:
+                return _generic_validation_result(
+                    message=f"rationale patch rejected: {exc}",
+                    issues=[{"field_path": "rationale", "reason": "invalid_rationale", "message": str(exc)}],
+                    method="patch_generic_object",
+                    attempted_query=attempted_query,
+                )
             continue
         if profile is not None:
             if update.field_path == "attributes" or update.field_path.startswith("attributes."):

@@ -324,6 +324,7 @@ def test_generic_builder_materializer_requires_explicit_class_key_and_label():
     missing_class_workspace = _generic_workspace(
         {
             "label": "TRiP.HMS00001",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The source table labels this as an RNAi reagent."],
         }
     )
@@ -342,6 +343,7 @@ def test_generic_builder_materializer_requires_explicit_class_key_and_label():
     missing_label_workspace = _generic_workspace(
         {
             "class_key": "generic:generic_reagent_candidate",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The source table labels this as an RNAi reagent."],
         }
     )
@@ -362,6 +364,7 @@ def test_explicit_generic_object_class_materializes_without_fallback():
             "label": "TRiP.HMS00001",
             "source_label": "TRiP.HMS00001",
             "description": "RNAi reagent mentioned in the paper.",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": [
                 "The paper calls this a reagent but no more specific class is needed."
             ],
@@ -383,6 +386,7 @@ def test_explicit_generic_object_class_materializes_without_fallback():
     assert obj.payload["class_key"] == "generic:generic_object"
     assert obj.payload["label"] == "TRiP.HMS00001"
     assert obj.payload["attributes"]["source_identifier"] == "TRiP.HMS00001"
+    assert obj.payload["rationale"] == "The paper names this item in its Results."
     assert obj.evidence_record_ids == ["evidence-generic-1"]
     assert obj.metadata["generic_extraction"]["class_key"] == "generic:generic_object"
     assert result.payload["metadata"]["provenance"]["source"] == GENERIC_MATERIALIZER_ID
@@ -390,11 +394,54 @@ def test_explicit_generic_object_class_materializes_without_fallback():
     assert "raw_mentions" not in result.payload
 
 
+@pytest.mark.parametrize("rationale", [None, "", "   "])
+def test_generic_materializer_rejects_new_candidate_without_rationale(rationale):
+    staged_fields = {
+        "class_key": "generic:generic_claim",
+        "label": "RNAi screen result",
+        "classification_notes": ["This is a paper-level result claim."],
+        "payload": {"claim_text": "The screen identified TRiP.HMS00001."},
+    }
+    if rationale is not None:
+        staged_fields["rationale"] = rationale
+    result = materialize_generic_builder_state(
+        workspace=_generic_workspace(staged_fields),
+        candidate_ids=["generic-candidate-1"],
+        evidence_records=_evidence_records(),
+        resolver_entry_lookup=None,
+    )
+
+    assert not result.ok
+    assert [(issue["field_path"], issue["reason"]) for issue in result.issues] == [
+        ("rationale", "missing_rationale")
+    ]
+
+
+@pytest.mark.parametrize(
+    "object_type", ["generic_object", "generic_claim", "generic_reagent_candidate"]
+)
+def test_generic_classes_declare_optional_rationale_in_rationale_group(object_type):
+    pack = get_generated_generic_domain_pack()
+    definition = next(
+        obj for obj in pack.metadata.object_definitions if obj.object_type == object_type
+    )
+    field = next(field for field in definition.fields if field.field_path == "rationale")
+    assert field.required is False
+    assert field.display_name == "Rationale"
+    groups = definition.metadata["workspace_display"]["groups"]
+    rationale_group = next(group for group in groups if group["id"] == "rationale")
+    assert rationale_group == {"id": "rationale", "label": "Rationale", "fields": ["rationale"]}
+    # Grouping must keep the summary fields curators saw before the rationale group existed.
+    grouped = [path for group in groups for path in group["fields"]]
+    assert set(definition.metadata["workspace_display"]["summary_fields"]) <= set(grouped)
+
+
 def test_generic_materializer_rejects_invalid_semantic_attributes():
     workspace = _generic_workspace(
         {
             "class_key": "generic:generic_object",
             "label": "B cell lymphoma",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The paper reports this tumor classification."],
             "attributes": {
                 "Cell Type": "B cell",
@@ -421,6 +468,7 @@ def test_generic_materializer_enforces_required_class_payload_fields():
         {
             "class_key": "generic:generic_claim",
             "label": "principal finding",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["This is a paper-level result claim."],
         }
     )
@@ -444,6 +492,7 @@ def test_generic_materializer_rejects_payload_keys_outside_selected_class():
         {
             "class_key": "generic:generic_reagent_candidate",
             "label": "TRiP.HMS00001",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The source table labels this as an RNAi reagent."],
             "payload": {"source_identifer": "typo"},
         }
@@ -519,6 +568,7 @@ def test_generic_builder_finalization_projects_to_object_tsv_rows():
             staged_fields={
                 "class_key": "generic:generic_reagent_candidate",
                 "label": label,
+                "rationale": "The paper names this item in its Results.",
                 "classification_notes": ["The prompt asked for a reagent inventory."],
                 "payload": {
                     "source": source,
@@ -585,6 +635,7 @@ def test_generic_proxy_materializer_hydrates_required_evidence_fields_and_schema
             "class_key": "gene:gene_mention_evidence",
             "label": "daf-16",
             "confidence": "high",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The paper-backed mention is a gene symbol."],
             "payload": {
                 "identity_resolution_notes": [
@@ -644,6 +695,7 @@ def test_unknown_generic_class_key_is_rejected_not_silently_fallbacked():
         {
             "class_key": "unknown:thing",
             "label": "TRiP.HMS00001",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["This deliberately uses an unknown class key."],
         }
     )
@@ -715,6 +767,7 @@ def test_generic_materializer_rejects_unknown_evidence_record_id():
         {
             "class_key": "generic:generic_reagent_candidate",
             "label": "TRiP.HMS00001",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The source table labels this as an RNAi reagent."],
         }
     )
