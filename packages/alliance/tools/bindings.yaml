@@ -1076,7 +1076,7 @@ tools:
       audit:
         display_name: Patch Gene Mention Evidence
       documentation:
-        summary: Updates specific fields on one draft gene the agent staged earlier — for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
+        summary: Updates specific fields on one draft gene the agent staged earlier — for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded.
         parameters:
           - name: candidate_id
             type: string
@@ -1089,7 +1089,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_gene_mention_evidence
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:discard_gene_mention_evidence
@@ -1527,7 +1527,7 @@ tools:
       audit:
         display_name: Patch Allele Observation
       documentation:
-        summary: Updates specific fields on one draft allele the agent staged earlier — for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
+        summary: Updates specific fields on one draft allele the agent staged earlier — for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded.
         parameters:
           - name: candidate_id
             type: string
@@ -1540,7 +1540,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_allele_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:discard_allele_observation
