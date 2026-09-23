@@ -67,6 +67,8 @@ from src.lib.domain_packs.resolvable_values import (
     OUTCOME_INVALID_SCHEMA,
     OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
     VALIDATOR_MATERIALIZATION_METADATA_KEY,
+    VALIDATOR_CURATOR_MESSAGE_KEY,
+    VALIDATOR_EXPLANATION_KEY,
     ResolvableSpec,
     ResolvableValueError,
     copy_resolution,
@@ -925,6 +927,20 @@ def _field_resolution_for(
     return None
 
 
+def _without_validator_words(value: Any) -> Any:
+    """A payload without the validators' free-text words (identity, state and outcome only)."""
+
+    if isinstance(value, list):
+        return [_without_validator_words(item) for item in value]
+    if isinstance(value, Mapping):
+        return {
+            key: _without_validator_words(item)
+            for key, item in value.items()
+            if key not in (VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY)
+        }
+    return value
+
+
 def _with_patched_target(
     envelope: DomainEnvelope,
     item: ValidatorResultMaterializationInput,
@@ -953,7 +969,9 @@ def _with_patched_target(
         else target.definition_state
     )
     if (
-        not payload_changed
+        # Only the decision counts: a validator's explanation words differ from
+        # run to run, so they are updated in place without a new event.
+        _without_validator_words(payload) == _without_validator_words(target.payload)
         and target.status is CuratableObjectStatus.VALIDATED
         and target.definition_state is definition_state
         # A value an earlier event already covers needs no new event; an
@@ -961,7 +979,9 @@ def _with_patched_target(
         # validator events) is recorded so the legacy rule sees it verified.
         and all(validator_event_covers(target.metadata, path) for path in materialized_field_paths)
     ):
-        return envelope, None
+        if not payload_changed:
+            return envelope, None
+        return _with_object_payload(envelope, target, payload), None
 
     original_values = _original_materialized_values(
         target.payload,

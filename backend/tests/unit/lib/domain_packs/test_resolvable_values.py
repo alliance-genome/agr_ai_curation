@@ -1409,3 +1409,27 @@ def test_effective_payload_reads_a_large_export_quickly():
 
     assert effective["value_0"]["lookup_outcome"] == OUTCOME_MATCHED
     assert elapsed < 2.0, elapsed
+
+
+# --- M4: a re-validation with the same decision appends no event ---------------
+
+
+def test_revalidation_with_new_wording_updates_the_explanation_without_a_new_event():
+    metadata = _metadata()
+    envelope = _envelope({"site": _staged_site()})
+    first = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, values={"curie": "ONT:1", "name": "epidermis"})],
+    ).envelope
+    events = first.extracted_objects[0].metadata["validator_resolved_value_materialization"]
+
+    item = _item(metadata, first, values={"curie": "ONT:1", "name": "epidermis"})
+    reworded = item.result.model_copy(update={"explanation": "Same term, different words."})
+    second = materialize_validator_results_into_envelope(
+        first, metadata, [ValidatorResultMaterializationInput(match=item.match, request=item.request,
+                                                              result=reworded)],
+    ).envelope
+
+    patched = second.extracted_objects[0]
+    assert patched.metadata["validator_resolved_value_materialization"] == events
+    assert patched.payload["site"]["validator_explanation"] == "Same term, different words."
+    assert patched.payload["site"]["curie"] == "ONT:1"
