@@ -48,12 +48,12 @@ PRODUCTION_SHAPES = [
      {"label": "allele_symbol", "id": "primary_external_id"}, "e1370 (WB:WBVar00143949)"),
     ({"subject_label": "daf-2", "subject_identifier": "WB:WBGene00000898", "subject_type": "gene",
       "resolution_state": "resolved", "lookup_outcome": "matched"}, SUBJECT, "daf-2 (WB:WBGene00000898)"),
-    # A pre-ALL-1283 "resolved" (no lookup_outcome) is legacy: unverified unless the
-    # caller applied the read-time legacy rule with a covering validator event.
+    # Without the contract state (no lookup_outcome) and without a declared mention role,
+    # a value reads through its spec's own state role, as before ALL-1283 (H1).
     ({"subject_label": "daf-2", "subject_identifier": "WB:WBGene00000898", "subject_type": "gene",
-      "resolution_state": "resolved"}, SUBJECT, "UNRESOLVED"),
+      "resolution_state": "resolved"}, SUBJECT, "daf-2 (WB:WBGene00000898)"),
     ({"subject_label": "daf-2(e1370)", "resolution_state": "pending_lookup", "resolution_note": "n"},
-     SUBJECT, "UNRESOLVED"),
+     SUBJECT, "daf-2(e1370) (unresolved)"),
     ({"curie": "WBPhenotype:0000154", "label": "reduced brood size", "resolution_state": "resolved",
       "lookup_outcome": "matched", "export_state": "ready", "write_blocked_reason": None}, PHENOTYPE_TERM,
      "reduced brood size (WBPhenotype:0000154)"),
@@ -529,11 +529,11 @@ async def test_split_list_through_formatter_tools_with_lock_and_inventory():
 def test_declared_field_never_substitutes_another_field():
     """A resolved field renders only its own label/id (Chris, Sep 22)."""
 
-    # Label and id empty: the mention is a separate column, not a substitute (ALL-1283:
-    # a value with paper wording and no validated identity reads UNRESOLVED).
-    assert display_text({"curie": None, "name": None, "mention": "PPIT-2"}, TERM) == "UNRESOLVED"
+    # Label and id empty: the mention is a separate column, not a substitute. A mapping
+    # that merely holds a mention is not a resolvable value unless declared (ALL-1283 H1).
+    assert display_text({"curie": None, "name": None, "mention": "PPIT-2"}, TERM) == ""
     assert display_text({"label": "", "mention": "gene X", "curie": ""},
-                        {"label": "label", "id": "curie"}) == "UNRESOLVED"
+                        {"label": "label", "id": "curie"}) == ""
     compose = {"compose": [{"path": "anatomical_structure", "display": TERM}], "separator": "; "}
     assert display_text({"anatomical_structure": {}, "statement": "free text"}, compose) == ""
     assert display_text({"mention": {"text": "unc-54(e190)"}}, {"label": "mention.text"}) == "unc-54(e190)"
@@ -630,7 +630,7 @@ def test_packaged_object_label_never_falls_back_to_mention(monkeypatch):
     declared = SimpleNamespace(metadata=pack.metadata.model_copy(deep=True))
     for model in declared.metadata.model_definitions:
         if model.model_id == "GeneMentionEvidencePayload":
-            model.metadata["display"] = {"label": "gene_symbol", "id": "primary_external_id"}
+            model.metadata["display"] = {"label": "gene_symbol", "id": "primary_external_id", "mention": "mention"}
     monkeypatch.setattr(export_fields, "_packaged_domain_pack", lambda *_args, **_kwargs: declared)
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_gene_mention_step([
@@ -1001,7 +1001,8 @@ def test_generic_reading_never_mixes_paper_wording_into_a_cell():
                          "lookup_outcome": "matched"}) == "Y (X:1)"
     assert display_text({"curie": None, "name": None, "mention": "Z", "resolution_state": "unresolved",
                          "lookup_outcome": "not_validated"}) == "UNRESOLVED"
-    assert display_text({"curie": "X:1", "name": "Y", "mention": "Z"}) == "UNRESOLVED"
+    # Only the contract state makes an undeclared mapping a resolvable value (H1).
+    assert display_text({"curie": "X:1", "name": "Y", "mention": "Z"}) == "curie: X:1; name: Y; mention: Z"
     assert display_text({"abbreviation": "WB", "mention": "WormBase", "resolution_state": "resolved",
                          "lookup_outcome": "matched"}) == "abbreviation: WB"
 

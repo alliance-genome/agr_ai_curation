@@ -883,7 +883,13 @@ def _entity_db_status(
 
 def _entity_db_identifier(entity_field: CurationDraftFieldSchema) -> str | None:
     validation_result = entity_field.validation_result
-    if validation_result is None or not validation_result.candidate_matches:
+    # Only a validated entity has a database identifier; a candidate match of an
+    # unresolved or ambiguous lookup is not one (ALL-1283).
+    if (
+        validation_result is None
+        or validation_result.status is not FieldValidationStatus.VALIDATED
+        or not validation_result.candidate_matches
+    ):
         return None
 
     identifier = validation_result.candidate_matches[0].identifier

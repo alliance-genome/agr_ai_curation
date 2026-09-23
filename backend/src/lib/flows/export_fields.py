@@ -210,16 +210,21 @@ class PackagedExportSource:
         A record stored in a previous pack format is first read in the current
         value shape by the pack's registered legacy display mapper; values
         stored before ALL-1283 then read through the legacy rule
-        (``resolvable_values.effective_payload``). Nothing is written back.
+        (``resolvable_values.effective_payload``); overruled identities are
+        left out; nothing is written back.
         """
 
-        from src.lib.domain_packs.resolvable_values import effective_payload
+        from src.lib.domain_packs.resolvable_values import effective_payload, without_overruled
 
         object_type = str(item.get("object_type") or "")
         specs = self.resolvable_fields.get(object_type)
         payload = item.get("payload")
-        if not specs or not isinstance(payload, dict):
+        if not isinstance(payload, dict):
             return item
+        # An identity a validator overruled is never exported.
+        payload = without_overruled(payload)
+        if not specs:
+            return {**item, "payload": payload}
         if self.legacy_display_mapper is not None:
             payload = self.legacy_display_mapper(object_type, payload)
         metadata = item.get("metadata")

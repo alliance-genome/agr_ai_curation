@@ -29,9 +29,11 @@ from src.lib.domain_packs.resolvable_values import (
     LOOKUP_OUTCOME_KEY,
     RESOLUTION_STATE_KEY,
     declared_resolvable_fields,
-    holds_resolution,
+    effective_payload,
+    has_resolution_state,
     stated_value,
     unresolved_header_text,
+    without_overruled,
 )
 from src.lib.domain_packs.supervisor_manifest import (
     SupervisorManifestPolicy,
@@ -979,6 +981,24 @@ def _descriptor(value: Any, *, read: Mapping[str, Any]) -> dict[str, Any]:
     return descriptor
 
 
+def _effective_object_payload(
+    obj: CuratableObjectEnvelope,
+    metadata: DomainPackMetadata,
+) -> Mapping[str, Any]:
+    """The object's payload read as exports read it (ALL-1283).
+
+    Each declared resolvable value carries its read-time state, with the
+    legacy rule and validator coverage applied, and overruled identities are
+    left out, so supervisor views and CSV exports agree.
+    """
+
+    return effective_payload(
+        without_overruled(obj.payload),
+        declared_resolvable_fields(metadata, obj.object_type),
+        object_metadata=obj.metadata,
+    )
+
+
 def _with_resolution_states(value: Any) -> Any:
     """Every resolvable value states a valid resolution, so a mention never reads as the item.
 
@@ -991,7 +1011,8 @@ def _with_resolution_states(value: Any) -> Any:
         return [_with_resolution_states(item) for item in value]
     if not isinstance(value, Mapping):
         return value
-    annotated = {key: _with_resolution_states(item) for key, item in value.items()}
+    # An identity a validator overruled is never presented as the value.
+    annotated = {key: _with_resolution_states(item) for key, item in without_overruled(value).items()}
     return stated_value(annotated)
 
 
@@ -1439,6 +1460,7 @@ def _object_row(
         "object_type": obj.object_type,
         "status": obj.status.value,
     }
+    payload = _effective_object_payload(obj, metadata)
     # One declared field each; an unresolved value reads as its paper wording (ALL-1283).
     for key, field in (
         ("display_label", policy.primary_label_field),
@@ -1455,14 +1477,14 @@ def _object_row(
         if paper_wording is not None:
             row[key] = paper_wording
             continue
-        value = _payload_path_value(obj.payload, field.path)
+        value = _payload_path_value(payload, field.path)
         if value not in (None, ""):
             row[key] = _value_view(value, read=read(field.path), payload_value=True)
     row["fields"] = {
         path: _value_view(value, read=read(path), payload_value=True)
         for path in selected
         if path in policy.field_paths
-        and (value := _payload_path_value(obj.payload, path)) is not None
+        and (value := _payload_path_value(payload, path)) is not None
     }
     row["validation"] = _object_validation_counts(findings)
     row["evidence_count"] = len(obj.evidence_record_ids)
@@ -1595,10 +1617,11 @@ def _object_response(result: _Result, *, object_ref: str | None) -> dict[str, An
     def read(path: str) -> dict[str, Any]:
         return result.call("field", object_ref=object_ref, field_path=path)
 
+    payload = _effective_object_payload(obj, metadata)
     values = {
         path: _value_view(value, read=read(path), payload_value=True)
         for path in policy.field_paths
-        if (value := _payload_path_value(obj.payload, path)) is not None
+        if (value := _payload_path_value(payload, path)) is not None
     }
 
     def render(shown: dict[str, Any]) -> dict[str, Any]:
@@ -1686,7 +1709,10 @@ def _field_response(
             visible_field_paths=sorted(visible_paths),
         )
     try:
-        value = _payload_path_value(obj.payload, field_path)
+        value = _payload_path_value(
+            _effective_object_payload(obj, _domain_pack_metadata(result.envelope.domain_pack_id)),
+            field_path,
+        )
     except ValueError as exc:
         raise _RequestError(
             "invalid_field_path",
@@ -1771,7 +1797,7 @@ def _details_response(
             cursor=cursor,
             message="Saved detail value is ready.",
         )
-    if holds_resolution(value):
+    if has_resolution_state(value):
         # A resolvable value states whether it is resolved, so its mention is
         # never read as the item (ALL-1283).
         state = _with_resolution_states(value)
