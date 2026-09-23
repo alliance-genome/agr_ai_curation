@@ -54,8 +54,8 @@ object_definitions:
               - source_label
               - description
               - confidence
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
     fields:
@@ -130,8 +130,8 @@ object_definitions:
             fields:
               - claim_text
               - confidence
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
     fields:
@@ -207,8 +207,8 @@ object_definitions:
               - source_identifier
               - count
               - reagent_type
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
     fields:

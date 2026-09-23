@@ -344,8 +344,8 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
                 ],
             },
             {
-                "id": "evidence",
-                "label": "Evidence and rationale",
+                "id": "rationale",
+                "label": "Rationale",
                 "fields": ["rationale"],
             },
         ],

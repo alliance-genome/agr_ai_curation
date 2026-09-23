@@ -181,7 +181,7 @@ def compile_profile_validation(
             fields=fields, metadata={"generic_profile_ref": profile.receipt,
                 "workspace_display": {"groups": [{"id": "profile", "label": contract.name,
                     "fields": ["attributes." + field.key for field in contract.fields]},
-                    {"id": "evidence", "label": "Evidence and rationale", "fields": ["rationale"]}]}},
+                    {"id": "rationale", "label": "Rationale", "fields": ["rationale"]}]}},
         )],
         "enum_definitions": enums,
         "model_definitions": [], "schema_refs": [], "fixture_packs": [],

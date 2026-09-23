@@ -330,6 +330,7 @@ def test_patch_cannot_clear_or_overfill_rationale(active_generic_builder_context
     )
 
     assert result.status == "error"
+    assert result.data["validation_issues"][0]["reason"] == "invalid_rationale"
     assert workspace.candidates["generic-candidate-1"].staged_fields["rationale"] == (
         "The screen result is reported as the paper's main finding."
     )

@@ -3897,7 +3897,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. The rationale can be rewritten but not cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3977,7 +3977,7 @@
           "type": "string"
         },
         {
-          "description": "Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids. The rationale can be rewritten but not cleared.",
+          "description": "Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5508,7 +5508,7 @@
           "type": "string"
         },
         {
-          "description": "The agent's short reason (up to 300 characters) for selecting this finding, grounded in the supporting quotes and written when the draft is created. Curators see it in review, CSV/TSV exports, and chat.",
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"
@@ -5684,7 +5684,7 @@
           "type": "array"
         },
         {
-          "description": "The agent's short reason (up to 300 characters) for selecting this object, grounded in the supporting quotes and written when the draft is created. Curators see it in review, CSV/TSV exports, and chat.",
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"

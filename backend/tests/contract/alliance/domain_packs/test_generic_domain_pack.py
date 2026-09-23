@@ -420,7 +420,7 @@ def test_generic_materializer_rejects_new_candidate_without_rationale(rationale)
 @pytest.mark.parametrize(
     "object_type", ["generic_object", "generic_claim", "generic_reagent_candidate"]
 )
-def test_generic_classes_declare_optional_rationale_in_evidence_group(object_type):
+def test_generic_classes_declare_optional_rationale_in_rationale_group(object_type):
     pack = get_generated_generic_domain_pack()
     definition = next(
         obj for obj in pack.metadata.object_definitions if obj.object_type == object_type
@@ -429,8 +429,8 @@ def test_generic_classes_declare_optional_rationale_in_evidence_group(object_typ
     assert field.required is False
     assert field.display_name == "Rationale"
     groups = definition.metadata["workspace_display"]["groups"]
-    evidence = next(group for group in groups if group["id"] == "evidence")
-    assert evidence == {"id": "evidence", "label": "Evidence and rationale", "fields": ["rationale"]}
+    rationale_group = next(group for group in groups if group["id"] == "rationale")
+    assert rationale_group == {"id": "rationale", "label": "Rationale", "fields": ["rationale"]}
     # Grouping must keep the summary fields curators saw before the rationale group existed.
     grouped = [path for group in groups for path in group["fields"]]
     assert set(definition.metadata["workspace_display"]["summary_fields"]) <= set(grouped)

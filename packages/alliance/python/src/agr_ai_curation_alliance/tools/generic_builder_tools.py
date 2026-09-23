@@ -13,7 +13,6 @@ from pydantic import (
     StrictStr,
     ValidationError,
     field_validator,
-    model_validator,
 )
 
 from agr_ai_curation_runtime.agr_lookup import (
@@ -290,14 +289,6 @@ class GenericPatchUpdateInput(_StrictToolModel):
         raise ValueError(
             "field_path must be a generic top-level field, payload.<key>, or attributes.<key>"
         )
-
-    @model_validator(mode="after")
-    def _rationale_is_not_cleared(self) -> "GenericPatchUpdateInput":
-        if self.field_path == "rationale":
-            if not isinstance(self.value, str):
-                raise ValueError("rationale patch requires a non-empty string; it cannot be cleared")
-            self.value = normalize_rationale(self.value)
-        return self
 
 
 class GenericPatchInput(_StrictToolModel):
@@ -728,10 +719,23 @@ def _patch_generic_object_impl(
                 )
             evidence_ids = new_ids
             continue
+        if update.field_path == "rationale":
+            try:
+                if not isinstance(update.value, str):
+                    raise ValueError("rationale must be a non-empty string; it cannot be cleared")
+                staged_payload["rationale"] = normalize_rationale(update.value)
+            except ValueError as exc:
+                return _generic_validation_result(
+                    message=f"rationale patch rejected: {exc}",
+                    issues=[{"field_path": "rationale", "reason": "invalid_rationale", "message": str(exc)}],
+                    method="patch_generic_object",
+                    attempted_query=attempted_query,
+                )
+            continue
         if profile is not None:
             if update.field_path == "attributes" or update.field_path.startswith("attributes."):
                 profile_attribute_updates.append({"field_path": update.field_path, "value": update.value})
-            elif update.field_path in {"label", "classification_notes", "rationale", "validation_guidance"}:
+            elif update.field_path in {"label", "classification_notes", "validation_guidance"}:
                 staged_payload[update.field_path] = update.value
             else:
                 return _generic_validation_result(

@@ -384,8 +384,8 @@ object_definitions:
               - expression_pattern.when_expressed.stage_uberon_slim_terms
               - relation.name
               - data_provider.abbreviation
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
       controlled_field_helper_gaps:

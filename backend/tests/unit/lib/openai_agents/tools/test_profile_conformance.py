@@ -531,6 +531,7 @@ def test_profile_bound_tools_require_and_protect_rationale(profile, record, monk
         assert rewritten.status == "ok", rewritten
         cleared = tools._patch_generic_object_impl(candidate_id, [{"field_path": "rationale", "value": None}])
         assert cleared.status == "error"
+        assert cleared.data["validation_issues"][0]["reason"] == "invalid_rationale"
         assert workspace.get_candidate(candidate_id).staged_fields["rationale"] == (
             "BDSC stock is named for this construct."
         )

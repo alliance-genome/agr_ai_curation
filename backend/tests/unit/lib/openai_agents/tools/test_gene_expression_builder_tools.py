@@ -874,6 +874,7 @@ def test_patch_cannot_clear_or_overfill_rationale(active_builder_context, value)
     result = _patch_rationale(value)
 
     assert result.status == "error"
+    assert [issue["reason"] for issue in result.data["validation_issues"]] == ["invalid_rationale"]
     assert workspace.candidates["gex-candidate-1"].staged_fields["rationale"] == (
         "Anti-GFP staining localizes the reporter to the cilium, not the cell body."
     )

@@ -237,10 +237,11 @@ class GeneExpressionPatchUpdateInput(_StrictToolModel):
             if not self.evidence_record_ids:
                 raise ValueError("evidence_record_ids patch requires evidence_record_ids")
             return self
+        if self.field_path == "rationale":
+            # Checked by the patch tool so the rejection carries invalid_rationale.
+            return self
         if not _clean_string(self.string_value):
             raise ValueError(f"{self.field_path} patch requires string_value")
-        if self.field_path == "rationale":
-            self.string_value = normalize_rationale(self.string_value)
         return self
 
 
@@ -6183,6 +6184,14 @@ def _patch_gene_expression_observation_impl(
             continue
         if update.field_path == "evidence_record_ids":
             evidence_ids = list(update.evidence_record_ids or [])
+            continue
+        if update.field_path == "rationale":
+            try:
+                payload["rationale"] = normalize_rationale(update.string_value or "")
+            except ValueError as exc:
+                issues.append(
+                    {"field_path": "rationale", "reason": "invalid_rationale", "message": str(exc)}
+                )
             continue
         if update.field_path == "reference.reference_id" and update.string_value:
             reference_issue = _reference_id_validation_issue(update.string_value)
