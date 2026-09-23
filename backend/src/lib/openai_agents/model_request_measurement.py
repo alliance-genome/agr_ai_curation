@@ -167,6 +167,28 @@ def _add(target: dict[str, int], size: Mapping[str, int]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def flatten_loaded_tool_definitions(tools: Any) -> list[Any]:
+    """Function/custom definitions a ``tool_search_output`` loaded.
+
+    Hosted tool search returns namespaces (``{"type": "namespace", "tools":
+    [...]}``) and may also return top-level definitions; the loaded count is the
+    number of member definitions, not the number of namespaces.
+    """
+
+    if not isinstance(tools, list):
+        return []
+    definitions: list[Any] = []
+    for raw_tool in tools:
+        tool = _as_mapping(raw_tool)
+        if tool.get("type") == "namespace":
+            members = tool.get("tools")
+            if isinstance(members, list):
+                definitions.extend(members)
+        else:
+            definitions.append(raw_tool)
+    return definitions
+
+
 def _measure_input(input_value: Any) -> dict[str, Any]:
     items: list[Any]
     if input_value is None:
@@ -181,7 +203,13 @@ def _measure_input(input_value: Any) -> dict[str, Any]:
     tool_calls = {"count": 0, **_empty_size()}
     tool_results = {"count": 0, **_empty_size()}
     reasoning = {"count": 0, **_empty_size()}
-    loaded_tool_definitions = {"count": 0, "items": 0, **_empty_size()}
+    loaded_tool_definitions = {
+        "count": 0,
+        "namespaces": 0,
+        "items": 0,
+        "definition_chars": 0,
+        **_empty_size(),
+    }
     other = {"count": 0, **_empty_size()}
     largest_result: dict[str, Any] | None = None
     call_names: dict[str, str] = {}
@@ -196,7 +224,16 @@ def _measure_input(input_value: Any) -> dict[str, Any]:
         if item_type == "tool_search_output":
             loaded_tool_definitions["items"] += 1
             tools = item.get("tools")
-            loaded_tool_definitions["count"] += len(tools) if isinstance(tools, list) else 0
+            definitions = flatten_loaded_tool_definitions(tools)
+            loaded_tool_definitions["count"] += len(definitions)
+            loaded_tool_definitions["namespaces"] += sum(
+                1
+                for tool in (tools if isinstance(tools, list) else [])
+                if _as_mapping(tool).get("type") == "namespace"
+            )
+            loaded_tool_definitions["definition_chars"] += sum(
+                _size(definition)["chars"] for definition in definitions
+            )
             _add(loaded_tool_definitions, size)
         elif item_type.endswith("_call_output"):
             tool_results["count"] += 1
