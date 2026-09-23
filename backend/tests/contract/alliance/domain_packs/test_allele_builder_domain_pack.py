@@ -190,7 +190,12 @@ def test_allele_builder_materializer_produces_clean_extraction_output():
     assert association["object_role"] == ALLELE_ASSOCIATION_OBJECT_ROLE
     assert association["pending_ref_id"] == "allele-paper-evidence-association-1"
     assert association["payload"]["association_kind"] == ALLELE_ASSOCIATION_KIND
-    assert "allele_identifier" not in association["payload"]
+    # The association's allele is staged unresolved with its paper wording.
+    assert association["payload"]["mention"] == "unc-54(e190)"
+    assert association["payload"]["resolution_state"] == "unresolved"
+    assert association["payload"]["lookup_outcome"] == "not_validated"
+    assert association["payload"].get("allele_identifier") is None
+    assert association["payload"].get("allele_label") is None
     assert association["evidence_record_ids"] == ["evidence-unc54-1"]
     assert association["payload"]["evidence_record_ids"] == ["evidence-unc54-1"]
     assert association["payload"]["rationale"] == _staged_fields()["rationale"]
@@ -581,3 +586,330 @@ def test_stored_allele_association_without_rationale_gets_no_new_findings():
         finding.code for finding in with_rationale
     ]
     assert not any("rationale" in str(finding.field_ref) for finding in without_rationale)
+
+
+# --- Extracted vs validated allele (ALL-1283) ----------------------------------------------
+
+
+def _staged_allele_envelope():
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    result = _materialize_one_candidate()
+    assert result.ok, result.summary()
+    return DomainEnvelope(
+        envelope_id="allele-resolution",
+        domain_pack_id=ALLELE_DOMAIN_PACK_ID,
+        extracted_objects=result.payload["curatable_objects"],
+        metadata=result.payload["metadata"],
+    )
+
+
+def _validate_allele_mention(envelope, **result_fields):
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.domain_packs.materialization import (
+        ValidatorResultMaterializationInput,
+        materialize_validator_results_into_envelope,
+    )
+    from src.lib.domain_packs.validation_registry import (
+        DomainPackValidationRegistry,
+        ValidationBindingState,
+    )
+    from src.schemas.domain_validator import DomainValidatorResultBase
+
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    match = next(
+        match
+        for match in DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(
+            envelope, states=[ValidationBindingState.ACTIVE]
+        )
+        if match.binding.binding_id == "allele_mention_reference_validation"
+    )
+    request = build_domain_validation_request(match).request
+    assert request is not None
+    assert request.selected_inputs["mention"] == "unc-54(e190)"
+    result = DomainValidatorResultBase(
+        request_id=request.request_id,
+        validator_binding_id=request.validator_binding_id,
+        validator_agent=request.validator_agent,
+        target=request.target,
+        **{
+            "resolved_objects": [],
+            "missing_expected_fields": [],
+            "candidates": [],
+            "lookup_attempts": [],
+            **result_fields,
+        },
+    )
+    return materialize_validator_results_into_envelope(
+        envelope,
+        pack.metadata,
+        [ValidatorResultMaterializationInput(match=match, request=request, result=result)],
+    )
+
+
+def _object(envelope, object_type):
+    return next(obj for obj in envelope.extracted_objects if obj.object_type == object_type)
+
+
+def test_allele_builder_stages_the_allele_unresolved_with_its_paper_wording():
+    mention = next(
+        obj
+        for obj in _materialize_one_candidate().payload["curatable_objects"]
+        if obj["object_type"] == ALLELE_MENTION_OBJECT_TYPE
+    )
+    allele = mention["payload"]["allele"]
+
+    assert allele["mention"] == "unc-54(e190)"
+    assert allele["resolution_state"] == "unresolved"
+    assert allele["lookup_outcome"] == "not_validated"
+    assert allele["validator_explanation"] == "Not validated yet."
+    for key in ("primary_external_id", "allele_symbol", "taxon"):
+        assert allele.get(key) is None
+
+
+def test_pinned_allele_binding_resolves_the_staged_allele_value():
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    binding = next(
+        item
+        for item in pack.metadata.metadata["validator_bindings"]["active"]
+        if item["binding_id"] == "allele_mention_reference_validation"
+    )
+    # The hash-pinned binding is unchanged; its parent value just carries the mention.
+    assert binding["expected_result_fields"] == {
+        "curie": "allele.primary_external_id",
+        "symbol": "allele.allele_symbol",
+        "taxon": "allele.taxon",
+    }
+
+    result = _validate_allele_mention(
+        _staged_allele_envelope(),
+        status="resolved",
+        resolved_values={
+            "curie": "WB:WBVar00000190",
+            "symbol": "e190",
+            "taxon": "NCBITaxon:6239",
+        },
+        explanation="Exact symbol match in WB.",
+        curator_message="Resolved unc-54(e190).",
+    )
+    allele = _object(result.envelope, ALLELE_MENTION_OBJECT_TYPE).payload["allele"]
+
+    assert allele == {
+        "mention": "unc-54(e190)",
+        "primary_external_id": "WB:WBVar00000190",
+        "allele_symbol": "e190",
+        "taxon": "NCBITaxon:6239",
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": "Exact symbol match in WB.",
+        "validator_curator_message": "Resolved unc-54(e190).",
+    }
+    assert [obj.payload for obj in result.materialized_objects if obj.object_type == "Allele"] == [
+        {
+            "primary_external_id": "WB:WBVar00000190",
+            "allele_symbol": "e190",
+            "taxon": "NCBITaxon:6239",
+        }
+    ]
+
+
+def test_unresolved_allele_keeps_its_paper_wording_and_no_identity():
+    result = _validate_allele_mention(
+        _staged_allele_envelope(),
+        status="unresolved",
+        resolved_values={},
+        lookup_attempts=[
+            {
+                "provider": "agr_curation_query",
+                "method": "search_alleles",
+                "query": {"allele_symbol": "unc-54(e190)"},
+                "result_count": 3,
+                "outcome": "ambiguous",
+            }
+        ],
+        explanation="Three WB alleles share this designation.",
+        curator_message="Pick the allele in review.",
+    )
+    allele = _object(result.envelope, ALLELE_MENTION_OBJECT_TYPE).payload["allele"]
+
+    assert allele["mention"] == "unc-54(e190)"
+    assert allele["resolution_state"] == "unresolved"
+    assert allele["lookup_outcome"] == "ambiguous"
+    assert allele["validator_explanation"] == "Three WB alleles share this designation."
+    for key in ("primary_external_id", "allele_symbol", "taxon"):
+        assert allele.get(key) is None
+    assert not [obj for obj in result.materialized_objects if obj.object_type == "Allele"]
+
+
+def test_allele_builder_requires_source_mentions_without_falling_back_to_the_mention():
+    workspace = ExtractionBuilderWorkspace(
+        run_id="allele-builder-no-source-mentions",
+        domain_pack_id=ALLELE_DOMAIN_PACK_ID,
+        agent_id="allele_extractor",
+    )
+    workspace.upsert_candidate(
+        candidate_id="allele-candidate-1",
+        staged_fields={**_staged_fields(), "source_mentions": []},
+        pending_ref_ids=["allele-mention-1"],
+        evidence_record_ids=["evidence-unc54-1"],
+        resolver_selection_refs=[],
+        status=CANDIDATE_STATUS_VALID,
+    )
+
+    result = materialize_allele_builder_state(
+        workspace=workspace,
+        candidate_ids=["allele-candidate-1"],
+        evidence_records=_evidence_records(),
+    )
+
+    assert not result.ok
+    assert [issue["reason"] for issue in result.issues] == ["missing_source_mentions"]
+
+
+def _association(envelope):
+    return _object(envelope, ALLELE_ASSOCIATION_OBJECT_TYPE)
+
+
+def _association_label(envelope) -> str:
+    from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    rows = DomainPackMetadataReviewRowMaterializer(pack.metadata).materialize(
+        envelope, envelope_revision=1
+    )
+    return next(
+        row.display_label for row in rows if row.object_type == ALLELE_ASSOCIATION_OBJECT_TYPE
+    )
+
+
+def _blocker_codes(envelope) -> set[str]:
+    from agr_ai_curation_alliance.domain_packs.allele import (
+        build_allele_association_submission_plan,
+    )
+
+    plan = build_allele_association_submission_plan(envelope)
+    return {blocker["code"] for blocker in plan["blockers"]}
+
+
+def test_validated_allele_is_written_back_onto_the_association():
+    staged = _staged_allele_envelope()
+    assert _association_label(staged) == "unc-54(e190) (paper wording)"
+    assert "alliance.allele.allele_unresolved" in _blocker_codes(staged)
+
+    result = _validate_allele_mention(
+        staged,
+        status="resolved",
+        resolved_values={
+            "curie": "WB:WBVar00000190",
+            "symbol": "e190",
+            "taxon": "NCBITaxon:6239",
+        },
+        explanation="Exact symbol match in WB.",
+        curator_message="Resolved unc-54(e190).",
+    )
+    association = _association(result.envelope)
+    allele = next(obj for obj in result.envelope.extracted_objects if obj.object_type == "Allele")
+
+    assert association.payload["mention"] == "unc-54(e190)"
+    assert association.payload["allele_identifier"] == "WB:WBVar00000190"
+    assert association.payload["allele_label"] == "e190"
+    assert association.payload["resolution_state"] == "resolved"
+    assert association.payload["lookup_outcome"] == "matched"
+    assert association.payload["validator_explanation"] == "Exact symbol match in WB."
+    assert allele.to_object_ref() in association.object_refs
+    assert _association_label(result.envelope) == "e190"
+    # The association now references its validated Allele, so that blocker is gone; the
+    # pack's by-design write blockers (blocked write behavior, durable DB ids) remain.
+    codes = _blocker_codes(result.envelope)
+    assert "alliance.allele.association_refs_missing" not in codes
+    assert "alliance.allele.allele_unresolved" not in codes
+    assert "alliance.allele.write_behavior_blocked" in codes
+
+    from agr_ai_curation_alliance.domain_packs.allele import validate_pending_allele_envelope
+
+    assert not [
+        finding
+        for finding in validate_pending_allele_envelope(result.envelope)
+        if finding.code == "alliance.allele.extractor_owned_identity_present"
+    ]
+
+
+def test_unresolved_allele_leaves_the_association_unresolved_with_its_paper_wording():
+    result = _validate_allele_mention(
+        _staged_allele_envelope(),
+        status="unresolved",
+        resolved_values={},
+        lookup_attempts=[
+            {
+                "provider": "agr_curation_query",
+                "method": "search_alleles",
+                "query": {"allele_symbol": "unc-54(e190)"},
+                "result_count": 0,
+                "outcome": "not_found",
+            }
+        ],
+        explanation="No WB allele matched.",
+        curator_message="Check the allele designation.",
+    )
+    association = _association(result.envelope)
+
+    assert association.payload["resolution_state"] == "unresolved"
+    assert association.payload["lookup_outcome"] == "not_found"
+    assert association.payload["validator_explanation"] == "No WB allele matched."
+    assert association.payload.get("allele_identifier") is None
+    assert association.payload.get("allele_label") is None
+    assert not [ref for ref in association.object_refs if ref.object_type == "Allele"]
+    assert _association_label(result.envelope) == "unc-54(e190) (paper wording)"
+    assert {
+        "alliance.allele.allele_unresolved",
+        "alliance.allele.association_refs_missing",
+    } <= _blocker_codes(result.envelope)
+
+
+def test_stored_association_before_the_contract_reads_as_legacy_unverified():
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    staged = _staged_allele_envelope()
+    objects = []
+    for obj in staged.extracted_objects:
+        if obj.object_type == ALLELE_ASSOCIATION_OBJECT_TYPE:
+            # The pre-ALL-1283 shape: the paper wording sat in allele_label, no state.
+            payload = {
+                key: value
+                for key, value in obj.payload.items()
+                if key
+                not in {
+                    "mention",
+                    "allele_identifier",
+                    "allele_label",
+                    "resolution_state",
+                    "lookup_outcome",
+                    "validator_explanation",
+                }
+            }
+            obj = obj.model_copy(update={"payload": {**payload, "allele_label": "unc-54(e190)"}})
+        objects.append(obj)
+    legacy = DomainEnvelope(
+        envelope_id="allele-legacy",
+        domain_pack_id=ALLELE_DOMAIN_PACK_ID,
+        extracted_objects=objects,
+    )
+
+    from src.lib.flows.export_fields import PackagedExportSource
+
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    association = _association(legacy)
+    effective = PackagedExportSource(pack).effective_item(
+        {
+            "object_type": ALLELE_ASSOCIATION_OBJECT_TYPE,
+            "payload": association.payload,
+            "metadata": association.metadata,
+        }
+    )["payload"]
+
+    # The stored label is never read as a validated allele: it becomes marked paper wording.
+    assert effective["resolution_state"] == "unresolved"
+    assert effective["lookup_outcome"] == "legacy_unverified"
+    assert effective["allele_label"] is None
+    assert effective["mention"] == "unc-54(e190) (legacy, unverified)"
+    assert "alliance.allele.allele_unresolved" in _blocker_codes(legacy)

@@ -28,6 +28,15 @@ ALLELE_ASSOCIATION_KIND = "allele_paper_evidence"
 # the validator-owned Allele identity scalars (curie/symbol/taxon).
 ALLELE_MENTION_REFERENCE_VALIDATOR_BINDING_ID = "allele_mention_reference_validation"
 
+# The binding writes allele.<key> on the AlleleMention; ``allele`` is a resolvable value
+# (ALL-1283) whose paper wording is the mention text and whose identity only the validator fills.
+ALLELE_VALUE_FIELD = "allele"
+ALLELE_IDENTITY_KEYS = ("primary_external_id", "allele_symbol", "taxon")
+# The association is itself a resolvable value: ``mention`` is the paper wording, and the
+# validated allele reaches allele_identifier/allele_label through the declared write-back
+# (fields naming the binding in ``validation_result_binding_id``).
+ALLELE_ASSOCIATION_IDENTITY_KEYS = ("allele_identifier", "allele_label")
+
 # LinkML grounding (pinned commit). The abstract AlleleAssociation class is used only for
 # pending-envelope metadata; writes/exports stay blocked.
 ALLELE_ASSOCIATION_LINKML_SCHEMA_ID = "alliance.linkml.AlleleAssociation"
@@ -44,6 +53,7 @@ ALLELE_DOMAIN_PACK_CONVERTER_ID = "agr_ai_curation_alliance.domain_packs.allele"
 
 
 __all__ = [
+    "ALLELE_ASSOCIATION_IDENTITY_KEYS",
     "ALLELE_ASSOCIATION_KIND",
     "ALLELE_ASSOCIATION_LINKML_SCHEMA_ID",
     "ALLELE_ASSOCIATION_MODEL_ID",
@@ -54,6 +64,7 @@ __all__ = [
     "ALLELE_DOMAIN_PACK_VERSION",
     "ALLELE_EVIDENCE_QUOTE_MODEL_ID",
     "ALLELE_EVIDENCE_QUOTE_OBJECT_TYPE",
+    "ALLELE_IDENTITY_KEYS",
     "ALLELE_LINKML_SCHEMA_SOURCE_FILE",
     "ALLELE_MATERIALIZER_ID",
     "ALLELE_MENTION_MODEL_ID",
@@ -63,4 +74,5 @@ __all__ = [
     "ALLELE_REFERENCE_MODEL_ID",
     "ALLELE_REFERENCE_OBJECT_TYPE",
     "ALLELE_REFERENCE_SCHEMA_SOURCE_FILE",
+    "ALLELE_VALUE_FIELD",
 ]

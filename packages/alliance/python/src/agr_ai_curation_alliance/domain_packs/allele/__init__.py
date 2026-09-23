@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agr_ai_curation_alliance.domain_packs.schema_refs import ALLIANCE_LINKML_COMMIT
+from src.lib.domain_packs.resolvable_values import (
+    RESOLVED,
+    effective_resolution,
+    unresolved_value,
+    validator_event_covers,
+)
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
@@ -23,6 +29,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
 )
 from .constants import (
+    ALLELE_ASSOCIATION_IDENTITY_KEYS,
     ALLELE_ASSOCIATION_KIND,
     ALLELE_ASSOCIATION_MODEL_ID,
     ALLELE_ASSOCIATION_OBJECT_ROLE,
@@ -30,10 +37,12 @@ from .constants import (
     ALLELE_DOMAIN_PACK_ID,
     ALLELE_DOMAIN_PACK_VERSION,
     ALLELE_EVIDENCE_QUOTE_OBJECT_TYPE,
+    ALLELE_IDENTITY_KEYS,
     ALLELE_MATERIALIZER_ID,
     ALLELE_MENTION_OBJECT_TYPE,
     ALLELE_MENTION_REFERENCE_VALIDATOR_BINDING_ID,
     ALLELE_REFERENCE_OBJECT_TYPE,
+    ALLELE_VALUE_FIELD,
 )
 from .conversion import (
     AlleleBuilderExtractionOutput,
@@ -138,7 +147,8 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             continue
 
         retained_count += 1
-        label = _required_string(item.get("label") or item.get("mention"), "allele label")
+        # The fixture's label is the allele's paper wording; no other field stands in for it.
+        label = _required_string(item.get("label"), "extraction.alleles[].label")
         normalized_hint = _optional_string(
             item.get("normalized_id"),
             "extraction.alleles[].normalized_id",
@@ -155,13 +165,15 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             value
             for value in (
                 _optional_string(value, "extraction.alleles[].source_mentions[]")
-                for value in _optional_sequence(
+                for value in _required_sequence(
                     item.get("source_mentions"),
                     "extraction.alleles[].source_mentions",
                 )
             )
             if value is not None
-        ] or [label]
+        ]
+        if not source_mentions:
+            raise ValueError("extraction.alleles[].source_mentions must name the paper wording")
 
         mention_ref_id = f"allele-mention-{retained_count}"
         association_ref_id = f"allele-paper-evidence-association-{retained_count}"
@@ -173,6 +185,7 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
                 "text": label,
             },
             "source_mentions": source_mentions,
+            ALLELE_VALUE_FIELD: unresolved_value(label, identity_keys=ALLELE_IDENTITY_KEYS),
         }
         if normalized_hint is not None:
             mention_payload["mention"]["normalized_hint"] = normalized_hint
@@ -233,8 +246,8 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
                 "Pending only; write behavior is blocked until reference IDs and write targets are verified."
             ],
             payload={
+                **unresolved_value(label, identity_keys=ALLELE_ASSOCIATION_IDENTITY_KEYS),
                 "association_kind": "allele_paper_evidence",
-                "allele_label": label,
                 "reference_title": _optional_string(paper.get("title"), "paper.title"),
                 "evidence_record_ids": evidence_record_ids,
             },
@@ -422,7 +435,13 @@ def validate_pending_allele_envelope(
                 )
             )
 
-        if association.payload.get("allele_identifier"):
+        # An identity the validator did not write (it is resolved only through validator
+        # write-back, or, for an association stored before ALL-1283, a covering write-back event).
+        if association.payload.get("allele_identifier") and effective_resolution(
+            association.payload,
+            identity_keys=ALLELE_ASSOCIATION_IDENTITY_KEYS,
+            covered_by_validator=validator_event_covers(association.metadata, ""),
+        )[0] != RESOLVED:
             findings.append(
                 ValidationFinding(
                     severity=ValidationFindingSeverity.ERROR,
@@ -488,18 +507,11 @@ def _legacy_keys_in_envelope(envelope: DomainEnvelope) -> set[str]:
 def _iter_allele_items(extraction: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
     return tuple(
         {
-            "label": _optional_string(item.get("label"), "extraction.alleles[].label")
-            or _optional_string(item.get("mention"), "extraction.alleles[].mention")
-            or _optional_string(
-                item.get("normalized_symbol"),
-                "extraction.alleles[].normalized_symbol",
-            ),
+            "label": item.get("label"),
             "normalized_id": item.get("normalized_id"),
             "associated_gene": item.get("associated_gene"),
             "taxon": item.get("taxon"),
-            "source_mentions": item.get("source_mentions")
-            if item.get("source_mentions") is not None
-            else [_optional_string(item.get("mention"), "extraction.alleles[].mention")],
+            "source_mentions": item.get("source_mentions"),
             "evidence": item.get("evidence"),
             "evidence_records": item.get("evidence_records"),
             "evidence_record_ids": item.get("evidence_record_ids"),

@@ -20,6 +20,41 @@ schema_refs:
           root_schema: model/schema/allianceModel.yaml
           cache_script: scripts/testing/cache_agr_curation_schema.sh
           ref_kind: schema
+enum_definitions:
+  - enum_id: ResolutionState
+    display_name: Resolution state
+    description: Whether the allele validator confirmed the allele (resolved) or not (unresolved).
+    values:
+      - value: resolved
+        label: Resolved
+      - value: unresolved
+        label: Unresolved
+  - enum_id: LookupOutcome
+    display_name: Lookup result
+    description: What the allele lookup found; matched exactly when the allele is resolved.
+    values:
+      - value: matched
+        label: Matched
+      - value: not_found
+        label: Not found
+      - value: ambiguous
+        label: Several matches
+      - value: conflict
+        label: Conflict
+      - value: blocked
+        label: Blocked
+      - value: transient
+        label: Temporary error
+      - value: invalid_schema
+        label: Invalid validator output
+      - value: missing_expected_result_field
+        label: Validator result incomplete
+      - value: rejected_candidates
+        label: Candidates rejected
+      - value: not_validated
+        label: Not validated yet
+      - value: legacy_unverified
+        label: Legacy, unverified
 model_definitions:
   - model_id: AllelePaperEvidenceAssociationPayload
     display_name: Allele paper/evidence association payload
@@ -42,7 +77,9 @@ model_definitions:
             class: AlleleAssociation
     metadata:
       display:
+        label: allele_label
         id: allele_identifier
+        mention: mention
   - model_id: AlleleReferencePayload
     display_name: Allele validated-reference payload
     schema_ref:
@@ -141,6 +178,11 @@ object_definitions:
             fields:
               - allele_label
               - allele_identifier
+              - mention
+              - resolution_state
+              - lookup_outcome
+              - validator_explanation
+              - validator_curator_message
           - id: rationale
             label: Rationale
             fields:
@@ -217,16 +259,50 @@ object_definitions:
               slot: evidence
               range: InformationContentEntity
       - field_path: mention
-        field_type: object_ref
-        display_name: Source allele mention
+        field_type: string
+        display_name: Allele (paper wording)
+        description: The allele mention exactly as written in the paper; not a validated allele. The source AlleleMention stays linked through the association's object refs.
         required: true
-        object_type_ref: AlleleMention
+        metadata:
+          protected: true
+          curator_action_note: Paper wording is the source evidence anchor, not a normalized edit target.
+      - field_path: resolution_state
+        field_type: enum
+        display_name: Allele (status)
+        description: Resolved only when the allele validator confirmed this allele; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: lookup_outcome
+        field_type: enum
+        display_name: Allele (lookup result)
+        description: What the allele lookup found; not validated yet until the validator runs.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: validator_explanation
+        field_type: string
+        display_name: Allele (validator explanation)
+        description: The allele validator's own explanation of its result.
+        metadata:
+          protected: true
+          hide_when_empty: true
+      - field_path: validator_curator_message
+        field_type: string
+        display_name: Allele (validator message)
+        description: The allele validator's message for curators, kept apart from its explanation.
+        metadata:
+          protected: true
+          hide_when_empty: true
       - field_path: allele_label
         field_type: string
         display_name: Allele label
         required: false
+        description: Validated allele symbol written by the allele validator; empty while the allele is unresolved.
         metadata:
-          curator_action_note: Extracted allele label preserved from the source mention; the primary review-row label for this association.
+          validation_result_binding_id: allele_mention_reference_validation
+          validation_result_field: symbol
+          curator_action_note: Validated allele symbol and the primary review-row label; an unresolved allele's row reads as its paper wording.
       - field_path: allele_identifier
         field_type: string
         display_name: Allele identifier
@@ -416,6 +492,55 @@ object_definitions:
       - field_path: source_mentions[0]
         field_type: string
         display_name: First source mention
+      - field_path: allele
+        field_type: object
+        display_name: Validated allele
+        description: The allele this mention names. The builder stages it unresolved with the mention text as its paper wording; only the allele validator fills its ID, symbol and taxon and marks it resolved.
+        metadata:
+          display:
+            label: allele_symbol
+            id: primary_external_id
+            mention: mention
+      - field_path: allele.mention
+        field_type: string
+        display_name: Allele (paper wording)
+        description: The allele mention exactly as written in the paper; not a validated allele.
+        metadata:
+          protected: true
+      - field_path: allele.primary_external_id
+        field_type: string
+        display_name: Validated allele ID
+        description: Alliance allele primary external identifier written by the allele validator; empty while the allele is unresolved.
+      - field_path: allele.allele_symbol
+        field_type: string
+        display_name: Validated allele symbol
+        description: Allele symbol written by the allele validator; empty while the allele is unresolved.
+      - field_path: allele.taxon
+        field_type: string
+        display_name: Validated allele taxon
+        description: NCBI Taxon CURIE written by the allele validator; empty while the allele is unresolved.
+      - field_path: allele.resolution_state
+        field_type: enum
+        display_name: Allele (status)
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: allele.lookup_outcome
+        field_type: enum
+        display_name: Allele (lookup result)
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: allele.validator_explanation
+        field_type: string
+        display_name: Allele (validator explanation)
+        metadata:
+          protected: true
+      - field_path: allele.validator_curator_message
+        field_type: string
+        display_name: Allele (validator message)
+        metadata:
+          protected: true
   - object_type: EvidenceQuote
     display_name: Verified evidence quote
     description: Metadata-only object preserving one record_evidence-verified quote and document locator.

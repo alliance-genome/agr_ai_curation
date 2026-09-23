@@ -36,6 +36,14 @@ envelope:
           curie: NCBITaxon:6239
         source_mentions:
           - daf-2(m41)
+        allele:
+          primary_external_id: null
+          allele_symbol: null
+          taxon: null
+          mention: daf-2(m41)
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
       evidence_record_ids:
         - daf-2-m41-evidence-1
         - daf-2-m41-evidence-2
@@ -76,7 +84,12 @@ envelope:
     - object_type: AllelePaperEvidenceAssociation
       payload:
         association_kind: allele_paper_evidence
-        allele_label: daf-2(m41)
+        allele_identifier: null
+        allele_label: null
+        mention: daf-2(m41)
+        resolution_state: unresolved
+        lookup_outcome: not_validated
+        validator_explanation: Not validated yet.
         reference_title: daf-2 allele evidence fixture paper
         evidence_record_ids:
           - daf-2-m41-evidence-1
