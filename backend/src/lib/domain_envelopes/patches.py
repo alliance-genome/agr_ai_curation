@@ -406,8 +406,16 @@ def _override_errors(
     *,
     registry: DomainPackValidationRegistry,
 ) -> list[str]:
-    """A whole-value override needs every identity field editable and changes only the identity."""
+    """A whole-value override needs every identity field editable and changes only the identity.
 
+    The value's own field needs no editable flag, but a protected one blocks it.
+    """
+
+    container = (
+        _field_definition_for(registry, domain_object.object_type, value_path) if value_path else None
+    )
+    if container is not None and _field_editability(container)[1]["protected"]:
+        return [f"field_path '{value_path}' is protected"]
     closed = []
     for key in spec.identity_keys:
         leaf = f"{value_path}.{key}" if value_path else key
