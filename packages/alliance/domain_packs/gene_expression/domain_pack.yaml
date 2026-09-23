@@ -380,7 +380,7 @@ object_definitions:
         primary_label_field: expression_annotation_subject.gene_symbol
         secondary_label_field: where_expressed_statement
         summary_fields:
-          - when_expressed_stage_name
+          - expression_pattern.when_expressed.developmental_stage_start.name
           - relation.name
           - expression_experiment.expression_assay_used.name
       workspace_display:
@@ -389,7 +389,7 @@ object_definitions:
         summary_fields:
           - expression_annotation_subject.gene_symbol
           - where_expressed_statement
-          - when_expressed_stage_name
+          - expression_pattern.when_expressed.developmental_stage_start.name
           - relation.name
           - expression_experiment.expression_assay_used.name
         groups:
@@ -424,7 +424,7 @@ object_definitions:
           - id: stage_relation
             label: Stage & relation
             fields:
-              - when_expressed_stage_name
+              - expression_pattern.when_expressed.developmental_stage_start.name
               - expression_pattern.when_expressed.developmental_stage_start.curie
               - expression_pattern.when_expressed.developmental_stage_start.mention
               - expression_pattern.when_expressed.stage_uberon_slim_terms
@@ -740,7 +740,6 @@ object_definitions:
               inspect_tool: inspect_ontology_term
               accepted_provenance_tools:
                 - resolve_domain_field_term
-              unresolved_metadata_path: metadata.normalization_notes
               search_channels:
                 - exact_label
                 - exact_synonym
@@ -986,7 +985,6 @@ object_definitions:
                 - trigram_synonym
                 - definition
                 - configured_mapping
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: assay
@@ -1496,7 +1494,6 @@ object_definitions:
                 - trigram_label
                 - trigram_synonym
                 - definition
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: zeco
@@ -1573,7 +1570,6 @@ object_definitions:
                 - trigram_label
                 - trigram_synonym
                 - definition
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: zeco
@@ -1731,11 +1727,10 @@ object_definitions:
       - field_path: when_expressed_stage_name
         field_type: string
         display_name: When expressed stage name
-        description: The paper's own wording for when expression was seen; the stage ontology term is developmental_stage_start.
-        required: true
+        description: The curation DB stage name column. The export writes it from the validated developmental_stage_start term's name; the paper's stage wording is that term's mention, and the extraction does not store it here.
         metadata:
-          editable: true
-          source_of_truth: extractor_evidence
+          protected: true
+          source_of_truth: expression_pattern.when_expressed.developmental_stage_start.name
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1806,6 +1801,7 @@ object_definitions:
       - field_path: expression_pattern.when_expressed.developmental_stage_start
         field_type: object
         display_name: Developmental stage start
+        required: true
         model_ref: OntologyTermSnapshotPayload
         metadata:
           validatable: true
@@ -1829,7 +1825,6 @@ object_definitions:
                 - exact_synonym
                 - trigram_label
                 - trigram_synonym
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: life_stage
@@ -1900,6 +1895,8 @@ object_definitions:
       - field_path: expression_pattern.when_expressed.developmental_stage_start.name
         field_type: string
         display_name: Developmental stage start name
+        description: The validated stage term's name; the export's stage name (when_expressed_stage_name).
+        required: true
         metadata:
           editable: true
           validatable: true
@@ -1942,7 +1939,6 @@ object_definitions:
                 - exact_synonym
                 - configured_mapping
                 - current_api_label_or_synonym_search
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: uberon
@@ -2043,7 +2039,6 @@ object_definitions:
                 - definition
                 - configured_mapping
                 - vector_recall
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: anatomical_site
             site_routing:
@@ -2108,7 +2103,6 @@ object_definitions:
                 - definition
                 - configured_mapping
                 - vector_recall
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: anatomy
@@ -2221,7 +2215,6 @@ object_definitions:
                 - exact_synonym
                 - configured_mapping
                 - current_api_label_or_synonym_search
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: uberon
@@ -2337,7 +2330,6 @@ object_definitions:
                 - definition
                 - configured_mapping
                 - vector_recall
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: go
@@ -2457,7 +2449,6 @@ object_definitions:
                 - definition
                 - configured_mapping
                 - vector_recall
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: go

@@ -303,25 +303,26 @@ def gene_expression_export_blockers(
         )
 
     # Each exported value blocks on its own field until it resolves.
-    present_values: set[str] = set()
+    unresolved_values: set[str] = set()
     for declared in GENE_EXPRESSION_RESOLVABLE_VALUES:
         if not declared.exported:
             continue
         stored = _payload_value(payload, declared.field_path)
         if stored is None:
             continue
-        present_values.add(declared.field_path)
         elements = (
             [(f"{declared.field_path}[{index}]", item) for index, item in enumerate(stored)]
             if declared.multivalued and isinstance(stored, list)
             else [(declared.field_path, stored)]
         )
         # The key the curation DB joins on: the value's id, or its label when it has no id.
+        # Required join keys are reported with the other required fields below.
         join_key = declared.spec.id_key or declared.spec.label_key
         for field_path, value in elements:
             if not isinstance(value, Mapping):
                 continue
             if not is_resolved(value):
+                unresolved_values.add(declared.field_path)
                 blockers.append(
                     blocker(
                         field_path,
@@ -329,7 +330,10 @@ def gene_expression_export_blockers(
                         unresolved_value_message(declared.label, value),
                     )
                 )
-            elif _value_missing_or_blank(value.get(join_key)):
+            elif (
+                f"{declared.field_path}.{join_key}" not in REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS
+                and _value_missing_or_blank(value.get(join_key))
+            ):
                 blockers.append(
                     blocker(
                         f"{field_path}.{join_key}",
@@ -339,9 +343,8 @@ def gene_expression_export_blockers(
                 )
 
     for field_path in sorted(REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS):
-        parent_path = field_path.rpartition(".")[0]
-        if parent_path in present_values:
-            # A present value's identity keys are reported through its own state.
+        if field_path.rpartition(".")[0] in unresolved_values:
+            # An unresolved value's identity keys are reported through its own state.
             continue
         if _value_missing_or_blank(_payload_value(payload, field_path)):
             blockers.append(
@@ -450,7 +453,10 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                     "datecreated": payload["date_created"],
                     "internal": payload["internal"],
                     "obsolete": payload.get("obsolete"),
-                    "whenexpressedstagename": payload["when_expressed_stage_name"],
+                    # The MOD stage name: the validated stage term's name, never paper wording.
+                    "whenexpressedstagename": _mapping(
+                        when_expressed.get("developmental_stage_start")
+                    )["name"],
                     "whereexpressedstatement": payload["where_expressed_statement"],
                     "negated": payload.get("negated"),
                     "uncertain": payload.get("uncertain"),

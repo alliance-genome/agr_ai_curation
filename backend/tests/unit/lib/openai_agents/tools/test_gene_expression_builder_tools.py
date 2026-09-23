@@ -34,7 +34,10 @@ def _resolved_output(
     selected_curie: str | None = None,
     instruction_value: Any | None = None,
     term_source: Mapping[str, Any] | None = None,
+    source_phrase: str = "expressed in",
 ) -> dict[str, Any]:
+    """A recorded resolve call; source_phrase is the wording it searched (the staged mention)."""
+
     selected_name = selected_name or selected_value
     instruction_value = selected_value if instruction_value is None else instruction_value
     return {
@@ -43,7 +46,7 @@ def _resolved_output(
             "domain_pack_id": agr_curation.GENE_EXPRESSION_DOMAIN_PACK_ID,
             "object_type": agr_curation.GENE_EXPRESSION_OBJECT_TYPE,
             "field_path": field_path,
-            "source_phrase": selected_value,
+            "source_phrase": source_phrase,
             "payload_field_instructions": {
                 "set": [{"field_path": field_path, "value": instruction_value}]
             },
@@ -52,7 +55,7 @@ def _resolved_output(
                 "source_tool": "resolve_domain_field_term",
                 "authority": "selector_evidence",
                 "lookup_status": "success",
-                "source_phrase": selected_value,
+                "source_phrase": source_phrase,
                 "term_source": term_source
                 or {"kind": "controlled_vocabulary", "vocabulary": "Expression Relation"},
                 "selected_value": selected_value,
@@ -163,7 +166,6 @@ def _stage_valid_observation(ledger: resolver_call_ledger.ResolverCallLedger):
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=["evidence-67598e5688f123c8"],
         where_expressed_statement="PEF-1::GFP expression in the cilium",
-        when_expressed_stage_name="L2 larva",
         rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         data_provider="WB",
         subject=_SUBJECT,
@@ -186,6 +188,7 @@ def _stage_materializable_observation(
             selected_curie="MMO:0000655",
             instruction_value={"curie": "MMO:0000655", "name": "GFP reporter assay"},
             term_source={"kind": "ontology", "ontology_family": "assay"},
+            source_phrase="GFP reporter",
         ),
         "call_stage": _resolved_output(
             field_path="expression_pattern.when_expressed.developmental_stage_start",
@@ -194,6 +197,7 @@ def _stage_materializable_observation(
             selected_curie="WBls:0000024",
             instruction_value={"curie": "WBls:0000024", "name": "L2 larva"},
             term_source={"kind": "ontology", "ontology_family": "life_stage"},
+            source_phrase="L2 larvae",
         ),
         "call_anatomy": _resolved_output(
             field_path="expression_pattern.where_expressed.anatomical_structure",
@@ -202,6 +206,7 @@ def _stage_materializable_observation(
             selected_curie="WBbt:0001234",
             instruction_value={"curie": "WBbt:0001234", "name": "cilium"},
             term_source={"kind": "ontology", "ontology_family": "anatomy"},
+            source_phrase="cilia",
         ),
     }
     for call_id, output in resolver_outputs.items():
@@ -217,7 +222,6 @@ def _stage_materializable_observation(
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=["evidence-67598e5688f123c8"],
         where_expressed_statement="PEF-1::GFP expression in the cilium",
-        when_expressed_stage_name="L2 larva",
         rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         data_provider="WB",
         subject=_SUBJECT,
@@ -388,7 +392,6 @@ def test_stage_rejects_missing_resolver_provenance(active_builder_context):
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=["evidence-1"],
         where_expressed_statement="expression in cilium",
-        when_expressed_stage_name=None,
         rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         data_provider="WB",
         subject=_SUBJECT,
@@ -420,7 +423,6 @@ def test_stage_rejects_missing_evidence_ids(active_builder_context):
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=[],
         where_expressed_statement="expression in cilium",
-        when_expressed_stage_name=None,
         rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         data_provider="WB",
         subject=_SUBJECT,
@@ -446,7 +448,6 @@ def test_stage_rejects_placeholder_reference(active_builder_context):
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=["evidence-1"],
         where_expressed_statement="expression in cilium",
-        when_expressed_stage_name=None,
         rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         data_provider="WB",
         subject=_SUBJECT,
@@ -498,7 +499,7 @@ def test_patch_updates_reference_and_controlled_field_from_ledger(active_builder
     ledger.record_tool_output(
         tool_call_id="call_relation_part_of",
         tool_name="resolve_domain_field_term",
-        output=_resolved_output(selected_value="is_not_expressed_in"),
+        output=_resolved_output(selected_value="is_not_expressed_in", source_phrase="not expressed in"),
     )
 
     result = _tool_fn(
@@ -836,7 +837,6 @@ def test_stage_rejects_blank_rationale(active_builder_context, rationale, messag
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=["evidence-67598e5688f123c8"],
         where_expressed_statement="PEF-1::GFP expression in the cilium",
-        when_expressed_stage_name=None,
         rationale=rationale,
         data_provider="WB",
         subject=_SUBJECT,
@@ -1007,8 +1007,8 @@ def test_stage_writes_resolver_identity_and_keeps_the_mention_apart(active_build
     }
     stage = staged["expression_pattern"]["when_expressed"]["developmental_stage_start"]
     assert (stage["curie"], stage["name"], stage["mention"]) == ("WBls:0000024", "L2 larva", "L2 larvae")
-    # The paper's stage wording is its own field; it is never filled from the term.
-    assert staged["when_expressed_stage_name"] == "L2 larva"
+    # The paper's stage wording is the stage term's mention; no separate stage-name field.
+    assert "when_expressed_stage_name" not in staged
 
 
 def test_stage_writes_subject_and_reference_as_paper_wording_only(active_builder_context):
@@ -1067,7 +1067,6 @@ def test_stage_resolves_data_provider_only_by_exact_provider_match(active_builde
             pending_ref_id=pending_ref_id,
             evidence_record_ids=["evidence-67598e5688f123c8"],
             where_expressed_statement="expression in cilium",
-            when_expressed_stage_name=None,
             rationale="Anti-GFP staining localizes the reporter to the cilium.",
             data_provider=provider,
             subject=_SUBJECT,
@@ -1104,6 +1103,7 @@ def test_stage_keeps_every_slim_term_as_its_own_value(active_builder_context):
             selected_curie="UBERON:0000113",
             instruction_value={"curie": "UBERON:0000113", "name": "post-juvenile adult stage"},
             term_source={"kind": "ontology", "ontology_family": "uberon"},
+            source_phrase="adult",
         ),
     )
 
@@ -1164,7 +1164,6 @@ def test_stage_requires_paper_wording_for_every_controlled_field(active_builder_
         pending_ref_id="gene-expression-annotation-pef-1",
         evidence_record_ids=["evidence-67598e5688f123c8"],
         where_expressed_statement="expression in cilium",
-        when_expressed_stage_name=None,
         rationale="Anti-GFP staining localizes the reporter to the cilium.",
         data_provider="WB",
         subject=_SUBJECT,
@@ -1205,6 +1204,63 @@ def test_patch_restages_a_controlled_field_unresolved_with_its_wording(active_bu
         None,
         "unresolved",
     )
+
+
+@pytest.mark.parametrize(
+    ("mention", "accepted"),
+    [("  Expressed   IN ", True), ("was detected in", False)],
+)
+def test_stage_pairs_a_resolution_only_with_the_wording_it_was_resolved_from(
+    active_builder_context, mention, accepted
+):
+    """A resolved value only counts for the paper wording its resolve call searched."""
+
+    workspace, ledger, _events = active_builder_context
+    ledger.record_tool_output(
+        tool_call_id="call_relation",
+        tool_name="resolve_domain_field_term",
+        output=_resolved_output(source_phrase="expressed in"),
+    )
+
+    result = _tool_fn(
+        agr_curation.stage_gene_expression_observation,
+        "stage_gene_expression_observation",
+    )(
+        pending_ref_id="gene-expression-annotation-pef-1",
+        evidence_record_ids=["evidence-67598e5688f123c8"],
+        where_expressed_statement="expression in cilium",
+        rationale="Anti-GFP staining localizes the reporter to the cilium.",
+        data_provider="WB",
+        subject=_SUBJECT,
+        reference=_REFERENCE,
+        controlled_fields=[{**_relation_field(), "mention": mention}],
+    )
+
+    if accepted:
+        assert result.status == "ok"
+        relation = workspace.candidates["gex-candidate-1"].staged_fields["relation"]
+        assert (relation["name"], relation["mention"]) == ("is_expressed_in", mention.strip())
+    else:
+        assert result.status == "error"
+        [issue] = result.data["validation_issues"]
+        assert issue["reason"] == "unresolved_selected_value"
+        assert "selected_value null" in issue["message"]
+
+
+@pytest.mark.parametrize("status", ["unresolved", "ambiguous", "blocked"])
+def test_resolver_instructions_tell_the_model_to_stage_unmatched_wording(status):
+    """Regression (ALL-1283): no "preserve it in unresolved metadata" instruction remains."""
+
+    lines = agr_curation._resolver_instruction(
+        resolution_status=status,
+        field_path="expression_pattern.where_expressed.anatomical_structure",
+        source_phrase=_RESIDUAL_BODY,
+        resolver={},
+    )
+    text = " ".join(lines)
+    assert "metadata" not in text
+    assert f"{_RESIDUAL_BODY!r} as its paper wording (mention) and selected_value null" in text
+    assert "its validator will check it" in text
 
 
 def test_resolver_selection_reads_only_the_selected_terms_own_keys():

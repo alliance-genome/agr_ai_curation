@@ -243,7 +243,6 @@ def _gene_expression_step():
                                              vocabulary="Expression Relation", id=200000200),
                 "expression_pattern": pattern,
                 "where_expressed_statement": statement_text,
-                "when_expressed_stage_name": (stage or {}).get("mention") or "young adult",
                 "single_reference": _validated_value(
                     "DOI:10.17912/micropub.biology.002386",
                     reference_id="DOI:10.17912/micropub.biology.002386",
@@ -255,7 +254,10 @@ def _gene_expression_step():
         statement("s1", _validated_value("hypodermis", curie="WBbt:0005733", name="hypodermis"),
                   _validated_value("L4 larval stage", curie="WBls:0000109", name="L4 larval stage"),
                   "GFP::PPIT-2 in hypodermis"),
-        statement("s2", residual_body, None, "signal near the residual body"),
+        statement("s2", residual_body, {"curie": None, "name": None, "mention": "young adult",
+                                        "resolution_state": "unresolved", "lookup_outcome": "not_validated",
+                                        "validator_explanation": "Not validated yet."},
+                  "signal near the residual body"),
     ]
     return {
         "step": 1, "node_id": "node_1", "agent_id": "gene_expression", "agent_name": "Gene Expression",
@@ -266,9 +268,9 @@ def _gene_expression_step():
                           "extracted_objects": objects,
                           "validation_findings": [{
                               "finding_id": "f1", "status": "open",
-                              "field_path": "when_expressed_stage_name",
+                              "field_path": "expression_pattern.when_expressed.developmental_stage_start",
                               "field_ref": {"object_ref": {"object_id": "s2"},
-                                            "field_path": "when_expressed_stage_name"},
+                                            "field_path": "expression_pattern.when_expressed.developmental_stage_start"},
                           }]},
         ),
     }
@@ -318,8 +320,12 @@ def test_default_layout_for_gene_expression_uses_declared_parents(monkeypatch, o
     assert "Y71G12B.17 (WB:WBGene00022155)" in first.values()
     assert "knock-in in situ reporter assay (MMO:0000672)" in first.values()
     assert "hypodermis (WBbt:0005733)" in first.values()
-    # Open finding on the flat stage text of s2 marks that value.
-    assert "young adult (unresolved)" in result.rows[1].values()
+    # s2's stage matched no term: its cell reads UNRESOLVED, never the paper wording.
+    stage_ref = "object.pack.GeneExpressionAnnotation.expression_pattern.when_expressed.developmental_stage_start"
+    stage_key = next(column.key for column in plan.columns if column.field_ref == stage_ref)
+    assert first[stage_key] == "L4 larval stage (WBls:0000109)"
+    assert result.rows[1][stage_key] == "UNRESOLVED"
+    assert "young adult" not in " ".join(cells)
 
 
 def test_selected_saved_plan_for_packaged_source_still_validates(monkeypatch):

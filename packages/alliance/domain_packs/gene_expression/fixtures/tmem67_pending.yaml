@@ -103,6 +103,14 @@ fixtures:
                     resolution_state: resolved
                     lookup_outcome: matched
                     validator_explanation: null
+              when_expressed:
+                developmental_stage_start:
+                  curie: FIXTURE_STAGE:00026
+                  name: TS26
+                  mention: TS26
+                  resolution_state: resolved
+                  lookup_outcome: matched
+                  validator_explanation: null
           evidence_record_ids:
             - evidence-tmem67-metanephros-1
           metadata_refs:

@@ -154,25 +154,30 @@ class ResolverCallLedger:
         return entry
 
     def find_validated_selection(
-        self, *, field_path: str, selected_value: str
+        self, *, field_path: str, selected_value: str, source_phrase: str
     ) -> ResolverCallLedgerEntry | None:
-        """Find a recorded resolver selection by its field_path and resolved value.
+        """Find a recorded resolver selection by field_path, resolved value and wording.
 
         This lets the builder verify provenance from what the agent naturally stages -- the
-        resolved value for a controlled field -- without requiring it to thread the resolve
-        call's opaque runtime tool_call_id. selected_value is the canonical resolved value
-        the resolve output exposes (e.g. 'WBbt:0006816', 'is_expressed_in'). Among equally
-        matching entries the most recently recorded wins (entries preserve insertion order).
+        resolved value for a controlled field and the paper wording it was resolved from --
+        without requiring it to thread the resolve call's opaque runtime tool_call_id.
+        selected_value is the canonical resolved value the resolve output exposes (e.g.
+        'WBbt:0006816', 'is_expressed_in'); source_phrase must be the wording the resolve
+        call searched (compared case- and whitespace-insensitively), so a resolution never
+        pairs with different paper wording. Among equally matching entries the most
+        recently recorded wins (entries preserve insertion order).
         """
         target_field = _optional_string(field_path)
         target_value = _optional_string(selected_value)
-        if not target_field or not target_value:
+        target_phrase = _normalized_phrase(source_phrase)
+        if not target_field or not target_value or not target_phrase:
             return None
         match: ResolverCallLedgerEntry | None = None
         for entry in self._entries.values():
             if (
                 entry.field_path == target_field
                 and entry.selected_value == target_value
+                and _normalized_phrase(entry.source_phrase) == target_phrase
             ):
                 match = entry
         return match
@@ -355,6 +360,12 @@ def _contains_value(container: Any, expected: Any) -> bool:
     if isinstance(container, list):
         return any(_contains_value(value, expected) for value in container)
     return False
+
+
+def _normalized_phrase(value: Any) -> str | None:
+    """Wording compared case- and whitespace-insensitively."""
+    text = _optional_string(value)
+    return " ".join(text.casefold().split()) if text else None
 
 
 def _optional_string(value: Any) -> str | None:

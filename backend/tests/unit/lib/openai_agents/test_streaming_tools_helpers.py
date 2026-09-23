@@ -2446,7 +2446,18 @@ def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
                     "status": "validated",
                     "payload": {
                         "expression_annotation_subject": {"gene_symbol": "rpm-1"},
-                        "when_expressed_stage_name": "L4",
+                        # The summary stage is the validated stage term's name (ALL-1283).
+                        "expression_pattern": {
+                            "when_expressed": {
+                                "developmental_stage_start": {
+                                    "curie": "WBls:0000038", "name": "L4",
+                                    "mention": "L4 larvae",
+                                    "resolution_state": "resolved",
+                                    "lookup_outcome": "matched",
+                                    "validator_explanation": None,
+                                },
+                            },
+                        },
                         "where_expressed_statement": huge_note,
                     },
                 }

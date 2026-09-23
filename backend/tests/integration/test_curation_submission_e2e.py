@@ -229,9 +229,9 @@ def _tmem67_gene_expression_envelope(*, envelope_id: str):
 def _with_tmem67_validator_results(envelope):
     """The extracted values as their validators resolve them (ALL-1283).
 
-    The extractor stages the subject gene, the reference and the UBERON slim
-    term as paper wording; export needs each one resolved, as the gene,
-    reference and ontology validators do in a real run.
+    The extractor stages the subject gene, the reference, the stage and the
+    UBERON slim term as paper wording; export needs each one resolved, as the
+    gene, reference and ontology validators do in a real run.
     """
 
     from src.lib.domain_packs.resolvable_values import mark_resolved
@@ -247,6 +247,10 @@ def _with_tmem67_validator_results(envelope):
         (
             payload["expression_pattern"]["where_expressed"]["anatomical_structure_uberon_terms"][0],
             {"curie": "UBERON:0001008", "name": "renal system"},
+        ),
+        (
+            payload["expression_pattern"]["when_expressed"]["developmental_stage_start"],
+            {"curie": "FIXTURE_STAGE:00026", "name": "TS26"},
         ),
     ]
     for value, identity in resolved:

@@ -87,7 +87,10 @@ REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
         "expression_experiment.entity_assayed.gene_symbol",
         "expression_experiment.expression_assay_used",
         "expression_experiment.expression_assay_used.curie",
-        "when_expressed_stage_name",
+        # The export's stage name (LinkML when_expressed_stage_name) is the validated
+        # stage term's name; the paper's stage wording is that term's mention.
+        "expression_pattern.when_expressed.developmental_stage_start",
+        "expression_pattern.when_expressed.developmental_stage_start.name",
         "where_expressed_statement",
         "expression_pattern",
         "expression_pattern.where_expressed",
@@ -110,7 +113,7 @@ MATERIALIZER_RESOLVABLE_EXTRACTION_FIELDS = frozenset(
             if field_path in _VALIDATOR_OWNED_IDENTITY_FIELDS
         ),
         "expression_pattern.where_expressed",
-        "when_expressed_stage_name",
+        "expression_pattern.when_expressed.developmental_stage_start",
     }
 )
 # Required fields with their own pending-envelope finding (the rest report
@@ -489,12 +492,6 @@ def validate_gene_expression_extraction_objects(
                                 field_path=value_path,
                             )
                         )
-        stage_name = _payload_value(obj.payload, "when_expressed_stage_name")
-        if stage_name is not None and not (isinstance(stage_name, str) and stage_name.strip()):
-            errors.append(
-                f"{location}.payload when_expressed_stage_name must be the paper's "
-                "stage wording when provided"
-            )
         if not _term_present(obj.payload.get("data_provider")):
             errors.append(
                 f"{location}.payload data_provider must be staged with the "
@@ -1415,10 +1412,10 @@ def _selector_integrity_findings(
         _required_selector_finding(
             expression_object=expression_object,
             object_ref=object_ref,
-            field_path="when_expressed_stage_name",
+            field_path="expression_pattern.when_expressed.developmental_stage_start",
             code="alliance.gene_expression.expression_context_missing",
-            message="GeneExpressionAnnotation requires when_expressed_stage_name.",
-            expected_selector="paper-supported stage label",
+            message="GeneExpressionAnnotation requires a developmental stage.",
+            expected_selector="the stage as the paper words it",
         ),
         _required_selector_finding(
             expression_object=expression_object,

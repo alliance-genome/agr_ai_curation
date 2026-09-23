@@ -5522,12 +5522,6 @@
           "type": "string"
         },
         {
-          "description": "The paper's own wording for when the expression was seen (for example \"L4 larva\"), or empty when the paper states no stage.",
-          "name": "when_expressed_stage_name",
-          "required": true,
-          "type": "any"
-        },
-        {
           "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
@@ -5564,7 +5558,7 @@
           "type": "any"
         }
       ],
-      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain \"where expressed\" statement, the paper's stage wording, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value keeps the paper's own wording; a term the agent could not match is kept as UNRESOLVED with that wording instead of being dropped."
+      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value keeps the paper's own wording; a term the agent could not match is kept as UNRESOLVED with that wording instead of being dropped."
     },
     "methods": null,
     "name": "Stage Gene Expression Observation",

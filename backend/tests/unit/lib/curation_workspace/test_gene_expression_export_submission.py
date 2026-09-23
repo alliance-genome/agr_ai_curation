@@ -215,9 +215,14 @@ def _lta_candidate() -> dict:
                 "expression assay", curie="MMO:0000640", name="expression assay"
             ),
         },
-        "when_expressed_stage_name": "N/A",
         "where_expressed_statement": "extracellular space",
         "expression_pattern": {
+            # The export's stage name comes from the validated stage term.
+            "when_expressed": {
+                "developmental_stage_start": _grounded(
+                    "adult", curie="FIXTURE_STAGE:00001", name="adult"
+                ),
+            },
             "where_expressed": {
                 "cellular_component": _grounded(
                     "extracellular space",
@@ -527,6 +532,7 @@ def test_gene_expression_export_maps_lta_cellular_component_projection():
         "curie": "GO:0005615",
         "name": "obsolete extracellular space",
     }
+    assert target_rows["geneexpressionannotation"]["columns"]["whenexpressedstagename"] == "adult"
 
 
 def test_gene_expression_export_blockers_are_object_and_field_addressable():

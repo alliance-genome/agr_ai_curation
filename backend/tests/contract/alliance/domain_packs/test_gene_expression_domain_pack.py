@@ -326,7 +326,7 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
         "summary_fields": [
             "expression_annotation_subject.gene_symbol",
             "where_expressed_statement",
-            "when_expressed_stage_name",
+            "expression_pattern.when_expressed.developmental_stage_start.name",
             "relation.name",
             "expression_experiment.expression_assay_used.name",
         ],
@@ -374,7 +374,7 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
                 "id": "stage_relation",
                 "label": "Stage & relation",
                 "fields": [
-                    "when_expressed_stage_name",
+                    "expression_pattern.when_expressed.developmental_stage_start.name",
                     "expression_pattern.when_expressed.developmental_stage_start.curie",
                     "expression_pattern.when_expressed.developmental_stage_start.mention",
                     "expression_pattern.when_expressed.stage_uberon_slim_terms",
@@ -518,7 +518,8 @@ def test_gene_expression_object_embeds_required_experiment_and_context_fields():
         "expression_experiment.entity_assayed.gene_symbol",
         "expression_experiment.expression_assay_used",
         "expression_experiment.expression_assay_used.curie",
-        "when_expressed_stage_name",
+        "expression_pattern.when_expressed.developmental_stage_start",
+        "expression_pattern.when_expressed.developmental_stage_start.name",
         "where_expressed_statement",
         "expression_pattern",
         "expression_pattern.where_expressed",
@@ -1332,8 +1333,9 @@ def test_gene_expression_stage_and_site_terms_materialize_from_validator_results
     )
 
     payload = result.envelope.extracted_objects[0].payload
-    # Regression (ALL-1283): the stage term never overwrites the paper's stage wording.
-    assert payload["when_expressed_stage_name"] == "TS26"
+    # Regression (ALL-1283): the stage validator writes only the stage term, never a flat
+    # stage-name field; the paper's stage wording stays the term's mention.
+    assert "when_expressed_stage_name" not in payload
     assert payload["expression_pattern"]["when_expressed"][
         "developmental_stage_start"
     ] == _validated("TS26", curie="FIXTURE_STAGE:00026", name="Theiler stage 26")
@@ -1757,7 +1759,7 @@ def test_multi_annotation_fixture_projects_one_review_row_per_expression_stateme
     assert [field.field_path for field in rows[0].summary_fields] == [
         "expression_annotation_subject.gene_symbol",
         "where_expressed_statement",
-        "when_expressed_stage_name",
+        "expression_pattern.when_expressed.developmental_stage_start.name",
         "relation.name",
         "expression_experiment.expression_assay_used.name",
     ]
@@ -2177,7 +2179,7 @@ def test_gene_expression_linkml_validator_reports_experiment_projection_mismatch
 def test_gene_expression_linkml_validator_reports_missing_expression_context():
     envelope = _converted_tmem67_envelope()
     payload = copy.deepcopy(envelope.extracted_objects[0].payload)
-    payload["when_expressed_stage_name"] = ""
+    payload["expression_pattern"].pop("when_expressed")
     payload["expression_pattern"]["where_expressed"] = {}
 
     findings = validate_pending_gene_expression_envelope(_with_payload(envelope, payload))
@@ -2188,7 +2190,7 @@ def test_gene_expression_linkml_validator_reports_missing_expression_context():
     }
 
     assert (
-        findings_by_field["when_expressed_stage_name"].code
+        findings_by_field["expression_pattern.when_expressed.developmental_stage_start"].code
         == "alliance.gene_expression.expression_context_missing"
     )
     assert (
@@ -2675,7 +2677,6 @@ def _gene_expression_builder_staged_fields(**overrides: Any) -> dict[str, Any]:
         "object_type": GENE_EXPRESSION_OBJECT_TYPE,
         "pending_ref_id": "gene-expression-annotation-pef-1",
         "where_expressed_statement": "PEF-1::GFP expression in the cilium",
-        "when_expressed_stage_name": "L2 larva",
         "rationale": "Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         "data_provider": data_provider_value("WB", "WB"),
         "relation": resolver_selected_value("relation", "expressed in", selections["relation"]),
@@ -2835,15 +2836,10 @@ def test_builder_preserves_unresolved_selectors_as_pending_blocked_observation(s
         )
 
 
-@pytest.mark.parametrize("stage_state", ["missing", "null"])
-def test_builder_preserves_missing_stage_selector_with_submission_blocker(stage_state):
+def test_builder_preserves_missing_stage_with_submission_blocker():
     staged = _gene_expression_builder_staged_fields()
     staged["expression_pattern"].pop("when_expressed")
     staged["where_expressed_statement"] += " Stage hint: long-pec."
-    if stage_state == "missing":
-        staged.pop("when_expressed_stage_name")
-    else:
-        staged["when_expressed_stage_name"] = None
     staged["metadata"]["provenance"]["helper_selections"] = [
         selection for selection in staged["metadata"]["provenance"]["helper_selections"]
         if selection["field_path"] != "expression_pattern.when_expressed.developmental_stage_start"
@@ -2855,29 +2851,80 @@ def test_builder_preserves_missing_stage_selector_with_submission_blocker(stage_
     )
     annotation = envelope.extracted_objects[0]
     assert annotation.status is CuratableObjectStatus.PENDING
-    assert not annotation.payload.get("when_expressed_stage_name")
+    assert "when_expressed" not in annotation.payload["expression_pattern"]
     assert annotation.payload["where_expressed_statement"] == staged["where_expressed_statement"]
     assert annotation.evidence_record_ids == ["evidence-67598e5688f123c8"]
+    stage_path = "expression_pattern.when_expressed.developmental_stage_start"
     finding = next(
         finding for finding in validate_pending_gene_expression_envelope(envelope)
-        if finding.field_ref and finding.field_ref.field_path == "when_expressed_stage_name"
+        if finding.field_ref and finding.field_ref.field_path == stage_path
     )
     assert finding.code == "alliance.gene_expression.expression_context_missing"
     assert finding.severity is ValidationFindingSeverity.BLOCKER
     assert finding.details["blocking"] is True
-    assert "when_expressed_stage_name" in {
+    assert stage_path in {
         blocker.field_path
         for blocker in gene_expression_export_blockers(annotation.model_dump(mode="json"))
     }
 
 
-@pytest.mark.parametrize("stage_value", [123, [], {"name": "long-pec"}, "   "])
-def test_builder_rejects_malformed_stage_wording(stage_value):
-    staged = _gene_expression_builder_staged_fields()
-    staged["when_expressed_stage_name"] = stage_value
-    result = _materialize_gene_expression_candidate(staged)
-    assert not result.ok
-    assert "when_expressed_stage_name" in str(result.issues)
+def _exportable_candidate(stage: Mapping[str, Any]) -> dict[str, Any]:
+    """The tmem67 grounded annotation with the given stage value, as an export candidate."""
+
+    annotation = _load_gene_expression_fixture_pack(GENE_EXPRESSION_FIXTURE_PACK_ID).fixtures[
+        0
+    ].envelope.extracted_objects[0]
+    payload = copy.deepcopy(annotation.payload)
+    payload["expression_pattern"]["when_expressed"]["developmental_stage_start"] = dict(stage)
+    return _export_candidate(annotation.model_copy(update={"payload": payload}))
+
+
+def test_export_stage_name_is_the_validated_stage_term_never_paper_wording():
+    from agr_ai_curation_alliance.domain_packs.gene_expression.export import (
+        _gene_expression_annotation_payload,
+    )
+
+    candidate = _exportable_candidate(
+        _grounded("TS26 embryos", curie="FIXTURE_STAGE:00026", name="Theiler stage 26")
+    )
+    candidate.update(
+        {
+            "envelope_revision": 1,
+            "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
+            "projection_ref": {"envelope_id": "envelope-1", "object_id": candidate["object_id"]},
+        }
+    )
+    # The stored DB-style stage column never feeds the export either.
+    candidate["payload"]["when_expressed_stage_name"] = "paper stage wording"
+
+    assert gene_expression_export_blockers(candidate) == ()
+    columns = _gene_expression_annotation_payload(candidate)["target_rows"][
+        "geneexpressionannotation"
+    ]["columns"]
+    assert columns["whenexpressedstagename"] == "Theiler stage 26"
+
+
+@pytest.mark.parametrize(
+    ("stage", "blocked_path", "code"),
+    [
+        (
+            staged_value("expression_pattern.when_expressed.developmental_stage_start", "TS26 embryos"),
+            "expression_pattern.when_expressed.developmental_stage_start",
+            "alliance.gene_expression.value_unresolved",
+        ),
+        (
+            _grounded("TS26", curie="FIXTURE_STAGE:00026", name=None),
+            "expression_pattern.when_expressed.developmental_stage_start.name",
+            "alliance.gene_expression.required_field_missing",
+        ),
+    ],
+)
+def test_export_blocks_until_the_stage_term_and_its_name_are_validated(stage, blocked_path, code):
+    blockers = {
+        blocker.field_path: blocker.code
+        for blocker in gene_expression_export_blockers(_exportable_candidate(stage))
+    }
+    assert blockers == {blocked_path: code}
 
 
 @pytest.mark.parametrize(
