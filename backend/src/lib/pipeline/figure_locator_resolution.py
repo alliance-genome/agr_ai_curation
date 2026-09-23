@@ -17,6 +17,11 @@ from src.lib.document_sources.figure_metadata import (
     provider_figure_semantic_ranges,
     strip_provider_figure_metadata_wrapper,
 )
+from src.lib.observability.cost_context import current_cost_context
+from src.lib.observability.payload_contracts import (
+    PayloadContractViolation,
+    report_payload_contract_violation,
+)
 from src.lib.observability.sentry import (
     gen_ai_invoke_agent_span,
     set_redacted_ai_span_data,
@@ -239,8 +244,19 @@ async def _call_figure_locator_classifier(
                     raise ValueError("figure locator classifier returned no structured output")
                 try:
                     _validated_outputs_by_id(output, candidates)
-                except ValueError:
+                except ValueError as contract_error:
                     if attempt == contract_retries:
+                        set_redacted_ai_span_data(
+                            sentry_span, "ai_curation.validation.retry_count", attempt
+                        )
+                        if _report_candidate_id_contract_failure(
+                            str(contract_error),
+                            retries=attempt,
+                            contract_retries=contract_retries,
+                            model_name=model_name,
+                            candidates=candidates,
+                        ):
+                            setattr(contract_error, "_ai_curation_sentry_captured", True)
                         raise
                     set_redacted_ai_span_data(
                         sentry_span, "ai_curation.validation.status", "retrying"
@@ -274,6 +290,9 @@ async def _call_figure_locator_classifier(
             raise
 
         set_redacted_ai_span_data(
+            sentry_span, "ai_curation.validation.retry_count", attempt
+        )
+        set_redacted_ai_span_data(
             sentry_span,
             "ai_curation.validation.status",
             "accepted",
@@ -289,6 +308,49 @@ async def _call_figure_locator_classifier(
             },
         )
         return output
+
+
+def _report_candidate_id_contract_failure(
+    detail: str,
+    *,
+    retries: int,
+    contract_retries: int,
+    model_name: str,
+    candidates: Sequence[FigureLocatorCandidate],
+) -> bool:
+    """Report once that a batch failed candidate ID coverage after all retries.
+
+    The detail names short candidate IDs only, never chunk text. Returns whether
+    Sentry accepted the report.
+    """
+
+    cost_context = current_cost_context()
+    return report_payload_contract_violation(
+        PayloadContractViolation(
+            category="contract_serialization_failure",
+            component="figure_locator",
+            message=(
+                "Figure locator classifier failed candidate ID coverage after "
+                f"{retries} correction retr{'y' if retries == 1 else 'ies'}: {detail}"
+            ),
+            measured=retries,
+            unit="correction_retries",
+            limit=contract_retries,
+            setting="FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES",
+            field="candidates",
+        ),
+        phase="figure_locator_resolution",
+        model=model_name,
+        agent="figure_locator_classifier",
+        correlation={
+            "outcome": "failed",
+            "contract_retries": retries,
+            "candidate_count": len(candidates),
+            "document_id": candidates[0][0].document_id,
+            "job_id": cost_context.get("job_id"),
+            "run_id": cost_context.get("run_id"),
+        },
+    )
 
 
 def _map_mentions_to_chunk(

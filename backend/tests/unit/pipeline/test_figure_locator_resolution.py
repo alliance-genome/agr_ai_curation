@@ -102,6 +102,21 @@ def contract_runner(monkeypatch):
     return runner, telemetry
 
 
+@pytest.fixture
+def contract_reports(monkeypatch):
+    reports = MagicMock(return_value=True)
+    monkeypatch.setattr(locator, "report_payload_contract_violation", reports)
+    return reports
+
+
+def _retry_counts(telemetry):
+    return [
+        call.args[2]
+        for call in telemetry.call_args_list
+        if call.args[1] == "ai_curation.validation.retry_count"
+    ]
+
+
 def _batch_result(ids):
     return SimpleNamespace(final_output=locator.FigureLocatorBatchOutput(
         candidates=[locator.FigureLocatorCandidateOutput(candidate_id=value) for value in ids]
@@ -110,7 +125,9 @@ def _batch_result(ids):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_ids", [[], ["c0", "c0"], ["unexpected-chunk"]])
-async def test_contract_correction_recovers_only_invalid_batch(contract_runner, invalid_ids, monkeypatch):
+async def test_contract_correction_recovers_only_invalid_batch(
+    contract_runner, contract_reports, invalid_ids, monkeypatch
+):
     runner, telemetry = contract_runner
     first = _chunk("chunk-0", "Figure 1 shows signal.")
     second = _chunk("chunk-1", "Figure 2 shows signal.")
@@ -132,6 +149,9 @@ async def test_contract_correction_recovers_only_invalid_batch(contract_runner, 
     assert "Correction required" not in instructions[2]
     statuses = [call.args[2] for call in telemetry.call_args_list if call.args[1] == "ai_curation.validation.status"]
     assert statuses == ["retrying", "accepted", "accepted"]
+    # The span keeps the correction visible; a recovered batch is not a failure.
+    assert _retry_counts(telemetry) == [1, 0]
+    contract_reports.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -147,26 +167,48 @@ async def test_default_contract_budget_recovers_on_third_attempt(contract_runner
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retries", [0, 1, 2])
-async def test_contract_correction_exhaustion_fails_closed(contract_runner, monkeypatch, retries):
+async def test_contract_correction_exhaustion_fails_closed(
+    contract_runner, contract_reports, monkeypatch, retries
+):
     runner, telemetry = contract_runner
     monkeypatch.setenv("FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES", str(retries))
     runner.return_value = _batch_result([])
     chunk = _chunk("chunk-0", "Figure 1 shows signal.")
-    with pytest.raises(ValueError, match="exact candidate_id batch contract"):
+    with pytest.raises(ValueError, match="exact candidate_id batch contract") as raised:
         await locator.resolve_figure_locators([chunk])
     assert runner.await_count == retries + 1
     assert chunk.metadata.figure_locator_resolution is None
+    # Outer pipeline failure capture must not duplicate the contract report.
+    assert getattr(raised.value, "_ai_curation_sentry_captured", False) is True
     statuses = [call.args[2] for call in telemetry.call_args_list if call.args[1] == "ai_curation.validation.status"]
     assert statuses == ["retrying"] * retries + ["error"]
+    assert _retry_counts(telemetry) == [retries]
+
+    contract_reports.assert_called_once()
+    violation = contract_reports.call_args.args[0]
+    kwargs = contract_reports.call_args.kwargs
+    assert violation.category == "contract_serialization_failure"
+    assert violation.component == "figure_locator"
+    assert violation.setting == "FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES"
+    assert (violation.measured, violation.limit) == (retries, retries)
+    assert "Figure 1 shows signal." not in violation.message
+    assert kwargs["phase"] == "figure_locator_resolution"
+    assert kwargs["agent"] == "figure_locator_classifier"
+    assert kwargs["correlation"]["document_id"] == "doc-1"
+    assert kwargs["correlation"]["contract_retries"] == retries
+    assert kwargs["correlation"]["candidate_count"] == 1
 
 
 @pytest.mark.asyncio
-async def test_contract_retry_does_not_retry_provider_failure(contract_runner):
+async def test_contract_retry_does_not_retry_provider_failure(
+    contract_runner, contract_reports
+):
     runner, _ = contract_runner
     runner.side_effect = RuntimeError("provider unavailable")
     with pytest.raises(RuntimeError, match="provider unavailable"):
         await locator.resolve_figure_locators([_chunk("chunk-0", "Figure 1 shows signal.")])
     assert runner.await_count == 1
+    contract_reports.assert_not_called()
 
 
 @pytest.mark.asyncio

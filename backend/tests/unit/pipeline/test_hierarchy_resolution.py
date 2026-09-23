@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.lib.observability.cost_context import cost_scope
 from src.lib.pipeline import hierarchy_resolution as hierarchy
 
 
@@ -359,7 +360,8 @@ _PAPER_SECTIONS = [
     {"title": "Discussion", "preview": "Our data show that wg is required."},
 ]
 
-# The same classification the header-echo contract produced on this paper.
+# Expected classification: every section keeps its own title, and each
+# subsection's parent is the paper's own top-level heading.
 _EXPECTED_PAPER_ITEMS = [
     ("Loss of wg disrupts wing growth", "Loss of wg disrupts wing growth", None, True),
     ("Abstract", "Abstract", None, True),
@@ -515,9 +517,27 @@ _INVALID_SECTION_INDEX_OUTPUTS = {
             {"idx": i - 1, "is_top_level": True, "parent_idx": None} for i in range(8)
         ]
     },
-    "parent_is_subsection": {
+    "parent_chain_loops": {
         "sections": [
-            {"idx": i, "is_top_level": i != 3 and i != 4, "parent_idx": 3 if i == 4 else (2 if i == 3 else None)}
+            {"idx": i, "is_top_level": i not in (3, 4), "parent_idx": {3: 4, 4: 3}.get(i)}
+            for i in range(8)
+        ]
+    },
+    "parent_is_self": {
+        "sections": [
+            {"idx": i, "is_top_level": i != 3, "parent_idx": 3 if i == 3 else None}
+            for i in range(8)
+        ]
+    },
+    "parent_chain_ends_without_top_level": {
+        "sections": [
+            {"idx": i, "is_top_level": i not in (3, 4), "parent_idx": 3 if i == 4 else None}
+            for i in range(8)
+        ]
+    },
+    "parent_chain_ends_out_of_range": {
+        "sections": [
+            {"idx": i, "is_top_level": i not in (3, 4), "parent_idx": {3: 12, 4: 3}.get(i)}
             for i in range(8)
         ]
     },
@@ -542,6 +562,17 @@ _INVALID_SECTION_INDEX_OUTPUTS = {
 }
 
 
+def _contract_report_recorder(monkeypatch):
+    reports = []
+
+    def _record(violation, **kwargs):
+        reports.append((violation, kwargs))
+        return True
+
+    monkeypatch.setattr(hierarchy, "report_payload_contract_violation", _record)
+    return reports
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", sorted(_INVALID_SECTION_INDEX_OUTPUTS))
 async def test_invalid_section_indexes_fail_explicitly_after_contract_retries(
@@ -550,10 +581,12 @@ async def test_invalid_section_indexes_fail_explicitly_after_contract_retries(
     invalid = _paper_output(**_INVALID_SECTION_INDEX_OUTPUTS[case])
     _captured, calls = _install_sequenced_runner(monkeypatch, [invalid, invalid])
     sentry_calls = _sentry_recorder(monkeypatch)
+    reports = _contract_report_recorder(monkeypatch)
 
-    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
-        _PAPER_SECTIONS
-    )
+    with cost_scope({"document_id": "doc-1", "job_id": "job-1"}):
+        sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+            _PAPER_SECTIONS
+        )
 
     assert (sections, abstract_title, raw) == ([], None, None)
     assert len(calls) == 2
@@ -567,6 +600,26 @@ async def test_invalid_section_indexes_fail_explicitly_after_contract_retries(
         call[2] for call in sentry_calls if call[1] == "ai_curation.error.detail"
     )
     assert "section index contract" in detail["message"]
+    assert ("data", "ai_curation.validation.retry_count", 1) in sentry_calls
+
+    assert len(reports) == 1
+    violation, kwargs = reports[0]
+    assert violation.category == "contract_serialization_failure"
+    assert violation.component == "hierarchy_resolution"
+    assert violation.setting == "HIERARCHY_RESOLUTION_CONTRACT_RETRIES"
+    assert (violation.measured, violation.limit) == (1, 1)
+    assert kwargs["level"] == "error"
+    assert kwargs["agent"] == "hierarchy_classifier"
+    assert kwargs["correlation"] == {
+        "outcome": "failed",
+        "contract_retries": 1,
+        "section_count": len(_PAPER_SECTIONS),
+        "document_id": "doc-1",
+        "job_id": "job-1",
+        "run_id": None,
+    }
+    for info in _PAPER_SECTIONS:
+        assert info["title"] not in violation.message
 
 
 @pytest.mark.asyncio
@@ -576,8 +629,9 @@ async def test_section_index_contract_correction_recovers(monkeypatch, hierarchy
         monkeypatch, [invalid, _paper_output()]
     )
     sentry_calls = _sentry_recorder(monkeypatch)
+    reports = _contract_report_recorder(monkeypatch)
 
-    sections, abstract_title, _raw = await hierarchy._call_llm_for_hierarchy(
+    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
         _PAPER_SECTIONS
     )
 
@@ -589,3 +643,95 @@ async def test_section_index_contract_correction_recovers(monkeypatch, hierarchy
         call[2] for call in sentry_calls if call[1] == "ai_curation.validation.status"
     ]
     assert statuses == ["retrying", "accepted"]
+    # The stored raw response and the span keep the correction visible.
+    assert raw["contract_retries"] == 1
+    assert ("data", "ai_curation.validation.retry_count", 1) in sentry_calls
+    assert len(reports) == 1
+    violation, kwargs = reports[0]
+    assert violation.component == "hierarchy_resolution"
+    assert kwargs["level"] == "warning"
+    assert kwargs["correlation"]["outcome"] == "recovered"
+    assert kwargs["correlation"]["contract_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_first_try_success_records_zero_retries_and_reports_nothing(
+    monkeypatch, hierarchy_env
+):
+    _install_sequenced_runner(monkeypatch, [_paper_output()])
+    sentry_calls = _sentry_recorder(monkeypatch)
+    reports = _contract_report_recorder(monkeypatch)
+
+    _sections, _abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+        _PAPER_SECTIONS
+    )
+
+    assert raw["contract_retries"] == 0
+    assert ("data", "ai_curation.validation.retry_count", 0) in sentry_calls
+    assert reports == []
+
+
+# Three-level numbered headings, in document order.
+_NESTED_SECTIONS = [
+    {"title": "Wingless patterns the wing disc", "preview": "Jane Doe"},
+    {"title": "1. Introduction", "preview": "Wingless is a morphogen."},
+    {"title": "2. Materials and Methods", "preview": ""},
+    {"title": "2.1. Fly genetics", "preview": ""},
+    {"title": "2.1.1. Fly strains", "preview": "w1118 flies were used."},
+    {"title": "2.1.2. Clone induction", "preview": "Clones were induced by heat shock."},
+    {"title": "2.2. Imaging", "preview": "Discs were imaged."},
+    {"title": "3. Results", "preview": ""},
+    {"title": "3.1. wg controls growth", "preview": ""},
+    {"title": "3.1.1. Clone size", "preview": "Clones lacking wg were small."},
+]
+
+
+@pytest.mark.asyncio
+async def test_nested_subsections_resolve_to_top_level_ancestor(
+    monkeypatch, hierarchy_env
+):
+    # 2.1.1 names its direct parent 2.1; 2.1.2 names the top-level section
+    # directly; 3.1.1 names 3.1. All must resolve to their top-level heading.
+    output = hierarchy.HierarchyOutput.model_validate({
+        "sections": [
+            {"idx": 0, "is_top_level": True, "parent_idx": None},
+            {"idx": 1, "is_top_level": True, "parent_idx": None},
+            {"idx": 2, "is_top_level": True, "parent_idx": None},
+            {"idx": 3, "is_top_level": False, "parent_idx": 2},
+            {"idx": 4, "is_top_level": False, "parent_idx": 3},
+            {"idx": 5, "is_top_level": False, "parent_idx": 2},
+            {"idx": 6, "is_top_level": False, "parent_idx": 2},
+            {"idx": 7, "is_top_level": True, "parent_idx": None},
+            {"idx": 8, "is_top_level": False, "parent_idx": 7},
+            {"idx": 9, "is_top_level": False, "parent_idx": 8},
+        ],
+        "abstract_idx": None,
+    })
+    _captured, calls = _install_sequenced_runner(monkeypatch, [output])
+    _sentry_recorder(monkeypatch)
+    reports = _contract_report_recorder(monkeypatch)
+
+    sections, _abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+        _NESTED_SECTIONS
+    )
+
+    methods = "2. Materials and Methods"
+    results = "3. Results"
+    assert [
+        (item.header, item.parent_section, item.subsection, item.is_top_level)
+        for item in sections
+    ] == [
+        ("Wingless patterns the wing disc", "Wingless patterns the wing disc", None, True),
+        ("1. Introduction", "1. Introduction", None, True),
+        (methods, methods, None, True),
+        ("2.1. Fly genetics", methods, "2.1. Fly genetics", False),
+        ("2.1.1. Fly strains", methods, "2.1.1. Fly strains", False),
+        ("2.1.2. Clone induction", methods, "2.1.2. Clone induction", False),
+        ("2.2. Imaging", methods, "2.2. Imaging", False),
+        (results, results, None, True),
+        ("3.1. wg controls growth", results, "3.1. wg controls growth", False),
+        ("3.1.1. Clone size", results, "3.1.1. Clone size", False),
+    ]
+    assert len(calls) == 1
+    assert raw["contract_retries"] == 0
+    assert reports == []

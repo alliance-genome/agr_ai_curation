@@ -27,6 +27,11 @@ from src.lib.document_sources.figure_metadata import (
     is_provider_figure_subsection,
 )
 from src.lib.config.env import require_env, require_env_choice
+from src.lib.observability.cost_context import current_cost_context
+from src.lib.observability.payload_contracts import (
+    PayloadContractViolation,
+    report_payload_contract_violation,
+)
 from src.lib.observability.sentry import (
     gen_ai_invoke_agent_span,
     set_redacted_ai_span_data,
@@ -65,7 +70,8 @@ class SectionClassification(BaseModel):
     )
     parent_idx: Optional[int] = Field(
         default=None,
-        description="For a subsection: the [n] number of the top-level section it belongs to. "
+        description="For a subsection: the [n] number of the section it is nested under "
+                    "(its top-level section, or its direct parent subsection). "
                     "Null for top-level sections."
     )
 
@@ -108,10 +114,11 @@ async def resolve_document_hierarchy(
     Analyze document elements to reconstruct section hierarchy using LLM.
 
     Updates each element with:
-    - metadata.parent_section: Top-level section name (e.g., "Methods")
+    - metadata.parent_section: The paper's own top-level heading (e.g., "Materials and Methods")
     - metadata.subsection: Subsection name if applicable (e.g., "Fly Strains")
     - metadata.is_top_level: Whether this is a top-level section
-    - section_title: Concatenated path for backward compatibility (e.g., "Methods > Fly Strains")
+    - section_title: Concatenated path for backward compatibility
+      (e.g., "Materials and Methods > Fly Strains")
 
     Args:
         elements: List of document elements from PDFX parser
@@ -340,14 +347,14 @@ SUBSECTIONS (is_top_level=false) - These are nested within top-level sections:
 SPECIAL CASES:
 - "Significance Statement" is typically a standalone top-level section (common in PNAS, eLife)
 - Numbered sections like "2.1. Something" are subsections of the parent numbered section
-- Nested subsections (for example "2.1.1") belong to their outermost top-level section
+- Nested subsections (for example "2.1.1") belong to their outermost top-level section; their parent_idx may be that top-level section or their direct parent subsection (for example "2.1")
 - Short ambiguous titles like "Notes" or "Data" - use the preview to determine placement
 - A subsection can only point to a top-level section in the list. If the heading of the section it belongs to is not in the list, classify it as top-level
 
 OUTPUT: Refer to sections only by their [n] numbers; never repeat title text. Return exactly one entry for every number in the input, each number once:
 - idx: the section's number
 - is_top_level: true for major sections, false for subsections
-- parent_idx: for a subsection, the number of the top-level section it belongs to; null for a top-level section
+- parent_idx: for a subsection, the number of the section it is nested under (its top-level section or its direct parent subsection); null for a top-level section. Following parent_idx from any subsection must reach a top-level section
 
 ADDITIONAL TASK - IDENTIFY ABSTRACT:
 Almost every scientific paper has an abstract. You must ALSO identify which section contains the abstract:
@@ -426,6 +433,7 @@ Common abstract locations when not explicitly labeled:
             try:
                 contract_retries = get_hierarchy_resolution_contract_retries()
                 attempt = 0
+                last_contract_error: Optional[str] = None
                 while True:
                     result = await run_agent_with_owned_openai_resources(
                         hierarchy_agent,
@@ -440,8 +448,25 @@ Common abstract locations when not explicitly labeled:
                             result.final_output,
                             section_info_list,
                         )
-                    except ValueError:
+                    except ValueError as contract_error:
+                        last_contract_error = str(contract_error)
                         if attempt == contract_retries:
+                            set_redacted_ai_span_data(
+                                sentry_span,
+                                "ai_curation.validation.retry_count",
+                                attempt,
+                            )
+                            if _report_section_index_contract(
+                                last_contract_error,
+                                outcome="failed",
+                                retries=attempt,
+                                contract_retries=contract_retries,
+                                model_name=model_name,
+                                section_count=len(section_info_list),
+                            ):
+                                setattr(
+                                    contract_error, "_ai_curation_sentry_captured", True
+                                )
                             raise
                         set_redacted_ai_span_data(
                             sentry_span, "ai_curation.validation.status", "retrying"
@@ -451,8 +476,10 @@ Common abstract locations when not explicitly labeled:
                             "section number contract. Return exactly one entry for "
                             "every input number, each number once, with no other "
                             "numbers. Top-level sections have parent_idx null; every "
-                            "subsection has the parent_idx of a top-level section. "
-                            "abstract_idx must be an input number or null."
+                            "subsection has the parent_idx of an input section, and "
+                            "following parent_idx must reach a top-level section "
+                            "without looping. abstract_idx must be an input number "
+                            "or null."
                         )
                         attempt += 1
                         continue
@@ -473,6 +500,19 @@ Common abstract locations when not explicitly labeled:
                     },
                 )
                 raise
+
+            set_redacted_ai_span_data(
+                sentry_span, "ai_curation.validation.retry_count", attempt
+            )
+            if last_contract_error is not None and resolved is not None:
+                _report_section_index_contract(
+                    last_contract_error,
+                    outcome="recovered",
+                    retries=attempt,
+                    contract_retries=contract_retries,
+                    model_name=model_name,
+                    section_count=len(section_info_list),
+                )
 
             # Record the resolved output while the Sentry span is still active so
             # Tier 2 captures the classifier result details on the span.
@@ -499,6 +539,7 @@ Common abstract locations when not explicitly labeled:
         raw_response = {
             "model": model_name,
             "reasoning_effort": reasoning_effort if is_gpt5 else None,
+            "contract_retries": attempt,
         }
 
         # Extract the structured output
@@ -529,8 +570,10 @@ def _resolve_section_indexes(
 ) -> tuple[List[SectionItem], Optional[str]]:
     """Map index-only classifier output back to titles in input order.
 
-    Raises ValueError when any index is missing, duplicated, out of range, or
-    points at something other than a top-level section.
+    A subsection's parent chain is followed to its top-level ancestor, so a
+    nested heading such as "2.1.1" may name its direct parent "2.1". Raises
+    ValueError when any index is missing, duplicated, or out of range, or when
+    a parent chain loops or ends without reaching a top-level section.
     """
     titles = [info["title"] for info in section_info_list]
     count = len(titles)
@@ -570,16 +613,9 @@ def _resolve_section_indexes(
                 is_top_level=True,
             ))
             continue
-        parent = by_idx.get(item.parent_idx) if item.parent_idx is not None else None
-        if parent is None or not parent.is_top_level:
-            raise ValueError(
-                "hierarchy classifier violated the section index contract: "
-                f"subsection idx {idx} has parent_idx {item.parent_idx}, "
-                "which is not a top-level section"
-            )
         resolved.append(SectionItem(
             header=title,
-            parent_section=titles[parent.idx],
+            parent_section=titles[_top_level_ancestor(idx, by_idx)],
             subsection=title,
             is_top_level=False,
         ))
@@ -588,6 +624,82 @@ def _resolve_section_indexes(
         titles[output.abstract_idx] if output.abstract_idx is not None else None
     )
     return resolved, abstract_title
+
+
+def _top_level_ancestor(
+    idx: int,
+    by_idx: Dict[int, SectionClassification],
+) -> int:
+    """Follow a subsection's parent_idx chain to its top-level section number."""
+    chain = [idx]
+    current = by_idx[idx]
+    while not current.is_top_level:
+        parent = (
+            by_idx.get(current.parent_idx)
+            if current.parent_idx is not None
+            else None
+        )
+        if parent is None:
+            raise ValueError(
+                "hierarchy classifier violated the section index contract: "
+                f"subsection idx {idx} parent chain {chain} ends at parent_idx "
+                f"{current.parent_idx}, which is not an input section"
+            )
+        if parent.idx in chain:
+            raise ValueError(
+                "hierarchy classifier violated the section index contract: "
+                f"subsection idx {idx} parent chain {chain + [parent.idx]} loops"
+            )
+        chain.append(parent.idx)
+        current = parent
+    return current.idx
+
+
+def _report_section_index_contract(
+    detail: str,
+    *,
+    outcome: str,
+    retries: int,
+    contract_retries: int,
+    model_name: str,
+    section_count: int,
+) -> bool:
+    """Report a section-number contract failure once per classification.
+
+    ``failed`` means the correction budget was spent and the document keeps its
+    unclassified titles; ``recovered`` means a correction retry succeeded. The
+    detail names section numbers only, never titles or previews. Returns whether
+    Sentry accepted the report.
+    """
+    cost_context = current_cost_context()
+    return report_payload_contract_violation(
+        PayloadContractViolation(
+            category="contract_serialization_failure",
+            component="hierarchy_resolution",
+            message=(
+                f"Hierarchy classifier section-number contract {outcome} after "
+                f"{retries} correction retr{'y' if retries == 1 else 'ies'}: {detail}"
+            ),
+            measured=retries,
+            unit="correction_retries",
+            limit=contract_retries,
+            setting="HIERARCHY_RESOLUTION_CONTRACT_RETRIES",
+            field="sections",
+        ),
+        phase="hierarchy_resolution",
+        provider="openai",
+        model=model_name,
+        agent="hierarchy_classifier",
+        correlation={
+            "outcome": outcome,
+            "contract_retries": retries,
+            "section_count": section_count,
+            "document_id": cost_context.get("document_id"),
+            "job_id": cost_context.get("job_id"),
+            "run_id": cost_context.get("run_id"),
+        },
+        level="error" if outcome == "failed" else "warning",
+    )
 
 
 def _deterministic_provider_figure_sections(
