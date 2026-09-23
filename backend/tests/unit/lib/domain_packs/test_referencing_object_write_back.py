@@ -340,9 +340,9 @@ def test_a_later_unresolved_result_overrules_the_referencing_value():
     assert acquisition.payload["lookup_outcome"] == "not_found"
     assert acquisition.payload["maker_id"] is None
     assert acquisition.payload["maker_name"] is None
-    # The overruled identity is kept only as hints.
-    assert acquisition.payload["proposed_maker_id"] == "GAL:M0042"
-    assert acquisition.payload["proposed_maker_name"] == "De Grieksche A"
+    # The overruled identity is kept only as overruled_<key> hints.
+    assert acquisition.payload["overruled_maker_id"] == "GAL:M0042"
+    assert acquisition.payload["overruled_maker_name"] == "De Grieksche A"
     assert acquisition.payload["mention"] == "the Delft workshop"
     # The link to the validated Maker is stale on an unresolved value, so it is dropped.
     assert acquisition.object_refs == [_MENTION_REF]

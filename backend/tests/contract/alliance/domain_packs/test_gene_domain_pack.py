@@ -812,3 +812,48 @@ def test_gene_taxon_is_part_of_the_validated_identity():
     assert exported["lookup_outcome"] == "legacy_unverified"
     # Covered by a validator write-back, the stored taxon reads as validated.
     assert effective_value(legacy, spec, covered_by_validator=True)["taxon"] == "NCBITaxon:6239"
+
+
+def test_a_demoted_gene_keeps_the_extractor_proposals_apart_from_the_overruled_identity():
+    resolved = _gene_validator_result(
+        _staged_gene_envelope(),
+        status="resolved",
+        resolved_values={
+            "curie": "WB:WBGene00000912",
+            "symbol": "daf-16",
+            "taxon": "NCBITaxon:6239",
+        },
+        explanation="Matched by symbol in WB.",
+        curator_message="Resolved daf-16.",
+    )
+    envelope = _staged_gene_envelope().model_copy(update={"extracted_objects": [resolved]})
+
+    demoted = _gene_validator_result(
+        envelope,
+        status="unresolved",
+        resolved_values={},
+        lookup_attempts=[
+            {
+                "provider": "agr_curation_query",
+                "method": "search_genes",
+                "query": {"symbol": "daf-16"},
+                "result_count": 2,
+                "outcome": "ambiguous",
+            }
+        ],
+        explanation="Two WB genes share this symbol.",
+        curator_message="Pick the gene in review.",
+    )
+    payload = demoted.payload
+
+    assert payload["resolution_state"] == "unresolved"
+    assert payload["lookup_outcome"] == "ambiguous"
+    for key in ("primary_external_id", "gene_symbol", "taxon"):
+        assert payload[key] is None
+    # The extractor's proposals are untouched; the overruled identity sits apart.
+    assert payload["proposed_gene_symbol"] == "daf-16"
+    assert payload["proposed_taxon"] == "NCBITaxon:6239"
+    assert "proposed_primary_external_id" not in payload
+    assert payload["overruled_primary_external_id"] == "WB:WBGene00000912"
+    assert payload["overruled_gene_symbol"] == "daf-16"
+    assert payload["overruled_taxon"] == "NCBITaxon:6239"
