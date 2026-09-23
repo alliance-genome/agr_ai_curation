@@ -176,14 +176,23 @@ def _compose_text(
         )
         entries.append((path, tokens, child_spec, named))
     # A part carries only the findings on its own sub-path; a part that reads
-    # the value itself carries the findings no other part names.
+    # the value itself carries the unnamed findings on the leaves it displays.
+    # Findings on undisplayed fields stay unplaced and mark the composite.
     unnamed = keyed.difference(*(named for *_rest, named in entries))
     parts = []
     unplaced = keyed
     for path, tokens, child_spec, named in entries:
         if tokens is None:
-            text = _mapping_text(value, child_spec, unnamed, marked)
-            named = unnamed
+            leaves = [
+                path_tokens(leaf) or (leaf,)
+                for role in ("label", "id", "state")
+                if (leaf := str((child_spec or {}).get(role) or ""))
+            ]
+            named = frozenset(
+                finding for finding in unnamed
+                if any(relative_finding_path(finding, leaf) is not None for leaf in leaves)
+            )
+            text = _mapping_text(value, child_spec, named, marked)
         else:
             own = _child_paths(keyed, tokens)
             text = _render(_child(value, path), child_spec, own, nested=True, marked=marked)
@@ -250,6 +259,7 @@ def display_text(
     *,
     unresolved: bool | Collection[tuple[PathToken, ...]] = False,
     marked: bool = True,
+    nested: bool = False,
 ) -> str:
     """Readable text for one stored value; empty values give "".
 
@@ -257,9 +267,12 @@ def display_text(
     relative to the value; each marker lands on the part a finding names.
     ``marked=False`` gives the value's text without any unresolved marker
     (for keys such as map_value lookups, or a template that marks itself).
+    ``nested=True`` reads a value that is one item of a list (a split column
+    or a list element), so a list value joins its items with ", " as it does
+    inside the whole cell.
     """
 
-    return _render(value, spec, _finding_paths(unresolved), nested=False, marked=marked)
+    return _render(value, spec, _finding_paths(unresolved), nested=nested, marked=marked)
 
 
 def _render(

@@ -820,7 +820,8 @@ def test_indexed_findings_mark_the_matching_fanned_out_position():
         "format": "csv", "row_source": "object", "missing_value": "-",
         "columns": [{"key": "cls", "field_ref": classes, "split_list": {"header_template": "Class {n}"}}],
     })
-    assert apply_projection_plan(bundle, split).rows[0] == {"cls_1": "ZECO:1 | ZECO:2 (unresolved)"}
+    # A split item that is itself a list joins like the whole cell (ALL-1290).
+    assert apply_projection_plan(bundle, split).rows[0] == {"cls_1": "ZECO:1, ZECO:2 (unresolved)"}
     json_rows = apply_projection_plan(bundle, _object_plan("json", [("summaries", summaries)])).rows
     assert json_rows == [{"summaries": [["heat", "diet"]]}]
 

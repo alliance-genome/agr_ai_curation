@@ -154,6 +154,57 @@ def test_status_selected_template_does_not_double_the_marker(output_format):
     assert row["terms"] == "slow (WBPhenotype:1, unresolved); small (WBPhenotype:2) (unresolved)"
 
 
+def test_multi_value_template_keeps_the_application_marker_per_value():
+    organs = "object.pack.PhenotypeAnnotation.organs"
+    bundle = _status_template_bundle([{"object.object_id": "p1", "validation.status": "open",
+                                       "validation.field_path": "organs[1]"}])
+    bundle.artifacts[0].rows_by_source["object"][0][organs] = ["head", "tail"]
+    bundle.field_catalog.append(FlowOutputField(ref=organs, label="Organs", value_type="list", row_source="object"))
+    plan = _plan("csv", [{"key": "terms", "transform": {
+        "type": "format_elements", "field_refs": [TERMS_REF, organs], "field_ref": STATE_REF,
+        "default": "{1} in {2}", "mapping": {"pending_lookup": "{1} (unresolved) in {2}"}, "separator": "; ",
+    }}])
+    [row] = apply_projection_plan(bundle, plan).rows
+    # The template's marker cannot say which value it means, so each value keeps its own.
+    assert row["terms"] == (
+        "slow (WBPhenotype:1) in head; small (WBPhenotype:2, unresolved) (unresolved) in tail (unresolved)"
+    )
+
+
+def test_list_elements_join_their_items_like_the_whole_cell():
+    nested = "object.pack.PhenotypeAnnotation.condition_relations.conditions.condition_summary"
+    rows = [{"artifact.is_canonical_curation_data": True, "object.object_id": "p1",
+             nested: [["heat", "diet"], ["cold"]]}]
+    bundle = _bundle(rows, [FlowOutputField(ref=nested, label="Conditions", value_type="list", row_source="object")])
+    plan = _plan("csv", [
+        {"key": "cell", "field_ref": nested},
+        {"key": "split", "field_ref": nested, "split_list": {"header_template": "Relation {n}"}},
+        {"key": "elements", "transform": {"type": "format_elements", "field_refs": [nested],
+                                          "default": "[{1}]", "separator": " "}},
+        {"key": "joined", "transform": {"type": "join_list", "field_ref": nested, "separator": " / "}},
+    ])
+    [row] = apply_projection_plan(bundle, plan).rows
+    assert row == {"cell": "heat, diet | cold", "split_1": "heat, diet", "split_2": "cold",
+                   "elements": "[heat, diet] [cold]", "joined": "heat, diet / cold"}
+
+
+def test_self_part_marks_only_the_leaves_it_displays():
+    spec = {"compose": [{"display": CONDITION}, {"path": "condition_chemical", "display": None}],
+            "separator": " with "}
+    condition = {"condition_class": {"curie": "ZECO:1"}, "condition_summary": "heat",
+                 "condition_chemical": {"curie": "CHEBI:1"}, "condition_taxon": {"curie": "NCBITaxon:1"}}
+    assert display_text(condition, spec, unresolved=[("condition_summary",)]) == (
+        "heat (ZECO:1, unresolved) with CHEBI:1"
+    )
+    assert display_text(condition, spec, unresolved=[("condition_class",)]) == (
+        "heat (ZECO:1, unresolved) with CHEBI:1"
+    )
+    # A finding on an undisplayed field marks the whole composite, not the summary part.
+    assert display_text(condition, spec, unresolved=[("condition_taxon", "curie")]) == (
+        "heat (ZECO:1) with CHEBI:1 (unresolved)"
+    )
+
+
 # --- map_value keys structured values by display text --------------------------------------
 
 ANATOMY = "object.pack.GeneExpressionAnnotation.expression_pattern.where_expressed.anatomical_structure"

@@ -7,7 +7,7 @@ from datetime import datetime
 import json
 import math
 import re
-from typing import Any, Callable, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -2332,21 +2332,25 @@ def _pair_join_value_groups(left: Any, right: Any) -> list[tuple[Any, Any]]:
 
 
 # Renders one stored value (field ref, value, list element index) as display text.
-ValueRenderer = Callable[[str, Any, "int | None"], str]
+# ``nested`` marks one item of a list (split column, list element), so a list
+# item joins its own items with ", " as it does inside the whole cell.
+class ValueRenderer(Protocol):
+    def __call__(self, field_ref: str, value: Any, index: int | None, *, nested: bool = False) -> str: ...
 
 
-def _plain_text(_field_ref: str, value: Any, _index: int | None = None) -> str:
+def _plain_text(_field_ref: str, value: Any, _index: int | None = None, *, nested: bool = False) -> str:
     return str(value)
 
 
-# Text of one stored value (field ref, value) without unresolved markers: the
-# key a map_value lookup matches, and a format_elements template value when the
-# template writes its own marker.
-ValueKey = Callable[[str, Any], str]
+# Text of one stored value without unresolved markers: the key a map_value
+# lookup matches, and a format_elements template value when the template
+# writes its own marker.
+class ValueKey(Protocol):
+    def __call__(self, field_ref: str, value: Any, *, nested: bool = False) -> str: ...
 
 
-def _generic_value_key(_field_ref: str, value: Any) -> str:
-    return display_text(value, marked=False)
+def _generic_value_key(_field_ref: str, value: Any, *, nested: bool = False) -> str:
+    return display_text(value, marked=False, nested=nested)
 
 
 def _pair_join_value(
@@ -2437,6 +2441,8 @@ def _format_elements_value(
     if selector_ref:
         values.append(row.get(selector_ref))
     rendered: list[str] = []
+    # Values taken from a list are list items; the rest broadcast whole.
+    from_list = [isinstance(value, list) for value in values[: len(refs)]]
     elements = _aligned_elements(values)
     for position, element in enumerate(elements):
         field_values = element[: len(refs)]
@@ -2448,9 +2454,13 @@ def _format_elements_value(
             selector_key = str(selector).lower() if isinstance(selector, bool) else str(selector)
             if not _is_empty(selector) and selector_key in transform.mapping:
                 template = transform.mapping[selector_key]
-        # A template that writes its own unresolved marker (saved plans from the
-        # earlier "template selected by status" guidance) owns the marker.
-        marks_itself = UNRESOLVED in str(template).lower()
+        # A one-value template that writes its own unresolved marker (saved
+        # plans from the earlier "template selected by status" guidance) owns
+        # the marker; with several values each keeps the application's marker.
+        marks_itself = (
+            UNRESOLVED in str(template).lower()
+            and len(set(_ELEMENT_PLACEHOLDER.findall(str(template)))) == 1
+        )
 
         def substitute(match: re.Match[str]) -> str:
             slot = int(match.group(1)) - 1
@@ -2459,9 +2469,10 @@ def _format_elements_value(
                 return missing_value or ""
             if render is None:
                 return _string_value(value)
+            nested = from_list[slot]
             if marks_itself:
-                return value_key(refs[slot], value)
-            return render(refs[slot], value, position if len(elements) > 1 else None)
+                return value_key(refs[slot], value, nested=nested)
+            return render(refs[slot], value, position if len(elements) > 1 else None, nested=nested)
 
         rendered.append(_ELEMENT_PLACEHOLDER.sub(substitute, str(template)))
     return transform.separator.join(rendered) if rendered else missing_value
@@ -3148,7 +3159,7 @@ def _transform_value(
         value = row.get(ref)
         if isinstance(value, list):
             items = [
-                text(ref, item, index)
+                text(ref, item, index, nested=True)
                 for index, item in enumerate(value)
                 if not _is_empty(item)
             ]
@@ -3341,7 +3352,7 @@ def _display_renderer(
     specs: Mapping[str, Any],
     finding_paths: Sequence[tuple[Any, ...]],
 ) -> ValueRenderer:
-    def render(field_ref: str, value: Any, index: int | None) -> str:
+    def render(field_ref: str, value: Any, index: int | None, *, nested: bool = False) -> str:
         unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref))
         if index is not None:
             # One split_list item: the findings on that position, or on every position.
@@ -3350,7 +3361,7 @@ def _display_renderer(
                 for path in unresolved
                 if not path or not isinstance(path[0], int) or path[0] == index
             )
-        return display_text(value, specs.get(field_ref), unresolved=unresolved)
+        return display_text(value, specs.get(field_ref), unresolved=unresolved, nested=nested)
 
     return render
 
@@ -3434,8 +3445,8 @@ def apply_projection_plan(
     display = render_display and plan.format != "json"
     specs = {field.ref: field.display for field in bundle.field_catalog if field.row_source == plan.row_source}
 
-    def value_key(field_ref: str, value: Any) -> str:
-        return display_text(value, specs.get(field_ref), marked=False)
+    def value_key(field_ref: str, value: Any, *, nested: bool = False) -> str:
+        return display_text(value, specs.get(field_ref), marked=False, nested=nested)
 
     open_paths = _open_finding_paths(bundle) if display and plan.row_source == "object" else {}
     # Split lists are sized by the longest list across all filtered rows.
@@ -3466,12 +3477,15 @@ def apply_projection_plan(
                 projected[column.key] = base[column.key]
                 continue
             source_column, position = split_items[column.key]
-            values = _split_items(row.get(source_column.field_ref or ""))
+            source_value = row.get(source_column.field_ref or "")
+            values = _split_items(source_value)
             item = values[position] if position < len(values) else None
             if source_column.source_node_id and row.get("artifact.node_id") != source_column.source_node_id:
                 item = None
             if not _is_empty(item) and render is not None:
-                item = render(source_column.field_ref or "", item, position)
+                item = render(
+                    source_column.field_ref or "", item, position, nested=isinstance(source_value, list),
+                )
             if item is None or (not preserve_empty and _is_empty(item)):
                 item = plan.missing_value
             projected[column.key] = _jsonable(item)
