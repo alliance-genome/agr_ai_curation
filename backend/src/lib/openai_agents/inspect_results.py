@@ -32,6 +32,7 @@ from src.lib.domain_packs.resolvable_values import (
     holds_resolution,
     stated_value,
     unresolved_header_text,
+    without_overruled,
 )
 from src.lib.domain_packs.supervisor_manifest import (
     SupervisorManifestPolicy,
@@ -991,7 +992,8 @@ def _with_resolution_states(value: Any) -> Any:
         return [_with_resolution_states(item) for item in value]
     if not isinstance(value, Mapping):
         return value
-    annotated = {key: _with_resolution_states(item) for key, item in value.items()}
+    # An identity a validator overruled is never presented as the value.
+    annotated = {key: _with_resolution_states(item) for key, item in without_overruled(value).items()}
     return stated_value(annotated)
 
 
