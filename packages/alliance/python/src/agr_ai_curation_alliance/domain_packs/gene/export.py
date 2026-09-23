@@ -15,10 +15,20 @@ from src.schemas.curation_workspace import (
     SubmissionMode,
     SubmissionTargetKey,
 )
+from src.lib.domain_packs.resolvable_values import (
+    LOOKUP_OUTCOME_KEY,
+    MENTION_KEY,
+    RESOLUTION_STATE_KEY,
+    RESOLVED,
+    VALIDATOR_CURATOR_MESSAGE_KEY,
+    VALIDATOR_EXPLANATION_KEY,
+    ResolvableSpec,
+    effective_value,
+    validator_event_covers,
+)
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
-    ValidationFindingStatus,
 )
 
 from .._export_utils import (
@@ -37,12 +47,15 @@ from .constants import (
 GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY = "gene_validated_reference_evidence"
 GENE_VALIDATED_REFERENCE_EXPORT_SCHEMA_VERSION = 1
 
-_REQUIRED_REFERENCE_FIELDS = (
-    "mention",
-    "primary_external_id",
-    "gene_symbol",
-    "taxon",
-    "confidence",
+# The gene identity only a validator writes; a gene_mention_evidence object is itself the
+# resolvable value (mention = paper wording).
+_GENE_IDENTITY_SPEC = ResolvableSpec(id_key="primary_external_id", label_key="gene_symbol")
+_VALIDATED_IDENTITY_FIELDS = ("primary_external_id", "gene_symbol", "taxon")
+_RESOLUTION_FIELDS = (
+    RESOLUTION_STATE_KEY,
+    LOOKUP_OUTCOME_KEY,
+    VALIDATOR_EXPLANATION_KEY,
+    VALIDATOR_CURATOR_MESSAGE_KEY,
 )
 _REQUIRED_EVIDENCE_FIELDS = (
     "evidence_record_id",
@@ -68,9 +81,8 @@ def build_gene_mention_evidence_export(
         )
 
     selected = set(selected_object_ids or ())
-    verified_object_ids = _tool_verified_gene_object_ids(envelope)
     records = [
-        _gene_evidence_record(domain_object, verified_object_ids=verified_object_ids)
+        _gene_evidence_record(domain_object)
         for domain_object in envelope.extracted_objects
         if domain_object.object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
         and (not selected or stable_object_id(domain_object) in selected)
@@ -158,21 +170,28 @@ class GeneMentionEvidenceExportAdapter(DeterministicExportAdapter):
         )
 
 
-def _gene_evidence_record(
-    domain_object: CuratableObjectEnvelope,
-    *,
-    verified_object_ids: set[str],
-) -> dict[str, Any]:
-    object_id = stable_object_id(domain_object)
-    if object_id not in verified_object_ids:
-        raise ValueError(
-            f"gene_mention_evidence object {object_id} is missing resolved tool verification"
-        )
+def _gene_evidence_record(domain_object: CuratableObjectEnvelope) -> dict[str, Any]:
+    """One export record; an unresolved gene is exported as explicitly unresolved.
 
-    reference = {
-        field: _required_payload_value(domain_object.payload, field)
-        for field in _REQUIRED_REFERENCE_FIELDS
+    ``validated_reference`` carries the gene's paper wording, its resolution state and lookup
+    outcome, and the validator-written identity. The identity keys are null unless the gene is
+    resolved. Values stored before ALL-1283 read through the shared legacy rule.
+    """
+
+    object_id = stable_object_id(domain_object)
+    gene = effective_value(
+        domain_object.payload,
+        _GENE_IDENTITY_SPEC,
+        covered_by_validator=validator_event_covers(domain_object.metadata, ""),
+    )
+    resolved = gene[RESOLUTION_STATE_KEY] == RESOLVED
+    reference: dict[str, Any] = {
+        MENTION_KEY: _required_payload_value(gene, MENTION_KEY),
+        "confidence": _required_payload_value(domain_object.payload, "confidence"),
     }
+    for field in _VALIDATED_IDENTITY_FIELDS:
+        reference[field] = _required_payload_value(gene, field) if resolved else None
+    reference.update({field: gene.get(field) for field in _RESOLUTION_FIELDS})
     reference.update(
         _optional_payload_values(domain_object.payload, _OPTIONAL_REFERENCE_FIELDS)
     )
@@ -205,38 +224,6 @@ def _gene_evidence_record(
             "write_target": None,
         },
     }
-
-
-def _tool_verified_gene_object_ids(envelope: DomainEnvelope) -> set[str]:
-    object_ids_by_ref = _object_ids_by_ref(envelope)
-    verified_object_ids: set[str] = set()
-    for finding in envelope.validation_findings:
-        if finding.code != "alliance.gene_reference.tool_verified":
-            continue
-        if finding.status is not ValidationFindingStatus.RESOLVED:
-            continue
-        object_ref = (
-            finding.field_ref.object_ref
-            if finding.field_ref is not None
-            else finding.object_ref
-        )
-        if object_ref is None:
-            continue
-        object_id = object_ids_by_ref.get(object_ref.ref_key())
-        if object_id is not None:
-            verified_object_ids.add(object_id)
-    return verified_object_ids
-
-
-def _object_ids_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
-    by_ref: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.extracted_objects:
-        object_id = stable_object_id(domain_object)
-        if domain_object.object_id is not None:
-            by_ref[("object_id", domain_object.object_id)] = object_id
-        if domain_object.pending_ref_id is not None:
-            by_ref[("pending_ref_id", domain_object.pending_ref_id)] = object_id
-    return by_ref
 
 
 def _required_payload_value(payload: Mapping[str, Any], field_path: str) -> Any:

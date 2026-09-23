@@ -15,7 +15,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
+from pydantic import ValidationError
 
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.loader import load_domain_fixture_pack
@@ -557,3 +559,224 @@ def test_stored_gene_evidence_without_rationale_gets_no_new_findings():
         finding.code for finding in with_rationale
     ]
     assert not any("rationale" in str(finding.field_ref) for finding in without_rationale)
+
+
+# --- Extracted vs validated gene (ALL-1283) ------------------------------------------------
+
+
+def _staged_gene_envelope() -> DomainEnvelope:
+    result = _materialize_one_candidate()
+    assert result.ok, result.summary()
+    return DomainEnvelope(
+        envelope_id="gene-resolution",
+        domain_pack_id=GENE_DOMAIN_PACK_ID,
+        extracted_objects=result.payload["curatable_objects"],
+        metadata=result.payload["metadata"],
+    )
+
+
+def _gene_validator_result(envelope: DomainEnvelope, **result_fields: Any):
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    match = next(
+        match
+        for match in DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(
+            envelope, states=[ValidationBindingState.ACTIVE]
+        )
+        if match.binding.binding_id == GENE_REFERENCE_VALIDATOR_BINDING_ID
+    )
+    request = build_domain_validation_request(match).request
+    assert request is not None
+    result = DomainValidatorResultBase(
+        request_id=request.request_id,
+        validator_binding_id=request.validator_binding_id,
+        validator_agent=request.validator_agent,
+        target=request.target,
+        **{
+            "resolved_objects": [],
+            "missing_expected_fields": [],
+            "candidates": [],
+            "lookup_attempts": [],
+            **result_fields,
+        },
+    )
+    return materialize_validator_results_into_envelope(
+        envelope,
+        pack.metadata,
+        [ValidatorResultMaterializationInput(match=match, request=request, result=result)],
+    ).envelope.extracted_objects[0]
+
+
+def test_gene_builder_stages_the_paper_wording_unresolved():
+    payload = _materialize_one_candidate().payload["curatable_objects"][0]["payload"]
+
+    assert payload["mention"] == "daf-16"
+    assert payload["resolution_state"] == "unresolved"
+    assert payload["lookup_outcome"] == "not_validated"
+    assert payload["validator_explanation"] == "Not validated yet."
+    # The extractor's proposal stays a proposal; no validated identity is staged.
+    assert payload["proposed_gene_symbol"] == "daf-16"
+    for key in ("primary_external_id", "gene_symbol", "taxon"):
+        assert payload.get(key) is None
+
+
+def test_gene_validator_resolution_writes_identity_and_state_keeping_the_mention():
+    obj = _gene_validator_result(
+        _staged_gene_envelope(),
+        status="resolved",
+        resolved_values={
+            "curie": "WB:WBGene00000912",
+            "symbol": "daf-16",
+            "taxon": "NCBITaxon:6239",
+        },
+        explanation="Matched by symbol in WB.",
+        curator_message="Resolved daf-16.",
+    )
+
+    assert obj.payload["mention"] == "daf-16"
+    assert obj.payload["primary_external_id"] == "WB:WBGene00000912"
+    assert obj.payload["gene_symbol"] == "daf-16"
+    assert obj.payload["taxon"] == "NCBITaxon:6239"
+    assert obj.payload["resolution_state"] == "resolved"
+    assert obj.payload["lookup_outcome"] == "matched"
+    assert obj.payload["validator_explanation"] == "Matched by symbol in WB."
+    assert obj.payload["validator_curator_message"] == "Resolved daf-16."
+
+
+def test_gene_validator_failure_records_the_outcome_and_never_fills_identity():
+    obj = _gene_validator_result(
+        _staged_gene_envelope(),
+        status="unresolved",
+        resolved_values={},
+        lookup_attempts=[
+            {
+                "provider": "agr_curation_query",
+                "method": "search_genes",
+                "query": {"symbol": "daf-16"},
+                "result_count": 0,
+                "outcome": "not_found",
+            }
+        ],
+        explanation="No WB gene matched daf-16.",
+        curator_message="Check the gene name in the paper.",
+    )
+
+    assert obj.payload["mention"] == "daf-16"
+    assert obj.payload["resolution_state"] == "unresolved"
+    assert obj.payload["lookup_outcome"] == "not_found"
+    assert obj.payload["validator_explanation"] == "No WB gene matched daf-16."
+    assert obj.payload["validator_curator_message"] == "Check the gene name in the paper."
+    for key in ("primary_external_id", "gene_symbol", "taxon"):
+        assert obj.payload.get(key) is None
+
+
+def test_gene_builder_requires_the_paper_wording_without_fallback():
+    workspace = ExtractionBuilderWorkspace(
+        run_id="gene-builder-no-mention",
+        domain_pack_id=GENE_DOMAIN_PACK_ID,
+        agent_id="gene_extractor",
+    )
+    staged = {**_staged_fields(), "mention": "  "}
+    workspace.upsert_candidate(
+        candidate_id="gene-candidate-1",
+        staged_fields=staged,
+        pending_ref_ids=["gene-mention-evidence-1"],
+        evidence_record_ids=["evidence-daf16-1"],
+        resolver_selection_refs=[],
+        status=CANDIDATE_STATUS_VALID,
+    )
+
+    result = materialize_gene_builder_state(
+        workspace=workspace,
+        candidate_ids=["gene-candidate-1"],
+        evidence_records=_evidence_records(),
+    )
+
+    assert not result.ok
+    assert [issue["reason"] for issue in result.issues] == ["missing_gene_mention"]
+
+
+def test_gene_builder_output_rejects_an_identity_without_validation():
+    payload = _materialize_one_candidate().payload
+    payload["curatable_objects"][0]["payload"]["primary_external_id"] = "WB:WBGene00000912"
+
+    with pytest.raises(ValidationError, match="never carries an identity"):
+        GeneBuilderExtractionOutput.model_validate(payload)
+
+
+def _review_label(payload: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
+    from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    envelope = DomainEnvelope(
+        envelope_id="gene-label",
+        domain_pack_id=GENE_DOMAIN_PACK_ID,
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type=GENE_MENTION_EVIDENCE_OBJECT_TYPE,
+                object_id="gene-object-1",
+                object_role=GENE_OBJECT_ROLE,
+                payload=payload,
+                metadata=metadata or {},
+            )
+        ],
+    )
+    rows = DomainPackMetadataReviewRowMaterializer(pack.metadata).materialize(
+        envelope, envelope_revision=1
+    )
+    return rows[0].display_label
+
+
+def test_gene_row_label_is_the_validated_symbol_or_marked_paper_wording():
+    resolved = {
+        "mention": "DAF-16",
+        "primary_external_id": "WB:WBGene00000912",
+        "gene_symbol": "daf-16",
+        "taxon": "NCBITaxon:6239",
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+    }
+    unresolved = {
+        "mention": "DAF-16",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_found",
+    }
+
+    assert _review_label(resolved) == "daf-16"
+    assert _review_label(unresolved) == "DAF-16 (paper wording)"
+    # A record stored before ALL-1283 never shows its stored text as the validated gene.
+    legacy = {"mention": "DAF-16", "gene_symbol": "daf-16", "primary_external_id": "WB:WBGene00000912"}
+    assert _review_label(legacy) == "DAF-16 (legacy, unverified)"
+    covered = {
+        "validator_resolved_value_materialization": [
+            {"materialized_field_paths": ["primary_external_id", "gene_symbol", "taxon"]}
+        ]
+    }
+    assert _review_label(legacy, covered) == "daf-16"
+
+
+def test_gene_pack_declares_the_shared_resolution_vocabularies():
+    from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOMES, RESOLUTION_STATES
+
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    enums = {enum.enum_id: [value.value for value in enum.values] for enum in pack.metadata.enum_definitions}
+    definition = next(
+        obj
+        for obj in pack.metadata.object_definitions
+        if obj.object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
+    )
+    fields = {field.field_path: field for field in definition.fields}
+
+    assert enums[fields["resolution_state"].enum_ref] == list(RESOLUTION_STATES)
+    assert enums[fields["lookup_outcome"].enum_ref] == list(LOOKUP_OUTCOMES)
+    assert fields["validator_explanation"].field_type.value == "string"
+    assert fields["validator_curator_message"].field_type.value == "string"
+    model = next(
+        model for model in pack.metadata.model_definitions if model.model_id == definition.model_ref
+    )
+    assert model.metadata["display"] == {
+        "label": "gene_symbol",
+        "id": "primary_external_id",
+        "mention": "mention",
+    }
+    assert definition.metadata["workspace_display"]["primary_label_field"] == "gene_symbol"
+    assert definition.metadata["supervisor_manifest"]["primary_label_field"] == "gene_symbol"

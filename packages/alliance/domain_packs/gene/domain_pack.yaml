@@ -31,6 +31,40 @@ enum_definitions:
         label: Medium
       - value: low
         label: Low
+  - enum_id: ResolutionState
+    display_name: Resolution state
+    description: Whether a validator confirmed the gene (resolved) or not (unresolved).
+    values:
+      - value: resolved
+        label: Resolved
+      - value: unresolved
+        label: Unresolved
+  - enum_id: LookupOutcome
+    display_name: Lookup result
+    description: What the gene lookup found; matched exactly when the gene is resolved.
+    values:
+      - value: matched
+        label: Matched
+      - value: not_found
+        label: Not found
+      - value: ambiguous
+        label: Several matches
+      - value: conflict
+        label: Conflict
+      - value: blocked
+        label: Blocked
+      - value: transient
+        label: Temporary error
+      - value: invalid_schema
+        label: Invalid validator output
+      - value: missing_expected_result_field
+        label: Validator result incomplete
+      - value: rejected_candidates
+        label: Candidates rejected
+      - value: not_validated
+        label: Not validated yet
+      - value: legacy_unverified
+        label: Legacy, unverified
 model_definitions:
   - model_id: GeneMentionEvidencePayload
     display_name: Gene mention evidence payload
@@ -55,6 +89,7 @@ model_definitions:
       display:
         label: gene_symbol
         id: primary_external_id
+        mention: mention
 object_definitions:
   - object_type: gene_mention_evidence
     display_name: Gene mention
@@ -89,14 +124,13 @@ object_definitions:
           - symbol
           - allele or genotype context gene
       supervisor_manifest:
-        primary_label_field: mention
-        secondary_label_field: gene_symbol
+        # The validated symbol; an unresolved gene reads as its paper wording, labelled as such.
+        primary_label_field: gene_symbol
         summary_fields:
           - primary_external_id
           - taxon
       workspace_display:
-        primary_label_field: mention
-        secondary_label_field: gene_symbol
+        primary_label_field: gene_symbol
         summary_fields:
           - gene_symbol
           - primary_external_id
@@ -112,6 +146,10 @@ object_definitions:
               - primary_external_id
               - taxon
               - species
+              - resolution_state
+              - lookup_outcome
+              - validator_explanation
+              - validator_curator_message
           - id: ai_proposal
             label: AI proposal
             fields:
@@ -226,8 +264,8 @@ object_definitions:
     fields:
       - field_path: mention
         field_type: string
-        display_name: Paper mention
-        description: Gene mention exactly as written in the paper.
+        display_name: Gene (paper wording)
+        description: Gene mention exactly as written in the paper. It is the extracted wording, not a validated gene.
         required: true
         metadata:
           evidence_source_field: true
@@ -236,7 +274,7 @@ object_definitions:
       - field_path: primary_external_id
         field_type: string
         display_name: Gene ID
-        description: Alliance Gene primary external identifier materialized by validation tooling.
+        description: Alliance Gene primary external identifier written by the gene validator; empty while the gene is unresolved.
         metadata:
           validatable: true
           validator_binding_id: alliance_gene_reference_lookup
@@ -254,7 +292,7 @@ object_definitions:
       - field_path: gene_symbol
         field_type: string
         display_name: Gene symbol
-        description: Current accepted symbol materialized by validation tooling.
+        description: Current accepted symbol written by the gene validator; empty while the gene is unresolved.
         metadata:
           validatable: true
           validator_binding_id: alliance_gene_reference_lookup
@@ -272,7 +310,7 @@ object_definitions:
       - field_path: taxon
         field_type: string
         display_name: Taxon
-        description: NCBI Taxon CURIE materialized by validation tooling for the resolved gene.
+        description: NCBI Taxon CURIE written by the gene validator for the resolved gene; empty while the gene is unresolved.
         metadata:
           validatable: true
           validator_binding_id: alliance_gene_reference_lookup
@@ -287,6 +325,34 @@ object_definitions:
               class: Gene
               slot: taxon
               range: NCBITaxonTerm
+      - field_path: resolution_state
+        field_type: enum
+        display_name: Gene (status)
+        description: Resolved only when the gene lookup validator confirmed the gene ID, symbol and taxon; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: lookup_outcome
+        field_type: enum
+        display_name: Gene (lookup result)
+        description: What the gene lookup found; not validated yet until the validator runs.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: validator_explanation
+        field_type: string
+        display_name: Gene (validator explanation)
+        description: The gene validator's own explanation of its result.
+        metadata:
+          protected: true
+          hide_when_empty: true
+      - field_path: validator_curator_message
+        field_type: string
+        display_name: Gene (validator message)
+        description: The gene validator's message for curators, kept apart from its explanation.
+        metadata:
+          protected: true
+          hide_when_empty: true
       - field_path: species
         field_type: string
         display_name: Species

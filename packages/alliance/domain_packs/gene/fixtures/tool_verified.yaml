@@ -48,6 +48,9 @@ fixtures:
             primary_external_id: "WB:WBGene00000912"
             gene_symbol: daf-16
             taxon: "NCBITaxon:6239"
+            resolution_state: resolved
+            lookup_outcome: matched
+            validator_explanation: null
             species: Caenorhabditis elegans
             identity_resolution_notes:
               - Resolved daf-16 through agr_curation_query get_gene_by_id.

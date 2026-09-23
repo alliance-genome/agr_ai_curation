@@ -18,6 +18,12 @@ from pydantic import (
     model_validator,
 )
 
+from src.lib.domain_packs.resolvable_values import (
+    ResolvableValueError,
+    check_resolvable_value,
+    resolved_value,
+    unresolved_value,
+)
 from src.lib.openai_agents.models import (
     GeneExtractionResultEnvelope as RuntimeGeneExtractionResultEnvelope,
 )
@@ -66,12 +72,16 @@ from .export import GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY
 _GENE_SOURCE_FILE = "model/schema/gene.yaml"
 _CORE_SOURCE_FILE = "model/schema/core.yaml"
 
+# The validated gene identity keys of a gene_mention_evidence object. The object itself is
+# the resolvable value (ALL-1283): ``mention`` is the paper wording, and only the gene validator
+# (or the lookup that produced a tool-verified fixture) fills these keys and marks it resolved.
+GENE_IDENTITY_KEYS = ("primary_external_id", "gene_symbol", "taxon")
+
 # Scalar gene-identity hint fields the builder stages for the validator handoff. These are
 # evidence-backed PROPOSALS; the active gene validator binding owns final primary_external_id /
 # gene_symbol / taxon. Evidence locator fields (verified_quote, page, ...) are copied from the
 # verified evidence record, never authored by the model.
 _GENE_IDENTITY_HINT_FIELDS = (
-    "mention",
     "species",
     "taxon_hint",
     "data_provider_hint",
@@ -419,11 +429,17 @@ def _payload_for_gene_evidence(
         list(gene.identity_resolution_notes)
         or [str(note).strip() for note in normalization_notes if str(note).strip()]
     )
+    # The tool-verified fixture carries identities an agr_curation_query lookup returned; that
+    # deterministic lookup is the validation, so the value is resolved.
     payload: dict[str, Any] = {
-        "mention": gene.mention,
-        "primary_external_id": gene.primary_external_id,
-        "gene_symbol": gene.gene_symbol,
-        "taxon": gene.taxon,
+        **resolved_value(
+            gene.mention,
+            {
+                "primary_external_id": gene.primary_external_id,
+                "gene_symbol": gene.gene_symbol,
+                "taxon": gene.taxon,
+            },
+        ),
         "confidence": gene.confidence,
         "evidence_record_id": evidence.evidence_record_id,
         "verified_quote": evidence.verified_quote,
@@ -618,6 +634,11 @@ def validate_gene_builder_objects(
         payload = obj.payload if isinstance(obj.payload, Mapping) else {}
         if not _gene_clean_text(payload.get("mention")):
             errors.append(f"{location}.payload.mention is required")
+        else:
+            try:
+                check_resolvable_value(payload, identity_keys=GENE_IDENTITY_KEYS)
+            except ResolvableValueError as exc:
+                errors.append(f"{location}.payload: {exc}")
         if not _gene_clean_text(payload.get("confidence")):
             errors.append(f"{location}.payload.confidence is required")
         notes = payload.get("identity_resolution_notes")
@@ -778,12 +799,17 @@ def _gene_candidate_pending_ref_id(
 
 
 def _gene_evidence_object_payload(
+    mention: str,
     staged_fields: Mapping[str, Any],
     evidence_record: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build one gene_mention_evidence payload from staged hints + one verified evidence record."""
+    """Build one gene_mention_evidence payload from staged hints + one verified evidence record.
 
-    payload: dict[str, Any] = {}
+    The gene is staged unresolved (not validated yet) with the paper wording as its mention;
+    only the gene validator writes its identity.
+    """
+
+    payload: dict[str, Any] = unresolved_value(mention, identity_keys=GENE_IDENTITY_KEYS)
     for field_name in _GENE_IDENTITY_HINT_FIELDS:
         value = staged_fields.get(field_name)
         if value is not None and not (isinstance(value, str) and not value.strip()):
@@ -860,6 +886,17 @@ def materialize_gene_builder_state(
                 )
             )
             continue
+        mention = _gene_clean_text(staged_fields.get("mention"))
+        if mention is None:
+            issues.append(
+                _gene_materialization_issue(
+                    field_path="mention",
+                    reason="missing_gene_mention",
+                    message="Finalized gene candidates require the gene's paper wording (mention).",
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
         if _gene_clean_text(staged_fields.get("rationale")) is None:
             issues.append(
                 _gene_materialization_issue(
@@ -909,7 +946,7 @@ def materialize_gene_builder_state(
                 if len(evidence_ids) == 1
                 else f"{candidate_pending_ref}-{object_index + 1}"
             )
-            payload = _gene_evidence_object_payload(staged_fields, evidence_record)
+            payload = _gene_evidence_object_payload(mention, staged_fields, evidence_record)
             evidence_position = next(
                 (
                     position
@@ -930,7 +967,7 @@ def materialize_gene_builder_state(
                 )
             raw_mentions.append(
                 {
-                    "mention": payload.get("mention") or candidate_pending_ref,
+                    "mention": mention,
                     "entity_type": "gene",
                     "evidence_record_ids": [evidence_id],
                 }
