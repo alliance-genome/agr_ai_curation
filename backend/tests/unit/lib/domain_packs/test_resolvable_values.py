@@ -741,3 +741,60 @@ def test_a_stored_vocabulary_word_outside_the_vocabulary_is_marked_not_raised():
     from src.lib.flows.value_display import display_text
 
     assert display_text("whatever", {"value_labels": LOOKUP_OUTCOME_LABELS}) == "Invalid value (whatever)"
+
+
+# --- Re-validating containers stored before the contract ------------------------
+
+_OLD_PHENOTYPE_TERM = {"curie": "WBPhenotype:0000154", "label": "reduced brood size",
+                       "resolution_state": "pending_ontology_resolution"}
+_OLD_DISEASE_TERM = {"curie": "DOID:10652", "name": "Alzheimer's disease",
+                     "resolution_state": "pending_ontology_resolution"}
+
+
+def _legacy_metadata(label_key):
+    return _metadata(expected={"curie": "site.curie", "label": f"site.{label_key}"}, input_path=f"site.{label_key}")
+
+
+@pytest.mark.parametrize(("old", "label_key"), [(_OLD_PHENOTYPE_TERM, "label"), (_OLD_DISEASE_TERM, "name")])
+def test_old_containers_revalidate_resolved_and_unresolved_without_raising(old, label_key):
+    from src.lib.domain_packs.resolvable_values import unresolved_header_text
+
+    metadata = _legacy_metadata(label_key)
+    if label_key == "label":
+        metadata = metadata.model_copy(update={"object_definitions": [
+            metadata.object_definitions[0].model_copy(update={"fields": [
+                *metadata.object_definitions[0].fields,
+                DomainPackFieldDefinition(field_path="site.label", field_type=DomainPackFieldType.STRING),
+            ]})
+        ]})
+    spec = ResolvableSpec(id_key="curie", label_key=label_key)
+
+    envelope = _envelope({"site": dict(old)})
+    resolved_item = _item(metadata, envelope, values={"curie": old["curie"], "label": old[label_key]})
+    resolved = materialize_validator_results_into_envelope(envelope, metadata, [resolved_item])
+    site = resolved.envelope.extracted_objects[0].payload["site"]
+    assert (site["resolution_state"], site["lookup_outcome"]) == (RESOLVED, OUTCOME_MATCHED)
+    assert "mention" not in site
+    assert effective_value(site, spec, covered_by_validator=False) is site
+
+    unresolved_item = _item(metadata, envelope, status="unresolved", outcome="not_found")
+    once = materialize_validator_results_into_envelope(envelope, metadata, [unresolved_item])
+    # Re-validating the re-validated container again must not raise either.
+    twice = materialize_validator_results_into_envelope(once.envelope, metadata, [unresolved_item])
+    site = twice.envelope.extracted_objects[0].payload["site"]
+    assert (site["resolution_state"], site["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_FOUND)
+    # The old identity is kept in storage but reads as unverified paper wording.
+    assert site["curie"] == old["curie"]
+    effective = effective_value(site, spec, covered_by_validator=False)
+    assert (effective["curie"], effective[label_key]) == (None, None)
+    assert effective["mention"] == f"{old[label_key]} ({old['curie']}) {LEGACY_UNVERIFIED_SUFFIX}"
+    assert effective["lookup_outcome"] == OUTCOME_NOT_FOUND
+    check_resolvable_value(effective, identity_keys=spec.identity_keys)
+    assert unresolved_header_text({"site": site}, f"site.{label_key}", resolvable_fields={"site": spec}) == (
+        f"{old[label_key]} ({old['curie']}) {LEGACY_UNVERIFIED_SUFFIX}")
+
+
+def test_a_contract_value_still_needs_non_empty_paper_wording():
+    with pytest.raises(ResolvableValueError, match="paper wording"):
+        check_resolvable_value({"curie": None, "mention": "  ", "resolution_state": "unresolved",
+                                "lookup_outcome": "not_found"}, identity_keys=TERM_KEYS)

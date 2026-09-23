@@ -283,7 +283,11 @@ def _check_contract_fields(value: Any) -> tuple[str, str]:
     if not isinstance(value, Mapping):
         raise ResolvableValueError(f"A resolvable value must be an object, not {type(value).__name__}")
     mention = value.get(MENTION_KEY)
-    if MENTION_KEY in value and not (isinstance(mention, str) and mention.strip()):
+    # No paper wording (absent or null) marks a container stored before the
+    # contract: the builder helpers always write a non-empty mention and the
+    # validator write-back never touches it, so such a container can be
+    # re-validated any number of times.
+    if mention is not None and not (isinstance(mention, str) and mention.strip()):
         raise ResolvableValueError("mention must be the non-empty paper wording")
     _optional_text(value.get(VALIDATOR_EXPLANATION_KEY), VALIDATOR_EXPLANATION_KEY)
     _optional_text(value.get(VALIDATOR_CURATOR_MESSAGE_KEY), VALIDATOR_CURATOR_MESSAGE_KEY)
@@ -637,6 +641,8 @@ def effective_value(
         problem = stored_state_problem(value, identity_keys=spec.identity_keys)
         if problem is None:
             return value
+        if _is_revalidated_legacy_leftover(value, spec):
+            return _legacy_leftover_value(value, spec)
         return _invalid_record_value(value, spec, problem)
     state, outcome = effective_resolution(
         value, identity_keys=spec.identity_keys, covered_by_validator=covered_by_validator,
@@ -650,6 +656,31 @@ def effective_value(
         for key in spec.identity_keys:
             annotated[key] = None
         annotated[spec.mention_key] = f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else None
+    return annotated
+
+
+def _is_revalidated_legacy_leftover(value: Mapping[str, Any], spec: ResolvableSpec) -> bool:
+    """A pre-contract container a validator left unresolved, still holding its old identity.
+
+    The validator write-back never touches id/label, so an old container
+    (no paper wording) re-validated as unresolved keeps the identity the old
+    extractor proposed; that identity was never verified.
+    """
+
+    if value.get(spec.mention_key) is not None or value.get(RESOLUTION_STATE_KEY) != UNRESOLVED:
+        return False
+    cleared = {**value, **{key: None for key in spec.identity_keys}}
+    return stored_state_problem(cleared, identity_keys=spec.identity_keys) is None
+
+
+def _legacy_leftover_value(value: Mapping[str, Any], spec: ResolvableSpec) -> dict[str, Any]:
+    """Read an old identity left in an unresolved pre-contract container as unverified paper wording."""
+
+    annotated = dict(value)
+    stored = _stored_text(value, spec)
+    for key in spec.identity_keys:
+        annotated[key] = None
+    annotated[spec.mention_key] = f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else None
     return annotated
 
 
@@ -880,7 +911,13 @@ def unresolved_header_text(
     if has_resolution_state(target):
         if is_resolved(target, identity_keys=spec.identity_keys if spec is not None else ()):
             return None
-        return f"{mention} {PAPER_WORDING_SUFFIX}" if mention else UNRESOLVED_DISPLAY
+        if mention:
+            return f"{mention} {PAPER_WORDING_SUFFIX}"
+        # A pre-contract container re-validated as unresolved: its old text is unverified.
+        stored = _stored_text(target, spec) if spec is not None else (
+            str(leaf).strip() if leaf is not None and not isinstance(leaf, (Mapping, list)) else ""
+        )
+        return f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else UNRESOLVED_DISPLAY
     if spec is not None:
         identity = [target.get(key) for key in spec.identity_keys]
     elif target is not named:
