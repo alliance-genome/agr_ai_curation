@@ -3433,6 +3433,8 @@ def test_curators_may_override_every_identity_but_not_the_wording_or_validation_
         for field in _gene_expression_pack().metadata.object_definitions[0].fields
     }
     for value_path, spec in declared_gene_expression_values().items():
+        # A protected value field would block a whole-value override (core).
+        assert (fields[value_path].get("protected") is True) == (value_path == "data_provider"), value_path
         for key in spec.identity_keys:
             if f"{value_path}.{key}" not in fields:
                 # The experiment reference's copy holds only the reference id.
@@ -3456,8 +3458,12 @@ def test_curators_may_override_every_identity_but_not_the_wording_or_validation_
     assert fields["data_provider.abbreviation"]["protected"] is True
 
 
-def _curator_patch(envelope: Any, field_path: str, value: Any, *, before: Any):
-    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+def _curator_patch(envelope: Any, field_path: str, value: Any, *, before: Any, identity: bool = False):
+    from src.lib.domain_envelopes.patches import (
+        EnvelopeFieldPatch,
+        EnvelopeFieldPatchOperation,
+        apply_curator_field_patch,
+    )
 
     return apply_curator_field_patch(
         envelope,
@@ -3469,6 +3475,11 @@ def _curator_patch(envelope: Any, field_path: str, value: Any, *, before: Any):
             field_path=field_path,
             before=before,
             value=value,
+            operation=(
+                EnvelopeFieldPatchOperation.REPLACE_IDENTITY
+                if identity
+                else EnvelopeFieldPatchOperation.REPLACE
+            ),
         ),
         current_revision=1,
         actor_id="curator-7",
@@ -3480,9 +3491,13 @@ def test_a_curator_override_resolves_daniela_anatomy_with_an_audit_event():
     from src.lib.domain_packs.resolvable_values import CURATOR_OVERRIDE_METADATA_KEY
 
     envelope = _daniela_envelope()
-    result = _curator_patch(envelope, f"{_ANATOMY}.curie", "EMAPA:17373", before=None)
-    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
-    result = _curator_patch(result.envelope, f"{_ANATOMY}.name", "metanephros", before=None)
+    result = _curator_patch(
+        envelope,
+        f"{_ANATOMY}.curie",
+        {"curie": "EMAPA:17373", "name": "metanephros"},
+        before={"curie": None, "name": None},
+        identity=True,
+    )
     assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
 
     annotation = result.envelope.extracted_objects[0]
@@ -3490,15 +3505,51 @@ def test_a_curator_override_resolves_daniela_anatomy_with_an_audit_event():
     assert (site["curie"], site["name"], site["mention"]) == ("EMAPA:17373", "metanephros", _RESIDUAL_BODY)
     assert (site["resolution_state"], site["lookup_outcome"]) == ("resolved", "curator_override")
     assert site["curator_override"]["actor_id"] == "curator-7"
-    events = annotation.metadata[CURATOR_OVERRIDE_METADATA_KEY]
-    assert [(event["field_path"], event["value_path"]) for event in events] == [
-        (f"{_ANATOMY}.curie", _ANATOMY),
-        (f"{_ANATOMY}.name", _ANATOMY),
-    ]
-    assert events[0]["previous"]["lookup_outcome"] == "not_validated"
+    [event] = annotation.metadata[CURATOR_OVERRIDE_METADATA_KEY]
+    assert (event["action"], event["field_path"], event["value_path"]) == (
+        "override",
+        f"{_ANATOMY}.curie",
+        _ANATOMY,
+    )
+    assert event["previous"]["lookup_outcome"] == "not_validated"
     assert _ANATOMY not in {
         blocker.field_path for blocker in gene_expression_export_blockers(_export_candidate(annotation))
     }
+
+
+def test_a_first_curator_override_needs_the_identifier_and_the_name_together():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _daniela_envelope()
+    for field_path, value, before, identity in (
+        (f"{_ANATOMY}.curie", "EMAPA:17373", None, False),
+        (f"{_ANATOMY}.curie", {"curie": "EMAPA:17373"}, {"curie": None}, True),
+    ):
+        result = _curator_patch(envelope, field_path, value, before=before, identity=identity)
+
+        assert result.status is EnvelopeFieldPatchStatus.REJECTED
+        assert result.errors == ("Enter both the identifier and the name for a curator override.",)
+        assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
+
+
+def test_a_curator_override_changes_only_the_identity():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _daniela_envelope()
+    result = _curator_patch(
+        envelope,
+        f"{_ANATOMY}.curie",
+        {"curie": "EMAPA:17373", "name": "metanephros", "mention": "residual body"},
+        before={"curie": None, "name": None, "mention": _RESIDUAL_BODY},
+        identity=True,
+    )
+
+    assert result.status is EnvelopeFieldPatchStatus.REJECTED
+    assert result.errors == (
+        f"field_path '{_ANATOMY}.curie' cannot change mention; only the identifier and name can be "
+        "changed in a curator override",
+    )
+    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
 
 
 def test_a_curator_override_of_the_subject_gene_carries_to_the_entity_assayed():
@@ -3513,8 +3564,9 @@ def test_a_curator_override_of_the_subject_gene_carries_to_the_entity_assayed():
     result = _curator_patch(
         _with_payload(envelope, payload),
         "expression_annotation_subject.primary_external_id",
-        "MGI:1923928",
-        before=None,
+        {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"},
+        before={"primary_external_id": None, "gene_symbol": None},
+        identity=True,
     )
     assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
 
@@ -3523,7 +3575,7 @@ def test_a_curator_override_of_the_subject_gene_carries_to_the_entity_assayed():
         overridden["expression_annotation_subject"],
         overridden["expression_experiment"]["entity_assayed"],
     ):
-        assert value["primary_external_id"] == "MGI:1923928"
+        assert (value["primary_external_id"], value["gene_symbol"]) == ("MGI:1923928", "Tmem67")
         assert (value["resolution_state"], value["lookup_outcome"]) == ("resolved", "curator_override")
 
 
