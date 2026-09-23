@@ -800,14 +800,14 @@ def test_stage_schema_requires_rationale_with_shared_description():
     patch_schema = agr_curation.patch_gene_expression_observation.params_json_schema
     update_schema = _defs_schema(patch_schema, "GeneExpressionPatchUpdateInput")
     assert "rationale" in update_schema["properties"]["field_path"]["enum"]
-    assert "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared." in patch_schema["properties"]["updates"]["description"]
+    assert "A `rationale` update must be non-empty; it cannot be cleared." in patch_schema["properties"]["updates"]["description"]
 
 
 @pytest.mark.parametrize(
     ("rationale", "message"),
-    [("   ", "rationale must be non-empty"), ("x" * 301, "shorten it to at most 300")],
+    [("   ", "rationale must be non-empty"), ("", "rationale must be non-empty")],
 )
-def test_stage_rejects_blank_or_overlong_rationale(active_builder_context, rationale, message):
+def test_stage_rejects_blank_rationale(active_builder_context, rationale, message):
     _workspace, ledger, _events = active_builder_context
     ledger.record_tool_output(
         tool_call_id="call_relation",
@@ -866,8 +866,8 @@ def test_patch_rewrites_rationale(active_builder_context):
     )
 
 
-@pytest.mark.parametrize("value", [None, "", "   ", "x" * 301])
-def test_patch_cannot_clear_or_overfill_rationale(active_builder_context, value):
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_patch_cannot_clear_rationale(active_builder_context, value):
     workspace, ledger, _events = active_builder_context
     _stage_valid_observation(ledger)
 

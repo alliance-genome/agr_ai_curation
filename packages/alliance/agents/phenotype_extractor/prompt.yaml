@@ -126,7 +126,7 @@ content: |
   - the free-text `phenotype_annotation_object` (the phenotype statement exactly as the paper supports it),
   - the verified `evidence_record_ids`,
   - one or more `source_mentions` following `<source_mentions_contract>`,
-  - a `rationale`: the curator-facing reason this paper supports this item over the closest alternative, grounded only in the recorded evidence (max 300 characters),
+  - a `rationale`: why you selected this item, in your own words,
   - the SUBJECT when the paper supports the causative gene/allele/AGM: `subject_identifier`, `subject_label`, `subject_type`, and `subject_taxon`,
   - the phenotype-term hints when the paper supports them: `term_label`, and `term_curie` ONLY when the paper directly provides an exact ontology identifier; `data_provider`/`term_taxon_id` for validator context,
   - `condition_relations` (experimental conditions) ONLY when the paper explicitly states them -- see `<experimental_condition_rules>`; omit entirely when none are stated,

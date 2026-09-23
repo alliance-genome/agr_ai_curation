@@ -652,7 +652,7 @@ def _patch_generic_object_impl(
 
     Args:
         updates: Field updates, each a field_path with its value (or evidence_record_ids).
-            A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
+            A `rationale` update must be non-empty; it cannot be cleared.
     """
 
     workspace = get_active_extraction_builder_workspace()

@@ -468,7 +468,7 @@ def test_stage_allele_tool_requires_rationale_with_shared_description():
     patch_schema = tools.patch_allele_observation.params_json_schema
     assert "rationale" not in patch_schema["properties"]
     assert (
-        "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared."
+        "A `rationale` update must be non-empty; it cannot be cleared."
         in patch_schema["properties"]["updates"]["description"]
     )
 
@@ -481,9 +481,9 @@ def test_stage_allele_rationale_is_stripped_and_staged(monkeypatch):
     assert candidate.staged_fields["rationale"] == "e190 is the allele this paper assays."
 
 
-def test_stage_allele_rejects_blank_or_overlong_rationale(monkeypatch):
+def test_stage_allele_rejects_blank_rationale(monkeypatch):
     tools, workspace = _rationale_tools(monkeypatch)
-    for bad_value, expected in (("   ", "non-empty"), ("x" * 301, "at most 300")):
+    for bad_value, expected in (("   ", "non-empty"), ("", "non-empty")):
         result = _stage_unc54(tools, bad_value)
         assert result.status == "error"
         issues = result.data["validation_issues"]

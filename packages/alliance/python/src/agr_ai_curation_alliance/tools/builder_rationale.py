@@ -1,7 +1,7 @@
 """Shared per-item ``rationale`` contract for extraction builder tools.
 
-Every extracting domain stores a short, curator-facing reason for each staged
-item, written by the extractor at extraction time. Saved custom agents run from
+Every extracting domain stores the extractor's own explanation of why it selected
+each staged item, written at extraction time. Saved custom agents run from
 frozen prompts, so the parameter description below is the complete guidance on
 its own; every stage and patch tool uses it verbatim.
 """
@@ -10,16 +10,9 @@ from __future__ import annotations
 
 from typing import Callable, TypeVar
 
-RATIONALE_MAX_CHARS = 300
-
 RATIONALE_ARG_DESCRIPTION = (
-    "Curator-facing reason this item was selected, max 300 characters. Name the "
-    "experiment, comparison, or statement that decides it, and why this "
-    "term/entity/relation fits better than the nearest alternative (a broader/narrower "
-    "term, a different allele or gene, another stage or tissue, a negated result). "
-    "Ground it only in the recorded evidence. Do not repeat the quote or list the field "
-    'values, do not open with "The paper states/shows", and do not describe your '
-    "process. Shown in review, CSV/TSV and chat."
+    "Why you selected this item, in your own words. Shown to curators in review, "
+    "CSV/TSV exports and chat."
 )
 
 _F = TypeVar("_F", bound=Callable[..., object])
@@ -30,12 +23,7 @@ def normalize_rationale(value: str) -> str:
 
     cleaned = value.strip()
     if not cleaned:
-        raise ValueError("rationale must be non-empty: give the curator-facing reason for this item")
-    if len(cleaned) > RATIONALE_MAX_CHARS:
-        raise ValueError(
-            f"rationale is {len(cleaned)} characters; shorten it to at most "
-            f"{RATIONALE_MAX_CHARS} characters and stage again"
-        )
+        raise ValueError("rationale must be non-empty: say why you selected this item")
     return cleaned
 
 

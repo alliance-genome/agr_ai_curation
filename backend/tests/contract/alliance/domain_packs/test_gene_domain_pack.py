@@ -474,7 +474,7 @@ def test_stage_gene_tool_requires_rationale_with_shared_description():
     patch_schema = tools.patch_gene_mention_evidence.params_json_schema
     assert "rationale" not in patch_schema["properties"]
     assert (
-        "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared."
+        "A `rationale` update must be non-empty; it cannot be cleared."
         in patch_schema["properties"]["updates"]["description"]
     )
 
@@ -488,9 +488,9 @@ def test_stage_gene_rationale_is_staged_separately_from_identity_notes(monkeypat
     assert fields["identity_resolution_notes"] == ["C. elegans paper; WB provider context."]
 
 
-def test_stage_gene_rejects_blank_or_overlong_rationale(monkeypatch):
+def test_stage_gene_rejects_blank_rationale(monkeypatch):
     tools, workspace = _gene_rationale_tools(monkeypatch)
-    for bad_value, expected in (("", "non-empty"), ("x" * 301, "at most 300")):
+    for bad_value, expected in (("", "non-empty"), ("   ", "non-empty")):
         result = _stage_daf16(tools, bad_value)
         assert result.status == "error"
         issues = result.data["validation_issues"]
@@ -511,7 +511,7 @@ def test_patch_gene_rationale_replaces_and_rejects_clearing(monkeypatch):
     assert patched.status == "ok"
     assert workspace.get_candidate(candidate_id).staged_fields["rationale"] == "Better reason."
 
-    for cleared in ("", "   ", None, "y" * 301):
+    for cleared in ("", "   ", None):
         rejected = tools._patch_gene_mention_evidence_impl(
             candidate_id=candidate_id,
             pending_ref_id="gene-mention-evidence-1",

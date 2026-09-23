@@ -3811,7 +3811,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3854,7 +3854,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3897,7 +3897,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3940,7 +3940,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3977,7 +3977,7 @@
           "type": "string"
         },
         {
-          "description": "Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
+          "description": "Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -4014,7 +4014,7 @@
           "type": "string"
         },
         {
-          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA `rationale` update must be non-empty and at most 300 characters; it cannot\nbe cleared.",
+          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -4057,7 +4057,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5282,7 +5282,7 @@
           "type": "array"
         },
         {
-          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"
@@ -5396,7 +5396,7 @@
           "type": "array"
         },
         {
-          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"
@@ -5522,7 +5522,7 @@
           "type": "string"
         },
         {
-          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"
@@ -5607,7 +5607,7 @@
           "type": "string"
         },
         {
-          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"
@@ -5704,7 +5704,7 @@
           "type": "array"
         },
         {
-          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"
@@ -5837,7 +5837,7 @@
           "type": "string"
         },
         {
-          "description": "Curator-facing reason this item was selected, max 300 characters. Name the experiment, comparison, or statement that decides it, and why this term/entity/relation fits better than the nearest alternative (a broader/narrower term, a different allele or gene, another stage or tissue, a negated result). Ground it only in the recorded evidence. Do not repeat the quote or list the field values, do not open with \"The paper states/shows\", and do not describe your process. Shown in review, CSV/TSV and chat.",
+          "description": "Why you selected this item, in your own words. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"
@@ -5981,7 +5981,7 @@
           "type": "array"
         },
         {
-          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"

@@ -447,11 +447,8 @@ def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
             "identity is pending."
         )
         lines.append(
-            "- Rationale rule: stage every retained item with `rationale`: one or two "
-            "sentences (max 300 characters) on why this paper supports this "
-            "entity/term/association rather than the closest alternative. Do not restate "
-            "the quote, the field values, or \"the paper states\"; never invent facts "
-            "beyond the recorded evidence."
+            "- Rationale rule: stage every retained item with a `rationale` explaining "
+            "why you selected it."
         )
 
     if not lines:

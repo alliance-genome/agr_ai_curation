@@ -604,10 +604,10 @@ def _stage_with_rationale(rationale):
     ("rationale", "message"),
     [
         ("   ", "rationale must be non-empty"),
-        ("x" * 301, "shorten it to at most 300 characters"),
+        ("", "rationale must be non-empty"),
     ],
 )
-def test_go_stage_rejects_blank_or_overlong_rationale(
+def test_go_stage_rejects_blank_rationale(
     active_go_builder_context, rationale, message
 ):
     result = _stage_with_rationale(rationale)
@@ -619,9 +619,9 @@ def test_go_stage_rejects_blank_or_overlong_rationale(
     )
 
 
-def test_go_stage_stores_stripped_rationale_at_the_cap(active_go_builder_context):
+def test_go_stage_stores_stripped_rationale_without_a_length_cap(active_go_builder_context):
     workspace, _events = active_go_builder_context
-    rationale = "y" * 300
+    rationale = "y" * 2000
 
     staged = _stage_with_rationale(f"  {rationale}  ")
 
@@ -636,10 +636,9 @@ def test_go_stage_stores_stripped_rationale_at_the_cap(active_go_builder_context
         (None, "rationale must be a non-empty string"),
         ("", "rationale must be non-empty"),
         ("  ", "rationale must be non-empty"),
-        ("z" * 301, "shorten it to at most 300 characters"),
     ],
 )
-def test_go_patch_cannot_clear_or_overfill_rationale(
+def test_go_patch_cannot_clear_rationale(
     active_go_builder_context, value, message
 ):
     workspace, _events = active_go_builder_context
@@ -666,7 +665,7 @@ def test_go_stage_tool_schema_carries_the_shared_rationale_description():
     assert properties["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
     imp_rule = (
         "For IMP annotations, the rationale must name the perturbation and the phenotype "
-        "in the paper's exact wording; that is required, not a restated quote."
+        "in the paper's exact wording."
     )
     assert imp_rule in " ".join(go_builder_tools.stage_go_recommendation.description.split())
     assert RATIONALE_ARG_DESCRIPTION not in go_builder_tools.stage_go_recommendation.description
@@ -674,8 +673,7 @@ def test_go_stage_tool_schema_carries_the_shared_rationale_description():
         "properties"
     ]["updates"]
     assert (
-        "A `rationale` update must be non-empty and at most 300 characters; it cannot "
-        "be cleared." in " ".join(patch_updates["description"].split())
+        "A `rationale` update must be non-empty; it cannot be cleared." in " ".join(patch_updates["description"].split())
     )
 
 

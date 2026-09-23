@@ -262,7 +262,7 @@ def test_stage_schema_requires_rationale_with_shared_description():
     assert "rationale" in schema["required"]
     assert schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
     patch_schema = generic_builder_tools.patch_generic_object.params_json_schema
-    assert "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared." in patch_schema["properties"]["updates"]["description"]
+    assert "A `rationale` update must be non-empty; it cannot be cleared." in patch_schema["properties"]["updates"]["description"]
 
 
 def test_stage_stores_stripped_rationale_beside_classification_notes(
@@ -280,9 +280,9 @@ def test_stage_stores_stripped_rationale_beside_classification_notes(
 
 @pytest.mark.parametrize(
     ("rationale", "message"),
-    [("   ", "rationale must be non-empty"), ("x" * 301, "shorten it to at most 300")],
+    [("   ", "rationale must be non-empty"), ("", "rationale must be non-empty")],
 )
-def test_stage_rejects_blank_or_overlong_rationale(
+def test_stage_rejects_blank_rationale(
     active_generic_builder_context, rationale, message
 ):
     workspace, _events = active_generic_builder_context
@@ -318,10 +318,9 @@ def test_patch_rewrites_rationale(active_generic_builder_context):
         {"field_path": "rationale", "value": ""},
         {"field_path": "rationale", "value": "   "},
         {"field_path": "rationale", "value": ["list"]},
-        {"field_path": "rationale", "value": "x" * 301},
     ],
 )
-def test_patch_cannot_clear_or_overfill_rationale(active_generic_builder_context, update):
+def test_patch_cannot_clear_rationale(active_generic_builder_context, update):
     workspace, _events = active_generic_builder_context
     _stage_claim()
 

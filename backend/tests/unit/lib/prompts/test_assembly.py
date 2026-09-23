@@ -182,7 +182,10 @@ def test_core_generated_contract_summarizes_tool_and_domain_metadata(monkeypatch
     assert "get_agent_contract" in generated
     assert "Domain envelope pack: agr.alliance.phenotype v0.1.0" in generated
     assert "No extractor should invent exact ontology CURIEs" in generated
-    assert "Rationale rule: stage every retained item with `rationale`" in generated
+    assert (
+        "Rationale rule: stage every retained item with a `rationale` explaining why "
+        "you selected it." in generated
+    )
     # NEW — single compact validator-owned-fields line replaces the per-field map
     assert "Validators own these fields" in generated
     assert "do not invent" in generated
@@ -206,13 +209,13 @@ def test_core_generated_contract_summarizes_tool_and_domain_metadata(monkeypatch
     # agent sets output_schema="PhenotypeResultEnvelope" (stubbed to
     # DemoStructuredOutput), so the core_generated ``generated`` layer here also
     # carries the fixed ~9-line/~127-word "## CRITICAL ... STRUCTURED OUTPUT"
-    # block plus a blank separator -- making this fixture 20 lines / 370 words
-    # (ALL-1298 added the one-line, ~50-word rationale rule).
+    # block plus a blank separator -- making this fixture 20 lines / ~330 words
+    # (ALL-1298 added a one-line, ~13-word rationale rule).
     # The real phenotype_extractor has output_schema=None and no such block, so
     # its contract is smaller. The ceilings below sit just above this fixture
-    # (runtime contract alone is ~10 lines / ~240 words, vs >30 lines pre-slim).
+    # (runtime contract alone is ~10 lines / ~200 words, vs >30 lines pre-slim).
     assert len(generated.splitlines()) <= 20
-    assert len(generated.split()) <= 375
+    assert len(generated.split()) <= 340
     assert "prompt_templates:" not in bundle.layers[1].source_ref
     assert "domain_pack:agr.alliance.phenotype" in bundle.layers[1].source_ref
 
