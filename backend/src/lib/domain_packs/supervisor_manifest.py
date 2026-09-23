@@ -151,13 +151,6 @@ def _policy_for_definition(
                 f"contains unknown key(s): {', '.join(unknown_keys)}"
             )
 
-    if "primary_label_fields" in config:
-        # A label chain fills the label from another field when the first is
-        # empty; an item's label is one declared field (ALL-1283).
-        raise SupervisorManifestPolicyError(
-            f"{metadata.pack_id}.{object_definition.object_type}.{source} declares "
-            "primary_label_fields; declare a single primary_label_field instead"
-        )
     field_definitions = {
         field.field_path: field for field in object_definition.fields
     }

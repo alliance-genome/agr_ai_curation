@@ -13,6 +13,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.lib.domain_packs.not_validatable import supersede_not_validatable_findings
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.validation_runtime import (
     dedupe,
@@ -534,10 +535,15 @@ def _refresh_domain_envelope_validation_for_ref(
     package_appended_findings = ()
     package_envelope = envelope
     if package_validator is not None and profile_context is None:
+        package_findings = package_validator(package_envelope)
         package_envelope, package_appended_findings = (
             append_validation_findings_to_envelope(
-                package_envelope,
-                package_validator(package_envelope),
+                supersede_not_validatable_findings(
+                    package_envelope,
+                    package_findings,
+                    actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
+                ),
+                package_findings,
                 actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
             )
         )

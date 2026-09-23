@@ -76,6 +76,7 @@ def test_vocabularies_are_closed_enums():
     assert LOOKUP_OUTCOMES == (
         "matched", "not_found", "ambiguous", "conflict", "blocked", "transient", "invalid_schema",
         "missing_expected_result_field", "rejected_candidates", "not_validated", "legacy_unverified",
+        "curator_override",
     )
     assert tuple(ResolutionState) == RESOLUTION_STATES
     assert tuple(LookupOutcome) == LOOKUP_OUTCOMES
@@ -198,11 +199,17 @@ def test_mark_writes_validator_words_and_never_touches_identity_or_mention():
     assert value["mention"] == "skin"
     assert (value["resolution_state"], value["lookup_outcome"]) == (RESOLVED, OUTCOME_MATCHED)
     assert (value["validator_explanation"], value["validator_curator_message"]) == ("Exact synonym.", None)
-    # A later failure cannot un-resolve a value an earlier validator resolved.
-    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="x")
-    assert value["resolution_state"] == RESOLVED
     with pytest.raises(ResolvableValueError):
-        mark_unresolved(value, "legacy_unverified", explanation=None)
+        mark_unresolved(value, "legacy_unverified", explanation=None, identity_keys=TERM_KEYS)
+    # The validator is the authority: un-resolving keeps the identity only as hints.
+    with pytest.raises(ResolvableValueError, match="identity keys"):
+        mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="x")
+    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="No longer matches.", identity_keys=TERM_KEYS)
+    assert value == {"mention": "skin", "curie": None, "name": None,
+                     "overruled_curie": "ONT:1", "overruled_name": "epidermis",
+                     "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_FOUND,
+                     "validator_explanation": "No longer matches.", "validator_curator_message": None}
+    check_resolvable_value(value, identity_keys=TERM_KEYS)
 
 
 def test_list_helpers_keep_each_element_separate():
@@ -340,9 +347,14 @@ def test_packs_declare_the_vocabularies_exactly():
 # --- Materializer write-back ---------------------------------------------------
 
 
-def _metadata(*, expected=None, mirror=False, input_path="site.mention") -> DomainPackMetadata:
+_SITE_DISPLAY = {"label": "name", "id": "curie", "mention": "mention"}
+
+
+def _metadata(*, expected=None, mirror=False, input_path="site.mention", declared=True) -> DomainPackMetadata:
+    display = {"display": _SITE_DISPLAY} if declared else {}
     fields = [
-        DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT),
+        DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT, metadata=display),
+        DomainPackFieldDefinition(field_path="copy", field_type=DomainPackFieldType.OBJECT, metadata=display),
         DomainPackFieldDefinition(
             field_path="site.curie",
             field_type=DomainPackFieldType.STRING,
@@ -527,7 +539,7 @@ def test_mirror_copies_take_the_source_value_state():
 
 
 def test_plain_values_without_a_resolvable_container_patch_as_before():
-    metadata = _metadata(input_path="site.name")
+    metadata = _metadata(input_path="site.name", declared=False)
     envelope = _envelope({"site": {"curie": None, "name": "skin"}})
     item = _item(metadata, envelope, values={"curie": "ONT:1", "name": "epidermis"})
 
@@ -777,21 +789,107 @@ def test_old_containers_revalidate_resolved_and_unresolved_without_raising(old, 
     assert "mention" not in site
     assert effective_value(site, spec, covered_by_validator=False) is site
 
-    unresolved_item = _item(metadata, envelope, status="unresolved", outcome="not_found")
-    once = materialize_validator_results_into_envelope(envelope, metadata, [unresolved_item])
-    # Re-validating the re-validated container again must not raise either.
-    twice = materialize_validator_results_into_envelope(once.envelope, metadata, [unresolved_item])
+    # A non-decisive outcome (a transient lookup error), twice: nothing raises, the
+    # old record stays exactly as stored and still reads as unverified paper
+    # wording, and the outage is reported as a finding instead.
+    transient = _item(metadata, envelope, status="unresolved", outcome="error")
+    once = materialize_validator_results_into_envelope(envelope, metadata, [transient])
+    twice = materialize_validator_results_into_envelope(once.envelope, metadata, [transient])
     site = twice.envelope.extracted_objects[0].payload["site"]
-    assert (site["resolution_state"], site["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_FOUND)
-    # The old identity is kept in storage but reads as unverified paper wording.
-    assert site["curie"] == old["curie"]
+    assert site == old
+    assert any(finding.code == "domain_pack.validator_error" for finding in once.appended_findings)
     effective = effective_value(site, spec, covered_by_validator=False)
-    assert (effective["curie"], effective[label_key]) == (None, None)
+    assert (effective["curie"], effective[label_key], effective["lookup_outcome"]) == (
+        None, None, OUTCOME_LEGACY_UNVERIFIED)
     assert effective["mention"] == f"{old[label_key]} ({old['curie']}) {LEGACY_UNVERIFIED_SUFFIX}"
-    assert effective["lookup_outcome"] == OUTCOME_NOT_FOUND
-    check_resolvable_value(effective, identity_keys=spec.identity_keys)
     assert unresolved_header_text({"site": site}, f"site.{label_key}", resolvable_fields={"site": spec}) == (
         f"{old[label_key]} ({old['curie']}) {LEGACY_UNVERIFIED_SUFFIX}")
+
+    # A decisive outcome sets the old identity aside, like an overruled one.
+    decided = _item(metadata, envelope, status="unresolved", outcome="not_found")
+    site = materialize_validator_results_into_envelope(
+        envelope, metadata, [decided]).envelope.extracted_objects[0].payload["site"]
+    assert (site["resolution_state"], site["lookup_outcome"], site["curie"]) == (
+        UNRESOLVED, OUTCOME_NOT_FOUND, None)
+    assert site["overruled_curie"] == old["curie"]
+    check_resolvable_value(site, identity_keys=spec.identity_keys)
+
+
+def test_a_legacy_value_with_paper_wording_is_left_alone_by_an_outage():
+    """M1/F1: an old value with a mention and an identity, re-validated unresolved."""
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    metadata = _metadata()
+    old = {"mention": "skin", "curie": "ONT:9", "name": "old guess"}
+    envelope = _envelope({"site": dict(old)})
+
+    stale = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="error")],
+    ).envelope.extracted_objects[0].payload["site"]
+    assert stale == old
+    effective = effective_value(stale, spec, covered_by_validator=False)
+    assert (effective["lookup_outcome"], effective["curie"], effective["name"]) == (
+        OUTCOME_LEGACY_UNVERIFIED, None, None)
+    assert "invalid record" not in str(effective)
+
+    decided = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="not_found")],
+    ).envelope.extracted_objects[0].payload["site"]
+    assert (decided["curie"], decided["overruled_curie"], decided["lookup_outcome"]) == (
+        None, "ONT:9", OUTCOME_NOT_FOUND)
+    assert effective_value(decided, spec, covered_by_validator=False) is decided
+
+
+def test_an_outage_leaves_a_validated_legacy_value_validated():
+    """F1: an old value the legacy rule reads as validated stays so after an outage."""
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    metadata = _metadata()
+    old = {"mention": "gene-22", "curie": "G:22", "name": "gene-22"}
+    envelope = _envelope({"site": dict(old)})
+    covered = envelope.extracted_objects[0].model_copy(update={"metadata": {
+        "validator_resolved_value_materialization": [{"materialized_field_paths": ["site.curie"]}]}})
+    envelope = envelope.model_copy(update={"extracted_objects": [covered]})
+
+    result = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="error")])
+
+    stored = result.envelope.extracted_objects[0]
+    assert stored.payload["site"] == old
+    effective = effective_payload(stored.payload, {"site": spec}, object_metadata=stored.metadata)["site"]
+    assert (effective["resolution_state"], effective["lookup_outcome"], effective["curie"]) == (
+        RESOLVED, OUTCOME_MATCHED, "G:22")
+    assert any(finding.code == "domain_pack.validator_error" for finding in result.appended_findings)
+
+
+def test_an_undeclared_container_in_contract_shape_is_reported_not_written():
+    """F2: a write into an undeclared container that holds a resolvable value."""
+
+    metadata = _metadata(input_path="site.mention", declared=False)
+    site = unresolved_value("skin", identity_keys=TERM_KEYS)
+    envelope = _envelope({"site": dict(site)})
+    item = _item(metadata, envelope, values={"curie": "ONT:1", "name": "epidermis"})
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    assert result.envelope.extracted_objects[0].payload == {"site": site}
+    problem = [finding for finding in result.appended_findings
+               if finding.code == "domain_pack.validator_materialization_invalid"]
+    assert len(problem) == 1
+    assert "does not declare" in problem[0].details["materialization_error"]
+
+
+def test_an_unresolved_contract_value_holding_an_identity_reads_as_invalid():
+    """LOW: only a pre-contract value (no paper wording) can be a re-validation leftover."""
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    broken = {"mention": "skin", "curie": "ONT:9", "name": "old guess", "resolution_state": UNRESOLVED,
+              "lookup_outcome": OUTCOME_NOT_FOUND, "validator_explanation": None}
+
+    effective = effective_value(broken, spec, covered_by_validator=False)
+
+    assert (effective["lookup_outcome"], effective["curie"], effective["name"]) == ("invalid_schema", None, None)
+    assert "invalid record" in effective["mention"]
 
 
 def test_a_contract_value_still_needs_non_empty_paper_wording():
@@ -1074,3 +1172,365 @@ def test_revalidating_a_legacy_record_upgrades_declared_values_and_records_the_e
     again = materialize_validator_results_into_envelope(result.envelope, metadata, items)
     assert len(again.envelope.extracted_objects[0].metadata["validator_resolved_value_materialization"]) == len(
         events)
+
+
+
+def test_a_validator_overrules_a_builder_resolved_value():
+    """The builder's deterministic lookup resolved it; the validator says no."""
+
+    metadata = _metadata(mirror=True)
+    builder_resolved = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"},
+                                      explanation="Matched by the builder's lookup.",
+                                      proposed_curie="ONT:9")  # the extractor's own proposal
+    envelope = _envelope({"site": dict(builder_resolved), "copy": dict(builder_resolved)})
+    item = _item(metadata, envelope, status="unresolved", outcome="not_found")
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    payload = result.envelope.extracted_objects[0].payload
+    for key in ("site", "copy"):
+        value = payload[key]
+        assert (value["resolution_state"], value["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_FOUND)
+        assert (value["curie"], value["name"]) == (None, None)
+        assert (value["overruled_curie"], value["overruled_name"]) == ("ONT:1", "epidermis")
+        # The extractor's proposal (a validator input) is never touched.
+        assert value["proposed_curie"] == "ONT:9"
+        assert value["validator_explanation"] == "Fixture validator decision."
+        assert value["mention"] == "skin"
+        check_resolvable_value(value, identity_keys=TERM_KEYS)
+    assert effective_value(payload["site"], ResolvableSpec(id_key="curie", label_key="name"),
+                           covered_by_validator=True) is payload["site"]
+
+
+
+def test_overruled_identities_are_informational_only():
+    from types import SimpleNamespace
+
+    from src.lib.domain_packs.resolvable_values import overruled_key, without_overruled
+    from src.lib.flows.export_fields import PackagedExportSource
+    from src.lib.flows.value_display import display_text
+
+    assert overruled_key("curie") == "overruled_curie"
+    value = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"})
+    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="No.", identity_keys=TERM_KEYS)
+    assert value["overruled_curie"] == "ONT:1"
+
+    # Never the value, never exported.
+    assert display_text(value, _TERM_DISPLAY) == "UNRESOLVED"
+    assert "overruled_curie" not in without_overruled({"site": value})["site"]
+    item = PackagedExportSource(SimpleNamespace(metadata=_expression_metadata())).effective_item(
+        {"object_type": "Expression", "payload": {"subject": value, "overruled_note": "x"}}
+    )
+    assert "overruled_curie" not in item["payload"]["subject"]
+    assert "overruled_note" not in item["payload"]
+
+    # Never a validator input, even when a selector reads the whole value.
+    metadata = _metadata(input_path="site")
+    envelope = _envelope({"site": value})
+    registry = DomainPackValidationRegistry.from_domain_pack(LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    ))
+    match = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])[0]
+    request = build_domain_validation_request(match).request
+    assert "overruled_curie" not in request.selected_inputs["mention"]
+
+    # A fresh resolution replaces the overruled identity.
+    mark_resolved(value, {"curie": "ONT:2", "name": "skin"}, explanation="Matched.")
+    assert not any(key.startswith("overruled_") for key in value)
+
+
+# --- H1: resolvable values come only from declarations --------------------------
+
+
+def _annotation_metadata():
+    def binding(binding_id, input_path, expected):
+        return {
+            "binding_id": binding_id,
+            "display_name": binding_id,
+            "validator_agent": {"package_id": "fixture.validators", "agent_id": "cv_validator"},
+            "applies_to": {"domain_pack_id": "fixture.annotation", "object_types": ["Annotation"]},
+            "input_fields": {"text": {"source": "payload", "path": input_path}},
+            "expected_result_fields": expected,
+        }
+
+    return DomainPackMetadata(
+        pack_id="fixture.annotation", display_name="Annotation", version="0.1.0", metadata_api_version="1.0.0",
+        metadata={"validator_bindings": {"active": [
+            binding("fixture.annotation_type", "mention", {"term_name": "annotation_type_name"}),
+            binding("fixture.relation", "mention", {"term_name": "relation_name"}),
+        ], "under_development": []}},
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Annotation", display_name="Annotation", metadata={"object_role": "curatable_unit"},
+            fields=[DomainPackFieldDefinition(field_path=path, field_type=DomainPackFieldType.STRING)
+                    for path in ("mention", "annotation_type_name", "relation_name")],
+        )],
+    )
+
+
+def test_an_undeclared_object_root_with_a_mention_is_not_a_resolvable_value():
+    metadata = _annotation_metadata()
+    envelope = DomainEnvelope(
+        envelope_id="annotation-env", domain_pack_id="fixture.annotation",
+        extracted_objects=[CuratableObjectEnvelope(
+            object_type="Annotation", pending_ref_id="annotation-1",
+            payload={"mention": "paper sentence", "annotation_type_name": None, "relation_name": None},
+        )],
+    )
+    registry = DomainPackValidationRegistry.from_domain_pack(LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    ))
+    items = []
+    for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE]):
+        request = build_domain_validation_request(match).request
+        resolved = request.validator_binding_id == "fixture.annotation_type"
+        result = DomainValidatorResultBase.model_validate({
+            "status": "resolved" if resolved else "unresolved", "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
+            "target": request.target, "resolved_values": {"term_name": "manually_curated"} if resolved else {},
+            "resolved_objects": [], "missing_expected_fields": [], "candidates": [],
+            "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 1,
+                                 "outcome": "success" if resolved else "not_found"}],
+            "curator_message": None, "explanation": "e",
+        })
+        items.append(ValidatorResultMaterializationInput(match=match, request=request, result=result))
+
+    for ordered in (items, list(reversed(items))):
+        payload = materialize_validator_results_into_envelope(
+            envelope, metadata, ordered).envelope.extracted_objects[0].payload
+        # Plain top-level fields: the resolved one is written; nothing is wiped
+        # or given a root "state", whatever order the bindings come back in.
+        assert payload == {"mention": "paper sentence", "annotation_type_name": "manually_curated",
+                           "relation_name": None}
+
+
+def test_object_root_coverage_needs_an_event_on_its_identity_keys():
+    metadata = {"validator_resolved_value_materialization": [{"materialized_field_paths": ["relation_name"]}]}
+    assert not validator_event_covers(metadata, "")
+    assert not validator_event_covers(metadata, "", ("gene_symbol", "primary_external_id"))
+    covered = {"validator_resolved_value_materialization": [{"materialized_field_paths": ["gene_symbol"]}]}
+    assert validator_event_covers(covered, "", ("gene_symbol", "primary_external_id"))
+    spec = ResolvableSpec(id_key="primary_external_id", label_key="gene_symbol")
+    legacy_root = {"gene_symbol": "unc-54", "primary_external_id": "G:1"}
+    assert effective_payload(legacy_root, {"": spec}, object_metadata=metadata)["lookup_outcome"] == (
+        OUTCOME_LEGACY_UNVERIFIED)
+    assert effective_payload(legacy_root, {"": spec}, object_metadata=covered)["lookup_outcome"] == OUTCOME_MATCHED
+
+
+# --- H2: only decisive outcomes overrule a resolved value -----------------------
+
+
+def _validated_gene_site():
+    return resolved_value("unc-54", {"curie": "G:1", "name": "unc-54"}, explanation="Validated earlier.")
+
+
+def test_an_api_outage_never_touches_an_earlier_validated_value():
+    metadata = _metadata(mirror=True)
+    envelope = _envelope({"site": _validated_gene_site(), "copy": _validated_gene_site()})
+    item = _item(metadata, envelope, status="unresolved", outcome="error")
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    payload = result.envelope.extracted_objects[0].payload
+    assert payload["site"] == _validated_gene_site()
+    assert payload["copy"] == _validated_gene_site()
+    # The outage is reported as a finding instead.
+    assert any(finding.code == "domain_pack.validator_error" for finding in result.appended_findings)
+
+
+@pytest.mark.parametrize("outcome", ["transient", "invalid_schema", "missing_expected_result_field", "blocked"])
+def test_non_decisive_outcomes_leave_a_resolved_value_as_it_was(outcome):
+    value = _validated_gene_site()
+    mark_unresolved(value, outcome, explanation="x", identity_keys=TERM_KEYS)
+    assert value == _validated_gene_site()
+
+
+@pytest.mark.parametrize("outcome", ["not_found", "ambiguous", "conflict", "rejected_candidates"])
+def test_decisive_outcomes_overrule_a_resolved_value(outcome):
+    value = _validated_gene_site()
+    mark_unresolved(value, outcome, explanation="Decided.", identity_keys=TERM_KEYS)
+    assert (value["resolution_state"], value["lookup_outcome"], value["curie"]) == (UNRESOLVED, outcome, None)
+    assert value["overruled_curie"] == "G:1"
+
+
+def test_a_never_resolved_value_takes_any_outcome():
+    value = unresolved_value("unc-54", identity_keys=TERM_KEYS)
+    mark_unresolved(value, "transient", explanation="Lookup service unavailable.")
+    assert (value["resolution_state"], value["lookup_outcome"]) == (UNRESOLVED, "transient")
+
+
+def test_a_partial_or_policy_rejected_result_never_touches_a_resolved_value():
+    metadata = _metadata()
+    envelope = _envelope({"site": _validated_gene_site()})
+    partial = _item(metadata, envelope, values={"curie": "G:2"}, missing=("name",))
+
+    payload = materialize_validator_results_into_envelope(
+        envelope, metadata, [partial]).envelope.extracted_objects[0].payload
+
+    assert payload["site"] == _validated_gene_site()
+
+
+# --- M2: one value that cannot be written never aborts the run ------------------
+
+
+def test_a_value_that_cannot_be_written_becomes_a_finding_and_the_rest_are_written():
+    metadata = _metadata()
+    envelope = DomainEnvelope(
+        envelope_id="two-objects", domain_pack_id="fixture.resolvable",
+        extracted_objects=[
+            CuratableObjectEnvelope(object_type="Observation", pending_ref_id="broken",
+                                    # A blank paper wording breaks the contract on any write.
+                                    payload={"site": {"mention": "  ", "curie": None, "name": None,
+                                                      "resolution_state": "unresolved",
+                                                      "lookup_outcome": "not_validated"}}),
+            CuratableObjectEnvelope(object_type="Observation", pending_ref_id="fine",
+                                    payload={"site": _staged_site()}),
+        ],
+    )
+    registry = DomainPackValidationRegistry.from_domain_pack(LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    ))
+    items = []
+    for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE]):
+        request = build_domain_validation_request(match).request
+        result = DomainValidatorResultBase.model_validate({
+            "status": "unresolved", "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
+            "target": request.target, "resolved_values": {}, "resolved_objects": [],
+            "missing_expected_fields": [], "candidates": [],
+            "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 0,
+                                 "outcome": "not_found"}],
+            "curator_message": None, "explanation": "e",
+        })
+        items.append(ValidatorResultMaterializationInput(match=match, request=request, result=result))
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, items)
+
+    broken, fine = result.envelope.extracted_objects
+    assert broken.payload == envelope.extracted_objects[0].payload
+    assert fine.payload["site"]["lookup_outcome"] == OUTCOME_NOT_FOUND
+    problem = [finding for finding in result.appended_findings
+               if finding.code == "domain_pack.validator_materialization_invalid"]
+    assert len(problem) == 1
+    assert "could not be written" in problem[0].details["materialization_error"]
+
+
+def test_a_resolved_mirror_of_a_never_resolved_source_is_overruled_with_its_own_keys():
+    metadata = _metadata(mirror=True)
+    source = {"mention": "skin", "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_VALIDATED,
+              "validator_explanation": NOT_VALIDATED_EXPLANATION}
+    envelope = _envelope({"site": source, "copy": _validated_gene_site()})
+
+    result = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="not_found")],
+    )
+
+    copy = result.envelope.extracted_objects[0].payload["copy"]
+    assert (copy["lookup_outcome"], copy["curie"], copy["overruled_curie"]) == (OUTCOME_NOT_FOUND, None, "G:1")
+    assert not any(finding.code == "domain_pack.validator_materialization_invalid"
+                   for finding in result.appended_findings)
+
+
+# --- M3: reading an export stays fast ------------------------------------------
+
+
+def test_effective_payload_reads_a_large_export_quickly():
+    """300 objects x 28 declared values x 30 validator events read well under a second or two."""
+
+    import time
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    specs = {f"value_{index}": spec for index in range(28)}
+    metadata = {"validator_resolved_value_materialization": [
+        {"materialized_field_paths": [f"value_{event % 28}.curie", f"value_{event % 28}.name"],
+         "original_values": {f"value_{event % 28}.name": "x"}}
+        for event in range(30)
+    ]}
+    legacy = {f"value_{index}": {"curie": f"T:{index}", "name": f"term {index}"} for index in range(28)}
+    contract = {
+        f"value_{index}": resolved_value(f"term {index}", {"curie": f"T:{index}", "name": f"term {index}"})
+        for index in range(28)
+    }
+
+    started = time.perf_counter()
+    for index in range(300):
+        effective = effective_payload(legacy if index % 2 else contract, specs, object_metadata=metadata)
+    elapsed = time.perf_counter() - started
+
+    assert effective["value_0"]["lookup_outcome"] == OUTCOME_MATCHED
+    assert elapsed < 2.0, elapsed
+
+
+# --- M4: a re-validation with the same decision appends no event ---------------
+
+
+def test_revalidation_with_new_wording_updates_the_explanation_without_a_new_event():
+    metadata = _metadata()
+    envelope = _envelope({"site": _staged_site()})
+    first = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, values={"curie": "ONT:1", "name": "epidermis"})],
+    ).envelope
+    events = first.extracted_objects[0].metadata["validator_resolved_value_materialization"]
+
+    item = _item(metadata, first, values={"curie": "ONT:1", "name": "epidermis"})
+    reworded = item.result.model_copy(update={"explanation": "Same term, different words."})
+    second = materialize_validator_results_into_envelope(
+        first, metadata, [ValidatorResultMaterializationInput(match=item.match, request=item.request,
+                                                              result=reworded)],
+    ).envelope
+
+    patched = second.extracted_objects[0]
+    assert patched.metadata["validator_resolved_value_materialization"] == events
+    assert patched.payload["site"]["validator_explanation"] == "Same term, different words."
+    assert patched.payload["site"]["curie"] == "ONT:1"
+
+
+# --- M6: plain-text legacy values at declared paths -----------------------------
+
+
+def test_plain_text_stored_at_a_declared_path_reads_as_legacy_paper_wording():
+    from src.lib.domain_packs.resolvable_values import unresolved_header_text
+    from src.lib.flows.value_display import display_text
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    payload = {"site": "hypodermis", "terms": ["embryo", "adult"], "empty": None}
+    effective = effective_payload(payload, {"site": spec, "terms": spec, "empty": spec}, object_metadata=None)
+
+    assert effective["site"] == {
+        "curie": None, "name": None, "mention": f"hypodermis {LEGACY_UNVERIFIED_SUFFIX}",
+        "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_LEGACY_UNVERIFIED,
+        "validator_explanation": LEGACY_EXPLANATION,
+    }
+    assert [term["mention"] for term in effective["terms"]] == [
+        f"embryo {LEGACY_UNVERIFIED_SUFFIX}", f"adult {LEGACY_UNVERIFIED_SUFFIX}"]
+    assert effective["empty"] is None
+    assert display_text(effective["site"], _TERM_DISPLAY) == "UNRESOLVED"
+    assert unresolved_header_text(payload, "site", resolvable_fields={"site": spec}) == (
+        f"hypodermis {LEGACY_UNVERIFIED_SUFFIX}")
+    assert payload["site"] == "hypodermis"
+
+
+# --- LOW: a fresh resolution leaves no stale identity or proposal ---------------
+
+
+def test_mark_resolved_clears_identity_keys_the_validator_did_not_supply():
+    value = {"mention": "hypodermal cells", "curie": None, "name": "hypodermis",
+             "proposed_curie": "ONT:9", "overruled_curie": "ONT:8",
+             "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_VALIDATED}
+    mark_resolved(value, {"curie": "ONT:1"}, explanation="Matched by CURIE.", identity_keys=TERM_KEYS)
+    assert (value["curie"], value["name"]) == ("ONT:1", None)
+    assert "overruled_curie" not in value
+    # The extractor's own proposal is a validator input and survives resolution.
+    assert value["proposed_curie"] == "ONT:9"
+    assert value["mention"] == "hypodermal cells"
+
+
+
+def test_a_resolved_cell_never_shows_proposals_or_overruled_identities():
+    from src.lib.flows.value_display import display_text
+
+    value = {"abbreviation": "XP", "proposed_abbreviation": "Example Provider", "overruled_abbreviation": "YP",
+             "mention": "Example Provider", "resolution_state": RESOLVED, "lookup_outcome": OUTCOME_MATCHED}
+    assert display_text(value) == "abbreviation: XP"
