@@ -108,7 +108,11 @@ def _metadata() -> DomainPackMetadata:
                     "workspace_display": {
                         "summary_fields": ["symbol", "identifier"],
                         "groups": [
-                            {"id": "identity", "label": "Identity", "fields": ["symbol", "identifier", "proposed_symbol"]},
+                            {
+                                "id": "identity",
+                                "label": "Identity",
+                                "fields": ["symbol", "identifier", "proposed_symbol", "mention", "lookup_outcome"],
+                            },
                         ],
                     },
                 },
@@ -298,6 +302,12 @@ def test_object_root_value_reads_through_its_identity_fields():
     # The extractor's proposal never becomes the validated value.
     assert _workspace_field(row, "proposed_symbol").resolution is None
     assert "ABC1" not in symbol.display_text
+    # The object root's own leaves read in plain words.
+    mention = _workspace_field(row, "mention").resolution
+    outcome = _workspace_field(row, "lookup_outcome").resolution
+    assert (mention.display_text, mention.leaf_key) == ("abc-1", "mention")
+    assert (outcome.display_text, outcome.leaf_key) == ("Candidates rejected", "lookup_outcome")
+    assert row.display_label == "object-1"
 
 
 @pytest.mark.parametrize("covered", [False, True])

@@ -1000,8 +1000,9 @@ class DomainPackFixturePackRef(DomainPackMetadataBaseModel):
 
 
 def _resolvable_vocabulary_errors(metadata: "DomainPackMetadata") -> list[str]:
-    """A resolvable value's resolution_state and lookup_outcome leaves are enums
-    whose values are exactly the shared controlled vocabularies (ALL-1283)."""
+    """A resolvable value's resolution_state and lookup_outcome leaves (including
+    those of a resolvable object root) are enums whose values are exactly the
+    shared controlled vocabularies (ALL-1283)."""
 
     from src.lib.domain_packs.resolvable_values import (
         LOOKUP_OUTCOME_KEY,
@@ -1027,15 +1028,19 @@ def _resolvable_vocabulary_errors(metadata: "DomainPackMetadata") -> list[str]:
     errors: list[str] = []
     for object_definition in metadata.object_definitions:
         by_path = {field.field_path: field for field in object_definition.fields}
+        root_model = models.get(object_definition.model_ref) if object_definition.model_ref else None
         for field in object_definition.fields:
             parent_path, _, key = field.field_path.rpartition(".")
             if key not in vocabularies:
                 continue
-            parent = by_path.get(parent_path)
-            parent_display = display(parent) if parent is not None else None
-            if key == RESOLUTION_STATE_KEY and not (
-                isinstance(parent_display, dict) and parent_display.get("mention")
-            ):
+            # Only a resolvable value's own leaves: under a declared field, or
+            # top-level leaves of an object whose root is declared resolvable.
+            if parent_path:
+                parent = by_path.get(parent_path)
+                parent_display = display(parent) if parent is not None else None
+            else:
+                parent_display = root_model.metadata.get("display") if root_model is not None else None
+            if not (isinstance(parent_display, dict) and parent_display.get("mention")):
                 continue
             allowed = list(vocabularies[key])
             if field.field_type is not DomainPackFieldType.ENUM or enums.get(field.enum_ref or "") != allowed:
