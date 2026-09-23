@@ -800,11 +800,15 @@ def effective_payload(
     if not resolvable_fields:
         return payload
     result: Any = dict(payload)
-    for field_path, spec in sorted(resolvable_fields.items(), key=lambda item: len(item[0])):
+    # Each concrete value is read once per pass: a pack may declare both a list
+    # field and one of its elements (``terms`` and ``terms[0]``); the most
+    # specific declaration reads the element, and the list pass skips it.
+    annotated: set[tuple[str | int, ...]] = set()
+    for field_path, spec in sorted(resolvable_fields.items(), key=lambda item: -len(item[0])):
         tokens = _path_tokens(field_path)
         if tokens is None:
             continue
-        result = _annotate_at(result, tokens, (), spec, object_metadata)
+        result = _annotate_at(result, tokens, (), spec, object_metadata, annotated)
     return result
 
 
@@ -824,6 +828,7 @@ def _annotate_at(
     walked: tuple[str | int, ...],
     spec: ResolvableSpec,
     object_metadata: Mapping[str, Any] | None,
+    annotated: set[tuple[str | int, ...]],
 ) -> Any:
     if isinstance(node, list):
         if remaining and isinstance(remaining[0], int):
@@ -833,17 +838,18 @@ def _annotate_at(
                 return node
             updated_list = list(node)
             updated_list[index] = _annotate_at(
-                node[index], remaining[1:], (*walked, index), spec, object_metadata
+                node[index], remaining[1:], (*walked, index), spec, object_metadata, annotated
             )
             return updated_list
         # A declared path without an index names every element; each is its own value.
         return [
-            _annotate_at(item, remaining, (*walked, index), spec, object_metadata)
+            _annotate_at(item, remaining, (*walked, index), spec, object_metadata, annotated)
             for index, item in enumerate(node)
         ]
     if not remaining:
-        if not isinstance(node, Mapping):
+        if not isinstance(node, Mapping) or walked in annotated:
             return node
+        annotated.add(walked)
         return effective_value(
             node,
             spec,
@@ -855,7 +861,9 @@ def _annotate_at(
     if key not in node:
         return node
     updated = dict(node)
-    updated[key] = _annotate_at(node[key], remaining[1:], (*walked, key), spec, object_metadata)
+    updated[key] = _annotate_at(
+        node[key], remaining[1:], (*walked, key), spec, object_metadata, annotated
+    )
     return updated
 
 
