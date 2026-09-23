@@ -2,6 +2,7 @@
 
 This layer knows invocation/request identity, not Alliance response formats.
 Package adapters own lookup interpretation and canonical record projection.
+The model-facing view applies only the package-neutral agr_lookup envelope view.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 from pydantic import create_model
 
+from agr_ai_curation_runtime.agr_lookup import lookup_model_view
 from src.lib.domain_packs.compact_decisions import (
     CanonicalValidatorRecord, DecisionContract, ValidatorDecisionWorkspace,
 )
@@ -51,8 +53,9 @@ class CompactValidatorRuntime:
         self.lookup_tool_names: frozenset[str] = frozenset()
         self.source_catalog: list[dict[str, Any]] = []
         self.standalone_evidence_records: list[dict[str, Any]] | None = None
-        # Complete lookup responses keyed by lookup_ref (the concrete call id),
-        # scoped to this invocation; the model pages them without a re-run.
+        # Model views of captured lookups keyed by lookup_ref (the concrete call
+        # id), scoped to this invocation; the model pages them without a re-run.
+        # The complete responses stay in the workspace ledger.
         self._lookup_views: dict[str, dict[str, Any]] = {}
 
     def wrap_lookup_tool(self, tool: Any) -> Any:
@@ -157,9 +160,11 @@ class CompactValidatorRuntime:
                     })
             # No second copy of the rich records. The catalogue adds only the
             # runtime reference and the names usable for canonical field copies.
+            # The workspace keeps the complete response; the model pages a view
+            # that shows each returned row once (derived restatements dropped).
             stored = {
                 "call_id": call_id,
-                "payload": payload,
+                "view": lookup_model_view(payload),
                 "catalog": catalog,
                 "lookup_refs": [{"request_id": request_id, "lookup_ref": call_id}
                                 for request_id in request_ids],
@@ -172,14 +177,14 @@ class CompactValidatorRuntime:
 
     def _bounded_lookup_view(self, tool_name: str, stored: Mapping[str, Any],
                              view: Mapping[str, Any]) -> dict[str, Any]:
-        """Serve a captured lookup whole when it fits, else as bounded pages.
+        """Serve a captured lookup's model view whole when it fits, else as bounded pages.
 
         Capture already holds the complete provider response application-side;
         the model sees each page's rows with exactly the record refs for those
         rows, and reads withheld values through exact detail chunks.
         """
-        payload, catalog = stored["payload"], stored["catalog"]
-        complete = {**payload, "validator_record_refs": catalog,
+        model_view, catalog = stored["view"], stored["catalog"]
+        complete = {**model_view, "validator_record_refs": catalog,
                     "validator_lookup_refs": stored["lookup_refs"]}
         budget = tool_result_budget()
         if not view and serialized_size(complete) <= budget:
@@ -202,7 +207,7 @@ class CompactValidatorRuntime:
 
         try:
             return bounded_json_result(
-                {**payload, "validator_lookup_refs": stored["lookup_refs"]},
+                {**model_view, "validator_lookup_refs": stored["lookup_refs"]},
                 budget=budget,
                 offset=view.get("result_offset", 0),
                 detail_path=view.get("detail_path"),
@@ -300,6 +305,7 @@ def compact_finalization_instruction(runtime, *, tool_name, batch=False):
         "For batch lookups, validator_request_ids must identify only the requests served by that call. "
         "Each reference is valid only for its named request and this invocation. "
         "source_path is a JSON pointer into the lookup response, distinguishing records with identical IDs or labels. "
+        "Derived restatements of returned rows are omitted; the program keeps the complete response. "
         "GO not_found_inputs are JSON pointers into that request's selected_inputs, not copied terms. "
         "Slot contracts: " + json.dumps(contracts)
         + " Supplied-context/scientific-option references (not database verification): " + json.dumps(runtime.source_catalog)
