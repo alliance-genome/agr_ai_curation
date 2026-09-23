@@ -16,6 +16,7 @@ from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS,
     CURATOR_OVERRIDE_KEY,
     CURATOR_OVERRIDE_METADATA_KEY,
+    EXTRACTOR_PROPOSAL_PREFIX,
     LOOKUP_OUTCOME_KEY,
     OVERRULED_KEY_PREFIX,
     RESOLUTION_STATE_KEY,
@@ -343,7 +344,9 @@ def _resolvable_target(
 
 
 def _set_by_validation(key: str) -> bool:
-    return key in CONTRACT_KEYS or key.startswith(OVERRULED_KEY_PREFIX)
+    """Keys extraction or validation writes: the contract keys, overruled and proposed identities."""
+
+    return key in CONTRACT_KEYS or key.startswith((OVERRULED_KEY_PREFIX, EXTRACTOR_PROPOSAL_PREFIX))
 
 
 def _resolvable_edit_errors(
@@ -360,7 +363,8 @@ def _resolvable_edit_errors(
     if key is not None:
         if _set_by_validation(key):
             return [
-                f"field_path '{patch.field_path}' is set by validation; edit the value's identity instead"
+                f"field_path '{patch.field_path}' is set by extraction or validation; "
+                "edit the value's identity instead"
             ]
         return []
     if not isinstance(patch.value, Mapping):
@@ -374,7 +378,7 @@ def _resolvable_edit_errors(
     if changed:
         return [
             f"field_path '{patch.field_path}' cannot change {', '.join(changed)}; "
-            "those are set by validation"
+            "those are set by extraction or validation"
         ]
     return []
 
@@ -415,14 +419,16 @@ def _apply_resolvable_edit(
         edits = {
             identity_key: copy.deepcopy(new_value[identity_key])
             for identity_key in spec.identity_keys
-            if identity_key in new_value and new_value[identity_key] != container.get(identity_key)
+            if identity_key in new_value
         }
-        if not edits:
+        if all(item == container.get(identity_key) for identity_key, item in edits.items()):
             return True, None
     audit = apply_curator_identity(
         container,
         edits,
         identity_keys=spec.identity_keys,
+        id_key=spec.id_key,
+        label_key=spec.label_key,
         actor_id=actor_id,
         at=datetime.now(timezone.utc).isoformat(),
     )
