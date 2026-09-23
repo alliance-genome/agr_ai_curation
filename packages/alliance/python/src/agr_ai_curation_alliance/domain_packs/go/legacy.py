@@ -1,13 +1,16 @@
 """GO records stored in the previous format, before ALL-1283 (read time only).
 
-The previous format kept the evidence code, its ECO CURIE, the reference,
-each With/From entry and each qualifier as plain strings, and the gene-product resolution state at
-the payload root. Such records are never rewritten. For display those strings
-are read as the current value objects through the shared legacy rule, so they
-show their stored text as "(legacy, unverified)" paper wording; the gene product
-and GO term were already objects and read through the same rule wherever values
-are displayed. They are not validated again: re-running extraction produces a
-record in the current format.
+The previous format kept the evidence code, its ECO CURIE, the reference, each
+With/From entry and each qualifier as plain strings, and the gene-product
+resolution state at the payload root. Such records are never rewritten. At
+read time ``legacy_display_payload`` (the pack's registered
+``legacy_display_mapper``) reshapes those strings into the current value
+objects without any state; the shared legacy rule
+(``resolvable_values.effective_payload``) then reads every value, so an
+unverified one shows its stored text as "(legacy, unverified)" paper wording.
+Exports apply that rule themselves; the GO review rows apply it here. The
+records are not validated again: re-running extraction produces a record in the
+current format.
 """
 
 from __future__ import annotations
@@ -19,7 +22,11 @@ from typing import Any
 
 from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
 from src.lib.domain_packs.not_validatable import NOT_VALIDATABLE_DETAIL_KEY
-from src.lib.domain_packs.resolvable_values import ResolvableSpec, effective_value
+from src.lib.domain_packs.resolvable_values import (
+    declared_resolvable_fields,
+    effective_payload,
+    has_resolution_state,
+)
 from src.schemas.domain_envelope import (
     DomainEnvelope,
     ValidationFinding,
@@ -29,87 +36,102 @@ from src.schemas.domain_envelope import (
 from src.schemas.curation_workspace import DomainEnvelopeReviewRow
 
 from .constants import GO_DOMAIN_PACK_ID, GO_OBJECT_TYPE
+from .values import RESOLVABLE_LIST_FIELDS, RESOLVABLE_VALUE_FIELDS
 
 
 PREVIOUS_FORMAT_FINDING_CODE = "agr.alliance.go.previous_format"
 PREVIOUS_FORMAT_MESSAGE = "Recorded in the previous GO format; re-run extraction to validate."
 
+# Lists that held plain strings in the previous format, with each element's identity key.
+_PREVIOUS_STRING_LISTS = {"with_from": "curie", "qualifiers": "name"}
+
+
+def _holds_contract_state(payload: Mapping[str, Any]) -> bool:
+    for key in (*RESOLVABLE_VALUE_FIELDS, *RESOLVABLE_LIST_FIELDS):
+        value = payload.get(key)
+        values = value if isinstance(value, list) else [value]
+        if any(has_resolution_state(item) for item in values):
+            return True
+    return False
+
 
 def is_previous_format(payload: Mapping[str, Any]) -> bool:
-    """Whether a stored GO payload predates the resolvable-value format."""
+    """Whether a stored GO payload predates the resolvable-value format.
 
-    with_from = payload.get("with_from")
+    Only a record in which no value carries the contract state is the previous
+    format; a current record never is, whatever a curator later edits.
+    """
+
+    if _holds_contract_state(payload):
+        return False
     return (
         isinstance(payload.get("evidence_code"), str)
         or "evidence_eco_curie" in payload
         or isinstance(payload.get("reference_curie"), str)
         or "resolution_state" in payload
         or any(
-            isinstance(values, list) and any(isinstance(item, str) for item in values)
-            for values in (with_from, payload.get("qualifiers"))
+            isinstance(payload.get(key), list) and any(isinstance(item, str) for item in payload[key])
+            for key in _PREVIOUS_STRING_LISTS
         )
     )
-
-
-# The display roles the pack declares for each value the previous format stored as a string.
-_EVIDENCE_CODE_SPEC = ResolvableSpec(id_key="eco_curie", label_key="code")
-_CURIE_SPEC = ResolvableSpec(id_key="curie")
-_QUALIFIER_SPEC = ResolvableSpec(label_key="name")
-
-
-def _legacy(spec: ResolvableSpec, **stored: Any) -> dict[str, Any]:
-    """A stored string as a value object, read through the shared legacy rule."""
-
-    value = {key: item for key, item in stored.items() if item is not None}
-    return dict(effective_value(value, spec, covered_by_validator=False))
 
 
 def previous_format_display_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """A read-time copy of a previous-format payload in the current value shape.
 
-    The old evidence code (with its ECO CURIE), reference, With/From and qualifier strings
-    become value objects that read as unresolved, ``legacy_unverified``, with
-    their stored text as "(legacy, unverified)" paper wording. The stored
-    record is not changed.
+    The evidence code (with its ECO CURIE), reference, With/From and qualifier
+    strings become value objects holding their stored text under the value's
+    own keys and no state, so the shared legacy rule reads them like any other
+    value stored before the contract. The stored record is not changed.
     """
 
     display = copy.deepcopy(dict(payload))
     display.pop("resolution_state", None)
-    evidence_code = display.get("evidence_code")
     eco_curie = display.pop("evidence_eco_curie", None)
-    if isinstance(evidence_code, str):
-        display["evidence_code"] = _legacy(_EVIDENCE_CODE_SPEC, code=evidence_code, eco_curie=eco_curie)
-    reference = display.get("reference_curie")
-    if isinstance(reference, str):
-        display["reference_curie"] = _legacy(_CURIE_SPEC, curie=reference)
-    with_from = display.get("with_from")
-    if isinstance(with_from, list):
-        display["with_from"] = [
-            _legacy(_CURIE_SPEC, curie=item) if isinstance(item, str) else item
-            for item in with_from
-        ]
-    qualifiers = display.get("qualifiers")
-    if isinstance(qualifiers, list):
-        display["qualifiers"] = [
-            _legacy(_QUALIFIER_SPEC, name=item) if isinstance(item, str) else item
-            for item in qualifiers
-        ]
+    if isinstance(display.get("evidence_code"), str):
+        display["evidence_code"] = {
+            key: value
+            for key, value in (("code", display["evidence_code"]), ("eco_curie", eco_curie))
+            if value is not None
+        }
+    if isinstance(display.get("reference_curie"), str):
+        display["reference_curie"] = {"curie": display["reference_curie"]}
+    for list_key, identity_key in _PREVIOUS_STRING_LISTS.items():
+        values = display.get(list_key)
+        if isinstance(values, list):
+            display[list_key] = [
+                {identity_key: item} if isinstance(item, str) else item for item in values
+            ]
     return display
 
 
-def _display_envelope(envelope: DomainEnvelope) -> DomainEnvelope:
-    objects = [
-        obj.model_copy(update={"payload": previous_format_display_payload(obj.payload)})
-        if obj.object_type == GO_OBJECT_TYPE and is_previous_format(obj.payload)
-        else obj
-        for obj in envelope.extracted_objects
-    ]
+def legacy_display_payload(object_type: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The pack's legacy display mapper: previous-format GO proposals in the current shape.
+
+    Registered for the GO pack (``legacy_display_mapper``) so exports read
+    previous-format records the way the review screen does; any other payload
+    comes back unchanged.
+    """
+
+    if object_type == GO_OBJECT_TYPE and is_previous_format(payload):
+        return previous_format_display_payload(payload)
+    return payload
+
+
+def _display_envelope(envelope: DomainEnvelope, metadata: Any) -> DomainEnvelope:
+    objects = []
+    for obj in envelope.extracted_objects:
+        payload = legacy_display_payload(obj.object_type, obj.payload)
+        specs = declared_resolvable_fields(metadata, obj.object_type)
+        if specs:
+            payload = effective_payload(payload, specs, object_metadata=obj.metadata)
+        objects.append(obj.model_copy(update={"payload": dict(payload)}))
     return envelope.model_copy(update={"extracted_objects": objects})
 
 
 @dataclass(frozen=True)
 class GOReviewRowMaterializer(DomainPackMetadataReviewRowMaterializer):
-    """Review rows for GO; previous-format records read through the legacy rule."""
+    """Review rows for GO; every value reads through the shared legacy rule."""
 
     def materialize(
         self,
@@ -118,7 +140,7 @@ class GOReviewRowMaterializer(DomainPackMetadataReviewRowMaterializer):
         envelope_revision: int,
     ) -> list[DomainEnvelopeReviewRow]:
         return super().materialize(
-            _display_envelope(envelope), envelope_revision=envelope_revision
+            _display_envelope(envelope, self.metadata), envelope_revision=envelope_revision
         )
 
 
@@ -147,6 +169,7 @@ def validate_go_envelope(envelope: DomainEnvelope) -> tuple[ValidationFinding, .
 
 __all__ = [
     "GOReviewRowMaterializer",
+    "legacy_display_payload",
     "PREVIOUS_FORMAT_FINDING_CODE",
     "PREVIOUS_FORMAT_MESSAGE",
     "is_previous_format",

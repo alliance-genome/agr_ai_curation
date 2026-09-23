@@ -417,7 +417,8 @@ def test_previous_format_record_shows_its_stored_values_as_legacy_in_review():
     assert fields["with_from"][0]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
     assert fields["qualifiers"][0]["mention"] == f"colocalizes_with {LEGACY_UNVERIFIED_SUFFIX}"
     assert fields["qualifiers"][0]["name"] is None
-    assert rows[0].display_label == f"Lta protein {LEGACY_UNVERIFIED_SUFFIX}"
+    # The row label names the legacy wording; the core header rule adds its own suffix.
+    assert rows[0].display_label.startswith(f"Lta protein {LEGACY_UNVERIFIED_SUFFIX}")
     assert legacy_object.payload == stored  # The stored record is never rewritten.
     assert "evidence_eco_curie" not in previous_format_display_payload(stored)
 
@@ -496,3 +497,133 @@ def test_every_go_value_the_builder_stages_is_declared_resolvable():
     for fixture in fixtures.fixtures:
         for obj in fixture.envelope.extracted_objects:
             assert set(contract_paths(obj.payload)) <= set(declared)
+
+
+def _curator_patch(envelope, object_id, field_path, *, before, value):
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch
+
+    return EnvelopeFieldPatch(
+        patch_id=f"curator-field-patch:{field_path}",
+        envelope_id=envelope.envelope_id,
+        expected_revision=1,
+        object_id=object_id,
+        field_path=field_path,
+        before=before,
+        value=value,
+        reason="Curator override.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value", "identity"),
+    [
+        ("gene_product.curie", "RGD:2325", {"curie": "RGD:2325"}),
+        ("go_term.label", "nucleoplasm", {"label": "nucleoplasm"}),
+        ("evidence_code.code", "IMP", {"code": "IMP"}),
+        ("reference_curie.curie", "AGRKB:101000000999999", {"curie": "AGRKB:101000000999999"}),
+    ],
+)
+def test_a_curator_identity_edit_on_a_go_value_is_a_curator_override(field_path, value, identity):
+    """ALL-1302 override note: GO identity leaves are curator-editable, and an edit is an audited override."""
+
+    from src.lib.domain_envelopes.patches import apply_curator_field_patch
+    from src.lib.domain_packs.resolvable_values import CURATOR_OVERRIDE_METADATA_KEY
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[1].envelope
+    obj = envelope.extracted_objects[0]
+    value_path, _, key = field_path.rpartition(".")
+    before = obj.payload[value_path].get(key)
+
+    result = apply_curator_field_patch(
+        envelope, pack, _curator_patch(envelope, obj.object_id, field_path, before=before, value=value),
+        current_revision=1, actor_id="curator-1",
+    )
+
+    assert result.accepted, result.errors
+    edited = result.envelope.extracted_objects[0]
+    changed = edited.payload[value_path]
+    assert {name: changed[name] for name in identity} == identity
+    assert (changed["resolution_state"], changed["lookup_outcome"]) == ("resolved", "curator_override")
+    assert changed["curator_override"]["actor_id"] == "curator-1"
+    assert changed["mention"] == obj.payload[value_path]["mention"]
+    audit, = edited.metadata[CURATOR_OVERRIDE_METADATA_KEY]
+    assert audit["field_path"] == field_path
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value"),
+    [
+        ("gene_product.mention", "a different wording"),
+        ("go_term.resolution_state", "resolved"),
+        ("evidence_code.lookup_outcome", "matched"),
+        ("gene_product.entity_type", "gene"),
+    ],
+)
+def test_go_paper_wording_and_validation_state_are_not_curator_editable(field_path, value):
+    from src.lib.domain_envelopes.patches import apply_curator_field_patch
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[1].envelope
+    obj = envelope.extracted_objects[0]
+    value_path, _, key = field_path.rpartition(".")
+
+    result = apply_curator_field_patch(
+        envelope, pack,
+        _curator_patch(envelope, obj.object_id, field_path, before=obj.payload[value_path].get(key), value=value),
+        current_revision=1, actor_id="curator-1",
+    )
+
+    assert not result.accepted
+
+
+def test_go_identity_leaves_are_the_editable_fields_and_the_catalog_ignores_it():
+    """Only identity leaves are editable; editable metadata is not in the export catalog."""
+
+    from src.lib.flows.export_fields import _pack_export_fields
+
+    metadata, _ = _contracts()
+    fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
+    editable = {path for path, field in fields.items() if field.metadata.get("editable")}
+    assert editable == {
+        "gene_product.curie", "gene_product.label", "go_term.curie", "go_term.label",
+        "evidence_code.code", "evidence_code.eco_curie", "reference_curie.curie",
+        "with_from.curie", "qualifiers.name",
+    }
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    assert all("editable" not in str(entry) for entry in _pack_export_fields(pack))
+
+
+def test_previous_format_go_records_export_through_the_registered_mapper():
+    """The GO legacy display mapper is registered, so flow exports read old records like review."""
+
+    from src.lib.flows.export_fields import PackagedExportSource
+
+    registry = CurationAdapterRegistry()
+    register_curation_adapters(registry)
+    assert registry.get_legacy_display_mapper_by_id("agr.alliance.go") is not None
+    mapper = registry.get_legacy_display_mapper_by_id("agr.alliance.go")
+    stored = {**_legacy_go_payload(), "qualifiers": ["colocalizes_with"]}
+    # The mapper only reshapes; it writes no state.
+    reshaped = mapper("GOCuratableObject", stored)
+    assert reshaped["evidence_code"] == {"code": "IDA", "eco_curie": "ECO:0000314"}
+    assert reshaped["qualifiers"] == [{"name": "colocalizes_with"}]
+
+    source = PackagedExportSource(load_alliance_domain_pack_registry().get_pack("agr.alliance.go"))
+    source.legacy_display_mapper = mapper
+    exported = source.effective_item({"object_type": "GOCuratableObject", "payload": stored, "metadata": {}})
+    assert exported["payload"]["evidence_code"]["mention"] == f"IDA (ECO:0000314) {LEGACY_UNVERIFIED_SUFFIX}"
+    assert exported["payload"]["reference_curie"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+    assert exported["payload"]["qualifiers"][0]["mention"] == f"colocalizes_with {LEGACY_UNVERIFIED_SUFFIX}"
+
+
+def test_a_curator_edit_never_makes_a_current_go_record_the_previous_format():
+    from agr_ai_curation_alliance.domain_packs.go.legacy import is_previous_format
+
+    _, fixtures = _contracts()
+    current = copy.deepcopy(fixtures.fixtures[0].envelope.extracted_objects[0].payload)
+    current["with_from"] = ["RGD:619839"]  # e.g. a hand-typed list entry
+    assert not is_previous_format(current)
+    assert is_previous_format(_legacy_go_payload())

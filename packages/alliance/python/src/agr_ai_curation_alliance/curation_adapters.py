@@ -19,6 +19,7 @@ from agr_ai_curation_alliance.domain_packs.generic import (
 from agr_ai_curation_alliance.domain_packs.loader import get_alliance_domain_pack
 from agr_ai_curation_alliance.domain_packs.go.legacy import (
     GOReviewRowMaterializer,
+    legacy_display_payload as go_legacy_display_payload,
     validate_go_envelope,
 )
 from agr_ai_curation_alliance.domain_packs.gene_expression import (
@@ -71,6 +72,9 @@ _DOMAIN_ENVELOPE_VALIDATORS = {
     "gene_expression": validate_pending_gene_expression_envelope,
     "go": validate_go_envelope,
 }
+_LEGACY_DISPLAY_MAPPERS = {
+    "go": go_legacy_display_payload,
+}
 _REVIEW_ROW_MATERIALIZERS = {
     "go": GOReviewRowMaterializer,
 }
@@ -99,6 +103,7 @@ def register_curation_adapters(registry) -> None:
             review_row_materializer=_REVIEW_ROW_MATERIALIZERS.get(
                 adapter_key, DomainPackMetadataReviewRowMaterializer
             )(metadata=domain_pack.metadata),
+            legacy_display_mapper=_LEGACY_DISPLAY_MAPPERS.get(adapter_key),
         )
 
     registry.register_adapter(

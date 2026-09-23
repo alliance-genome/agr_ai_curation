@@ -150,13 +150,17 @@ object_definitions:
         field_type: string
         display_name: Gene-product label
         required: false
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
       - field_path: gene_product.curie
         field_type: string
         display_name: Gene-product CURIE
         required: false
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           render_as: curie-chip
-          curator_action_note: Must remain absent while identity is unresolved; never synthesize an RGD CURIE from a mature-RNA label.
       - field_path: gene_product.entity_type
         field_type: string
         display_name: Gene-product type
@@ -209,11 +213,16 @@ object_definitions:
         display_name: GO term CURIE
         required: false
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           render_as: curie-chip
       - field_path: go_term.label
         field_type: string
         display_name: GO term label
         required: false
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
       - field_path: go_term.aspect
         field_type: enum
         display_name: GO aspect
@@ -260,11 +269,16 @@ object_definitions:
         field_type: string
         display_name: GO evidence code
         required: false
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
       - field_path: evidence_code.eco_curie
         field_type: string
         display_name: ECO CURIE
         required: false
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           render_as: curie-chip
       - field_path: evidence_code.resolution_state
         field_type: enum
@@ -307,6 +321,8 @@ object_definitions:
         display_name: Reference CURIE
         required: false
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           render_as: curie-chip
       - field_path: reference_curie.resolution_state
         field_type: enum
@@ -347,6 +363,8 @@ object_definitions:
         field_type: string
         display_name: With/From CURIE
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           render_as: curie-chip
       - field_path: with_from.resolution_state
         field_type: enum
@@ -386,6 +404,9 @@ object_definitions:
       - field_path: qualifiers.name
         field_type: string
         display_name: Qualifier
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
       - field_path: qualifiers.resolution_state
         field_type: enum
         display_name: Qualifier status
