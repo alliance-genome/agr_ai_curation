@@ -71,7 +71,7 @@ PRODUCTION_SHAPES = [
      "condition_relation_type: has_condition; conditions: condition_class: ZECO:0000111; "
      "condition_summary: heat"),
     ([{"curie": "UBERON:0001008", "name": "renal system"}, {"curie": "UBERON:0002113", "name": "kidney"}],
-     TERM, "renal system (UBERON:0001008); kidney (UBERON:0002113)"),
+     TERM, "renal system (UBERON:0001008) | kidney (UBERON:0002113)"),
     ({}, TERM, ""),
     ("free text", None, "free text"),
 ]
@@ -94,7 +94,7 @@ def test_display_text_composite_and_unresolved_rules():
     assert display_text({"curie": "WBbt:1", "name": "sperm"}, TERM, unresolved=True) == "sperm (WBbt:1, unresolved)"
     assert display_text("L4 larval stage", None, unresolved=True) == "L4 larval stage (unresolved)"
     terms = [{"curie": "A:1", "name": "a"}, {"name": "b"}, {"curie": "C:3", "name": "c"}]
-    assert display_text(terms, TERM, unresolved=frozenset({2})) == "a (A:1); b (unresolved); c (C:3, unresolved)"
+    assert display_text(terms, TERM, unresolved=[(2,)]) == "a (A:1) | b (unresolved) | c (C:3, unresolved)"
 
 
 def _bundle(rows, catalog, findings=()):
@@ -659,3 +659,254 @@ def test_custom_profile_object_label_is_its_payload_label():
     }
     bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Generic", output_format="csv")
     assert [row["object.label"] for row in bundle.rows_for_source("object")] == ["B cell lymphoma", None]
+
+
+# --- Independent review of ALL-1282 (Sep 23) ------------------------------------------
+
+def _envelope_step(agent_id, pack_id, objects, findings=(), *, step=1, node_id="node_1"):
+    return {
+        "step": step, "node_id": node_id, "agent_id": agent_id, "agent_name": agent_id,
+        "candidate": SimpleNamespace(
+            agent_key=agent_id, adapter_key=agent_id, candidate_count=len(objects),
+            conversation_summary="x",
+            payload_json={"domain_pack_id": pack_id, "envelope_id": f"env-{node_id}",
+                          "extracted_objects": list(objects),
+                          "validation_findings": list(findings)},
+        ),
+    }
+
+
+def _open_finding(field_path, **object_ref):
+    return {"finding_id": f"f-{field_path}", "status": "open", "severity": "warning",
+            "field_path": field_path,
+            "field_ref": {"object_ref": object_ref, "field_path": field_path}}
+
+
+def _object_plan(output_format, columns):
+    return FlowOutputProjectionPlan.model_validate({
+        "format": output_format, "row_source": "object", "missing_value": "-",
+        "columns": [{"key": key, "field_ref": ref} for key, ref in columns],
+    })
+
+
+def test_open_findings_only_mark_objects_in_their_own_envelope():
+    """Pending ref ids restart per envelope; step 1's finding never marks step 2's row."""
+
+    def annotation():
+        return {"object_type": "GeneExpressionAnnotation", "pending_ref_id": "gene-expression-annotation-1",
+                "payload": {"expression_annotation_subject": {"gene_symbol": "Y71", "primary_external_id": "WB:1"},
+                            "where_expressed_statement": "hyp"}}
+
+    finding = _open_finding("expression_annotation_subject", pending_ref_id="gene-expression-annotation-1",
+                            object_type="GeneExpressionAnnotation")
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            _envelope_step("gene_expression", "agr.alliance.gene_expression", [annotation()], [finding]),
+            _envelope_step("gene_expression", "agr.alliance.gene_expression", [annotation()],
+                           step=2, node_id="node_2"),
+        ],
+        flow_name="P", output_format="csv",
+    )
+    result = apply_projection_plan(bundle, _object_plan("csv", [
+        ("node", "artifact.node_id"), ("gene", SUBJECT_REF),
+    ]))
+    marked = {row["node"]: "unresolved" in row["gene"] for row in result.rows}
+    assert marked == {"node_1": True, "node_2": False}
+
+
+def test_composite_marker_lands_on_the_unresolved_part():
+    where = {"anatomical_structure": {"curie": "WBbt:1", "name": "hyp"},
+             "cellular_component": {"curie": "GO:1", "name": "nucleus"}}
+    compose = {"compose": [{"path": "anatomical_structure", "display": TERM},
+                           {"path": "cellular_component", "display": TERM}], "separator": "; "}
+    assert display_text(where, compose, unresolved=[("anatomical_structure",)]) == (
+        "hyp (WBbt:1, unresolved); nucleus (GO:1)"
+    )
+    assert display_text(where, compose, unresolved=[("cellular_component", "curie")]) == (
+        "hyp (WBbt:1); nucleus (GO:1, unresolved)"
+    )
+    # A finding on the composite itself, or on a part it does not display,
+    # still marks the composite as a whole.
+    assert display_text(where, compose, unresolved=True) == "hyp (WBbt:1); nucleus (GO:1) (unresolved)"
+    assert display_text(where, compose, unresolved=[("subcellular_structure",)]) == (
+        "hyp (WBbt:1); nucleus (GO:1) (unresolved)"
+    )
+
+    pattern_ref = "object.pack.GeneExpressionAnnotation.expression_pattern"
+    pattern_spec = {"compose": [
+        {"path": "where_expressed.anatomical_structure", "display": TERM},
+        {"path": "when_expressed.developmental_stage_start", "display": TERM},
+    ], "separator": "; "}
+    row = {"object.object_id": "g1", pattern_ref: {
+        "where_expressed": {"anatomical_structure": {"curie": "WBbt:1", "name": "hyp"}},
+        "when_expressed": {"developmental_stage_start": {"curie": "WBls:1", "name": "L4"}},
+    }}
+    finding = {"object.object_id": "g1", "validation.status": "open",
+               "validation.field_path": "expression_pattern.where_expressed.anatomical_structure"}
+    bundle = _bundle([row], [FlowOutputField(ref=pattern_ref, label="Pattern", value_type="object",
+                                             row_source="object", display=pattern_spec)], [finding])
+    result = apply_projection_plan(bundle, _object_plan("csv", [("pattern", pattern_ref)]))
+    assert result.rows[0]["pattern"] == "hyp (WBbt:1, unresolved); L4 (WBls:1)"
+
+
+def test_indexed_findings_mark_the_matching_fanned_out_position():
+    relations = "object.pack.DiseaseAnnotation.condition_relations"
+    summaries = f"{relations}.conditions.condition_summary"
+    classes = f"{relations}.conditions.condition_class"
+    relation_value = [{"condition_relation_type": {"name": "induced_by"}, "conditions": [
+        {"condition_class": {"curie": "ZECO:1"}, "condition_summary": "heat"},
+        {"condition_class": {"curie": "ZECO:2"}, "condition_summary": "diet"},
+    ]}]
+    row = {"object.object_id": "d1", relations: relation_value, summaries: [["heat", "diet"]],
+           classes: [[{"curie": "ZECO:1"}, {"curie": "ZECO:2"}]]}
+    finding = {"object.object_id": "d1", "validation.status": "open",
+               "validation.field_path": "condition_relations[0].conditions[1]"}
+    catalog = [FlowOutputField(ref=ref, label=ref, value_type="list", row_source="object")
+               for ref in (relations, summaries, classes)]
+    bundle = _bundle([row], catalog, [finding])
+    result = apply_projection_plan(bundle, _object_plan("csv", [
+        ("relations", relations), ("summaries", summaries), ("classes", classes),
+    ]))
+    cells = result.rows[0]
+    assert cells["summaries"] == "heat; diet (unresolved)"
+    assert cells["classes"] == "ZECO:1 | ZECO:2 (unresolved)"
+    assert cells["relations"] == (
+        "condition_relation_type: induced_by; conditions: condition_class: ZECO:1; condition_summary: heat"
+        " | condition_class: ZECO:2; condition_summary: diet (unresolved)"
+    )
+    # Split columns carry the marker only on the unresolved item.
+    split = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object", "missing_value": "-",
+        "columns": [{"key": "cls", "field_ref": classes, "split_list": {"header_template": "Class {n}"}}],
+    })
+    assert apply_projection_plan(bundle, split).rows[0] == {"cls_1": "ZECO:1 | ZECO:2 (unresolved)"}
+    json_rows = apply_projection_plan(bundle, _object_plan("json", [("summaries", summaries)])).rows
+    assert json_rows == [{"summaries": [["heat", "diet"]]}]
+
+
+def test_default_layout_lists_only_curatable_units():
+    for agent_id, pack_id, unit_types in (
+        ("phenotype", "agr.alliance.phenotype", {"PhenotypeAnnotation"}),
+        ("allele", "agr.alliance.allele", {"AllelePaperEvidenceAssociation"}),
+        ("disease", "agr.alliance.disease", {"DiseaseAnnotation", "GeneDiseaseAnnotation",
+                                             "AlleleDiseaseAnnotation", "AGMDiseaseAnnotation"}),
+    ):
+        entry = {"curation": {"domain_pack_id": pack_id}}
+        pack = export_fields._packaged_domain_pack(agent_id, entry)
+        types = [obj.object_type for obj in pack.metadata.object_definitions]
+        refs = export_fields.packaged_default_layout(agent_id, entry, types)
+        assert refs, agent_id
+        assert {ref.split(".")[2] for ref in refs} <= unit_types, (agent_id, refs)
+    # A pack without curatable units lays out the objects it declares.
+    gene_entry = {"curation": {"domain_pack_id": "gene"}}
+    assert export_fields.packaged_default_layout("gene", gene_entry, ["gene_mention_evidence"])
+
+
+def test_lists_of_structured_records_keep_record_boundaries():
+    candidates = {"candidates": [{"value": "A:1", "label": "a", "score": 1},
+                                 {"value": "B:2", "label": "b", "score": 2}], "status": "ambiguous"}
+    assert display_text(candidates) == (
+        "candidates: value: A:1; label: a; score: 1 | value: B:2; label: b; score: 2; status: ambiguous"
+    )
+    assert display_text([{"curie": "A:1", "name": "a"}, {"curie": "B:2", "name": "b"}], TERM) == "a (A:1) | b (B:2)"
+    assert display_text(["heat", "diet"]) == "heat; diet"
+    # A second identifier is content too; the generic reading keeps it.
+    assert display_text({"id": "X:1", "curie": "C:1", "name": "n"}) == "id: X:1; curie: C:1; name: n"
+
+
+PHENOTYPE_PACK = "agr.alliance.phenotype"
+PHENOTYPE_SUBJECT_REF = "object.pack.PhenotypeAnnotation.phenotype_annotation_subject"
+PHENOTYPE_TERM_REF = "object.pack.PhenotypeAnnotation.phenotype_terms[0]"
+
+
+def _phenotype_objects(term_count=1):
+    terms = [{"curie": f"WBPhenotype:{index}", "label": f"term {index}", "resolution_state": "resolved"}
+             for index in range(term_count)]
+    subject = {"resolution_state": "resolved", "subject_label": "daf-2",
+               "subject_identifier": "WB:WBGene00000898", "subject_type": "gene", "taxon": "NCBITaxon:6239"}
+    annotation = {
+        "object_type": "PhenotypeAnnotation", "pending_ref_id": "ann-1",
+        "object_refs": [{"pending_ref_id": "subj-1", "object_type": "PhenotypeSubject"},
+                        *({"pending_ref_id": f"term-{index}", "object_type": "PhenotypeTerm"}
+                          for index in range(term_count))],
+        "payload": {"phenotype_annotation_subject": dict(subject), "phenotype_terms": deepcopy(terms),
+                    "phenotype_annotation_object": "reduced brood size"},
+    }
+    support = [{"object_type": "PhenotypeSubject", "pending_ref_id": "subj-1", "payload": dict(subject)}]
+    support += [{"object_type": "PhenotypeTerm", "pending_ref_id": f"term-{index}", "payload": dict(term)}
+                for index, term in enumerate(terms)]
+    return [annotation, *support]
+
+
+def test_object_ref_cells_carry_open_findings_on_the_referenced_object():
+    findings = [
+        {"finding_id": "f1", "status": "resolved", "severity": "info", "field_path": "subject_identifier",
+         "field_ref": {"object_ref": {"pending_ref_id": "subj-1", "object_type": "PhenotypeSubject"},
+                       "field_path": "subject_identifier"}},
+        _open_finding("curie", pending_ref_id="term-0", object_type="PhenotypeTerm"),
+    ]
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("phenotype", PHENOTYPE_PACK, _phenotype_objects(), findings)],
+        flow_name="P", output_format="csv",
+    )
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object", "missing_value": "-",
+        "filters": [{"field_ref": "object.object_type", "op": "eq", "value": "PhenotypeAnnotation"}],
+        "columns": [{"key": "subject", "field_ref": PHENOTYPE_SUBJECT_REF},
+                    {"key": "term", "field_ref": PHENOTYPE_TERM_REF}],
+    })
+    [row] = apply_projection_plan(bundle, plan).rows
+    assert "unresolved" in row["term"]
+    assert "unresolved" not in row["subject"]
+    json_plan = plan.model_copy(update={"format": "json"})
+    assert apply_projection_plan(bundle, json_plan).rows[0]["term"]["curie"] == "WBPhenotype:0"
+
+
+def test_indexed_object_ref_field_maps_to_the_referenced_object_at_that_position():
+    finding = _open_finding("curie", pending_ref_id="term-1", object_type="PhenotypeTerm")
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("phenotype", PHENOTYPE_PACK, _phenotype_objects(2), [finding])],
+        flow_name="P", output_format="csv",
+    )
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object", "missing_value": "-",
+        "filters": [{"field_ref": "object.object_type", "op": "eq", "value": "PhenotypeAnnotation"}],
+        "columns": [{"key": "term", "field_ref": PHENOTYPE_TERM_REF}],
+    })
+    # phenotype_terms[0] references term-0; only term-1 has an open finding.
+    assert "unresolved" not in apply_projection_plan(bundle, plan).rows[0]["term"]
+
+
+def test_json_bundle_field_catalog_excludes_display_specs(monkeypatch):
+    _declared_gene_expression_pack(monkeypatch)
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_gene_expression_step()], flow_name="GE", output_format="json",
+    )
+    assert any(field.display for field in bundle.field_catalog)
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": "json", "row_source": "object", "json_shape": "bundle",
+        "columns": [{"key": "g", "field_ref": SUBJECT_REF}],
+    })
+    data = finalize_output_projection(bundle, plan).json_data
+    assert all("display" not in field for field in data["field_catalog"])
+    assert data["rows"][0]["g"]["gene_symbol"] == "Y71G12B.17"
+
+
+def test_group_by_a_structured_field_uses_display_text(monkeypatch):
+    _declared_gene_expression_pack(monkeypatch)
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_gene_expression_step()], flow_name="GE", output_format="chat",
+    )
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": "chat", "row_source": "object", "group_by": [SUBJECT_REF],
+        "columns": [{"key": "s", "header": "Statement", "field_ref": STATEMENT}],
+    })
+    chat = finalize_output_projection(bundle, plan).chat_output
+    assert chat.count("## ") == 1
+    assert "## Expression Annotation Subject: Y71G12B.17 (WB:WBGene00022155)" in chat
+    _no_object_text(chat)
+    grouped = finalize_output_projection(bundle, plan.model_copy(update={
+        "format": "json", "json_shape": "grouped",
+    })).json_data
+    assert len(grouped) == 1
+    assert grouped[0]["group"][SUBJECT_REF]["gene_symbol"] == "Y71G12B.17"

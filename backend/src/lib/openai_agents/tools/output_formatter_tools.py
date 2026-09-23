@@ -1271,9 +1271,11 @@ def _capabilities_payload(
         "value_display": (
             "CSV, TSV and chat cells render structured values as display text: "
             "\"label (ID)\" from the pack's declared roles (generic curie/id plus "
-            "name/label otherwise), lists joined with \"; \", and unresolved values "
+            "name/label otherwise), lists joined with \"; \" (lists of structured records "
+            "with \" | \"), and unresolved values "
             "marked \"(unresolved)\" from declared resolution state, open validation "
-            "findings on that field, or a declared ID that is missing. Select the parent "
+            "findings on that field or on the object it references, or a declared ID "
+            "that is missing. Select the parent "
             "structured field instead of composing leaves. JSON keeps raw values."
         ),
         "detail_access": (
