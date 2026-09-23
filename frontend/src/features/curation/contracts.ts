@@ -134,13 +134,13 @@ export interface DomainEnvelopeReviewResolvedValue {
   /** Paper wording; a legacy value reads "... (legacy, unverified)". */
   mention?: string | null
   resolution_state: ResolutionState
-  /** Backend-owned lookup outcome code (resolvable_values.LookupOutcome); null when unreadable. */
-  lookup_outcome: string | null
+  /** Backend-owned lookup outcome code (resolvable_values.LookupOutcome). */
+  lookup_outcome: string
   /** The lookup outcome in plain words, e.g. "Not found". */
   lookup_result: string
   validator_explanation?: string | null
   validator_curator_message?: string | null
-  /** Why the stored value could not be read; it then reads as unresolved. */
+  /** A plain sentence when the stored value could not be read; it then reads as unresolved. */
   issue?: string | null
 }
 

@@ -525,25 +525,29 @@ def _refresh_domain_envelope_validation_for_ref(
     )
     if profile_context is not None:
         domain_pack = profile_context.registry.domain_pack
-    structural_result = run_domain_envelope_structural_checks(
-        envelope,
-        domain_pack,
-        registry=profile_context.registry if profile_context is not None else None,
-        profile_context=profile_context,
-    )
+    # The package validator runs first: an object it marks not validatable
+    # (not_validatable.NOT_VALIDATABLE_DETAIL_KEY) is skipped by the structural
+    # checks and the binding dispatch below.
     package_validator = resolve_curation_domain_envelope_validator_by_id(
         envelope.domain_pack_id
     )
     package_appended_findings = ()
-    validator_envelope = structural_result.envelope
+    package_envelope = envelope
     if package_validator is not None and profile_context is None:
-        validator_envelope, package_appended_findings = (
+        package_envelope, package_appended_findings = (
             append_validation_findings_to_envelope(
-                structural_result.envelope,
-                package_validator(structural_result.envelope),
+                package_envelope,
+                package_validator(package_envelope),
                 actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
             )
         )
+    structural_result = run_domain_envelope_structural_checks(
+        package_envelope,
+        domain_pack,
+        registry=profile_context.registry if profile_context is not None else None,
+        profile_context=profile_context,
+    )
+    validator_envelope = structural_result.envelope
     if envelope.metadata.get("inline_validator_dispatch_complete"):
         # A1: the chat turn already dispatched the active validators and the findings are saved
         # on this envelope. Reuse them; run only the cheap structural checks here, do NOT re-run

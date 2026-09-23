@@ -67,13 +67,13 @@ from src.lib.domain_packs.validator_result_policies import (
     allowed_term_policy_violations,
 )
 from src.lib.domain_packs.resolvable_values import (
+    INVALID_RECORD_EXPLANATION,
     LEAF_VALUE_LABELS,
     LOOKUP_OUTCOME_KEY,
     LOOKUP_OUTCOME_LABELS,
     MENTION_KEY,
     OUTCOME_INVALID_SCHEMA,
     OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
-    OUTCOME_NOT_VALIDATED,
     RESOLUTION_STATE_KEY,
     RESOLVED,
     UNRESOLVED,
@@ -82,20 +82,20 @@ from src.lib.domain_packs.resolvable_values import (
     VALIDATOR_EXPLANATION_KEY,
     VALIDATOR_MATERIALIZATION_METADATA_KEY,
     ResolvableSpec,
-    ResolvableValueError,
-    check_resolvable_value,
     copy_resolution,
     declared_resolvable_fields,
+    declared_spec_for,
     effective_payload,
-    effective_resolution,
     effective_value,
     has_resolution_state,
     holds_resolution,
     lookup_outcome_for_failure,
     mark_resolved,
     mark_unresolved,
+    stored_state_problem,
     unresolved_header_text,
     validator_event_covers,
+    value_covered_by_validator,
 )
 from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.lib.openai_agents.config import (
@@ -448,8 +448,15 @@ def materialize_validator_results_into_envelope(
     working_envelope = envelope
     findings: list[ValidationFinding] = []
     materialized_objects: list[CuratableObjectEnvelope] = []
+    resolvable_fields_by_type = {
+        definition.object_type: declared_resolvable_fields(metadata, definition.object_type)
+        for definition in metadata.object_definitions
+    }
 
     for item in items:
+        target_type = (
+            item.match.object_envelope.object_type if item.match.object_envelope is not None else None
+        )
         (
             working_envelope,
             patch_problem,
@@ -458,6 +465,7 @@ def materialize_validator_results_into_envelope(
             item,
             object_definitions=object_definitions,
             source_envelope_revision=source_envelope_revision,
+            resolvable_fields=resolvable_fields_by_type.get(target_type or "", {}),
         )
         if patch_problem is not None:
             findings.append(
@@ -528,6 +536,7 @@ def _patch_target_object_from_resolved_values(
     *,
     object_definitions: Mapping[str, DomainPackObjectDefinition],
     source_envelope_revision: int | None,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> tuple[DomainEnvelope, str | None]:
     """Patch validator-owned results onto the matched envelope object.
 
@@ -564,6 +573,7 @@ def _patch_target_object_from_resolved_values(
             object_definition=object_definition,
             declared_fields=declared_fields,
             source_envelope_revision=source_envelope_revision,
+            resolvable_fields=resolvable_fields,
         )
 
     if result.status != "resolved":
@@ -576,7 +586,10 @@ def _patch_target_object_from_resolved_values(
             )
         )
         return (
-            _with_unresolved_values(envelope, item, target, declared_fields, outcome),
+            _with_unresolved_values(
+                envelope, item, target, declared_fields, outcome,
+                resolvable_fields=resolvable_fields,
+            ),
             None,
         )
     if not result.resolved_values:
@@ -589,6 +602,7 @@ def _patch_target_object_from_resolved_values(
                 target,
                 declared_fields,
                 OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+                resolvable_fields=resolvable_fields,
             ),
             None,
         )
@@ -596,7 +610,8 @@ def _patch_target_object_from_resolved_values(
     if policy_violations:
         if target is not None and object_definition is not None:
             envelope = _with_unresolved_values(
-                envelope, item, target, declared_fields, OUTCOME_INVALID_SCHEMA
+                envelope, item, target, declared_fields, OUTCOME_INVALID_SCHEMA,
+                resolvable_fields=resolvable_fields,
             )
         return envelope, "; ".join(
             violation.message for violation in policy_violations
@@ -621,7 +636,9 @@ def _patch_target_object_from_resolved_values(
         if materialized_field_path is None:
             continue
         resolved_value = result.resolved_values.get(result_field)
-        container_path = _resolvable_container_path(payload, materialized_field_path)
+        container_path = _resolvable_container_path(
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
         if container_path is not None:
             missing = (
                 result_field in result.missing_expected_fields
@@ -646,6 +663,7 @@ def _patch_target_object_from_resolved_values(
             materialized_field_path,
             resolved_value,
             declared_fields=declared_fields,
+            resolvable_fields=resolvable_fields,
         )
 
     for container_path, writes in resolvable_writes.items():
@@ -657,10 +675,14 @@ def _patch_target_object_from_resolved_values(
                 OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
                 explanation=result.explanation,
                 curator_message=result.curator_message,
+                identity_keys=_container_identity_keys(
+                    item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+                ),
             )
             for materialized_field_path, _ in writes:
                 _propagate_materialized_resolution_state(
-                    payload, materialized_field_path, declared_fields=declared_fields
+                    payload, materialized_field_path, declared_fields=declared_fields,
+                    resolvable_fields=resolvable_fields,
                 )
             continue
         has_materializable_resolved_value = True
@@ -679,6 +701,7 @@ def _patch_target_object_from_resolved_values(
                 materialized_field_path,
                 resolved_value,
                 declared_fields=declared_fields,
+                resolvable_fields=resolvable_fields,
             )
     return _with_patched_target(
         envelope,
@@ -705,6 +728,8 @@ def _field_resolution_targets(
     item: ValidatorResultMaterializationInput,
     payload: Mapping[str, Any],
     declared_fields: Mapping[str, DomainPackFieldDefinition],
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> tuple[dict[str, tuple[str, list[tuple[str, str]]]], str | None]:
     """Resolve each ``field_resolutions`` key to the resolvable value it decides.
 
@@ -724,7 +749,9 @@ def _field_resolution_targets(
         )
         if materialized_field_path is None:
             continue
-        container_path = _resolvable_container_path(payload, materialized_field_path)
+        container_path = _resolvable_container_path(
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
         if container_path is None:
             continue
         fields_by_container.setdefault(container_path, []).append(
@@ -757,6 +784,7 @@ def _patch_target_object_from_field_resolutions(
     object_definition: DomainPackObjectDefinition,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
     source_envelope_revision: int | None,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> tuple[DomainEnvelope, str | None]:
     """Write a composite validator's per-value decisions (``field_resolutions``).
 
@@ -770,7 +798,9 @@ def _patch_target_object_from_field_resolutions(
 
     result = item.result
     payload = copy.deepcopy(target.payload)
-    targets, problem = _field_resolution_targets(item, payload, declared_fields)
+    targets, problem = _field_resolution_targets(
+        item, payload, declared_fields, resolvable_fields=resolvable_fields
+    )
     if problem is not None:
         return envelope, problem
 
@@ -793,7 +823,8 @@ def _patch_target_object_from_field_resolutions(
             )
             for materialized_field_path, value in values.items():
                 _propagate_materialized_mirror_paths(
-                    payload, materialized_field_path, value, declared_fields=declared_fields
+                    payload, materialized_field_path, value, declared_fields=declared_fields,
+                    resolvable_fields=resolvable_fields,
                 )
             written.extend(values)
             continue
@@ -806,10 +837,14 @@ def _patch_target_object_from_field_resolutions(
             ),
             explanation=resolution.explanation,
             curator_message=resolution.curator_message,
+            identity_keys=_container_identity_keys(
+                item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+            ),
         )
         for _result_field, materialized_field_path in fields:
             _propagate_materialized_resolution_state(
-                payload, materialized_field_path, declared_fields=declared_fields
+                payload, materialized_field_path, declared_fields=declared_fields,
+                resolvable_fields=resolvable_fields,
             )
 
     if result.status == "resolved":
@@ -825,13 +860,16 @@ def _patch_target_object_from_field_resolutions(
             if (
                 materialized_field_path is None
                 or missing_resolved_value(resolved_value)
-                or _resolvable_container_path(payload, materialized_field_path) is not None
+                or _resolvable_container_path(
+                    payload, materialized_field_path, resolvable_fields=resolvable_fields
+                ) is not None
             ):
                 continue
             if _payload_value(payload, materialized_field_path) != resolved_value:
                 _set_payload_value(payload, materialized_field_path, resolved_value)
                 _propagate_materialized_mirror_paths(
-                    payload, materialized_field_path, resolved_value, declared_fields=declared_fields
+                    payload, materialized_field_path, resolved_value, declared_fields=declared_fields,
+                    resolvable_fields=resolvable_fields,
                 )
             written.append(materialized_field_path)
 
@@ -906,6 +944,10 @@ def _with_patched_target(
         not payload_changed
         and target.status is CuratableObjectStatus.VALIDATED
         and target.definition_state is definition_state
+        # A value an earlier event already covers needs no new event; an
+        # unchanged value no event covers yet (e.g. one stored before
+        # validator events) is recorded so the legacy rule sees it verified.
+        and all(validator_event_covers(target.metadata, path) for path in materialized_field_paths)
     ):
         return envelope, None
 
@@ -962,12 +1004,15 @@ def _with_unresolved_values(
     target: CuratableObjectEnvelope,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
     outcome: str,
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> DomainEnvelope:
     """Record why the resolvable values a binding writes stay unresolved.
 
-    Only the state, lookup outcome and the validator's own explanation change;
-    id/label and ``mention`` are untouched, and plain fields keep whatever the
-    extractor staged.
+    The state, lookup outcome and the validator's own words change; a value
+    that read as resolved (e.g. a builder's deterministic lookup) keeps its
+    identity only as ``proposed_*`` hints (the validator is the authority).
+    ``mention`` is untouched, and plain fields keep whatever the extractor staged.
     """
 
     payload = copy.deepcopy(target.payload)
@@ -980,7 +1025,9 @@ def _with_unresolved_values(
         )
         if materialized_field_path is None:
             continue
-        container_path = _resolvable_container_path(payload, materialized_field_path)
+        container_path = _resolvable_container_path(
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
         if container_path is None:
             continue
         mark_unresolved(
@@ -988,9 +1035,13 @@ def _with_unresolved_values(
             outcome,
             explanation=item.result.explanation,
             curator_message=item.result.curator_message,
+            identity_keys=_container_identity_keys(
+                item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+            ),
         )
         _propagate_materialized_resolution_state(
-            payload, materialized_field_path, declared_fields=declared_fields
+            payload, materialized_field_path, declared_fields=declared_fields,
+            resolvable_fields=resolvable_fields,
         )
     if payload == target.payload:
         return envelope
@@ -1013,6 +1064,8 @@ def _with_object_payload(
 def _resolvable_container_path(
     payload: Mapping[str, Any],
     field_path: str,
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> str | None:
     """The path of the resolvable value holding ``field_path`` ("" for the root), or None."""
 
@@ -1023,9 +1076,48 @@ def _resolvable_container_path(
     if not parts or not isinstance(parts[-1], str):
         return None
     container_path = _format_field_path(parts[:-1])
-    if holds_resolution(_payload_container(payload, container_path)):
+    container = _payload_container(payload, container_path)
+    if holds_resolution(container):
+        return container_path
+    # A value the pack declares resolvable but stored before the contract
+    # (no state, no mention) is written as one too, so it takes the contract shape.
+    if (
+        resolvable_fields
+        and isinstance(container, dict)
+        and declared_spec_for(resolvable_fields, parts[:-1]) is not None
+    ):
         return container_path
     return None
+
+
+def _container_identity_keys(
+    item: ValidatorResultMaterializationInput,
+    container_path: str,
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec] | None,
+) -> tuple[str, ...]:
+    """Every key a validator supplies for one value: its declared identity plus the
+    keys this binding writes into it (so an overruled identity is fully cleared)."""
+
+    keys: list[str] = []
+    try:
+        container_tokens = parse_field_path(container_path) if container_path else ()
+    except ValueError:
+        container_tokens = ()
+    spec = declared_spec_for(resolvable_fields, container_tokens) if resolvable_fields else None
+    if spec is not None:
+        keys.extend(spec.identity_keys)
+    for raw_field_path in item.request.expected_result_fields.values():
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            continue
+        materialized_field_path = _materialized_field_path(raw_field_path, declared_fields=declared_fields)
+        if materialized_field_path is None:
+            continue
+        parts = parse_field_path(materialized_field_path)
+        if isinstance(parts[-1], str) and _format_field_path(parts[:-1]) == container_path:
+            keys.append(parts[-1])
+    return tuple(dict.fromkeys(keys))
 
 
 def _payload_container(payload: Mapping[str, Any], container_path: str) -> Any:
@@ -1442,6 +1534,7 @@ def _propagate_materialized_mirror_paths(
     resolved_value: Any,
     *,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> None:
     """Copy a resolved value into the field's declared ``materializes_to_field_paths`` mirrors.
 
@@ -1459,7 +1552,8 @@ def _propagate_materialized_mirror_paths(
         if _payload_value(payload, mirror_path) != resolved_value:
             _set_payload_value(payload, mirror_path, resolved_value)
     _propagate_materialized_resolution_state(
-        payload, materialized_field_path, declared_fields=declared_fields
+        payload, materialized_field_path, declared_fields=declared_fields,
+        resolvable_fields=resolvable_fields,
     )
 
 
@@ -1468,17 +1562,22 @@ def _propagate_materialized_resolution_state(
     materialized_field_path: str,
     *,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> None:
     """Give each resolvable mirror of a written field its source value's resolution."""
 
-    source_path = _resolvable_container_path(payload, materialized_field_path)
+    source_path = _resolvable_container_path(
+        payload, materialized_field_path, resolvable_fields=resolvable_fields
+    )
     if source_path is None:
         return
     source = _payload_container(payload, source_path)
     for mirror_path in _mirror_field_paths(
         materialized_field_path, declared_fields=declared_fields
     ):
-        mirror_container_path = _resolvable_container_path(payload, mirror_path)
+        mirror_container_path = _resolvable_container_path(
+            payload, mirror_path, resolvable_fields=resolvable_fields
+        )
         if mirror_container_path is None:
             continue
         copy_resolution(source, _payload_container(payload, mirror_container_path))
@@ -2584,7 +2683,6 @@ def _is_empty_projection_value(value: Any) -> bool:
 
 # --- Extracted vs validated values on review fields (ALL-1283) -----------------
 
-_UNREADABLE_LOOKUP_RESULT = "Stored value unreadable"
 # Curator-facing; the technical detail goes to the log only.
 _UNREADABLE_ISSUE = (
     "This stored value could not be read; please re-run validation or contact the "
@@ -2606,16 +2704,16 @@ class _ValueReading:
     path: tuple[str | int, ...]
     spec: ResolvableSpec
     reviewed: DomainEnvelopeReviewResolvedValue
-    # The read-time value (legacy rule applied); None when it cannot be read.
-    value: Mapping[str, Any] | None
+    # The read-time value (legacy and invalid-record rules applied).
+    value: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
 class _ReviewValueReader:
     """Reads one object's declared resolvable values for its review fields.
 
-    ``payload`` is the object's read-time payload (legacy rule applied, and an
-    unreadable value marked unresolved so it never displays as validated);
+    ``payload`` is the object's read-time payload (``effective_payload``: the
+    legacy rule applied and invalid stored records read as unresolved);
     ``readings`` holds each resolvable value; ``field_displays`` holds the
     declared display spec per field path.
     """
@@ -2629,11 +2727,12 @@ class _ReviewValueReader:
 
         A field that is, or contains, resolvable values reads through its
         declared display ("label (ID)" or UNRESOLVED per value). A field that
-        is one identity key of a value (its id or label) shows that key when
-        the value is resolved and UNRESOLVED otherwise. A field that is one of
-        the value's own leaves (paper wording, status, lookup result,
-        validator text) shows that leaf in plain words. Paper wording never
-        fills a validated value's text.
+        is one identity key of a value (its id, label or a declared validated
+        key such as a taxon) shows that key when the value is resolved and
+        UNRESOLVED otherwise. A field that is one of the value's own leaves
+        (paper wording, status, lookup result, validator text) shows that
+        leaf in plain words. Paper wording and ``proposed_<key>`` hints never
+        fill a validated value's text.
         """
 
         from src.lib.flows.value_display import display_text
@@ -2647,10 +2746,7 @@ class _ReviewValueReader:
             if field_tokens[:-1] != reading.path or not isinstance(key, str):
                 continue
             if key in reading.spec.identity_keys:
-                resolved = (
-                    reading.value is not None
-                    and reading.reviewed.resolution_state == RESOLVED
-                )
+                resolved = reading.reviewed.resolution_state == RESOLVED
                 return DomainEnvelopeReviewFieldResolution(
                     display_text=(
                         display_text(reading.value.get(key)) if resolved else UNRESOLVED_DISPLAY
@@ -2723,41 +2819,42 @@ def _review_value_reader(
 ) -> _ReviewValueReader | None:
     if not specs:
         return None
-    payload: Any = effective_payload(
+    payload = effective_payload(
         domain_object.payload, specs, object_metadata=domain_object.metadata,
     )
-    readings: list[_ValueReading] = []
-    for declared_path, spec in specs.items():
+    readings: dict[tuple[str | int, ...], tuple[int, _ValueReading]] = {}
+    declared = list(specs.items())
+    # The most specific declaration reads a value declared both as a list and
+    # as one of its elements, as effective_payload does; readings keep the
+    # pack's declaration order, then payload order.
+    for order, (declared_path, spec) in sorted(
+        enumerate(declared), key=lambda item: -len(item[1][0]),
+    ):
         try:
             tokens = parse_field_path(declared_path) if declared_path else ()
         except ValueError:
             continue
         for value_path in _concrete_value_paths(payload, tokens, ()):
-            readings.append(
+            if value_path in readings:
+                continue
+            readings[value_path] = (
+                order,
                 _read_review_value(
                     domain_object,
                     value_path,
                     spec,
                     envelope_id=envelope_id,
                     envelope_revision=envelope_revision,
-                )
+                ),
             )
-    for reading in readings:
-        if reading.value is None:
-            # Display reads the unreadable value as unresolved, never as validated.
-            payload = _replaced_at(
-                payload,
-                reading.path,
-                {
-                    **_payload_container(payload, _format_field_path(reading.path)),
-                    RESOLUTION_STATE_KEY: UNRESOLVED,
-                    LOOKUP_OUTCOME_KEY: OUTCOME_NOT_VALIDATED,
-                },
-            )
+    ordered = [
+        reading
+        for _order, reading in sorted(readings.values(), key=lambda item: item[0])
+    ]
     prefix = f"object.pack.{domain_object.object_type}."
     return _ReviewValueReader(
         payload=payload,
-        readings=tuple(readings),
+        readings=tuple(ordered),
         field_displays={
             ref[len(prefix):]: spec
             for ref, spec in display_source.display_specs.items()
@@ -2774,47 +2871,47 @@ def _read_review_value(
     envelope_id: str,
     envelope_revision: int,
 ) -> _ValueReading:
-    """Read one stored value; a value outside the contract reads as unresolved with its issue."""
+    """Read one value from the read-time payload; a broken stored record says so plainly."""
 
     from src.lib.flows.value_display import display_text
 
     path_text = _format_field_path(value_path)
-    # The value as stored; the read-time payload already carries legacy state.
+    # Read the stored value as effective_payload does; the read-time copy
+    # already carries a legacy state and must not be read a second time.
     stored = _payload_container(domain_object.payload, path_text)
-    covered = validator_event_covers(domain_object.metadata, path_text)
-    try:
-        state, outcome = effective_resolution(
-            stored, identity_keys=spec.identity_keys, covered_by_validator=covered,
+    value = effective_value(
+        stored,
+        spec,
+        covered_by_validator=value_covered_by_validator(domain_object.metadata, path_text, spec),
+    )
+    problem = (
+        stored_state_problem(stored, identity_keys=spec.identity_keys)
+        if has_resolution_state(stored)
+        else None
+    )
+    if problem is None:
+        problem = next(
+            (
+                f"{text_key} must be text or null"
+                for text_key in (VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY)
+                if value.get(text_key) is not None and not isinstance(value.get(text_key), str)
+            ),
+            None,
         )
-        value = effective_value(stored, spec, covered_by_validator=covered)
-        if has_resolution_state(stored):
-            check_resolvable_value(value, identity_keys=spec.identity_keys)
-        for text_key in (VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY):
-            if value.get(text_key) is not None and not isinstance(value.get(text_key), str):
-                raise ResolvableValueError(f"{text_key} must be text or null")
-    except ResolvableValueError as exc:
+    # A value re-read under the legacy rule (an old container a validator left
+    # unresolved) is not a broken record; only one read as invalid is.
+    broken = problem is not None and (
+        value.get(VALIDATOR_EXPLANATION_KEY) == INVALID_RECORD_EXPLANATION
+        or not has_resolution_state(stored)
+    )
+    if broken:
         logger.warning(
             "Review row reads an unreadable resolvable value as unresolved: "
             "envelope_id=%s envelope_revision=%s object_id=%s object_type=%s value_path=%r: %s",
             envelope_id, envelope_revision, stable_object_id(domain_object),
-            domain_object.object_type, path_text, exc,
+            domain_object.object_type, path_text, problem,
         )
-        mention = stored.get(spec.mention_key)
-        return _ValueReading(
-            path=value_path,
-            spec=spec,
-            reviewed=DomainEnvelopeReviewResolvedValue(
-                value_path=path_text,
-                display_text=UNRESOLVED_DISPLAY,
-                mention=mention.strip() if isinstance(mention, str) and mention.strip() else None,
-                resolution_state=UNRESOLVED,
-                lookup_outcome=None,
-                lookup_result=_UNREADABLE_LOOKUP_RESULT,
-                issue=_UNREADABLE_ISSUE,
-            ),
-            value=None,
-        )
-
+    state, outcome = str(value[RESOLUTION_STATE_KEY]), str(value[LOOKUP_OUTCOME_KEY])
     mention = value.get(spec.mention_key)
     return _ValueReading(
         path=value_path,
@@ -2831,31 +2928,19 @@ def _read_review_value(
                         ("mention", spec.mention_key),
                     )
                     if key
-                },
+                }
+                | ({"validated": list(spec.validated_keys)} if spec.validated_keys else {}),
             ),
             mention=mention.strip() if isinstance(mention, str) and mention.strip() else None,
-            resolution_state=state,
-            lookup_outcome=outcome,
-            lookup_result=LOOKUP_OUTCOME_LABELS[outcome],
-            validator_explanation=value.get(VALIDATOR_EXPLANATION_KEY),
-            validator_curator_message=value.get(VALIDATOR_CURATOR_MESSAGE_KEY),
+            resolution_state=UNRESOLVED if broken else state,
+            lookup_outcome=OUTCOME_INVALID_SCHEMA if broken else outcome,
+            lookup_result=LOOKUP_OUTCOME_LABELS[OUTCOME_INVALID_SCHEMA if broken else outcome],
+            validator_explanation=None if broken else value.get(VALIDATOR_EXPLANATION_KEY),
+            validator_curator_message=None if broken else value.get(VALIDATOR_CURATOR_MESSAGE_KEY),
+            issue=_UNREADABLE_ISSUE if broken else None,
         ),
         value=value,
     )
-
-
-def _replaced_at(node: Any, tokens: Sequence[str | int], replacement: Any) -> Any:
-    """A copy of ``node`` with ``replacement`` at ``tokens``; ``node`` is untouched."""
-
-    if not tokens:
-        return replacement
-    head, rest = tokens[0], tokens[1:]
-    if isinstance(head, int):
-        items = list(node)
-        items[head] = _replaced_at(items[head], rest, replacement)
-        return items
-    return {**node, head: _replaced_at(node[head], rest, replacement)}
-
 
 def _concrete_value_paths(
     node: Any,

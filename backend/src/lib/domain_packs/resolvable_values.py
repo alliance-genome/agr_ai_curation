@@ -35,8 +35,9 @@ none of them re-implements the rules.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -137,8 +138,12 @@ LOOKUP_OUTCOME_LABELS: dict[str, str] = {
 }
 RESOLUTION_STATE_LABELS: dict[str, str] = {RESOLVED: "Resolved", UNRESOLVED: "Unresolved"}
 
+# A validator that overrules a resolved value keeps its identity under these hint keys.
+PROPOSED_KEY_PREFIX = "proposed_"
+
 NOT_VALIDATED_EXPLANATION = "Not validated yet."
 LEGACY_EXPLANATION = "Recorded before validation tracking; not verified."
+INVALID_RECORD_EXPLANATION = "The stored validation record is invalid; treated as unresolved."
 
 # The cell text for an unresolved value on every non-JSON surface.
 UNRESOLVED_DISPLAY = "UNRESOLVED"
@@ -162,8 +167,12 @@ LEAF_VALUE_LABELS = {
 }
 # Appended to a legacy value's stored text, shown as paper wording.
 LEGACY_UNVERIFIED_SUFFIX = "(legacy, unverified)"
+# Appended to the stored text of a value whose stored record breaks the contract.
+INVALID_RECORD_SUFFIX = "(invalid record, unverified)"
 
 VALIDATOR_MATERIALIZATION_METADATA_KEY = "validator_resolved_value_materialization"
+
+_log = logging.getLogger(__name__)
 
 
 class ResolvableValueError(ValueError):
@@ -207,6 +216,11 @@ class ResolvableSpec:
     id_key: str | None = None
     label_key: str | None = None
     mention_key: str = MENTION_KEY
+    # Further keys only a validator fills (e.g. a taxon); part of the identity.
+    validated_keys: tuple[str, ...] = ()
+    # Payload paths whose validator coverage also covers this value: the
+    # sources of a declared mirror copy (``materializes_to_field_paths``).
+    covered_by: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not (self.id_key or self.label_key):
@@ -214,14 +228,17 @@ class ResolvableSpec:
 
     @property
     def identity_keys(self) -> tuple[str, ...]:
-        return tuple(key for key in (self.id_key, self.label_key) if key)
+        """Every key a validator supplies: id, label and the declared ``validated`` keys."""
+
+        return tuple(key for key in (self.id_key, self.label_key, *self.validated_keys) if key)
 
 
 def resolvable_spec_from_display(display: Mapping[str, Any] | None) -> ResolvableSpec | None:
     """The resolvable spec a pack display declaration names, or None.
 
     A display spec declares a resolvable value by naming a ``mention`` role
-    next to its ``label``/``id`` roles (``src.lib.flows.value_display``).
+    next to its ``label``/``id`` roles (``src.lib.flows.value_display``); an
+    optional ``validated`` list names further keys only a validator fills.
     """
 
     if not isinstance(display, Mapping) or not display.get("mention"):
@@ -230,6 +247,7 @@ def resolvable_spec_from_display(display: Mapping[str, Any] | None) -> Resolvabl
         id_key=display.get("id") or None,
         label_key=display.get("label") or None,
         mention_key=str(display["mention"]),
+        validated_keys=tuple(str(key) for key in display.get("validated") or ()),
     )
 
 
@@ -271,19 +289,17 @@ def _optional_text(value: Any, key: str) -> None:
         raise ResolvableValueError(f"{key} must be text or null, got {type(value).__name__}")
 
 
-def check_resolvable_value(value: Any, *, identity_keys: Sequence[str]) -> None:
-    """Raise ``ResolvableValueError`` unless ``value`` satisfies the invariant.
-
-    ``identity_keys`` are the id/label keys the caller's domain uses. The state
-    and outcome must be values of their closed vocabularies.
-    """
+def _check_contract_fields(value: Any) -> tuple[str, str]:
+    """The vocabulary and state/outcome rules that need no domain keys; returns (state, outcome)."""
 
     if not isinstance(value, Mapping):
         raise ResolvableValueError(f"A resolvable value must be an object, not {type(value).__name__}")
-    if not identity_keys:
-        raise ResolvableValueError("check_resolvable_value needs the value's id/label keys")
     mention = value.get(MENTION_KEY)
-    if MENTION_KEY in value and not (isinstance(mention, str) and mention.strip()):
+    # No paper wording (absent or null) marks a container stored before the
+    # contract: the builder helpers always write a non-empty mention and the
+    # validator write-back never touches it, so such a container can be
+    # re-validated any number of times.
+    if mention is not None and not (isinstance(mention, str) and mention.strip()):
         raise ResolvableValueError("mention must be the non-empty paper wording")
     _optional_text(value.get(VALIDATOR_EXPLANATION_KEY), VALIDATOR_EXPLANATION_KEY)
     _optional_text(value.get(VALIDATOR_CURATOR_MESSAGE_KEY), VALIDATOR_CURATOR_MESSAGE_KEY)
@@ -293,25 +309,64 @@ def check_resolvable_value(value: Any, *, identity_keys: Sequence[str]) -> None:
         raise ResolvableValueError(f"resolution_state must be one of {RESOLUTION_STATES}, got {state!r}")
     if outcome not in LOOKUP_OUTCOMES:
         raise ResolvableValueError(f"lookup_outcome must be one of {LOOKUP_OUTCOMES}, got {outcome!r}")
-    has_identity = any(not _is_empty(value.get(key)) for key in identity_keys)
-    if state == RESOLVED:
-        if outcome != OUTCOME_MATCHED:
-            raise ResolvableValueError(f"A resolved value's lookup_outcome is matched, got {outcome!r}")
-        if not has_identity:
-            raise ResolvableValueError(
-                "A resolved value needs the identity a validator supplied "
-                f"(one of {', '.join(identity_keys)})"
-            )
-        return
-    if outcome not in STORED_UNRESOLVED_OUTCOMES:
+    if state == RESOLVED and outcome != OUTCOME_MATCHED:
+        raise ResolvableValueError(f"A resolved value's lookup_outcome is matched, got {outcome!r}")
+    if state == UNRESOLVED and outcome not in STORED_UNRESOLVED_OUTCOMES:
         raise ResolvableValueError(
             f"An unresolved value's lookup_outcome is one of {STORED_UNRESOLVED_OUTCOMES}, got {outcome!r}"
         )
-    if has_identity:
+    return str(state), str(outcome)
+
+
+def check_resolvable_value(value: Any, *, identity_keys: Sequence[str]) -> None:
+    """Raise ``ResolvableValueError`` unless ``value`` satisfies the invariant.
+
+    ``identity_keys`` are the id/label keys the caller's domain uses. The state
+    and outcome must be values of their closed vocabularies.
+    """
+
+    if not identity_keys:
+        raise ResolvableValueError("check_resolvable_value needs the value's id/label keys")
+    state, _outcome = _check_contract_fields(value)
+    has_identity = any(not _is_empty(value.get(key)) for key in identity_keys)
+    if state == RESOLVED and not has_identity:
+        raise ResolvableValueError(
+            "A resolved value needs the identity a validator supplied "
+            f"(one of {', '.join(identity_keys)})"
+        )
+    if state == UNRESOLVED and has_identity:
         raise ResolvableValueError(
             "An unresolved value never carries an identity; "
             f"{', '.join(key for key in identity_keys if not _is_empty(value.get(key)))} must be empty"
         )
+
+
+def stored_state_problem(value: Any, *, identity_keys: Sequence[str] = ()) -> str | None:
+    """Why a value stored with the contract state breaks the contract, or None.
+
+    With ``identity_keys`` the whole invariant is checked; without them, the
+    vocabularies and the state/outcome pairing. Read paths use this instead of
+    raising, so one bad stored value never fails a whole envelope read.
+    """
+
+    try:
+        if identity_keys:
+            check_resolvable_value(value, identity_keys=identity_keys)
+        else:
+            _check_contract_fields(value)
+    except ResolvableValueError as exc:
+        return str(exc)
+    return None
+
+
+def is_resolved(value: Any, *, identity_keys: Sequence[str] = ()) -> bool:
+    """Whether a stored value reads as resolved: a valid contract state of ``resolved``."""
+
+    return (
+        has_resolution_state(value)
+        and value[RESOLUTION_STATE_KEY] == RESOLVED
+        and stored_state_problem(value, identity_keys=identity_keys) is None
+    )
 
 
 def _required_mention(mention: Any) -> str:
@@ -407,28 +462,45 @@ def mark_resolved(
     check_resolvable_value(value, identity_keys=tuple(identity))
 
 
+def proposed_key(key: str) -> str:
+    """The hint key that keeps an identity a validator overruled (``curie`` -> ``proposed_curie``)."""
+
+    return f"{PROPOSED_KEY_PREFIX}{key}"
+
+
 def mark_unresolved(
     value: MutableMapping[str, Any],
     outcome: str,
     *,
     explanation: str | None,
     curator_message: str | None = None,
+    identity_keys: Sequence[str] = (),
 ) -> None:
-    """Record why a value is unresolved; never touches its id/label or ``mention``.
+    """Record why a value is unresolved, with the validator's own words; ``mention`` is untouched.
 
-    A value some earlier validator resolved keeps that identity and state:
-    unresolved write-back only applies to values that were never resolved.
+    The validator is the authority: a value that read as resolved (e.g. a
+    builder's deterministic lookup) becomes unresolved too. Its identity is
+    kept only as hints (``proposed_<key>``) and its ``identity_keys`` are
+    cleared, so the invariant holds. A value that never resolved keeps its
+    id/label as stored (empty for a contract value).
     """
 
     if outcome not in STORED_UNRESOLVED_OUTCOMES:
         raise ResolvableValueError(
             f"lookup_outcome must be one of {STORED_UNRESOLVED_OUTCOMES}, got {outcome!r}"
         )
-    if has_resolution_state(value) and value[RESOLUTION_STATE_KEY] == RESOLVED:
-        return
+    if is_resolved(value):
+        if not identity_keys:
+            raise ResolvableValueError("Unresolving a resolved value needs its identity keys")
+        for key in identity_keys:
+            if not _is_empty(value.get(key)):
+                value[proposed_key(key)] = value[key]
+            if key in value:
+                value[key] = None
     value[RESOLUTION_STATE_KEY] = UNRESOLVED
     value[LOOKUP_OUTCOME_KEY] = outcome
     _write_validator_text(value, explanation, curator_message)
+    _check_contract_fields(value)
 
 
 def copy_resolution(source: Mapping[str, Any], target: MutableMapping[str, Any]) -> None:
@@ -440,12 +512,19 @@ def copy_resolution(source: Mapping[str, Any], target: MutableMapping[str, Any])
         _write_validator_text(
             target, source.get(VALIDATOR_EXPLANATION_KEY), source.get(VALIDATOR_CURATOR_MESSAGE_KEY),
         )
+        _check_contract_fields(target)
     elif source.get(RESOLUTION_STATE_KEY) == UNRESOLVED:
         mark_unresolved(
             target,
             source[LOOKUP_OUTCOME_KEY],
             explanation=source.get(VALIDATOR_EXPLANATION_KEY),
             curator_message=source.get(VALIDATOR_CURATOR_MESSAGE_KEY),
+            # The mirror holds the source's keys; the ones the source moved to hints.
+            identity_keys=tuple(
+                key.removeprefix(PROPOSED_KEY_PREFIX)
+                for key in source
+                if key.startswith(PROPOSED_KEY_PREFIX)
+            ),
         )
 
 
@@ -481,7 +560,7 @@ def unresolved_positions(values: Sequence[Any]) -> list[int]:
     return [
         index
         for index, item in enumerate(values)
-        if not (has_resolution_state(item) and item[RESOLUTION_STATE_KEY] == RESOLVED)
+        if not is_resolved(item)
     ]
 
 
@@ -497,27 +576,82 @@ def _path_tokens(path: str) -> tuple[str | int, ...] | None:
         return None
 
 
+# Write-back events that count as validator coverage: packaged domain-pack
+# bindings (materialization.py) and closed-profile validator mappings
+# (profile_materialization.py), which record their payload paths as
+# ``field_paths`` (e.g. ``attributes.gene.gene_id``).
+PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY = "profile_validator_materialization"
+# An event path segment ``[]`` names every element of a list.
+_ANY_INDEX = -1
+
+
+def _event_path_tokens(path: str) -> tuple[str | int, ...] | None:
+    """Tokens of an event's recorded payload path; ``[]`` becomes an any-element index."""
+
+    if "[]" not in path:
+        return _path_tokens(path)
+    tokens: list[str | int] = []
+    for segment in path.split("."):
+        key, _, brackets = segment.partition("[")
+        if not key:
+            return None
+        tokens.append(key)
+        for bracket in filter(None, f"[{brackets}".split("[")) if brackets else ():
+            index = bracket.rstrip("]")
+            if index == "":
+                tokens.append(_ANY_INDEX)
+            elif index.isdigit():
+                tokens.append(int(index))
+            else:
+                return None
+    return tuple(tokens)
+
+
 def validator_materialized_paths(object_metadata: Mapping[str, Any] | None) -> tuple[tuple[str | int, ...], ...]:
-    """Payload paths a validator write-back event recorded for one object."""
+    """Payload paths validator write-back events recorded for one object.
+
+    Both packaged binding events (``materialized_field_paths`` and the keys of
+    ``original_values``) and closed-profile validator events (``field_paths``)
+    count.
+    """
 
     if not isinstance(object_metadata, Mapping):
         return ()
+    recorded: list[Any] = []
     events = object_metadata.get(VALIDATOR_MATERIALIZATION_METADATA_KEY)
-    if not isinstance(events, list):
-        return ()
-    paths: list[tuple[str | int, ...]] = []
-    for event in events:
+    for event in events if isinstance(events, list) else ():
         if not isinstance(event, Mapping):
             continue
-        recorded = [*(event.get("materialized_field_paths") or [])]
+        recorded.extend(event.get("materialized_field_paths") or [])
         original_values = event.get("original_values")
         if isinstance(original_values, Mapping):
             recorded.extend(original_values)
-        for path in recorded:
-            tokens = _path_tokens(str(path))
-            if tokens:
-                paths.append(tokens)
+    profile_events = object_metadata.get(PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY)
+    for event in profile_events if isinstance(profile_events, list) else ():
+        if isinstance(event, Mapping) and isinstance(event.get("field_paths"), list):
+            recorded.extend(event["field_paths"])
+    paths: list[tuple[str | int, ...]] = []
+    for path in recorded:
+        tokens = _event_path_tokens(str(path))
+        if tokens:
+            paths.append(tokens)
     return tuple(paths)
+
+
+def _covers(path: Sequence[str | int], target: Sequence[str | int]) -> bool:
+    """Whether a recorded write path covers the value at ``target``.
+
+    It covers the value when it wrote the value or one of its keys, or when
+    it wrote the whole list the value is an element (or part of an element) of.
+    """
+
+    shared = min(len(path), len(target))
+    if not all(
+        recorded == wanted or (recorded == _ANY_INDEX and isinstance(wanted, int))
+        for recorded, wanted in zip(path[:shared], target[:shared])
+    ):
+        return False
+    return len(path) >= len(target) or isinstance(target[len(path)], int)
 
 
 def validator_event_covers(
@@ -533,7 +667,21 @@ def validator_event_covers(
     target = _path_tokens(value_path)
     if target is None:
         return False
-    return any(path[: len(target)] == target for path in validator_materialized_paths(object_metadata))
+    return any(_covers(path, target) for path in validator_materialized_paths(object_metadata))
+
+
+def value_covered_by_validator(
+    object_metadata: Mapping[str, Any] | None,
+    value_path: str,
+    spec: ResolvableSpec | None,
+) -> bool:
+    """Validator coverage of one value: its own path, or a declared mirror source (``covered_by``)."""
+
+    if validator_event_covers(object_metadata, value_path):
+        return True
+    return spec is not None and any(
+        validator_event_covers(object_metadata, source) for source in spec.covered_by
+    )
 
 
 def effective_resolution(
@@ -548,16 +696,15 @@ def effective_resolution(
     the contract (no state, or another ``resolution_state`` word) is resolved
     (``matched``) only when it holds an identity and a validator write-back
     event covers it (``validator_event_covers``); otherwise it is unresolved
-    with outcome ``legacy_unverified``. Only vocabulary values come back.
+    with outcome ``legacy_unverified``. A stored contract value that breaks
+    the contract reads as unresolved/``invalid_schema``. Only vocabulary
+    values come back; nothing raises.
     """
 
     if has_resolution_state(value):
-        state, outcome = value.get(RESOLUTION_STATE_KEY), value.get(LOOKUP_OUTCOME_KEY)
-        if state not in RESOLUTION_STATES or outcome not in LOOKUP_OUTCOMES:
-            raise ResolvableValueError(
-                f"Stored resolution {state!r}/{outcome!r} is outside the controlled vocabulary"
-            )
-        return str(state), str(outcome)
+        if stored_state_problem(value, identity_keys=identity_keys) is not None:
+            return UNRESOLVED, OUTCOME_INVALID_SCHEMA
+        return str(value[RESOLUTION_STATE_KEY]), str(value[LOOKUP_OUTCOME_KEY])
     if covered_by_validator and any(not _is_empty(value.get(key)) for key in identity_keys):
         return RESOLVED, OUTCOME_MATCHED
     return UNRESOLVED, OUTCOME_LEGACY_UNVERIFIED
@@ -582,15 +729,24 @@ def effective_value(
 ) -> Any:
     """A read-time copy of a resolvable value with its effective state written in.
 
-    Values with the contract state come back unchanged. A legacy value reads
+    Values with a valid contract state come back unchanged; an invalid stored
+    one reads as unresolved/``invalid_schema`` (``_invalid_record_value``),
+    is logged, and never raises. A legacy value reads
     with the explanation "Recorded before validation tracking; not verified."
     When not verified it reads as unresolved/``legacy_unverified``: its
     identity keys are emptied and its stored text becomes paper wording
     labelled "(legacy, unverified)". Nothing is written back to storage.
     """
 
-    if not isinstance(value, Mapping) or has_resolution_state(value):
+    if not isinstance(value, Mapping):
         return value
+    if has_resolution_state(value):
+        problem = stored_state_problem(value, identity_keys=spec.identity_keys)
+        if problem is None:
+            return value
+        if _is_revalidated_legacy_leftover(value, spec):
+            return _legacy_leftover_value(value, spec)
+        return _invalid_record_value(value, spec, problem)
     state, outcome = effective_resolution(
         value, identity_keys=spec.identity_keys, covered_by_validator=covered_by_validator,
     )
@@ -604,6 +760,77 @@ def effective_value(
             annotated[key] = None
         annotated[spec.mention_key] = f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else None
     return annotated
+
+
+def _is_revalidated_legacy_leftover(value: Mapping[str, Any], spec: ResolvableSpec) -> bool:
+    """A pre-contract container a validator left unresolved, still holding its old identity.
+
+    The validator write-back never touches id/label, so an old container
+    (no paper wording) re-validated as unresolved keeps the identity the old
+    extractor proposed; that identity was never verified.
+    """
+
+    if value.get(spec.mention_key) is not None or value.get(RESOLUTION_STATE_KEY) != UNRESOLVED:
+        return False
+    cleared = {**value, **{key: None for key in spec.identity_keys}}
+    return stored_state_problem(cleared, identity_keys=spec.identity_keys) is None
+
+
+def _legacy_leftover_value(value: Mapping[str, Any], spec: ResolvableSpec) -> dict[str, Any]:
+    """Read an old identity left in an unresolved pre-contract container as unverified paper wording."""
+
+    annotated = dict(value)
+    stored = _stored_text(value, spec)
+    for key in spec.identity_keys:
+        annotated[key] = None
+    annotated[spec.mention_key] = f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else None
+    return annotated
+
+
+def _invalid_record_value(value: Mapping[str, Any], spec: ResolvableSpec, problem: str) -> dict[str, Any]:
+    """A stored value that breaks the contract, read as unresolved with a clear marker."""
+
+    _log.warning("Stored resolvable value breaks the contract and reads as unresolved: %s", problem)
+    annotated = dict(value)
+    stored = _stored_text(value, spec)
+    for key in spec.identity_keys:
+        annotated[key] = None
+    annotated[spec.mention_key] = f"{stored} {INVALID_RECORD_SUFFIX}" if stored else None
+    annotated[RESOLUTION_STATE_KEY] = UNRESOLVED
+    annotated[LOOKUP_OUTCOME_KEY] = OUTCOME_INVALID_SCHEMA
+    annotated[VALIDATOR_EXPLANATION_KEY] = INVALID_RECORD_EXPLANATION
+    annotated[VALIDATOR_CURATOR_MESSAGE_KEY] = None
+    return annotated
+
+
+def stated_value(value: Any) -> Any:
+    """A read-time copy of a resolvable value that states a valid resolution, without a spec.
+
+    For surfaces that do not know the pack's declarations (e.g. supervisor
+    views): a legacy value reads unresolved/``legacy_unverified``, an invalid
+    stored one unresolved/``invalid_schema``; a valid one comes back unchanged.
+    """
+
+    if not holds_resolution(value):
+        return value
+    if has_resolution_state(value):
+        problem = stored_state_problem(value)
+        if problem is None:
+            return value
+        _log.warning("Stored resolvable value breaks the contract and reads as unresolved: %s", problem)
+        return {
+            **value,
+            RESOLUTION_STATE_KEY: UNRESOLVED,
+            LOOKUP_OUTCOME_KEY: OUTCOME_INVALID_SCHEMA,
+            VALIDATOR_EXPLANATION_KEY: INVALID_RECORD_EXPLANATION,
+            VALIDATOR_CURATOR_MESSAGE_KEY: None,
+        }
+    return {
+        **value,
+        RESOLUTION_STATE_KEY: UNRESOLVED,
+        LOOKUP_OUTCOME_KEY: OUTCOME_LEGACY_UNVERIFIED,
+        VALIDATOR_EXPLANATION_KEY: LEGACY_EXPLANATION,
+    }
 
 
 def effective_payload(
@@ -622,11 +849,15 @@ def effective_payload(
     if not resolvable_fields:
         return payload
     result: Any = dict(payload)
-    for field_path, spec in sorted(resolvable_fields.items(), key=lambda item: len(item[0])):
+    # Each concrete value is read once per pass: a pack may declare both a list
+    # field and one of its elements (``terms`` and ``terms[0]``); the most
+    # specific declaration reads the element, and the list pass skips it.
+    annotated: set[tuple[str | int, ...]] = set()
+    for field_path, spec in sorted(resolvable_fields.items(), key=lambda item: -len(item[0])):
         tokens = _path_tokens(field_path)
         if tokens is None:
             continue
-        result = _annotate_at(result, tokens, (), spec, object_metadata)
+        result = _annotate_at(result, tokens, (), spec, object_metadata, annotated)
     return result
 
 
@@ -646,20 +877,32 @@ def _annotate_at(
     walked: tuple[str | int, ...],
     spec: ResolvableSpec,
     object_metadata: Mapping[str, Any] | None,
+    annotated: set[tuple[str | int, ...]],
 ) -> Any:
     if isinstance(node, list):
-        # Declared paths name list fields without indexes; each element is its own value.
+        if remaining and isinstance(remaining[0], int):
+            # An explicitly indexed declared path (e.g. ``terms[0]``) names one element.
+            index = remaining[0]
+            if index >= len(node):
+                return node
+            updated_list = list(node)
+            updated_list[index] = _annotate_at(
+                node[index], remaining[1:], (*walked, index), spec, object_metadata, annotated
+            )
+            return updated_list
+        # A declared path without an index names every element; each is its own value.
         return [
-            _annotate_at(item, remaining, (*walked, index), spec, object_metadata)
+            _annotate_at(item, remaining, (*walked, index), spec, object_metadata, annotated)
             for index, item in enumerate(node)
         ]
     if not remaining:
-        if not isinstance(node, Mapping):
+        if not isinstance(node, Mapping) or walked in annotated:
             return node
+        annotated.add(walked)
         return effective_value(
             node,
             spec,
-            covered_by_validator=validator_event_covers(object_metadata, _format_path(walked)),
+            covered_by_validator=value_covered_by_validator(object_metadata, _format_path(walked), spec),
         )
     if not isinstance(node, Mapping):
         return node
@@ -667,7 +910,9 @@ def _annotate_at(
     if key not in node:
         return node
     updated = dict(node)
-    updated[key] = _annotate_at(node[key], remaining[1:], (*walked, key), spec, object_metadata)
+    updated[key] = _annotate_at(
+        node[key], remaining[1:], (*walked, key), spec, object_metadata, annotated
+    )
     return updated
 
 
@@ -716,11 +961,52 @@ def declared_resolvable_fields(metadata: Any, object_type: str) -> dict[str, Res
         spec = resolvable_spec_from_display(display)
         if spec is not None:
             specs[field.field_path] = spec
-    return specs
+    return _with_mirror_sources(specs, object_definition.fields)
+
+
+def _with_mirror_sources(
+    specs: dict[str, ResolvableSpec], fields: Sequence[Any],
+) -> dict[str, ResolvableSpec]:
+    """Give each declared value the source paths of the mirror copies written into it.
+
+    A field declaring ``materializes_to_field_paths`` copies its validated
+    value into those paths, so a validator event covering the source also
+    covers the copy (e.g. a subject gene copied into the entity assayed).
+    """
+
+    declared_paths = {field.field_path for field in fields}
+    sources: dict[str, list[str]] = {}
+    for field in fields:
+        mirrors = field.metadata.get("materializes_to_field_paths")
+        if not isinstance(mirrors, list):
+            continue
+        for mirror in mirrors:
+            if not isinstance(mirror, str) or not mirror.strip():
+                continue
+            mirror_path = mirror.strip()
+            if mirror_path not in declared_paths and "." in mirror_path:
+                # A mirror may name its object type first (``Type.field``).
+                mirror_path = mirror_path.split(".", 1)[1]
+            # The copy is one key of the value it lands in.
+            value_path = mirror_path.rpartition(".")[0]
+            if value_path in specs and field.field_path not in sources.get(value_path, ()):
+                sources.setdefault(value_path, []).append(field.field_path)
+    return {
+        path: replace(spec, covered_by=tuple(sources[path])) if path in sources else spec
+        for path, spec in specs.items()
+    }
 
 
 def _bare_path(tokens: Sequence[str | int]) -> str:
     return ".".join(str(token) for token in tokens if isinstance(token, str))
+
+
+def declared_spec_for(
+    declared: Mapping[str, ResolvableSpec], tokens: Sequence[str | int],
+) -> ResolvableSpec | None:
+    """The spec declared for a concrete path: its indexed form (``terms[0]``) or its list field."""
+
+    return declared.get(_format_path(tokens)) or declared.get(_bare_path(tokens))
 
 
 def unresolved_header_text(
@@ -750,11 +1036,13 @@ def unresolved_header_text(
     named = _walk(payload, tokens)
     parent_tokens = tokens[:-1] if isinstance(tokens[-1], str) else None
     parent = _walk(payload, parent_tokens) if parent_tokens is not None else None
+    named_spec = declared_spec_for(declared, tokens)
+    parent_spec = declared_spec_for(declared, parent_tokens) if parent_tokens is not None else None
     spec: ResolvableSpec | None = None
-    if _bare_path(tokens) in declared and isinstance(named, Mapping):
-        target, target_tokens, leaf, spec = named, tokens, None, declared[_bare_path(tokens)]
-    elif parent_tokens is not None and _bare_path(parent_tokens) in declared and isinstance(parent, Mapping):
-        target, target_tokens, leaf, spec = parent, parent_tokens, named, declared[_bare_path(parent_tokens)]
+    if named_spec is not None and isinstance(named, Mapping):
+        target, target_tokens, leaf, spec = named, tokens, None, named_spec
+    elif parent_spec is not None and isinstance(parent, Mapping):
+        target, target_tokens, leaf, spec = parent, parent_tokens, named, parent_spec
     elif holds_resolution(named):
         target, target_tokens, leaf = named, tokens, None
     elif parent_tokens is not None and holds_resolution(parent):
@@ -765,17 +1053,23 @@ def unresolved_header_text(
     mention = target.get(mention_key)
     mention = mention.strip() if isinstance(mention, str) and mention.strip() else None
     if has_resolution_state(target):
-        if target[RESOLUTION_STATE_KEY] == RESOLVED:
+        if is_resolved(target, identity_keys=spec.identity_keys if spec is not None else ()):
             return None
-        return f"{mention} {PAPER_WORDING_SUFFIX}" if mention else UNRESOLVED_DISPLAY
+        if mention:
+            return f"{mention} {PAPER_WORDING_SUFFIX}"
+        # A pre-contract container re-validated as unresolved: its old text is unverified.
+        stored = _stored_text(target, spec) if spec is not None else (
+            str(leaf).strip() if leaf is not None and not isinstance(leaf, (Mapping, list)) else ""
+        )
+        return f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else UNRESOLVED_DISPLAY
     if spec is not None:
         identity = [target.get(key) for key in spec.identity_keys]
     elif target is not named:
         identity = [leaf]
     else:
         identity = [item for key, item in target.items() if key not in CONTRACT_KEYS]
-    if any(not _is_empty(item) for item in identity) and validator_event_covers(
-        object_metadata, _format_path(target_tokens)
+    if any(not _is_empty(item) for item in identity) and value_covered_by_validator(
+        object_metadata, _format_path(target_tokens), spec
     ):
         return None
     if spec is not None:
@@ -789,6 +1083,8 @@ def unresolved_header_text(
 
 __all__ = [
     "CONTRACT_KEYS",
+    "INVALID_RECORD_EXPLANATION",
+    "INVALID_RECORD_SUFFIX",
     "LEAF_VALUE_LABELS",
     "LEGACY_EXPLANATION",
     "LEGACY_UNVERIFIED_SUFFIX",
@@ -811,6 +1107,8 @@ __all__ = [
     "OUTCOME_REJECTED_CANDIDATES",
     "OUTCOME_TRANSIENT",
     "PAPER_WORDING_SUFFIX",
+    "PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY",
+    "PROPOSED_KEY_PREFIX",
     "RESOLUTION_STATES",
     "RESOLUTION_STATE_KEY",
     "RESOLUTION_STATE_LABELS",
@@ -831,21 +1129,27 @@ __all__ = [
     "check_resolvable_value",
     "copy_resolution",
     "declared_resolvable_fields",
+    "declared_spec_for",
     "effective_payload",
     "effective_resolution",
     "effective_value",
     "has_resolution_state",
     "holds_resolution",
+    "is_resolved",
     "lookup_outcome_for_failure",
     "mark_resolved",
     "mark_unresolved",
+    "proposed_key",
     "resolvable_leaf_header",
     "resolvable_spec_from_display",
     "resolved_value",
+    "stated_value",
+    "stored_state_problem",
     "unresolved_header_text",
     "unresolved_list",
     "unresolved_positions",
     "unresolved_value",
     "validator_event_covers",
     "validator_materialized_paths",
+    "value_covered_by_validator",
 ]

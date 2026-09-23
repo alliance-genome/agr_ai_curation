@@ -990,8 +990,8 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
     Read from the stored value with the shared resolvable-value rules
     (``src.lib.domain_packs.resolvable_values``), including the read-time
     legacy rule for values stored before resolution tracking (ALL-1283). A
-    stored value outside the contract reads as unresolved with an ``issue``
-    and no lookup outcome.
+    stored value that breaks the contract reads as unresolved/invalid_schema
+    with a curator-facing ``issue``.
     """
 
     value_path: str = Field(description="Payload path of the value; empty for the object itself")
@@ -1001,10 +1001,7 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
         description='Paper wording; a legacy value\'s stored text reads "... (legacy, unverified)"',
     )
     resolution_state: str = Field(description="resolved or unresolved")
-    lookup_outcome: str | None = Field(
-        default=None,
-        description="Code of the lookup outcome; null only for a stored value that cannot be read",
-    )
+    lookup_outcome: str = Field(description="Code of the lookup outcome")
     lookup_result: str = Field(description='The lookup outcome in plain words, e.g. "Not found"')
     validator_explanation: str | None = Field(
         default=None,
@@ -1033,10 +1030,8 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
 
         if self.resolution_state not in RESOLUTION_STATES:
             raise ValueError(f"resolution_state must be one of {RESOLUTION_STATES}")
-        if self.issue is not None:
-            if self.resolution_state != UNRESOLVED or self.lookup_outcome is not None:
-                raise ValueError("an unreadable value is unresolved and has no lookup_outcome")
-            return self
+        if self.issue is not None and self.resolution_state != UNRESOLVED:
+            raise ValueError("an unreadable stored value reads as unresolved")
         if self.lookup_outcome not in LOOKUP_OUTCOMES:
             raise ValueError(f"lookup_outcome must be one of {LOOKUP_OUTCOMES}")
         if self.lookup_result != LOOKUP_OUTCOME_LABELS[self.lookup_outcome]:

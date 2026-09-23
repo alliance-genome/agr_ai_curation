@@ -50,7 +50,9 @@ def _metadata() -> DomainPackMetadata:
             DomainPackModelDefinition(
                 model_id="SubjectMention",
                 display_name="Subject mention",
-                metadata={"display": {"label": "symbol", "id": "identifier", "mention": "mention"}},
+                metadata={"display": {
+                    "label": "symbol", "id": "identifier", "mention": "mention", "validated": ["taxon"],
+                }},
             )
         ],
         object_definitions=[
@@ -69,6 +71,7 @@ def _metadata() -> DomainPackMetadata:
                                 "fields": [
                                     "site.curie",
                                     "site.name",
+                                    "site.proposed_curie",
                                     "site.mention",
                                     "site.resolution_state",
                                     "site.lookup_outcome",
@@ -111,12 +114,17 @@ def _metadata() -> DomainPackMetadata:
                             {
                                 "id": "identity",
                                 "label": "Identity",
-                                "fields": ["symbol", "identifier", "proposed_symbol", "mention", "lookup_outcome"],
+                                "fields": [
+                                    "symbol", "identifier", "taxon", "proposed_symbol", "mention", "lookup_outcome",
+                                ],
                             },
                         ],
                     },
                 },
-                fields=[_field("symbol"), _field("identifier"), _field("mention"), _field("proposed_symbol")],
+                fields=[
+                    _field("symbol"), _field("identifier"), _field("taxon"), _field("mention"),
+                    _field("proposed_symbol"),
+                ],
             ),
         ],
     )
@@ -285,7 +293,7 @@ def test_object_root_value_reads_through_its_identity_fields():
     payload = {
         **unresolved_value(
             "abc-1",
-            identity_keys=("symbol", "identifier"),
+            identity_keys=("symbol", "identifier", "taxon"),
             outcome="rejected_candidates",
             explanation="Every candidate was a different species.",
         ),
@@ -356,12 +364,12 @@ def test_resolved_value_vocabularies_are_closed():
         (
             {"mention": "gut", "curie": "ONT:1", "name": "gut", "resolution_state": "resolved",
              "lookup_outcome": "pending"},
-            "outside the controlled vocabulary",
+            "lookup_outcome must be one of",
         ),
         (
             {"mention": "gut", "curie": None, "name": None, "resolution_state": "unresolved",
              "lookup_outcome": None},
-            "outside the controlled vocabulary",
+            "lookup_outcome must be one of",
         ),
         (
             {"mention": "gut", "curie": "ONT:1", "name": "gut", "resolution_state": "resolved",
@@ -371,7 +379,7 @@ def test_resolved_value_vocabularies_are_closed():
         (
             {"mention": "gut", "curie": None, "name": None, "resolution_state": "unresolved",
              "lookup_outcome": "not_found", "validator_explanation": {"text": "no"}},
-            "validator_explanation must be text",
+            "validator_explanation must be text or null",
         ),
     ],
 )
@@ -386,16 +394,56 @@ def test_unreadable_stored_value_reads_unresolved_without_breaking_the_row(site,
         assert field.resolution.display_text == UNRESOLVED_DISPLAY
         [value] = field.resolution.values
         assert value.resolution_state == "unresolved"
-        assert value.lookup_outcome is None
-        assert value.lookup_result == "Stored value unreadable"
-        assert value.mention == "gut"
+        assert value.lookup_outcome == "invalid_schema"
+        assert value.lookup_result == "Invalid validator output"
+        assert value.mention == "gut (invalid record, unverified)"
+        assert value.validator_explanation is None
         assert value.issue == (
             "This stored value could not be read; please re-run validation or contact the "
             "AI Curation developers."
         )
-    assert _workspace_field(row, "site.lookup_outcome").resolution.display_text == "Stored value unreadable"
+    assert _workspace_field(row, "site.lookup_outcome").resolution.display_text == "Invalid validator output"
     assert _summary_field(row, "note").value == "plain"
     # The technical detail goes to the log, with where the value lives.
     assert "unreadable resolvable value" in caplog.text
     assert "envelope_id=env-resolution envelope_revision=1 object_id=object-1" in caplog.text
     assert issue in caplog.text
+
+
+def test_validated_keys_read_like_the_identity():
+    unresolved = _row(
+        unresolved_value("abc-1", identity_keys=("symbol", "identifier", "taxon")),
+        object_type="SubjectEvidence",
+    )
+    resolved = _row(
+        resolved_value("abc-1", {"symbol": "abc-1", "identifier": "GENE:1", "taxon": "TAXON:9"}),
+        object_type="SubjectEvidence",
+    )
+
+    assert _workspace_field(unresolved, "taxon").resolution.display_text == UNRESOLVED_DISPLAY
+    assert _workspace_field(resolved, "taxon").resolution.display_text == "TAXON:9"
+    assert _workspace_field(resolved, "symbol").resolution.values[0].display_text == "abc-1 (GENE:1)"
+
+
+def test_a_demoted_value_never_shows_its_hints_as_the_value():
+    # A validator overruled a builder-resolved value: its identity is kept only as hints.
+    site = unresolved_value(
+        "gut lining",
+        identity_keys=TERM_KEYS,
+        outcome="rejected_candidates",
+        explanation="The lookup matched a different tissue.",
+        proposed_curie="ONT:0000101",
+        proposed_name="gut",
+    )
+    row = _row({"site": site})
+
+    whole = _summary_field(row, "site").resolution
+    assert whole.display_text == UNRESOLVED_DISPLAY
+    assert whole.values[0].display_text == UNRESOLVED_DISPLAY
+    for path in ("site.curie", "site.name"):
+        assert _workspace_field(row, path).resolution.display_text == UNRESOLVED_DISPLAY
+    # The hint is its own labelled field, never a reading of the value.
+    hint = _workspace_field(row, "site.proposed_curie")
+    assert hint.value == "ONT:0000101"
+    assert hint.resolution is None
+    assert "ONT:0000101" not in row.display_label

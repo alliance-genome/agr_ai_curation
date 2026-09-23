@@ -1327,6 +1327,30 @@ describe('buildHorizontalGridModel', () => {
         }),
         draftField({ fieldKey: 'aliases', label: 'Aliases', order: 3, value: ['one', 'two'] }),
         draftField({
+          fieldKey: 'demoted',
+          label: 'Demoted',
+          order: 5,
+          value: {
+            mention: 'gut lining',
+            curie: null,
+            proposed_curie: 'ONT:1',
+            resolution_state: 'unresolved',
+            lookup_outcome: 'rejected_candidates',
+          },
+        }),
+        draftField({
+          fieldKey: 'reresolved',
+          label: 'Re-resolved',
+          order: 6,
+          value: {
+            abbreviation: 'XB',
+            proposed_abbreviation: 'YB',
+            mention: 'Xenbase',
+            resolution_state: 'resolved',
+            lookup_outcome: 'matched',
+          },
+        }),
+        draftField({
           fieldKey: 'provider_ref',
           label: 'Provider reference',
           order: 4,
@@ -1348,6 +1372,9 @@ describe('buildHorizontalGridModel', () => {
       'UNRESOLVED',
       'abbreviation: XB; tags: a, b | abbreviation: YB',
       'one; two',
+      'abbreviation: XB',
+      // A validator's overruled identity survives only as a hint, never as the value.
+      'UNRESOLVED',
       'abbreviation: XB',
     ])
   })

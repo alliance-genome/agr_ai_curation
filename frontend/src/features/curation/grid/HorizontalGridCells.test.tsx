@@ -156,8 +156,8 @@ describe('HorizontalGridFieldCellContent', () => {
       display_text: 'UNRESOLVED',
       mention: 'gut',
       resolution_state: 'unresolved',
-      lookup_outcome: null,
-      lookup_result: 'Stored value unreadable',
+      lookup_outcome: 'invalid_schema',
+      lookup_result: 'Invalid validator output',
       validator_explanation: null,
       issue: 'This stored value could not be read; please re-run validation or contact the '
         + 'AI Curation developers.',
@@ -166,7 +166,7 @@ describe('HorizontalGridFieldCellContent', () => {
 
     expect(slot(container, 'field-value')).toHaveTextContent(/^UNRESOLVED$/)
     expect(slot(container, 'field-lookup-result')).toHaveTextContent(
-      'Lookup result: Stored value unreadable. This stored value could not be read; '
+      'Lookup result: Invalid validator output. This stored value could not be read; '
       + 'please re-run validation or contact the AI Curation developers.',
     )
   })
