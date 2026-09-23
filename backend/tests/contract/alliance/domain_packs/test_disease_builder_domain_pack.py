@@ -777,7 +777,7 @@ def test_disease_builder_rejects_new_candidate_without_rationale():
     assert any(issue["reason"] == "missing_rationale" for issue in result.issues)
 
 
-def test_disease_annotations_declare_optional_rationale_in_evidence_group():
+def test_disease_annotations_declare_optional_rationale_in_rationale_group():
     registry = load_alliance_domain_pack_registry()
     pack = registry.get_pack(DISEASE_DOMAIN_PACK_ID)
     assert pack is not None
@@ -798,9 +798,9 @@ def test_disease_annotations_declare_optional_rationale_in_evidence_group():
         assert rationale.field_type == "string"
         assert rationale.required is False
         groups = definition.metadata["workspace_display"]["groups"]
-        evidence_group = next(group for group in groups if group["id"] == "evidence")
-        assert evidence_group["label"] == "Evidence and rationale"
-        assert evidence_group["fields"] == ["rationale"]
+        rationale_group = next(group for group in groups if group["id"] == "rationale")
+        assert rationale_group["label"] == "Rationale"
+        assert rationale_group["fields"] == ["rationale"]
 
 
 def test_stored_disease_annotation_without_rationale_validates_without_new_findings():

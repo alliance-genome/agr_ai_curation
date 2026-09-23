@@ -267,8 +267,8 @@ object_definitions:
               - disease_qualifier_names
               - genetic_sex_name
               - with_gene_identifiers
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
           - id: provenance
@@ -1130,8 +1130,8 @@ object_definitions:
               - disease_qualifier_names
               - genetic_sex_name
               - with_gene_identifiers
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
           - id: provenance
@@ -1584,8 +1584,8 @@ object_definitions:
               - disease_qualifier_names
               - genetic_sex_name
               - with_gene_identifiers
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
           - id: provenance
@@ -2031,8 +2031,8 @@ object_definitions:
               - disease_qualifier_names
               - genetic_sex_name
               - with_gene_identifiers
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
           - id: provenance

@@ -234,8 +234,8 @@ object_definitions:
             label: Experimental conditions
             fields:
               - condition_relations
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
       export_behavior:
