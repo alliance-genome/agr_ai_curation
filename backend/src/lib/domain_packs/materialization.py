@@ -42,6 +42,7 @@ from src.schemas.domain_envelope import (
 )
 from src.schemas.domain_pack_metadata import (
     DomainPackFieldDefinition,
+    DomainPackFieldType,
     DomainPackMetadata,
     DomainPackObjectDefinition,
 )
@@ -421,6 +422,13 @@ def materialize_validator_results_into_envelope(
             source_envelope_revision=source_envelope_revision,
         )
         if patch_problem is not None:
+            working_envelope = _write_back_to_referencing_objects(
+                working_envelope,
+                item,
+                object_definitions=object_definitions,
+                validated_references=None,
+                source_envelope_revision=source_envelope_revision,
+            )
             findings.append(
                 _finding_for_materialization_problem(
                     item,
@@ -444,6 +452,13 @@ def materialize_validator_results_into_envelope(
                 new_objects,
             )
             materialized_objects.extend(linked_objects)
+            working_envelope = _write_back_to_referencing_objects(
+                working_envelope,
+                item,
+                object_definitions=object_definitions,
+                validated_references=new_objects,
+                source_envelope_revision=source_envelope_revision,
+            )
             validator_finding = _finding_for_validator_result(
                 item,
                 source_envelope_revision=source_envelope_revision,
@@ -461,6 +476,13 @@ def materialize_validator_results_into_envelope(
             )
             continue
 
+        working_envelope = _write_back_to_referencing_objects(
+            working_envelope,
+            item,
+            object_definitions=object_definitions,
+            validated_references=None,
+            source_envelope_revision=source_envelope_revision,
+        )
         findings.append(
             _finding_for_materialization_problem(
                 item,
@@ -700,6 +722,160 @@ def _patch_target_object_from_resolved_values(
         for candidate in envelope.extracted_objects
     ]
     return envelope.model_copy(update={"extracted_objects": objects}), None
+
+
+def _write_back_to_referencing_objects(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    validated_references: Sequence[CuratableObjectEnvelope] | None,
+    source_envelope_revision: int | None,
+) -> DomainEnvelope:
+    """Carry a binding's result onto the objects that reference its target.
+
+    A binding validates one target object, but a pack may declare that the
+    result belongs on another object too: a field whose
+    ``metadata.validation_result_binding_id`` names the binding, on an object
+    holding an object_ref to the validated target. A scalar field names the
+    result field it receives (``validation_result_field``); an object_ref field
+    receives the ref to the validated reference of its ``object_type_ref`` the
+    same result materialized.
+
+    Resolved (every declared result field came back): the declared values and
+    refs are written, a resolvable value holding the scalars is marked resolved,
+    and a write-back event is recorded. Otherwise nothing is written except the
+    lookup outcome on such a resolvable value; its id/label stay untouched.
+    ``validated_references`` is None when the result could not be materialized
+    (an invalid result or validated reference), which never counts as resolved.
+    """
+
+    target = item.match.object_envelope
+    if target is None:
+        return envelope
+    binding_id = item.request.validator_binding_id
+    target_keys = set(target.ref_keys())
+    objects = list(envelope.extracted_objects)
+    changed = False
+    for index, domain_object in enumerate(objects):
+        if _same_object_identity(domain_object, target) or not any(
+            ref.ref_key() in target_keys for ref in domain_object.object_refs
+        ):
+            continue
+        object_definition = object_definitions.get(domain_object.object_type)
+        declared = [
+            field
+            for field in (object_definition.fields if object_definition is not None else [])
+            if field.metadata.get("validation_result_binding_id") == binding_id
+        ]
+        if not declared:
+            continue
+        updated = _referencing_object_with_result(
+            domain_object,
+            item,
+            declared,
+            validated_references=validated_references,
+            source_envelope_revision=source_envelope_revision,
+        )
+        if updated is not domain_object:
+            objects[index] = updated
+            changed = True
+    if not changed:
+        return envelope
+    return envelope.model_copy(update={"extracted_objects": objects})
+
+
+def _referencing_object_with_result(
+    domain_object: CuratableObjectEnvelope,
+    item: ValidatorResultMaterializationInput,
+    declared: Sequence[DomainPackFieldDefinition],
+    *,
+    validated_references: Sequence[CuratableObjectEnvelope] | None,
+    source_envelope_revision: int | None,
+) -> CuratableObjectEnvelope:
+    result = item.result
+    scalar_writes = {
+        field.field_path: result.resolved_values.get(str(field.metadata["validation_result_field"]))
+        for field in declared
+        if field.metadata.get("validation_result_field")
+    }
+    ref_types = {
+        field.object_type_ref
+        for field in declared
+        if field.field_type is DomainPackFieldType.OBJECT_REF and field.object_type_ref
+    }
+    payload = copy.deepcopy(domain_object.payload)
+    containers: dict[str, list[str]] = {}
+    for field_path in scalar_writes:
+        container_path = _resolvable_container_path(payload, field_path)
+        if container_path is not None:
+            containers.setdefault(container_path, []).append(field_path)
+
+    if result.status != "resolved":
+        outcome = lookup_outcome_for_failure(
+            validator_failure_classification(result, error_type=DomainEnvelopeMaterializationError)
+        )
+    elif any(missing_resolved_value(value) for value in scalar_writes.values()):
+        outcome = OUTCOME_MISSING_EXPECTED_RESULT_FIELD
+    elif validated_references is None:
+        outcome = OUTCOME_INVALID_SCHEMA
+    else:
+        outcome = None
+    if outcome is not None:
+        for container_path in containers:
+            mark_unresolved(
+                _payload_container(payload, container_path),
+                outcome,
+                explanation=result.explanation,
+                curator_message=result.curator_message,
+            )
+        if payload == domain_object.payload:
+            return domain_object
+        return domain_object.model_copy(update={"payload": payload})
+
+    for field_path, value in scalar_writes.items():
+        if not any(field_path in paths for paths in containers.values()):
+            _set_payload_value(payload, field_path, value)
+    for container_path, field_paths in containers.items():
+        mark_resolved(
+            _payload_container(payload, container_path),
+            {str(parse_field_path(path)[-1]): scalar_writes[path] for path in field_paths},
+            explanation=result.explanation,
+            curator_message=result.curator_message,
+        )
+    object_refs = list(domain_object.object_refs)
+    existing_ref_keys = {ref.ref_key() for ref in object_refs}
+    for reference in validated_references:
+        object_ref = reference.to_object_ref()
+        if reference.object_type in ref_types and object_ref.ref_key() not in existing_ref_keys:
+            object_refs.append(object_ref)
+            existing_ref_keys.add(object_ref.ref_key())
+    if payload == domain_object.payload and object_refs == list(domain_object.object_refs):
+        return domain_object
+
+    metadata = dict(domain_object.metadata)
+    events = metadata.get(VALIDATOR_MATERIALIZATION_METADATA_KEY)
+    metadata[VALIDATOR_MATERIALIZATION_METADATA_KEY] = [
+        *(events if isinstance(events, list) else []),
+        {
+            "source": "domain_validator_referenced_target",
+            "request_id": result.request_id,
+            "validator_binding_id": result.validator_binding_id,
+            "validator_agent": result.validator_agent.model_dump(mode="json"),
+            "validated_target": item.match.object_envelope.to_object_ref().model_dump(
+                mode="json", exclude_none=True
+            ),
+            "materialized_field_paths": list(scalar_writes),
+            **(
+                {"source_envelope_revision": source_envelope_revision}
+                if source_envelope_revision is not None
+                else {}
+            ),
+        },
+    ]
+    return domain_object.model_copy(
+        update={"payload": payload, "object_refs": object_refs, "metadata": metadata}
+    )
 
 
 def _with_unresolved_values(
