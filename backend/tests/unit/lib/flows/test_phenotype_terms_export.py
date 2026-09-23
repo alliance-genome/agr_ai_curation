@@ -16,6 +16,7 @@ from src.lib.flows.output_projection import (
     default_projection_plan,
     finalize_output_projection,
 )
+from src.lib.flows.value_display import RECORD_SEPARATOR
 from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
 
 TERMS = "object.pack.PhenotypeAnnotation.phenotype_terms"
@@ -111,7 +112,7 @@ def test_joined_cell_carries_every_term_marked_per_term(output_format):
         {"key": "statement", "field_ref": "object.pack.PhenotypeAnnotation.phenotype_annotation_object"},
         {"key": "terms", "header": "Phenotype Terms", "field_ref": TERMS},
     ]))
-    assert result.rows[0]["terms"] == "; ".join(EXPECTED_TERMS)
+    assert result.rows[0]["terms"] == RECORD_SEPARATOR.join(EXPECTED_TERMS)
     assert result.rows[1]["terms"] == "dumpy (WBPhenotype:0000583)"
 
 
@@ -144,7 +145,7 @@ def test_default_layout_exports_every_phenotype_term(output_format):
     assert not any(ref and ref.startswith(TERMS + "[") for ref in refs)
     result = finalize_output_projection(bundle, plan)
     key = next(column.key for column in plan.columns if column.field_ref == TERMS)
-    assert result.rows[0][key] == "; ".join(EXPECTED_TERMS)
+    assert result.rows[0][key] == RECORD_SEPARATOR.join(EXPECTED_TERMS)
 
 
 def test_saved_first_term_layout_still_validates_and_renders():
@@ -167,3 +168,42 @@ def test_json_keeps_every_phenotype_term_lossless():
     terms = json.loads(json.dumps(result.json_data))[0]["terms"]
     assert [term["label"] for term in terms] == ["reduced brood size", "slow growth", "embryonic lethal"]
     assert terms[1]["curie"] is None
+
+
+@pytest.mark.parametrize("finding_path", ["phenotype_terms[1]", "phenotype_terms[1].curie"])
+@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
+def test_finding_on_embedded_term_marks_only_that_term(finding_path, output_format):
+    """An open finding addressed to the annotation's own embedded term (no PhenotypeTerm
+    support object) marks that term alone, in the joined cell and in split columns."""
+
+    step = _phenotype_step()
+    annotation = {
+        "object_type": "PhenotypeAnnotation", "object_id": "p3",
+        "payload": {
+            "annotation_kind": "phenotype_annotation",
+            "phenotype_annotation_object": "uncoordinated and dumpy",
+            "phenotype_terms": [
+                _term("uncoordinated", "WBPhenotype:0000643", "resolved"),
+                _term("dumpy", "WBPhenotype:0000583", "resolved"),
+            ],
+            "negated": False,
+        },
+    }
+    step["candidate"].payload_json = {
+        **step["candidate"].payload_json,
+        "extracted_objects": [annotation],
+        "validation_findings": [{
+            "finding_id": "f-embedded", "status": "open", "field_path": finding_path,
+            "field_ref": {"object_ref": {"object_id": "p3"}, "field_path": finding_path},
+        }],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step], flow_name="Phenotype", output_format=output_format,
+    )
+    expected = ["uncoordinated (WBPhenotype:0000643)", "dumpy (WBPhenotype:0000583, unresolved)"]
+    joined = apply_projection_plan(bundle, _plan(output_format, [{"key": "terms", "field_ref": TERMS}]))
+    assert joined.rows[0]["terms"] == RECORD_SEPARATOR.join(expected)
+    split = apply_projection_plan(bundle, _plan(output_format, [
+        {"key": "terms", "field_ref": TERMS, "split_list": {"header_template": "Phenotype Term {n}"}},
+    ]))
+    assert list(split.rows[0].values()) == expected
