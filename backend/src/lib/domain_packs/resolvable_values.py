@@ -850,6 +850,23 @@ def effective_value(
     return annotated
 
 
+def _legacy_text_value(value: Any, spec: ResolvableSpec) -> dict[str, Any]:
+    """A declared resolvable value stored before the contract as plain text (e.g. a string).
+
+    It reads unresolved/``legacy_unverified`` with the text as paper wording
+    labelled "(legacy, unverified)"; nothing verified it.
+    """
+
+    text = str(value).strip()
+    return {
+        **{key: None for key in spec.identity_keys},
+        spec.mention_key: f"{text} {LEGACY_UNVERIFIED_SUFFIX}",
+        RESOLUTION_STATE_KEY: UNRESOLVED,
+        LOOKUP_OUTCOME_KEY: OUTCOME_LEGACY_UNVERIFIED,
+        VALIDATOR_EXPLANATION_KEY: LEGACY_EXPLANATION,
+    }
+
+
 def _is_revalidated_legacy_leftover(value: Mapping[str, Any], spec: ResolvableSpec) -> bool:
     """A pre-contract value a validator left unresolved, still holding its old identity.
 
@@ -995,9 +1012,12 @@ def _annotate_at(
             for index, item in enumerate(node)
         ]
     if not remaining:
-        if not isinstance(node, Mapping) or walked in annotated:
+        if walked in annotated or _is_empty(node):
             return node
         annotated.add(walked)
+        if not isinstance(node, Mapping):
+            # A declared value stored before the contract as plain text.
+            return _legacy_text_value(node, spec)
         # Coverage matters only for a value stored without the contract state.
         return effective_value(
             node,
@@ -1141,6 +1161,9 @@ def unresolved_header_text(
     named_spec = declared_spec_for(declared, tokens)
     parent_spec = declared_spec_for(declared, parent_tokens) if parent_tokens is not None else None
     spec: ResolvableSpec | None = None
+    if named_spec is not None and not isinstance(named, (Mapping, list)) and not _is_empty(named):
+        # A declared value stored before the contract as plain text.
+        return f"{str(named).strip()} {LEGACY_UNVERIFIED_SUFFIX}"
     if named_spec is not None and isinstance(named, Mapping):
         target, target_tokens, leaf, spec = named, tokens, None, named_spec
     elif parent_spec is not None and isinstance(parent, Mapping):

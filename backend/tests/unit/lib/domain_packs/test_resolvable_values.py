@@ -1433,3 +1433,28 @@ def test_revalidation_with_new_wording_updates_the_explanation_without_a_new_eve
     assert patched.metadata["validator_resolved_value_materialization"] == events
     assert patched.payload["site"]["validator_explanation"] == "Same term, different words."
     assert patched.payload["site"]["curie"] == "ONT:1"
+
+
+# --- M6: plain-text legacy values at declared paths -----------------------------
+
+
+def test_plain_text_stored_at_a_declared_path_reads_as_legacy_paper_wording():
+    from src.lib.domain_packs.resolvable_values import unresolved_header_text
+    from src.lib.flows.value_display import display_text
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    payload = {"site": "hypodermis", "terms": ["embryo", "adult"], "empty": None}
+    effective = effective_payload(payload, {"site": spec, "terms": spec, "empty": spec}, object_metadata=None)
+
+    assert effective["site"] == {
+        "curie": None, "name": None, "mention": f"hypodermis {LEGACY_UNVERIFIED_SUFFIX}",
+        "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_LEGACY_UNVERIFIED,
+        "validator_explanation": LEGACY_EXPLANATION,
+    }
+    assert [term["mention"] for term in effective["terms"]] == [
+        f"embryo {LEGACY_UNVERIFIED_SUFFIX}", f"adult {LEGACY_UNVERIFIED_SUFFIX}"]
+    assert effective["empty"] is None
+    assert display_text(effective["site"], _TERM_DISPLAY) == "UNRESOLVED"
+    assert unresolved_header_text(payload, "site", resolvable_fields={"site": spec}) == (
+        f"hypodermis {LEGACY_UNVERIFIED_SUFFIX}")
+    assert payload["site"] == "hypodermis"
