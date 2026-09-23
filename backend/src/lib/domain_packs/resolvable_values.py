@@ -138,8 +138,11 @@ LOOKUP_OUTCOME_LABELS: dict[str, str] = {
 }
 RESOLUTION_STATE_LABELS: dict[str, str] = {RESOLVED: "Resolved", UNRESOLVED: "Unresolved"}
 
-# A validator that overrules a resolved value keeps its identity under these hint keys.
-PROPOSED_KEY_PREFIX = "proposed_"
+# A validator that overrules a resolved value keeps the old identity under
+# these keys: informational only (never the value, never exported, never a
+# validator input). ``proposed_*`` stays the extractor's own proposal.
+OVERRULED_KEY_PREFIX = "overruled_"
+_EXTRACTOR_PROPOSAL_PREFIX = "proposed_"
 
 NOT_VALIDATED_EXPLANATION = "Not validated yet."
 LEGACY_EXPLANATION = "Recorded before validation tracking; not verified."
@@ -456,16 +459,42 @@ def mark_resolved(
     if not identity or all(_is_empty(item) for item in identity.values()):
         raise ResolvableValueError("mark_resolved needs the identity a validator supplied")
     value.update(identity)
+    _drop_overruled(value)
     value[RESOLUTION_STATE_KEY] = RESOLVED
     value[LOOKUP_OUTCOME_KEY] = OUTCOME_MATCHED
     _write_validator_text(value, explanation, curator_message)
     check_resolvable_value(value, identity_keys=tuple(identity))
 
 
-def proposed_key(key: str) -> str:
-    """The hint key that keeps an identity a validator overruled (``curie`` -> ``proposed_curie``)."""
+def overruled_key(key: str) -> str:
+    """The key that keeps an identity a validator overruled (``curie`` -> ``overruled_curie``)."""
 
-    return f"{PROPOSED_KEY_PREFIX}{key}"
+    return f"{OVERRULED_KEY_PREFIX}{key}"
+
+
+def _drop_overruled(value: MutableMapping[str, Any]) -> None:
+    """A fresh validator decision replaces any earlier overruled identity."""
+
+    for key in [key for key in value if isinstance(key, str) and key.startswith(OVERRULED_KEY_PREFIX)]:
+        del value[key]
+
+
+def without_overruled(value: Any) -> Any:
+    """A copy without overruled identities, for every reader that is not an audit view.
+
+    Overruled keys are informational only: they are never the value, never
+    exported and never a validator input.
+    """
+
+    if isinstance(value, list):
+        return [without_overruled(item) for item in value]
+    if isinstance(value, Mapping):
+        return {
+            key: without_overruled(item)
+            for key, item in value.items()
+            if not (isinstance(key, str) and key.startswith(OVERRULED_KEY_PREFIX))
+        }
+    return value
 
 
 def mark_unresolved(
@@ -480,9 +509,10 @@ def mark_unresolved(
 
     The validator is the authority: a value that read as resolved (e.g. a
     builder's deterministic lookup) becomes unresolved too. Its identity is
-    kept only as hints (``proposed_<key>``) and its ``identity_keys`` are
-    cleared, so the invariant holds. A value that never resolved keeps its
-    id/label as stored (empty for a contract value).
+    kept only as informational ``overruled_<key>`` keys and its
+    ``identity_keys`` are cleared, so the invariant holds; the extractor's own
+    ``proposed_*`` keys are never touched. A value that never resolved keeps
+    its id/label as stored (empty for a contract value).
     """
 
     if outcome not in STORED_UNRESOLVED_OUTCOMES:
@@ -494,7 +524,7 @@ def mark_unresolved(
             raise ResolvableValueError("Unresolving a resolved value needs its identity keys")
         for key in identity_keys:
             if not _is_empty(value.get(key)):
-                value[proposed_key(key)] = value[key]
+                value[overruled_key(key)] = value[key]
             if key in value:
                 value[key] = None
     value[RESOLUTION_STATE_KEY] = UNRESOLVED
@@ -512,6 +542,7 @@ def copy_resolution(source: Mapping[str, Any], target: MutableMapping[str, Any])
         _write_validator_text(
             target, source.get(VALIDATOR_EXPLANATION_KEY), source.get(VALIDATOR_CURATOR_MESSAGE_KEY),
         )
+        _drop_overruled(target)
         _check_contract_fields(target)
     elif source.get(RESOLUTION_STATE_KEY) == UNRESOLVED:
         mark_unresolved(
@@ -519,12 +550,14 @@ def copy_resolution(source: Mapping[str, Any], target: MutableMapping[str, Any])
             source[LOOKUP_OUTCOME_KEY],
             explanation=source.get(VALIDATOR_EXPLANATION_KEY),
             curator_message=source.get(VALIDATOR_CURATOR_MESSAGE_KEY),
-            # The mirror holds the source's keys; the ones the source moved to hints.
-            identity_keys=tuple(
-                key.removeprefix(PROPOSED_KEY_PREFIX)
+            # The mirror holds the source's own keys (never its proposals).
+            identity_keys=tuple(dict.fromkeys(
+                key.removeprefix(OVERRULED_KEY_PREFIX)
                 for key in source
-                if key.startswith(PROPOSED_KEY_PREFIX)
-            ),
+                if isinstance(key, str)
+                and key not in CONTRACT_KEYS
+                and not key.startswith(_EXTRACTOR_PROPOSAL_PREFIX)
+            )),
         )
 
 
@@ -1108,7 +1141,7 @@ __all__ = [
     "OUTCOME_TRANSIENT",
     "PAPER_WORDING_SUFFIX",
     "PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY",
-    "PROPOSED_KEY_PREFIX",
+    "OVERRULED_KEY_PREFIX",
     "RESOLUTION_STATES",
     "RESOLUTION_STATE_KEY",
     "RESOLUTION_STATE_LABELS",
@@ -1139,7 +1172,7 @@ __all__ = [
     "lookup_outcome_for_failure",
     "mark_resolved",
     "mark_unresolved",
-    "proposed_key",
+    "overruled_key",
     "resolvable_leaf_header",
     "resolvable_spec_from_display",
     "resolved_value",
@@ -1151,5 +1184,6 @@ __all__ = [
     "unresolved_value",
     "validator_event_covers",
     "validator_materialized_paths",
+    "without_overruled",
     "value_covered_by_validator",
 ]

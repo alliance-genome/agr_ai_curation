@@ -31,7 +31,7 @@ from src.schemas.domain_validator import ValidatorOutputProjection
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
 from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
-from src.lib.domain_packs.resolvable_values import holds_resolution
+from src.lib.domain_packs.resolvable_values import holds_resolution, without_overruled
 from src.lib.flows.value_display import (
     LIST_SEPARATOR,
     display_text,
@@ -576,9 +576,10 @@ def _is_empty(value: Any) -> bool:
 
 
 def _scalar_payload_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+    # An identity a validator overruled is informational only, never exported.
     return {
         str(key): value
-        for key, value in payload.items()
+        for key, value in without_overruled(payload).items()
         if isinstance(value, (str, int, float, bool)) or value is None
     }
 
@@ -597,7 +598,7 @@ def _scalar_attribute_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(attributes, Mapping):
         return {}
     fields: dict[str, Any] = {}
-    for key, value in attributes.items():
+    for key, value in without_overruled(attributes).items():
         normalized_key = _normalize_attribute_key(key)
         if not normalized_key:
             continue
