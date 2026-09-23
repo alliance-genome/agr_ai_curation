@@ -287,7 +287,7 @@ def test_disease_groups_hide_plumbing_and_keep_curatable():
             proposed_subject_identifier="WB:WBGene1",
         ),
         "disease_relation": unresolved_value("is_implicated_in", identity_keys=("name",)),
-        "evidence_codes": [unresolved_value("ECO:0000033", identity_keys=("curie",))],
+        "evidence_code_curies": [unresolved_value("ECO:0000033", identity_keys=("curie",))],
         "data_provider": unresolved_value("WB", identity_keys=("abbreviation",)),
         "confidence": "high",
         "annotation_type": unresolved_value("manually_curated", identity_keys=("name",)),
@@ -304,7 +304,7 @@ def test_disease_groups_hide_plumbing_and_keep_curatable():
     assert "disease_annotation_object.mention" in paths
     assert "disease_annotation_subject.subject_identifier" in paths
     assert "disease_annotation_subject.mention" in paths
-    assert "evidence_codes" in paths
+    assert "evidence_code_curies" in paths
     assert "confidence" not in paths
     assert "annotation_type.vocabulary" not in paths
     assert "annotation_type.id" not in paths

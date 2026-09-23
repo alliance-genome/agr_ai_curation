@@ -387,7 +387,7 @@ def test_disease_export_blocks_every_unresolved_value_and_never_exports_paper_wo
         explanation="No Disease Ontology term matched.",
         proposed_curie="DOID:0050730",
     )
-    candidate["payload"]["evidence_codes"].append(
+    candidate["payload"]["evidence_code_curies"].append(
         unresolved_value("IMP", identity_keys=("curie",))
     )
 
@@ -402,7 +402,7 @@ def test_disease_export_blocks_every_unresolved_value_and_never_exports_paper_wo
         for blocker in payload["adapter_blockers"]
         if blocker["code"] == "alliance.disease.export.unresolved_value"
     }
-    assert set(unresolved) == {"disease_annotation_object", "evidence_codes[1]"}
+    assert set(unresolved) == {"disease_annotation_object", "evidence_code_curies[1]"}
     assert unresolved["disease_annotation_object"]["details"] == {
         "lookup_outcome": "not_found",
         "paper_wording": "breast carcinoma",

@@ -107,7 +107,7 @@ output:
         blocked:
         - disease_annotation_subject
         - single_reference
-        - evidence_codes
+        - evidence_code_curies
   metadata:
     raw_mentions:
     - mention: Andersen-Tawil syndrome

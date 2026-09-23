@@ -10,6 +10,10 @@ from agr_ai_curation_alliance.domain_packs.disease import (
     DiseaseAnnotationExportAdapter,
     DiseaseAnnotationSubmissionBlockerAdapter,
 )
+from agr_ai_curation_alliance.domain_packs.disease.legacy import (
+    DiseaseReviewRowMaterializer,
+    validate_disease_envelope,
+)
 from agr_ai_curation_alliance.domain_packs.gene import GeneMentionEvidenceExportAdapter
 from agr_ai_curation_alliance.domain_packs.gene import normalize_gene_extraction_payload
 from agr_ai_curation_alliance.domain_packs.generic import (
@@ -64,7 +68,11 @@ _DOMAIN_SUBMISSION_TRANSPORTS = {
     "phenotype": PhenotypeAnnotationSubmissionBlockerAdapter,
 }
 _DOMAIN_ENVELOPE_VALIDATORS = {
+    "disease": validate_disease_envelope,
     "gene_expression": validate_pending_gene_expression_envelope,
+}
+_REVIEW_ROW_MATERIALIZERS = {
+    "disease": DiseaseReviewRowMaterializer,
 }
 _EXTRACTION_PAYLOAD_NORMALIZERS = {
     "gene": normalize_gene_extraction_payload,
@@ -88,9 +96,9 @@ def register_curation_adapters(registry) -> None:
             domain_pack=domain_pack,
             domain_envelope_validator=_domain_envelope_validator_for(adapter_key),
             extraction_payload_normalizer=_extraction_payload_normalizer_for(adapter_key),
-            review_row_materializer=DomainPackMetadataReviewRowMaterializer(
-                metadata=domain_pack.metadata,
-            ),
+            review_row_materializer=_REVIEW_ROW_MATERIALIZERS.get(
+                adapter_key, DomainPackMetadataReviewRowMaterializer
+            )(metadata=domain_pack.metadata),
         )
 
     registry.register_adapter(

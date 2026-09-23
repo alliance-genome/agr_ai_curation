@@ -214,6 +214,7 @@ model_definitions:
     definition_state: stable
     metadata:
       display:
+        label: name
         id: curie
         mention: mention
   - model_id: ConditionRelationPayload
@@ -327,7 +328,7 @@ object_definitions:
           - id: evidence_codes
             label: Evidence & codes
             fields:
-              - evidence_codes
+              - evidence_code_curies
           - id: conditions
             label: Experimental conditions
             fields:
@@ -335,9 +336,9 @@ object_definitions:
           - id: qualifiers
             label: Optional qualifiers
             fields:
-              - disease_qualifiers
+              - disease_qualifier_names
               - genetic_sex
-              - with_genes
+              - with_gene_identifiers
           - id: rationale
             label: Rationale
             fields:
@@ -354,7 +355,7 @@ object_definitions:
           - disease_relation
           - role
           - confidence
-          - evidence_codes
+          - evidence_code_curies
           - evidence_record_ids
           - evidence_records
           - condition_relations
@@ -510,15 +511,13 @@ object_definitions:
       - field_path: disease_annotation_object.proposed_curie
         field_type: string
         display_name: Disease term proposed ID
-        description: The ID the extractor proposed; a validator checks it and it is never shown as the validated
-          ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_object.proposed_name
         field_type: string
         display_name: Disease term proposed name
-        description: The name the extractor proposed; a validator checks it and it is never shown as the validated
-          name.
+        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_object.resolution_state
@@ -703,8 +702,7 @@ object_definitions:
       - field_path: disease_annotation_subject.proposed_subject_identifier
         field_type: string
         display_name: Subject proposed identifier
-        description: The identifier the extractor proposed; a validator checks it and it is never shown as the
-          validated identifier.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_subject.resolution_state
@@ -778,7 +776,7 @@ object_definitions:
               range: string
               db_table: informationcontententity
               db_column: curie
-      - field_path: evidence_codes
+      - field_path: evidence_code_curies
         field_type: array
         display_name: Evidence codes
         metadata:
@@ -799,7 +797,7 @@ object_definitions:
               slot: evidence_code_curies
               range: string
         model_ref: EvidenceCodeSnapshotPayload
-      - field_path: evidence_codes.curie
+      - field_path: evidence_code_curies.curie
         field_type: string
         display_name: Evidence code CURIE
         description: ECO term ID the ontology validator confirmed; empty until then.
@@ -808,33 +806,33 @@ object_definitions:
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
           definition_state_category: complete
-      - field_path: evidence_codes.mention
+      - field_path: evidence_code_curies.mention
         field_type: string
         display_name: Evidence code paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: evidence_codes.resolution_state
+      - field_path: evidence_code_curies.resolution_state
         field_type: enum
         display_name: Evidence code status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: evidence_codes.lookup_outcome
+      - field_path: evidence_code_curies.lookup_outcome
         field_type: enum
         display_name: Evidence code lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: evidence_codes.validator_explanation
+      - field_path: evidence_code_curies.validator_explanation
         field_type: string
         display_name: Evidence code validator explanation
         metadata:
           protected: true
-      - field_path: evidence_codes.validator_curator_message
+      - field_path: evidence_code_curies.validator_curator_message
         field_type: string
         display_name: Evidence code validator message
         metadata:
@@ -990,7 +988,7 @@ object_definitions:
         display_name: Genetic sex validator message
         metadata:
           protected: true
-      - field_path: disease_qualifiers
+      - field_path: disease_qualifier_names
         field_type: array
         display_name: Disease qualifiers
         metadata:
@@ -1011,7 +1009,7 @@ object_definitions:
               slot: disease_qualifier_names
               range: string
         model_ref: VocabularyTermSnapshotPayload
-      - field_path: disease_qualifiers.name
+      - field_path: disease_qualifier_names.name
         field_type: string
         display_name: Disease qualifier name
         description: Disease Qualifier vocabulary term name the validator confirmed; empty until then.
@@ -1020,38 +1018,38 @@ object_definitions:
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
           definition_state_category: complete
-      - field_path: disease_qualifiers.mention
+      - field_path: disease_qualifier_names.mention
         field_type: string
         display_name: Disease qualifier paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: disease_qualifiers.resolution_state
+      - field_path: disease_qualifier_names.resolution_state
         field_type: enum
         display_name: Disease qualifier status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: disease_qualifiers.lookup_outcome
+      - field_path: disease_qualifier_names.lookup_outcome
         field_type: enum
         display_name: Disease qualifier lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: disease_qualifiers.validator_explanation
+      - field_path: disease_qualifier_names.validator_explanation
         field_type: string
         display_name: Disease qualifier validator explanation
         metadata:
           protected: true
-      - field_path: disease_qualifiers.validator_curator_message
+      - field_path: disease_qualifier_names.validator_curator_message
         field_type: string
         display_name: Disease qualifier validator message
         metadata:
           protected: true
-      - field_path: with_genes
+      - field_path: with_gene_identifiers
         field_type: array
         display_name: With/from genes
         metadata:
@@ -1072,7 +1070,7 @@ object_definitions:
               slot: with_gene_identifiers
               range: string
         model_ref: WithGeneSnapshotPayload
-      - field_path: with_genes.primary_external_id
+      - field_path: with_gene_identifiers.primary_external_id
         field_type: string
         display_name: With/from gene identifier
         description: Gene identifier the gene validator confirmed; empty until then.
@@ -1081,33 +1079,33 @@ object_definitions:
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           definition_state_category: complete
-      - field_path: with_genes.mention
+      - field_path: with_gene_identifiers.mention
         field_type: string
         display_name: With/from gene paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: with_genes.resolution_state
+      - field_path: with_gene_identifiers.resolution_state
         field_type: enum
         display_name: With/from gene status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: with_genes.lookup_outcome
+      - field_path: with_gene_identifiers.lookup_outcome
         field_type: enum
         display_name: With/from gene lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: with_genes.validator_explanation
+      - field_path: with_gene_identifiers.validator_explanation
         field_type: string
         display_name: With/from gene validator explanation
         metadata:
           protected: true
-      - field_path: with_genes.validator_curator_message
+      - field_path: with_gene_identifiers.validator_curator_message
         field_type: string
         display_name: With/from gene validator message
         metadata:
@@ -1370,8 +1368,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_class.proposed_curie
         field_type: string
         display_name: Condition class proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_class.resolution_state
@@ -1436,6 +1433,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_class.name
+        field_type: string
+        display_name: Condition class name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_id
         field_type: object
         display_name: Condition
@@ -1451,8 +1454,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_id.proposed_curie
         field_type: string
         display_name: Condition proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_id.resolution_state
@@ -1517,6 +1519,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_id.name
+        field_type: string
+        display_name: Condition name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_chemical
         field_type: object
         display_name: Chemical
@@ -1532,8 +1540,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_chemical.proposed_curie
         field_type: string
         display_name: Chemical proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_chemical.resolution_state
@@ -1575,6 +1582,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_chemical.name
+        field_type: string
+        display_name: Chemical name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_taxon
         field_type: object
         display_name: Condition taxon
@@ -1590,8 +1603,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_taxon.proposed_curie
         field_type: string
         display_name: Condition taxon proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_taxon.resolution_state
@@ -1633,6 +1645,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_taxon.name
+        field_type: string
+        display_name: Condition taxon name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
@@ -1716,7 +1734,7 @@ object_definitions:
           - id: evidence_codes
             label: Evidence & codes
             fields:
-              - evidence_codes
+              - evidence_code_curies
           - id: conditions
             label: Experimental conditions
             fields:
@@ -1724,9 +1742,9 @@ object_definitions:
           - id: qualifiers
             label: Optional qualifiers
             fields:
-              - disease_qualifiers
+              - disease_qualifier_names
               - genetic_sex
-              - with_genes
+              - with_gene_identifiers
           - id: rationale
             label: Rationale
             fields:
@@ -1823,15 +1841,13 @@ object_definitions:
       - field_path: disease_annotation_object.proposed_curie
         field_type: string
         display_name: Disease term proposed ID
-        description: The ID the extractor proposed; a validator checks it and it is never shown as the validated
-          ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_object.proposed_name
         field_type: string
         display_name: Disease term proposed name
-        description: The name the extractor proposed; a validator checks it and it is never shown as the validated
-          name.
+        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_object.resolution_state
@@ -2010,8 +2026,7 @@ object_definitions:
       - field_path: disease_annotation_subject.proposed_subject_identifier
         field_type: string
         display_name: Subject proposed identifier
-        description: The identifier the extractor proposed; a validator checks it and it is never shown as the
-          validated identifier.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_subject.resolution_state
@@ -2085,7 +2100,7 @@ object_definitions:
               range: string
               db_table: informationcontententity
               db_column: curie
-      - field_path: evidence_codes
+      - field_path: evidence_code_curies
         field_type: array
         display_name: Evidence codes
         metadata:
@@ -2106,7 +2121,7 @@ object_definitions:
               slot: evidence_code_curies
               range: string
         model_ref: EvidenceCodeSnapshotPayload
-      - field_path: evidence_codes.curie
+      - field_path: evidence_code_curies.curie
         field_type: string
         display_name: Evidence code CURIE
         description: ECO term ID the ontology validator confirmed; empty until then.
@@ -2115,33 +2130,33 @@ object_definitions:
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
           definition_state_category: complete
-      - field_path: evidence_codes.mention
+      - field_path: evidence_code_curies.mention
         field_type: string
         display_name: Evidence code paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: evidence_codes.resolution_state
+      - field_path: evidence_code_curies.resolution_state
         field_type: enum
         display_name: Evidence code status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: evidence_codes.lookup_outcome
+      - field_path: evidence_code_curies.lookup_outcome
         field_type: enum
         display_name: Evidence code lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: evidence_codes.validator_explanation
+      - field_path: evidence_code_curies.validator_explanation
         field_type: string
         display_name: Evidence code validator explanation
         metadata:
           protected: true
-      - field_path: evidence_codes.validator_curator_message
+      - field_path: evidence_code_curies.validator_curator_message
         field_type: string
         display_name: Evidence code validator message
         metadata:
@@ -2297,7 +2312,7 @@ object_definitions:
         display_name: Genetic sex validator message
         metadata:
           protected: true
-      - field_path: disease_qualifiers
+      - field_path: disease_qualifier_names
         field_type: array
         display_name: Disease qualifiers
         metadata:
@@ -2318,7 +2333,7 @@ object_definitions:
               slot: disease_qualifier_names
               range: string
         model_ref: VocabularyTermSnapshotPayload
-      - field_path: disease_qualifiers.name
+      - field_path: disease_qualifier_names.name
         field_type: string
         display_name: Disease qualifier name
         description: Disease Qualifier vocabulary term name the validator confirmed; empty until then.
@@ -2327,38 +2342,38 @@ object_definitions:
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
           definition_state_category: complete
-      - field_path: disease_qualifiers.mention
+      - field_path: disease_qualifier_names.mention
         field_type: string
         display_name: Disease qualifier paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: disease_qualifiers.resolution_state
+      - field_path: disease_qualifier_names.resolution_state
         field_type: enum
         display_name: Disease qualifier status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: disease_qualifiers.lookup_outcome
+      - field_path: disease_qualifier_names.lookup_outcome
         field_type: enum
         display_name: Disease qualifier lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: disease_qualifiers.validator_explanation
+      - field_path: disease_qualifier_names.validator_explanation
         field_type: string
         display_name: Disease qualifier validator explanation
         metadata:
           protected: true
-      - field_path: disease_qualifiers.validator_curator_message
+      - field_path: disease_qualifier_names.validator_curator_message
         field_type: string
         display_name: Disease qualifier validator message
         metadata:
           protected: true
-      - field_path: with_genes
+      - field_path: with_gene_identifiers
         field_type: array
         display_name: With/from genes
         metadata:
@@ -2379,7 +2394,7 @@ object_definitions:
               slot: with_gene_identifiers
               range: string
         model_ref: WithGeneSnapshotPayload
-      - field_path: with_genes.primary_external_id
+      - field_path: with_gene_identifiers.primary_external_id
         field_type: string
         display_name: With/from gene identifier
         description: Gene identifier the gene validator confirmed; empty until then.
@@ -2388,33 +2403,33 @@ object_definitions:
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           definition_state_category: complete
-      - field_path: with_genes.mention
+      - field_path: with_gene_identifiers.mention
         field_type: string
         display_name: With/from gene paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: with_genes.resolution_state
+      - field_path: with_gene_identifiers.resolution_state
         field_type: enum
         display_name: With/from gene status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: with_genes.lookup_outcome
+      - field_path: with_gene_identifiers.lookup_outcome
         field_type: enum
         display_name: With/from gene lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: with_genes.validator_explanation
+      - field_path: with_gene_identifiers.validator_explanation
         field_type: string
         display_name: With/from gene validator explanation
         metadata:
           protected: true
-      - field_path: with_genes.validator_curator_message
+      - field_path: with_gene_identifiers.validator_curator_message
         field_type: string
         display_name: With/from gene validator message
         metadata:
@@ -2677,8 +2692,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_class.proposed_curie
         field_type: string
         display_name: Condition class proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_class.resolution_state
@@ -2743,6 +2757,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_class.name
+        field_type: string
+        display_name: Condition class name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_id
         field_type: object
         display_name: Condition
@@ -2758,8 +2778,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_id.proposed_curie
         field_type: string
         display_name: Condition proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_id.resolution_state
@@ -2824,6 +2843,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_id.name
+        field_type: string
+        display_name: Condition name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_chemical
         field_type: object
         display_name: Chemical
@@ -2839,8 +2864,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_chemical.proposed_curie
         field_type: string
         display_name: Chemical proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_chemical.resolution_state
@@ -2882,6 +2906,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_chemical.name
+        field_type: string
+        display_name: Chemical name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_taxon
         field_type: object
         display_name: Condition taxon
@@ -2897,8 +2927,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_taxon.proposed_curie
         field_type: string
         display_name: Condition taxon proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_taxon.resolution_state
@@ -2940,6 +2969,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_taxon.name
+        field_type: string
+        display_name: Condition taxon name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
@@ -3017,7 +3052,7 @@ object_definitions:
           - id: evidence_codes
             label: Evidence & codes
             fields:
-              - evidence_codes
+              - evidence_code_curies
           - id: conditions
             label: Experimental conditions
             fields:
@@ -3025,9 +3060,9 @@ object_definitions:
           - id: qualifiers
             label: Optional qualifiers
             fields:
-              - disease_qualifiers
+              - disease_qualifier_names
               - genetic_sex
-              - with_genes
+              - with_gene_identifiers
           - id: rationale
             label: Rationale
             fields:
@@ -3124,15 +3159,13 @@ object_definitions:
       - field_path: disease_annotation_object.proposed_curie
         field_type: string
         display_name: Disease term proposed ID
-        description: The ID the extractor proposed; a validator checks it and it is never shown as the validated
-          ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_object.proposed_name
         field_type: string
         display_name: Disease term proposed name
-        description: The name the extractor proposed; a validator checks it and it is never shown as the validated
-          name.
+        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_object.resolution_state
@@ -3308,8 +3341,7 @@ object_definitions:
       - field_path: disease_annotation_subject.proposed_subject_identifier
         field_type: string
         display_name: Subject proposed identifier
-        description: The identifier the extractor proposed; a validator checks it and it is never shown as the
-          validated identifier.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_subject.resolution_state
@@ -3383,7 +3415,7 @@ object_definitions:
               range: string
               db_table: informationcontententity
               db_column: curie
-      - field_path: evidence_codes
+      - field_path: evidence_code_curies
         field_type: array
         display_name: Evidence codes
         metadata:
@@ -3404,7 +3436,7 @@ object_definitions:
               slot: evidence_code_curies
               range: string
         model_ref: EvidenceCodeSnapshotPayload
-      - field_path: evidence_codes.curie
+      - field_path: evidence_code_curies.curie
         field_type: string
         display_name: Evidence code CURIE
         description: ECO term ID the ontology validator confirmed; empty until then.
@@ -3413,33 +3445,33 @@ object_definitions:
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
           definition_state_category: complete
-      - field_path: evidence_codes.mention
+      - field_path: evidence_code_curies.mention
         field_type: string
         display_name: Evidence code paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: evidence_codes.resolution_state
+      - field_path: evidence_code_curies.resolution_state
         field_type: enum
         display_name: Evidence code status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: evidence_codes.lookup_outcome
+      - field_path: evidence_code_curies.lookup_outcome
         field_type: enum
         display_name: Evidence code lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: evidence_codes.validator_explanation
+      - field_path: evidence_code_curies.validator_explanation
         field_type: string
         display_name: Evidence code validator explanation
         metadata:
           protected: true
-      - field_path: evidence_codes.validator_curator_message
+      - field_path: evidence_code_curies.validator_curator_message
         field_type: string
         display_name: Evidence code validator message
         metadata:
@@ -3595,7 +3627,7 @@ object_definitions:
         display_name: Genetic sex validator message
         metadata:
           protected: true
-      - field_path: disease_qualifiers
+      - field_path: disease_qualifier_names
         field_type: array
         display_name: Disease qualifiers
         metadata:
@@ -3616,7 +3648,7 @@ object_definitions:
               slot: disease_qualifier_names
               range: string
         model_ref: VocabularyTermSnapshotPayload
-      - field_path: disease_qualifiers.name
+      - field_path: disease_qualifier_names.name
         field_type: string
         display_name: Disease qualifier name
         description: Disease Qualifier vocabulary term name the validator confirmed; empty until then.
@@ -3625,38 +3657,38 @@ object_definitions:
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
           definition_state_category: complete
-      - field_path: disease_qualifiers.mention
+      - field_path: disease_qualifier_names.mention
         field_type: string
         display_name: Disease qualifier paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: disease_qualifiers.resolution_state
+      - field_path: disease_qualifier_names.resolution_state
         field_type: enum
         display_name: Disease qualifier status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: disease_qualifiers.lookup_outcome
+      - field_path: disease_qualifier_names.lookup_outcome
         field_type: enum
         display_name: Disease qualifier lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: disease_qualifiers.validator_explanation
+      - field_path: disease_qualifier_names.validator_explanation
         field_type: string
         display_name: Disease qualifier validator explanation
         metadata:
           protected: true
-      - field_path: disease_qualifiers.validator_curator_message
+      - field_path: disease_qualifier_names.validator_curator_message
         field_type: string
         display_name: Disease qualifier validator message
         metadata:
           protected: true
-      - field_path: with_genes
+      - field_path: with_gene_identifiers
         field_type: array
         display_name: With/from genes
         metadata:
@@ -3677,7 +3709,7 @@ object_definitions:
               slot: with_gene_identifiers
               range: string
         model_ref: WithGeneSnapshotPayload
-      - field_path: with_genes.primary_external_id
+      - field_path: with_gene_identifiers.primary_external_id
         field_type: string
         display_name: With/from gene identifier
         description: Gene identifier the gene validator confirmed; empty until then.
@@ -3686,33 +3718,33 @@ object_definitions:
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           definition_state_category: complete
-      - field_path: with_genes.mention
+      - field_path: with_gene_identifiers.mention
         field_type: string
         display_name: With/from gene paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: with_genes.resolution_state
+      - field_path: with_gene_identifiers.resolution_state
         field_type: enum
         display_name: With/from gene status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: with_genes.lookup_outcome
+      - field_path: with_gene_identifiers.lookup_outcome
         field_type: enum
         display_name: With/from gene lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: with_genes.validator_explanation
+      - field_path: with_gene_identifiers.validator_explanation
         field_type: string
         display_name: With/from gene validator explanation
         metadata:
           protected: true
-      - field_path: with_genes.validator_curator_message
+      - field_path: with_gene_identifiers.validator_curator_message
         field_type: string
         display_name: With/from gene validator message
         metadata:
@@ -3975,8 +4007,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_class.proposed_curie
         field_type: string
         display_name: Condition class proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_class.resolution_state
@@ -4041,6 +4072,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_class.name
+        field_type: string
+        display_name: Condition class name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_id
         field_type: object
         display_name: Condition
@@ -4056,8 +4093,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_id.proposed_curie
         field_type: string
         display_name: Condition proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_id.resolution_state
@@ -4122,6 +4158,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_id.name
+        field_type: string
+        display_name: Condition name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_chemical
         field_type: object
         display_name: Chemical
@@ -4137,8 +4179,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_chemical.proposed_curie
         field_type: string
         display_name: Chemical proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_chemical.resolution_state
@@ -4180,6 +4221,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_chemical.name
+        field_type: string
+        display_name: Chemical name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_taxon
         field_type: object
         display_name: Condition taxon
@@ -4195,8 +4242,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_taxon.proposed_curie
         field_type: string
         display_name: Condition taxon proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_taxon.resolution_state
@@ -4238,6 +4284,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_taxon.name
+        field_type: string
+        display_name: Condition taxon name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
@@ -4315,7 +4367,7 @@ object_definitions:
           - id: evidence_codes
             label: Evidence & codes
             fields:
-              - evidence_codes
+              - evidence_code_curies
           - id: conditions
             label: Experimental conditions
             fields:
@@ -4323,9 +4375,9 @@ object_definitions:
           - id: qualifiers
             label: Optional qualifiers
             fields:
-              - disease_qualifiers
+              - disease_qualifier_names
               - genetic_sex
-              - with_genes
+              - with_gene_identifiers
           - id: rationale
             label: Rationale
             fields:
@@ -4422,15 +4474,13 @@ object_definitions:
       - field_path: disease_annotation_object.proposed_curie
         field_type: string
         display_name: Disease term proposed ID
-        description: The ID the extractor proposed; a validator checks it and it is never shown as the validated
-          ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_object.proposed_name
         field_type: string
         display_name: Disease term proposed name
-        description: The name the extractor proposed; a validator checks it and it is never shown as the validated
-          name.
+        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_object.resolution_state
@@ -4608,8 +4658,7 @@ object_definitions:
       - field_path: disease_annotation_subject.proposed_subject_identifier
         field_type: string
         display_name: Subject proposed identifier
-        description: The identifier the extractor proposed; a validator checks it and it is never shown as the
-          validated identifier.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: disease_annotation_subject.resolution_state
@@ -4683,7 +4732,7 @@ object_definitions:
               range: string
               db_table: informationcontententity
               db_column: curie
-      - field_path: evidence_codes
+      - field_path: evidence_code_curies
         field_type: array
         display_name: Evidence codes
         metadata:
@@ -4704,7 +4753,7 @@ object_definitions:
               slot: evidence_code_curies
               range: string
         model_ref: EvidenceCodeSnapshotPayload
-      - field_path: evidence_codes.curie
+      - field_path: evidence_code_curies.curie
         field_type: string
         display_name: Evidence code CURIE
         description: ECO term ID the ontology validator confirmed; empty until then.
@@ -4713,33 +4762,33 @@ object_definitions:
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
           definition_state_category: complete
-      - field_path: evidence_codes.mention
+      - field_path: evidence_code_curies.mention
         field_type: string
         display_name: Evidence code paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: evidence_codes.resolution_state
+      - field_path: evidence_code_curies.resolution_state
         field_type: enum
         display_name: Evidence code status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: evidence_codes.lookup_outcome
+      - field_path: evidence_code_curies.lookup_outcome
         field_type: enum
         display_name: Evidence code lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: evidence_codes.validator_explanation
+      - field_path: evidence_code_curies.validator_explanation
         field_type: string
         display_name: Evidence code validator explanation
         metadata:
           protected: true
-      - field_path: evidence_codes.validator_curator_message
+      - field_path: evidence_code_curies.validator_curator_message
         field_type: string
         display_name: Evidence code validator message
         metadata:
@@ -4895,7 +4944,7 @@ object_definitions:
         display_name: Genetic sex validator message
         metadata:
           protected: true
-      - field_path: disease_qualifiers
+      - field_path: disease_qualifier_names
         field_type: array
         display_name: Disease qualifiers
         metadata:
@@ -4916,7 +4965,7 @@ object_definitions:
               slot: disease_qualifier_names
               range: string
         model_ref: VocabularyTermSnapshotPayload
-      - field_path: disease_qualifiers.name
+      - field_path: disease_qualifier_names.name
         field_type: string
         display_name: Disease qualifier name
         description: Disease Qualifier vocabulary term name the validator confirmed; empty until then.
@@ -4925,38 +4974,38 @@ object_definitions:
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
           definition_state_category: complete
-      - field_path: disease_qualifiers.mention
+      - field_path: disease_qualifier_names.mention
         field_type: string
         display_name: Disease qualifier paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: disease_qualifiers.resolution_state
+      - field_path: disease_qualifier_names.resolution_state
         field_type: enum
         display_name: Disease qualifier status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: disease_qualifiers.lookup_outcome
+      - field_path: disease_qualifier_names.lookup_outcome
         field_type: enum
         display_name: Disease qualifier lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: disease_qualifiers.validator_explanation
+      - field_path: disease_qualifier_names.validator_explanation
         field_type: string
         display_name: Disease qualifier validator explanation
         metadata:
           protected: true
-      - field_path: disease_qualifiers.validator_curator_message
+      - field_path: disease_qualifier_names.validator_curator_message
         field_type: string
         display_name: Disease qualifier validator message
         metadata:
           protected: true
-      - field_path: with_genes
+      - field_path: with_gene_identifiers
         field_type: array
         display_name: With/from genes
         metadata:
@@ -4977,7 +5026,7 @@ object_definitions:
               slot: with_gene_identifiers
               range: string
         model_ref: WithGeneSnapshotPayload
-      - field_path: with_genes.primary_external_id
+      - field_path: with_gene_identifiers.primary_external_id
         field_type: string
         display_name: With/from gene identifier
         description: Gene identifier the gene validator confirmed; empty until then.
@@ -4986,33 +5035,33 @@ object_definitions:
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           definition_state_category: complete
-      - field_path: with_genes.mention
+      - field_path: with_gene_identifiers.mention
         field_type: string
         display_name: With/from gene paper wording
         description: The text the extractor chose for this value; kept as extracted and never replaced by the
           validated value.
         metadata:
           protected: true
-      - field_path: with_genes.resolution_state
+      - field_path: with_gene_identifiers.resolution_state
         field_type: enum
         display_name: With/from gene status
         description: Resolved only when a validator supplied the identity; otherwise unresolved.
         enum_ref: ResolutionState
         metadata:
           protected: true
-      - field_path: with_genes.lookup_outcome
+      - field_path: with_gene_identifiers.lookup_outcome
         field_type: enum
         display_name: With/from gene lookup result
         description: What the validator lookup found, or that no validator has run yet.
         enum_ref: LookupOutcome
         metadata:
           protected: true
-      - field_path: with_genes.validator_explanation
+      - field_path: with_gene_identifiers.validator_explanation
         field_type: string
         display_name: With/from gene validator explanation
         metadata:
           protected: true
-      - field_path: with_genes.validator_curator_message
+      - field_path: with_gene_identifiers.validator_curator_message
         field_type: string
         display_name: With/from gene validator message
         metadata:
@@ -5275,8 +5324,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_class.proposed_curie
         field_type: string
         display_name: Condition class proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_class.resolution_state
@@ -5341,6 +5389,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_class.name
+        field_type: string
+        display_name: Condition class name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_id
         field_type: object
         display_name: Condition
@@ -5356,8 +5410,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_id.proposed_curie
         field_type: string
         display_name: Condition proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_id.resolution_state
@@ -5422,6 +5475,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_id.name
+        field_type: string
+        display_name: Condition name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_chemical
         field_type: object
         display_name: Chemical
@@ -5437,8 +5496,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_chemical.proposed_curie
         field_type: string
         display_name: Chemical proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_chemical.resolution_state
@@ -5480,6 +5538,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_chemical.name
+        field_type: string
+        display_name: Chemical name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_taxon
         field_type: object
         display_name: Condition taxon
@@ -5495,8 +5559,7 @@ object_definitions:
       - field_path: condition_relations.conditions.condition_taxon.proposed_curie
         field_type: string
         display_name: Condition taxon proposed ID
-        description: The term ID the extractor proposed; a validator checks it and it is never shown as the
-          validated ID.
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
       - field_path: condition_relations.conditions.condition_taxon.resolution_state
@@ -5538,6 +5601,12 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_taxon.name
+        field_type: string
+        display_name: Condition taxon name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
@@ -5693,13 +5762,13 @@ metadata:
         curator_label: Confirm each disease qualifier against the Disease Qualifier vocabulary
         description: Checks that each qualifier on the annotation, such as susceptibility or severity, is a term in the Disease Qualifier vocabulary.
         definition_notes:
-          - Runs through the controlled-vocabulary package validator binding (vocabulary Disease Qualifier) on disease_qualifiers (R4).
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Disease Qualifier) on disease_qualifier_names (R4).
       - validator_id: disease_with_gene_validation
         display_name: With/from gene lookup
         curator_label: Confirm each with/from gene in the Alliance records
         description: Checks that each gene listed as supporting evidence in the with/from column matches an Alliance gene record.
         definition_notes:
-          - Runs through the gene_validation package validator binding on with_genes (R4).
+          - Runs through the gene_validation package validator binding on with_gene_identifiers (R4).
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
         curator_label: Confirm each experimental condition against the condition ontologies and vocabularies
@@ -5979,7 +6048,7 @@ metadata:
         allow_opt_out: true
         curator_override:
           allowed: true
-      # FULL LinkML alignment (D3): ECO evidence-code lookup activated. evidence_codes is
+      # FULL LinkML alignment (D3): ECO evidence-code lookup activated. evidence_code_curies is
       # LinkML-required + multivalued; ECO CURIEs are validated through the ontology-term validator.
       - binding_id: disease_evidence_code_lookup
         display_name: Evidence code lookup
@@ -5999,11 +6068,11 @@ metadata:
             - AlleleDiseaseAnnotation
             - AGMDiseaseAnnotation
           field_paths:
-            - evidence_codes
+            - evidence_code_curies
         input_fields:
           curie:
             source: payload
-            path: evidence_codes.mention
+            path: evidence_code_curies.mention
             required: false
           ontology_family:
             source: literal
@@ -6022,7 +6091,7 @@ metadata:
             allow_multiple: true
             context_only: true
         expected_result_fields:
-          curie: evidence_codes.curie
+          curie: evidence_code_curies.curie
         required: true
         blocking: false
         allow_opt_out: true
@@ -6115,7 +6184,7 @@ metadata:
         allow_opt_out: true
         curator_override:
           allowed: false
-      # R4 SLOT 3: disease_qualifiers — MULTIVALUED Disease Qualifier CV. The field is declared
+      # R4 SLOT 3: disease_qualifier_names — MULTIVALUED Disease Qualifier CV. The field is declared
       # `multivalued: true`, so every staged qualifier name fans out to its own per-element
       # validation against the Disease Qualifier vocabulary.
       - binding_id: disease_qualifier_cv_lookup
@@ -6124,7 +6193,7 @@ metadata:
         description: Checks that each qualifier on the annotation, such as susceptibility or severity, is a term in the Disease Qualifier vocabulary.
         when_off: Disease qualifiers stay as the extractor wrote them, and review rows show them unconfirmed.
         definition_notes:
-          - Runs through the controlled-vocabulary package validator binding (vocabulary Disease Qualifier) on disease_qualifiers (R4).
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Disease Qualifier) on disease_qualifier_names (R4).
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
@@ -6136,14 +6205,14 @@ metadata:
             - AlleleDiseaseAnnotation
             - AGMDiseaseAnnotation
           field_paths:
-            - disease_qualifiers
+            - disease_qualifier_names
         input_fields:
           vocabulary:
             source: literal
             value: Disease Qualifier
           term_name:
             source: payload
-            path: disease_qualifiers.mention
+            path: disease_qualifier_names.mention
             required: false
           source_mentions:
             source: payload
@@ -6152,7 +6221,7 @@ metadata:
             allow_multiple: true
             context_only: true
         expected_result_fields:
-          term_name: disease_qualifiers.name
+          term_name: disease_qualifier_names.name
         required: true
         blocking: false
         allow_opt_out: true
@@ -6162,7 +6231,7 @@ metadata:
           enabled: true
           family: disease_qualifier_cv_lookup
           max_size: 25
-      # R4 SLOT 4: with_or_from — MULTIVALUED Gene reference via with_genes. The field is
+      # R4 SLOT 4: with_or_from — MULTIVALUED Gene reference via with_gene_identifiers. The field is
       # declared `multivalued: true`, so every staged gene identifier fans out to its own per-element
       # validation through gene_validation, mirroring the subject_gene_validation binding.
       - binding_id: disease_with_gene_validation
@@ -6171,7 +6240,7 @@ metadata:
         description: Checks that each gene listed as supporting evidence in the with/from column matches an Alliance gene record.
         when_off: With/from genes stay as the extractor wrote them, and review rows show them unconfirmed.
         definition_notes:
-          - Runs through the gene_validation package validator binding on with_genes (R4).
+          - Runs through the gene_validation package validator binding on with_gene_identifiers (R4).
         validator_agent:
           package_id: agr.alliance
           agent_id: gene_validation
@@ -6183,11 +6252,11 @@ metadata:
             - AlleleDiseaseAnnotation
             - AGMDiseaseAnnotation
           field_paths:
-            - with_genes
+            - with_gene_identifiers
         input_fields:
           gene_id:
             source: payload
-            path: with_genes.mention
+            path: with_gene_identifiers.mention
             required: false
           data_provider:
             source: payload
@@ -6201,7 +6270,7 @@ metadata:
             allow_multiple: true
             context_only: true
         expected_result_fields:
-          primary_external_id: with_genes.primary_external_id
+          primary_external_id: with_gene_identifiers.primary_external_id
         required: true
         blocking: false
         allow_opt_out: true
@@ -6320,12 +6389,20 @@ metadata:
             allow_multiple: true
             required: false
             context_only: true
-        # The composite resolves on the always-present condition_class (the experimental-variable
-        # TYPE every condition carries); condition_id (a more specific ZECO term) is OPTIONAL and
-        # absent in ~74% of curated conditions, so requiring it would false-negative the majority.
-        # The agent still reports unresolved if any PRESENT component (class/chemical/...) fails.
+        # Every component the paper states is decided on its own (field_resolutions, ALL-1283):
+        # its CURIE and name are written back, or it records why it stays unresolved. A component
+        # the paper does not state (condition_id is absent in ~74% of curated conditions) is
+        # never required and never written. The condition as a whole stays unresolved if any
+        # PRESENT component fails.
         expected_result_fields:
           condition_class_curie: condition_relations.conditions.condition_class.curie
+          condition_class_name: condition_relations.conditions.condition_class.name
+          condition_id_curie: condition_relations.conditions.condition_id.curie
+          condition_id_name: condition_relations.conditions.condition_id.name
+          condition_chemical_curie: condition_relations.conditions.condition_chemical.curie
+          condition_chemical_name: condition_relations.conditions.condition_chemical.name
+          condition_taxon_curie: condition_relations.conditions.condition_taxon.curie
+          condition_taxon_name: condition_relations.conditions.condition_taxon.name
         required: true
         blocking: false
         allow_opt_out: true

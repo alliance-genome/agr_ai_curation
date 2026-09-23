@@ -35,7 +35,7 @@ disease:
         validator_explanation: Term found in the Gene Disease Relation subset.
       single_reference:
         reference_id: 508744
-      evidence_codes:
+      evidence_code_curies:
         - curie: ECO:0000314
           mention: ECO:0000314
           resolution_state: resolved

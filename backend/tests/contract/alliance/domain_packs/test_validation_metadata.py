@@ -1129,7 +1129,7 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "accepted_prefixes": ["ECO"],
                 "optional_inputs": ["curie"],
                 "expected_result_fields": {
-                    "curie": "evidence_codes.curie",
+                    "curie": "evidence_code_curies.curie",
                 },
             },
         },

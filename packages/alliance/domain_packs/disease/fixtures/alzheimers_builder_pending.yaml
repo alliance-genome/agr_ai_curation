@@ -174,7 +174,7 @@ fixtures:
           resolution_state: unresolved
           lookup_outcome: not_validated
           validator_explanation: Not validated yet.
-        evidence_codes:
+        evidence_code_curies:
         - curie: null
           mention: ECO:0000315
           resolution_state: unresolved
@@ -186,13 +186,13 @@ fixtures:
           resolution_state: unresolved
           lookup_outcome: not_validated
           validator_explanation: Not validated yet.
-        disease_qualifiers:
+        disease_qualifier_names:
         - name: null
           mention: severity_of
           resolution_state: unresolved
           lookup_outcome: not_validated
           validator_explanation: Not validated yet.
-        with_genes:
+        with_gene_identifiers:
         - primary_external_id: null
           mention: FB:FBgn0000108
           resolution_state: unresolved

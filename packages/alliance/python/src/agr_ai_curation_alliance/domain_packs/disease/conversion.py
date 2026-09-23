@@ -790,7 +790,7 @@ def _payload_for_assertion(
             for condition in assertion.conditions
         ]
     if assertion.evidence_code_curies:
-        payload["evidence_codes"] = staged_list(
+        payload["evidence_code_curies"] = staged_list(
             assertion.evidence_code_curies, identity_keys=("curie",)
         )
     return payload

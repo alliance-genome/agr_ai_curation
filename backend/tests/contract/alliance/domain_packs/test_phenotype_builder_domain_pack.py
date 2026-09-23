@@ -598,10 +598,11 @@ def test_phenotype_builder_materializes_staged_condition_relations():
     conditions = relation["conditions"]
     assert len(conditions) == 2
     assert conditions[0]["condition_class"] == {
-        "proposed_curie": "ZECO:0000111", "curie": None, "mention": "chemical treatment", **unresolved,
+        "proposed_curie": "ZECO:0000111", "curie": None, "name": None, "mention": "chemical treatment",
+        **unresolved,
     }
     assert conditions[0]["condition_chemical"] == {
-        "proposed_curie": "CHEBI:9168", "curie": None, "mention": "rapamycin", **unresolved,
+        "proposed_curie": "CHEBI:9168", "curie": None, "name": None, "mention": "rapamycin", **unresolved,
     }
     assert conditions[0]["condition_summary"] == "treated with 3 pM rapamycin"
     assert conditions[1]["condition_class"]["proposed_curie"] == "ZECO:0000160"

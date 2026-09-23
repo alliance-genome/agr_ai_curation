@@ -678,15 +678,15 @@ def materialize_disease_builder_state(
         # Every optional value is staged only when the extractor supplied it; lists stage each
         # proposed entry as its own value, validated per element.
         disease_relation = _optional_vocabulary_value(staged_fields, "disease_relation_name")
-        evidence_codes = staged_list(
+        evidence_code_curies = staged_list(
             staged_fields.get("evidence_code_curies"), identity_keys=EVIDENCE_CODE_IDENTITY_KEYS
         )
         genetic_sex = _optional_vocabulary_value(staged_fields, "genetic_sex_name")
-        disease_qualifiers = staged_list(
+        disease_qualifier_names = staged_list(
             staged_fields.get("disease_qualifier_names"),
             identity_keys=VOCABULARY_TERM_IDENTITY_KEYS,
         )
-        with_genes = staged_list(
+        with_gene_identifiers = staged_list(
             staged_fields.get("with_gene_identifiers"), identity_keys=WITH_GENE_IDENTITY_KEYS
         )
         condition_relations = condition_relations_payload(staged_fields.get("condition_relations"))
@@ -829,15 +829,15 @@ def materialize_disease_builder_state(
             annotation_payload["disease_annotation_subject"] = copy.deepcopy(subject_payload)
         if disease_relation is not None:
             annotation_payload["disease_relation"] = disease_relation
-        if evidence_codes:
-            annotation_payload["evidence_codes"] = evidence_codes
+        if evidence_code_curies:
+            annotation_payload["evidence_code_curies"] = evidence_code_curies
         # R4 optional slots — only carried when the extractor staged them.
         if genetic_sex is not None:
             annotation_payload["genetic_sex"] = genetic_sex
-        if disease_qualifiers:
-            annotation_payload["disease_qualifiers"] = disease_qualifiers
-        if with_genes:
-            annotation_payload["with_genes"] = with_genes
+        if disease_qualifier_names:
+            annotation_payload["disease_qualifier_names"] = disease_qualifier_names
+        if with_gene_identifiers:
+            annotation_payload["with_gene_identifiers"] = with_gene_identifiers
         # EXPERIMENTAL CONDITIONS: nested condition_relations[].conditions[]. Only carried when
         # the extractor staged them. Each condition references the annotation's evidence
         # (evidence_record_ids on the annotation) per the evidence contract — no condition-level

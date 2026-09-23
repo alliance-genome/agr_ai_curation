@@ -35,7 +35,7 @@ PROPOSED_KEY_PREFIX = "proposed_"
 # term name; vocabulary/id are the validator's snapshot written alongside it.
 VOCABULARY_TERM_IDENTITY_KEYS = ("name",)
 ONTOLOGY_TERM_IDENTITY_KEYS = ("curie", "name")
-CONDITION_TERM_IDENTITY_KEYS = ("curie",)
+CONDITION_TERM_IDENTITY_KEYS = ("curie", "name")
 
 # Condition components that name an ontology term, in staging order.
 CONDITION_TERM_COMPONENTS = (

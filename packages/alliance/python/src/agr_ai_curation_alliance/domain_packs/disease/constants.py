@@ -91,11 +91,11 @@ DISEASE_SUBJECT_VALIDATOR_BINDING_ID = "disease_subject_materialization"
 DISEASE_REFERENCE_VALIDATOR_BINDING_ID = "disease_reference_materialization"
 DISEASE_EVIDENCE_CODE_VALIDATOR_BINDING_ID = "disease_evidence_code_lookup"
 
-# Optional-slot bindings (R4): annotation_type constant, genetic_sex CV, disease_qualifiers CV,
+# Optional-slot bindings (R4): annotation_type constant, genetic_sex CV, disease_qualifier_names CV,
 # with_or_from gene reference. annotation_type is fixed to a constant and never extracted; the
 # other three are optional, paper-supported extractor inputs validated through the active
-# CV / gene_validation agents, per element for the multivalued slots (disease_qualifiers /
-# with_genes).
+# CV / gene_validation agents, per element for the multivalued slots (disease_qualifier_names /
+# with_gene_identifiers).
 DISEASE_ANNOTATION_TYPE_CV_BINDING_ID = "disease_annotation_type_cv_lookup"
 DISEASE_GENETIC_SEX_CV_BINDING_ID = "disease_genetic_sex_cv_lookup"
 DISEASE_QUALIFIER_CV_BINDING_ID = "disease_qualifier_cv_lookup"

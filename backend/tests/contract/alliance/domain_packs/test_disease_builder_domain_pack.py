@@ -210,7 +210,7 @@ def test_disease_builder_materializes_concrete_gene_subtype():
         name=None,
     )
     # D3: every proposed ECO code is its own value.
-    assert payload_obj["evidence_codes"] == [_staged("ECO:0000315", curie=None)]
+    assert payload_obj["evidence_code_curies"] == [_staged("ECO:0000315", curie=None)]
     # D5: relation rides on the concrete object.
     assert payload_obj["disease_relation"] == _staged("is_implicated_in", name=None)
     assert payload_obj["data_provider"] == _staged("FB", abbreviation=None)
@@ -218,25 +218,25 @@ def test_disease_builder_materializes_concrete_gene_subtype():
     assert payload_obj["annotation_type"] == _staged("manually_curated", name=None)
     # R4: the 3 optional extracted slots are staged on the concrete annotation payload.
     assert payload_obj["genetic_sex"] == _staged("male", name=None)
-    assert payload_obj["disease_qualifiers"] == [
+    assert payload_obj["disease_qualifier_names"] == [
         _staged("severity_of", name=None),
         _staged("onset_of", name=None),
     ]
-    assert payload_obj["with_genes"] == [
+    assert payload_obj["with_gene_identifiers"] == [
         _staged("FB:FBgn0000108", primary_external_id=None),
         _staged("FB:FBgn0003089", primary_external_id=None),
     ]
     # D4: nothing names the source reference, so single_reference is absent.
     assert "single_reference" not in payload_obj
-    for legacy_key in (
+    # The flat CV scalars became one value each; their previous keys are gone.
+    for previous_key in (
         "disease_relation_name",
-        "evidence_code_curies",
+        "disease_relation_vocabulary",
+        "disease_relation_id",
         "annotation_type_name",
         "genetic_sex_name",
-        "disease_qualifier_names",
-        "with_gene_identifiers",
     ):
-        assert legacy_key not in payload_obj
+        assert previous_key not in payload_obj
     # FULL alignment: NO blocked write/export posture on the concrete annotation metadata.
     assert "write_behavior" not in annotation["metadata"]
     assert "export_behavior" not in annotation["metadata"]
@@ -471,8 +471,8 @@ def test_disease_annotation_type_constant_is_always_materialized():
     assert payload_obj["annotation_type"]["resolution_state"] == UNRESOLVED
     # ...and the omitted optional slots are NOT carried.
     assert "genetic_sex" not in payload_obj
-    assert "disease_qualifiers" not in payload_obj
-    assert "with_genes" not in payload_obj
+    assert "disease_qualifier_names" not in payload_obj
+    assert "with_gene_identifiers" not in payload_obj
 
 
 def test_disease_r4_optional_slot_bindings_are_active():
@@ -514,24 +514,24 @@ def test_disease_r4_optional_slot_bindings_are_active():
     }
     assert genetic_sex["input_fields"]["term_name"]["required"] is False
 
-    # SLOT 3: disease_qualifiers — controlled_vocabulary, Disease Qualifier, multivalued bare path.
+    # SLOT 3: disease_qualifier_names — controlled_vocabulary, Disease Qualifier, multivalued bare path.
     qualifier = bindings_by_id["disease_qualifier_cv_lookup"]
     assert qualifier["validator_agent"]["agent_id"] == "controlled_vocabulary_validation"
     assert qualifier["input_fields"]["vocabulary"]["value"] == "Disease Qualifier"
-    assert qualifier["input_fields"]["term_name"]["path"] == "disease_qualifiers.mention"
-    assert qualifier["applies_to"]["field_paths"] == ["disease_qualifiers"]
+    assert qualifier["input_fields"]["term_name"]["path"] == "disease_qualifier_names.mention"
+    assert qualifier["applies_to"]["field_paths"] == ["disease_qualifier_names"]
     assert qualifier["expected_result_fields"] == {
-        "term_name": "disease_qualifiers.name"
+        "term_name": "disease_qualifier_names.name"
     }
 
     # SLOT 4: with_or_from — gene_validation, multivalued bare path, primary_external_id result key.
     with_gene = bindings_by_id["disease_with_gene_validation"]
     assert with_gene["validator_agent"]["agent_id"] == "gene_validation"
-    assert with_gene["input_fields"]["gene_id"]["path"] == "with_genes.mention"
+    assert with_gene["input_fields"]["gene_id"]["path"] == "with_gene_identifiers.mention"
     assert with_gene["input_fields"]["data_provider"]["context_only"] is True
-    assert with_gene["applies_to"]["field_paths"] == ["with_genes"]
+    assert with_gene["applies_to"]["field_paths"] == ["with_gene_identifiers"]
     assert with_gene["expected_result_fields"] == {
-        "primary_external_id": "with_genes.primary_external_id"
+        "primary_external_id": "with_gene_identifiers.primary_external_id"
     }
 
     # Each new active binding has matching active capability metadata + the right policy posture.
@@ -678,14 +678,14 @@ def test_disease_builder_materializes_staged_condition_relations():
     conditions = relation["conditions"]
     assert len(conditions) == 2
     assert conditions[0]["condition_class"] == _staged(
-        "chemical treatment", proposed_curie="ZECO:0000111", curie=None
+        "chemical treatment", proposed_curie="ZECO:0000111", curie=None, name=None
     )
     assert conditions[0]["condition_chemical"] == _staged(
-        "rapamycin", proposed_curie="CHEBI:9168", curie=None
+        "rapamycin", proposed_curie="CHEBI:9168", curie=None, name=None
     )
     assert conditions[0]["condition_summary"] == "treated with 3 pM rapamycin"
     assert conditions[1]["condition_class"] == _staged(
-        "temperature exposure", proposed_curie="ZECO:0000160", curie=None
+        "temperature exposure", proposed_curie="ZECO:0000160", curie=None, name=None
     )
     assert conditions[1]["condition_free_text"] == "37 degrees C"
     # Empty leaves are dropped (condition 2 had no chemical).

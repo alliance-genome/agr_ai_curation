@@ -1156,11 +1156,18 @@ def test_phenotype_condition_binding_scoped_and_shaped(monkeypatch):
         "condition_relations.condition_relation_type.mention"
     )
     assert composite["input_fields"]["condition_relation_type"]["context_only"] is True
-    # expected_result_fields = condition_class_curie (NOT condition_id, which is optional/sparse).
+    # Every component is its own write-back target (field_resolutions); an absent one, such as
+    # the optional condition_id, is never required.
     assert composite["expected_result_fields"] == {
-        "condition_class_curie": "condition_relations.conditions.condition_class.curie"
+        "condition_class_curie": "condition_relations.conditions.condition_class.curie",
+        "condition_class_name": "condition_relations.conditions.condition_class.name",
+        "condition_id_curie": "condition_relations.conditions.condition_id.curie",
+        "condition_id_name": "condition_relations.conditions.condition_id.name",
+        "condition_chemical_curie": "condition_relations.conditions.condition_chemical.curie",
+        "condition_chemical_name": "condition_relations.conditions.condition_chemical.name",
+        "condition_taxon_curie": "condition_relations.conditions.condition_taxon.curie",
+        "condition_taxon_name": "condition_relations.conditions.condition_taxon.name",
     }
-    assert "condition_id" not in composite["expected_result_fields"]
     assert composite["batch"]["enabled"] is True
     assert composite["batch"]["family"] == "experimental_condition_validation"
     assert composite["batch"]["max_size"] == 4
@@ -1378,7 +1385,9 @@ def test_phenotype_export_blocks_unresolved_condition_parts():
                 ),
                 "conditions": [
                     {
-                        "condition_class": _resolved("drug treatment", curie="ZECO:0000111"),
+                        "condition_class": _resolved(
+                            "drug treatment", curie="ZECO:0000111", name="drug treatment"
+                        ),
                         "condition_chemical": _staged("rapamycin", "curie", proposed_curie="CHEBI:9168"),
                         "condition_summary": "treated with rapamycin",
                     }
@@ -1396,7 +1405,7 @@ def test_phenotype_export_blocks_unresolved_condition_parts():
 
     chemical = candidate["payload"]["condition_relations"][0]["conditions"][0]["condition_chemical"]
     chemical.update(
-        curie="CHEBI:9168", resolution_state="resolved", lookup_outcome="matched",
+        curie="CHEBI:9168", name="rapamycin", resolution_state="resolved", lookup_outcome="matched",
     )
     ready = build_phenotype_annotation_export_payload(domain_envelope_candidates=[candidate])
 
@@ -1406,8 +1415,8 @@ def test_phenotype_export_blocks_unresolved_condition_parts():
             "condition_relation_type": {"name": "has_condition"},
             "conditions": [
                 {
-                    "condition_class": {"curie": "ZECO:0000111"},
-                    "condition_chemical": {"curie": "CHEBI:9168"},
+                    "condition_class": {"curie": "ZECO:0000111", "name": "drug treatment"},
+                    "condition_chemical": {"curie": "CHEBI:9168", "name": "rapamycin"},
                     "condition_summary": "treated with rapamycin",
                 }
             ],
