@@ -788,21 +788,56 @@ def test_old_containers_revalidate_resolved_and_unresolved_without_raising(old, 
     assert "mention" not in site
     assert effective_value(site, spec, covered_by_validator=False) is site
 
-    unresolved_item = _item(metadata, envelope, status="unresolved", outcome="not_found")
-    once = materialize_validator_results_into_envelope(envelope, metadata, [unresolved_item])
-    # Re-validating the re-validated container again must not raise either.
-    twice = materialize_validator_results_into_envelope(once.envelope, metadata, [unresolved_item])
+    # A non-decisive outcome (a transient lookup error), twice: nothing raises, the
+    # validator's outcome and words are kept, and the old identity stays in
+    # storage but reads as unverified paper wording.
+    transient = _item(metadata, envelope, status="unresolved", outcome="error")
+    once = materialize_validator_results_into_envelope(envelope, metadata, [transient])
+    twice = materialize_validator_results_into_envelope(once.envelope, metadata, [transient])
     site = twice.envelope.extracted_objects[0].payload["site"]
-    assert (site["resolution_state"], site["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_FOUND)
-    # The old identity is kept in storage but reads as unverified paper wording.
+    assert (site["resolution_state"], site["lookup_outcome"]) == (UNRESOLVED, "transient")
     assert site["curie"] == old["curie"]
     effective = effective_value(site, spec, covered_by_validator=False)
     assert (effective["curie"], effective[label_key]) == (None, None)
     assert effective["mention"] == f"{old[label_key]} ({old['curie']}) {LEGACY_UNVERIFIED_SUFFIX}"
-    assert effective["lookup_outcome"] == OUTCOME_NOT_FOUND
+    assert effective["validator_explanation"] == "Fixture validator decision."
     check_resolvable_value(effective, identity_keys=spec.identity_keys)
     assert unresolved_header_text({"site": site}, f"site.{label_key}", resolvable_fields={"site": spec}) == (
         f"{old[label_key]} ({old['curie']}) {LEGACY_UNVERIFIED_SUFFIX}")
+
+    # A decisive outcome sets the old identity aside, like an overruled one.
+    decided = _item(metadata, envelope, status="unresolved", outcome="not_found")
+    site = materialize_validator_results_into_envelope(
+        envelope, metadata, [decided]).envelope.extracted_objects[0].payload["site"]
+    assert (site["resolution_state"], site["lookup_outcome"], site["curie"]) == (
+        UNRESOLVED, OUTCOME_NOT_FOUND, None)
+    assert site["overruled_curie"] == old["curie"]
+    check_resolvable_value(site, identity_keys=spec.identity_keys)
+
+
+def test_a_legacy_value_with_paper_wording_keeps_the_validator_outcome():
+    """M1: an old value with a mention and an identity, re-validated unresolved."""
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    metadata = _metadata()
+    old = {"mention": "skin", "curie": "ONT:9", "name": "old guess"}
+    envelope = _envelope({"site": dict(old)})
+
+    stale = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="error")],
+    ).envelope.extracted_objects[0].payload["site"]
+    effective = effective_value(stale, spec, covered_by_validator=False)
+    assert (effective["lookup_outcome"], effective["validator_explanation"]) == (
+        "transient", "Fixture validator decision.")
+    assert (effective["curie"], effective["name"], effective["mention"]) == (None, None, "skin")
+    assert "invalid record" not in str(effective)
+
+    decided = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="not_found")],
+    ).envelope.extracted_objects[0].payload["site"]
+    assert (decided["curie"], decided["overruled_curie"], decided["lookup_outcome"]) == (
+        None, "ONT:9", OUTCOME_NOT_FOUND)
+    assert effective_value(decided, spec, covered_by_validator=False) is decided
 
 
 def test_a_contract_value_still_needs_non_empty_paper_wording():

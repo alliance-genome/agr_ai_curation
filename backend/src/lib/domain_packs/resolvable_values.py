@@ -529,15 +529,24 @@ def mark_unresolved(
             return
         if not identity_keys:
             raise ResolvableValueError("Unresolving a resolved value needs its identity keys")
-        for key in identity_keys:
-            if not _is_empty(value.get(key)):
-                value[overruled_key(key)] = value[key]
-            if key in value:
-                value[key] = None
+        _overrule_identity(value, identity_keys)
+    elif not has_resolution_state(value) and outcome in DECISIVE_OUTCOMES:
+        # A value stored before the contract holds an identity nobody verified;
+        # a decisive outcome sets it aside like an overruled one. A non-decisive
+        # outcome keeps it, and it reads as "(legacy, unverified)".
+        _overrule_identity(value, identity_keys)
     value[RESOLUTION_STATE_KEY] = UNRESOLVED
     value[LOOKUP_OUTCOME_KEY] = outcome
     _write_validator_text(value, explanation, curator_message)
     _check_contract_fields(value)
+
+
+def _overrule_identity(value: MutableMapping[str, Any], identity_keys: Sequence[str]) -> None:
+    for key in identity_keys:
+        if not _is_empty(value.get(key)):
+            value[overruled_key(key)] = value[key]
+        if key in value:
+            value[key] = None
 
 
 def copy_resolution(source: Mapping[str, Any], target: MutableMapping[str, Any]) -> None:
@@ -824,27 +833,34 @@ def effective_value(
 
 
 def _is_revalidated_legacy_leftover(value: Mapping[str, Any], spec: ResolvableSpec) -> bool:
-    """A pre-contract container a validator left unresolved, still holding its old identity.
+    """A pre-contract value a validator left unresolved, still holding its old identity.
 
-    The validator write-back never touches id/label, so an old container
-    (no paper wording) re-validated as unresolved keeps the identity the old
-    extractor proposed; that identity was never verified.
+    A non-decisive outcome (e.g. a transient lookup error) never sets aside
+    the identity an old record stored, so it stays beside the validator's
+    outcome and explanation; that identity was never verified.
     """
 
-    if value.get(spec.mention_key) is not None or value.get(RESOLUTION_STATE_KEY) != UNRESOLVED:
+    if value.get(RESOLUTION_STATE_KEY) != UNRESOLVED:
         return False
     cleared = {**value, **{key: None for key in spec.identity_keys}}
     return stored_state_problem(cleared, identity_keys=spec.identity_keys) is None
 
 
 def _legacy_leftover_value(value: Mapping[str, Any], spec: ResolvableSpec) -> dict[str, Any]:
-    """Read an old identity left in an unresolved pre-contract container as unverified paper wording."""
+    """Read an old identity left in an unresolved pre-contract value as unverified.
+
+    The validator's outcome and explanation are kept. Without paper wording,
+    the old identity text becomes the paper wording labelled "(legacy,
+    unverified)"; with paper wording, that stays and the old identity is
+    left out of the reading.
+    """
 
     annotated = dict(value)
     stored = _stored_text(value, spec)
     for key in spec.identity_keys:
         annotated[key] = None
-    annotated[spec.mention_key] = f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else None
+    if not (isinstance(value.get(spec.mention_key), str) and value[spec.mention_key].strip()):
+        annotated[spec.mention_key] = f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else None
     return annotated
 
 
