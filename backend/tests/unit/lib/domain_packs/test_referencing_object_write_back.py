@@ -373,6 +373,8 @@ def test_a_curator_override_on_the_referencing_value_is_never_changed():
                 payload,
                 {"maker_id": "GAL:M0007", "maker_name": "De Porceleyne Fles"},
                 identity_keys=("maker_id", "maker_name"),
+                id_key="maker_id",
+                label_key="maker_name",
                 actor_id="curator-1",
                 at="2026-09-23T20:00:00Z",
             )

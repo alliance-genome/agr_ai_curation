@@ -877,8 +877,12 @@ def test_every_staged_gene_contract_value_is_a_declared_resolvable_value():
         ]
 
 
-def _curator_patch(envelope, field_path, value, *, before):
-    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+def _curator_patch(envelope, field_path, value, *, before, identity=False):
+    from src.lib.domain_envelopes.patches import (
+        EnvelopeFieldPatch,
+        EnvelopeFieldPatchOperation,
+        apply_curator_field_patch,
+    )
 
     pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
     return apply_curator_field_patch(
@@ -891,6 +895,11 @@ def _curator_patch(envelope, field_path, value, *, before):
             field_path=field_path,
             before=before,
             value=value,
+            operation=(
+                EnvelopeFieldPatchOperation.REPLACE_IDENTITY
+                if identity
+                else EnvelopeFieldPatchOperation.REPLACE
+            ),
         ),
         current_revision=1,
         actor_id="curator-7",
@@ -903,25 +912,56 @@ def _staged_gene_object_envelope() -> DomainEnvelope:
     return staged.model_copy(update={"extracted_objects": [obj]})
 
 
-def test_curators_override_the_gene_identity_including_taxon():
+_GENE_IDENTITY = {
+    "primary_external_id": "WB:WBGene00000912",
+    "gene_symbol": "daf-16",
+    "taxon": "NCBITaxon:6239",
+}
+_NO_GENE_IDENTITY = {key: None for key in _GENE_IDENTITY}
+
+
+def test_curators_override_the_gene_root_identity_including_taxon_in_one_edit():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    result = _curator_patch(
+        _staged_gene_object_envelope(),
+        "primary_external_id",
+        _GENE_IDENTITY,
+        before=_NO_GENE_IDENTITY,
+        identity=True,
+    )
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    payload = result.envelope.extracted_objects[0].payload
+    assert {key: payload[key] for key in _GENE_IDENTITY} == _GENE_IDENTITY
+    assert payload["resolution_state"] == "resolved"
+    assert payload["lookup_outcome"] == "curator_override"
+    assert payload["curator_override"]["actor_id"] == "curator-7"
+    assert payload["mention"] == "daf-16"
+    assert payload["proposed_gene_symbol"] == "daf-16"
+    [event] = result.envelope.extracted_objects[0].metadata["curator_resolution_overrides"]
+    assert event["action"] == "override"
+
+
+def test_a_gene_override_cannot_change_other_keys_or_start_from_one_leaf():
     from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
 
     envelope = _staged_gene_object_envelope()
-    for field_path, value in (
-        ("primary_external_id", "WB:WBGene00000912"),
-        ("gene_symbol", "daf-16"),
-        ("taxon", "NCBITaxon:6239"),
-    ):
-        result = _curator_patch(envelope, field_path, value, before=None)
-        assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
-        obj = result.envelope.extracted_objects[0]
-        assert obj.payload[field_path] == value
-        assert obj.payload["resolution_state"] == "resolved"
-        assert obj.payload["lookup_outcome"] == "curator_override"
-        assert obj.payload["curator_override"]["actor_id"] == "curator-7"
-        assert obj.payload["mention"] == "daf-16"
-        [event] = obj.metadata["curator_resolution_overrides"]
-        assert (event["action"], event["field_path"]) == ("override", field_path)
+    other_key = _curator_patch(
+        envelope,
+        "primary_external_id",
+        {**_GENE_IDENTITY, "mention": "DAF16"},
+        before={**_NO_GENE_IDENTITY, "mention": "daf-16"},
+        identity=True,
+    )
+    assert other_key.status is EnvelopeFieldPatchStatus.REJECTED
+    assert any("cannot change" in error for error in other_key.errors)
+
+    single_leaf = _curator_patch(envelope, "gene_symbol", "daf-16", before=None)
+    assert single_leaf.status is EnvelopeFieldPatchStatus.REJECTED
+    assert any(
+        "Enter both the identifier and the name" in error for error in single_leaf.errors
+    )
 
 
 def test_curators_cannot_edit_the_gene_paper_wording_or_validation_state():
