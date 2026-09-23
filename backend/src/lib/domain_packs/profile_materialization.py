@@ -199,7 +199,7 @@ def _resolution_updates(expected, result, context, target, *, unresolved):
         if unresolved is None and not any(missing_resolved_value(item) for item in identity.values()):
             mark_resolved(value, identity, explanation=result.explanation, curator_message=result.curator_message)
         else:
-            # The validator overrules an earlier resolution: its identity becomes proposed_<key> hints.
+            # The validator overrules an earlier resolution: its identity is kept as overruled_<key>.
             mark_unresolved(value, unresolved or OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
                             explanation=result.explanation, curator_message=result.curator_message,
                             identity_keys=context.profile.resolvable_objects()[declared_value_path(path)])

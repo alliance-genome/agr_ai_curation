@@ -817,14 +817,14 @@ def test_identifier_role_prefers_the_key_an_exact_identifier_slot_writes():
     assert (spec.id_key, spec.label_key) == ("gene_id", "taxon_id")
 
 
-def test_a_proposed_identity_hint_is_stored_record_only(resolvable_profile):
-    """ALL-1302 with core aadd93a03: proposed_<key> hints conform when stored, never as extractor input."""
+def test_an_overruled_identity_is_stored_record_only(resolvable_profile):
+    """ALL-1302 with core aadd93a03: overruled_<key> identities conform when stored, never as extractor input."""
 
-    demoted = {**_resolved_gene(), "gene_id": None, "symbol": None, "proposed_gene_id": "EX:1",
-               "proposed_symbol": "daf-16", "resolution_state": "unresolved", "lookup_outcome": "not_found"}
+    demoted = {**_resolved_gene(), "gene_id": None, "symbol": None, "overruled_gene_id": "EX:1",
+               "overruled_symbol": "daf-16", "resolution_state": "unresolved", "lookup_outcome": "not_found"}
     resolvable_profile.require_attributes({"genes": [demoted]})
-    wrong = resolvable_profile.validate_attributes({"genes": [{**demoted, "proposed_gene_id": 3}]})
+    wrong = resolvable_profile.validate_attributes({"genes": [{**demoted, "overruled_gene_id": 3}]})
     assert [issue["reason"] for issue in wrong] == ["wrong_type"]
     issues = resolvable_profile.validate_attributes(
-        {"genes": [{"mention": "daf-16", "proposed_gene_id": "EX:1"}]}, extractor_input=True)
+        {"genes": [{"mention": "daf-16", "overruled_gene_id": "EX:1"}]}, extractor_input=True)
     assert [issue["reason"] for issue in issues] == ["validator_owned_field"]

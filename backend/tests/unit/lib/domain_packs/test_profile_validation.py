@@ -495,7 +495,7 @@ def test_overlay_declares_a_resolvable_values_paper_wording_and_resolution_leave
     assert enums[fields["attributes.gene.lookup_outcome"].enum_ref] == list(LOOKUP_OUTCOMES)
     assert fields["attributes.gene.validator_explanation"].field_type.value == "string"
     assert "attributes.gene.validator_curator_message" in fields
-    assert fields["attributes.gene.proposed_gene_id"].metadata["read_only"] is True
+    assert "attributes.gene.overruled_gene_id" not in fields  # Stripped by every reader, never a column.
     # A value stored before the contract goes through the shared legacy rule.
     from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, effective_payload
     from src.lib.flows.value_display import display_text

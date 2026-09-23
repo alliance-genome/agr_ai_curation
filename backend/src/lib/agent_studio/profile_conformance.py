@@ -15,7 +15,7 @@ from typing import Any
 from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS, LOOKUP_OUTCOME_KEY, LOOKUP_OUTCOMES, MENTION_KEY, RESOLUTION_STATE_KEY,
     RESOLUTION_STATES, VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY,
-    ResolvableSpec, ResolvableValueError, check_resolvable_value, has_resolution_state, proposed_key,
+    ResolvableSpec, ResolvableValueError, check_resolvable_value, has_resolution_state, overruled_key,
     unresolved_value,
 )
 from src.lib.openai_agents.config import (
@@ -350,8 +350,8 @@ class ResolvedGenericProfile:
                 declared = declared_value_path(path)
                 identity = resolvable.get(declared)
                 owned = {key for key in fields if f"{declared}.{key}" in validator_owned}
-                # A validator that overrules a resolution keeps its identity as proposed_<key> hints.
-                hints = {proposed_key(key): key for key in identity or () if key in fields}
+                # A validator that overrules a resolution keeps its identity, read-only, as overruled_<key>.
+                hints = {overruled_key(key): key for key in identity or () if key in fields}
                 system_keys = owned | (set(RESOLUTION_KEYS) | set(hints) if identity is not None else set())
                 if identity is not None:
                     check_resolvable(value, identity, path)
