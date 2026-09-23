@@ -749,6 +749,11 @@ _PDFX_ELEMENTS = [
     {"type": "Title", "text": "Methods", "metadata": {"section_title": "Methods"}},
     {"type": "Title", "text": "Fly strains", "metadata": {"section_title": "Fly strains"}},
     {
+        "type": "Table",
+        "text": "| Stock | Genotype |\n| --- | --- |\n| BL1 | w1118 |",
+        "metadata": {"section_title": "Fly strains"},
+    },
+    {
         "type": "NarrativeText",
         "text": "Fly strains",
         "metadata": {"section_title": "Fly strains"},
@@ -817,6 +822,27 @@ async def test_section_previews_can_be_disabled(monkeypatch):
     assert [info["preview"] for info in llm_inputs[0]] == ["", "", ""]
 
 
+@pytest.mark.asyncio
+async def test_list_items_can_supply_a_section_preview(monkeypatch):
+    monkeypatch.delenv("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", raising=False)
+    llm_inputs = _capture_section_info(monkeypatch)
+    elements = [
+        {"type": "Title", "text": "Key resources", "metadata": {"section_title": "Key resources"}},
+        {
+            "type": "ListItem",
+            "text": "- UAS-GFP flies were obtained from Bloomington.",
+            "metadata": {"section_title": "Key resources"},
+        },
+    ]
+
+    await hierarchy.resolve_document_hierarchy(elements)
+
+    assert llm_inputs == [[{
+        "title": "Key resources",
+        "preview": "- UAS-GFP flies were obtained from Bloomington.",
+    }]]
+
+
 def test_preview_max_chars_setting_default_and_override(monkeypatch):
     from src.lib.openai_agents.config import get_hierarchy_resolution_preview_max_chars
 
@@ -844,6 +870,11 @@ async def test_prompt_marks_only_cut_previews_and_omits_empty_ones(
     assert '[3] "2.1. Fly strains" → "Flies were raised at 25 C."\n' in prompt
     assert '[2] "Materials and Methods"\n' in prompt
     assert "(~100 characters)" not in calls[0]["instructions"]
+    # Previews can be absent for reasons other than a missing body (for
+    # example HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS=0), so the prompt must not
+    # claim a missing preview means the section has no body text.
+    assert "has no body text directly under it" not in calls[0]["instructions"]
+    assert "or when previews are turned off" in calls[0]["instructions"]
     # Parent chains may name a direct parent subsection, so the prompt must not
     # restrict subsections to pointing at top-level sections.
     assert "can only point to a section in the list" in calls[0]["instructions"]

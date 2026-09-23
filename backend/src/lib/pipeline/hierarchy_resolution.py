@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 # Allowed reasoning effort levels (must come from .env; no code fallback).
 _REASONING_LEVELS = ("minimal", "low", "medium", "high")
 
+# Element types never used as a section preview: headings repeat their own
+# title, and tables arrive as markdown pipe rows rather than prose.
+_NON_PREVIEW_ELEMENT_TYPES = frozenset({"Title", "Table"})
+
 
 # =============================================================================
 # Pydantic Models for Structured LLM Output
@@ -132,7 +136,7 @@ async def resolve_document_hierarchy(
     # 1. Extract unique section_titles from all elements (in order of first appearance)
     # Also capture a bounded preview of the first body text under each heading to
     # help the LLM understand the section. Heading ("Title") elements carry their
-    # own title as section_title, so they are never used as the preview.
+    # own title as section_title and tables are pipe rows, so neither is used.
     # Note: section_title is stored in element metadata, not at top level
     preview_max_chars = get_hierarchy_resolution_preview_max_chars()
     section_info_list = []  # List of {"title": str, "preview": str}
@@ -153,7 +157,11 @@ async def resolve_document_hierarchy(
             info_by_title[section_title] = info
             section_info_list.append(info)
 
-        if preview_max_chars == 0 or info["preview"] or elem.get("type") == "Title":
+        if (
+            preview_max_chars == 0
+            or info["preview"]
+            or elem.get("type") in _NON_PREVIEW_ELEMENT_TYPES
+        ):
             continue
         info["preview"] = _section_body_preview(
             elem.get("text", ""), section_title, preview_max_chars
@@ -342,7 +350,7 @@ CONTEXT: You are part of an automated curation pipeline that processes scientifi
 
 YOUR TASK: Analyze the section structure of a scientific paper and classify each section as either a TOP-LEVEL SECTION or a SUBSECTION. This hierarchy will be used to help curators efficiently search and navigate the document.
 
-INPUT FORMAT: You will receive a numbered list of section titles extracted from the paper. Each line starts with its number, like [0], followed by the title and, when the section has body text of its own, a short preview of the opening of that text ("..." marks where the preview was cut). A title without a preview has no body text directly under it, for example a top-level heading followed immediately by its first subsection. The sections are listed in document order.
+INPUT FORMAT: You will receive a numbered list of section titles extracted from the paper. Each line starts with its number, like [0], followed by the title and, when the section has body text of its own, a short preview of the opening of that text ("..." marks where the preview was cut). Some titles have no preview, for example a top-level heading followed immediately by its first subsection, or when previews are turned off; judge those from the title and its position in the list. The sections are listed in document order.
 
 CLASSIFICATION GUIDELINES:
 
