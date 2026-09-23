@@ -3006,17 +3006,14 @@ def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
         "agr_curation_query",
         "search_document",
         "read_chunk",
-        "read_section",
-        "read_subsection",
         "record_evidence",
         "list_recorded_evidence",
         "get_recorded_evidence",
-        "attach_evidence_to_object",
-        "detach_evidence_from_object",
-        "update_recorded_evidence_metadata",
         "finalize_validator_result",
     ]
     instructions = captured["agent"].instructions
+    for removed_tool in NEVER_CALLED_VALIDATOR_TOOLS:
+        assert removed_tool not in instructions
     assert "Extractor-provided evidence" in instructions
     assert (
         "`selected_inputs.evidence_quote` or `selected_inputs.evidence_quotes`"
@@ -3273,6 +3270,81 @@ def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
     }
     assert captured["kwargs"]["max_turns"] == 6
     assert captured["agent_lookup"][1] == {"authenticated_groups": ["RGD"]}
+
+
+# Never called by any validator in 522 production runs (Sep 16-22, 2026);
+# validators read the paper through search_document and read_chunk only.
+NEVER_CALLED_VALIDATOR_TOOLS = (
+    "read_section",
+    "read_subsection",
+    "attach_evidence_to_object",
+    "detach_evidence_from_object",
+    "update_recorded_evidence_metadata",
+)
+
+
+def test_package_scoped_validator_batch_agent_offers_only_used_paper_tools(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[_compact_lookup_tool()],
+        instructions="Base validator instructions.",
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+            batch_capabilities=["domain_validator_batch"],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key, **kwargs: source_agent,
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.resolve_tools",
+        lambda tool_ids, execution_context: [
+            SimpleNamespace(name=tool_id) for tool_id in tool_ids
+        ],
+    )
+
+    def _fake_run_sync(agent, **kwargs):
+        captured["agent"] = agent
+        tool = next(
+            tool for tool in agent.tools if tool.name == "finalize_validator_batch_results"
+        )
+        _unwrap_function_tool(tool)(results=[_compact_test_decision(agent, request)])
+        return {"results": [_result_payload(request)]}
+
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
+
+    run_package_scoped_validator_agent_batch(
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
+        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
+        runtime_context=ValidatorRuntimeContext(document_id="doc-123", user_id="user-1"),
+    )
+
+    runtime_agent = captured["agent"]
+    assert [tool.name for tool in runtime_agent.tools] == [
+        "agr_curation_query",
+        "search_document",
+        "read_chunk",
+        "finalize_validator_batch_results",
+    ]
+    for removed_tool in NEVER_CALLED_VALIDATOR_TOOLS:
+        assert removed_tool not in runtime_agent.instructions
 
 
 @pytest.mark.parametrize("batch", [False, True])

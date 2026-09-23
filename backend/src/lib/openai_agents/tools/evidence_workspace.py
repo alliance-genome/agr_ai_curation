@@ -750,7 +750,6 @@ def create_detach_evidence_from_object_tool(
     *,
     workspace_records: list[dict[str, Any]] | None = None,
     allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
-    allow_detach: bool = True,
 ):
     """Create a tool for detaching evidence from an object or pending ref."""
 
@@ -780,12 +779,6 @@ def create_detach_evidence_from_object_tool(
         scope_error = _allowed_id_error(evidence_record_id, allowed_ids)
         if scope_error is not None:
             return scope_error
-        if not allow_detach:
-            return {
-                "status": "forbidden",
-                "evidence_record_id": _optional_string(evidence_record_id),
-                "message": "Validator evidence tools cannot detach scoped evidence from the current validation target.",
-            }
         record = _find_record(
             evidence_record_id,
             document_id=document_id,
