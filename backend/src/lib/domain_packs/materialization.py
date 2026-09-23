@@ -639,6 +639,7 @@ def _patch_target_object_from_resolved_values(
         container = _payload_container(payload, container_path)
         if any(value is _MISSING for _, value in writes):
             # A partial identity is not a validated value.
+            before = copy.deepcopy(container)
             mark_unresolved(
                 container,
                 OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
@@ -648,6 +649,8 @@ def _patch_target_object_from_resolved_values(
                     item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
                 ),
             )
+            if container == before:
+                continue
             for materialized_field_path, _ in writes:
                 _propagate_materialized_resolution_state(
                     payload, materialized_field_path, declared_fields=declared_fields,
@@ -797,6 +800,7 @@ def _patch_target_object_from_field_resolutions(
                 )
             written.extend(values)
             continue
+        before = copy.deepcopy(container)
         mark_unresolved(
             container,
             (
@@ -810,6 +814,8 @@ def _patch_target_object_from_field_resolutions(
                 item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
             ),
         )
+        if container == before:
+            continue
         for _result_field, materialized_field_path in fields:
             _propagate_materialized_resolution_state(
                 payload, materialized_field_path, declared_fields=declared_fields,
@@ -999,8 +1005,10 @@ def _with_unresolved_values(
         )
         if container_path is None:
             continue
+        container = _payload_container(payload, container_path)
+        before = copy.deepcopy(container)
         mark_unresolved(
-            _payload_container(payload, container_path),
+            container,
             outcome,
             explanation=item.result.explanation,
             curator_message=item.result.curator_message,
@@ -1008,6 +1016,9 @@ def _with_unresolved_values(
                 item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
             ),
         )
+        if container == before:
+            # A non-decisive outcome left a resolved value as it was; so do its mirrors.
+            continue
         _propagate_materialized_resolution_state(
             payload, materialized_field_path, declared_fields=declared_fields,
             resolvable_fields=resolvable_fields,

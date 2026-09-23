@@ -116,6 +116,16 @@ _OUTCOME_FOR_FAILURE: dict[ValidatorFailureClassification, LookupOutcome] = {
     "rejected_candidates": LookupOutcome.REJECTED_CANDIDATES,
 }
 # Outcomes a stored unresolved value may carry (legacy_unverified is read-time only).
+# Only these outcomes may overrule a value that already reads as resolved: the
+# lookup ran and decided against it. The rest (a transient error, invalid or
+# incomplete validator output, a blocked lookup, an allowed-term violation)
+# add a finding but never touch a resolved value (ALL-1283 review H2).
+DECISIVE_OUTCOMES = (
+    LookupOutcome.NOT_FOUND.value,
+    LookupOutcome.AMBIGUOUS.value,
+    LookupOutcome.CONFLICT.value,
+    LookupOutcome.REJECTED_CANDIDATES.value,
+)
 STORED_UNRESOLVED_OUTCOMES = tuple(
     outcome.value
     for outcome in LookupOutcome
@@ -499,11 +509,14 @@ def mark_unresolved(
 ) -> None:
     """Record why a value is unresolved, with the validator's own words; ``mention`` is untouched.
 
-    The validator is the authority: a value that read as resolved (e.g. a
-    builder's deterministic lookup) becomes unresolved too. Its identity is
+    The validator is the authority, but only a decisive outcome
+    (``DECISIVE_OUTCOMES``) overrules a value that reads as resolved (e.g. a
+    builder's deterministic lookup or an earlier validation): its identity is
     kept only as informational ``overruled_<key>`` keys and its
     ``identity_keys`` are cleared, so the invariant holds; the extractor's own
-    ``proposed_*`` keys are never touched. A value that never resolved keeps
+    ``proposed_*`` keys are never touched. A non-decisive outcome (e.g. a
+    transient lookup error) leaves a resolved value exactly as it was. A value
+    that never resolved takes the unresolved state with any outcome and keeps
     its id/label as stored (empty for a contract value).
     """
 
@@ -512,6 +525,8 @@ def mark_unresolved(
             f"lookup_outcome must be one of {STORED_UNRESOLVED_OUTCOMES}, got {outcome!r}"
         )
     if is_resolved(value):
+        if outcome not in DECISIVE_OUTCOMES:
+            return
         if not identity_keys:
             raise ResolvableValueError("Unresolving a resolved value needs its identity keys")
         for key in identity_keys:
@@ -1124,6 +1139,7 @@ def unresolved_header_text(
 
 __all__ = [
     "CONTRACT_KEYS",
+    "DECISIVE_OUTCOMES",
     "INVALID_RECORD_EXPLANATION",
     "INVALID_RECORD_SUFFIX",
     "LEAF_VALUE_LABELS",

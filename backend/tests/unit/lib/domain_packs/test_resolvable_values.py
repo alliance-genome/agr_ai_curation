@@ -1229,3 +1229,56 @@ def test_object_root_coverage_needs_an_event_on_its_identity_keys():
     assert effective_payload(legacy_root, {"": spec}, object_metadata=metadata)["lookup_outcome"] == (
         OUTCOME_LEGACY_UNVERIFIED)
     assert effective_payload(legacy_root, {"": spec}, object_metadata=covered)["lookup_outcome"] == OUTCOME_MATCHED
+
+
+# --- H2: only decisive outcomes overrule a resolved value -----------------------
+
+
+def _validated_gene_site():
+    return resolved_value("unc-54", {"curie": "G:1", "name": "unc-54"}, explanation="Validated earlier.")
+
+
+def test_an_api_outage_never_touches_an_earlier_validated_value():
+    metadata = _metadata(mirror=True)
+    envelope = _envelope({"site": _validated_gene_site(), "copy": _validated_gene_site()})
+    item = _item(metadata, envelope, status="unresolved", outcome="error")
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    payload = result.envelope.extracted_objects[0].payload
+    assert payload["site"] == _validated_gene_site()
+    assert payload["copy"] == _validated_gene_site()
+    # The outage is reported as a finding instead.
+    assert any(finding.code == "domain_pack.validator_error" for finding in result.appended_findings)
+
+
+@pytest.mark.parametrize("outcome", ["transient", "invalid_schema", "missing_expected_result_field", "blocked"])
+def test_non_decisive_outcomes_leave_a_resolved_value_as_it_was(outcome):
+    value = _validated_gene_site()
+    mark_unresolved(value, outcome, explanation="x", identity_keys=TERM_KEYS)
+    assert value == _validated_gene_site()
+
+
+@pytest.mark.parametrize("outcome", ["not_found", "ambiguous", "conflict", "rejected_candidates"])
+def test_decisive_outcomes_overrule_a_resolved_value(outcome):
+    value = _validated_gene_site()
+    mark_unresolved(value, outcome, explanation="Decided.", identity_keys=TERM_KEYS)
+    assert (value["resolution_state"], value["lookup_outcome"], value["curie"]) == (UNRESOLVED, outcome, None)
+    assert value["overruled_curie"] == "G:1"
+
+
+def test_a_never_resolved_value_takes_any_outcome():
+    value = unresolved_value("unc-54", identity_keys=TERM_KEYS)
+    mark_unresolved(value, "transient", explanation="Lookup service unavailable.")
+    assert (value["resolution_state"], value["lookup_outcome"]) == (UNRESOLVED, "transient")
+
+
+def test_a_partial_or_policy_rejected_result_never_touches_a_resolved_value():
+    metadata = _metadata()
+    envelope = _envelope({"site": _validated_gene_site()})
+    partial = _item(metadata, envelope, values={"curie": "G:2"}, missing=("name",))
+
+    payload = materialize_validator_results_into_envelope(
+        envelope, metadata, [partial]).envelope.extracted_objects[0].payload
+
+    assert payload["site"] == _validated_gene_site()
