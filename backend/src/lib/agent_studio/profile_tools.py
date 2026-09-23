@@ -65,22 +65,25 @@ def profile_bound_tool(raw: Callable[..., Any], existing: Any, profile: Resolved
     name = existing.name
     if name == "stage_generic_object":
         def stage(label: str, attributes: dict[str, Any], evidence_record_ids: list[str],
-                  classification_notes: list[str], validation_guidance: str | None = None) -> Any:
+                  classification_notes: list[str], rationale: str, validation_guidance: str | None = None) -> Any:
             return raw(class_key="generic:generic_object", label=label, attributes=attributes,
                        semantic_class=profile.contract.semantic_class,
                        evidence_record_ids=evidence_record_ids, classification_notes=classification_notes,
-                       validation_guidance=validation_guidance)
+                       rationale=rationale, validation_guidance=validation_guidance)
 
         impl = stage
         description = "Stage an evidence-backed record using only the saved output structure's canonical fields."
+        # The installed stage tool owns the rationale contract; reuse its wording verbatim.
+        rationale_description = existing.params_json_schema["properties"]["rationale"]["description"]
         schema = {"type": "object", "additionalProperties": False,
-                  "required": ["label", "attributes", "evidence_record_ids", "classification_notes"],
+                  "required": ["label", "attributes", "evidence_record_ids", "classification_notes", "rationale"],
                   "properties": {
                       "label": {"type": "string"}, "attributes": profile.attributes_schema(),
                       "validation_guidance": {"type": ["string", "null"],
                           "description": "Optional short advisory sentence forwarding relevant configured validation rules and evidence-backed context for this finding; distinguish rules from paper facts, not a resolved identity."},
                       "evidence_record_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                       "classification_notes": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                      "rationale": {"type": "string", "minLength": 1, "description": rationale_description},
                   }}
     elif name == "patch_generic_object":
         def patch(candidate_id: str, updates: list[dict[str, Any]]) -> Any:
@@ -90,7 +93,9 @@ def profile_bound_tool(raw: Callable[..., Any], existing: Any, profile: Resolved
         description = "Replace a declared attributes subtree or existing array index; the complete record must still conform."
         schema = {"type": "object", "additionalProperties": False,
                   "required": ["candidate_id", "updates"], "properties": {
-                      "candidate_id": {"type": "string"}, "updates": profile.patch_schema(),
+                      "candidate_id": {"type": "string"},
+                      "updates": {**profile.patch_schema(),
+                                  "description": existing.params_json_schema["properties"]["updates"]["description"]},
                   }}
     else:
         raise ValueError(f"No profile-specific signature for tool {name}")

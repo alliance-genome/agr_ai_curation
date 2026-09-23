@@ -50,6 +50,7 @@ from .agr_curation import (
     _search_builder_candidates,
 )
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import document_rationale_arg, normalize_rationale
 
 
 _GO_PATCH_FIELD_PATHS = frozenset(
@@ -138,7 +139,6 @@ class GOStageInput(_StrictToolModel):
         "evidence_code",
         "evidence_eco_curie",
         "reference_curie",
-        "rationale",
         "existing_annotation_status",
     )
     @classmethod
@@ -147,6 +147,11 @@ class GOStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("value must be non-empty")
         return cleaned
+
+    @field_validator("rationale")
+    @classmethod
+    def _rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
     @field_validator(
         "evidence_record_ids",
@@ -510,6 +515,7 @@ def _ground_payload(
     return refs, requirements, issues
 
 
+@document_rationale_arg
 def _stage_go_recommendation_impl(
     pending_ref_id: str,
     gene_product_mention: str,
@@ -541,6 +547,9 @@ def _stage_go_recommendation_impl(
     validation_guidance: Optional[str] = None,
 ) -> AgrQueryResult:
     """Stage one evidence-backed GO recommendation for canonical finalization.
+
+    For IMP annotations, the rationale must name the perturbation and the phenotype in
+    the paper's exact wording; that is required, not a restated quote.
 
     Args:
         validation_guidance: Optional short sentence forwarding relevant rules from your
@@ -645,6 +654,15 @@ def _patch_go_recommendation_impl(
     candidate_id: str,
     updates: List[Mapping[str, Any]],
 ) -> AgrQueryResult:
+    """Correct allowed fields on one staged GO recommendation.
+
+    Args:
+        candidate_id: The staged candidate to correct.
+        updates: Field corrections, each with field_path and value (or evidence_record_ids).
+            A `rationale` update must be non-empty and at most 300 characters; it cannot
+            be cleared.
+    """
+
     attempted_query = _attempt_query(
         "patch_go_recommendation",
         candidate_id=candidate_id,
@@ -712,6 +730,24 @@ def _patch_go_recommendation_impl(
                     attempted_query=attempted_query,
                 )
             staged_fields["validation_guidance"] = update.value
+        elif update.field_path == "rationale":
+            try:
+                if not isinstance(update.value, str):
+                    raise ValueError("rationale must be a non-empty string")
+                payload["rationale"] = normalize_rationale(update.value)
+            except ValueError as exc:
+                return _go_validation_result(
+                    message="patch_go_recommendation rejected the rationale update.",
+                    issues=[
+                        {
+                            "field_path": "rationale",
+                            "reason": "invalid_rationale",
+                            "message": str(exc),
+                        }
+                    ],
+                    method="patch_go_recommendation",
+                    attempted_query=attempted_query,
+                )
         elif update.value in (None, ""):
             payload.pop(update.field_path, None)
         else:

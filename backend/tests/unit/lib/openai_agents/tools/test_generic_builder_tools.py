@@ -47,6 +47,7 @@ def test_generic_object_stage_reports_attributes_and_soft_key_notice(
         label="B cell lymphoma",
         evidence_record_ids=["evidence-1"],
         classification_notes=["The paper reports this tumor classification."],
+        rationale="The paper names this item in its Results.",
         pending_ref_id="generic-object-1",
         semantic_class="tumor_classification_occurrence",
         attributes={
@@ -74,6 +75,7 @@ def test_generic_object_stage_reports_attributes_and_soft_key_notice(
         label="T cell lymphoma",
         evidence_record_ids=["evidence-2"],
         classification_notes=["The paper reports another tumor classification."],
+        rationale="The paper names this item in its Results.",
         pending_ref_id="generic-object-2",
         semantic_class="tumor_classification_occurrence",
         attributes={
@@ -183,6 +185,7 @@ def test_generic_object_stage_rejects_invalid_attributes(
         label="Invalid attribute object",
         evidence_record_ids=["evidence-1"],
         classification_notes=["The paper reports this object."],
+        rationale="The paper names this item in its Results.",
         pending_ref_id="generic-object-1",
         semantic_class="tumor_classification_occurrence",
         attributes=attributes,
@@ -198,6 +201,7 @@ def test_generic_claim_stage_rejects_attributes(active_generic_builder_context):
         label="Narrative claim",
         evidence_record_ids=["evidence-1"],
         classification_notes=["The paper states a narrative claim."],
+        rationale="The paper names this item in its Results.",
         pending_ref_id="generic-claim-1",
         payload={"claim_text": "The paper reports lymphoma incidence."},
         attributes={"cell_type": "B cell"},
@@ -219,6 +223,7 @@ def test_generic_claim_patch_rejects_attributes(active_generic_builder_context):
             "class_key": "generic:generic_claim",
             "label": "Narrative claim",
             "classification_notes": ["The paper states a narrative claim."],
+            "rationale": "The paper names this item in its Results.",
             "payload": {"claim_text": "The paper reports lymphoma incidence."},
         },
         pending_ref_ids=["generic-claim-1"],
@@ -235,4 +240,97 @@ def test_generic_claim_patch_rejects_attributes(active_generic_builder_context):
     assert result.status == "error"
     assert result.data["validation_issues"][0]["reason"] == (
         "attributes_not_supported_for_class"
+    )
+
+
+def _stage_claim(rationale: Any = "The screen result is reported as the paper's main finding."):
+    return generic_builder_tools._stage_generic_object_impl(
+        class_key="generic:generic_claim",
+        label="Narrative claim",
+        evidence_record_ids=["evidence-1"],
+        classification_notes=["The paper states a narrative claim."],
+        rationale=rationale,
+        pending_ref_id="generic-claim-1",
+        payload={"claim_text": "The paper reports lymphoma incidence."},
+    )
+
+
+def test_stage_schema_requires_rationale_with_shared_description():
+    from agr_ai_curation_alliance.tools.builder_rationale import RATIONALE_ARG_DESCRIPTION
+
+    schema = generic_builder_tools.stage_generic_object.params_json_schema
+    assert "rationale" in schema["required"]
+    assert schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+    patch_schema = generic_builder_tools.patch_generic_object.params_json_schema
+    assert "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared." in patch_schema["properties"]["updates"]["description"]
+
+
+def test_stage_stores_stripped_rationale_beside_classification_notes(
+    active_generic_builder_context,
+):
+    workspace, _events = active_generic_builder_context
+
+    result = _stage_claim("  The screen result is reported as the paper's main finding.  ")
+
+    assert result.status == "ok"
+    staged = workspace.candidates["generic-candidate-1"].staged_fields
+    assert staged["rationale"] == "The screen result is reported as the paper's main finding."
+    assert staged["classification_notes"] == ["The paper states a narrative claim."]
+
+
+@pytest.mark.parametrize(
+    ("rationale", "message"),
+    [("   ", "rationale must be non-empty"), ("x" * 301, "shorten it to at most 300")],
+)
+def test_stage_rejects_blank_or_overlong_rationale(
+    active_generic_builder_context, rationale, message
+):
+    workspace, _events = active_generic_builder_context
+
+    result = _stage_claim(rationale)
+
+    assert result.status == "error"
+    assert result.data["validation_issues"][0]["field_path"] == "rationale"
+    assert message in result.data["validation_issues"][0]["message"]
+    assert not workspace.candidates
+
+
+def test_patch_rewrites_rationale(active_generic_builder_context):
+    workspace, _events = active_generic_builder_context
+    _stage_claim()
+
+    result = generic_builder_tools._patch_generic_object_impl(
+        candidate_id="generic-candidate-1",
+        updates=[{"field_path": "rationale", "value": " Only this claim is quantified. "}],
+    )
+
+    assert result.status == "ok"
+    assert workspace.candidates["generic-candidate-1"].staged_fields["rationale"] == (
+        "Only this claim is quantified."
+    )
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"field_path": "rationale"},
+        {"field_path": "rationale", "value": None},
+        {"field_path": "rationale", "value": ""},
+        {"field_path": "rationale", "value": "   "},
+        {"field_path": "rationale", "value": ["list"]},
+        {"field_path": "rationale", "value": "x" * 301},
+    ],
+)
+def test_patch_cannot_clear_or_overfill_rationale(active_generic_builder_context, update):
+    workspace, _events = active_generic_builder_context
+    _stage_claim()
+
+    result = generic_builder_tools._patch_generic_object_impl(
+        candidate_id="generic-candidate-1", updates=[update]
+    )
+
+    assert result.status == "error"
+    assert result.data["validation_issues"][0]["reason"] == "invalid_rationale"
+    assert workspace.candidates["generic-candidate-1"].staged_fields["rationale"] == (
+        "The screen result is reported as the paper's main finding."
     )

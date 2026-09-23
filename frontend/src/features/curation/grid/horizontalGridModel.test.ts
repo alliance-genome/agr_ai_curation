@@ -313,6 +313,52 @@ describe('buildHorizontalGridModel', () => {
     })
   })
 
+  it('shows the stored rationale on the row context instead of a decision column', () => {
+    const fields = (value: unknown) => [
+      draftField({ fieldKey: 'term', label: 'Term', order: 0, value: 'Term one' }),
+      draftField({
+        fieldKey: 'rationale',
+        label: 'Rationale',
+        order: 1,
+        value,
+        readOnly: true,
+        groupKey: 'rationale',
+        groupLabel: 'Rationale',
+      }),
+    ]
+    const recorded = candidate({
+      id: 'candidate-recorded',
+      objectId: 'object-recorded',
+      order: 0,
+      fields: fields('  Knockdown removed the phenotype that the rescue restored.  '),
+    })
+    const notRecorded = candidate({
+      id: 'candidate-not-recorded',
+      objectId: 'object-not-recorded',
+      order: 1,
+      fields: fields(null),
+    })
+    const undeclared = candidate({
+      id: 'candidate-undeclared',
+      objectId: 'object-undeclared',
+      order: 2,
+      fields: [draftField({ fieldKey: 'term', label: 'Term', order: 0, value: 'Term two' })],
+    })
+
+    const model = modelForRows([
+      workspaceRow({ candidate: recorded }),
+      workspaceRow({ candidate: notRecorded }),
+      workspaceRow({ candidate: undeclared }),
+    ])
+
+    expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'term'])
+    expect(model.rows.map((row) => row.contextCell.value.rationale)).toEqual([
+      { value: 'Knockdown removed the phenotype that the rescue restored.' },
+      { value: null },
+      null,
+    ])
+  })
+
   it('projects extractor proposals into their canonical field instead of peer columns', () => {
     const confirmedCandidate = candidate({
       id: 'candidate-confirmed',

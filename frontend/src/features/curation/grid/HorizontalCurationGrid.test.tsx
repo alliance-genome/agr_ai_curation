@@ -117,6 +117,7 @@ function row(candidateId = 'candidate-1'): HorizontalGridRow {
         candidateMetadata: {},
         summaryFields: [],
         reviewRowMetadata: {},
+        rationale: null,
       },
       evidence: [],
       validation: emptyValidation,
@@ -162,6 +163,21 @@ afterEach(() => {
 })
 
 describe('HorizontalCurationGrid', () => {
+  it('shows the stored rationale in the row context and says when none was recorded', () => {
+    const recorded = row()
+    recorded.contextCell.value.rationale = { value: 'Knockdown removed the phenotype.' }
+    const notRecorded = row('candidate-2')
+    notRecorded.contextCell.value.rationale = { value: null }
+
+    renderGrid(model([recorded, notRecorded, row('candidate-3')]))
+
+    const rationaleLines = document.querySelectorAll('[data-slot="row-rationale"]')
+    expect([...rationaleLines].map((line) => line.textContent)).toEqual([
+      'Rationale: Knockdown removed the phenotype.',
+      'Rationale: Not recorded',
+    ])
+  })
+
   it('ports the prototype compact state surfaces and anchored action layout in light mode', () => {
     const lightModel = model([
       {

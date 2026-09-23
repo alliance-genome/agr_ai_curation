@@ -324,6 +324,7 @@ def test_generic_builder_materializer_requires_explicit_class_key_and_label():
     missing_class_workspace = _generic_workspace(
         {
             "label": "TRiP.HMS00001",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The source table labels this as an RNAi reagent."],
         }
     )
@@ -342,6 +343,7 @@ def test_generic_builder_materializer_requires_explicit_class_key_and_label():
     missing_label_workspace = _generic_workspace(
         {
             "class_key": "generic:generic_reagent_candidate",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The source table labels this as an RNAi reagent."],
         }
     )
@@ -362,6 +364,7 @@ def test_explicit_generic_object_class_materializes_without_fallback():
             "label": "TRiP.HMS00001",
             "source_label": "TRiP.HMS00001",
             "description": "RNAi reagent mentioned in the paper.",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": [
                 "The paper calls this a reagent but no more specific class is needed."
             ],
@@ -383,6 +386,7 @@ def test_explicit_generic_object_class_materializes_without_fallback():
     assert obj.payload["class_key"] == "generic:generic_object"
     assert obj.payload["label"] == "TRiP.HMS00001"
     assert obj.payload["attributes"]["source_identifier"] == "TRiP.HMS00001"
+    assert obj.payload["rationale"] == "The paper names this item in its Results."
     assert obj.evidence_record_ids == ["evidence-generic-1"]
     assert obj.metadata["generic_extraction"]["class_key"] == "generic:generic_object"
     assert result.payload["metadata"]["provenance"]["source"] == GENERIC_MATERIALIZER_ID
@@ -390,11 +394,231 @@ def test_explicit_generic_object_class_materializes_without_fallback():
     assert "raw_mentions" not in result.payload
 
 
+@pytest.mark.parametrize("rationale", [None, "", "   "])
+def test_generic_materializer_rejects_new_candidate_without_rationale(rationale):
+    staged_fields = {
+        "class_key": "generic:generic_claim",
+        "label": "RNAi screen result",
+        "classification_notes": ["This is a paper-level result claim."],
+        "payload": {"claim_text": "The screen identified TRiP.HMS00001."},
+    }
+    if rationale is not None:
+        staged_fields["rationale"] = rationale
+    result = materialize_generic_builder_state(
+        workspace=_generic_workspace(staged_fields),
+        candidate_ids=["generic-candidate-1"],
+        evidence_records=_evidence_records(),
+        resolver_entry_lookup=None,
+    )
+
+    assert not result.ok
+    assert [(issue["field_path"], issue["reason"]) for issue in result.issues] == [
+        ("rationale", "missing_rationale")
+    ]
+
+
+_GENERIC_DETAILS_FIELDS = {
+    "generic_object": ["source_label", "description", "confidence"],
+    "generic_claim": ["claim_text", "confidence"],
+    "generic_reagent_candidate": ["source", "source_identifier", "count", "reagent_type"],
+}
+
+
+@pytest.mark.parametrize("object_type", sorted(_GENERIC_DETAILS_FIELDS))
+def test_generic_classes_declare_protected_rationale_in_its_own_group(object_type):
+    pack = get_generated_generic_domain_pack()
+    definition = next(
+        obj for obj in pack.metadata.object_definitions if obj.object_type == object_type
+    )
+    fields = {field.field_path: field for field in definition.fields}
+    rationale = fields["rationale"]
+    assert rationale.required is False
+    assert rationale.display_name == "Rationale"
+    assert rationale.metadata["protected"] is True
+    assert rationale.metadata["curator_action_note"] == "Written by the extraction agent; not editable."
+    assert "hide_when_empty" not in rationale.metadata
+    workspace_display = definition.metadata["workspace_display"]
+    assert workspace_display["groups"] == [
+        {"id": "details", "label": "Details", "fields": _GENERIC_DETAILS_FIELDS[object_type]},
+        {"id": "rationale", "label": "Rationale", "fields": ["rationale"]},
+    ]
+    # summary_fields (secondary-label fallback, candidate summaries) stay as before.
+    assert workspace_display["summary_fields"] == _GENERIC_DETAILS_FIELDS[object_type]
+    for path in _GENERIC_DETAILS_FIELDS[object_type]:
+        assert fields[path].metadata["hide_when_empty"] is True
+
+
+@pytest.mark.parametrize("object_type", sorted(_GENERIC_DETAILS_FIELDS))
+def test_generic_rationale_stays_out_of_supervisor_manifest_summaries(object_type):
+    from src.lib.domain_packs.supervisor_manifest import supervisor_manifest_policy_for_object
+
+    # Each generic class declares its own supervisor_manifest, which wins over
+    # workspace_display, so the review-only rationale never reaches supervisor
+    # result summaries or inspect_results.
+    policy = supervisor_manifest_policy_for_object(
+        get_generated_generic_domain_pack().metadata, object_type
+    )
+    assert "rationale" not in policy.field_paths
+
+
+def _generic_pack_metadata() -> Any:
+    from src.lib.domain_packs.loader import load_domain_pack_metadata
+
+    return load_domain_pack_metadata(
+        REPO_ROOT / "packages" / "alliance" / "domain_packs" / "generic" / "domain_pack.yaml"
+    )
+
+
+def _generic_review_row(metadata: Any, object_type: str, payload: Mapping[str, Any]) -> Any:
+    from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+    from src.schemas.domain_envelope import CuratableObjectStatus, DomainEnvelopeStatus
+
+    envelope = DomainEnvelope(
+        envelope_id="generic-review",
+        domain_pack_id=metadata.pack_id,
+        domain_pack_version=metadata.version,
+        status=DomainEnvelopeStatus.EXTRACTED,
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type=object_type,
+                object_id="generic-1",
+                status=CuratableObjectStatus.PENDING,
+                payload=dict(payload),
+            )
+        ],
+    )
+    row, = DomainPackMetadataReviewRowMaterializer(metadata).materialize(
+        envelope, envelope_revision=1
+    )
+    return row
+
+
+def _draft_fields(row: Any) -> list[dict[str, Any]]:
+    from src.lib.curation_workspace.pipeline import _draft_fields_from_review_row
+
+    return [
+        {
+            "field_key": field.field_key,
+            "value": field.value,
+            "group_key": field.group_key,
+            "read_only": field.read_only,
+        }
+        for field in _draft_fields_from_review_row(row)
+    ]
+
+
+def _metadata_without_rationale(metadata: Any) -> Any:
+    """The generic pack as it was before rationale and its groups were declared."""
+
+    object_definitions = []
+    for definition in metadata.object_definitions:
+        display = {
+            key: value
+            for key, value in definition.metadata["workspace_display"].items()
+            if key != "groups"
+        }
+        object_definitions.append(
+            definition.model_copy(
+                update={
+                    "fields": [
+                        field.model_copy(
+                            update={
+                                "metadata": {
+                                    key: value
+                                    for key, value in field.metadata.items()
+                                    if key != "hide_when_empty"
+                                }
+                            }
+                        )
+                        for field in definition.fields
+                        if field.field_path != "rationale"
+                    ],
+                    "metadata": {**definition.metadata, "workspace_display": display},
+                },
+                deep=True,
+            )
+        )
+    return metadata.model_copy(update={"object_definitions": object_definitions}, deep=True)
+
+
+_REAGENT_WITHOUT_COUNT_OR_IDENTIFIER = {
+    "label": "TRiP.HMS00001",
+    "class_key": "generic:generic_reagent_candidate",
+    "source": "BDSC",
+    "reagent_type": "RNAi",
+    "classification_notes": ["The Methods list this RNAi line."],
+}
+
+
+def test_generic_reagent_review_row_adds_only_the_rationale_field():
+    metadata = _generic_pack_metadata()
+    before = _draft_fields(
+        _generic_review_row(
+            _metadata_without_rationale(metadata),
+            "generic_reagent_candidate",
+            _REAGENT_WITHOUT_COUNT_OR_IDENTIFIER,
+        )
+    )
+    old_item = _draft_fields(
+        _generic_review_row(metadata, "generic_reagent_candidate", _REAGENT_WITHOUT_COUNT_OR_IDENTIFIER)
+    )
+    new_item = _draft_fields(
+        _generic_review_row(
+            metadata,
+            "generic_reagent_candidate",
+            {**_REAGENT_WITHOUT_COUNT_OR_IDENTIFIER, "rationale": "The knockdown line used for the screen."},
+        )
+    )
+
+    field_value = lambda fields: [(field["field_key"], field["value"]) for field in fields]  # noqa: E731
+    # Absent count/source_identifier stay absent: no always-empty decision columns.
+    assert field_value(before) == [("source", "BDSC"), ("reagent_type", "RNAi")]
+    # A record stored before rationale existed shows the same fields plus a
+    # rationale field with no value, which review renders as "Not recorded".
+    assert field_value(old_item) == [*field_value(before), ("rationale", None)]
+    assert field_value(new_item) == [
+        *field_value(before),
+        ("rationale", "The knockdown line used for the screen."),
+    ]
+    # Only the grouping header changes for existing fields.
+    assert [field["group_key"] for field in new_item] == ["details", "details", "rationale"]
+    # Curators read the rationale; only the extraction agent writes it.
+    assert new_item[-1]["read_only"] is True
+    assert old_item[-1]["read_only"] is True
+
+
+@pytest.mark.parametrize(
+    ("object_type", "payload"),
+    [
+        (
+            "generic_claim",
+            {"label": "Claim", "class_key": "generic:generic_claim", "claim_text": "X increases Y."},
+        ),
+        (
+            "generic_reagent_candidate",
+            {"label": "Reagent", "class_key": "generic:generic_reagent_candidate", "source": "BDSC"},
+        ),
+    ],
+)
+def test_generic_rationale_never_becomes_the_secondary_label(object_type, payload):
+    metadata = _generic_pack_metadata()
+    with_rationale = {**payload, "rationale": "Why this item was selected."}
+
+    assert _generic_review_row(
+        _metadata_without_rationale(metadata), object_type, payload
+    ).secondary_label is None
+    assert _generic_review_row(metadata, object_type, payload).secondary_label is None
+    row = _generic_review_row(metadata, object_type, with_rationale)
+    assert row.secondary_label is None
+    assert "rationale" not in [field.field_path for field in row.summary_fields]
+
+
 def test_generic_materializer_rejects_invalid_semantic_attributes():
     workspace = _generic_workspace(
         {
             "class_key": "generic:generic_object",
             "label": "B cell lymphoma",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The paper reports this tumor classification."],
             "attributes": {
                 "Cell Type": "B cell",
@@ -421,6 +645,7 @@ def test_generic_materializer_enforces_required_class_payload_fields():
         {
             "class_key": "generic:generic_claim",
             "label": "principal finding",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["This is a paper-level result claim."],
         }
     )
@@ -444,6 +669,7 @@ def test_generic_materializer_rejects_payload_keys_outside_selected_class():
         {
             "class_key": "generic:generic_reagent_candidate",
             "label": "TRiP.HMS00001",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The source table labels this as an RNAi reagent."],
             "payload": {"source_identifer": "typo"},
         }
@@ -519,6 +745,7 @@ def test_generic_builder_finalization_projects_to_object_tsv_rows():
             staged_fields={
                 "class_key": "generic:generic_reagent_candidate",
                 "label": label,
+                "rationale": "The paper names this item in its Results.",
                 "classification_notes": ["The prompt asked for a reagent inventory."],
                 "payload": {
                     "source": source,
@@ -585,6 +812,7 @@ def test_generic_proxy_materializer_hydrates_required_evidence_fields_and_schema
             "class_key": "gene:gene_mention_evidence",
             "label": "daf-16",
             "confidence": "high",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The paper-backed mention is a gene symbol."],
             "payload": {
                 "identity_resolution_notes": [
@@ -644,6 +872,7 @@ def test_unknown_generic_class_key_is_rejected_not_silently_fallbacked():
         {
             "class_key": "unknown:thing",
             "label": "TRiP.HMS00001",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["This deliberately uses an unknown class key."],
         }
     )
@@ -715,6 +944,7 @@ def test_generic_materializer_rejects_unknown_evidence_record_id():
         {
             "class_key": "generic:generic_reagent_candidate",
             "label": "TRiP.HMS00001",
+            "rationale": "The paper names this item in its Results.",
             "classification_notes": ["The source table labels this as an RNAi reagent."],
         }
     )

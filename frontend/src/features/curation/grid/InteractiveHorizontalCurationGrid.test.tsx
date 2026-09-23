@@ -330,6 +330,7 @@ function buildModel({
             candidateMetadata: {},
             summaryFields: [],
             reviewRowMetadata: {},
+            rationale: null,
           },
           evidence: objectEvidence,
           validation: emptyValidation,
@@ -478,6 +479,17 @@ afterEach(() => {
 })
 
 describe('InteractiveHorizontalCurationGrid', () => {
+  it('shows the rationale read-only inside the selectable row context', () => {
+    const model = buildModel()
+    model.rows[0]!.contextCell.value.rationale = { value: null }
+    renderGrid({ model })
+
+    const context = screen.getByTestId('horizontal-grid-context-candidate-1')
+    expect(within(context).getByText('Not recorded')).toBeInTheDocument()
+    expect(context.querySelector('input, textarea, [contenteditable="true"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: /edit.*rationale/i })).toBeNull()
+  })
+
   it('selects canonical candidates and dispatches exact field and context evidence commands', async () => {
     const user = userEvent.setup()
     const navigateEvidence = vi.fn()

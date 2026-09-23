@@ -1298,7 +1298,14 @@ def _capabilities_payload(
             "chat": (
                 "Chat table or list rendered by the application from every requested row "
                 "and delivered to the curator once. Call finalize_chat_output exactly once; "
-                "optional notes carry a brief curator-requested caveat, never table rows."
+                "optional notes carry a brief curator-requested caveat, never table rows "
+                "or explanations. For 'why' or 'explain' requests add a column for the stored "
+                "per-item rationale field (object.payload.rationale); if a source has no "
+                "rationale field, call formatter_cannot_complete naming it. chat_layout: "
+                "table (default), bullets (one line per row) or sections (one heading per "
+                "row). group_by splits rows into headed groups that share the same columns; "
+                "use it for 'separate sections' split by a value. Sections needing "
+                "different columns are not supported: call formatter_cannot_complete."
             ),
         }[output_format],
         "source_refs": source_refs,

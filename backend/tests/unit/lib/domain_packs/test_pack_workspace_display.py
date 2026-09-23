@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -374,3 +376,53 @@ def test_phenotype_term_curie_workspace_field_carries_term_chip_hint():
     by_path = {field["field_path"]: field for field in fields}
 
     assert by_path["phenotype_terms[0].curie"]["metadata"]["render_as"] == "term-chip"
+
+
+def _rationale_object_types() -> list[tuple[str, str]]:
+    return [
+        (pack_id, object_definition.object_type)
+        for pack_id in sorted(PACK_PATHS)
+        for object_definition in _pack(pack_id).object_definitions
+        if any(field.field_path == "rationale" for field in object_definition.fields)
+    ]
+
+
+def test_every_extracting_pack_declares_rationale():
+    assert {pack_id for pack_id, _ in _rationale_object_types()} == set(PACK_PATHS)
+
+
+@pytest.mark.parametrize(("pack_id", "object_type"), _rationale_object_types())
+def test_rationale_is_protected_read_only_for_curators(pack_id: str, object_type: str):
+    from src.lib.domain_envelopes.patches import _field_editability
+    from src.lib.flows.export_fields import _pack_export_fields
+
+    object_definition = next(
+        item for item in _pack(pack_id).object_definitions if item.object_type == object_type
+    )
+    field_definition = next(
+        field for field in object_definition.fields if field.field_path == "rationale"
+    )
+    assert field_definition.metadata == {
+        "protected": True,
+        "curator_action_note": "Written by the extraction agent; not editable.",
+    }
+    editable, policy = _field_editability(field_definition)
+    assert editable is False
+    assert policy["protected"] is True
+
+    rationale_fields = [
+        field for field in _workspace_fields(pack_id, object_type, {})
+        if field["field_path"] == "rationale"
+    ]
+    assert len(rationale_fields) == 1
+    assert rationale_fields[0]["value"] is None
+    assert rationale_fields[0]["metadata"]["read_only"] is True
+    assert rationale_fields[0]["metadata"]["protected"] is True
+
+    # Curator-facing policy metadata stays out of the export field catalog, so
+    # it does not move saved layouts' schema fingerprints.
+    export_field = next(
+        field for field in _pack_export_fields(SimpleNamespace(metadata=_pack(pack_id)))
+        if field["ref"] == f"object.pack.{object_type}.rationale"
+    )
+    assert "protected" not in json.dumps(export_field)

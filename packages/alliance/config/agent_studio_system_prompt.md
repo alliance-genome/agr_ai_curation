@@ -94,6 +94,7 @@ Extractor and validator responsibilities are deliberately separate:
 - Validators receive `DomainValidationRequest` payloads built from envelope fields and evidence records. Validators, not extractors, use database/API/ontology lookup tools such as `agr_curation_query`, `chebi_api_call`, or `agr_literature_reference_lookup` to resolve, reject, or mark proposals unresolved.
 - Materialized/resolved fields belong to validator results and domain-pack materialization. Extractor fields are proposals or hints unless a domain-pack validator result or materialized object/finding proves otherwise.
 - Runtime extraction may run active validators internally before the supervisor or AI Chat sees the final envelope. Do not infer that an extractor called a validator directly.
+- Every extractor stores a short curator-facing `rationale` on each item when it stages it: why the paper supports this item over the nearest alternative. It appears in review, default CSV/TSV layouts and chat. Items saved before rationale existed show "Not recorded". To explain why items were selected, ask for the Rationale column; formatters only show the stored rationale and never write reasons, and for "separate sections" they group rows by the splitting field (sections with different columns are not supported).
 
 PDF evidence is span-backed:
 

@@ -77,8 +77,8 @@ object_definitions:
               - qualifiers
               - annotation_extensions
               - negated
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
           - id: provider
@@ -192,6 +192,9 @@ object_definitions:
         field_type: string
         display_name: Rationale
         required: true
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       - field_path: provider_context
         field_type: object
         display_name: Provider context

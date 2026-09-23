@@ -142,6 +142,10 @@ object_definitions:
             fields:
               - allele_label
               - allele_identifier
+          - id: rationale
+            label: Rationale
+            fields:
+              - rationale
       export_behavior:
         status: blocked
         mode: verified_association_targets_only
@@ -240,6 +244,14 @@ object_definitions:
               class: AlleleGenomicEntityAssociationDTO
               slot: allele_identifier
               range: string
+      - field_path: rationale
+        field_type: string
+        display_name: Rationale
+        required: false
+        description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       - field_path: evidence_record_ids[0]
         field_type: string
         display_name: First evidence record ID

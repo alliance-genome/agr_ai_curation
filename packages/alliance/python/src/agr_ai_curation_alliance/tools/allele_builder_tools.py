@@ -63,6 +63,10 @@ from .agr_curation import (
     _ok,
 )
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import (
+    document_rationale_arg,
+    normalize_rationale,
+)
 
 
 # Patch field paths that map staging-input names to allele candidate staged-field names.
@@ -77,6 +81,7 @@ _ALLELE_PATCH_FIELD_PATHS = frozenset(
         "reference_filename",
         "source_mentions",
         "evidence_record_ids",
+        "rationale",
     }
 )
 
@@ -102,6 +107,7 @@ class AlleleStageInput(_StrictToolModel):
             "verified quote/provenance stays in evidence_record_ids."
         ),
     )
+    rationale: StrictStr
     normalized_hint: Optional[StrictStr] = None
     associated_gene: Optional[StrictStr] = None
     taxon: Optional[StrictStr] = None
@@ -123,6 +129,11 @@ class AlleleStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("source_mentions must contain at least one non-empty value")
         return cleaned
+
+    @field_validator("rationale")
+    @classmethod
+    def _valid_rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
 
 class AllelePatchUpdateInput(_StrictToolModel):
@@ -252,6 +263,7 @@ def _stage_payload_from_allele_input(stage_input: AlleleStageInput) -> dict[str,
         "pending_ref_id": stage_input.pending_ref_id,
         "mention": stage_input.mention,
         "source_mentions": list(stage_input.source_mentions),
+        "rationale": stage_input.rationale,
     }
     for field_name in (
         "validation_guidance",
@@ -267,11 +279,13 @@ def _stage_payload_from_allele_input(stage_input: AlleleStageInput) -> dict[str,
     return payload
 
 
+@document_rationale_arg
 def _stage_allele_observation_impl(
     pending_ref_id: str,
     mention: str,
     evidence_record_ids: List[str],
     source_mentions: List[str],
+    rationale: str,
     normalized_hint: Optional[str] = None,
     associated_gene: Optional[str] = None,
     taxon: Optional[str] = None,
@@ -304,6 +318,7 @@ def _stage_allele_observation_impl(
             mention=mention,
             evidence_record_ids=evidence_record_ids,
             source_mentions=source_mentions,
+            rationale=rationale,
             normalized_hint=normalized_hint,
             associated_gene=associated_gene,
             taxon=taxon,
@@ -358,7 +373,12 @@ def _patch_allele_observation_impl(
     pending_ref_id: str,
     updates: List[Mapping[str, Any]],
 ) -> AgrQueryResult:
-    """Patch enumerated fields on one staged allele mention candidate."""
+    """Patch enumerated fields on one staged allele mention candidate.
+
+    Args:
+        updates: Field updates, each naming one allowed `field_path` with its new value.
+            A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
+    """
 
     attempted_query = _attempt_query(
         "patch_allele_observation",
@@ -425,6 +445,17 @@ def _patch_allele_observation_impl(
                     attempted_query=attempted_query,
                 )
             payload["source_mentions"] = new_mentions
+            continue
+        if update.field_path == "rationale":
+            try:
+                payload["rationale"] = normalize_rationale(update.string_value or "")
+            except ValueError as exc:
+                return _allele_validation_result(
+                    message=f"rationale patch rejected: {exc}.",
+                    issues=[{"field_path": "rationale", "reason": "invalid_rationale", "message": str(exc)}],
+                    method="patch_allele_observation",
+                    attempted_query=attempted_query,
+                )
             continue
         _set_allele_patch_value(payload, update.field_path, update.string_value)
 

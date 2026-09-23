@@ -88,6 +88,7 @@ def _staged_fields(subject_type: str = "gene", subject_identifier: str = "FB:FBg
         "disease_qualifier_names": ["severity_of", "onset_of"],
         "with_gene_identifiers": ["FB:FBgn0000108", "FB:FBgn0003089"],
         "source_mentions": ["a transgenic Drosophila model of Alzheimer's disease"],
+        "rationale": "APP and BACE over-expression reproduced core Alzheimer's features in this line.",
         "negated": False,
     }
 
@@ -639,3 +640,184 @@ def test_disease_builder_omits_condition_relations_when_unstaged():
         if obj["object_type"] == DISEASE_GENE_OBJECT_TYPE
     )
     assert "condition_relations" not in annotation["payload"]
+
+
+# --- ALL-1298: per-item rationale -------------------------------------------------------------
+
+
+def _stage_kwargs(**overrides: Any) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "pending_ref_id": "disease-annotation-1",
+        "mention": "Alzheimer's disease",
+        "disease_name": "Alzheimer's disease",
+        "role": "model_context",
+        "confidence": "high",
+        "data_provider": "FB",
+        "evidence_record_ids": ["evidence-ad-1"],
+        "source_mentions": ["a transgenic Drosophila model of Alzheimer's disease"],
+        "rationale": "  APP and BACE over-expression reproduced core Alzheimer's features.  ",
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def _builder_tools_with_workspace(monkeypatch: Any) -> tuple[Any, ExtractionBuilderWorkspace]:
+    from agr_ai_curation_alliance.tools import disease_builder_tools as tools
+
+    workspace = ExtractionBuilderWorkspace(
+        run_id="disease-rationale-run",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        agent_id="disease_extractor",
+    )
+    monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
+    monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_: None)
+    return tools, workspace
+
+
+def test_stage_disease_tool_requires_rationale_with_shared_description():
+    from agr_ai_curation_alliance.tools.builder_rationale import RATIONALE_ARG_DESCRIPTION
+    from agr_ai_curation_alliance.tools.disease_builder_tools import (
+        patch_disease_observation,
+        stage_disease_observation,
+    )
+
+    schema = stage_disease_observation.params_json_schema
+    assert "rationale" in schema["required"]
+    assert schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+    patch_updates = patch_disease_observation.params_json_schema["properties"]["updates"]
+    assert "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared." in (
+        " ".join(patch_updates["description"].split())
+    )
+
+
+def test_stage_disease_observation_stores_stripped_rationale(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(**_stage_kwargs())
+
+    assert result.status == "ok"
+    staged = workspace.candidates[result.data["candidate_id"]].staged_fields
+    assert staged["rationale"] == "APP and BACE over-expression reproduced core Alzheimer's features."
+
+
+def test_stage_disease_observation_rejects_blank_or_overlong_rationale(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    blank = tools._stage_disease_observation_impl(**_stage_kwargs(rationale="   "))
+    overlong = tools._stage_disease_observation_impl(**_stage_kwargs(rationale="x" * 301))
+
+    for result in (blank, overlong):
+        assert result.status == "error"
+        assert result.data["validation_issues"][0]["field_path"] == "rationale"
+    assert "shorten it to at most 300 characters" in overlong.data["validation_issues"][0]["message"]
+    assert workspace.candidates == {}
+
+
+def test_patch_disease_observation_rewrites_but_never_clears_rationale(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    candidate_id = tools._stage_disease_observation_impl(**_stage_kwargs()).data["candidate_id"]
+
+    rewritten = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[{"field_path": "rationale", "string_value": "Flies model the disease, not background."}],
+    )
+    assert rewritten.status == "ok"
+    assert workspace.candidates[candidate_id].staged_fields["rationale"] == (
+        "Flies model the disease, not background."
+    )
+
+    for value in ("  ", None):
+        cleared = tools._patch_disease_observation_impl(
+            candidate_id=candidate_id,
+            pending_ref_id="disease-annotation-1",
+            updates=[{"field_path": "rationale", "string_value": value}],
+        )
+        assert cleared.status == "error"
+        assert cleared.data["validation_issues"][0]["reason"] == "invalid_rationale"
+    assert workspace.candidates[candidate_id].staged_fields["rationale"] == (
+        "Flies model the disease, not background."
+    )
+
+
+def test_disease_builder_carries_rationale_onto_annotation_only():
+    result = _materialize_one_candidate()
+    assert result.ok, result.summary()
+
+    for obj in result.payload["curatable_objects"]:
+        if obj["object_type"] == DISEASE_GENE_OBJECT_TYPE:
+            assert obj["payload"]["rationale"] == _staged_fields()["rationale"]
+        else:
+            assert "rationale" not in obj["payload"]
+
+
+def test_disease_builder_rejects_new_candidate_without_rationale():
+    staged = _staged_fields()
+    del staged["rationale"]
+    workspace = ExtractionBuilderWorkspace(
+        run_id="disease-builder-no-rationale",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        agent_id="disease_extractor",
+    )
+    workspace.upsert_candidate(
+        candidate_id="disease-candidate-1",
+        staged_fields=staged,
+        pending_ref_ids=["disease-annotation-1"],
+        evidence_record_ids=["evidence-ad-1"],
+        resolver_selection_refs=[],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    result = materialize_disease_builder_state(
+        workspace=workspace,
+        candidate_ids=["disease-candidate-1"],
+        evidence_records=_evidence_records(),
+        resolver_entry_lookup=None,
+    )
+    assert not result.ok
+    assert any(issue["reason"] == "missing_rationale" for issue in result.issues)
+
+
+def test_disease_annotations_declare_optional_rationale_in_rationale_group():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(DISEASE_DOMAIN_PACK_ID)
+    assert pack is not None
+    annotation_types = {
+        DISEASE_OBJECT_TYPE,
+        DISEASE_GENE_OBJECT_TYPE,
+        DISEASE_ALLELE_OBJECT_TYPE,
+        DISEASE_AGM_OBJECT_TYPE,
+    }
+    definitions = [
+        definition
+        for definition in pack.metadata.object_definitions
+        if definition.object_type in annotation_types
+    ]
+    assert {definition.object_type for definition in definitions} == annotation_types
+    for definition in definitions:
+        rationale = next(field for field in definition.fields if field.field_path == "rationale")
+        assert rationale.field_type == "string"
+        assert rationale.required is False
+        groups = definition.metadata["workspace_display"]["groups"]
+        rationale_group = next(group for group in groups if group["id"] == "rationale")
+        assert rationale_group["label"] == "Rationale"
+        assert rationale_group["fields"] == ["rationale"]
+
+
+def test_stored_disease_annotation_without_rationale_validates_without_new_findings():
+    from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(DISEASE_DOMAIN_PACK_ID)
+    assert pack is not None
+    current = load_domain_fixture_pack(BUILDER_FIXTURE_PATH).fixtures[0].envelope
+    stored_before_rationale = current.model_copy(deep=True)
+    for obj in stored_before_rationale.extracted_objects:
+        obj.payload.pop("rationale", None)
+    assert any("rationale" in obj.payload for obj in current.extracted_objects)
+
+    baseline = run_domain_envelope_structural_checks(current, pack)
+    legacy = run_domain_envelope_structural_checks(stored_before_rationale, pack)
+
+    assert [finding.code for finding in legacy.appended_findings] == [
+        finding.code for finding in baseline.appended_findings
+    ]

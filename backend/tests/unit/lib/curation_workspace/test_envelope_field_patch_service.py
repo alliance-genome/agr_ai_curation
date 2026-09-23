@@ -388,6 +388,28 @@ def _create_session_with_envelope_projection(db_session) -> tuple[CurationReview
                     "metadata": {
                         "source_field_path": "experiment.entity_assayed.symbol"
                     },
+                },
+                {
+                    "field_key": "protected_note",
+                    "label": "Protected note",
+                    "value": "do not edit",
+                    "seed_value": "do not edit",
+                    "field_type": "string",
+                    "group_key": "notes",
+                    "group_label": "Notes",
+                    "order": 4,
+                    "required": False,
+                    "read_only": True,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {
+                        "source_field_path": "protected_note",
+                        "field_metadata": {
+                            "protected": True,
+                            "curator_action_note": "Written by the extraction agent; not editable.",
+                        },
+                    },
                 }
             ],
             draft_metadata={},
@@ -861,6 +883,72 @@ def test_update_candidate_draft_rejects_read_only_projection_field_mutation(
 
     assert exc.value.status_code == 400
     assert "not declared editable" in exc.value.detail
+
+
+@pytest.mark.parametrize("value", ["curator rewrite", None, ""])
+def test_update_candidate_draft_rejects_protected_field_before_any_write(
+    db_session,
+    loaded_pack,
+    value,
+):
+    session, candidate = _create_session_with_envelope_projection(db_session)
+    draft_id = str(candidate.draft.id)
+
+    with pytest.raises(HTTPException) as exc:
+        module.update_candidate_draft(
+            db_session,
+            session.id,
+            candidate.id,
+            CurationCandidateDraftUpdateRequest(
+                session_id=str(session.id),
+                candidate_id=str(candidate.id),
+                draft_id=draft_id,
+                expected_version=1,
+                field_changes=[
+                    CurationDraftFieldChange(field_key="protected_note", value=value)
+                ],
+                autosave=True,
+            ),
+            {"sub": "curator-1", "email": "curator@example.org"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == (
+        "Draft field protected_note is protected: "
+        "Written by the extraction agent; not editable."
+    )
+    envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
+    assert envelope_row.revision == 1
+    assert envelope_row.envelope_json["extracted_objects"][0]["payload"]["protected_note"] == (
+        "do not edit"
+    )
+
+
+def test_update_candidate_draft_allows_protected_field_revert_to_seed(
+    db_session,
+    loaded_pack,
+):
+    session, candidate = _create_session_with_envelope_projection(db_session)
+
+    response = module.update_candidate_draft(
+        db_session,
+        session.id,
+        candidate.id,
+        CurationCandidateDraftUpdateRequest(
+            session_id=str(session.id),
+            candidate_id=str(candidate.id),
+            draft_id=str(candidate.draft.id),
+            expected_version=1,
+            field_changes=[
+                CurationDraftFieldChange(field_key="protected_note", revert_to_seed=True)
+            ],
+            autosave=True,
+        ),
+        {"sub": "curator-1", "email": "curator@example.org"},
+    )
+
+    assert response.action_log_entry is None
+    assert response.draft.fields[4].value == "do not edit"
 
 
 def test_patch_envelope_field_rejects_stale_revision_without_checkpoint(

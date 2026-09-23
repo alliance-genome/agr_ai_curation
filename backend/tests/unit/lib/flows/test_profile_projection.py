@@ -313,3 +313,35 @@ async def test_formatter_tools_cannot_override_selected_fields(profile_step):
     await invoke("finalize_and_save", {})
     assert len(saved) == 1
     assert len(saved[0]["projection"].columns) == 3
+
+
+@pytest.mark.parametrize("format", ["csv", "tsv"])
+def test_profile_rationale_is_a_declared_selectable_export_field(profile_step, format):
+    from src.lib.flows.export_fields import PROFILE_RATIONALE_EXPORT_FIELD
+    from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+    import csv
+    import io
+    step, _, profile = profile_step
+    step["node_id"] = "stocks"
+    objects = step["candidate"]["payload_json"]["curatable_objects"]
+    objects[0]["payload"]["rationale"] = "BDSC stock is named for this construct."
+    # A record staged before the builder required a rationale stays blank.
+    objects.append(deepcopy(objects[0]))
+    objects[1]["pending_ref_id"] = "record-2"
+    del objects[1]["payload"]["rationale"]
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Stock", profile_resolver=lambda _: profile)
+    artifact = bundle.artifacts[0]
+    assert PROFILE_RATIONALE_EXPORT_FIELD["ref"] in {field.ref for field in artifact.declared_fields}
+    assert artifact.default_object_refs[-1] == PROFILE_RATIONALE_EXPORT_FIELD["ref"]
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": format, "row_source": "object", "row_strategy": "wide_union",
+        "selection_mode": "selected_fields", "missing_value": "",
+        "selected_sources": [{"node_id": artifact.node_id, "schema_fingerprint": artifact.export_schema_fingerprint}],
+        "columns": [
+            {"key": "count", "field_ref": "object.attribute.count", "source_node_id": artifact.node_id},
+            {"key": "Rationale", "field_ref": PROFILE_RATIONALE_EXPORT_FIELD["ref"], "source_node_id": artifact.node_id},
+        ],
+    })
+    content = _projection_content_for_file_type(output_format=format, projection=apply_projection_plan(bundle, plan))
+    rows = list(csv.reader(io.StringIO(content), delimiter="," if format == "csv" else "\t"))
+    assert rows == [["count", "Rationale"], ["0", "BDSC stock is named for this construct."], ["0", ""]]

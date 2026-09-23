@@ -373,7 +373,9 @@ def _validate_payload(
             issues.append(
                 _issue(
                     f"payload.{field_path}",
-                    "missing_required_payload_field",
+                    "missing_rationale"
+                    if field_path == "rationale"
+                    else "missing_required_payload_field",
                     "GO candidate is missing a required contract field.",
                     candidate_id,
                 )

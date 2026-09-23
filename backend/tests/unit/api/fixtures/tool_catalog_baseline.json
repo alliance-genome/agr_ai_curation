@@ -3811,7 +3811,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3854,7 +3854,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3897,7 +3897,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3940,7 +3940,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3977,7 +3977,7 @@
           "type": "string"
         },
         {
-          "description": "Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids.",
+          "description": "Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -4008,11 +4008,13 @@
     "documentation": {
       "parameters": [
         {
+          "description": "The staged candidate to correct.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA `rationale` update must be non-empty and at most 300 characters; it cannot\nbe cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -4055,7 +4057,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5280,6 +5282,12 @@
           "type": "array"
         },
         {
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
           "default": null,
           "description": "A cleaned-up version of the allele name the agent suggests, offered as a hint for the allele specialist.",
           "name": "normalized_hint",
@@ -5386,6 +5394,12 @@
           "name": "source_mentions",
           "required": true,
           "type": "array"
+        },
+        {
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
         },
         {
           "default": null,
@@ -5508,6 +5522,12 @@
           "type": "string"
         },
         {
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
           "description": "The gene whose expression was observed, with the exact phrase from the paper and the agent's proposed symbol/ID.",
           "name": "subject",
           "required": true,
@@ -5583,6 +5603,12 @@
         {
           "description": "How sure the agent is about this finding (high, medium, or low).",
           "name": "confidence",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
           "required": true,
           "type": "string"
         },
@@ -5678,6 +5704,12 @@
           "type": "array"
         },
         {
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
           "description": "Optional stable draft identifier for this object.",
           "name": "pending_ref_id",
           "required": false,
@@ -5720,7 +5752,7 @@
           "type": "object"
         }
       ],
-      "summary": "Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, and classification notes."
+      "summary": "Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, classification notes, and a rationale."
     },
     "methods": null,
     "name": "Stage Generic Object",
@@ -5805,6 +5837,7 @@
           "type": "string"
         },
         {
+          "description": "Curator-facing reason this item was selected, max 300 characters. Name the experiment, comparison, or statement that decides it, and why this term/entity/relation fits better than the nearest alternative (a broader/narrower term, a different allele or gene, another stage or tissue, a negated result). Ground it only in the recorded evidence. Do not repeat the quote or list the field values, do not open with \"The paper states/shows\", and do not describe your process. Shown in review, CSV/TSV and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"
@@ -5946,6 +5979,12 @@
           "name": "source_mentions",
           "required": true,
           "type": "array"
+        },
+        {
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
         },
         {
           "default": null,

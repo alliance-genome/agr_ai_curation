@@ -790,6 +790,7 @@ def _gene_evidence_object_payload(
             payload[field_name] = value
     notes = staged_fields.get("identity_resolution_notes")
     payload["identity_resolution_notes"] = _gene_unique_strings(notes)
+    payload["rationale"] = _gene_clean_text(staged_fields.get("rationale"))
     payload["evidence_record_id"] = _gene_clean_text(evidence_record.get("evidence_record_id"))
     for field_name in _GENE_EVIDENCE_LOCATOR_FIELDS:
         value = evidence_record.get(field_name)
@@ -855,6 +856,16 @@ def materialize_gene_builder_state(
                     field_path="evidence_record_ids",
                     reason="missing_evidence_record_ids",
                     message="Finalized gene candidates require non-empty evidence_record_ids.",
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
+        if _gene_clean_text(staged_fields.get("rationale")) is None:
+            issues.append(
+                _gene_materialization_issue(
+                    field_path="rationale",
+                    reason="missing_rationale",
+                    message="Finalized gene candidates require a non-empty rationale.",
                     candidate_id=getattr(candidate, "candidate_id", None),
                 )
             )
