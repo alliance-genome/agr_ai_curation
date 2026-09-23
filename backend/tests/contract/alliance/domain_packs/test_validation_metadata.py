@@ -520,6 +520,17 @@ def test_alliance_validator_binding_capability_groups_have_explicit_policies():
                 assert binding["blocking"] is True
                 assert binding["allow_opt_out"] is True
                 assert binding["curator_override"] == {"allowed": True}
+            elif pack_id == "agr.alliance.disease":
+                # ALL-1283: the gate and the export agree. Every other disease value the
+                # export needs blocks readiness while unresolved; opting out is allowed and
+                # its consequence is stated.
+                assert binding["blocking"] is True
+                assert binding["allow_opt_out"] is True
+                assert binding["curator_override"] == {"allowed": False}
+                assert binding["when_off"] == (
+                    "If you turn this check off, these values stay unresolved and the "
+                    "annotation cannot be exported until they are validated."
+                )
             else:
                 assert binding["blocking"] is False
                 assert binding["allow_opt_out"] is True

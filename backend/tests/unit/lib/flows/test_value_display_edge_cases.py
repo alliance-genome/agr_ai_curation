@@ -459,3 +459,42 @@ def test_a_field_declared_not_exported_is_never_an_export_column():
     paths = [entry["payload_path"] for entry in _pack_export_fields(SimpleNamespace(metadata=metadata))]
 
     assert paths == ["term"]
+
+
+@pytest.mark.parametrize("output_format", ["csv", "chat"])
+def test_previous_format_disease_record_exports_unresolved_with_legacy_wording(output_format):
+    """ALL-1283: the disease pack's legacy display mapper reads a previous-format record in the
+    current shape, so its old strings export as UNRESOLVED with "(legacy, unverified)" wording,
+    never as bare unverified identifiers, and its flat relation text is not lost."""
+
+    stored = {
+        "annotation_type_name": "manually_curated",
+        "mention": "Alzheimer's disease",
+        "disease_annotation_object": {"curie": "DOID:10652", "name": "Alzheimer's disease"},
+        "data_provider": {"abbreviation": "FB"},
+        "disease_relation_name": "is_implicated_in",
+        "evidence_code_curies": ["ECO:0000315"],
+        "with_gene_identifiers": ["FB:FBgn0003089"],
+    }
+    item = {"object_type": "GeneDiseaseAnnotation", "object_id": "d-old", "payload": deepcopy(stored)}
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("disease", "agr.alliance.disease", [item])],
+        flow_name="D", output_format=output_format,
+    )
+    ref = "object.pack.GeneDiseaseAnnotation."
+    columns = [{"key": key, "field_ref": ref + path} for key, path in (
+        ("relation", "disease_relation"), ("relation_wording", "disease_relation.mention"),
+        ("codes", "evidence_code_curies"), ("codes_wording", "evidence_code_curies.mention"),
+        ("genes", "with_gene_identifiers"), ("term", "disease_annotation_object"),
+    )]
+
+    [row] = apply_projection_plan(bundle, _plan(output_format, columns)).rows
+
+    assert row["relation"] == "UNRESOLVED"
+    assert row["relation_wording"] == "is_implicated_in (legacy, unverified)"
+    assert row["codes"] == "UNRESOLVED"
+    assert row["codes_wording"] == "ECO:0000315 (legacy, unverified)"
+    assert row["genes"] == "UNRESOLVED"
+    assert row["term"] == "UNRESOLVED"
+    assert "ECO:0000315" not in row["codes"]
+    assert item["payload"] == stored  # The stored record is never rewritten.

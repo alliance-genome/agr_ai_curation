@@ -601,3 +601,37 @@ def test_stored_component_judged_without_its_own_lookup_is_not_validated(schemas
     result = workspace.assemble(contract.decision_schema.model_validate(decision))
 
     assert result.field_resolutions["condition_chemical_curie"].lookup_outcome == "not_validated"
+
+
+@pytest.mark.parametrize("record_values", [
+    {"curie": "ZECO:0000111", "name": None},
+    {"curie": "ZECO:0000111", "name": ""},
+    {"curie": "ZECO:0000111", "term_name": "chemical treatment"},
+    {"curie": "ZECO:0000111", "label": "chemical treatment"},
+])
+def test_resolved_component_without_a_record_name_stays_unresolved_alone(schemas, record_values):
+    """Review #3: an empty or differently keyed record name never raises for the whole call;
+    that component alone is recorded as missing_expected_result_field."""
+
+    from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord
+    from src.schemas.domain_validator import ValidatorCandidate, ValidatorLookupAttempt
+
+    contract, workspace, decision = _stored_condition_workspace(schemas, with_chemical=False)
+    ref = workspace.record_lookup("stored-condition", call_id="bare-lookup", attempt=ValidatorLookupAttempt(
+        provider="agr_curation_query", method="get_ontology_terms", query={"terms": ["ZECO:0000111"]},
+        result_count=1, outcome="success",
+    ), records=[CanonicalValidatorRecord(candidate=ValidatorCandidate(value="ZECO:0000111"),
+                                          values=record_values)])[0]
+    selection = {"kind": "record", "record_ref": ref, "field": "curie"}
+    decision["candidates"] = [_assessment(ref)]
+    decision["slots"] = {"condition_class_curie": selection}
+    decision["components"][0].update(candidates=[_assessment(ref)], slots={"curie": selection},
+                                     lookup_refs=["bare-lookup"])
+
+    result = workspace.assemble(contract.decision_schema.model_validate(decision))
+
+    decided = result.field_resolutions["condition_class_curie"]
+    assert (decided.status, decided.lookup_outcome, decided.resolved_values) == (
+        "unresolved", "missing_expected_result_field", {},
+    )
+    assert result.missing_expected_fields == []

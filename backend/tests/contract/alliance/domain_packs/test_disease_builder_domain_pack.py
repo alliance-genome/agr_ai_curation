@@ -544,7 +544,8 @@ def test_disease_r4_optional_slot_bindings_are_active():
         assert binding_id in active_validator_ids
         binding = bindings_by_id[binding_id]
         assert binding["required"] is True
-        assert binding["blocking"] is False
+        # ALL-1283: an unresolved value blocks the export, so it blocks readiness too.
+        assert binding["blocking"] is True
         assert binding["allow_opt_out"] is True
         assert binding["curator_override"] == {"allowed": False}
         # All 4 disease object types declare the binding so dispatch fires on the concrete subtypes.

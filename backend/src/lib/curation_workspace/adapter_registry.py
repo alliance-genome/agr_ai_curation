@@ -24,6 +24,7 @@ class CurationAdapterRegistry:
         self._domain_packs: dict[str, Any] = {}
         self._domain_packs_by_id: dict[str, Any] = {}
         self._domain_envelope_validators_by_pack_id: dict[str, Any] = {}
+        self._legacy_display_mappers_by_pack_id: dict[str, Any] = {}
         self._review_row_materializers: dict[str, Any] = {}
         self._review_row_materializers_by_domain_pack: dict[str, Any] = {}
 
@@ -38,6 +39,7 @@ class CurationAdapterRegistry:
         domain_envelope_validator: Any | None = None,
         extraction_payload_normalizer: Any | None = None,
         review_row_materializer: Any | None = None,
+        legacy_display_mapper: Any | None = None,
     ) -> None:
         normalized_key = str(adapter_key).strip()
         if not normalized_key:
@@ -119,6 +121,21 @@ class CurationAdapterRegistry:
                 domain_envelope_validator
             )
 
+        if legacy_display_mapper is not None:
+            # (object_type, payload) -> a read-time copy of a record stored in a previous
+            # pack format, in the current value shape; never written back (ALL-1283).
+            if not callable(legacy_display_mapper):
+                raise ValueError("legacy_display_mapper must be callable")
+            domain_pack_id = _domain_pack_id(domain_pack)
+            if domain_pack_id is None:
+                raise ValueError("legacy_display_mapper requires a registered domain_pack")
+            existing_mapper = self._legacy_display_mappers_by_pack_id.get(domain_pack_id)
+            if existing_mapper is not None and existing_mapper is not legacy_display_mapper:
+                raise ValueError(
+                    f"Legacy display mapper for domain pack '{domain_pack_id}' is already registered"
+                )
+            self._legacy_display_mappers_by_pack_id[domain_pack_id] = legacy_display_mapper
+
         if review_row_materializer is not None:
             existing_materializer = self._review_row_materializers.get(normalized_key)
             if (
@@ -175,6 +192,9 @@ class CurationAdapterRegistry:
         return self._domain_envelope_validators_by_pack_id.get(
             str(domain_pack_id).strip()
         )
+
+    def get_legacy_display_mapper_by_id(self, domain_pack_id: str) -> Any | None:
+        return self._legacy_display_mappers_by_pack_id.get(str(domain_pack_id).strip())
 
     def get_review_row_materializer(self, adapter_key: str) -> Any | None:
         return self._review_row_materializers.get(str(adapter_key).strip())
@@ -264,6 +284,20 @@ def resolve_curation_domain_envelope_validator_by_id(domain_pack_id: str) -> Any
     return load_curation_adapter_registry().get_domain_envelope_validator_by_id(
         normalized_id
     )
+
+
+def resolve_curation_legacy_display_mapper_by_id(domain_pack_id: str) -> Any | None:
+    """Resolve a package-owned legacy display mapper by domain pack ID.
+
+    The mapper reads a record stored in a previous pack format as the current
+    value shape (its old values as "(legacy, unverified)" paper wording) at
+    read time; exports apply it before the shared legacy rule.
+    """
+
+    normalized_id = str(domain_pack_id).strip()
+    if not normalized_id:
+        return None
+    return load_curation_adapter_registry().get_legacy_display_mapper_by_id(normalized_id)
 
 
 def _default_packages_dir() -> Path:

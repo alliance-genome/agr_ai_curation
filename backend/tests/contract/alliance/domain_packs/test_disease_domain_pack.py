@@ -1695,8 +1695,20 @@ def test_previous_format_disease_values_display_as_legacy_paper_wording_only():
         previous_format_display_payload,
     )
 
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, effective_payload
+
     stored = _previous_format_payload()
-    display = previous_format_display_payload(stored)
+    reshaped = previous_format_display_payload(stored)
+    # The mapper only reshapes (no state); the shared legacy rule reads the values once.
+    assert reshaped["disease_relation"] == {
+        "name": "is_implicated_in", "vocabulary": "Disease Relation", "id": "4011",
+    }
+    assert reshaped["evidence_code_curies"] == [{"curie": "ECO:0000315"}]
+    display = effective_payload(
+        reshaped,
+        declared_resolvable_fields(_disease_pack().metadata, "GeneDiseaseAnnotation"),
+        object_metadata={},
+    )
 
     assert is_previous_format(stored)
     assert stored == _previous_format_payload()  # The stored record is never rewritten.
@@ -1835,3 +1847,35 @@ def test_extractor_proposals_are_declared_but_never_export_columns():
     assert proposal_fields
     assert catalog_paths.isdisjoint(proposal_fields)
     assert "disease_annotation_object.mention" in catalog_paths
+
+
+def test_a_curator_edit_never_makes_a_current_record_the_previous_format():
+    """Review #7: only a record with no contract state at all is the previous format."""
+
+    from agr_ai_curation_alliance.domain_packs.disease.legacy import (
+        is_previous_format,
+        validate_disease_envelope,
+    )
+
+    edited = {
+        **_annotation_payload_from_builder(),
+        "annotation_type": unresolved_value("manually_curated", identity_keys=("name",)),
+        # A curator replaced the term with a bare edit and typed a with/from gene as text.
+        "disease_annotation_object": {"curie": "DOID:10652", "name": "Alzheimer's disease"},
+        "with_gene_identifiers": ["FB:FBgn0003089"],
+    }
+    envelope = DomainEnvelope(
+        envelope_id="disease-edited-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneDiseaseAnnotation",
+                pending_ref_id="gene-disease-edited",
+                payload=edited,
+            )
+        ],
+    )
+
+    assert not is_previous_format(edited)
+    assert validate_disease_envelope(envelope) == ()
+    assert is_previous_format(_previous_format_payload())

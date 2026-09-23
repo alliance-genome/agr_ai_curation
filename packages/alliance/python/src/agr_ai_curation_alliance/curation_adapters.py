@@ -12,6 +12,7 @@ from agr_ai_curation_alliance.domain_packs.disease import (
 )
 from agr_ai_curation_alliance.domain_packs.disease.legacy import (
     DiseaseReviewRowMaterializer,
+    legacy_display_payload as disease_legacy_display_payload,
     validate_disease_envelope,
 )
 from agr_ai_curation_alliance.domain_packs.gene import GeneMentionEvidenceExportAdapter
@@ -74,6 +75,9 @@ _DOMAIN_ENVELOPE_VALIDATORS = {
 _REVIEW_ROW_MATERIALIZERS = {
     "disease": DiseaseReviewRowMaterializer,
 }
+_LEGACY_DISPLAY_MAPPERS = {
+    "disease": disease_legacy_display_payload,
+}
 _EXTRACTION_PAYLOAD_NORMALIZERS = {
     "gene": normalize_gene_extraction_payload,
     "phenotype": normalize_phenotype_extraction_payload,
@@ -99,6 +103,7 @@ def register_curation_adapters(registry) -> None:
             review_row_materializer=_REVIEW_ROW_MATERIALIZERS.get(
                 adapter_key, DomainPackMetadataReviewRowMaterializer
             )(metadata=domain_pack.metadata),
+            legacy_display_mapper=_LEGACY_DISPLAY_MAPPERS.get(adapter_key),
         )
 
     registry.register_adapter(

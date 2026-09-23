@@ -5806,7 +5806,7 @@ metadata:
         display_name: Disease ontology lookup
         curator_label: Confirm each disease term against the Disease Ontology
         description: Checks that the disease named on each annotation is a real Disease Ontology term. It matches the DOID identifier or the disease name and fills in the confirmed identifier and name.
-        when_off: The disease term stays as the extractor wrote it, and review rows show it unconfirmed.
+        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
         definition_notes:
           - Runs through the ontology-term package validator binding (ontology family disease, DOTerm, accepted prefix DOID).
         validator_agent:
@@ -5856,7 +5856,7 @@ metadata:
           curie: disease_annotation_object.curie
           label: disease_annotation_object.name
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
           allowed: false
@@ -5864,7 +5864,7 @@ metadata:
         display_name: Disease relation vocabulary lookup
         curator_label: Confirm the disease relation against the Disease Relation vocabulary
         description: Checks that the relation between the subject and the disease, such as is_model_of or is_implicated_in, is a term in the Disease Relation vocabulary.
-        when_off: The disease relation stays as the extractor wrote it, and review rows show it unconfirmed.
+        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
         definition_notes:
           - Runs through the controlled-vocabulary package validator binding (vocabulary Disease Relation) on disease_relation.
         validator_agent:
@@ -5917,7 +5917,7 @@ metadata:
           vocabulary: disease_relation.vocabulary
           internal_id: disease_relation.id
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
           allowed: false
@@ -5925,7 +5925,7 @@ metadata:
         display_name: Condition relation type lookup
         curator_label: Confirm each condition relation type against the Condition Relation Type vocabulary
         description: Checks that the relation type on each experimental condition, such as has_condition or induced_by, is a term in the Condition Relation Type vocabulary.
-        when_off: Condition relation types stay as the extractor wrote them, and review rows show them unconfirmed.
+        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
         definition_notes:
           - Runs through the controlled-vocabulary package validator binding (vocabulary Condition Relation Type, subset Expression Condition Relation).
           - Fans out one check per condition_relations entry.
@@ -5973,7 +5973,7 @@ metadata:
           vocabulary: condition_relations.condition_relation_type.vocabulary
           internal_id: condition_relations.condition_relation_type.id
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
           allowed: false
@@ -5981,7 +5981,7 @@ metadata:
         display_name: Data provider lookup
         curator_label: Confirm the data provider against the Alliance member list
         description: Checks that the data provider abbreviation on each annotation, such as ZFIN or MGI, names an Alliance member database.
-        when_off: The data provider stays as the extractor wrote it, and review rows show it unconfirmed.
+        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
         definition_notes:
           - Runs through the data-provider package validator binding.
         validator_agent:
@@ -6009,7 +6009,7 @@ metadata:
         expected_result_fields:
           abbreviation: data_provider.abbreviation
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
           allowed: false
@@ -6074,7 +6074,7 @@ metadata:
         display_name: Evidence code lookup
         curator_label: Confirm each evidence code against the Evidence and Conclusion Ontology
         description: Checks that each evidence code on the annotation is a real ECO term, such as ECO:0000033 for an author statement.
-        when_off: Evidence codes stay as the extractor wrote them, and review rows show them unconfirmed.
+        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
         definition_notes:
           - Runs through the ontology-term package validator binding (ontology family evidence, ECOTerm, accepted prefix ECO) (D3 full LinkML alignment).
         validator_agent:
@@ -6113,7 +6113,7 @@ metadata:
         expected_result_fields:
           curie: evidence_code_curies.curie
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
           allowed: false
@@ -6128,7 +6128,7 @@ metadata:
         display_name: Annotation type lookup
         curator_label: Confirm the annotation type against the Annotation Type vocabulary
         description: Checks that the annotation type on each disease record is a term in the Annotation Type vocabulary. Records from this pipeline carry manually_curated.
-        when_off: The annotation type stays as the extractor wrote it, and review rows show it unconfirmed.
+        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
         definition_notes:
           - Runs through the controlled-vocabulary package validator binding (vocabulary Annotation Type, curation-method constant manually_curated) (R4).
         validator_agent:
@@ -6155,7 +6155,7 @@ metadata:
           vocabulary: annotation_type.vocabulary
           internal_id: annotation_type.id
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
           allowed: false
@@ -6166,7 +6166,7 @@ metadata:
         display_name: Genetic sex lookup
         curator_label: Confirm the genetic sex against the Genetic Sex vocabulary
         description: Checks that the genetic sex on the annotation, when the paper states one, is a term in the Genetic Sex vocabulary.
-        when_off: The genetic sex stays as the extractor wrote it, and review rows show it unconfirmed.
+        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
         definition_notes:
           - Runs through the controlled-vocabulary package validator binding (vocabulary Genetic Sex) on the optional genetic_sex (R4).
         validator_agent:
@@ -6200,7 +6200,7 @@ metadata:
           vocabulary: genetic_sex.vocabulary
           internal_id: genetic_sex.id
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
           allowed: false
@@ -6211,7 +6211,7 @@ metadata:
         display_name: Disease qualifier lookup
         curator_label: Confirm each disease qualifier against the Disease Qualifier vocabulary
         description: Checks that each qualifier on the annotation, such as susceptibility or severity, is a term in the Disease Qualifier vocabulary.
-        when_off: Disease qualifiers stay as the extractor wrote them, and review rows show them unconfirmed.
+        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
         definition_notes:
           - Runs through the controlled-vocabulary package validator binding (vocabulary Disease Qualifier) on disease_qualifier_names (R4).
         validator_agent:
@@ -6243,7 +6243,7 @@ metadata:
         expected_result_fields:
           term_name: disease_qualifier_names.name
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
           allowed: false
@@ -6258,7 +6258,7 @@ metadata:
         display_name: With/from gene lookup
         curator_label: Confirm each with/from gene in the Alliance records
         description: Checks that each gene listed as supporting evidence in the with/from column matches an Alliance gene record.
-        when_off: With/from genes stay as the extractor wrote them, and review rows show them unconfirmed.
+        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
         definition_notes:
           - Runs through the gene_validation package validator binding on with_gene_identifiers (R4).
         validator_agent:
@@ -6292,7 +6292,7 @@ metadata:
         expected_result_fields:
           primary_external_id: with_gene_identifiers.primary_external_id
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
           allowed: false
@@ -6313,7 +6313,7 @@ metadata:
         display_name: Experimental condition validation
         curator_label: Confirm each experimental condition against the condition ontologies and vocabularies
         description: Checks each experimental condition on the annotation as one unit. It confirms the condition class and ontology terms, any chemical, the taxon, and the data provider together, so one decision covers the whole condition.
-        when_off: Experimental conditions stay as the extractor wrote them, and review rows show them unconfirmed.
+        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
         definition_notes:
           - Runs through the experimental-condition package validator binding, which composes the disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision.
           - Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
@@ -6424,7 +6424,7 @@ metadata:
           condition_taxon_curie: condition_relations.conditions.condition_taxon.curie
           condition_taxon_name: condition_relations.conditions.condition_taxon.name
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
           allowed: false
