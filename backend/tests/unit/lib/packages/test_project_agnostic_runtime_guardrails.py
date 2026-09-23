@@ -132,6 +132,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Standard display rendering is checked against the installed Alliance
     # gene-expression pack and production value shapes (ALL-1282).
     Path("backend/tests/unit/lib/flows/test_value_display.py"),
+    # Display edge cases render the installed Alliance packs' declarations (ALL-1290).
+    Path("backend/tests/unit/lib/flows/test_value_display_edge_cases.py"),
     # Immutable execution migrations preserve the shipped Alliance group prompts
     # and packaged builder identities, including historical access boundaries.
     Path("backend/tests/integration/persistence/test_agent_execution_revision_persistence.py"),

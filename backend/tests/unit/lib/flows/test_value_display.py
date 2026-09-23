@@ -204,7 +204,8 @@ def test_packaged_field_value_fans_out_through_arrays():
     ]}}
     field = {"object_type": "T", "payload_path": "condition_relations.conditions.condition_free_text"}
     assert export_fields.packaged_field_value(item, field) == [["heat", "cold"], ["dark"]]
-    assert display_text(export_fields.packaged_field_value(item, field)) == "heat; cold; dark"
+    # One record per relation; items inside a record join with ", " (ALL-1290).
+    assert display_text(export_fields.packaged_field_value(item, field)) == "heat, cold | dark"
 
 
 def _gene_expression_step():
@@ -537,10 +538,14 @@ def test_declared_field_never_substitutes_another_field():
 
 
 def test_display_roles_must_be_single_leaf_paths():
-    field = SimpleNamespace(field_path="gene_product", metadata={"display": {"label": ["label", "mention"]}},
-                            model_ref=None, object_type_ref=None)
-    with pytest.raises(ValueError, match="single leaf path"):
-        export_fields._field_display(field, {})
+    from pydantic import ValidationError
+
+    from src.schemas.domain_pack_metadata import DomainPackFieldDefinition
+
+    # Checked when the pack loads (ALL-1290), not when a bundle is built.
+    with pytest.raises(ValidationError, match="single leaf path"):
+        DomainPackFieldDefinition(field_path="gene_product",
+                                  metadata={"display": {"label": ["label", "mention"]}})
 
 
 _SHAPES_FIXTURE = (
@@ -775,13 +780,13 @@ def test_composite_list_marker_lands_on_the_indexed_child():
         return apply_projection_plan(bundle, _object_plan("csv", [("relations", relations)])).rows[0]["relations"]
 
     assert cell("condition_relations[0].conditions[1]") == (
-        "induced_by: heat (ZECO:1) | diet (ZECO:2, unresolved) | has_condition: cold (ZECO:3)"
+        "induced_by: heat (ZECO:1), diet (ZECO:2, unresolved) | has_condition: cold (ZECO:3)"
     )
     assert cell("condition_relations[1].conditions[0].condition_class") == (
-        "induced_by: heat (ZECO:1) | diet (ZECO:2) | has_condition: cold (ZECO:3, unresolved)"
+        "induced_by: heat (ZECO:1), diet (ZECO:2) | has_condition: cold (ZECO:3, unresolved)"
     )
     assert cell("condition_relations[0].condition_relation_type") == (
-        "induced_by (unresolved): heat (ZECO:1) | diet (ZECO:2) | has_condition: cold (ZECO:3)"
+        "induced_by (unresolved): heat (ZECO:1), diet (ZECO:2) | has_condition: cold (ZECO:3)"
     )
 
 
@@ -804,11 +809,11 @@ def test_indexed_findings_mark_the_matching_fanned_out_position():
         ("relations", relations), ("summaries", summaries), ("classes", classes),
     ]))
     cells = result.rows[0]
-    assert cells["summaries"] == "heat; diet (unresolved)"
-    assert cells["classes"] == "ZECO:1 | ZECO:2 (unresolved)"
+    assert cells["summaries"] == "heat, diet (unresolved)"
+    assert cells["classes"] == "ZECO:1, ZECO:2 (unresolved)"
     assert cells["relations"] == (
         "condition_relation_type: induced_by; conditions: condition_class: ZECO:1; condition_summary: heat"
-        " | condition_class: ZECO:2; condition_summary: diet (unresolved)"
+        ", condition_class: ZECO:2; condition_summary: diet (unresolved)"
     )
     # Split columns carry the marker only on the unresolved item.
     split = FlowOutputProjectionPlan.model_validate({
@@ -828,21 +833,23 @@ def test_default_layout_lists_only_curatable_units():
                                              "AlleleDiseaseAnnotation", "AGMDiseaseAnnotation"}),
     ):
         entry = {"curation": {"domain_pack_id": pack_id}}
-        pack = export_fields._packaged_domain_pack(agent_id, entry)
-        types = [obj.object_type for obj in pack.metadata.object_definitions]
-        refs = export_fields.packaged_default_layout(agent_id, entry, types)
+        source = export_fields.packaged_export_source(agent_id, entry, cache={})
+        types = [obj.object_type for obj in source.domain_pack.metadata.object_definitions]
+        refs = source.default_layout(types)
         assert refs, agent_id
         assert {ref.split(".")[2] for ref in refs} <= unit_types, (agent_id, refs)
     # A pack without curatable units lays out the objects it declares.
     gene_entry = {"curation": {"domain_pack_id": "gene"}}
-    assert export_fields.packaged_default_layout("gene", gene_entry, ["gene_mention_evidence"])
+    assert export_fields.packaged_export_source("gene", gene_entry, cache={}).default_layout(
+        ["gene_mention_evidence"])
 
 
 def test_lists_of_structured_records_keep_record_boundaries():
     candidates = {"candidates": [{"value": "A:1", "label": "a", "score": 1},
                                  {"value": "B:2", "label": "b", "score": 2}], "status": "ambiguous"}
+    # A list inside a record joins its items with ", " (ALL-1290).
     assert display_text(candidates) == (
-        "candidates: value: A:1; label: a; score: 1 | value: B:2; label: b; score: 2; status: ambiguous"
+        "candidates: value: A:1; label: a; score: 1, value: B:2; label: b; score: 2; status: ambiguous"
     )
     assert display_text([{"curie": "A:1", "name": "a"}, {"curie": "B:2", "name": "b"}], TERM) == "a (A:1) | b (B:2)"
     assert display_text(["heat", "diet"]) == "heat; diet"

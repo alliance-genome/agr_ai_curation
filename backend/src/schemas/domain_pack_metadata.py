@@ -665,7 +665,72 @@ class DomainPackValidatorBindings(DomainPackMetadataBaseModel):
         return self
 
 
+_DISPLAY_ROLES = ("label", "id", "state")
+_DISPLAY_KEYS = frozenset({*_DISPLAY_ROLES, "resolved_states", "compose", "separator"})
+
+
+def _validate_display_spec(display: Any, where: str) -> None:
+    """A ``metadata.display`` declaration (see ``src.lib.flows.value_display``).
+
+    Roles are single leaf paths, never fallback lists; ``compose`` joins
+    declared parts and cannot be mixed with roles. Checked when a pack loads.
+    """
+
+    if not isinstance(display, dict) or not display:
+        raise ValueError(f"{where} must be a non-empty mapping")
+    unknown = sorted(set(display) - _DISPLAY_KEYS)
+    if unknown:
+        raise ValueError(f"{where} has unknown display key(s): {', '.join(unknown)}")
+    for role in _DISPLAY_ROLES:
+        if role in display and not (isinstance(display[role], str) and display[role].strip()):
+            raise ValueError(
+                f"{where}.{role} must be a single leaf path string; fallback lists are not supported"
+            )
+    if "separator" in display and not isinstance(display["separator"], str):
+        raise ValueError(f"{where}.separator must be a string")
+    if "compose" in display:
+        if any(key in display for key in (*_DISPLAY_ROLES, "resolved_states")):
+            raise ValueError(f"{where}.compose cannot be combined with label, id or state roles")
+        compose = display["compose"]
+        if not isinstance(compose, list) or not compose:
+            raise ValueError(f"{where}.compose must list at least one child path")
+        for index, entry in enumerate(compose):
+            entry_where = f"{where}.compose[{index}]"
+            if isinstance(entry, str) and entry.strip():
+                continue
+            if not isinstance(entry, dict) or set(entry) - {"path", "display"} or not entry:
+                raise ValueError(
+                    f"{entry_where}: a compose entry is a child path or a mapping of path and display"
+                )
+            path = entry.get("path")
+            if path is not None and not (isinstance(path, str) and path.strip()):
+                raise ValueError(f"{entry_where}: a compose entry path must be a non-empty string")
+            if "display" in entry:
+                _validate_display_spec(entry["display"], f"{entry_where}.display")
+            if path is None and not (
+                isinstance(entry.get("display"), dict)
+                and (entry["display"].get("label") or entry["display"].get("id"))
+            ):
+                raise ValueError(
+                    f"{entry_where}: a compose entry without a path reads the value itself "
+                    "and needs a display with a label or id role"
+                )
+        return
+    if not (display.get("label") or display.get("id")):
+        raise ValueError(f"{where} needs a label, id or compose declaration")
+    if "state" in display:
+        states = display.get("resolved_states")
+        if not isinstance(states, list) or not states or not all(
+            isinstance(state, str) and state.strip() for state in states
+        ):
+            raise ValueError(f"{where}.state needs a non-empty resolved_states list of strings")
+    elif "resolved_states" in display:
+        raise ValueError(f"{where}.resolved_states needs a state role")
+
+
 def _validate_metadata_mapping(value: dict[str, Any]) -> dict[str, Any]:
+    if "display" in value:
+        _validate_display_spec(value["display"], "metadata.display")
     raw_bindings = value.get("validator_bindings")
     if raw_bindings is None:
         return value
