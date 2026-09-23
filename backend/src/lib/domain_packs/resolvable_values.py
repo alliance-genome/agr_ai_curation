@@ -138,6 +138,9 @@ LOOKUP_OUTCOME_LABELS: dict[str, str] = {
 }
 RESOLUTION_STATE_LABELS: dict[str, str] = {RESOLVED: "Resolved", UNRESOLVED: "Unresolved"}
 
+# A validator that overrules a resolved value keeps its identity under these hint keys.
+PROPOSED_KEY_PREFIX = "proposed_"
+
 NOT_VALIDATED_EXPLANATION = "Not validated yet."
 LEGACY_EXPLANATION = "Recorded before validation tracking; not verified."
 INVALID_RECORD_EXPLANATION = "The stored validation record is invalid; treated as unresolved."
@@ -459,25 +462,41 @@ def mark_resolved(
     check_resolvable_value(value, identity_keys=tuple(identity))
 
 
+def proposed_key(key: str) -> str:
+    """The hint key that keeps an identity a validator overruled (``curie`` -> ``proposed_curie``)."""
+
+    return f"{PROPOSED_KEY_PREFIX}{key}"
+
+
 def mark_unresolved(
     value: MutableMapping[str, Any],
     outcome: str,
     *,
     explanation: str | None,
     curator_message: str | None = None,
+    identity_keys: Sequence[str] = (),
 ) -> None:
-    """Record why a value is unresolved; never touches its id/label or ``mention``.
+    """Record why a value is unresolved, with the validator's own words; ``mention`` is untouched.
 
-    A value some earlier validator resolved keeps that identity and state:
-    unresolved write-back only applies to values that were never resolved.
+    The validator is the authority: a value that read as resolved (e.g. a
+    builder's deterministic lookup) becomes unresolved too. Its identity is
+    kept only as hints (``proposed_<key>``) and its ``identity_keys`` are
+    cleared, so the invariant holds. A value that never resolved keeps its
+    id/label as stored (empty for a contract value).
     """
 
     if outcome not in STORED_UNRESOLVED_OUTCOMES:
         raise ResolvableValueError(
             f"lookup_outcome must be one of {STORED_UNRESOLVED_OUTCOMES}, got {outcome!r}"
         )
-    if has_resolution_state(value) and value[RESOLUTION_STATE_KEY] == RESOLVED:
-        return
+    if is_resolved(value):
+        if not identity_keys:
+            raise ResolvableValueError("Unresolving a resolved value needs its identity keys")
+        for key in identity_keys:
+            if not _is_empty(value.get(key)):
+                value[proposed_key(key)] = value[key]
+            if key in value:
+                value[key] = None
     value[RESOLUTION_STATE_KEY] = UNRESOLVED
     value[LOOKUP_OUTCOME_KEY] = outcome
     _write_validator_text(value, explanation, curator_message)
@@ -500,6 +519,12 @@ def copy_resolution(source: Mapping[str, Any], target: MutableMapping[str, Any])
             source[LOOKUP_OUTCOME_KEY],
             explanation=source.get(VALIDATOR_EXPLANATION_KEY),
             curator_message=source.get(VALIDATOR_CURATOR_MESSAGE_KEY),
+            # The mirror holds the source's keys; the ones the source moved to hints.
+            identity_keys=tuple(
+                key.removeprefix(PROPOSED_KEY_PREFIX)
+                for key in source
+                if key.startswith(PROPOSED_KEY_PREFIX)
+            ),
         )
 
 
@@ -1083,6 +1108,7 @@ __all__ = [
     "OUTCOME_TRANSIENT",
     "PAPER_WORDING_SUFFIX",
     "PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY",
+    "PROPOSED_KEY_PREFIX",
     "RESOLUTION_STATES",
     "RESOLUTION_STATE_KEY",
     "RESOLUTION_STATE_LABELS",
@@ -1113,6 +1139,7 @@ __all__ = [
     "lookup_outcome_for_failure",
     "mark_resolved",
     "mark_unresolved",
+    "proposed_key",
     "resolvable_leaf_header",
     "resolvable_spec_from_display",
     "resolved_value",

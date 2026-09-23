@@ -644,6 +644,9 @@ def _patch_target_object_from_resolved_values(
                 OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
                 explanation=result.explanation,
                 curator_message=result.curator_message,
+                identity_keys=_container_identity_keys(
+                    item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+                ),
             )
             for materialized_field_path, _ in writes:
                 _propagate_materialized_resolution_state(
@@ -803,6 +806,9 @@ def _patch_target_object_from_field_resolutions(
             ),
             explanation=resolution.explanation,
             curator_message=resolution.curator_message,
+            identity_keys=_container_identity_keys(
+                item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+            ),
         )
         for _result_field, materialized_field_path in fields:
             _propagate_materialized_resolution_state(
@@ -972,9 +978,10 @@ def _with_unresolved_values(
 ) -> DomainEnvelope:
     """Record why the resolvable values a binding writes stay unresolved.
 
-    Only the state, lookup outcome and the validator's own explanation change;
-    id/label and ``mention`` are untouched, and plain fields keep whatever the
-    extractor staged.
+    The state, lookup outcome and the validator's own words change; a value
+    that read as resolved (e.g. a builder's deterministic lookup) keeps its
+    identity only as ``proposed_*`` hints (the validator is the authority).
+    ``mention`` is untouched, and plain fields keep whatever the extractor staged.
     """
 
     payload = copy.deepcopy(target.payload)
@@ -997,6 +1004,9 @@ def _with_unresolved_values(
             outcome,
             explanation=item.result.explanation,
             curator_message=item.result.curator_message,
+            identity_keys=_container_identity_keys(
+                item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+            ),
         )
         _propagate_materialized_resolution_state(
             payload, materialized_field_path, declared_fields=declared_fields,
@@ -1047,6 +1057,36 @@ def _resolvable_container_path(
     ):
         return container_path
     return None
+
+
+def _container_identity_keys(
+    item: ValidatorResultMaterializationInput,
+    container_path: str,
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec] | None,
+) -> tuple[str, ...]:
+    """Every key a validator supplies for one value: its declared identity plus the
+    keys this binding writes into it (so an overruled identity is fully cleared)."""
+
+    keys: list[str] = []
+    try:
+        container_tokens = parse_field_path(container_path) if container_path else ()
+    except ValueError:
+        container_tokens = ()
+    spec = declared_spec_for(resolvable_fields, container_tokens) if resolvable_fields else None
+    if spec is not None:
+        keys.extend(spec.identity_keys)
+    for raw_field_path in item.request.expected_result_fields.values():
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            continue
+        materialized_field_path = _materialized_field_path(raw_field_path, declared_fields=declared_fields)
+        if materialized_field_path is None:
+            continue
+        parts = parse_field_path(materialized_field_path)
+        if isinstance(parts[-1], str) and _format_field_path(parts[:-1]) == container_path:
+            keys.append(parts[-1])
+    return tuple(dict.fromkeys(keys))
 
 
 def _payload_container(payload: Mapping[str, Any], container_path: str) -> Any:

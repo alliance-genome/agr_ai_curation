@@ -198,11 +198,17 @@ def test_mark_writes_validator_words_and_never_touches_identity_or_mention():
     assert value["mention"] == "skin"
     assert (value["resolution_state"], value["lookup_outcome"]) == (RESOLVED, OUTCOME_MATCHED)
     assert (value["validator_explanation"], value["validator_curator_message"]) == ("Exact synonym.", None)
-    # A later failure cannot un-resolve a value an earlier validator resolved.
-    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="x")
-    assert value["resolution_state"] == RESOLVED
     with pytest.raises(ResolvableValueError):
-        mark_unresolved(value, "legacy_unverified", explanation=None)
+        mark_unresolved(value, "legacy_unverified", explanation=None, identity_keys=TERM_KEYS)
+    # The validator is the authority: un-resolving keeps the identity only as hints.
+    with pytest.raises(ResolvableValueError, match="identity keys"):
+        mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="x")
+    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="No longer matches.", identity_keys=TERM_KEYS)
+    assert value == {"mention": "skin", "curie": None, "name": None,
+                     "proposed_curie": "ONT:1", "proposed_name": "epidermis",
+                     "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_FOUND,
+                     "validator_explanation": "No longer matches.", "validator_curator_message": None}
+    check_resolvable_value(value, identity_keys=TERM_KEYS)
 
 
 def test_list_helpers_keep_each_element_separate():
@@ -1074,3 +1080,28 @@ def test_revalidating_a_legacy_record_upgrades_declared_values_and_records_the_e
     again = materialize_validator_results_into_envelope(result.envelope, metadata, items)
     assert len(again.envelope.extracted_objects[0].metadata["validator_resolved_value_materialization"]) == len(
         events)
+
+
+
+def test_a_validator_overrules_a_builder_resolved_value():
+    """The builder's deterministic lookup resolved it; the validator says no."""
+
+    metadata = _metadata(mirror=True)
+    builder_resolved = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"},
+                                      explanation="Matched by the builder's lookup.")
+    envelope = _envelope({"site": dict(builder_resolved), "copy": dict(builder_resolved)})
+    item = _item(metadata, envelope, status="unresolved", outcome="not_found")
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    payload = result.envelope.extracted_objects[0].payload
+    for key in ("site", "copy"):
+        value = payload[key]
+        assert (value["resolution_state"], value["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_FOUND)
+        assert (value["curie"], value["name"]) == (None, None)
+        assert (value["proposed_curie"], value["proposed_name"]) == ("ONT:1", "epidermis")
+        assert value["validator_explanation"] == "Fixture validator decision."
+        assert value["mention"] == "skin"
+        check_resolvable_value(value, identity_keys=TERM_KEYS)
+    assert effective_value(payload["site"], ResolvableSpec(id_key="curie", label_key="name"),
+                           covered_by_validator=True) is payload["site"]
