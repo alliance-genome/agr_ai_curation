@@ -130,17 +130,23 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "resolve_domain_field_term" in content
     assert "copyable provenance" not in content
     assert "copy the returned helper_selection into provenance" not in content
-    assert "relation resolver call, assay resolver call, stage resolver call" in content
+    assert "relation, assay, and anatomy or cellular-component controlled fields" in content
+    # ALL-1283: an unmatched term is staged with its paper wording, never dropped.
+    assert "its paper wording as `mention`" in content
+    assert "`selected_value` null" in content
+    assert "keep the paper label in metadata/provenance" not in content
     assert "`relation.name`" in content
-    assert "controlled-vocabulary value" in content
+    assert "controlled-vocabulary choice" in content
     assert "`expression_pattern.where_expressed`" in content
     assert "`expression_experiment.expression_assay_used`" in content
-    assert "`when_expressed_stage_name`" in content
+    assert "`expression_pattern.when_expressed.developmental_stage_start` controlled field" in content
+    assert "Never write the stage name (`when_expressed_stage_name`) yourself" in content
+    assert "with that same wording as `source_phrase`" in content
     assert "metadata.provenance.helper_selections[]" in content
     assert "do not author" in content
     assert "slot_hint" in content
     assert "cellular-component-only sites such as nucleus or cytoplasm are valid" in content
-    assert "`data_provider.abbreviation`" in content
+    assert "Pass `data_provider` as the Alliance member abbreviation" in content
     assert "zebrafish / Danio rerio => `ZFIN`" in content
     assert "broad expression ontology lookup" in content
     assert "agr_curation_query" not in content
@@ -226,15 +232,17 @@ def test_gene_expression_schema_rejects_legacy_payload_evidence_fields():
     assert "metadata.evidence_records[]" in str(exc_info.value)
 
 
-def test_gene_expression_schema_rejects_null_relation_name():
+def test_gene_expression_schema_rejects_resolved_relation_without_its_name():
     schema = _load_gene_expression_schema()
     payload = deepcopy(_load_tmem67_output())
-    payload["curatable_objects"][0]["payload"]["relation"]["name"] = None
+    payload["curatable_objects"][0]["payload"]["relation"].update(
+        {"name": None, "vocabulary": None, "id": None}
+    )
 
     with pytest.raises(ValidationError) as exc_info:
         schema.model_validate(payload)
 
-    assert "relation.name must be selected explicitly" in str(exc_info.value)
+    assert "relation: A resolved value needs the identity" in str(exc_info.value)
 
 
 def test_gene_expression_schema_rejects_relation_without_helper_selection():
@@ -299,7 +307,7 @@ def test_gene_expression_schema_logs_malformed_helper_selection(caplog):
     )
 
 
-def test_gene_expression_schema_rejects_null_data_provider_abbreviation():
+def test_gene_expression_schema_rejects_resolved_data_provider_without_abbreviation():
     schema = _load_gene_expression_schema()
     payload = deepcopy(_load_tmem67_output())
     payload["curatable_objects"][0]["payload"]["data_provider"]["abbreviation"] = None
@@ -307,7 +315,18 @@ def test_gene_expression_schema_rejects_null_data_provider_abbreviation():
     with pytest.raises(ValidationError) as exc_info:
         schema.model_validate(payload)
 
-    assert "data_provider.abbreviation must be a non-empty" in str(exc_info.value)
+    assert "data_provider: A resolved value needs the identity" in str(exc_info.value)
+
+
+def test_gene_expression_schema_rejects_missing_data_provider():
+    schema = _load_gene_expression_schema()
+    payload = deepcopy(_load_tmem67_output())
+    payload["curatable_objects"][0]["payload"].pop("data_provider")
+
+    with pytest.raises(ValidationError) as exc_info:
+        schema.model_validate(payload)
+
+    assert "data_provider must be staged" in str(exc_info.value)
 
 
 def test_gene_expression_schema_rejects_non_annotation_curatable_objects():

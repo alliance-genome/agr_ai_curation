@@ -20,6 +20,43 @@ schema_refs:
           root_schema: model/schema/allianceModel.yaml
           cache_script: scripts/testing/cache_agr_curation_schema.sh
           ref_kind: schema
+enum_definitions:
+  - enum_id: GeneExpressionResolutionState
+    display_name: Resolution status
+    description: Whether a validator (or an exact lookup) confirmed the value's identity.
+    values:
+      - value: resolved
+        label: Resolved
+      - value: unresolved
+        label: Unresolved
+  - enum_id: GeneExpressionLookupOutcome
+    display_name: Lookup result
+    description: What the lookup behind a value found; matched, or curator override, exactly when the value is resolved.
+    values:
+      - value: matched
+        label: Matched
+      - value: not_found
+        label: Not found
+      - value: ambiguous
+        label: Several matches
+      - value: conflict
+        label: Conflict
+      - value: blocked
+        label: Blocked
+      - value: transient
+        label: Temporary error
+      - value: invalid_schema
+        label: Invalid validator output
+      - value: missing_expected_result_field
+        label: Validator result incomplete
+      - value: rejected_candidates
+        label: Candidates rejected
+      - value: not_validated
+        label: Not validated yet
+      - value: legacy_unverified
+        label: Legacy, unverified
+      - value: curator_override
+        label: Curator override
 model_definitions:
   - model_id: GeneExpressionAnnotationPayload
     display_name: Gene expression annotation payload
@@ -76,6 +113,7 @@ model_definitions:
       display:
         label: gene_symbol
         id: primary_external_id
+        mention: mention
   - model_id: ReferenceSnapshotPayload
     display_name: Reference snapshot payload
     description: Embedded reference identifier for the annotation evidence.
@@ -96,6 +134,7 @@ model_definitions:
       display:
         label: title
         id: reference_id
+        mention: mention
   - model_id: OrganizationSnapshotPayload
     display_name: Organization snapshot payload
     description: Embedded data provider identity for the annotation.
@@ -115,6 +154,7 @@ model_definitions:
     metadata:
       display:
         label: abbreviation
+        mention: mention
   - model_id: VocabularyTermSnapshotPayload
     display_name: Vocabulary term snapshot payload
     description: Embedded controlled vocabulary term identity.
@@ -134,6 +174,10 @@ model_definitions:
     metadata:
       display:
         label: name
+        mention: mention
+        validated:
+          - vocabulary
+          - id
   - model_id: OntologyTermSnapshotPayload
     display_name: Ontology term snapshot payload
     description: Embedded ontology term identity for assay, stage, anatomy, UBERON slim, and cellular component refs.
@@ -154,6 +198,7 @@ model_definitions:
       display:
         label: name
         id: curie
+        mention: mention
   - model_id: ReagentSnapshotPayload
     display_name: Detection reagent snapshot payload
     description: Embedded detection reagent selector or placeholder for expression assay context.
@@ -240,14 +285,13 @@ model_definitions:
             source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
             class: ExperimentalCondition
     metadata:
-      # "label (class id)" then the chemical, so no condition part is hidden.
+      # The summary, then the condition class and the chemical, so no condition part is hidden.
       display:
         compose:
-          - display:
-              label: condition_summary
-              id: condition_class.curie
+          - condition_summary
+          - condition_class
           - condition_chemical
-        separator: " with "
+        separator: "; "
   - model_id: ExpressionPatternPayload
     display_name: Expression pattern payload
     description: Embedded expression pattern context for one annotation.
@@ -354,25 +398,31 @@ object_definitions:
           - relation.name
           - expression_experiment.expression_assay_used.name
         groups:
+          # Each validated value sits next to its paper wording (the .mention field).
           - id: subject
             label: Subject gene
             fields:
               - expression_annotation_subject.primary_external_id
               - expression_annotation_subject.gene_symbol
+              - expression_annotation_subject.mention
           - id: reference
             label: Reference
             fields:
               - single_reference.reference_id
+              - single_reference.mention
           - id: assay
             label: Assay
             fields:
               - expression_experiment.expression_assay_used.curie
+              - expression_experiment.expression_assay_used.mention
           - id: expression_site
             label: Expression site
             fields:
               - where_expressed_statement
               - expression_pattern.where_expressed.anatomical_structure.curie
+              - expression_pattern.where_expressed.anatomical_structure.mention
               - expression_pattern.where_expressed.cellular_component.curie
+              - expression_pattern.where_expressed.cellular_component.mention
               - expression_pattern.where_expressed.anatomical_structure_uberon_terms
               - expression_pattern.where_expressed.cellular_component_qualifiers
               - condition_relations
@@ -381,9 +431,12 @@ object_definitions:
             fields:
               - when_expressed_stage_name
               - expression_pattern.when_expressed.developmental_stage_start.curie
+              - expression_pattern.when_expressed.developmental_stage_start.mention
               - expression_pattern.when_expressed.stage_uberon_slim_terms
               - relation.name
+              - relation.mention
               - data_provider.abbreviation
+              - data_provider.mention
           - id: rationale
             label: Rationale
             fields:
@@ -487,6 +540,35 @@ object_definitions:
               range: Organization
               db_table: geneexpressionannotation
               db_column: dataprovider_id
+      - field_path: data_provider.mention
+        field_type: string
+        display_name: Data provider (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: data_provider.resolution_state
+        field_type: enum
+        display_name: Data provider (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: data_provider.lookup_outcome
+        field_type: enum
+        display_name: Data provider (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: data_provider.validator_explanation
+        field_type: string
+        display_name: Data provider (validator explanation)
+        metadata:
+          protected: true
+      - field_path: data_provider.validator_curator_message
+        field_type: string
+        display_name: Data provider (validator message)
+        metadata:
+          protected: true
       - field_path: data_provider.abbreviation
         field_type: string
         display_name: Data provider abbreviation
@@ -527,12 +609,42 @@ object_definitions:
               range: Gene
               db_table: geneexpressionannotation
               db_column: expressionannotationsubject_id
+      - field_path: expression_annotation_subject.mention
+        field_type: string
+        display_name: Subject gene (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_annotation_subject.resolution_state
+        field_type: enum
+        display_name: Subject gene (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: expression_annotation_subject.lookup_outcome
+        field_type: enum
+        display_name: Subject gene (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: expression_annotation_subject.validator_explanation
+        field_type: string
+        display_name: Subject gene (validator explanation)
+        metadata:
+          protected: true
+      - field_path: expression_annotation_subject.validator_curator_message
+        field_type: string
+        display_name: Subject gene (validator message)
+        metadata:
+          protected: true
       - field_path: expression_annotation_subject.primary_external_id
         field_type: string
         display_name: Gene primary external ID
         required: true
         metadata:
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           materializes_to_field_paths:
             - expression_experiment.entity_assayed.primary_external_id
           validatable: true
@@ -557,6 +669,7 @@ object_definitions:
           - Flattened from the Gene.gene_symbol slot annotation display text for pending envelope review.
         metadata:
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           materializes_to_field_paths:
             - expression_experiment.entity_assayed.gene_symbol
           validatable: true
@@ -589,12 +702,42 @@ object_definitions:
               range: VocabularyTerm
               db_table: geneexpressionannotation
               db_column: relation_id
+      - field_path: relation.mention
+        field_type: string
+        display_name: Relation (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: relation.resolution_state
+        field_type: enum
+        display_name: Relation (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: relation.lookup_outcome
+        field_type: enum
+        display_name: Relation (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: relation.validator_explanation
+        field_type: string
+        display_name: Relation (validator explanation)
+        metadata:
+          protected: true
+      - field_path: relation.validator_curator_message
+        field_type: string
+        display_name: Relation (validator message)
+        metadata:
+          protected: true
       - field_path: relation.name
         field_type: string
         display_name: Relation name
         required: true
         metadata:
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           source_of_truth: alliance_linkml
           term_helper:
             field_path: relation.name
@@ -605,7 +748,6 @@ object_definitions:
               inspect_tool: inspect_ontology_term
               accepted_provenance_tools:
                 - resolve_domain_field_term
-              unresolved_metadata_path: metadata.normalization_notes
               search_channels:
                 - exact_label
                 - exact_synonym
@@ -632,6 +774,8 @@ object_definitions:
         field_type: string
         display_name: Relation vocabulary
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           validatable: true
           validator_binding_id: relation_vocabulary_validation
           validation_result_field: vocabulary
@@ -642,6 +786,8 @@ object_definitions:
         field_type: integer
         display_name: Relation internal ID
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           validatable: true
           validator_binding_id: relation_vocabulary_validation
           validation_result_field: internal_id
@@ -654,6 +800,14 @@ object_definitions:
         required: true
         model_ref: ReferenceSnapshotPayload
         metadata:
+          # The experiment's copy holds only the reference id; the annotation's reference also
+          # keeps the curie its validator returns.
+          display:
+            label: title
+            id: reference_id
+            mention: mention
+            validated:
+              - curie
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
@@ -667,12 +821,42 @@ object_definitions:
               range: Reference
               db_table: geneexpressionannotation
               db_column: evidenceitem_id
+      - field_path: single_reference.mention
+        field_type: string
+        display_name: Evidence reference (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: single_reference.resolution_state
+        field_type: enum
+        display_name: Evidence reference (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: single_reference.lookup_outcome
+        field_type: enum
+        display_name: Evidence reference (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: single_reference.validator_explanation
+        field_type: string
+        display_name: Evidence reference (validator explanation)
+        metadata:
+          protected: true
+      - field_path: single_reference.validator_curator_message
+        field_type: string
+        display_name: Evidence reference (validator message)
+        metadata:
+          protected: true
       - field_path: single_reference.reference_id
         field_type: integer
         display_name: Reference ID
         required: true
         metadata:
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           materializes_to_field_paths:
             - expression_experiment.single_reference.reference_id
           validatable: true
@@ -694,6 +878,7 @@ object_definitions:
         display_name: Reference CURIE
         metadata:
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
@@ -711,6 +896,7 @@ object_definitions:
         display_name: Reference title
         metadata:
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
@@ -822,7 +1008,6 @@ object_definitions:
                 - trigram_synonym
                 - definition
                 - configured_mapping
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: assay
@@ -860,13 +1045,43 @@ object_definitions:
               range: MMOTerm
               db_table: geneexpressionannotation
               db_column: expressionassayused_id
+      - field_path: expression_experiment.expression_assay_used.mention
+        field_type: string
+        display_name: Expression assay (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_experiment.expression_assay_used.resolution_state
+        field_type: enum
+        display_name: Expression assay (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: expression_experiment.expression_assay_used.lookup_outcome
+        field_type: enum
+        display_name: Expression assay (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: expression_experiment.expression_assay_used.validator_explanation
+        field_type: string
+        display_name: Expression assay (validator explanation)
+        metadata:
+          protected: true
+      - field_path: expression_experiment.expression_assay_used.validator_curator_message
+        field_type: string
+        display_name: Expression assay (validator message)
+        metadata:
+          protected: true
       - field_path: expression_experiment.expression_assay_used.curie
         field_type: string
         display_name: Expression assay CURIE
         required: true
         metadata:
-          render_as: curie-chip
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          render_as: curie-chip
           validatable: true
           validator_binding_id: expression_assay_ontology_validation
           validator_state: active
@@ -886,6 +1101,7 @@ object_definitions:
         display_name: Expression assay name
         metadata:
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           validatable: true
           validator_binding_id: expression_assay_ontology_validation
           validator_state: active
@@ -920,6 +1136,35 @@ object_definitions:
               range: Reference
               db_table: geneexpressionexperiment
               db_column: singlereference_id
+      - field_path: expression_experiment.single_reference.mention
+        field_type: string
+        display_name: Experiment evidence reference (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_experiment.single_reference.resolution_state
+        field_type: enum
+        display_name: Experiment evidence reference (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: expression_experiment.single_reference.lookup_outcome
+        field_type: enum
+        display_name: Experiment evidence reference (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: expression_experiment.single_reference.validator_explanation
+        field_type: string
+        display_name: Experiment evidence reference (validator explanation)
+        metadata:
+          protected: true
+      - field_path: expression_experiment.single_reference.validator_curator_message
+        field_type: string
+        display_name: Experiment evidence reference (validator message)
+        metadata:
+          protected: true
       - field_path: expression_experiment.single_reference.reference_id
         field_type: integer
         display_name: Experiment reference ID
@@ -961,6 +1206,35 @@ object_definitions:
               range: Gene
               db_table: geneexpressionexperiment
               db_column: entityassayed_id
+      - field_path: expression_experiment.entity_assayed.mention
+        field_type: string
+        display_name: Entity assayed (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_experiment.entity_assayed.resolution_state
+        field_type: enum
+        display_name: Entity assayed (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: expression_experiment.entity_assayed.lookup_outcome
+        field_type: enum
+        display_name: Entity assayed (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: expression_experiment.entity_assayed.validator_explanation
+        field_type: string
+        display_name: Entity assayed (validator explanation)
+        metadata:
+          protected: true
+      - field_path: expression_experiment.entity_assayed.validator_curator_message
+        field_type: string
+        display_name: Entity assayed (validator message)
+        metadata:
+          protected: true
       - field_path: expression_experiment.entity_assayed.primary_external_id
         field_type: string
         display_name: Entity assayed gene primary external ID
@@ -1092,7 +1366,7 @@ object_definitions:
         metadata:
           display:
             compose:
-              - condition_relation_type.name
+              - condition_relation_type
               - conditions
             separator: ": "
           render_as: sub-table
@@ -1108,10 +1382,52 @@ object_definitions:
               slot: condition_relations
               range: ConditionRelation
               db_table: geneexpressionannotation_conditionrelation
+      - field_path: condition_relations.condition_relation_type
+        field_type: object
+        display_name: Condition relation type
+        metadata:
+          # The extractor's relation type wording; the relation-type lookup writes the vocabulary term.
+          display:
+            label: name
+            mention: mention
+            validated:
+              - vocabulary
+              - id
+      - field_path: condition_relations.condition_relation_type.mention
+        field_type: string
+        display_name: Condition relation type (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: condition_relations.condition_relation_type.resolution_state
+        field_type: enum
+        display_name: Condition relation type (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: condition_relations.condition_relation_type.lookup_outcome
+        field_type: enum
+        display_name: Condition relation type (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: condition_relations.condition_relation_type.validator_explanation
+        field_type: string
+        display_name: Condition relation type (validator explanation)
+        metadata:
+          protected: true
+      - field_path: condition_relations.condition_relation_type.validator_curator_message
+        field_type: string
+        display_name: Condition relation type (validator message)
+        metadata:
+          protected: true
       - field_path: condition_relations.condition_relation_type.name
         field_type: string
         display_name: Condition relation type
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           validatable: true
           validator_binding_id: gene_expression_condition_relation_lookup
           validator_state: active
@@ -1126,6 +1442,28 @@ object_definitions:
               range: string
               db_table: vocabularyterm
               db_column: name
+      - field_path: condition_relations.condition_relation_type.vocabulary
+        field_type: string
+        display_name: Condition relation type vocabulary
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          validatable: true
+          validator_binding_id: gene_expression_condition_relation_lookup
+          validation_result_field: vocabulary
+          validator_state: active
+          definition_state_category: complete
+      - field_path: condition_relations.condition_relation_type.id
+        field_type: integer
+        display_name: Condition relation type internal ID
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          validatable: true
+          validator_binding_id: gene_expression_condition_relation_lookup
+          validation_result_field: internal_id
+          validator_state: active
+          definition_state_category: complete
       - field_path: condition_relations.conditions
         field_type: array
         display_name: Experimental conditions
@@ -1150,10 +1488,49 @@ object_definitions:
               slot: conditions
               range: ExperimentalCondition
               db_table: conditionrelation_experimentalcondition
+      - field_path: condition_relations.conditions.condition_class
+        field_type: object
+        display_name: Condition class
+        metadata:
+          # The extractor's proposed CURIE is its mention until a validator writes the identity.
+          display:
+            id: curie
+            mention: mention
+      - field_path: condition_relations.conditions.condition_class.mention
+        field_type: string
+        display_name: Condition class (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: condition_relations.conditions.condition_class.resolution_state
+        field_type: enum
+        display_name: Condition class (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_class.lookup_outcome
+        field_type: enum
+        display_name: Condition class (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_class.validator_explanation
+        field_type: string
+        display_name: Condition class (validator explanation)
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_class.validator_curator_message
+        field_type: string
+        display_name: Condition class (validator message)
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_class.curie
         field_type: string
         display_name: Condition class CURIE
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           # Per-condition component (ZECO). Grounded by the extractor via the term helper and
           # composed (not separately bound) by experimental_condition_validation at the condition grain.
           term_helper:
@@ -1171,7 +1548,6 @@ object_definitions:
                 - trigram_label
                 - trigram_synonym
                 - definition
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: zeco
@@ -1190,10 +1566,49 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_id
+        field_type: object
+        display_name: Condition term
+        metadata:
+          # The extractor's proposed CURIE is its mention until a validator writes the identity.
+          display:
+            id: curie
+            mention: mention
+      - field_path: condition_relations.conditions.condition_id.mention
+        field_type: string
+        display_name: Condition term (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: condition_relations.conditions.condition_id.resolution_state
+        field_type: enum
+        display_name: Condition term (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_id.lookup_outcome
+        field_type: enum
+        display_name: Condition term (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_id.validator_explanation
+        field_type: string
+        display_name: Condition term (validator explanation)
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_id.validator_curator_message
+        field_type: string
+        display_name: Condition term (validator message)
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_id.curie
         field_type: string
         display_name: Condition ID CURIE
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           # Per-condition component (ZECO/XCO). Grounded by the extractor; composed by the
           # condition-grain composite validator.
           term_helper:
@@ -1211,7 +1626,6 @@ object_definitions:
                 - trigram_label
                 - trigram_synonym
                 - definition
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: zeco
@@ -1230,10 +1644,49 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_chemical
+        field_type: object
+        display_name: Chemical
+        metadata:
+          # The extractor's proposed CURIE is its mention until a validator writes the identity.
+          display:
+            id: curie
+            mention: mention
+      - field_path: condition_relations.conditions.condition_chemical.mention
+        field_type: string
+        display_name: Chemical (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: condition_relations.conditions.condition_chemical.resolution_state
+        field_type: enum
+        display_name: Chemical (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_chemical.lookup_outcome
+        field_type: enum
+        display_name: Chemical (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_chemical.validator_explanation
+        field_type: string
+        display_name: Chemical (validator explanation)
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_chemical.validator_curator_message
+        field_type: string
+        display_name: Chemical (validator message)
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_chemical.curie
         field_type: string
         display_name: Chemical CURIE
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           # ChEBI is an ontology term in the curation DB (db_table: ontologyterm, ontologytermtype
           # CHEBITerm); the composite validator resolves it via agr_curation_query get_ontology_term.
           definition_state_category: complete
@@ -1247,10 +1700,49 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_taxon
+        field_type: object
+        display_name: Taxon
+        metadata:
+          # The extractor's proposed CURIE is its mention until a validator writes the identity.
+          display:
+            id: curie
+            mention: mention
+      - field_path: condition_relations.conditions.condition_taxon.mention
+        field_type: string
+        display_name: Taxon (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: condition_relations.conditions.condition_taxon.resolution_state
+        field_type: enum
+        display_name: Taxon (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_taxon.lookup_outcome
+        field_type: enum
+        display_name: Taxon (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_taxon.validator_explanation
+        field_type: string
+        display_name: Taxon (validator explanation)
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_taxon.validator_curator_message
+        field_type: string
+        display_name: Taxon (validator message)
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_taxon.curie
         field_type: string
         display_name: Taxon CURIE
         metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -1295,40 +1787,11 @@ object_definitions:
       - field_path: when_expressed_stage_name
         field_type: string
         display_name: When expressed stage name
+        description: The stage name the curation DB export writes (LinkML-required). It is filled from the validated developmental_stage_start term's name, or entered by a curator when the paper states no stage; the extraction never writes it.
         required: true
         metadata:
           editable: true
-          validatable: true
-          validator_binding_id: expression_stage_ontology_validation
-          validator_state: active
           source_of_truth: alliance_linkml
-          term_helper:
-            field_path: when_expressed_stage_name
-            authority: selector_evidence
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              query_expansion:
-                evidence_local_terms: true
-                abbreviation_expansion: true
-                organism_specific_synonyms: true
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - trigram_label
-                - trigram_synonym
-              unresolved_metadata_path: metadata.normalization_notes
-            term_source:
-              kind: ontology
-              ontology_family: life_stage
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_life_stage_terms
-              provider_required: true
-              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1422,7 +1885,6 @@ object_definitions:
                 - exact_synonym
                 - trigram_label
                 - trigram_synonym
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: life_stage
@@ -1441,12 +1903,42 @@ object_definitions:
               range: StageTerm
               db_table: temporalcontext
               db_column: developmentalstagestart_id
+      - field_path: expression_pattern.when_expressed.developmental_stage_start.mention
+        field_type: string
+        display_name: Developmental stage start (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.when_expressed.developmental_stage_start.resolution_state
+        field_type: enum
+        display_name: Developmental stage start (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: expression_pattern.when_expressed.developmental_stage_start.lookup_outcome
+        field_type: enum
+        display_name: Developmental stage start (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: expression_pattern.when_expressed.developmental_stage_start.validator_explanation
+        field_type: string
+        display_name: Developmental stage start (validator explanation)
+        metadata:
+          protected: true
+      - field_path: expression_pattern.when_expressed.developmental_stage_start.validator_curator_message
+        field_type: string
+        display_name: Developmental stage start (validator message)
+        metadata:
+          protected: true
       - field_path: expression_pattern.when_expressed.developmental_stage_start.curie
         field_type: string
         display_name: Developmental stage start CURIE
         metadata:
-          render_as: curie-chip
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          render_as: curie-chip
           validatable: true
           validator_binding_id: expression_stage_ontology_validation
           validator_state: active
@@ -1464,8 +1956,12 @@ object_definitions:
       - field_path: expression_pattern.when_expressed.developmental_stage_start.name
         field_type: string
         display_name: Developmental stage start name
+        description: The validated stage term's name; validation copies it into when_expressed_stage_name.
         metadata:
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          materializes_to_field_paths:
+            - when_expressed_stage_name
           validatable: true
           validator_binding_id: expression_stage_ontology_validation
           validator_state: active
@@ -1483,16 +1979,21 @@ object_definitions:
       - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms
         field_type: array
         display_name: Stage UBERON slim terms
-        model_ref: OntologyTermSnapshotPayload
+        description: Broad life-stage terms chosen from the Stage Uberon Slim Terms vocabulary (UBERON:0000068, UBERON:0000113, or post embryonic, pre-adult); a fixed choice, so each term's mention is the chosen term name.
+        model_ref: VocabularyTermSnapshotPayload
         metadata:
           render_as: chip
           hide_when_empty: true
+          # Each element is its own resolvable value, validated at its own index.
+          multivalued: true
           validatable: true
           validator_binding_id: expression_stage_uberon_slim_validation
           validator_state: active
+          # LinkML range VocabularyTerm: the curation DB stores these as terms of the
+          # Stage Uberon Slim Terms vocabulary (the UBERON ones named by their CURIE).
           term_helper:
             field_path: expression_pattern.when_expressed.stage_uberon_slim_terms
-            authority: selector_evidence
+            authority: live_validated_option
             resolver:
               primary_tool: resolve_domain_field_term
               search_tool: search_domain_field_terms
@@ -1504,22 +2005,13 @@ object_definitions:
                 - exact_synonym
                 - configured_mapping
                 - current_api_label_or_synonym_search
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
-              kind: ontology
-              ontology_family: uberon
-              ontology_term_type: UBERONTerm
-              slim_membership:
-                source: alliance_linkml
-                allowed_term_curies:
-                  - UBERON:0000068
-                  - UBERON:0000113
-                unresolved_allowed_term_labels:
-                  - post embryonic, pre-adult
+              kind: controlled_vocabulary
+              vocabulary: Stage Uberon Slim Terms
             lookup:
               package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: selector_evidence
+              method: search_vocabulary_terms
+              candidate_authority: live_validated_option
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1529,6 +2021,56 @@ object_definitions:
               slot: stage_uberon_slim_terms
               range: VocabularyTerm
               db_table: temporalcontext_stageuberonslimterms
+      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.name
+        field_type: string
+        display_name: Stage UBERON slim term name
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          source_of_truth: alliance_linkml
+      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.vocabulary
+        field_type: string
+        display_name: Stage UBERON slim term vocabulary
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          source_of_truth: alliance_linkml
+      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.id
+        field_type: integer
+        display_name: Stage UBERON slim term internal ID
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          source_of_truth: alliance_linkml
+      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.mention
+        field_type: string
+        display_name: Stage UBERON slim term (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.resolution_state
+        field_type: enum
+        display_name: Stage UBERON slim term (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.lookup_outcome
+        field_type: enum
+        display_name: Stage UBERON slim term (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.validator_explanation
+        field_type: string
+        display_name: Stage UBERON slim term (validator explanation)
+        metadata:
+          protected: true
+      - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms.validator_curator_message
+        field_type: string
+        display_name: Stage UBERON slim term (validator message)
+        metadata:
+          protected: true
       - field_path: expression_pattern.where_expressed
         field_type: object
         display_name: Anatomical site
@@ -1565,7 +2107,6 @@ object_definitions:
                 - definition
                 - configured_mapping
                 - vector_recall
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: anatomical_site
             site_routing:
@@ -1630,7 +2171,6 @@ object_definitions:
                 - definition
                 - configured_mapping
                 - vector_recall
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: anatomy
@@ -1649,12 +2189,42 @@ object_definitions:
               range: AnatomicalTerm
               db_table: anatomicalsite
               db_column: anatomicalstructure_id
+      - field_path: expression_pattern.where_expressed.anatomical_structure.mention
+        field_type: string
+        display_name: Anatomical structure (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.where_expressed.anatomical_structure.resolution_state
+        field_type: enum
+        display_name: Anatomical structure (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.anatomical_structure.lookup_outcome
+        field_type: enum
+        display_name: Anatomical structure (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.anatomical_structure.validator_explanation
+        field_type: string
+        display_name: Anatomical structure (validator explanation)
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.anatomical_structure.validator_curator_message
+        field_type: string
+        display_name: Anatomical structure (validator message)
+        metadata:
+          protected: true
       - field_path: expression_pattern.where_expressed.anatomical_structure.curie
         field_type: string
         display_name: Anatomical structure CURIE
         metadata:
-          render_as: curie-chip
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          render_as: curie-chip
           validatable: true
           validator_binding_id: expression_anatomical_structure_validation
           validator_state: active
@@ -1674,6 +2244,7 @@ object_definitions:
         display_name: Anatomical structure name
         metadata:
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           validatable: true
           validator_binding_id: expression_anatomical_structure_validation
           validator_state: active
@@ -1695,6 +2266,8 @@ object_definitions:
         metadata:
           render_as: chip
           hide_when_empty: true
+          # Each element is its own resolvable value, validated at its own index.
+          multivalued: true
           validatable: true
           validator_binding_id: expression_anatomical_uberon_slim_validation
           validator_state: active
@@ -1712,7 +2285,6 @@ object_definitions:
                 - exact_synonym
                 - configured_mapping
                 - current_api_label_or_synonym_search
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: uberon
@@ -1759,6 +2331,50 @@ object_definitions:
               slot: anatomical_structure_uberon_terms
               range: UBERONTerm
               db_table: anatomicalsite_anatomicalstructureuberonterms
+      - field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.curie
+        field_type: string
+        display_name: Anatomical structure UBERON slim term CURIE
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          render_as: curie-chip
+          source_of_truth: alliance_linkml
+      - field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.name
+        field_type: string
+        display_name: Anatomical structure UBERON slim term name
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          source_of_truth: alliance_linkml
+      - field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.mention
+        field_type: string
+        display_name: Anatomical structure UBERON slim term (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.resolution_state
+        field_type: enum
+        display_name: Anatomical structure UBERON slim term (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.lookup_outcome
+        field_type: enum
+        display_name: Anatomical structure UBERON slim term (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.validator_explanation
+        field_type: string
+        display_name: Anatomical structure UBERON slim term (validator explanation)
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.validator_curator_message
+        field_type: string
+        display_name: Anatomical structure UBERON slim term (validator message)
+        metadata:
+          protected: true
       - field_path: expression_pattern.where_expressed.cellular_component
         field_type: object
         display_name: Cellular component
@@ -1788,7 +2404,6 @@ object_definitions:
                 - definition
                 - configured_mapping
                 - vector_recall
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: go
@@ -1807,12 +2422,42 @@ object_definitions:
               range: GOTerm
               db_table: anatomicalsite
               db_column: cellularcomponentterm_id
+      - field_path: expression_pattern.where_expressed.cellular_component.mention
+        field_type: string
+        display_name: Cellular component (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.where_expressed.cellular_component.resolution_state
+        field_type: enum
+        display_name: Cellular component (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.cellular_component.lookup_outcome
+        field_type: enum
+        display_name: Cellular component (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.cellular_component.validator_explanation
+        field_type: string
+        display_name: Cellular component (validator explanation)
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.cellular_component.validator_curator_message
+        field_type: string
+        display_name: Cellular component (validator message)
+        metadata:
+          protected: true
       - field_path: expression_pattern.where_expressed.cellular_component.curie
         field_type: string
         display_name: Cellular component CURIE
         metadata:
-          render_as: curie-chip
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          render_as: curie-chip
           validatable: true
           validator_binding_id: expression_cellular_component_validation
           validator_state: active
@@ -1832,6 +2477,7 @@ object_definitions:
         display_name: Cellular component name
         metadata:
           editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           validatable: true
           validator_binding_id: expression_cellular_component_validation
           validator_state: active
@@ -1853,6 +2499,8 @@ object_definitions:
         metadata:
           render_as: chip
           hide_when_empty: true
+          # Each element is its own resolvable value, validated at its own index.
+          multivalued: true
           validatable: true
           validator_binding_id: expression_cellular_component_qualifier_validation
           validator_state: active
@@ -1877,7 +2525,6 @@ object_definitions:
                 - definition
                 - configured_mapping
                 - vector_recall
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: go
@@ -1895,6 +2542,50 @@ object_definitions:
               slot: cellular_component_qualifiers
               range: OntologyTerm
               db_table: anatomicalsite_cellularcomponentqualifiers
+      - field_path: expression_pattern.where_expressed.cellular_component_qualifiers.curie
+        field_type: string
+        display_name: Cellular component qualifier CURIE
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          render_as: curie-chip
+          source_of_truth: alliance_linkml
+      - field_path: expression_pattern.where_expressed.cellular_component_qualifiers.name
+        field_type: string
+        display_name: Cellular component qualifier name
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          source_of_truth: alliance_linkml
+      - field_path: expression_pattern.where_expressed.cellular_component_qualifiers.mention
+        field_type: string
+        display_name: Cellular component qualifier (paper wording)
+        description: The paper's own wording for this value, kept beside the validated identity.
+        metadata:
+          protected: true
+          curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.where_expressed.cellular_component_qualifiers.resolution_state
+        field_type: enum
+        display_name: Cellular component qualifier (status)
+        enum_ref: GeneExpressionResolutionState
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.cellular_component_qualifiers.lookup_outcome
+        field_type: enum
+        display_name: Cellular component qualifier (lookup result)
+        enum_ref: GeneExpressionLookupOutcome
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.cellular_component_qualifiers.validator_explanation
+        field_type: string
+        display_name: Cellular component qualifier (validator explanation)
+        metadata:
+          protected: true
+      - field_path: expression_pattern.where_expressed.cellular_component_qualifiers.validator_curator_message
+        field_type: string
+        display_name: Cellular component qualifier (validator message)
+        metadata:
+          protected: true
       - field_path: negated
         field_type: boolean
         display_name: Negated
@@ -2041,10 +2732,10 @@ metadata:
           - Runs through the ontology-term package validator binding (ontology family assay, MMOTerm, lookup method search_ontology_terms); original labels are preserved in materialization metadata.
       - validator_id: expression_stage_uberon_slim_validation
         display_name: Stage UBERON slim lookup
-        curator_label: Confirm each stage slim term against the allowed UBERON life-stage terms
-        description: Checks that each broad life-stage term on the annotation is one of the allowed UBERON slim terms, such as embryo stage or post-embryonic stage.
+        curator_label: Confirm each stage slim term against the Stage Uberon Slim Terms vocabulary
+        description: Checks that each broad life-stage term on the annotation is a term of the Stage Uberon Slim Terms vocabulary, such as embryo stage (UBERON:0000068), post-juvenile adult stage (UBERON:0000113), or post embryonic, pre-adult.
         definition_notes:
-          - Runs through the ontology-term package validator binding (ontology family uberon, UBERONTerm) with allowed_term_curies UBERON:0000068 and UBERON:0000113; the label 'post embryonic, pre-adult' is accepted unresolved. Materializes the stage UBERON slim term array through ontology lookup evidence.
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Stage Uberon Slim Terms, LinkML range VocabularyTerm), one lookup per slim term.
       - validator_id: expression_anatomical_structure_validation
         display_name: Anatomical structure ontology lookup
         curator_label: Confirm the anatomical structure against the anatomy ontology for the species
@@ -2115,7 +2806,7 @@ metadata:
             value: Expression Relation
           term_name:
             source: payload
-            path: relation.name
+            path: relation.mention
         expected_result_fields:
           term_name: relation.name
           vocabulary: relation.vocabulary
@@ -2144,7 +2835,7 @@ metadata:
         input_fields:
           abbreviation:
             source: payload
-            path: data_provider.abbreviation
+            path: data_provider.mention
         expected_result_fields:
           abbreviation: data_provider.abbreviation
         required: true
@@ -2192,7 +2883,7 @@ metadata:
             required: false
           gene_symbol:
             source: payload
-            path: expression_annotation_subject.gene_symbol
+            path: expression_annotation_subject.mention
             required: false
           data_provider:
             source: payload
@@ -2301,11 +2992,11 @@ metadata:
           object_types:
             - GeneExpressionAnnotation
           field_paths:
-            - when_expressed_stage_name
+            - expression_pattern.when_expressed.developmental_stage_start
         input_fields:
           label:
             source: payload
-            path: when_expressed_stage_name
+            path: expression_pattern.when_expressed.developmental_stage_start.mention
           data_provider:
             source: payload
             path: data_provider.abbreviation
@@ -2320,12 +3011,11 @@ metadata:
           evidence_quotes:
             source: evidence_record
             output: quote_bundle
-            field_path: when_expressed_stage_name
+            field_path: expression_pattern.when_expressed.developmental_stage_start
             allow_multiple: true
             required: false
             context_only: true
         expected_result_fields:
-          label: when_expressed_stage_name
           curie: expression_pattern.when_expressed.developmental_stage_start.curie
           name: expression_pattern.when_expressed.developmental_stage_start.name
         required: true
@@ -2356,7 +3046,7 @@ metadata:
             required: false
           label:
             source: payload
-            path: expression_experiment.expression_assay_used.name
+            path: expression_experiment.expression_assay_used.mention
             required: false
           ontology_family:
             source: literal
@@ -2384,14 +3074,14 @@ metadata:
           allowed: false
       - binding_id: expression_stage_uberon_slim_validation
         display_name: Stage UBERON slim lookup
-        curator_label: Confirm each stage slim term against the allowed UBERON life-stage terms
-        description: Checks that each broad life-stage term on the annotation is one of the allowed UBERON slim terms, such as embryo stage or post-embryonic stage.
+        curator_label: Confirm each stage slim term against the Stage Uberon Slim Terms vocabulary
+        description: Checks that each broad life-stage term on the annotation is a term of the Stage Uberon Slim Terms vocabulary, such as embryo stage (UBERON:0000068), post-juvenile adult stage (UBERON:0000113), or post embryonic, pre-adult.
         when_off: Stage slim terms stay as the extractor wrote them, and review rows show them unconfirmed.
         definition_notes:
-          - Runs through the ontology-term package validator binding (ontology family uberon, UBERONTerm) with allowed_term_curies UBERON:0000068 and UBERON:0000113; the label 'post embryonic, pre-adult' is accepted unresolved. Materializes the stage UBERON slim term array through ontology lookup evidence.
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Stage Uberon Slim Terms, LinkML range VocabularyTerm), one lookup per slim term; the curation DB names the UBERON terms by their CURIE.
         validator_agent:
           package_id: agr.alliance
-          agent_id: ontology_term_validation
+          agent_id: controlled_vocabulary_validation
         applies_to:
           domain_pack_id: agr.alliance.gene_expression
           object_types:
@@ -2399,38 +3089,20 @@ metadata:
           field_paths:
             - expression_pattern.when_expressed.stage_uberon_slim_terms
         input_fields:
-          terms:
+          vocabulary:
+            source: literal
+            value: Stage Uberon Slim Terms
+          # expression_pattern.when_expressed.stage_uberon_slim_terms is multivalued: the engine
+          # fans out one lookup per element. A slim term is a fixed choice, so its mention is the
+          # term name the extractor chose.
+          term_name:
             source: payload
-            path: expression_pattern.when_expressed.stage_uberon_slim_terms
+            path: expression_pattern.when_expressed.stage_uberon_slim_terms.mention
             required: false
-            allow_multiple: true
-          ontology_family:
-            source: literal
-            value: uberon
-          ontology_term_type:
-            source: literal
-            value: UBERONTerm
-          lookup_method:
-            source: literal
-            value: search_ontology_terms
-          allowed_term_curies:
-            source: literal
-            value:
-              - UBERON:0000068
-              - UBERON:0000113
-          unresolved_allowed_term_labels:
-            source: literal
-            value:
-              - post embryonic, pre-adult
-          evidence_quotes:
-            source: evidence_record
-            output: quote_bundle
-            field_path: expression_pattern.when_expressed.stage_uberon_slim_terms
-            allow_multiple: true
-            required: false
-            context_only: true
         expected_result_fields:
-          terms: expression_pattern.when_expressed.stage_uberon_slim_terms
+          term_name: expression_pattern.when_expressed.stage_uberon_slim_terms.name
+          vocabulary: expression_pattern.when_expressed.stage_uberon_slim_terms.vocabulary
+          internal_id: expression_pattern.when_expressed.stage_uberon_slim_terms.id
         required: true
         blocking: false
         allow_opt_out: true
@@ -2459,7 +3131,7 @@ metadata:
             required: false
           label:
             source: payload
-            path: expression_pattern.where_expressed.anatomical_structure.name
+            path: expression_pattern.where_expressed.anatomical_structure.mention
             required: false
           data_provider:
             source: payload
@@ -2504,11 +3176,15 @@ metadata:
           field_paths:
             - expression_pattern.where_expressed.anatomical_structure_uberon_terms
         input_fields:
-          terms:
+          # expression_pattern.where_expressed.anatomical_structure_uberon_terms is multivalued: the engine fans out one lookup per element.
+          curie:
             source: payload
-            path: expression_pattern.where_expressed.anatomical_structure_uberon_terms
+            path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.curie
             required: false
-            allow_multiple: true
+          label:
+            source: payload
+            path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.mention
+            required: false
           ontology_family:
             source: literal
             value: uberon
@@ -2555,7 +3231,8 @@ metadata:
             required: false
             context_only: true
         expected_result_fields:
-          terms: expression_pattern.where_expressed.anatomical_structure_uberon_terms
+          curie: expression_pattern.where_expressed.anatomical_structure_uberon_terms.curie
+          name: expression_pattern.where_expressed.anatomical_structure_uberon_terms.name
         required: true
         blocking: false
         allow_opt_out: true
@@ -2584,7 +3261,7 @@ metadata:
             required: false
           label:
             source: payload
-            path: expression_pattern.where_expressed.cellular_component.name
+            path: expression_pattern.where_expressed.cellular_component.mention
             required: false
           ontology_family:
             source: literal
@@ -2627,11 +3304,15 @@ metadata:
           field_paths:
             - expression_pattern.where_expressed.cellular_component_qualifiers
         input_fields:
-          terms:
+          # expression_pattern.where_expressed.cellular_component_qualifiers is multivalued: the engine fans out one lookup per element.
+          curie:
             source: payload
-            path: expression_pattern.where_expressed.cellular_component_qualifiers
+            path: expression_pattern.where_expressed.cellular_component_qualifiers.curie
             required: false
-            allow_multiple: true
+          label:
+            source: payload
+            path: expression_pattern.where_expressed.cellular_component_qualifiers.mention
+            required: false
           ontology_family:
             source: literal
             value: go
@@ -2649,7 +3330,8 @@ metadata:
             required: false
             context_only: true
         expected_result_fields:
-          terms: expression_pattern.where_expressed.cellular_component_qualifiers
+          curie: expression_pattern.where_expressed.cellular_component_qualifiers.curie
+          name: expression_pattern.where_expressed.cellular_component_qualifiers.name
         required: true
         blocking: false
         allow_opt_out: true
@@ -2688,7 +3370,7 @@ metadata:
             required: false
           term_name:
             source: payload
-            path: condition_relations.condition_relation_type.name
+            path: condition_relations.condition_relation_type.mention
             required: false
         expected_result_fields:
           term_name: condition_relations.condition_relation_type.name
@@ -2739,7 +3421,7 @@ metadata:
           # context (does the class fit the relation?) and never re-looks-it-up.
           condition_relation_type:
             source: payload
-            path: condition_relations.condition_relation_type.name
+            path: condition_relations.condition_relation_type.mention
             required: false
             context_only: true
           # The whole ExperimentalCondition object for this element (component bundle).
@@ -2749,19 +3431,19 @@ metadata:
             required: false
           condition_class_curie:
             source: payload
-            path: condition_relations.conditions.condition_class.curie
+            path: condition_relations.conditions.condition_class.mention
             required: false
           condition_id_curie:
             source: payload
-            path: condition_relations.conditions.condition_id.curie
+            path: condition_relations.conditions.condition_id.mention
             required: false
           condition_chemical_curie:
             source: payload
-            path: condition_relations.conditions.condition_chemical.curie
+            path: condition_relations.conditions.condition_chemical.mention
             required: false
           condition_taxon_curie:
             source: payload
-            path: condition_relations.conditions.condition_taxon.curie
+            path: condition_relations.conditions.condition_taxon.mention
             required: false
           condition_free_text:
             source: payload

@@ -13,6 +13,11 @@ from typing import Any, Callable
 
 from pydantic import ValidationError, model_validator
 
+from src.lib.domain_packs.resolvable_values import (
+    ResolvableValueError,
+    check_resolvable_list,
+    check_resolvable_value,
+)
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
@@ -41,8 +46,14 @@ from ..schema_refs import (
     OBJECT_ROLE_METADATA_KEY,
     PROVIDER_REFS_METADATA_KEY,
 )
-from ._payload_terms import has_term_selector as _has_term_selector
+from ._payload_terms import term_present as _term_present
 from ._payload_terms import value_missing_or_blank as _value_missing_or_blank
+from .legacy import is_previous_format_annotation, previous_format_finding
+from .resolvable import (
+    GENE_EXPRESSION_RESOLVABLE_VALUES,
+    is_resolved,
+    staged_value,
+)
 from .constants import (
     GENE_EXPRESSION_DOMAIN_PACK_CONVERTER_ID,
     GENE_EXPRESSION_DOMAIN_PACK_ID,
@@ -77,42 +88,65 @@ REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
         "expression_experiment.entity_assayed.gene_symbol",
         "expression_experiment.expression_assay_used",
         "expression_experiment.expression_assay_used.curie",
+        # The stage name the export writes. Validation fills it from the stage term's
+        # name, or a curator enters it; the extraction never writes it.
         "when_expressed_stage_name",
         "where_expressed_statement",
         "expression_pattern",
         "expression_pattern.where_expressed",
     }
 )
+# Required fields the extractor does not supply: a validator (or the builder's
+# deterministic lookup) writes the identity keys of each resolvable value, and a
+# paper may state no stage or leave the expression site UNRESOLVED. The pending
+# envelope and export still report them.
+_VALIDATOR_OWNED_IDENTITY_FIELDS = frozenset(
+    f"{value.field_path}.{key}"
+    for value in GENE_EXPRESSION_RESOLVABLE_VALUES
+    for key in value.identity_keys
+)
 MATERIALIZER_RESOLVABLE_EXTRACTION_FIELDS = frozenset(
     {
-        "expression_experiment.expression_assay_used.curie",
-        # Evidence-backed extraction may retain unresolved selectors. The
-        # pending-envelope validator still reports these as blocking findings;
-        # they are not prerequisites for preserving the extracted observation.
-        "expression_annotation_subject.primary_external_id",
-        "expression_experiment.entity_assayed.primary_external_id",
+        *(
+            field_path
+            for field_path in REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS
+            if field_path in _VALIDATOR_OWNED_IDENTITY_FIELDS
+        ),
         "expression_pattern.where_expressed",
         "when_expressed_stage_name",
     }
 )
+# Required fields with their own pending-envelope finding (the rest report
+# alliance.gene_expression.required_field_missing).
 FIELD_SPECIFIC_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
     {
-        "data_provider.abbreviation",
-        "expression_annotation_subject.primary_external_id",
-        "expression_annotation_subject.gene_symbol",
-        "relation.name",
-        "single_reference.reference_id",
-        "expression_experiment.single_reference.reference_id",
-        "expression_experiment.expression_assay_used.curie",
-        "expression_experiment.entity_assayed.primary_external_id",
-        "expression_experiment.entity_assayed.gene_symbol",
-        "when_expressed_stage_name",
+        *MATERIALIZER_RESOLVABLE_EXTRACTION_FIELDS,
+        "data_provider",
+        "expression_annotation_subject",
+        "relation",
+        "single_reference",
+        "expression_experiment.single_reference",
+        "expression_experiment.entity_assayed",
+        "expression_experiment.expression_assay_used",
         "where_expressed_statement",
-        "expression_pattern.where_expressed",
     }
 )
 GENE_EXPRESSION_LINKML_CONTRACT_VALIDATOR_ID = (
     "gene_expression.linkml_extraction_contract"
+)
+# Controlled-vocabulary list fields the builder resolves only through
+# resolve_domain_field_term (by term name).
+_RESOLVER_BACKED_VOCABULARY_FIELDS = (
+    "expression_pattern.when_expressed.stage_uberon_slim_terms",
+)
+# Ontology-term fields the builder resolves only through resolve_domain_field_term.
+_RESOLVER_BACKED_TERM_FIELDS = (
+    "expression_experiment.expression_assay_used",
+    "expression_pattern.when_expressed.developmental_stage_start",
+    "expression_pattern.where_expressed.anatomical_structure",
+    "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+    "expression_pattern.where_expressed.cellular_component",
+    "expression_pattern.where_expressed.cellular_component_qualifiers",
 )
 VALID_GENE_EXPRESSION_RELATION_NAMES = frozenset({"is_expressed_in"})
 EXPRESSION_RELATION_VOCABULARY = "Expression Relation"
@@ -146,17 +180,6 @@ FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
 )
 GENE_EXPRESSION_MATERIALIZER_ID = "gene_expression.builder_materializer.v1"
 PLACEHOLDER_REFERENCE_IDS = frozenset({"PMID:12345678", "PMID12345678"})
-GENE_ID_PROVIDER_PREFIXES = {
-    "WB:": "WB",
-    "WBGene:": "WB",
-    "MGI:": "MGI",
-    "ZFIN:": "ZFIN",
-    "FB:": "FB",
-    "FBgn": "FB",
-    "RGD:": "RGD",
-    "SGD:": "SGD",
-    "Xenbase:": "XB",
-}
 
 
 @dataclass(frozen=True)
@@ -184,12 +207,52 @@ class GeneExpressionMaterializationResult:
 
 
 def _has_anatomical_site_slot(where_expressed: Any) -> bool:
+    """Whether the paper supplied an anatomical structure or cellular component, resolved or not."""
+
     if not isinstance(where_expressed, Mapping):
         return False
     return (
-        _has_term_selector(where_expressed.get("anatomical_structure"))
-        or _has_term_selector(where_expressed.get("cellular_component"))
+        _term_present(where_expressed.get("anatomical_structure"))
+        or _term_present(where_expressed.get("cellular_component"))
     )
+
+
+def _resolvable_value_errors(payload: Mapping[str, Any]) -> list[str]:
+    """Contract errors for the resolvable values a payload holds (absent values are skipped)."""
+
+    errors: list[str] = []
+    for declared in GENE_EXPRESSION_RESOLVABLE_VALUES:
+        for path, value in _values_at(payload, declared.field_path):
+            try:
+                if declared.multivalued:
+                    check_resolvable_list(value, identity_keys=declared.identity_keys)
+                else:
+                    check_resolvable_value(value, identity_keys=declared.identity_keys)
+            except ResolvableValueError as exc:
+                errors.append(f"{path}: {exc}")
+    return errors
+
+
+def _values_at(payload: Any, field_path: str) -> list[tuple[str, Any]]:
+    """Every stored value at a declared path, walking list levels; absent values are skipped."""
+
+    found: list[tuple[str, Any]] = []
+
+    def walk(node: Any, parts: list[str], walked: str) -> None:
+        if not parts:
+            if node is not None:
+                found.append((walked, node))
+            return
+        if isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, parts, f"{walked}[{index}]")
+            return
+        if not isinstance(node, Mapping) or parts[0] not in node:
+            return
+        walk(node[parts[0]], parts[1:], f"{walked}.{parts[0]}" if walked else parts[0])
+
+    walk(payload, field_path.split("."), "")
+    return found
 
 
 def _payload_value(payload: Mapping[str, Any], field_path: str) -> Any:
@@ -389,96 +452,65 @@ def validate_gene_expression_extraction_objects(
                 f"{location}.payload is missing required fields: "
                 + ", ".join(missing_payload_fields)
             )
+        errors.extend(
+            f"{location}.payload {error}" for error in _resolvable_value_errors(obj.payload)
+        )
         relation = obj.payload.get("relation")
-        relation_name = (
-            relation.get("name") if isinstance(relation, Mapping) else None
-        )
-        if not isinstance(relation_name, str) or not relation_name.strip():
+        if not _term_present(relation):
             errors.append(
-                f"{location}.payload relation.name must be selected explicitly "
-                "from domain-pack term helper options"
+                f"{location}.payload relation must be staged with its paper wording"
             )
-        elif relation_name.strip() not in VALID_GENE_EXPRESSION_RELATION_NAMES:
-            errors.append(
-                f"{location}.payload relation.name must be a valid "
-                f"{EXPRESSION_RELATION_VOCABULARY} option"
-            )
-        elif not _has_helper_selection(
-            output,
-            field_path="relation.name",
-            selected_value=relation_name.strip(),
-        ):
-            errors.append(
-                _resolver_provenance_error(
-                    location=location,
-                    field_path="relation.name",
+        elif is_resolved(relation):
+            relation_name = relation.get("name")
+            if relation_name not in VALID_GENE_EXPRESSION_RELATION_NAMES:
+                errors.append(
+                    f"{location}.payload relation.name must be a valid "
+                    f"{EXPRESSION_RELATION_VOCABULARY} option"
                 )
-            )
-        assay_curie = _payload_value(
-            obj.payload,
-            "expression_experiment.expression_assay_used.curie",
-        )
-        if isinstance(assay_curie, str) and assay_curie.strip():
-            if not _has_helper_selection(
+            elif not _has_helper_selection(
                 output,
-                field_path="expression_experiment.expression_assay_used",
-                selected_curie=assay_curie.strip(),
+                field_path="relation.name",
+                selected_value=relation_name,
             ):
                 errors.append(
                     _resolver_provenance_error(
                         location=location,
-                        field_path="expression_experiment.expression_assay_used",
+                        field_path="relation.name",
                     )
                 )
-        stage_name = _payload_value(obj.payload, "when_expressed_stage_name")
-        if stage_name is not None and not isinstance(stage_name, str):
+        # A term the builder staged as resolved carries the resolver call that matched it.
+        for field_path in _RESOLVER_BACKED_VOCABULARY_FIELDS:
+            for value_path, value in _values_at(obj.payload, field_path):
+                for term in value if isinstance(value, list) else [value]:
+                    if is_resolved(term) and not _has_helper_selection(
+                        output,
+                        field_path=field_path,
+                        selected_value=str(term.get("name") or ""),
+                    ):
+                        errors.append(
+                            _resolver_provenance_error(location=location, field_path=value_path)
+                        )
+        for field_path in _RESOLVER_BACKED_TERM_FIELDS:
+            for value_path, value in _values_at(obj.payload, field_path):
+                terms = value if isinstance(value, list) else [value]
+                for term in terms:
+                    if not is_resolved(term):
+                        continue
+                    if not _has_helper_selection(
+                        output,
+                        field_path=field_path,
+                        selected_curie=str(term.get("curie") or ""),
+                    ):
+                        errors.append(
+                            _resolver_provenance_error(
+                                location=location,
+                                field_path=value_path,
+                            )
+                        )
+        if not _term_present(obj.payload.get("data_provider")):
             errors.append(
-                f"{location}.payload when_expressed_stage_name must be a string when provided"
-            )
-        if isinstance(stage_name, str) and stage_name.strip():
-            if not _has_helper_selection(
-                output,
-                field_path="when_expressed_stage_name",
-                selected_value=stage_name.strip(),
-            ):
-                errors.append(
-                    _resolver_provenance_error(
-                        location=location,
-                        field_path="when_expressed_stage_name",
-                    )
-                )
-        stage_curie = _payload_value(
-            obj.payload,
-            "expression_pattern.when_expressed.developmental_stage_start.curie",
-        )
-        if isinstance(stage_curie, str) and stage_curie.strip():
-            if not _has_helper_selection(
-                output,
-                field_path="expression_pattern.when_expressed.developmental_stage_start",
-                selected_curie=stage_curie.strip(),
-            ):
-                errors.append(
-                    _resolver_provenance_error(
-                        location=location,
-                        field_path=(
-                            "expression_pattern.when_expressed."
-                            "developmental_stage_start"
-                        ),
-                    )
-                )
-        data_provider = obj.payload.get("data_provider")
-        provider_abbreviation = (
-            data_provider.get("abbreviation")
-            if isinstance(data_provider, Mapping)
-            else None
-        )
-        if (
-            not isinstance(provider_abbreviation, str)
-            or not provider_abbreviation.strip()
-        ):
-            errors.append(
-                f"{location}.payload data_provider.abbreviation must be a "
-                "non-empty Alliance provider abbreviation"
+                f"{location}.payload data_provider must be staged with the "
+                "extractor's Alliance provider abbreviation"
             )
 
         where_expressed = (
@@ -491,44 +523,6 @@ def validate_gene_expression_extraction_objects(
                 f"{location}.payload expression_pattern.where_expressed must "
                 "include anatomical_structure or cellular_component"
             )
-        anatomy_curie = _payload_value(
-            obj.payload,
-            "expression_pattern.where_expressed.anatomical_structure.curie",
-        )
-        if isinstance(anatomy_curie, str) and anatomy_curie.strip():
-            if not _has_helper_selection(
-                output,
-                field_path="expression_pattern.where_expressed.anatomical_structure",
-                selected_curie=anatomy_curie.strip(),
-            ):
-                errors.append(
-                    _resolver_provenance_error(
-                        location=location,
-                        field_path=(
-                            "expression_pattern.where_expressed."
-                            "anatomical_structure"
-                        ),
-                    )
-                )
-        cellular_curie = _payload_value(
-            obj.payload,
-            "expression_pattern.where_expressed.cellular_component.curie",
-        )
-        if isinstance(cellular_curie, str) and cellular_curie.strip():
-            if not _has_helper_selection(
-                output,
-                field_path="expression_pattern.where_expressed.cellular_component",
-                selected_curie=cellular_curie.strip(),
-            ):
-                errors.append(
-                    _resolver_provenance_error(
-                        location=location,
-                        field_path=(
-                            "expression_pattern.where_expressed."
-                            "cellular_component"
-                        ),
-                    )
-                )
 
         if not obj.evidence_record_ids:
             errors.append(f"{location}.evidence_record_ids must not be empty")
@@ -769,7 +763,7 @@ def materialize_gene_expression_builder_state(
         retained_evidence_ids.extend(evidence_ids)
         raw_mentions.append(
             {
-                "mention": _raw_mention_label(payload, fallback=pending_ref_id),
+                "mention": _raw_mention_label(payload),
                 "entity_type": "gene_expression",
                 "evidence_record_ids": evidence_ids,
             }
@@ -993,38 +987,26 @@ def _materialized_gene_expression_payload(
     payload.setdefault("internal", False)
     payload.setdefault("obsolete", False)
 
-    subject = _mapping_payload(payload.setdefault("expression_annotation_subject", {}))
-    reference = _mapping_payload(payload.setdefault("single_reference", {}))
-    reference_id, reference_issue = _normalized_reference_id(reference.get("reference_id"))
+    subject = _mapping_payload(payload.get("expression_annotation_subject"))
+    reference = _mapping_payload(payload.get("single_reference"))
+    reference_issue = _reference_mention_issue(reference.get("mention"))
     if reference_issue:
         issues.append(
             _materialization_issue(
-                field_path="single_reference.reference_id",
+                field_path="single_reference.mention",
                 candidate_id=candidate_id,
                 **reference_issue,
             )
         )
-    if reference_id:
-        reference["reference_id"] = reference_id
-    payload["single_reference"] = reference
-
-    data_provider = _mapping_payload(payload.setdefault("data_provider", {}))
-    if _value_missing_or_blank(data_provider.get("abbreviation")):
-        provider = _provider_from_gene_id(subject.get("primary_external_id"))
-        if provider:
-            data_provider["abbreviation"] = provider
-    payload["data_provider"] = data_provider
 
     expression_experiment = _mapping_payload(payload.setdefault("expression_experiment", {}))
-    expression_experiment.setdefault("single_reference", copy.deepcopy(reference))
-    expression_experiment.setdefault(
-        "entity_assayed",
-        {
-            key: subject[key]
-            for key in ("primary_external_id", "gene_symbol")
-            if not _value_missing_or_blank(subject.get(key))
-        },
-    )
+    # The experiment's reference and assayed gene are the annotation's own values
+    # (LinkML requires them to match); each copy carries its value's paper wording
+    # and state, and validator write-back keeps the copy in step.
+    if reference:
+        expression_experiment.setdefault("single_reference", copy.deepcopy(reference))
+    if subject:
+        expression_experiment.setdefault("entity_assayed", copy.deepcopy(subject))
     expression_experiment.setdefault(
         "unique_id",
         _deterministic_experiment_id(
@@ -1042,23 +1024,21 @@ def _materialized_gene_expression_payload(
     return payload
 
 
-def _normalized_reference_id(value: Any) -> tuple[str | None, dict[str, str] | None]:
-    reference_id = _clean_text(value)
-    if reference_id is None:
-        return None, {
+def _reference_mention_issue(mention: Any) -> dict[str, str] | None:
+    """A placeholder reference (e.g. PMID:12345678) cannot be finalized."""
+
+    text = _clean_text(mention)
+    if text is None:
+        return {
             "reason": "missing_reference_id",
-            "message": "single_reference.reference_id is required.",
+            "message": "single_reference.mention is required.",
         }
-    compact = re.sub(r"[\s_-]+", "", reference_id).upper()
-    if compact in PLACEHOLDER_REFERENCE_IDS:
-        return None, {
+    if re.sub(r"[\s_-]+", "", text).upper() in PLACEHOLDER_REFERENCE_IDS:
+        return {
             "reason": "placeholder_reference",
             "message": "Placeholder references such as PMID:12345678 cannot be finalized.",
         }
-    pmid_match = re.fullmatch(r"PMID\s*:?\s*(\d+)", reference_id, flags=re.IGNORECASE)
-    if pmid_match:
-        return f"PMID:{pmid_match.group(1)}", None
-    return reference_id, None
+    return None
 
 
 def _materialized_helper_selections(
@@ -1143,16 +1123,6 @@ def _dedupe_helper_selections(selections: list[dict[str, Any]]) -> list[dict[str
     return deduped
 
 
-def _provider_from_gene_id(primary_external_id: Any) -> str | None:
-    text = _clean_text(primary_external_id)
-    if text is None:
-        return None
-    for prefix, provider in GENE_ID_PROVIDER_PREFIXES.items():
-        if text.startswith(prefix):
-            return provider
-    return None
-
-
 def _deterministic_experiment_id(
     *,
     pending_ref_id: str,
@@ -1174,11 +1144,12 @@ def _deterministic_experiment_id(
     return f"gene-expression-experiment-{digest}"
 
 
-def _raw_mention_label(payload: Mapping[str, Any], *, fallback: str) -> str:
-    subject = _payload_value(payload, "expression_annotation_subject.gene_symbol")
-    where = _payload_value(payload, "where_expressed_statement")
-    parts = [part for part in (_clean_text(subject), _clean_text(where)) if part]
-    return " expression in ".join(parts) if parts else fallback
+def _raw_mention_label(payload: Mapping[str, Any]) -> str:
+    """The paper's own wording: the subject gene as written and the expression-site statement."""
+
+    subject = _clean_text(_payload_value(payload, "expression_annotation_subject.mention"))
+    where = _clean_text(_payload_value(payload, "where_expressed_statement"))
+    return " expression in ".join(part for part in (subject, where) if part)
 
 
 def _mapping_payload(value: Any) -> dict[str, Any]:
@@ -1196,9 +1167,11 @@ def _condition_relations_payload(raw_relations: Any) -> list[dict[str, Any]]:
     Maps each staged ``{condition_relation_type, conditions: [{condition_*_curie, ...}]}`` into
     ``{condition_relation_type: {name}, conditions: [{condition_class: {curie}, ...}]}`` — the exact
     target paths the active bindings read (``condition_relations.condition_relation_type.name`` and
-    ``condition_relations.conditions.condition_<x>.curie``). Empty leaves are dropped; a relation
-    with no resolvable conditions is dropped entirely. Only invoked when conditions were staged, so
-    absent conditions leave the payload untouched (mirrors the optional-field pattern).
+    ``condition_relations.conditions.condition_<x>.curie``). The relation type and each component
+    CURIE are the extractor's proposals, so each is staged as its paper wording (``mention``) with
+    an empty identity, UNRESOLVED until a validator writes it back. Empty leaves are dropped; a
+    relation with no resolvable conditions is dropped entirely. Only invoked when conditions were
+    staged, so absent conditions leave the payload untouched (mirrors the optional-field pattern).
     """
 
     if not isinstance(raw_relations, Sequence) or isinstance(raw_relations, (str, bytes)):
@@ -1228,7 +1201,9 @@ def _condition_relations_payload(raw_relations: Any) -> list[dict[str, Any]]:
             for staged_key, leaf_key in _curie_leaf.items():
                 curie = _clean_text(raw_condition.get(staged_key))
                 if curie:
-                    condition[leaf_key] = {"curie": curie}
+                    condition[leaf_key] = staged_value(
+                        f"condition_relations.conditions.{leaf_key}", curie
+                    )
             for text_key in ("condition_free_text", "condition_summary"):
                 value = _clean_text(raw_condition.get(text_key))
                 if value:
@@ -1238,7 +1213,9 @@ def _condition_relations_payload(raw_relations: Any) -> list[dict[str, Any]]:
         if conditions:
             relations.append(
                 {
-                    "condition_relation_type": {"name": relation_type},
+                    "condition_relation_type": staged_value(
+                        "condition_relations.condition_relation_type", relation_type
+                    ),
                     "conditions": conditions,
                 }
             )
@@ -1407,61 +1384,65 @@ def _selector_integrity_findings(
     expression_object: CuratableObjectEnvelope,
     object_ref: ObjectRef,
 ) -> list[ValidationFinding]:
+    """Findings for required values the extraction did not supply at all.
+
+    A value staged UNRESOLVED is present: its validator binding looks it up and
+    reports its own outcome, and export blocks it until it resolves.
+    """
+
     findings: list[ValidationFinding] = []
     for candidate in (
         _required_selector_finding(
             expression_object=expression_object,
             object_ref=object_ref,
-            field_path="data_provider.abbreviation",
+            field_path="data_provider",
             code="alliance.gene_expression.data_provider_abbreviation_missing",
-            message=(
-                "GeneExpressionAnnotation requires a non-empty "
-                "data_provider.abbreviation selector."
-            ),
+            message="GeneExpressionAnnotation requires a data provider.",
             expected_selector="Alliance data provider abbreviation",
         ),
         _required_selector_finding(
             expression_object=expression_object,
             object_ref=object_ref,
-            field_path="expression_annotation_subject.primary_external_id",
+            field_path="expression_annotation_subject",
             code="alliance.gene_expression.subject_gene_missing",
-            message=(
-                "GeneExpressionAnnotation requires a subject gene "
-                "primary_external_id selector."
-            ),
-            expected_selector="Alliance gene primary_external_id",
+            message="GeneExpressionAnnotation requires a subject gene.",
+            expected_selector="the subject gene as the paper names it",
         ),
         _required_selector_finding(
             expression_object=expression_object,
             object_ref=object_ref,
-            field_path="expression_annotation_subject.gene_symbol",
-            code="alliance.gene_expression.subject_gene_missing",
-            message="GeneExpressionAnnotation requires a subject gene symbol selector.",
-            expected_selector="Alliance gene symbol",
-        ),
-        _required_selector_finding(
-            expression_object=expression_object,
-            object_ref=object_ref,
-            field_path="expression_experiment.entity_assayed.primary_external_id",
+            field_path="expression_experiment.entity_assayed",
             code="alliance.gene_expression.entity_assayed_missing",
-            message="GeneExpressionExperiment requires an entity_assayed primary_external_id selector.",
-            expected_selector="Alliance gene primary_external_id",
+            message="GeneExpressionExperiment requires an entity_assayed gene.",
+            expected_selector="the subject gene as the paper names it",
         ),
         _required_selector_finding(
             expression_object=expression_object,
             object_ref=object_ref,
-            field_path="single_reference.reference_id",
+            field_path="single_reference",
             code="alliance.gene_expression.reference_missing",
-            message="GeneExpressionAnnotation requires a source reference selector.",
+            message="GeneExpressionAnnotation requires a source reference.",
             expected_selector="PMID or Alliance reference identifier",
         ),
-        _required_selector_finding(
+        # A staged stage term fills the stage name when it validates; without one, a
+        # curator enters the stage name.
+        None
+        if _term_present(
+            _payload_value(
+                expression_object.payload,
+                "expression_pattern.when_expressed.developmental_stage_start",
+            )
+        )
+        else _required_selector_finding(
             expression_object=expression_object,
             object_ref=object_ref,
             field_path="when_expressed_stage_name",
             code="alliance.gene_expression.expression_context_missing",
-            message="GeneExpressionAnnotation requires when_expressed_stage_name.",
-            expected_selector="paper-supported stage label",
+            message=(
+                "GeneExpressionAnnotation requires when_expressed_stage_name: the paper states "
+                "no stage term, so a curator enters the stage name."
+            ),
+            expected_selector="stage name",
         ),
         _required_selector_finding(
             expression_object=expression_object,
@@ -1486,26 +1467,25 @@ def _relation_name_findings(
     expression_object: CuratableObjectEnvelope,
     object_ref: ObjectRef,
 ) -> list[ValidationFinding]:
-    relation_name = _payload_value(expression_object.payload, "relation.name")
-    if not isinstance(relation_name, str) or not relation_name.strip():
+    relation = _payload_value(expression_object.payload, "relation")
+    if not _term_present(relation):
         return [
             _validation_finding(
                 object_ref=object_ref,
-                field_path="relation.name",
+                field_path="relation",
                 code="alliance.gene_expression.relation_name_missing",
                 message=(
-                    "GeneExpressionAnnotation relation.name must be selected "
-                    "explicitly from Expression Relation options."
+                    "GeneExpressionAnnotation relation must be staged with its "
+                    "Expression Relation wording."
                 ),
                 details=_diagnostic_details(
-                    submitted_value=relation_name,
+                    submitted_value=relation,
                     expected_vocabulary=EXPRESSION_RELATION_VOCABULARY,
                     expected_values=sorted(VALID_GENE_EXPRESSION_RELATION_NAMES),
                 ),
             )
         ]
-    normalized = relation_name.strip()
-    if normalized in VALID_GENE_EXPRESSION_RELATION_NAMES:
+    if not is_resolved(relation) or relation.get("name") in VALID_GENE_EXPRESSION_RELATION_NAMES:
         return []
     return [
         _validation_finding(
@@ -1517,7 +1497,7 @@ def _relation_name_findings(
                 "Expression Relation option."
             ),
             details=_diagnostic_details(
-                submitted_value=relation_name,
+                submitted_value=relation.get("name"),
                 expected_vocabulary=EXPRESSION_RELATION_VOCABULARY,
                 expected_values=sorted(VALID_GENE_EXPRESSION_RELATION_NAMES),
             ),
@@ -1552,27 +1532,21 @@ def _assay_method_findings(
             )
         ]
 
-    assay_curie = _payload_value(
-        expression_object.payload,
-        "expression_experiment.expression_assay_used.curie",
-    )
-    if not isinstance(assay_curie, str) or not assay_curie.strip():
+    if not _term_present(assay):
         return [
             _validation_finding(
                 object_ref=object_ref,
-                field_path="expression_experiment.expression_assay_used.curie",
+                field_path="expression_experiment.expression_assay_used",
                 code="alliance.gene_expression.assay_method_missing",
-                message=(
-                    "GeneExpressionAnnotation requires an assay or method CURIE "
-                    "selector."
-                ),
+                message="GeneExpressionAnnotation requires an assay or method.",
                 details=_diagnostic_details(
-                    submitted_value=assay_curie,
-                    expected_selector="MMO assay/method CURIE",
+                    submitted_value=assay,
+                    expected_selector="the assay as the paper names it",
                 ),
             )
         ]
-    if ":" not in assay_curie.strip():
+    assay_curie = assay.get("curie")
+    if is_resolved(assay) and not (isinstance(assay_curie, str) and ":" in assay_curie):
         return [
             _validation_finding(
                 object_ref=object_ref,
@@ -1914,6 +1888,10 @@ def validate_pending_gene_expression_envelope(
     evidence_records_by_id = _evidence_records_by_id(envelope)
 
     for expression_object in expression_objects:
+        if is_previous_format_annotation(expression_object):
+            # Not validatable: this one finding stands for the whole record.
+            findings.append(previous_format_finding(expression_object))
+            continue
         object_ref = _object_ref(expression_object)
         # NOTE: status is intentionally NOT asserted here. PENDING means "not yet validated by
         # the automated validator"; automated validation legitimately advances resolved objects to

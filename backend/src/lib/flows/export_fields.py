@@ -221,12 +221,12 @@ class PackagedExportSource:
         payload = item.get("payload")
         if not isinstance(payload, dict):
             return item
+        if self.legacy_display_mapper is not None:
+            payload = self.legacy_display_mapper(object_type, payload)
         # An identity a validator overruled is never exported.
         payload = without_overruled(payload)
         if not specs:
             return {**item, "payload": payload}
-        if self.legacy_display_mapper is not None:
-            payload = self.legacy_display_mapper(object_type, payload)
         metadata = item.get("metadata")
         return {
             **item,

@@ -387,6 +387,11 @@ def _completed_domain_source_step(
     return result
 
 
+# A validated gene-expression anatomy value (ALL-1283 contract).
+PVD = {"curie": "WBbt:0006831", "name": "PVD", "mention": "PVD", "resolution_state": "resolved",
+       "lookup_outcome": "matched", "validator_explanation": None}
+
+
 @pytest.mark.parametrize("selection_mode", ["guided", "selected_fields"])
 def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monkeypatch, selection_mode):
     import csv
@@ -408,10 +413,14 @@ def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monk
                 "object_type": "GeneExpressionAnnotation",
                 "object_id": object_id,
                 "payload": {
-                    "expression_annotation_subject": {"gene_symbol": symbol},
+                    "expression_annotation_subject": {
+                        "gene_symbol": symbol, "primary_external_id": None, "mention": symbol,
+                        "resolution_state": "resolved", "lookup_outcome": "matched",
+                        "validator_explanation": None,
+                    },
                     "expression_pattern": {
                         "where_expressed": {
-                            "anatomical_structure": {"curie": "WBbt:0006831", "name": "PVD"},
+                            "anatomical_structure": PVD,
                         },
                     },
                 },
@@ -432,7 +441,7 @@ def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monk
     assert gene_ref in {field.ref for field in artifact.declared_fields}
     assert [row[gene_ref] for row in artifact.rows_by_source["object"]] == ["dma-1", "dma-1", "tiam-1"]
     anatomy_ref = "object.pack.GeneExpressionAnnotation.expression_pattern.where_expressed.anatomical_structure"
-    assert artifact.rows_by_source["object"][0][anatomy_ref] == {"curie": "WBbt:0006831", "name": "PVD"}
+    assert artifact.rows_by_source["object"][0][anatomy_ref] == PVD
     plan = FlowOutputProjectionPlan.model_validate({
         "format": "csv", "row_source": "object", "row_strategy": "wide_union",
         "selection_mode": selection_mode,

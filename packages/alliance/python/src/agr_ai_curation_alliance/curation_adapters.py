@@ -32,6 +32,10 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (
     GeneExpressionSubmissionAdapter,
     validate_pending_gene_expression_envelope,
 )
+from agr_ai_curation_alliance.domain_packs.gene_expression.legacy import (
+    GeneExpressionReviewRowMaterializer,
+    legacy_display_payload as gene_expression_legacy_display_payload,
+)
 from agr_ai_curation_alliance.domain_packs.phenotype import (
     PhenotypeAnnotationExportAdapter,
     PhenotypeAnnotationSubmissionBlockerAdapter,
@@ -79,16 +83,14 @@ _DOMAIN_ENVELOPE_VALIDATORS = {
     "go": validate_go_envelope,
 }
 _LEGACY_DISPLAY_MAPPERS = {
+    "disease": disease_legacy_display_payload,
+    "gene_expression": gene_expression_legacy_display_payload,
     "go": go_legacy_display_payload,
 }
 _REVIEW_ROW_MATERIALIZERS = {
-    "go": GOReviewRowMaterializer,
-}
-_REVIEW_ROW_MATERIALIZERS = {
     "disease": DiseaseReviewRowMaterializer,
-}
-_LEGACY_DISPLAY_MAPPERS = {
-    "disease": disease_legacy_display_payload,
+    "gene_expression": GeneExpressionReviewRowMaterializer,
+    "go": GOReviewRowMaterializer,
 }
 _EXTRACTION_PAYLOAD_NORMALIZERS = {
     "gene": normalize_gene_extraction_payload,

@@ -209,10 +209,25 @@ def test_packaged_field_value_fans_out_through_arrays():
     assert display_text(export_fields.packaged_field_value(item, field)) == "heat, cold | dark"
 
 
+def _validated_value(mention, **identity):
+    """A stored value a validator resolved (ALL-1283 contract)."""
+
+    return {**identity, "mention": mention, "resolution_state": "resolved",
+            "lookup_outcome": "matched", "validator_explanation": None}
+
+
+RESIDUAL_BODY = "structures associated with the residual body"
+
+
 def _gene_expression_step():
-    subject = {"gene_symbol": "Y71G12B.17", "primary_external_id": "WB:WBGene00022155",
-               "source_phrase": "PPIT-2 (Y71G12B.17)"}
-    assay = {"curie": "MMO:0000672", "name": "knock-in in situ reporter assay"}
+    subject = _validated_value("PPIT-2 (Y71G12B.17)", gene_symbol="Y71G12B.17",
+                               primary_external_id="WB:WBGene00022155")
+    assay = _validated_value("knock-in", curie="MMO:0000672", name="knock-in in situ reporter assay")
+    # Daniela's statement: the anatomy term matched nothing, so it stays UNRESOLVED
+    # with the paper's wording instead of being dropped.
+    residual_body = {"curie": None, "name": None, "mention": RESIDUAL_BODY,
+                     "resolution_state": "unresolved", "lookup_outcome": "not_found",
+                     "validator_explanation": "No anatomy term matches this wording."}
 
     def statement(object_id, anatomy, stage, statement_text):
         pattern = {"where_expressed": {"anatomical_structure": anatomy} if anatomy else {}}
@@ -224,18 +239,25 @@ def _gene_expression_step():
                 "expression_annotation_subject": deepcopy(subject),
                 "expression_experiment": {"expression_assay_used": deepcopy(assay),
                                           "entity_assayed": deepcopy(subject)},
-                "relation": {"name": "is_expressed_in", "vocabulary": "Expression Relation", "id": 200000200},
+                "relation": _validated_value("expressed in", name="is_expressed_in",
+                                             vocabulary="Expression Relation", id=200000200),
                 "expression_pattern": pattern,
                 "where_expressed_statement": statement_text,
-                "when_expressed_stage_name": (stage or {}).get("name") or "young adult",
-                "single_reference": {"reference_id": "DOI:10.17912/micropub.biology.002386"},
+                "single_reference": _validated_value(
+                    "DOI:10.17912/micropub.biology.002386",
+                    reference_id="DOI:10.17912/micropub.biology.002386",
+                ),
             },
         }
 
     objects = [
-        statement("s1", {"curie": "WBbt:0005733", "name": "hypodermis"},
-                  {"curie": "WBls:0000109", "name": "L4 larval stage"}, "GFP::PPIT-2 in hypodermis"),
-        statement("s2", None, None, "signal near the residual body"),
+        statement("s1", _validated_value("hypodermis", curie="WBbt:0005733", name="hypodermis"),
+                  _validated_value("L4 larval stage", curie="WBls:0000109", name="L4 larval stage"),
+                  "GFP::PPIT-2 in hypodermis"),
+        statement("s2", residual_body, {"curie": None, "name": None, "mention": "young adult",
+                                        "resolution_state": "unresolved", "lookup_outcome": "not_validated",
+                                        "validator_explanation": "Not validated yet."},
+                  "signal near the residual body"),
     ]
     return {
         "step": 1, "node_id": "node_1", "agent_id": "gene_expression", "agent_name": "Gene Expression",
@@ -246,9 +268,9 @@ def _gene_expression_step():
                           "extracted_objects": objects,
                           "validation_findings": [{
                               "finding_id": "f1", "status": "open",
-                              "field_path": "when_expressed_stage_name",
+                              "field_path": "expression_pattern.when_expressed.developmental_stage_start",
                               "field_ref": {"object_ref": {"object_id": "s2"},
-                                            "field_path": "when_expressed_stage_name"},
+                                            "field_path": "expression_pattern.when_expressed.developmental_stage_start"},
                           }]},
         ),
     }
@@ -298,8 +320,12 @@ def test_default_layout_for_gene_expression_uses_declared_parents(monkeypatch, o
     assert "Y71G12B.17 (WB:WBGene00022155)" in first.values()
     assert "knock-in in situ reporter assay (MMO:0000672)" in first.values()
     assert "hypodermis (WBbt:0005733)" in first.values()
-    # Open finding on the flat stage text of s2 marks that value.
-    assert "young adult (unresolved)" in result.rows[1].values()
+    # s2's stage matched no term: its cell reads UNRESOLVED, never the paper wording.
+    stage_ref = "object.pack.GeneExpressionAnnotation.expression_pattern.when_expressed.developmental_stage_start"
+    stage_key = next(column.key for column in plan.columns if column.field_ref == stage_ref)
+    assert first[stage_key] == "L4 larval stage (WBls:0000109)"
+    assert result.rows[1][stage_key] == "UNRESOLVED"
+    assert "young adult" not in " ".join(cells)
 
 
 def test_selected_saved_plan_for_packaged_source_still_validates(monkeypatch):
@@ -339,6 +365,9 @@ def test_packaged_gene_expression_declarations_render_daniela_values():
         assert "hypodermis (WBbt:0005733)" in " ".join(values)
         assert "Y71G12B.17 (WB:WBGene00022155)" in values
         assert "knock-in in situ reporter assay (MMO:0000672)" in values
+        # The unmatched anatomy reads UNRESOLVED; its paper wording never fills the cell.
+        assert RESIDUAL_BODY not in values
+        assert "UNRESOLVED" in " ".join(values)
         if output_format == "csv":
             _no_object_text(_projection_content_for_file_type(output_format="csv", projection=result))
 
@@ -705,14 +734,19 @@ def _object_plan(output_format, columns):
 
 
 def test_open_findings_only_mark_objects_in_their_own_envelope():
-    """Pending ref ids restart per envelope; step 1's finding never marks step 2's row."""
+    """Pending ref ids restart per envelope; step 1's finding never marks step 2's row.
+
+    A resolvable value's cell reads its own stored state, so the marker is shown on a
+    plain field.
+    """
 
     def annotation():
         return {"object_type": "GeneExpressionAnnotation", "pending_ref_id": "gene-expression-annotation-1",
-                "payload": {"expression_annotation_subject": {"gene_symbol": "Y71", "primary_external_id": "WB:1"},
+                "payload": {"expression_annotation_subject": _validated_value(
+                                "Y71", gene_symbol="Y71", primary_external_id="WB:1"),
                             "where_expressed_statement": "hyp"}}
 
-    finding = _open_finding("expression_annotation_subject", pending_ref_id="gene-expression-annotation-1",
+    finding = _open_finding("where_expressed_statement", pending_ref_id="gene-expression-annotation-1",
                             object_type="GeneExpressionAnnotation")
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[
@@ -723,9 +757,10 @@ def test_open_findings_only_mark_objects_in_their_own_envelope():
         flow_name="P", output_format="csv",
     )
     result = apply_projection_plan(bundle, _object_plan("csv", [
-        ("node", "artifact.node_id"), ("gene", SUBJECT_REF),
+        ("node", "artifact.node_id"),
+        ("statement", "object.pack.GeneExpressionAnnotation.where_expressed_statement"),
     ]))
-    marked = {row["node"]: "unresolved" in row["gene"] for row in result.rows}
+    marked = {row["node"]: "unresolved" in row["statement"] for row in result.rows}
     assert marked == {"node_1": True, "node_2": False}
 
 

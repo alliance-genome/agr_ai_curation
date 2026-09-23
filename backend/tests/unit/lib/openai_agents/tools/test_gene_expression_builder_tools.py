@@ -34,7 +34,10 @@ def _resolved_output(
     selected_curie: str | None = None,
     instruction_value: Any | None = None,
     term_source: Mapping[str, Any] | None = None,
+    source_phrase: str = "expressed in",
 ) -> dict[str, Any]:
+    """A recorded resolve call; source_phrase is the wording it searched (the staged mention)."""
+
     selected_name = selected_name or selected_value
     instruction_value = selected_value if instruction_value is None else instruction_value
     return {
@@ -43,7 +46,7 @@ def _resolved_output(
             "domain_pack_id": agr_curation.GENE_EXPRESSION_DOMAIN_PACK_ID,
             "object_type": agr_curation.GENE_EXPRESSION_OBJECT_TYPE,
             "field_path": field_path,
-            "source_phrase": selected_value,
+            "source_phrase": source_phrase,
             "payload_field_instructions": {
                 "set": [{"field_path": field_path, "value": instruction_value}]
             },
@@ -52,7 +55,7 @@ def _resolved_output(
                 "source_tool": "resolve_domain_field_term",
                 "authority": "selector_evidence",
                 "lookup_status": "success",
-                "source_phrase": selected_value,
+                "source_phrase": source_phrase,
                 "term_source": term_source
                 or {"kind": "controlled_vocabulary", "vocabulary": "Expression Relation"},
                 "selected_value": selected_value,
@@ -61,6 +64,30 @@ def _resolved_output(
             },
         },
     }
+
+
+_ALLIANCE_PROVIDERS = {"WB", "ZFIN", "MGI", "FB", "RGD", "SGD", "XB"}
+
+
+def _provider_lookup(*, method: str, abbreviation: str | None = None, **_kwargs: Any):
+    """The exact provider-list lookup the builder runs for the staged data provider."""
+
+    assert method == "get_data_provider"
+    normalized = (abbreviation or "").strip().upper()
+    matches = [{"abbreviation": normalized}] if normalized in _ALLIANCE_PROVIDERS else []
+    return agr_curation.AgrQueryResult(
+        status="ok",
+        data={"matches": matches, "candidates": matches},
+        count=len(matches),
+    )
+
+
+_SUBJECT = {"mention": "pef-1"}
+_REFERENCE = {"mention": "PMID:39550471"}
+
+
+def _relation_field(selected_value: str | None = "is_expressed_in") -> dict[str, Any]:
+    return {"field_path": "relation.name", "mention": "expressed in", "selected_value": selected_value}
 
 
 @pytest.fixture
@@ -73,6 +100,7 @@ def active_builder_context(monkeypatch):
         "write_extraction_trace_event",
         lambda **event: events.append(event) or event,
     )
+    monkeypatch.setattr(agr_curation, "_AGR_QUERY_CALLABLE", _provider_lookup)
     workspace = _workspace()
     ledger = resolver_call_ledger.ResolverCallLedger(trace_id=workspace.run_id)
     evidence_records = [
@@ -139,25 +167,18 @@ def _stage_valid_observation(ledger: resolver_call_ledger.ResolverCallLedger):
         evidence_record_ids=["evidence-67598e5688f123c8"],
         where_expressed_statement="PEF-1::GFP expression in the cilium",
         rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
-        subject={
-            "source_phrase": "PEF-1::GFP",
-            "gene_symbol": "pef-1",
-            "primary_external_id": "WB:WBGene00000001",
-        },
-        reference={
-            "source_phrase": "PMID 39550471",
-            "reference_id": "PMID:39550471",
-        },
-        controlled_fields=[
-            {
-                "field_path": "relation.name",
-                "selected_value": "is_expressed_in",
-            }
-        ],
+        data_provider="WB",
+        subject=_SUBJECT,
+        reference=_REFERENCE,
+        controlled_fields=[_relation_field()],
     )
 
 
-def _stage_materializable_observation(ledger: resolver_call_ledger.ResolverCallLedger):
+def _stage_materializable_observation(
+    ledger: resolver_call_ledger.ResolverCallLedger,
+    *extra_controlled_fields: dict[str, Any],
+    anatomy: dict[str, Any] | None = None,
+):
     resolver_outputs = {
         "call_relation": _resolved_output(),
         "call_assay": _resolved_output(
@@ -167,12 +188,16 @@ def _stage_materializable_observation(ledger: resolver_call_ledger.ResolverCallL
             selected_curie="MMO:0000655",
             instruction_value={"curie": "MMO:0000655", "name": "GFP reporter assay"},
             term_source={"kind": "ontology", "ontology_family": "assay"},
+            source_phrase="GFP reporter",
         ),
         "call_stage": _resolved_output(
-            field_path="when_expressed_stage_name",
-            selected_value="L2 larva",
+            field_path="expression_pattern.when_expressed.developmental_stage_start",
+            selected_value="WBls:0000024",
             selected_name="L2 larva",
+            selected_curie="WBls:0000024",
+            instruction_value={"curie": "WBls:0000024", "name": "L2 larva"},
             term_source={"kind": "ontology", "ontology_family": "life_stage"},
+            source_phrase="L2 larvae",
         ),
         "call_anatomy": _resolved_output(
             field_path="expression_pattern.where_expressed.anatomical_structure",
@@ -181,6 +206,7 @@ def _stage_materializable_observation(ledger: resolver_call_ledger.ResolverCallL
             selected_curie="WBbt:0001234",
             instruction_value={"curie": "WBbt:0001234", "name": "cilium"},
             term_source={"kind": "ontology", "ontology_family": "anatomy"},
+            source_phrase="cilia",
         ),
     }
     for call_id, output in resolver_outputs.items():
@@ -197,32 +223,28 @@ def _stage_materializable_observation(ledger: resolver_call_ledger.ResolverCallL
         evidence_record_ids=["evidence-67598e5688f123c8"],
         where_expressed_statement="PEF-1::GFP expression in the cilium",
         rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
-        subject={
-            "source_phrase": "PEF-1::GFP",
-            "gene_symbol": "pef-1",
-            "primary_external_id": "WB:WBGene00000001",
-        },
-        reference={
-            "source_phrase": "PMID 39550471",
-            "reference_id": "PMID:39550471",
-        },
+        data_provider="WB",
+        subject=_SUBJECT,
+        reference=_REFERENCE,
         controlled_fields=[
-            {
-                "field_path": "relation.name",
-                "selected_value": "is_expressed_in",
-            },
+            _relation_field(),
             {
                 "field_path": "expression_experiment.expression_assay_used",
+                "mention": "GFP reporter",
                 "selected_value": "MMO:0000655",
             },
             {
-                "field_path": "when_expressed_stage_name",
-                "selected_value": "L2 larva",
+                "field_path": "expression_pattern.when_expressed.developmental_stage_start",
+                "mention": "L2 larvae",
+                "selected_value": "WBls:0000024",
             },
-            {
+            anatomy
+            or {
                 "field_path": "expression_pattern.where_expressed.anatomical_structure",
+                "mention": "cilia",
                 "selected_value": "WBbt:0001234",
             },
+            *extra_controlled_fields,
         ],
     )
 def test_gene_expression_builder_tool_schemas_are_strict():
@@ -345,7 +367,15 @@ def test_stage_gene_expression_observation_copies_resolver_provenance(active_bui
     candidate = workspace.candidates["gex-candidate-1"]
     assert candidate.evidence_record_ids == ["evidence-67598e5688f123c8"]
     assert candidate.resolver_selection_refs == ["call_relation"]
-    assert candidate.staged_fields["relation"]["name"] == "is_expressed_in"
+    assert candidate.staged_fields["relation"] == {
+        "name": "is_expressed_in",
+        "vocabulary": None,
+        "id": None,
+        "mention": "expressed in",
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": None,
+    }
     selection = candidate.staged_fields["metadata"]["provenance"]["helper_selections"][0]
     assert selection["resolver_call_id"] == "call_relation"
     assert selection["source_tool"] == "resolve_domain_field_term"
@@ -363,18 +393,10 @@ def test_stage_rejects_missing_resolver_provenance(active_builder_context):
         evidence_record_ids=["evidence-1"],
         where_expressed_statement="expression in cilium",
         rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
-        subject={
-            "source_phrase": "PEF-1::GFP",
-            "gene_symbol": "pef-1",
-            "primary_external_id": "WB:WBGene00000001",
-        },
-        reference={"source_phrase": "PMID 39550471", "reference_id": "PMID:39550471"},
-        controlled_fields=[
-            {
-                "field_path": "relation.name",
-                "selected_value": "is_expressed_in",
-            }
-        ],
+        data_provider="WB",
+        subject=_SUBJECT,
+        reference=_REFERENCE,
+        controlled_fields=[_relation_field()],
     )
 
     assert result.status == "error"
@@ -402,18 +424,10 @@ def test_stage_rejects_missing_evidence_ids(active_builder_context):
         evidence_record_ids=[],
         where_expressed_statement="expression in cilium",
         rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
-        subject={
-            "source_phrase": "PEF-1::GFP",
-            "gene_symbol": "pef-1",
-            "primary_external_id": "WB:WBGene00000001",
-        },
-        reference={"source_phrase": "PMID 39550471", "reference_id": "PMID:39550471"},
-        controlled_fields=[
-            {
-                "field_path": "relation.name",
-                "selected_value": "is_expressed_in",
-            }
-        ],
+        data_provider="WB",
+        subject=_SUBJECT,
+        reference=_REFERENCE,
+        controlled_fields=[_relation_field()],
     )
 
     assert {issue["reason"] for issue in result.data["validation_issues"]} == {"too_short"}
@@ -435,18 +449,10 @@ def test_stage_rejects_placeholder_reference(active_builder_context):
         evidence_record_ids=["evidence-1"],
         where_expressed_statement="expression in cilium",
         rationale="Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
-        subject={
-            "source_phrase": "PEF-1::GFP",
-            "gene_symbol": "pef-1",
-            "primary_external_id": "WB:WBGene00000001",
-        },
-        reference={"source_phrase": "PMID placeholder", "reference_id": "PMID:..."},
-        controlled_fields=[
-            {
-                "field_path": "relation.name",
-                "selected_value": "is_expressed_in",
-            }
-        ],
+        data_provider="WB",
+        subject=_SUBJECT,
+        reference={"mention": "PMID:..."},
+        controlled_fields=[_relation_field()],
     )
 
     assert {issue["reason"] for issue in result.data["validation_issues"]} == {
@@ -470,11 +476,13 @@ def test_patch_rejects_free_form_field_and_requires_resolver_for_controlled_patc
             {
                 "field_path": "free_form.path",
                 "string_value": "nope",
+                "mention": None,
                 "evidence_record_ids": None,
             },
             {
                 "field_path": "relation.name",
                 "string_value": None,
+                "mention": None,
                 "evidence_record_ids": None,
             },
         ],
@@ -491,7 +499,7 @@ def test_patch_updates_reference_and_controlled_field_from_ledger(active_builder
     ledger.record_tool_output(
         tool_call_id="call_relation_part_of",
         tool_name="resolve_domain_field_term",
-        output=_resolved_output(selected_value="is_not_expressed_in"),
+        output=_resolved_output(selected_value="is_not_expressed_in", source_phrase="not expressed in"),
     )
 
     result = _tool_fn(
@@ -502,13 +510,15 @@ def test_patch_updates_reference_and_controlled_field_from_ledger(active_builder
         pending_ref_id="gene-expression-annotation-pef-1",
         updates=[
             {
-                "field_path": "reference.reference_id",
-                "string_value": "PMID:39550471",
+                "field_path": "reference",
+                "string_value": "PMID 39550472",
+                "mention": None,
                 "evidence_record_ids": None,
             },
             {
                 "field_path": "relation.name",
                 "string_value": "is_not_expressed_in",
+                "mention": "not expressed in",
                 "evidence_record_ids": None,
             },
         ],
@@ -516,8 +526,13 @@ def test_patch_updates_reference_and_controlled_field_from_ledger(active_builder
 
     assert result.status == "ok"
     candidate = workspace.candidates["gex-candidate-1"]
-    assert candidate.staged_fields["single_reference"]["reference_id"] == "PMID:39550471"
+    reference = candidate.staged_fields["single_reference"]
+    assert reference["mention"] == "PMID 39550472"
+    assert reference["pmid"] == "PMID:39550472"
+    assert reference["reference_id"] is None
+    assert reference["resolution_state"] == "unresolved"
     assert candidate.staged_fields["relation"]["name"] == "is_not_expressed_in"
+    assert candidate.staged_fields["relation"]["mention"] == "not expressed in"
     assert candidate.resolver_selection_refs == ["call_relation", "call_relation_part_of"]
 
 
@@ -728,12 +743,12 @@ def test_finalize_copies_resolver_provenance_from_ledger(active_builder_context)
     }
 
 
-def test_finalize_rejects_null_relation_name(active_builder_context):
+def test_finalize_rejects_relation_without_contract_state(active_builder_context):
     workspace, ledger, _events = active_builder_context
     _stage_materializable_observation(ledger)
     candidate = workspace.get_candidate("gex-candidate-1")
     staged_fields = dict(candidate.staged_fields)
-    staged_fields["relation"] = {"name": None}
+    staged_fields["relation"] = {"name": "is_expressed_in"}
     workspace.upsert_candidate(
         candidate_id="gex-candidate-1",
         staged_fields=staged_fields,
@@ -751,7 +766,7 @@ def test_finalize_rejects_null_relation_name(active_builder_context):
     )(candidate_ids=["gex-candidate-1"])
 
     assert result.status == "error"
-    assert "relation.name must be selected explicitly" in str(
+    assert "relation: resolution_state must be one of" in str(
         result.data["validation_issues"]
     )
 
@@ -763,7 +778,7 @@ def test_finalize_rejects_placeholder_pmid(active_builder_context):
     staged_fields = dict(candidate.staged_fields)
     staged_fields["single_reference"] = {
         **staged_fields["single_reference"],
-        "reference_id": "PMID:12345678",
+        "mention": "PMID:12345678",
     }
     workspace.upsert_candidate(
         candidate_id="gex-candidate-1",
@@ -823,9 +838,10 @@ def test_stage_rejects_blank_rationale(active_builder_context, rationale, messag
         evidence_record_ids=["evidence-67598e5688f123c8"],
         where_expressed_statement="PEF-1::GFP expression in the cilium",
         rationale=rationale,
-        subject={"source_phrase": "PEF-1::GFP", "gene_symbol": "pef-1", "primary_external_id": None},
-        reference={"source_phrase": "PMID 39550471", "reference_id": "PMID:39550471"},
-        controlled_fields=[{"field_path": "relation.name", "selected_value": "is_expressed_in"}],
+        data_provider="WB",
+        subject=_SUBJECT,
+        reference=_REFERENCE,
+        controlled_fields=[_relation_field()],
     )
 
     assert result.status == "error"
@@ -850,7 +866,14 @@ def _patch_rationale(value: Any):
     )(
         candidate_id="gex-candidate-1",
         pending_ref_id="gene-expression-annotation-pef-1",
-        updates=[{"field_path": "rationale", "string_value": value, "evidence_record_ids": None}],
+        updates=[
+            {
+                "field_path": "rationale",
+                "string_value": value,
+                "mention": None,
+                "evidence_record_ids": None,
+            }
+        ],
     )
 
 
@@ -923,6 +946,365 @@ def test_finalize_rejects_new_candidate_without_rationale(active_builder_context
     assert result.data["validation_issues"][0]["message"].endswith(
         "patch the candidate with a rationale saying why you selected it."
     )
+
+
+# ---------------------------------------------------------------------------------------
+# ALL-1283: every staged value keeps the paper's wording beside its validated identity.
+# ---------------------------------------------------------------------------------------
+
+_RESIDUAL_BODY = "structures associated with the residual body"
+
+
+def test_stage_keeps_unmatched_anatomy_unresolved_with_its_paper_wording(active_builder_context):
+    """Daniela's case: an anatomy term with no match is staged, never rejected or dropped."""
+
+    workspace, ledger, _events = active_builder_context
+
+    result = _stage_materializable_observation(
+        ledger,
+        anatomy={
+            "field_path": "expression_pattern.where_expressed.anatomical_structure",
+            "mention": _RESIDUAL_BODY,
+            "selected_value": None,
+        },
+    )
+
+    assert result.status == "ok"
+    staged = workspace.candidates["gex-candidate-1"].staged_fields
+    assert staged["expression_pattern"]["where_expressed"]["anatomical_structure"] == {
+        "curie": None,
+        "name": None,
+        "mention": _RESIDUAL_BODY,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+    finalized = _tool_fn(
+        agr_curation.finalize_gene_expression_extraction,
+        "finalize_gene_expression_extraction",
+    )(candidate_ids=["gex-candidate-1"])
+    assert finalized.status == "ok"
+    payload = workspace.finalization.payload["curatable_objects"][0]["payload"]
+    anatomy = payload["expression_pattern"]["where_expressed"]["anatomical_structure"]
+    assert anatomy["mention"] == _RESIDUAL_BODY
+    assert anatomy["resolution_state"] == "unresolved"
+
+
+def test_stage_writes_resolver_identity_and_keeps_the_mention_apart(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+
+    _stage_materializable_observation(ledger)
+
+    staged = workspace.candidates["gex-candidate-1"].staged_fields
+    anatomy = staged["expression_pattern"]["where_expressed"]["anatomical_structure"]
+    assert anatomy == {
+        "curie": "WBbt:0001234",
+        "name": "cilium",
+        "mention": "cilia",
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": None,
+    }
+    stage = staged["expression_pattern"]["when_expressed"]["developmental_stage_start"]
+    assert (stage["curie"], stage["name"], stage["mention"]) == ("WBls:0000024", "L2 larva", "L2 larvae")
+    # The paper's stage wording is the stage term's mention; no separate stage-name field.
+    assert "when_expressed_stage_name" not in staged
+
+
+def test_stage_writes_subject_and_reference_as_paper_wording_only(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+
+    _stage_valid_observation(ledger)
+
+    staged = workspace.candidates["gex-candidate-1"].staged_fields
+    assert staged["expression_annotation_subject"] == {
+        "primary_external_id": None,
+        "gene_symbol": None,
+        "mention": "pef-1",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+    reference = staged["single_reference"]
+    assert (reference["mention"], reference["pmid"]) == ("PMID:39550471", "PMID:39550471")
+    assert (reference["reference_id"], reference["curie"], reference["title"]) == (None, None, None)
+    assert reference["resolution_state"] == "unresolved"
+
+
+@pytest.mark.parametrize(
+    ("mention", "lookup_inputs"),
+    [
+        ("PMID 39550471", {"pmid": "PMID:39550471"}),
+        ("doi:10.1242/dev.201234", {"doi": "10.1242/dev.201234"}),
+        ("WB:WBPaper00065432", {}),
+    ],
+)
+def test_reference_mention_becomes_lookup_input_never_identity(mention, lookup_inputs):
+    reference = agr_curation._gene_expression_reference_value(mention)
+
+    assert reference["mention"] == mention
+    assert {key: reference[key] for key in ("pmid", "doi") if key in reference} == lookup_inputs
+    assert (reference["reference_id"], reference["curie"], reference["title"]) == (None, None, None)
+
+
+def test_stage_resolves_data_provider_only_by_exact_provider_match(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+    ledger.record_tool_output(
+        tool_call_id="call_relation",
+        tool_name="resolve_domain_field_term",
+        output=_resolved_output(),
+    )
+    stage = _tool_fn(
+        agr_curation.stage_gene_expression_observation,
+        "stage_gene_expression_observation",
+    )
+
+    for pending_ref_id, provider in (
+        ("gene-expression-annotation-pef-1", "wb"),
+        ("gene-expression-annotation-pef-2", "C. elegans"),
+    ):
+        result = stage(
+            pending_ref_id=pending_ref_id,
+            evidence_record_ids=["evidence-67598e5688f123c8"],
+            where_expressed_statement="expression in cilium",
+            rationale="Anti-GFP staining localizes the reporter to the cilium.",
+            data_provider=provider,
+            subject=_SUBJECT,
+            reference=_REFERENCE,
+            controlled_fields=[_relation_field()],
+        )
+        assert result.status == "ok"
+
+    matched = workspace.candidates["gex-candidate-1"].staged_fields["data_provider"]
+    assert (matched["abbreviation"], matched["mention"], matched["resolution_state"]) == (
+        "WB",
+        "wb",
+        "resolved",
+    )
+    unmatched = workspace.candidates["gex-candidate-2"].staged_fields["data_provider"]
+    assert unmatched == {
+        "abbreviation": None,
+        "mention": "C. elegans",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+
+
+def test_stage_keeps_every_slim_term_as_its_own_value(active_builder_context):
+    """Stage slims are Stage Uberon Slim Terms vocabulary terms, each its own value."""
+
+    workspace, ledger, _events = active_builder_context
+    output = _resolved_output(
+        field_path="expression_pattern.when_expressed.stage_uberon_slim_terms",
+        selected_value="post embryonic, pre-adult",
+        term_source={"kind": "controlled_vocabulary", "vocabulary": "Stage Uberon Slim Terms"},
+        source_phrase="post embryonic, pre-adult",
+    )
+    output["data"]["helper_selection"].update(
+        {"vocabulary": "Stage Uberon Slim Terms", "selected_internal_id": 200008800}
+    )
+    ledger.record_tool_output(
+        tool_call_id="call_slim",
+        tool_name="resolve_domain_field_term",
+        output=output,
+    )
+
+    result = _stage_materializable_observation(
+        ledger,
+        {
+            "field_path": "expression_pattern.when_expressed.stage_uberon_slim_terms",
+            "mention": "post embryonic, pre-adult",
+            "selected_value": "post embryonic, pre-adult",
+        },
+        {
+            "field_path": "expression_pattern.when_expressed.stage_uberon_slim_terms",
+            "mention": "late larval",
+            "selected_value": None,
+        },
+    )
+
+    assert result.status == "ok"
+    slims = workspace.candidates["gex-candidate-1"].staged_fields["expression_pattern"][
+        "when_expressed"
+    ]["stage_uberon_slim_terms"]
+    assert [
+        (term["mention"], term["name"], term["vocabulary"], term["id"], term["resolution_state"])
+        for term in slims
+    ] == [
+        ("post embryonic, pre-adult", "post embryonic, pre-adult", "Stage Uberon Slim Terms", 200008800, "resolved"),
+        ("late larval", None, None, None, "unresolved"),
+    ]
+
+
+def test_stage_rejects_a_single_valued_field_staged_twice(active_builder_context):
+    _workspace, ledger, _events = active_builder_context
+
+    result = _stage_materializable_observation(
+        ledger,
+        {
+            "field_path": "expression_pattern.where_expressed.anatomical_structure",
+            "mention": "hypodermis",
+            "selected_value": None,
+        },
+    )
+
+    assert result.status == "error"
+    assert [issue["reason"] for issue in result.data["validation_issues"]] == [
+        "duplicate_controlled_field"
+    ]
+
+
+def test_stage_requires_paper_wording_for_every_controlled_field(active_builder_context):
+    _workspace, ledger, _events = active_builder_context
+    ledger.record_tool_output(
+        tool_call_id="call_relation",
+        tool_name="resolve_domain_field_term",
+        output=_resolved_output(),
+    )
+
+    result = _tool_fn(
+        agr_curation.stage_gene_expression_observation,
+        "stage_gene_expression_observation",
+    )(
+        pending_ref_id="gene-expression-annotation-pef-1",
+        evidence_record_ids=["evidence-67598e5688f123c8"],
+        where_expressed_statement="expression in cilium",
+        rationale="Anti-GFP staining localizes the reporter to the cilium.",
+        data_provider="WB",
+        subject=_SUBJECT,
+        reference=_REFERENCE,
+        controlled_fields=[{**_relation_field(), "mention": "  "}],
+    )
+
+    assert result.status == "error"
+    assert result.data["validation_issues"][0]["field_path"].endswith("mention")
+
+
+def test_patch_restages_a_controlled_field_unresolved_with_its_wording(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+    _stage_materializable_observation(ledger)
+
+    result = _tool_fn(
+        agr_curation.patch_gene_expression_observation,
+        "patch_gene_expression_observation",
+    )(
+        candidate_id="gex-candidate-1",
+        pending_ref_id="gene-expression-annotation-pef-1",
+        updates=[
+            {
+                "field_path": "expression_pattern.where_expressed.anatomical_structure",
+                "string_value": None,
+                "mention": _RESIDUAL_BODY,
+                "evidence_record_ids": None,
+            }
+        ],
+    )
+
+    assert result.status == "ok"
+    anatomy = workspace.candidates["gex-candidate-1"].staged_fields["expression_pattern"][
+        "where_expressed"
+    ]["anatomical_structure"]
+    assert (anatomy["mention"], anatomy["curie"], anatomy["resolution_state"]) == (
+        _RESIDUAL_BODY,
+        None,
+        "unresolved",
+    )
+
+
+@pytest.mark.parametrize(
+    ("mention", "accepted"),
+    [("  Expressed   IN ", True), ("was detected in", False)],
+)
+def test_stage_pairs_a_resolution_only_with_the_wording_it_was_resolved_from(
+    active_builder_context, mention, accepted
+):
+    """A resolved value only counts for the paper wording its resolve call searched."""
+
+    workspace, ledger, _events = active_builder_context
+    ledger.record_tool_output(
+        tool_call_id="call_relation",
+        tool_name="resolve_domain_field_term",
+        output=_resolved_output(source_phrase="expressed in"),
+    )
+
+    result = _tool_fn(
+        agr_curation.stage_gene_expression_observation,
+        "stage_gene_expression_observation",
+    )(
+        pending_ref_id="gene-expression-annotation-pef-1",
+        evidence_record_ids=["evidence-67598e5688f123c8"],
+        where_expressed_statement="expression in cilium",
+        rationale="Anti-GFP staining localizes the reporter to the cilium.",
+        data_provider="WB",
+        subject=_SUBJECT,
+        reference=_REFERENCE,
+        controlled_fields=[{**_relation_field(), "mention": mention}],
+    )
+
+    if accepted:
+        assert result.status == "ok"
+        relation = workspace.candidates["gex-candidate-1"].staged_fields["relation"]
+        assert (relation["name"], relation["mention"]) == ("is_expressed_in", mention.strip())
+    else:
+        assert result.status == "error"
+        [issue] = result.data["validation_issues"]
+        assert issue["reason"] == "unresolved_selected_value"
+        assert "selected_value null" in issue["message"]
+
+
+@pytest.mark.parametrize("status", ["unresolved", "ambiguous", "blocked"])
+def test_resolver_instructions_tell_the_model_to_stage_unmatched_wording(status):
+    """Regression (ALL-1283): no "preserve it in unresolved metadata" instruction remains."""
+
+    lines = agr_curation._resolver_instruction(
+        resolution_status=status,
+        field_path="expression_pattern.where_expressed.anatomical_structure",
+        source_phrase=_RESIDUAL_BODY,
+        resolver={},
+    )
+    text = " ".join(lines)
+    assert "metadata" not in text
+    # Shared with every builder: no builder-specific parameter names.
+    assert "selected_value" not in text
+    assert f"{_RESIDUAL_BODY!r} as the paper's wording (its mention), leaving the identifier empty" in text
+    assert "the validator will check it" in text
+
+
+def test_resolver_selection_reads_only_the_selected_terms_own_keys():
+    """Regression (ALL-1283): no name/curie/value fallback chains in resolver output."""
+
+    ontology_source = {"kind": "ontology", "ontology_family": "anatomy"}
+    no_curie = {"name": "cilium", "term_name": "cilium", "value": "cilium"}
+    selection = agr_curation._resolver_helper_selection(
+        field_path="expression_pattern.where_expressed.anatomical_structure",
+        source_phrase="cilia",
+        candidate=no_curie,
+        term_source=ontology_source,
+        policy={},
+        evidence_context={},
+        resolved_at="2026-09-23T00:00:00Z",
+    )
+    assert "selected_value" not in selection
+    assert selection["selected_name"] == "cilium"
+
+    vocabulary = {"kind": "controlled_vocabulary", "vocabulary": "Expression Relation"}
+    assert agr_curation._payload_field_instructions(
+        field_path="relation.name",
+        candidate={"name": "expressed in", "value": "expressed in"},
+        term_source=vocabulary,
+    ) == {"set": [{"field_path": "relation.name", "value": None}]}
+    # A stage-name path no longer takes the CURIE as its name.
+    assert agr_curation._payload_field_instructions(
+        field_path="when_expressed_stage_name",
+        candidate={"curie": "WBls:0000024"},
+        term_source=ontology_source,
+    ) == {
+        "set": [
+            {"field_path": "when_expressed_stage_name.curie", "value": "WBls:0000024"},
+            {"field_path": "when_expressed_stage_name.name", "value": None},
+        ]
+    }
 
 
 # ---------------------------------------------------------------------------------------

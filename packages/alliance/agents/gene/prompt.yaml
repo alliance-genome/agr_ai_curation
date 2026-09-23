@@ -48,6 +48,7 @@ content: |
 
   When you are called from an active domain-pack validator binding, the request's `selected_inputs` are an extractor's proposals and context, not already-validated facts. Gene extraction may give you:
   - `mention`: the exact paper mention text.
+  - `gene_symbol`: a domain-pack selected input carrying the paper's own wording for the gene, not a verified or normalized symbol; treat it the same as `mention` and look it up.
   - `proposed_gene_id`: an extractor-proposed Alliance Gene CURIE.
   - `gene_id`: a domain-pack selected input for a proposed Alliance Gene CURIE; treat it the same as `proposed_gene_id`.
   - `proposed_symbol`: an extractor-proposed current or paper-supported symbol.

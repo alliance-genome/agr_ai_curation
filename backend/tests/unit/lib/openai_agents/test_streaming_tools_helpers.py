@@ -2447,7 +2447,19 @@ def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
                     "status": "validated",
                     "payload": {
                         "expression_annotation_subject": {"gene_symbol": "rpm-1"},
+                        # Filled from the validated stage term's name (ALL-1283).
                         "when_expressed_stage_name": "L4",
+                        "expression_pattern": {
+                            "when_expressed": {
+                                "developmental_stage_start": {
+                                    "curie": "WBls:0000038", "name": "L4",
+                                    "mention": "L4 larvae",
+                                    "resolution_state": "resolved",
+                                    "lookup_outcome": "matched",
+                                    "validator_explanation": None,
+                                },
+                            },
+                        },
                         "where_expressed_statement": huge_note,
                     },
                 }
@@ -3245,10 +3257,27 @@ def _chat_dispatch_domain_cases():
                         object_type="GeneExpressionAnnotation",
                         pending_ref_id="gene-expression-annotation-1",
                         payload={
-                            "relation": {"name": "is_expressed_in"},
-                            "data_provider": {"abbreviation": "ZFIN"},
+                            # Staged for validation (ALL-1283): the validators read
+                            # the extractor's wording from each value's mention.
+                            "relation": {
+                                "name": None, "vocabulary": None, "id": None,
+                                "mention": "is_expressed_in",
+                                "resolution_state": "unresolved",
+                                "lookup_outcome": "not_validated",
+                                "validator_explanation": "Not validated yet.",
+                            },
+                            "data_provider": {
+                                "abbreviation": None, "mention": "ZFIN",
+                                "resolution_state": "unresolved",
+                                "lookup_outcome": "not_validated",
+                                "validator_explanation": "Not validated yet.",
+                            },
                             "expression_annotation_subject": {
-                                "gene_symbol": "flcn",
+                                "primary_external_id": None, "gene_symbol": None,
+                                "mention": "flcn",
+                                "resolution_state": "unresolved",
+                                "lookup_outcome": "not_validated",
+                                "validator_explanation": "Not validated yet.",
                             },
                             "single_reference": {
                                 "pmid": "PMID:27528223",
@@ -3263,7 +3292,8 @@ def _chat_dispatch_domain_cases():
                 "subject_gene_validation",
                 "source_reference_validation",
             },
-            7,
+            # The slim and qualifier lists fan out per element, so empty lists match nothing.
+            4,
             id="gene-expression",
         ),
     ]

@@ -41,7 +41,7 @@ content: |
   ### Output discipline
   - Do not stage candidates you exclude — leave them unstaged. (You never write `metadata.exclusions[]`; the builder path leaves it empty.)
   - Keep only experimentally observed WB-curation-relevant GeneExpressionAnnotation objects in `curatable_objects[]`.
-  - Store verified quotes, page numbers, figure references, genotype strings, and unresolved WB anatomy/stage labels in envelope metadata or object metadata; do not put legacy flat evidence fields in payload.
+  - Store verified quotes, page numbers, figure references, and genotype strings in envelope metadata or object metadata; do not put legacy flat evidence fields in payload. A WB anatomy or stage label that no term matches is staged as that controlled field's paper wording (`mention`) with `selected_value` null.
 
   ### Rescue experiment language exclusion
   - Exclude sentences where "expression" refers to transgenic rescue, not endogenous expression profiling (reason_code: `rescue_experiment_not_expression`).
@@ -59,7 +59,7 @@ content: |
 
   ### Incomplete annotation handling
   - When expression is mentioned but key details (anatomy, life stage) are missing from the text:
-    - Still capture the annotation with null values at the relevant domain-pack payload paths, such as `expression_pattern.where_expressed.anatomical_structure.name` and/or `when_expressed_stage_name`.
+    - Still stage the annotation. Leave out a field the paper does not state (for example no developmental stage controlled field; a curator then enters the stage name); stage a field the paper states but no term matches with its paper wording as `mention` and `selected_value` null.
     - Leave the incomplete fields for the validator and note in your staged evidence which fields are missing and may require curator review of figures.
     - Example: "Expression pattern of the acox-1.1 gene." -> capture with gene but null anatomy.
   - When neuron or tissue identities are stated as uncertain ("possibly M3, AWB, and ASJ"):
@@ -69,7 +69,7 @@ content: |
 
   ### Negative expression results (C. elegans)
   - Experimentally demonstrated absence of expression is a valid annotation with payload `negated: true`.
-    Example: "no GFP signal was observed in the pharynx" -> annotation with `expression_pattern.where_expressed.anatomical_structure.name: pharynx` and `negated: true`.
+    Example: "no GFP signal was observed in the pharynx" -> annotation with the `expression_pattern.where_expressed.anatomical_structure` controlled field staged with mention `pharynx`, and `negated: true`.
   - Expression unchanged in perturbation background (e.g., "expression of RAB-11 in acs-1(RNAi) embryos was not different from wild type") is generally NOT a new expression annotation.
     - If wild-type expression is established elsewhere in the paper, do not duplicate it.
     - If this is the ONLY evidence of the expression pattern, capture it with context.
