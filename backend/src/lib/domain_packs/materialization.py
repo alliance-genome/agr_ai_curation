@@ -70,6 +70,8 @@ from src.lib.domain_packs.resolvable_values import (
     ResolvableSpec,
     copy_resolution,
     declared_resolvable_fields,
+    declared_spec_for,
+    validator_event_covers,
     holds_resolution,
     lookup_outcome_for_failure,
     mark_resolved,
@@ -415,8 +417,15 @@ def materialize_validator_results_into_envelope(
     working_envelope = envelope
     findings: list[ValidationFinding] = []
     materialized_objects: list[CuratableObjectEnvelope] = []
+    resolvable_fields_by_type = {
+        definition.object_type: declared_resolvable_fields(metadata, definition.object_type)
+        for definition in metadata.object_definitions
+    }
 
     for item in items:
+        target_type = (
+            item.match.object_envelope.object_type if item.match.object_envelope is not None else None
+        )
         (
             working_envelope,
             patch_problem,
@@ -425,6 +434,7 @@ def materialize_validator_results_into_envelope(
             item,
             object_definitions=object_definitions,
             source_envelope_revision=source_envelope_revision,
+            resolvable_fields=resolvable_fields_by_type.get(target_type or "", {}),
         )
         if patch_problem is not None:
             findings.append(
@@ -495,6 +505,7 @@ def _patch_target_object_from_resolved_values(
     *,
     object_definitions: Mapping[str, DomainPackObjectDefinition],
     source_envelope_revision: int | None,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> tuple[DomainEnvelope, str | None]:
     """Patch validator-owned results onto the matched envelope object.
 
@@ -531,6 +542,7 @@ def _patch_target_object_from_resolved_values(
             object_definition=object_definition,
             declared_fields=declared_fields,
             source_envelope_revision=source_envelope_revision,
+            resolvable_fields=resolvable_fields,
         )
 
     if result.status != "resolved":
@@ -543,7 +555,10 @@ def _patch_target_object_from_resolved_values(
             )
         )
         return (
-            _with_unresolved_values(envelope, item, target, declared_fields, outcome),
+            _with_unresolved_values(
+                envelope, item, target, declared_fields, outcome,
+                resolvable_fields=resolvable_fields,
+            ),
             None,
         )
     if not result.resolved_values:
@@ -556,6 +571,7 @@ def _patch_target_object_from_resolved_values(
                 target,
                 declared_fields,
                 OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+                resolvable_fields=resolvable_fields,
             ),
             None,
         )
@@ -563,7 +579,8 @@ def _patch_target_object_from_resolved_values(
     if policy_violations:
         if target is not None and object_definition is not None:
             envelope = _with_unresolved_values(
-                envelope, item, target, declared_fields, OUTCOME_INVALID_SCHEMA
+                envelope, item, target, declared_fields, OUTCOME_INVALID_SCHEMA,
+                resolvable_fields=resolvable_fields,
             )
         return envelope, "; ".join(
             violation.message for violation in policy_violations
@@ -588,7 +605,9 @@ def _patch_target_object_from_resolved_values(
         if materialized_field_path is None:
             continue
         resolved_value = result.resolved_values.get(result_field)
-        container_path = _resolvable_container_path(payload, materialized_field_path)
+        container_path = _resolvable_container_path(
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
         if container_path is not None:
             missing = (
                 result_field in result.missing_expected_fields
@@ -613,6 +632,7 @@ def _patch_target_object_from_resolved_values(
             materialized_field_path,
             resolved_value,
             declared_fields=declared_fields,
+            resolvable_fields=resolvable_fields,
         )
 
     for container_path, writes in resolvable_writes.items():
@@ -627,7 +647,8 @@ def _patch_target_object_from_resolved_values(
             )
             for materialized_field_path, _ in writes:
                 _propagate_materialized_resolution_state(
-                    payload, materialized_field_path, declared_fields=declared_fields
+                    payload, materialized_field_path, declared_fields=declared_fields,
+                    resolvable_fields=resolvable_fields,
                 )
             continue
         has_materializable_resolved_value = True
@@ -646,6 +667,7 @@ def _patch_target_object_from_resolved_values(
                 materialized_field_path,
                 resolved_value,
                 declared_fields=declared_fields,
+                resolvable_fields=resolvable_fields,
             )
     return _with_patched_target(
         envelope,
@@ -672,6 +694,8 @@ def _field_resolution_targets(
     item: ValidatorResultMaterializationInput,
     payload: Mapping[str, Any],
     declared_fields: Mapping[str, DomainPackFieldDefinition],
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> tuple[dict[str, tuple[str, list[tuple[str, str]]]], str | None]:
     """Resolve each ``field_resolutions`` key to the resolvable value it decides.
 
@@ -691,7 +715,9 @@ def _field_resolution_targets(
         )
         if materialized_field_path is None:
             continue
-        container_path = _resolvable_container_path(payload, materialized_field_path)
+        container_path = _resolvable_container_path(
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
         if container_path is None:
             continue
         fields_by_container.setdefault(container_path, []).append(
@@ -724,6 +750,7 @@ def _patch_target_object_from_field_resolutions(
     object_definition: DomainPackObjectDefinition,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
     source_envelope_revision: int | None,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> tuple[DomainEnvelope, str | None]:
     """Write a composite validator's per-value decisions (``field_resolutions``).
 
@@ -737,7 +764,9 @@ def _patch_target_object_from_field_resolutions(
 
     result = item.result
     payload = copy.deepcopy(target.payload)
-    targets, problem = _field_resolution_targets(item, payload, declared_fields)
+    targets, problem = _field_resolution_targets(
+        item, payload, declared_fields, resolvable_fields=resolvable_fields
+    )
     if problem is not None:
         return envelope, problem
 
@@ -760,7 +789,8 @@ def _patch_target_object_from_field_resolutions(
             )
             for materialized_field_path, value in values.items():
                 _propagate_materialized_mirror_paths(
-                    payload, materialized_field_path, value, declared_fields=declared_fields
+                    payload, materialized_field_path, value, declared_fields=declared_fields,
+                    resolvable_fields=resolvable_fields,
                 )
             written.extend(values)
             continue
@@ -776,7 +806,8 @@ def _patch_target_object_from_field_resolutions(
         )
         for _result_field, materialized_field_path in fields:
             _propagate_materialized_resolution_state(
-                payload, materialized_field_path, declared_fields=declared_fields
+                payload, materialized_field_path, declared_fields=declared_fields,
+                resolvable_fields=resolvable_fields,
             )
 
     if result.status == "resolved":
@@ -792,13 +823,16 @@ def _patch_target_object_from_field_resolutions(
             if (
                 materialized_field_path is None
                 or missing_resolved_value(resolved_value)
-                or _resolvable_container_path(payload, materialized_field_path) is not None
+                or _resolvable_container_path(
+                    payload, materialized_field_path, resolvable_fields=resolvable_fields
+                ) is not None
             ):
                 continue
             if _payload_value(payload, materialized_field_path) != resolved_value:
                 _set_payload_value(payload, materialized_field_path, resolved_value)
                 _propagate_materialized_mirror_paths(
-                    payload, materialized_field_path, resolved_value, declared_fields=declared_fields
+                    payload, materialized_field_path, resolved_value, declared_fields=declared_fields,
+                    resolvable_fields=resolvable_fields,
                 )
             written.append(materialized_field_path)
 
@@ -873,6 +907,10 @@ def _with_patched_target(
         not payload_changed
         and target.status is CuratableObjectStatus.VALIDATED
         and target.definition_state is definition_state
+        # A value an earlier event already covers needs no new event; an
+        # unchanged value no event covers yet (e.g. one stored before
+        # validator events) is recorded so the legacy rule sees it verified.
+        and all(validator_event_covers(target.metadata, path) for path in materialized_field_paths)
     ):
         return envelope, None
 
@@ -929,6 +967,8 @@ def _with_unresolved_values(
     target: CuratableObjectEnvelope,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
     outcome: str,
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> DomainEnvelope:
     """Record why the resolvable values a binding writes stay unresolved.
 
@@ -947,7 +987,9 @@ def _with_unresolved_values(
         )
         if materialized_field_path is None:
             continue
-        container_path = _resolvable_container_path(payload, materialized_field_path)
+        container_path = _resolvable_container_path(
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
         if container_path is None:
             continue
         mark_unresolved(
@@ -957,7 +999,8 @@ def _with_unresolved_values(
             curator_message=item.result.curator_message,
         )
         _propagate_materialized_resolution_state(
-            payload, materialized_field_path, declared_fields=declared_fields
+            payload, materialized_field_path, declared_fields=declared_fields,
+            resolvable_fields=resolvable_fields,
         )
     if payload == target.payload:
         return envelope
@@ -980,6 +1023,8 @@ def _with_object_payload(
 def _resolvable_container_path(
     payload: Mapping[str, Any],
     field_path: str,
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> str | None:
     """The path of the resolvable value holding ``field_path`` ("" for the root), or None."""
 
@@ -990,7 +1035,16 @@ def _resolvable_container_path(
     if not parts or not isinstance(parts[-1], str):
         return None
     container_path = _format_field_path(parts[:-1])
-    if holds_resolution(_payload_container(payload, container_path)):
+    container = _payload_container(payload, container_path)
+    if holds_resolution(container):
+        return container_path
+    # A value the pack declares resolvable but stored before the contract
+    # (no state, no mention) is written as one too, so it takes the contract shape.
+    if (
+        resolvable_fields
+        and isinstance(container, dict)
+        and declared_spec_for(resolvable_fields, parts[:-1]) is not None
+    ):
         return container_path
     return None
 
@@ -1409,6 +1463,7 @@ def _propagate_materialized_mirror_paths(
     resolved_value: Any,
     *,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> None:
     """Copy a resolved value into the field's declared ``materializes_to_field_paths`` mirrors.
 
@@ -1426,7 +1481,8 @@ def _propagate_materialized_mirror_paths(
         if _payload_value(payload, mirror_path) != resolved_value:
             _set_payload_value(payload, mirror_path, resolved_value)
     _propagate_materialized_resolution_state(
-        payload, materialized_field_path, declared_fields=declared_fields
+        payload, materialized_field_path, declared_fields=declared_fields,
+        resolvable_fields=resolvable_fields,
     )
 
 
@@ -1435,17 +1491,22 @@ def _propagate_materialized_resolution_state(
     materialized_field_path: str,
     *,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> None:
     """Give each resolvable mirror of a written field its source value's resolution."""
 
-    source_path = _resolvable_container_path(payload, materialized_field_path)
+    source_path = _resolvable_container_path(
+        payload, materialized_field_path, resolvable_fields=resolvable_fields
+    )
     if source_path is None:
         return
     source = _payload_container(payload, source_path)
     for mirror_path in _mirror_field_paths(
         materialized_field_path, declared_fields=declared_fields
     ):
-        mirror_container_path = _resolvable_container_path(payload, mirror_path)
+        mirror_container_path = _resolvable_container_path(
+            payload, mirror_path, resolvable_fields=resolvable_fields
+        )
         if mirror_container_path is None:
             continue
         copy_resolution(source, _payload_container(payload, mirror_container_path))
