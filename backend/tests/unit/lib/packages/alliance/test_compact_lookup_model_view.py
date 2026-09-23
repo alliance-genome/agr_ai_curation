@@ -408,6 +408,8 @@ def test_finalization_guidance_names_the_shared_field_list(schemas):
     instruction = compact_finalization_instruction(runtime, tool_name="finalize_validator_result")
     assert SHARED_FIELDS in instruction
     assert "available_fields" in instruction
+    # Fields resolve within one response; a list never carries across pages.
+    assert "same tool response (page)" in instruction
 
 
 @pytest.mark.asyncio
