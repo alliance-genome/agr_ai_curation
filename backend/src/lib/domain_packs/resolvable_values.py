@@ -684,16 +684,59 @@ def _walk(node: Any, tokens: Sequence[str | int]) -> Any:
     return node
 
 
+def declared_resolvable_fields(metadata: Any, object_type: str) -> dict[str, ResolvableSpec]:
+    """The resolvable values a pack declares for one object type: {field path: spec}.
+
+    A field (or, at path "", the object root through its model) is declared
+    resolvable by a display spec with a ``mention`` role, read from the field
+    itself, else from its model or its referenced object's model.
+    """
+
+    models = {model.model_id: model for model in metadata.model_definitions}
+    object_models = {obj.object_type: obj.model_ref for obj in metadata.object_definitions}
+    object_definition = next(
+        (obj for obj in metadata.object_definitions if obj.object_type == object_type), None,
+    )
+    if object_definition is None:
+        return {}
+
+    def model_display(model_ref: str | None) -> Any:
+        model = models.get(model_ref) if model_ref else None
+        return model.metadata.get("display") if model is not None else None
+
+    specs: dict[str, ResolvableSpec] = {}
+    root = resolvable_spec_from_display(model_display(object_definition.model_ref))
+    if root is not None:
+        specs[""] = root
+    for field in object_definition.fields:
+        display = field.metadata.get("display") or model_display(
+            field.model_ref
+            or (object_models.get(field.object_type_ref) if field.object_type_ref else None)
+        )
+        spec = resolvable_spec_from_display(display)
+        if spec is not None:
+            specs[field.field_path] = spec
+    return specs
+
+
+def _bare_path(tokens: Sequence[str | int]) -> str:
+    return ".".join(str(token) for token in tokens if isinstance(token, str))
+
+
 def unresolved_header_text(
     payload: Mapping[str, Any],
     field_path: str,
     *,
     object_metadata: Mapping[str, Any] | None = None,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> str | None:
     """Explicit paper wording for a header (row label, summary) naming an unresolved value.
 
     ``field_path`` names a resolvable value or one of its keys (e.g. a label
-    field). Returns None when it names no resolvable value or the value is
+    field). The value is recognised by the pack's declared
+    ``resolvable_fields`` (``declared_resolvable_fields``), so a value stored
+    before the contract gets the legacy rule, or else by its stored contract
+    keys. Returns None when it names no resolvable value or the value is
     resolved; the caller then shows the stored value. Otherwise returns the
     paper wording labelled "(paper wording)" (or, for a legacy value, its
     stored text labelled "(legacy, unverified)"), and UNRESOLVED when no
@@ -703,28 +746,44 @@ def unresolved_header_text(
     tokens = _path_tokens(field_path)
     if not tokens:
         return None
+    declared = resolvable_fields or {}
     named = _walk(payload, tokens)
-    if holds_resolution(named):
+    parent_tokens = tokens[:-1] if isinstance(tokens[-1], str) else None
+    parent = _walk(payload, parent_tokens) if parent_tokens is not None else None
+    spec: ResolvableSpec | None = None
+    if _bare_path(tokens) in declared and isinstance(named, Mapping):
+        target, target_tokens, leaf, spec = named, tokens, None, declared[_bare_path(tokens)]
+    elif parent_tokens is not None and _bare_path(parent_tokens) in declared and isinstance(parent, Mapping):
+        target, target_tokens, leaf, spec = parent, parent_tokens, named, declared[_bare_path(parent_tokens)]
+    elif holds_resolution(named):
         target, target_tokens, leaf = named, tokens, None
-    elif isinstance(tokens[-1], str) and holds_resolution(parent := _walk(payload, tokens[:-1])):
-        target, target_tokens, leaf = parent, tokens[:-1], named
+    elif parent_tokens is not None and holds_resolution(parent):
+        target, target_tokens, leaf = parent, parent_tokens, named
     else:
         return None
-    mention = target.get(MENTION_KEY)
+    mention_key = spec.mention_key if spec is not None else MENTION_KEY
+    mention = target.get(mention_key)
     mention = mention.strip() if isinstance(mention, str) and mention.strip() else None
     if has_resolution_state(target):
         if target[RESOLUTION_STATE_KEY] == RESOLVED:
             return None
         return f"{mention} {PAPER_WORDING_SUFFIX}" if mention else UNRESOLVED_DISPLAY
-    identity = [leaf] if target is not named else [
-        item for key, item in target.items()
-        if key not in CONTRACT_KEYS
-    ]
+    if spec is not None:
+        identity = [target.get(key) for key in spec.identity_keys]
+    elif target is not named:
+        identity = [leaf]
+    else:
+        identity = [item for key, item in target.items() if key not in CONTRACT_KEYS]
     if any(not _is_empty(item) for item in identity) and validator_event_covers(
         object_metadata, _format_path(target_tokens)
     ):
         return None
-    stored = mention or (str(leaf).strip() if leaf is not None and not isinstance(leaf, (Mapping, list)) else "")
+    if spec is not None:
+        stored = _stored_text(target, spec)
+    else:
+        stored = mention or (
+            str(leaf).strip() if leaf is not None and not isinstance(leaf, (Mapping, list)) else ""
+        )
     return f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else UNRESOLVED_DISPLAY
 
 
@@ -771,6 +830,7 @@ __all__ = [
     "check_resolvable_list",
     "check_resolvable_value",
     "copy_resolution",
+    "declared_resolvable_fields",
     "effective_payload",
     "effective_resolution",
     "effective_value",

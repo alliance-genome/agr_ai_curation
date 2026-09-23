@@ -271,10 +271,64 @@ def test_proxy_field_definition_strips_unproxied_field_validator_metadata():
         },
     )
 
-    proxy_field = _proxy_field_definition(field_definition)
+    proxy_field = _proxy_field_definition(field_definition, source_pack=_source_pack(), proxied_enums={})
 
     assert "validator_bindings" not in proxy_field.metadata
     assert proxy_field.metadata["display"] == {"label": "symbol"}
+
+
+def _source_pack(enum_definitions=()):
+    from src.lib.domain_packs.registry import LoadedDomainPack
+    from src.schemas.domain_pack_metadata import DomainPackMetadata
+
+    metadata = DomainPackMetadata(
+        pack_id="fixture.source", display_name="Source", version="0.1.0", metadata_api_version="1.0.0",
+        enum_definitions=list(enum_definitions),
+    )
+    return LoadedDomainPack(
+        pack_id="fixture.source", display_name="Source", version="0.1.0",
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    )
+
+
+def test_proxy_keeps_resolvable_vocabulary_enums_and_flattens_other_enums():
+    """ALL-1283: resolution_state / lookup_outcome stay closed vocabularies in the generic view."""
+
+    from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOMES
+    from src.schemas.domain_pack_metadata import DomainPackEnumDefinition
+
+    outcome_enum = DomainPackEnumDefinition(
+        enum_id="LookupOutcome", display_name="Lookup outcome",
+        values=[{"value": value} for value in LOOKUP_OUTCOMES],
+    )
+    other_enum = DomainPackEnumDefinition(enum_id="Color", display_name="Color", values=[{"value": "red"}])
+    source_pack = _source_pack([outcome_enum, other_enum])
+    proxied: dict = {}
+
+    outcome = _proxy_field_definition(
+        DomainPackFieldDefinition(field_path="term.lookup_outcome", field_type=DomainPackFieldType.ENUM,
+                                  enum_ref="LookupOutcome"),
+        source_pack=source_pack, proxied_enums=proxied,
+    )
+    color = _proxy_field_definition(
+        DomainPackFieldDefinition(field_path="color", field_type=DomainPackFieldType.ENUM, enum_ref="Color"),
+        source_pack=source_pack, proxied_enums=proxied,
+    )
+
+    assert outcome.field_type is DomainPackFieldType.ENUM
+    assert outcome.enum_ref in proxied
+    assert [value.value for value in proxied[outcome.enum_ref].values] == list(LOOKUP_OUTCOMES)
+    assert (color.field_type, color.enum_ref) == (DomainPackFieldType.STRING, None)
+    assert list(proxied) == [outcome.enum_ref]
+
+
+def test_generated_generic_pack_carries_proxied_vocabulary_enums():
+    pack = get_generated_generic_domain_pack()
+    enum_ids = {enum.enum_id for enum in pack.metadata.enum_definitions}
+    for obj in pack.metadata.object_definitions:
+        for field in obj.fields:
+            if field.enum_ref is not None:
+                assert field.enum_ref in enum_ids
 
 
 def test_generated_generic_validator_dispatch_builds_source_validator_request():
