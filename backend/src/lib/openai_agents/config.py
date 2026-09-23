@@ -1390,6 +1390,17 @@ def get_hierarchy_resolution_contract_retries() -> int:
     return max(0, _get_env_int_with_fallback("HIERARCHY_RESOLUTION_CONTRACT_RETRIES", 2))
 
 
+def get_hierarchy_resolution_preview_max_chars() -> int:
+    """Body-text preview length per section for the hierarchy classifier (HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS).
+
+    Each section title is sent with the opening of the first body text under
+    it, never the heading repeated. Longer text is cut and marked with "...";
+    stored document text is unaffected. 0 sends titles only. Default 100,
+    matching the preview length used before previews skipped headings.
+    """
+    return max(0, _get_env_int_with_fallback("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", 100))
+
+
 def get_figure_locator_resolution_max_turns() -> int:
     """Turn budget for the one-shot figure locator classifier.
 

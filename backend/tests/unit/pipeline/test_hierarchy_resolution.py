@@ -735,3 +735,138 @@ async def test_nested_subsections_resolve_to_top_level_ancestor(
     assert len(calls) == 1
     assert raw["contract_retries"] == 0
     assert reports == []
+
+
+# PDFX shape: every heading is its own "Title" element whose section_title is
+# itself, and the first body element under it often repeats the heading line.
+_PDFX_ELEMENTS = [
+    {"type": "Title", "text": "Results", "metadata": {"section_title": "Results"}},
+    {
+        "type": "NarrativeText",
+        "text": "Results\n\nClones lacking   wg were\nsmall.",
+        "metadata": {"section_title": "Results"},
+    },
+    {"type": "Title", "text": "Methods", "metadata": {"section_title": "Methods"}},
+    {"type": "Title", "text": "Fly strains", "metadata": {"section_title": "Fly strains"}},
+    {
+        "type": "NarrativeText",
+        "text": "Fly strains",
+        "metadata": {"section_title": "Fly strains"},
+    },
+    {
+        "type": "NarrativeText",
+        "text": "Flies were raised at 25 C.",
+        "metadata": {"section_title": "Fly strains"},
+    },
+    {
+        "type": "NarrativeText",
+        "text": "Results obtained with this second paragraph stay out of the preview.",
+        "metadata": {"section_title": "Results"},
+    },
+]
+
+
+def _capture_section_info(monkeypatch):
+    llm_inputs = []
+
+    async def _fake_llm(section_info):
+        llm_inputs.append(section_info)
+        return ([], None, None)
+
+    monkeypatch.setattr(hierarchy, "_call_llm_for_hierarchy", _fake_llm)
+    return llm_inputs
+
+
+@pytest.mark.asyncio
+async def test_section_previews_use_first_body_text_not_the_heading(monkeypatch):
+    monkeypatch.delenv("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", raising=False)
+    llm_inputs = _capture_section_info(monkeypatch)
+
+    await hierarchy.resolve_document_hierarchy(_PDFX_ELEMENTS)
+
+    assert llm_inputs == [[
+        {"title": "Results", "preview": "Clones lacking wg were small."},
+        {"title": "Methods", "preview": ""},
+        {"title": "Fly strains", "preview": "Flies were raised at 25 C."},
+    ]]
+
+
+@pytest.mark.asyncio
+async def test_section_previews_are_bounded_with_an_explicit_cut_marker(monkeypatch):
+    monkeypatch.setenv("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", "14")
+    llm_inputs = _capture_section_info(monkeypatch)
+
+    await hierarchy.resolve_document_hierarchy(_PDFX_ELEMENTS)
+
+    previews = {info["title"]: info["preview"] for info in llm_inputs[0]}
+    assert previews["Results"] == "Clones lacking..."
+    # Text that fits the bound is sent whole, without a cut marker.
+    monkeypatch.setenv("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", "26")
+    await hierarchy.resolve_document_hierarchy(_PDFX_ELEMENTS)
+    previews = {info["title"]: info["preview"] for info in llm_inputs[1]}
+    assert previews["Fly strains"] == "Flies were raised at 25 C."
+
+
+@pytest.mark.asyncio
+async def test_section_previews_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", "0")
+    llm_inputs = _capture_section_info(monkeypatch)
+
+    await hierarchy.resolve_document_hierarchy(_PDFX_ELEMENTS)
+
+    assert [info["preview"] for info in llm_inputs[0]] == ["", "", ""]
+
+
+def test_preview_max_chars_setting_default_and_override(monkeypatch):
+    from src.lib.openai_agents.config import get_hierarchy_resolution_preview_max_chars
+
+    monkeypatch.delenv("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", raising=False)
+    assert get_hierarchy_resolution_preview_max_chars() == 100
+    monkeypatch.setenv("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", "240")
+    assert get_hierarchy_resolution_preview_max_chars() == 240
+    monkeypatch.setenv("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", "-5")
+    assert get_hierarchy_resolution_preview_max_chars() == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_marks_only_cut_previews_and_omits_empty_ones(
+    monkeypatch, hierarchy_env
+):
+    _captured, calls = _install_sequenced_runner(monkeypatch, [_paper_output()])
+    _sentry_recorder(monkeypatch)
+    sections = [dict(info) for info in _PAPER_SECTIONS]
+    sections[1]["preview"] = "Wingless signaling controls..."
+
+    await hierarchy._call_llm_for_hierarchy(sections)
+
+    prompt = calls[0]["prompt"]
+    assert '[1] "Abstract" → "Wingless signaling controls..."' in prompt
+    assert '[3] "2.1. Fly strains" → "Flies were raised at 25 C."\n' in prompt
+    assert '[2] "Materials and Methods"\n' in prompt
+    assert "(~100 characters)" not in calls[0]["instructions"]
+
+
+@pytest.mark.asyncio
+async def test_pdfx_fixture_previews_never_repeat_their_heading(monkeypatch):
+    import json
+    from pathlib import Path
+
+    monkeypatch.delenv("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", raising=False)
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "fixtures"
+        / "micropub-biology-001725_pdfx.json"
+    )
+    elements = json.loads(fixture.read_text(encoding="utf-8"))
+    llm_inputs = _capture_section_info(monkeypatch)
+
+    await hierarchy.resolve_document_hierarchy(elements)
+
+    previews = {info["title"]: info["preview"] for info in llm_inputs[0]}
+    assert previews["Abstract"].startswith("The Drosophila ovary serves as")
+    assert previews["Methods"].startswith("The Drosophila melanogaster ovarian")
+    assert previews["References"].startswith("Cetera M, Horne-Badovinac S.")
+    for title, preview in previews.items():
+        assert preview, title
+        assert not preview.startswith(title), title
+        assert len(preview) <= 100 + len("..."), title

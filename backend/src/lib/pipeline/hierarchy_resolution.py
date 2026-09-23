@@ -127,11 +127,16 @@ async def resolve_document_hierarchy(
     Returns:
         Tuple of (updated elements, hierarchy metadata for tracing)
     """
+    from src.lib.openai_agents.config import get_hierarchy_resolution_preview_max_chars
+
     # 1. Extract unique section_titles from all elements (in order of first appearance)
-    # Also capture the first ~100 chars of content to help LLM understand the section
+    # Also capture a bounded preview of the first body text under each heading to
+    # help the LLM understand the section. Heading ("Title") elements carry their
+    # own title as section_title, so they are never used as the preview.
     # Note: section_title is stored in element metadata, not at top level
+    preview_max_chars = get_hierarchy_resolution_preview_max_chars()
     section_info_list = []  # List of {"title": str, "preview": str}
-    seen_titles = set()
+    info_by_title: Dict[str, Dict[str, str]] = {}
 
     for elem in elements:
         # section_title is in metadata
@@ -139,18 +144,20 @@ async def resolve_document_hierarchy(
         section_title = metadata.get("section_title") or ""
         section_title = str(section_title).strip() if section_title else ""
 
-        if not section_title or section_title in seen_titles:
+        if not section_title:
             continue
 
-        # Get a preview of the content under this section (first ~100 chars)
-        text = elem.get("text", "").strip()
-        preview = text[:100] if text else ""
+        info = info_by_title.get(section_title)
+        if info is None:
+            info = {"title": section_title, "preview": ""}
+            info_by_title[section_title] = info
+            section_info_list.append(info)
 
-        seen_titles.add(section_title)
-        section_info_list.append({
-            "title": section_title,
-            "preview": preview
-        })
+        if preview_max_chars == 0 or info["preview"] or elem.get("type") == "Title":
+            continue
+        info["preview"] = _section_body_preview(
+            elem.get("text", ""), section_title, preview_max_chars
+        )
 
     if not section_info_list:
         logger.info("[HIERARCHY] No section_titles found in elements.")
@@ -280,6 +287,24 @@ async def resolve_document_hierarchy(
     return elements, hierarchy_metadata
 
 
+def _section_body_preview(text: str, section_title: str, max_chars: int) -> str:
+    """Return the bounded opening of a body element's text for the classifier.
+
+    PDFX body elements often begin with their heading on its own line; that
+    line is dropped so the preview shows content, and a title-only element
+    yields an empty preview. Whitespace is collapsed so each section stays on
+    one prompt line. Text longer than ``max_chars`` is cut and marked with
+    "..."; the stored element text is unchanged.
+    """
+    lines = str(text or "").strip().splitlines()
+    if lines and " ".join(lines[0].split()) == " ".join(section_title.split()):
+        lines = lines[1:]
+    body = " ".join(" ".join(lines).split())
+    if len(body) <= max_chars:
+        return body
+    return body[:max_chars].rstrip() + "..."
+
+
 # =============================================================================
 # LLM Call
 # =============================================================================
@@ -317,7 +342,7 @@ CONTEXT: You are part of an automated curation pipeline that processes scientifi
 
 YOUR TASK: Analyze the section structure of a scientific paper and classify each section as either a TOP-LEVEL SECTION or a SUBSECTION. This hierarchy will be used to help curators efficiently search and navigate the document.
 
-INPUT FORMAT: You will receive a numbered list of section titles extracted from the paper, each with a brief preview of the content (~100 characters). Each line starts with its number, like [0]. The sections are listed in document order.
+INPUT FORMAT: You will receive a numbered list of section titles extracted from the paper. Each line starts with its number, like [0], followed by the title and, when the section has body text of its own, a short preview of the opening of that text ("..." marks where the preview was cut). A title without a preview has no body text directly under it, for example a top-level heading followed immediately by its first subsection. The sections are listed in document order.
 
 CLASSIFICATION GUIDELINES:
 
@@ -379,12 +404,12 @@ Common abstract locations when not explicitly labeled:
         title = info["title"]
         preview = info.get("preview", "")
         if preview:
-            formatted_sections.append(f'[{idx}] "{title}" → "{preview}..."')
+            formatted_sections.append(f'[{idx}] "{title}" → "{preview}"')
         else:
             formatted_sections.append(f'[{idx}] "{title}"')
 
     sections_text = "\n".join(formatted_sections)
-    user_prompt = f"Classify these numbered section titles from a scientific paper. Each entry shows the section number and title followed by a preview of its content:\n\n{sections_text}"
+    user_prompt = f"Classify these numbered section titles from a scientific paper. Each entry shows the section number and title, followed by a preview of its opening body text when it has any:\n\n{sections_text}"
 
     try:
         model_name = require_env("HIERARCHY_LLM_MODEL")
