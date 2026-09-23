@@ -73,7 +73,6 @@ CHEMICAL_RELATIONS = [{
 @pytest.mark.parametrize("agent_id,pack_id,object_type", [
     ("disease", "agr.alliance.disease", "DiseaseAnnotation"),
     ("gene_expression", "agr.alliance.gene_expression", "GeneExpressionAnnotation"),
-    ("phenotype", "agr.alliance.phenotype", "PhenotypeAnnotation"),
 ])
 @pytest.mark.parametrize("output_format", ["csv", "chat"])
 def test_experimental_condition_cell_includes_its_chemical(agent_id, pack_id, object_type, output_format):
@@ -103,6 +102,41 @@ def test_experimental_condition_cell_includes_its_chemical(agent_id, pack_id, ob
     # JSON keeps the stored value unchanged.
     [json_row] = apply_projection_plan(bundle, _plan("json", [{"key": "c", "field_ref": ref}])).rows
     assert json_row["c"] == CHEMICAL_RELATIONS
+
+
+def _condition_value(mention, curie=None, **extra):
+    resolved = curie is not None
+    return {**extra, "curie": curie, "mention": mention,
+            "resolution_state": "resolved" if resolved else "unresolved",
+            "lookup_outcome": "matched" if resolved else "not_validated"}
+
+
+@pytest.mark.parametrize("output_format", ["csv", "chat"])
+def test_phenotype_condition_cell_shows_each_part_by_its_own_state(output_format):
+    """ALL-1283: every phenotype condition part is a resolvable value; paper wording stays out."""
+
+    ref = "object.pack.PhenotypeAnnotation.condition_relations"
+    relations = [{
+        "condition_relation_type": {"name": "has_condition", "mention": "has_condition",
+                                    "resolution_state": "resolved", "lookup_outcome": "matched"},
+        "conditions": [
+            {"condition_class": _condition_value("chemical treatment", "ZECO:0000111"),
+             "condition_chemical": _condition_value("rapamycin", proposed_curie="CHEBI:9168"),
+             "condition_free_text": "3 pM",
+             "condition_summary": "treated with 3 pM rapamycin"},
+        ],
+    }]
+    item = {"object_type": "PhenotypeAnnotation", "object_id": "a1",
+            "payload": {"condition_relations": deepcopy(relations)}}
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("phenotype", "agr.alliance.phenotype", [item])],
+        flow_name="C", output_format=output_format,
+    )
+    [row] = apply_projection_plan(bundle, _plan(output_format, [{"key": "c", "field_ref": ref}])).rows
+    assert row["c"] == "has_condition: ZECO:0000111; UNRESOLVED; 3 pM"
+    assert "rapamycin" not in row["c"]
+    [json_row] = apply_projection_plan(bundle, _plan("json", [{"key": "c", "field_ref": ref}])).rows
+    assert json_row["c"] == relations
 
 
 # --- Generic reading keeps a second identifier ---------------------------------------------

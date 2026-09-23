@@ -3196,18 +3196,27 @@ def _chat_dispatch_domain_cases():
                 envelope_id="chat-phenotype-env",
                 domain_pack_id="agr.alliance.phenotype",
                 extracted_objects=[
+                    # ALL-1283: the term validator resolves the annotation's own terms.
                     CuratableObjectEnvelope(
-                        object_type="PhenotypeTerm",
-                        object_role="validated_reference",
-                        pending_ref_id="phenotype-term-1",
+                        object_type="PhenotypeAnnotation",
+                        pending_ref_id="phenotype-annotation-1",
                         payload={
-                            "resolution_state": "pending_ontology_resolution",
-                            "curie": "WBPhenotype:0000886",
-                            "label": "reduced brood size",
-                            "ontology_lookup_hint": {
-                                "data_provider": "WB",
-                                "taxon_id": "NCBITaxon:6239",
-                            },
+                            "phenotype_annotation_object": "reduced brood size",
+                            "phenotype_terms": [
+                                {
+                                    "proposed_curie": "WBPhenotype:0000886",
+                                    "curie": None,
+                                    "label": None,
+                                    "mention": "fewer progeny",
+                                    "resolution_state": "unresolved",
+                                    "lookup_outcome": "not_validated",
+                                    "validator_explanation": "Not validated yet.",
+                                    "ontology_lookup_hint": {
+                                        "data_provider": "WB",
+                                        "taxon_id": "NCBITaxon:6239",
+                                    },
+                                }
+                            ],
                         },
                     )
                 ],

@@ -4,11 +4,12 @@ Thin domain adapter over the project-agnostic ``ExtractionBuilderWorkspace`` eng
 shared ``finalize_builder_extraction`` orchestration. Mirrors ``gene_builder_tools.py`` but adapted
 to the phenotype ``PhenotypeAnnotation`` curatable_unit target:
 
-  * The candidate stages a free-text phenotype statement, a pending subject reference, a pending
-    phenotype-term candidate (label/CURIE), source mentions, and evidence_record_ids.
+  * The candidate stages a free-text phenotype statement, the phenotype term as the paper words it
+    (plus any term ID/name the extractor proposes), the subject as the paper names it (plus a
+    proposed identifier), source mentions, and evidence_record_ids.
   * NO resolver-backed controlled fields: the active ``phenotype_term_ontology_validator`` resolves
-    the staged label/CURIE candidate inline (``require_resolver_selections=False``), preserving the
-    existing pack's posture (runbook §3 — change the mechanism, not the curation target).
+    the staged term inline (``require_resolver_selections=False``). A value that does not match is
+    still staged, unresolved, for the validators to decide (ALL-1283).
   * NO mirror/projection fields (the subject IS the canonical subject; no
     ``materializes_to_field_paths``).
 
@@ -30,6 +31,7 @@ from pydantic import (
     StrictStr,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 from agr_ai_curation_runtime.agr_lookup import (
@@ -75,6 +77,7 @@ _PHENOTYPE_PATCH_FIELD_PATHS = frozenset(
         "subject_label",
         "subject_type",
         "subject_taxon",
+        "term_mention",
         "term_curie",
         "term_label",
         "data_provider",
@@ -91,22 +94,70 @@ class _StrictToolModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ExperimentalConditionInput(_StrictToolModel):
-    """One grounded ExperimentalCondition the extractor read from the paper.
+_CONDITION_TERM_COMPONENTS = (
+    "condition_class",
+    "condition_id",
+    "condition_chemical",
+    "condition_taxon",
+)
 
-    All ontology/chemical/taxon CURIEs are GROUNDED by the extractor via the term-helper lookup
-    tools before staging (do not guess ZECO/ChEBI from memory). Every field is optional and sparse
-    — stage only what the paper explicitly states. The condition carries no quote text: the
-    validator reads the annotation's evidence_record_ids (the spans the condition was read from)
-    per the evidence contract.
+
+class ExperimentalConditionInput(_StrictToolModel):
+    """One experimental condition the extractor read from the paper.
+
+    Each condition part (class, specific condition, chemical, taxon) is staged with its paper
+    wording in ``<part>_mention``; a CURIE found with the term-helper lookup tools goes in
+    ``<part>_curie`` as a proposal the condition validator checks. A part with a CURIE but no
+    paper wording is rejected. Every field is optional and sparse — stage only what the paper
+    explicitly states. The condition carries no quote text: the validator reads the annotation's
+    evidence_record_ids (the spans the condition was read from) per the evidence contract.
     """
 
-    condition_class_curie: Optional[StrictStr] = None
-    condition_id_curie: Optional[StrictStr] = None
-    condition_chemical_curie: Optional[StrictStr] = None
-    condition_taxon_curie: Optional[StrictStr] = None
+    condition_class_mention: Optional[StrictStr] = Field(
+        default=None,
+        description="The kind of experimental variable as the paper words it (for example 'chemical treatment').",
+    )
+    condition_class_curie: Optional[StrictStr] = Field(
+        default=None,
+        description="Proposed ZECO class ID for that wording, from the term lookup tools; a validator confirms it.",
+    )
+    condition_id_mention: Optional[StrictStr] = Field(
+        default=None,
+        description="The specific condition as the paper words it, when stated.",
+    )
+    condition_id_curie: Optional[StrictStr] = Field(
+        default=None,
+        description="Proposed ZECO/XCO ID for the specific condition; a validator confirms it.",
+    )
+    condition_chemical_mention: Optional[StrictStr] = Field(
+        default=None,
+        description="The chemical as the paper names it, when a chemical treatment is stated.",
+    )
+    condition_chemical_curie: Optional[StrictStr] = Field(
+        default=None,
+        description="Proposed ChEBI ID for the chemical; a validator confirms it.",
+    )
+    condition_taxon_mention: Optional[StrictStr] = Field(
+        default=None,
+        description="The organism as the paper names it, only when the condition involves a distinct organism.",
+    )
+    condition_taxon_curie: Optional[StrictStr] = Field(
+        default=None,
+        description="Proposed NCBITaxon ID for that organism; a validator confirms it.",
+    )
     condition_free_text: Optional[StrictStr] = None
     condition_summary: Optional[StrictStr] = None
+
+    @model_validator(mode="after")
+    def _curie_needs_paper_wording(self) -> "ExperimentalConditionInput":
+        for component in _CONDITION_TERM_COMPONENTS:
+            curie = getattr(self, f"{component}_curie")
+            mention = getattr(self, f"{component}_mention")
+            if curie is not None and curie.strip() and not (mention and mention.strip()):
+                raise ValueError(
+                    f"{component}_curie needs {component}_mention, the paper's wording for it"
+                )
+        return self
 
 
 class ConditionRelationInput(_StrictToolModel):
@@ -142,8 +193,20 @@ class PhenotypeStageInput(_StrictToolModel):
             "verified quote/provenance stays in evidence_record_ids."
         ),
     )
+    term_mention: StrictStr = Field(
+        description=(
+            "The phenotype term as the paper words it. It is kept as the paper wording and "
+            "staged even when no ontology term matches; validators decide."
+        ),
+    )
     subject_identifier: Optional[StrictStr] = None
-    subject_label: Optional[StrictStr] = None
+    subject_label: Optional[StrictStr] = Field(
+        default=None,
+        description=(
+            "The subject (gene, allele, or model) as the paper names it. Required whenever "
+            "any subject detail is staged."
+        ),
+    )
     subject_type: Optional[StrictStr] = None
     subject_taxon: Optional[StrictStr] = None
     term_curie: Optional[StrictStr] = None
@@ -159,13 +222,20 @@ class PhenotypeStageInput(_StrictToolModel):
     )
     negated: Optional[StrictBool] = None
 
-    @field_validator("pending_ref_id", "phenotype_annotation_object")
+    @field_validator("pending_ref_id", "phenotype_annotation_object", "term_mention")
     @classmethod
     def _non_empty_string(cls, value: str) -> str:
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("value must be non-empty")
         return cleaned
+
+    @model_validator(mode="after")
+    def _subject_needs_paper_wording(self) -> "PhenotypeStageInput":
+        issue = _subject_wording_issue(self.model_dump())
+        if issue is not None:
+            raise ValueError(issue)
+        return self
 
     @field_validator("rationale")
     @classmethod
@@ -179,6 +249,25 @@ class PhenotypeStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("source_mentions must contain at least one non-empty value")
         return cleaned
+
+
+_SUBJECT_DETAIL_FIELDS = ("subject_identifier", "subject_type", "subject_taxon")
+
+
+def _subject_wording_issue(fields: Mapping[str, Any]) -> Optional[str]:
+    """Why staged subject details lack the subject's paper wording, or None."""
+
+    label = fields.get("subject_label")
+    if isinstance(label, str) and label.strip():
+        return None
+    staged = [
+        name
+        for name in _SUBJECT_DETAIL_FIELDS
+        if isinstance(fields.get(name), str) and fields[name].strip()
+    ]
+    if not staged:
+        return None
+    return f"{', '.join(staged)} need subject_label, the subject as the paper names it"
 
 
 class PhenotypePatchUpdateInput(_StrictToolModel):
@@ -324,10 +413,11 @@ def _staged_condition_relations(
         for condition in relation.conditions:
             component: dict[str, Any] = {}
             for field_name in (
-                "condition_class_curie",
-                "condition_id_curie",
-                "condition_chemical_curie",
-                "condition_taxon_curie",
+                *(
+                    f"{part}_{suffix}"
+                    for part in _CONDITION_TERM_COMPONENTS
+                    for suffix in ("mention", "curie")
+                ),
                 "condition_free_text",
                 "condition_summary",
             ):
@@ -362,6 +452,7 @@ def _stage_payload_from_phenotype_input(stage_input: PhenotypeStageInput) -> dic
         "subject_label",
         "subject_type",
         "subject_taxon",
+        "term_mention",
         "term_curie",
         "term_label",
         "data_provider",
@@ -383,6 +474,7 @@ def _stage_phenotype_observation_impl(
     evidence_record_ids: List[str],
     source_mentions: List[str],
     rationale: str,
+    term_mention: str,
     subject_identifier: Optional[str] = None,
     subject_label: Optional[str] = None,
     subject_type: Optional[str] = None,
@@ -398,6 +490,11 @@ def _stage_phenotype_observation_impl(
     """Stage one retained, evidence-backed phenotype assertion through the builder workspace.
 
     Args:
+        term_mention: The phenotype term as the paper words it. It is kept as paper wording and
+            staged even when no ontology term matches; the phenotype ontology validator decides
+            the term.
+        subject_label: The subject (gene, allele, or model) as the paper names it. Required
+            whenever a subject identifier, type, or taxon is staged.
         validation_guidance: Optional short sentence forwarding relevant rules from your
             configured prompt and case-specific paper context to this finding's validators.
             Distinguish domain rules from paper facts. Do not copy whole prompts, quote
@@ -421,6 +518,7 @@ def _stage_phenotype_observation_impl(
             rationale=rationale,
             evidence_record_ids=evidence_record_ids,
             source_mentions=source_mentions,
+            term_mention=term_mention,
             subject_identifier=subject_identifier,
             subject_label=subject_label,
             subject_type=subject_type,
@@ -578,7 +676,23 @@ def _patch_phenotype_observation_impl(
                     attempted_query=attempted_query,
                 )
             continue
+        if update.field_path == "term_mention" and not (update.string_value or "").strip():
+            return _phenotype_validation_result(
+                message="term_mention patch requires the phenotype term as the paper words it.",
+                issues=[{"field_path": "term_mention", "reason": "missing_term_mention", "message": "term_mention cannot be cleared."}],
+                method="patch_phenotype_observation",
+                attempted_query=attempted_query,
+            )
         _set_phenotype_patch_value(payload, update.field_path, update.string_value)
+
+    subject_issue = _subject_wording_issue(payload)
+    if subject_issue is not None:
+        return _phenotype_validation_result(
+            message=f"patch_phenotype_observation rejected: {subject_issue}.",
+            issues=[{"field_path": "subject_label", "reason": "missing_subject_wording", "message": subject_issue}],
+            method="patch_phenotype_observation",
+            attempted_query=attempted_query,
+        )
 
     workspace.upsert_candidate(
         candidate_id=patch_input.candidate_id,

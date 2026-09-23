@@ -182,32 +182,36 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
         "package_id": "agr.alliance",
         "agent_id": "ontology_term_validation",
     }
+    # ALL-1283: the validator resolves each annotation term in place; the paper wording is the
+    # label input and the extractor's proposed CURIE the fast path.
+    assert term_binding["applies_to"]["object_types"] == [PHENOTYPE_OBJECT_TYPE]
+    assert term_binding["applies_to"]["field_paths"] == ["phenotype_terms"]
     assert term_binding["input_fields"] == {
         "curie": {
             "source": "payload",
-            "path": "curie",
+            "path": "phenotype_terms.proposed_curie",
             "required": False,
         },
         "label": {
             "source": "payload",
-            "path": "label",
-            "required": False,
+            "path": "phenotype_terms.mention",
+            "required": True,
         },
         "data_provider": {
             "source": "payload",
-            "path": "ontology_lookup_hint.data_provider",
+            "path": "phenotype_terms.ontology_lookup_hint.data_provider",
             "required": False,
             "context_only": True,
         },
         "taxon_id": {
             "source": "payload",
-            "path": "ontology_lookup_hint.taxon_id",
+            "path": "phenotype_terms.ontology_lookup_hint.taxon_id",
             "required": False,
             "context_only": True,
         },
         "evidence_record_id": {
             "source": "payload",
-            "path": "ontology_lookup_hint.evidence_record_id",
+            "path": "phenotype_terms.ontology_lookup_hint.evidence_record_id",
             "required": False,
             "context_only": True,
         },
@@ -268,8 +272,8 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
         },
     }
     assert term_binding["expected_result_fields"] == {
-        "curie": "curie",
-        "label": "label",
+        "curie": "phenotype_terms.curie",
+        "label": "phenotype_terms.label",
     }
     assert term_binding["required"] is True
     assert term_binding["blocking"] is False
@@ -310,12 +314,12 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
         },
         "subject_identifier": {
             "source": "payload",
-            "path": "subject_identifier",
+            "path": "proposed_subject_identifier",
             "required": True,
         },
         "subject_label": {
             "source": "payload",
-            "path": "subject_label",
+            "path": "mention",
             "required": False,
         },
         "taxon": {
@@ -483,15 +487,18 @@ def test_tool_verified_phenotype_fixture_converts_to_pending_envelope():
         obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
     )
     assert annotation.payload["phenotype_annotation_object"] == "reduced brood size"
+    # The fixture's normalized_id is the extractor's proposal, never a validated CURIE.
     assert annotation.payload["phenotype_terms"] == [
         {
-            "resolution_state": "pending_ontology_resolution",
-            "curie": "WBPhenotype:0000886",
-            "label": "reduced brood size",
             "source_mentions": ["reduced brood size"],
             "ontology_lookup_hint": {"evidence_record_id": "verified_exact"},
-            "export_state": "blocked_pending_ontology_resolution",
-            "write_blocked_reason": "phenotype term CURIE unresolved",
+            "proposed_curie": "WBPhenotype:0000886",
+            "curie": None,
+            "label": None,
+            "mention": "reduced brood size",
+            "resolution_state": "unresolved",
+            "lookup_outcome": "not_validated",
+            "validator_explanation": "Not validated yet.",
         }
     ]
     assert annotation.metadata["export_behavior"]["status"] == "blocked"
@@ -552,6 +559,7 @@ def test_pending_phenotype_term_without_curie_dispatches_with_context():
             "data_provider": "MGI",
             "taxon": "NCBITaxon:10090",
             "subject_identifier": "MGI:109583",
+            "subject_label": "Pax6",
             "subject_type": "gene",
         }
     )
@@ -562,16 +570,18 @@ def test_pending_phenotype_term_without_curie_dispatches_with_context():
         obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_TERM_OBJECT_TYPE
     )
     assert phenotype_term.payload["curie"] is None
-    assert phenotype_term.payload["resolution_state"] == "pending_ontology_resolution"
+    assert "proposed_curie" not in phenotype_term.payload
+    assert phenotype_term.payload["resolution_state"] == "unresolved"
+    assert phenotype_term.payload["lookup_outcome"] == "not_validated"
     assert phenotype_term.payload["ontology_lookup_hint"] == {
         "data_provider": "MGI",
         "taxon_id": "NCBITaxon:10090",
         "evidence_record_id": "verified_exact",
     }
-    assert phenotype_term.payload["export_state"] == (
+    assert phenotype_term.metadata["export_state"] == (
         "blocked_pending_ontology_resolution"
     )
-    assert phenotype_term.payload["write_blocked_reason"] == (
+    assert phenotype_term.metadata["write_blocked_reason"] == (
         "phenotype term CURIE unresolved"
     )
 
@@ -618,19 +628,23 @@ def test_unsupported_phenotype_provider_taxon_label_lookup_is_blocked_preflight(
         domain_pack_id=PHENOTYPE_DOMAIN_PACK_ID,
         extracted_objects=[
             CuratableObjectEnvelope(
-                object_type=PHENOTYPE_TERM_OBJECT_TYPE,
-                object_role="validated_reference",
-                pending_ref_id="phenotype-term-zfin",
+                object_type=PHENOTYPE_OBJECT_TYPE,
+                pending_ref_id="phenotype-annotation-zfin",
                 payload={
-                    "resolution_state": "pending_ontology_resolution",
-                    "curie": None,
-                    "label": "boundary disruptions",
-                    "source_mentions": ["boundary disruptions"],
-                    "ontology_lookup_hint": {
-                        "taxon_id": "NCBITaxon:7955",
-                    },
-                    "export_state": "blocked_pending_ontology_resolution",
-                    "write_blocked_reason": "phenotype term CURIE unresolved",
+                    "annotation_kind": "phenotype_assertion",
+                    "phenotype_annotation_object": "somite boundary disruptions",
+                    "phenotype_terms": [
+                        {
+                            "source_mentions": ["boundary disruptions"],
+                            "ontology_lookup_hint": {"taxon_id": "NCBITaxon:7955"},
+                            "curie": None,
+                            "label": None,
+                            "mention": "boundary disruptions",
+                            "resolution_state": "unresolved",
+                            "lookup_outcome": "not_validated",
+                            "validator_explanation": "Not validated yet.",
+                        }
+                    ],
                 },
             )
         ],
@@ -1016,6 +1030,19 @@ def test_phenotype_constants_include_fixture_id_for_contract_callers():
     assert PHENOTYPE_FIXTURE_PACK_ID == "tool_verified_pending"
 
 
+def _staged(mention: str, *identity_keys: str, **extra: Any) -> dict[str, Any]:
+    """A staged, not yet validated value in the shared extracted-vs-validated shape."""
+
+    return {
+        **extra,
+        **{key: None for key in identity_keys},
+        "mention": mention,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+
+
 def _phenotype_condition_payload() -> dict[str, Any]:
     """A phenotype annotation carrying one relation with TWO experimental conditions."""
 
@@ -1023,7 +1050,7 @@ def _phenotype_condition_payload() -> dict[str, Any]:
         "annotation_kind": "phenotype_assertion",
         "phenotype_annotation_object": "abnormal sensory cilia morphology",
         "negated": False,
-        "data_provider": {"abbreviation": "WB"},
+        "data_provider": _staged("WB", "abbreviation"),
         "source_mentions": ["abnormal sensory cilia morphology"],
         "evidence_record_ids": ["evidence-1"],
         "evidence_records": [
@@ -1037,15 +1064,21 @@ def _phenotype_condition_payload() -> dict[str, Any]:
         ],
         "condition_relations": [
             {
-                "condition_relation_type": {"name": "has_condition"},
+                "condition_relation_type": _staged("has_condition", "name"),
                 "conditions": [
                     {
-                        "condition_class": {"curie": "ZECO:0000111"},
-                        "condition_chemical": {"curie": "CHEBI:9168"},
+                        "condition_class": _staged(
+                            "chemical treatment", "curie", proposed_curie="ZECO:0000111"
+                        ),
+                        "condition_chemical": _staged(
+                            "rapamycin", "curie", proposed_curie="CHEBI:9168"
+                        ),
                         "condition_summary": "treated with 3 pM rapamycin",
                     },
                     {
-                        "condition_class": {"curie": "ZECO:0000160"},
+                        "condition_class": _staged(
+                            "temperature exposure", "curie", proposed_curie="ZECO:0000160"
+                        ),
                         "condition_summary": "reared at 28C",
                     },
                 ],
@@ -1111,11 +1144,16 @@ def test_phenotype_condition_binding_scoped_and_shaped(monkeypatch):
     assert composite["applies_to"]["object_types"] == [PHENOTYPE_OBJECT_TYPE]
     assert composite["applies_to"]["field_paths"] == ["condition_relations.conditions"]
     # Per-condition input_fields use BARE nested paths; relation is context_only.
+    # Component inputs read the extractor's proposed CURIE and the paper wording; only the
+    # validator writes the validated CURIE back.
     assert composite["input_fields"]["condition_class_curie"]["path"] == (
-        "condition_relations.conditions.condition_class.curie"
+        "condition_relations.conditions.condition_class.proposed_curie"
+    )
+    assert composite["input_fields"]["condition_class_name"]["path"] == (
+        "condition_relations.conditions.condition_class.mention"
     )
     assert composite["input_fields"]["condition_relation_type"]["path"] == (
-        "condition_relations.condition_relation_type.name"
+        "condition_relations.condition_relation_type.mention"
     )
     assert composite["input_fields"]["condition_relation_type"]["context_only"] is True
     # expected_result_fields = condition_class_curie (NOT condition_id, which is optional/sparse).
@@ -1191,3 +1229,214 @@ def test_phenotype_condition_binding_fans_out_one_composite_per_condition():
     ]
     # Both carry the annotation's backend-resolved evidence (evidence contract: no LLM quote).
     assert first.evidence and first.evidence[0]["verified_quote"]
+
+
+# --- ALL-1283: extracted vs validated values ----------------------------------------------------
+
+
+def _resolved(mention: str, **identity: Any) -> dict[str, Any]:
+    return {
+        **identity,
+        "mention": mention,
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": "Fixture validator decision.",
+    }
+
+
+def _export_candidate(**payload_overrides: Any) -> dict[str, Any]:
+    payload = {
+        "phenotype_annotation_object": "abnormal retina inner nuclear layer morphology",
+        "phenotype_annotation_subject": _resolved(
+            "retina model mice",
+            subject_type="agm",
+            subject_identifier="MGI:6288847",
+            subject_label="retina model",
+            taxon="NCBITaxon:10090",
+        ),
+        "phenotype_terms": [
+            _resolved(
+                "thinner inner nuclear layer",
+                curie="MP:0003733",
+                label="abnormal retina inner nuclear layer morphology",
+            )
+        ],
+        "single_reference": _resolved("Retina paper", reference_id=296935, title="Retina paper"),
+        "data_provider": _resolved("MGI", abbreviation="MGI"),
+        "negated": False,
+    }
+    payload.update(payload_overrides)
+    return {
+        "candidate_id": "phenotype-candidate-1",
+        "envelope_id": "phenotype-envelope-1",
+        "object_id": "phenotype-annotation-1",
+        "object_type": PHENOTYPE_OBJECT_TYPE,
+        "payload": payload,
+        "object": {"metadata": {}},
+    }
+
+
+def test_phenotype_export_reads_every_resolved_term_identity():
+    from agr_ai_curation_alliance.domain_packs.phenotype import (
+        build_phenotype_annotation_export_payload,
+    )
+
+    candidate = _export_candidate()
+    candidate["payload"]["phenotype_terms"].append(
+        _resolved("smaller eyes", curie="MP:0001293", label="decreased eye size")
+    )
+
+    payload = build_phenotype_annotation_export_payload(domain_envelope_candidates=[candidate])
+
+    assert payload["payload_status"] == "ready"
+    linkml = payload["phenotype_annotations"][0]["linkml_payload"]
+    # Only validated identities are exported; paper wording and contract keys stay out.
+    assert linkml["phenotype_terms"] == [
+        {"curie": "MP:0003733", "label": "abnormal retina inner nuclear layer morphology"},
+        {"curie": "MP:0001293", "label": "decreased eye size"},
+    ]
+    assert linkml["phenotype_annotation_subject"] == {
+        "subject_type": "agm",
+        "primary_external_id": "MGI:6288847",
+        "label": "retina model",
+        "taxon": "NCBITaxon:10090",
+    }
+    assert linkml["data_provider"] == {"abbreviation": "MGI"}
+    assert linkml["single_reference"] == {"reference_id": 296935, "title": "Retina paper"}
+
+
+def test_phenotype_export_blocks_an_unresolved_term_instead_of_exporting_it():
+    from agr_ai_curation_alliance.domain_packs.phenotype import (
+        build_phenotype_annotation_export_payload,
+    )
+
+    candidate = _export_candidate()
+    candidate["payload"]["phenotype_terms"].append(
+        {
+            "proposed_curie": "MP:0001293",
+            "curie": None,
+            "label": None,
+            "mention": "smaller eyes",
+            "resolution_state": "unresolved",
+            "lookup_outcome": "not_found",
+            "validator_explanation": "No term matched.",
+        }
+    )
+
+    payload = build_phenotype_annotation_export_payload(domain_envelope_candidates=[candidate])
+
+    assert payload["payload_status"] == "blocked"
+    assert payload["phenotype_annotations"] == []
+    blocker = payload["adapter_blockers"][0]
+    assert blocker["code"] == "alliance.phenotype.export.unresolved_value"
+    assert blocker["field_path"] == "phenotype_terms[1]"
+    assert blocker["details"] == {"lookup_outcome": "not_found", "paper_wording": "smaller eyes"}
+
+
+@pytest.mark.parametrize("covered", [False, True])
+def test_phenotype_export_applies_the_legacy_rule_to_old_terms(covered):
+    from agr_ai_curation_alliance.domain_packs.phenotype import (
+        build_phenotype_annotation_export_payload,
+    )
+
+    candidate = _export_candidate(
+        phenotype_terms=[
+            {
+                "resolution_state": "pending_ontology_resolution",
+                "curie": "MP:0003733",
+                "label": "abnormal retina inner nuclear layer morphology",
+            }
+        ]
+    )
+    if covered:
+        candidate["object"]["metadata"]["validator_resolved_value_materialization"] = [
+            {"materialized_field_paths": ["phenotype_terms[0].curie"]}
+        ]
+
+    payload = build_phenotype_annotation_export_payload(domain_envelope_candidates=[candidate])
+
+    if covered:
+        assert payload["payload_status"] == "ready"
+        assert payload["phenotype_annotations"][0]["linkml_payload"]["phenotype_terms"] == [
+            {"curie": "MP:0003733", "label": "abnormal retina inner nuclear layer morphology"}
+        ]
+    else:
+        assert payload["payload_status"] == "blocked"
+        assert payload["adapter_blockers"][0]["details"]["lookup_outcome"] == "legacy_unverified"
+
+
+def test_phenotype_export_blocks_unresolved_condition_parts():
+    from agr_ai_curation_alliance.domain_packs.phenotype import (
+        build_phenotype_annotation_export_payload,
+    )
+
+    candidate = _export_candidate(
+        condition_relations=[
+            {
+                "condition_relation_type": _resolved(
+                    "has_condition", name="has_condition", vocabulary="Condition Relation Type", id="1"
+                ),
+                "conditions": [
+                    {
+                        "condition_class": _resolved("drug treatment", curie="ZECO:0000111"),
+                        "condition_chemical": _staged("rapamycin", "curie", proposed_curie="CHEBI:9168"),
+                        "condition_summary": "treated with rapamycin",
+                    }
+                ],
+            }
+        ]
+    )
+
+    blocked = build_phenotype_annotation_export_payload(domain_envelope_candidates=[candidate])
+
+    assert blocked["payload_status"] == "blocked"
+    assert [blocker["field_path"] for blocker in blocked["adapter_blockers"]] == [
+        "condition_relations[0].conditions[0].condition_chemical"
+    ]
+
+    chemical = candidate["payload"]["condition_relations"][0]["conditions"][0]["condition_chemical"]
+    chemical.update(
+        curie="CHEBI:9168", resolution_state="resolved", lookup_outcome="matched",
+    )
+    ready = build_phenotype_annotation_export_payload(domain_envelope_candidates=[candidate])
+
+    assert ready["payload_status"] == "ready"
+    assert ready["phenotype_annotations"][0]["linkml_payload"]["condition_relations"] == [
+        {
+            "condition_relation_type": {"name": "has_condition"},
+            "conditions": [
+                {
+                    "condition_class": {"curie": "ZECO:0000111"},
+                    "condition_chemical": {"curie": "CHEBI:9168"},
+                    "condition_summary": "treated with rapamycin",
+                }
+            ],
+        }
+    ]
+
+
+def test_pending_phenotype_validator_requires_first_term_paper_wording():
+    # Regression (__init__.py :1006-1008): the first-term check accepted a CURIE or label; it
+    # now requires the term's paper wording.
+    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
+    envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
+    annotation = next(
+        obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
+    )
+    first_term = annotation.payload["phenotype_terms"][0]
+    del first_term["mention"]
+    first_term["curie"] = "WBPhenotype:0000886"
+
+    codes = [finding.code for finding in validate_pending_phenotype_envelope(envelope)]
+
+    assert "alliance.phenotype.missing_phenotype_term" in codes
+
+
+def test_tool_verified_converter_requires_subject_paper_wording():
+    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
+    fixture["extraction"]["items"][0].update(
+        {"subject_identifier": "WB:WBGene00000912", "subject_type": "gene"}
+    )
+
+    with pytest.raises(ValueError, match="subject_label"):
+        build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)

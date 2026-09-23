@@ -904,20 +904,24 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "taxon": "taxon",
     }
 
+    # ALL-1283: the term validator resolves each annotation term in place, reading the
+    # paper wording as its label and the extractor's CURIE only as a proposal.
     phenotype_term_binding = phenotype_bindings["phenotype_term_ontology_validator"]
     assert phenotype_term_binding.validator_agent is not None
     assert phenotype_term_binding.validator_agent.agent_id == "ontology_term_validation"
     assert phenotype_term_binding.state is ValidationBindingState.ACTIVE
-    assert phenotype_term_binding.object_types == ("PhenotypeTerm",)
-    assert phenotype_term_binding.field_paths == ()
+    assert phenotype_term_binding.object_types == ("PhenotypeAnnotation",)
+    assert phenotype_term_binding.field_paths == ("phenotype_terms",)
+    assert phenotype_term_binding.input_fields["curie"].path == "phenotype_terms.proposed_curie"
     assert phenotype_term_binding.input_fields["curie"].required is False
-    assert phenotype_term_binding.input_fields["label"].required is False
+    assert phenotype_term_binding.input_fields["label"].path == "phenotype_terms.mention"
+    assert phenotype_term_binding.input_fields["label"].required is True
     assert phenotype_term_binding.input_fields["data_provider"].path == (
-        "ontology_lookup_hint.data_provider"
+        "phenotype_terms.ontology_lookup_hint.data_provider"
     )
     assert phenotype_term_binding.input_fields["data_provider"].context_only is True
     assert phenotype_term_binding.input_fields["taxon_id"].path == (
-        "ontology_lookup_hint.taxon_id"
+        "phenotype_terms.ontology_lookup_hint.taxon_id"
     )
     assert phenotype_term_binding.input_fields["taxon_id"].context_only is True
     assert (
@@ -943,7 +947,7 @@ def test_subject_entity_selectors_require_type_and_omit_absent_optional_context(
                 object_type="PhenotypeSubject",
                 pending_ref_id="subject-1",
                 payload={
-                    "subject_identifier": "WB:WBGene00000001",
+                    "proposed_subject_identifier": "WB:WBGene00000001",
                     "subject_type": "gene",
                 },
             )
@@ -976,7 +980,7 @@ def test_subject_entity_selectors_require_type_and_omit_absent_optional_context(
             CuratableObjectEnvelope(
                 object_type="PhenotypeSubject",
                 pending_ref_id="subject-1",
-                payload={"subject_identifier": "WB:WBGene00000001"},
+                payload={"proposed_subject_identifier": "WB:WBGene00000001"},
             )
         ],
     )
@@ -1015,7 +1019,7 @@ def test_subject_entity_selectors_reject_ambiguous_optional_taxon_context():
                 object_type="PhenotypeSubject",
                 pending_ref_id="subject-1",
                 payload={
-                    "subject_identifier": "WB:WBGene00000001",
+                    "proposed_subject_identifier": "WB:WBGene00000001",
                     "subject_type": "gene",
                     "taxon": ["NCBITaxon:6239", "NCBITaxon:10090"],
                 },
@@ -1134,15 +1138,14 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "accepted_prefixes": ["MP", "WBPhenotype"],
                 "optional_inputs": [
                     "curie",
-                    "label",
                     "data_provider",
                     "taxon_id",
                     "evidence_record_id",
                     "evidence_quotes",
                 ],
                 "expected_result_fields": {
-                    "curie": "curie",
-                    "label": "label",
+                    "curie": "phenotype_terms.curie",
+                    "label": "phenotype_terms.label",
                 },
             }
         },
@@ -1282,12 +1285,21 @@ def test_representative_alliance_active_validators_dispatch_unresolved_results()
                 domain_pack_id="agr.alliance.phenotype",
                 extracted_objects=[
                     CuratableObjectEnvelope(
-                        object_type="PhenotypeTerm",
-                        object_role="validated_reference",
-                        pending_ref_id="phenotype-term-1",
+                        object_type="PhenotypeAnnotation",
+                        pending_ref_id="phenotype-annotation-1",
                         payload={
-                            "curie": "WBPhenotype:0000001",
-                            "label": "fixture phenotype",
+                            "phenotype_annotation_object": "fixture phenotype",
+                            "phenotype_terms": [
+                                {
+                                    "proposed_curie": "WBPhenotype:0000001",
+                                    "curie": None,
+                                    "label": None,
+                                    "mention": "fixture phenotype",
+                                    "resolution_state": "unresolved",
+                                    "lookup_outcome": "not_validated",
+                                    "validator_explanation": "Not validated yet.",
+                                }
+                            ],
                         },
                     )
                 ],

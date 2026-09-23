@@ -911,10 +911,15 @@ def test_object_ref_cells_carry_open_findings_on_the_referenced_object():
                     {"key": "term", "field_ref": PHENOTYPE_TERM_REF}],
     })
     [row] = apply_projection_plan(bundle, plan).rows
-    assert "unresolved" in row["term"]
-    assert "unresolved" not in row["subject"]
+    # The phenotype term is a resolvable value (ALL-1283): stored without a state and with no
+    # validator write-back event, it reads UNRESOLVED under the legacy rule whatever the findings.
+    assert row["term"] == "UNRESOLVED"
+    assert "unresolved" not in row["subject"].lower()
     json_plan = plan.model_copy(update={"format": "json"})
-    assert apply_projection_plan(bundle, json_plan).rows[0]["term"]["curie"] == "WBPhenotype:0"
+    json_term = apply_projection_plan(bundle, json_plan).rows[0]["term"]
+    # The legacy read never presents the unverified CURIE as the validated one.
+    assert json_term["curie"] is None
+    assert json_term["mention"] == "term 0 (WBPhenotype:0) (legacy, unverified)"
 
 
 def test_indexed_object_ref_field_maps_to_the_referenced_object_at_that_position():

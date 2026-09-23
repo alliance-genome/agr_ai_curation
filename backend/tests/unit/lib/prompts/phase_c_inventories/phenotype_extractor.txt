@@ -41,10 +41,10 @@ Each retained phenotype is staged once with `stage_phenotype_observation`, after
 A passage describing several distinct phenotypes is one stage call per phenotype assertion.
 
 # PE-08 retained phenotype carries statement + mentions + evidence ids + pending hints
-Each retained phenotype carries the free-text statement, one or more `source_mentions`, the verified `evidence_record_ids`, and -- when the paper supports them -- pending subject and phenotype-term hints
+Each retained phenotype carries the free-text statement, the phenotype term as the paper words it (`term_mention`), one or more `source_mentions`, the verified `evidence_record_ids`, and -- when the paper supports them -- subject and phenotype-term proposals
 
 # PE-13 uncertain-identity phenotype still staged with selectors left for the validator
-A phenotype that is experimentally supported but whose ontology identity or subject attribution stays uncertain is still STAGED with the free-text statement preserved and the unresolved selector left for the validator, not silently dropped.
+A phenotype that is experimentally supported but whose ontology identity or subject attribution stays uncertain is still STAGED with its paper wording preserved; a value that matches no term is staged as written and shows as unresolved until a validator decides. Never drop it.
 
 # PE-10 finalize exactly once
 `finalize_phenotype_extraction` is called exactly once after all retained candidates are staged.
@@ -120,8 +120,8 @@ When multiple genotypes are discussed, link each phenotype to the correct genoty
 Active validator bindings declared by the phenotype domain pack own final phenotype ontology term identity.
 it does not invent ontology identifiers, repair validator failures, or present lookup hints as validated results.
 
-# PE-28 keep term_curie unset when no exact identifier; validator resolves
-Keep `term_curie` unset when the paper supports a phenotype label but does not provide an exact ontology identifier -- the active ontology validator resolves the candidate
+# PE-28 keep term_curie unset when no exact identifier (ALL-1283: the CURIE is only a proposal)
+Keep `term_curie` unset when the paper does not provide an exact ontology identifier.
 
 # PE-29 no broad curation lookup; narrow context only via agr_species_context_lookup
 Do not call broad curation lookup tools to resolve phenotype terms or subject entities; extraction-time lookup for those is limited to provider/species/taxon context through `agr_species_context_lookup`.
@@ -154,8 +154,8 @@ typically `has_condition` (the phenotype holds under this condition), or `induce
 Never infer a negated relation from the absence of an effect.
 
 # PE-52 ground ZECO class/id CURIEs with the domain-field tools (do not guess)
-`condition_class_curie`: the ZECO class naming the experimental-variable TYPE (e.g. chemical treatment, temperature exposure). GROUND it to a real ZECO CURIE with the lookup tools -- call `search_domain_field_terms`/`resolve_domain_field_term` with `field_path="condition_relations.conditions.condition_class.curie"` and the term phrase; do NOT guess ZECO identifiers from memory.
-`condition_chemical_curie`: the ChEBI CURIE for the chemical when a chemical treatment is stated (e.g. `CHEBI:6909`).
+GROUND the CURIE with the lookup tools -- call `search_domain_field_terms`/`resolve_domain_field_term` with `field_path="condition_relations.conditions.condition_class.curie"` and the term phrase; do NOT guess ZECO identifiers from memory.
+`condition_chemical_mention` + `condition_chemical_curie`: the chemical as the paper names it and its ChEBI CURIE (e.g. `CHEBI:6909`) when a chemical treatment is stated
 
 # PE-53 condition meaning is the combination of its fields; stage together
 A condition's MEANING is the COMBINATION of its fields (the class names the variable type; the chemical/quantity fill it). Stage them together so the composite condition validator can check both per-field existence AND cross-field coherence.
@@ -175,8 +175,11 @@ Do not hand-author `curatable_objects[]`, the legacy top-level semantic lists, `
 Cite verified evidence with `evidence_record_ids` only; the source quote and provenance come from a verified `record_evidence` result, not a paraphrase.
 
 # PE-24 full staged-field contract: subject + phenotype-term + condition hints; negated
-the SUBJECT when the paper supports the causative gene/allele/AGM: `subject_identifier`, `subject_label`, `subject_type`, and `subject_taxon`,
-the phenotype-term hints when the paper supports them: `term_label`, and `term_curie` ONLY when the paper directly provides an exact ontology identifier; `data_provider`/`term_taxon_id` for validator context,
+# ALL-1283 every staged value keeps its paper wording; proposals stay apart from validated identity
+`term_mention`: the phenotype term as the paper words it (required; staged even when no ontology term matches),
+Every condition part is staged with its paper wording in `<part>_mention`; its CURIE is a proposal the condition validator checks, and a CURIE without its wording is rejected
+the SUBJECT when the paper supports the causative gene/allele/AGM: `subject_label` (the subject as the paper names it; required whenever any subject detail is staged), plus `subject_identifier` (a proposal), `subject_type`, and `subject_taxon`,
+the phenotype-term proposals when the paper supports them: `term_label`, and `term_curie` ONLY when the paper directly provides an exact ontology identifier; `data_provider`/`term_taxon_id` for validator context,
 `negated=true` only when the paper explicitly reports the phenotype was NOT observed under defined conditions.
 
 # PE-57 multiple phenotypes in one passage -> one observation per assertion
