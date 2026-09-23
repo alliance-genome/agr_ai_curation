@@ -196,15 +196,20 @@ class PackagedExportSource:
         """An object row's item with the read-time resolution state of its declared values.
 
         Values stored before ALL-1283 read through the legacy rule
-        (``resolvable_values.effective_payload``); nothing is written back.
+        (``resolvable_values.effective_payload``); overruled identities are
+        left out; nothing is written back.
         """
 
-        from src.lib.domain_packs.resolvable_values import effective_payload
+        from src.lib.domain_packs.resolvable_values import effective_payload, without_overruled
 
         specs = self.resolvable_fields.get(str(item.get("object_type") or ""))
         payload = item.get("payload")
-        if not specs or not isinstance(payload, dict):
+        if not isinstance(payload, dict):
             return item
+        # An identity a validator overruled is never exported.
+        payload = without_overruled(payload)
+        if not specs:
+            return {**item, "payload": payload}
         metadata = item.get("metadata")
         return {
             **item,

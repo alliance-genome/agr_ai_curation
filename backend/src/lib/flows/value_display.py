@@ -56,6 +56,7 @@ from src.lib.domain_packs.resolvable_values import (
     holds_resolution,
     is_resolved,
     resolvable_spec_from_display,
+    without_overruled,
 )
 from src.schemas.domain_envelope import parse_field_path
 
@@ -312,7 +313,9 @@ def _resolvable_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None) -
     if label or identifier:
         return _labeled(label, identifier, False)
     # Undeclared identity keys: show the validated content, never the paper wording.
-    identity = {key: item for key, item in value.items() if key not in CONTRACT_KEYS}
+    identity = {
+        key: item for key, item in without_overruled(value).items() if key not in CONTRACT_KEYS
+    }
     return _pairs_text(identity, frozenset(), False)
 
 

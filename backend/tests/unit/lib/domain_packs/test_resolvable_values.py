@@ -205,7 +205,7 @@ def test_mark_writes_validator_words_and_never_touches_identity_or_mention():
         mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="x")
     mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="No longer matches.", identity_keys=TERM_KEYS)
     assert value == {"mention": "skin", "curie": None, "name": None,
-                     "proposed_curie": "ONT:1", "proposed_name": "epidermis",
+                     "overruled_curie": "ONT:1", "overruled_name": "epidermis",
                      "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_FOUND,
                      "validator_explanation": "No longer matches.", "validator_curator_message": None}
     check_resolvable_value(value, identity_keys=TERM_KEYS)
@@ -1088,7 +1088,8 @@ def test_a_validator_overrules_a_builder_resolved_value():
 
     metadata = _metadata(mirror=True)
     builder_resolved = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"},
-                                      explanation="Matched by the builder's lookup.")
+                                      explanation="Matched by the builder's lookup.",
+                                      proposed_curie="ONT:9")  # the extractor's own proposal
     envelope = _envelope({"site": dict(builder_resolved), "copy": dict(builder_resolved)})
     item = _item(metadata, envelope, status="unresolved", outcome="not_found")
 
@@ -1099,9 +1100,49 @@ def test_a_validator_overrules_a_builder_resolved_value():
         value = payload[key]
         assert (value["resolution_state"], value["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_FOUND)
         assert (value["curie"], value["name"]) == (None, None)
-        assert (value["proposed_curie"], value["proposed_name"]) == ("ONT:1", "epidermis")
+        assert (value["overruled_curie"], value["overruled_name"]) == ("ONT:1", "epidermis")
+        # The extractor's proposal (a validator input) is never touched.
+        assert value["proposed_curie"] == "ONT:9"
         assert value["validator_explanation"] == "Fixture validator decision."
         assert value["mention"] == "skin"
         check_resolvable_value(value, identity_keys=TERM_KEYS)
     assert effective_value(payload["site"], ResolvableSpec(id_key="curie", label_key="name"),
                            covered_by_validator=True) is payload["site"]
+
+
+
+def test_overruled_identities_are_informational_only():
+    from types import SimpleNamespace
+
+    from src.lib.domain_packs.resolvable_values import overruled_key, without_overruled
+    from src.lib.flows.export_fields import PackagedExportSource
+    from src.lib.flows.value_display import display_text
+
+    assert overruled_key("curie") == "overruled_curie"
+    value = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"})
+    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="No.", identity_keys=TERM_KEYS)
+    assert value["overruled_curie"] == "ONT:1"
+
+    # Never the value, never exported.
+    assert display_text(value, _TERM_DISPLAY) == "UNRESOLVED"
+    assert "overruled_curie" not in without_overruled({"site": value})["site"]
+    item = PackagedExportSource(SimpleNamespace(metadata=_expression_metadata())).effective_item(
+        {"object_type": "Expression", "payload": {"subject": value, "overruled_note": "x"}}
+    )
+    assert "overruled_curie" not in item["payload"]["subject"]
+    assert "overruled_note" not in item["payload"]
+
+    # Never a validator input, even when a selector reads the whole value.
+    metadata = _metadata(input_path="site")
+    envelope = _envelope({"site": value})
+    registry = DomainPackValidationRegistry.from_domain_pack(LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    ))
+    match = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])[0]
+    request = build_domain_validation_request(match).request
+    assert "overruled_curie" not in request.selected_inputs["mention"]
+
+    # A fresh resolution replaces the overruled identity.
+    mark_resolved(value, {"curie": "ONT:2", "name": "skin"}, explanation="Matched.")
+    assert not any(key.startswith("overruled_") for key in value)
