@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+from src.lib.domain_packs.not_validatable import NOT_VALIDATABLE_DETAIL_KEY
 from src.lib.domain_packs.resolvable_values import ResolvableSpec, effective_value
 from src.schemas.domain_envelope import (
     DomainEnvelope,
@@ -122,7 +123,10 @@ class GOReviewRowMaterializer(DomainPackMetadataReviewRowMaterializer):
 
 
 def validate_go_envelope(envelope: DomainEnvelope) -> tuple[ValidationFinding, ...]:
-    """One curator-facing finding per GO record stored in the previous format."""
+    """One curator-facing finding per GO record stored in the previous format.
+
+    The finding marks the record not validatable, so it is the record's only finding.
+    """
 
     if envelope.domain_pack_id != GO_DOMAIN_PACK_ID:
         return ()
@@ -133,7 +137,8 @@ def validate_go_envelope(envelope: DomainEnvelope) -> tuple[ValidationFinding, .
             code=PREVIOUS_FORMAT_FINDING_CODE,
             message=PREVIOUS_FORMAT_MESSAGE,
             object_ref=obj.to_object_ref(),
-            details={"previous_format": True},
+            # Structural checks and validator dispatch skip the record, so this is its one finding.
+            details={"previous_format": True, NOT_VALIDATABLE_DETAIL_KEY: True},
         )
         for obj in envelope.extracted_objects
         if obj.object_type == GO_OBJECT_TYPE and is_previous_format(obj.payload)

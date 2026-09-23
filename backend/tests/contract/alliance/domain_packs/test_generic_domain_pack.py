@@ -274,19 +274,21 @@ def test_proxy_field_definition_strips_unproxied_field_validator_metadata():
         },
     )
 
-    proxy_field = _proxy_field_definition(field_definition, source_pack=_source_pack(), proxied_enums={})
+    proxy_field = _proxy_field_definition(
+        field_definition, source_pack=_source_pack(), proxied_enums={}, proxied_models={},
+    )
 
     assert "validator_bindings" not in proxy_field.metadata
     assert proxy_field.metadata["display"] == {"label": "symbol"}
 
 
-def _source_pack(enum_definitions=()):
+def _source_pack(enum_definitions=(), model_definitions=()):
     from src.lib.domain_packs.registry import LoadedDomainPack
     from src.schemas.domain_pack_metadata import DomainPackMetadata
 
     metadata = DomainPackMetadata(
         pack_id="fixture.source", display_name="Source", version="0.1.0", metadata_api_version="1.0.0",
-        enum_definitions=list(enum_definitions),
+        enum_definitions=list(enum_definitions), model_definitions=list(model_definitions),
     )
     return LoadedDomainPack(
         pack_id="fixture.source", display_name="Source", version="0.1.0",
@@ -311,11 +313,11 @@ def test_proxy_keeps_resolvable_vocabulary_enums_and_flattens_other_enums():
     outcome = _proxy_field_definition(
         DomainPackFieldDefinition(field_path="term.lookup_outcome", field_type=DomainPackFieldType.ENUM,
                                   enum_ref="LookupOutcome"),
-        source_pack=source_pack, proxied_enums=proxied,
+        source_pack=source_pack, proxied_enums=proxied, proxied_models={},
     )
     color = _proxy_field_definition(
         DomainPackFieldDefinition(field_path="color", field_type=DomainPackFieldType.ENUM, enum_ref="Color"),
-        source_pack=source_pack, proxied_enums=proxied,
+        source_pack=source_pack, proxied_enums=proxied, proxied_models={},
     )
 
     assert outcome.field_type is DomainPackFieldType.ENUM
@@ -1311,3 +1313,75 @@ def test_generic_required_fields_are_checked_when_staged(active_generic_builder_
         payload=staged["payload"],
     )
     assert gene.status == "ok", gene
+
+
+def test_proxy_keeps_a_resolvable_object_root_and_nested_resolvable_models():
+    """ALL-1283: the generic view reads the same resolvable values as the source pack."""
+
+    from types import SimpleNamespace
+
+    from agr_ai_curation_alliance.domain_packs.generic.catalog import _proxy_object_definition
+    from src.lib.domain_packs.resolvable_values import (
+        LEGACY_UNVERIFIED_SUFFIX,
+        LOOKUP_OUTCOMES,
+        RESOLUTION_STATES,
+        declared_resolvable_fields,
+        unresolved_header_text,
+    )
+    from src.schemas.domain_pack_metadata import (
+        DomainPackEnumDefinition,
+        DomainPackMetadata,
+        DomainPackModelDefinition,
+    )
+
+    resolvable_display = {"label": "symbol", "id": "curie", "mention": "mention"}
+    source_pack = _source_pack(
+        enum_definitions=[
+            DomainPackEnumDefinition(enum_id="ResolutionState", display_name="State",
+                                     values=[{"value": value} for value in RESOLUTION_STATES]),
+            DomainPackEnumDefinition(enum_id="LookupOutcome", display_name="Outcome",
+                                     values=[{"value": value} for value in LOOKUP_OUTCOMES]),
+        ],
+        model_definitions=[
+            DomainPackModelDefinition(model_id="MentionPayload", display_name="Mention",
+                                      metadata={"display": resolvable_display}),
+            DomainPackModelDefinition(model_id="PlainPayload", display_name="Plain",
+                                      metadata={"display": {"label": "symbol"}}),
+        ],
+    )
+    source_object = DomainPackObjectDefinition(
+        object_type="Mention", display_name="Mention", model_ref="MentionPayload",
+        fields=[
+            DomainPackFieldDefinition(field_path="symbol", field_type=DomainPackFieldType.STRING),
+            DomainPackFieldDefinition(field_path="resolution_state", field_type=DomainPackFieldType.ENUM,
+                                      enum_ref="ResolutionState"),
+            DomainPackFieldDefinition(field_path="lookup_outcome", field_type=DomainPackFieldType.ENUM,
+                                      enum_ref="LookupOutcome"),
+            DomainPackFieldDefinition(field_path="partner", field_type=DomainPackFieldType.OBJECT,
+                                      model_ref="MentionPayload"),
+            DomainPackFieldDefinition(field_path="plain", field_type=DomainPackFieldType.OBJECT,
+                                      model_ref="PlainPayload"),
+        ],
+    )
+    entry = SimpleNamespace(class_key="fixture:mention", source_domain_pack_id="fixture.source",
+                            source_object_type="Mention", display_name="Mention",
+                            generic_object_type="generic_proxy__fixture_source__Mention")
+    enums: dict = {}
+    models: dict = {}
+    proxy = _proxy_object_definition(source_object, entry=entry, source_pack=source_pack,
+                                     proxied_enums=enums, proxied_models=models)
+
+    assert proxy.model_ref in models
+    fields = {field.field_path: field for field in proxy.fields}
+    assert fields["partner"].model_ref == proxy.model_ref
+    assert fields["plain"].model_ref is None
+    generic = DomainPackMetadata(
+        pack_id="generic", display_name="Generic", version="0.1.0", metadata_api_version="1.0.0",
+        enum_definitions=list(enums.values()), model_definitions=list(models.values()),
+        object_definitions=[proxy],
+    )
+    assert set(declared_resolvable_fields(generic, proxy.object_type)) == {"", "partner"}
+    assert unresolved_header_text(
+        {"symbol": "unc-54"}, "symbol",
+        resolvable_fields=declared_resolvable_fields(generic, proxy.object_type),
+    ) == f"unc-54 {LEGACY_UNVERIFIED_SUFFIX}"

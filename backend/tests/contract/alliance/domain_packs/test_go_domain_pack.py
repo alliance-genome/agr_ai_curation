@@ -435,3 +435,36 @@ def test_previous_format_record_gets_one_clear_revalidation_finding():
     assert finding.message == "Recorded in the previous GO format; re-run extraction to validate."
     assert finding.severity.value == "blocker"
     assert validate_go_envelope(envelope) == ()
+
+
+def test_previous_format_record_gets_exactly_the_one_clear_finding_on_revalidation():
+    """ALL-1302 review #2 with core (g): no selector or missing-field findings beside it."""
+
+    from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+    from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
+
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    legacy_object = envelope.extracted_objects[0].model_copy(update={"payload": _legacy_go_payload()})
+    legacy_envelope = envelope.model_copy(
+        update={"extracted_objects": [legacy_object], "validation_findings": []}
+    )
+
+    # The workspace hook order: package validator, structural checks, binding dispatch.
+    flagged, package_findings = append_validation_findings_to_envelope(
+        legacy_envelope, validate_go_envelope(legacy_envelope)
+    )
+    structural = run_domain_envelope_structural_checks(flagged, pack)
+    dispatched = dispatch_active_validator_bindings(
+        structural.envelope,
+        pack,
+        runner=lambda *_args, **_kwargs: pytest.fail("A previous-format record was sent to a validator"),
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
+    )
+
+    findings = [*package_findings, *structural.appended_findings, *dispatched.appended_findings]
+    assert [finding.code for finding in findings] == [PREVIOUS_FORMAT_FINDING_CODE]
+    assert findings[0].message == "Recorded in the previous GO format; re-run extraction to validate."
+    assert dispatched.validator_agent_run_count == 0

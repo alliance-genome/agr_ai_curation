@@ -666,7 +666,7 @@ class DomainPackValidatorBindings(DomainPackMetadataBaseModel):
 
 
 _DISPLAY_ROLES = ("label", "id", "state", "mention")
-_DISPLAY_KEYS = frozenset({*_DISPLAY_ROLES, "resolved_states", "compose", "separator"})
+_DISPLAY_KEYS = frozenset({*_DISPLAY_ROLES, "resolved_states", "compose", "separator", "validated"})
 
 
 def _validate_display_spec(display: Any, where: str) -> None:
@@ -693,7 +693,7 @@ def _validate_display_spec(display: Any, where: str) -> None:
     if "separator" in display and not isinstance(display["separator"], str):
         raise ValueError(f"{where}.separator must be a string")
     if "compose" in display:
-        if any(key in display for key in (*_DISPLAY_ROLES, "resolved_states")):
+        if any(key in display for key in (*_DISPLAY_ROLES, "resolved_states", "validated")):
             raise ValueError(f"{where}.compose cannot be combined with label, id or state roles")
         compose = display["compose"]
         if not isinstance(compose, list) or not compose:
@@ -733,6 +733,22 @@ def _validate_display_spec(display: Any, where: str) -> None:
                 raise ValueError(
                     f"{where}.{role}: a resolvable value's mention, label and id are keys of the value itself"
                 )
+    if "validated" in display:
+        validated = display["validated"]
+        if "mention" not in display:
+            raise ValueError(f"{where}.validated is only for a resolvable value (a mention role)")
+        roles = {display.get(role) for role in ("label", "id", "mention")}
+        if (
+            not isinstance(validated, list)
+            or not validated
+            or not all(isinstance(key, str) and key.strip() and "." not in key for key in validated)
+            or len(set(validated)) != len(validated)
+            or roles.intersection(validated)
+        ):
+            raise ValueError(
+                f"{where}.validated must list distinct keys of the value itself, "
+                "other than its label, id and mention"
+            )
     if "state" in display:
         states = display.get("resolved_states")
         if not isinstance(states, list) or not states or not all(
@@ -1051,6 +1067,25 @@ def _resolvable_vocabulary_errors(metadata: "DomainPackMetadata") -> list[str]:
     return errors
 
 
+def _resolvable_validated_key_errors(metadata: "DomainPackMetadata") -> list[str]:
+    """Each ``validated`` key of a declared resolvable value is a declared leaf of it."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    errors: list[str] = []
+    for object_definition in metadata.object_definitions:
+        declared_paths = {field.field_path for field in object_definition.fields}
+        for field_path, spec in declared_resolvable_fields(metadata, object_definition.object_type).items():
+            for key in spec.validated_keys:
+                leaf = f"{field_path}.{key}" if field_path else key
+                if leaf not in declared_paths:
+                    errors.append(
+                        f"object_definitions.{object_definition.object_type}: validated key "
+                        f"'{key}' of '{field_path or '<object root>'}' is not a declared field ({leaf})"
+                    )
+    return errors
+
+
 class DomainPackMetadata(DomainPackMetadataBaseModel):
     """Top-level metadata contract for a provider-neutral domain pack."""
 
@@ -1141,6 +1176,7 @@ class DomainPackMetadata(DomainPackMetadataBaseModel):
                     )
 
         errors.extend(_resolvable_vocabulary_errors(self))
+        errors.extend(_resolvable_validated_key_errors(self))
 
         for fixture_pack in self.fixture_packs:
             for object_type in fixture_pack.object_types:
