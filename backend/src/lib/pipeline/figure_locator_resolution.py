@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from src.lib.config.env import require_env
 from src.lib.document_sources.figure_metadata import (
@@ -32,7 +32,7 @@ from src.models.chunk import (
 if TYPE_CHECKING:
     from src.lib.openai_agents.config import ReasoningEffort
 
-FIGURE_LOCATOR_PROMPT_VERSION = "figure-locator-v1"
+FIGURE_LOCATOR_PROMPT_VERSION = "figure-locator-v2"
 
 # Candidate selection only. This pattern must never be used to derive semantics.
 _LOCATOR_CANDIDATE_PATTERN = re.compile(
@@ -58,24 +58,21 @@ FigureLocatorCandidate = tuple[DocumentChunk, str]
 
 
 class FigureLocatorMentionOutput(BaseModel):
-    """One semantic locator expression returned verbatim by the classifier."""
+    """One semantic locator expression returned verbatim by the classifier.
+
+    The canonical reference is derived by the application from kind, number
+    and panels; the classifier never returns it.
+    """
 
     text: str = Field(..., min_length=1)
     cardinality: Literal["single", "multiple", "uncertain"]
     kind: Literal["figure", "table", "unknown"]
     number: str | None = None
     panels: list[str] = Field(default_factory=list)
-    canonical_reference: str | None = None
-
-    @model_validator(mode="after")
-    def validate_canonical_reference(self) -> "FigureLocatorMentionOutput":
-        if self.cardinality != "single" and self.canonical_reference is not None:
-            raise ValueError("only single locators may have canonical_reference")
-        return self
 
 
 class FigureLocatorCandidateOutput(BaseModel):
-    """Classifier result for one deterministic chunk candidate ID."""
+    """Classifier result for one short batch candidate ID (``c0``..``cN``)."""
 
     candidate_id: str = Field(..., min_length=1)
     mentions: list[FigureLocatorMentionOutput] = Field(default_factory=list)
@@ -147,8 +144,8 @@ async def resolve_figure_locators(
         )
         outputs_by_id = _validated_outputs_by_id(output, batch)
 
-        for chunk, _candidate_text in batch:
-            result = outputs_by_id[chunk.id]
+        for position, (chunk, _candidate_text) in enumerate(batch):
+            result = outputs_by_id[_short_candidate_id(position)]
             annotations = _map_mentions_to_chunk(
                 chunk.content,
                 result.mentions,
@@ -251,7 +248,8 @@ async def _call_figure_locator_classifier(
                     agent.instructions = _CLASSIFIER_INSTRUCTIONS + (
                         "\nCorrection required: the previous response failed exact "
                         "candidate_id coverage. Return every candidate_id in the "
-                        "input exactly once, unchanged, with no additional IDs. "
+                        "input (c0, c1, ...) exactly once, unchanged, with no "
+                        "additional IDs. "
                         "Include candidates with no mentions using an empty mentions "
                         "list. Check the complete ID set before returning."
                     )
@@ -400,10 +398,16 @@ def _provider_semantic_ranges(
     ]
 
 
+def _short_candidate_id(position: int) -> str:
+    """Model-facing ID for the candidate at ``position`` in one batch."""
+
+    return f"c{position}"
+
+
 def _classifier_prompt(candidates: Sequence[FigureLocatorCandidate]) -> str:
     payload = [
-        {"candidate_id": chunk.id, "text": candidate_text}
-        for chunk, candidate_text in candidates
+        {"candidate_id": _short_candidate_id(position), "text": candidate_text}
+        for position, (_chunk, candidate_text) in enumerate(candidates)
     ]
     return _CLASSIFIER_PROMPT_PREFIX + json.dumps(payload, ensure_ascii=False)
 
@@ -438,11 +442,13 @@ def _validated_outputs_by_id(
     output: FigureLocatorBatchOutput,
     candidates: Sequence[FigureLocatorCandidate],
 ) -> dict[str, FigureLocatorCandidateOutput]:
+    """Return results keyed by short candidate ID after exact coverage checks."""
+
     outputs_by_id: dict[str, list[FigureLocatorCandidateOutput]] = {}
     for result in output.candidates:
         outputs_by_id.setdefault(result.candidate_id, []).append(result)
 
-    expected_ids = {chunk.id for chunk, _candidate_text in candidates}
+    expected_ids = {_short_candidate_id(position) for position in range(len(candidates))}
     if (
         len(output.candidates) != len(candidates)
         or set(outputs_by_id) != expected_ids
@@ -651,9 +657,10 @@ def _clean_optional(value: object) -> str | None:
 
 _CLASSIFIER_INSTRUCTIONS = """You resolve figure and table locator expressions in source text.
 
-The input is a JSON array of candidates. Analyze each candidate once and return
-exactly one result with the same candidate_id. Candidate selection has already
-happened; do not assume every candidate contains a semantic locator.
+The input is a JSON array of candidates with short IDs (c0, c1, ...). Analyze
+each candidate once and return exactly one result with the same candidate_id.
+Candidate selection has already happened; do not assume every candidate
+contains a semantic locator.
 
 For every locator expression:
 - Copy `text` verbatim from the candidate. Include the complete expression,
@@ -665,9 +672,8 @@ For every locator expression:
   safely. Deictic expressions such as "the upper panel" or "the left panel"
   are uncertain locators, not absent locators.
 - Set kind to figure, table, or unknown; include number and panels only when
-  explicit in the source.
-- Emit canonical_reference only for a safe singleton, using `Figure <id>` or
-  `Table <id>`. Never emit it for multiple or uncertain expressions.
+  explicit in the source. The application builds the normalized reference from
+  these fields.
 - Group a semantically linked multi-part expression into one mention. Keep
   unrelated locator expressions as separate mentions so their exact source
   spans remain distinguishable.

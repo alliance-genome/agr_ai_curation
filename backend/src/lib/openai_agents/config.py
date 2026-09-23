@@ -3408,3 +3408,19 @@ def get_flow_output_split_list_max_columns() -> int:
     A curator ``max_columns`` on the column can only lower it. Default 20.
     """
     return max(1, _get_env_int_with_fallback("FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS", 20))
+
+
+# =============================================================================
+# ALL-1286: Short-reference classifier answers
+# =============================================================================
+
+def get_hierarchy_resolution_contract_retries() -> int:
+    """Correction attempts for the hierarchy section-number contract (HIERARCHY_RESOLUTION_CONTRACT_RETRIES).
+
+    The hierarchy classifier answers with input section numbers instead of
+    echoed titles. A missing, duplicate, out-of-range, or non-top-level parent
+    number triggers a correction retry; after the budget is spent the result is
+    rejected. Provider failures are not retried. Default 2, matching
+    FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES.
+    """
+    return max(0, _get_env_int_with_fallback("HIERARCHY_RESOLUTION_CONTRACT_RETRIES", 2))

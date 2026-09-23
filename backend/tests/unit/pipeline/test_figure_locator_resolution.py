@@ -109,7 +109,7 @@ def _batch_result(ids):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("invalid_ids", [[], ["chunk-0", "chunk-0"], ["unexpected-chunk"]])
+@pytest.mark.parametrize("invalid_ids", [[], ["c0", "c0"], ["unexpected-chunk"]])
 async def test_contract_correction_recovers_only_invalid_batch(contract_runner, invalid_ids, monkeypatch):
     runner, telemetry = contract_runner
     first = _chunk("chunk-0", "Figure 1 shows signal.")
@@ -120,7 +120,7 @@ async def test_contract_correction_recovers_only_invalid_batch(contract_runner, 
 
     async def run(agent, prompt, **kwargs):
         instructions.append(agent.instructions)
-        return [_batch_result(invalid_ids), _batch_result([first.id]), _batch_result([second.id])][len(instructions) - 1]
+        return [_batch_result(invalid_ids), _batch_result(["c0"]), _batch_result(["c0"])][len(instructions) - 1]
 
     runner.side_effect = run
     assert await locator.resolve_figure_locators([first, second]) == [first, second]
@@ -138,7 +138,7 @@ async def test_contract_correction_recovers_only_invalid_batch(contract_runner, 
 async def test_default_contract_budget_recovers_on_third_attempt(contract_runner, monkeypatch):
     runner, _ = contract_runner
     monkeypatch.delenv("FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES", raising=False)
-    runner.side_effect = [_batch_result([]), _batch_result([]), _batch_result(["chunk-0"])]
+    runner.side_effect = [_batch_result([]), _batch_result([]), _batch_result(["c0"])]
     chunk = _chunk("chunk-0", "Figure 1 shows signal.")
     await locator.resolve_figure_locators([chunk])
     assert runner.await_count == 3
@@ -207,9 +207,17 @@ async def test_semantic_adversarial_corpus(case, monkeypatch) -> None:
         return_value=locator.FigureLocatorBatchOutput(
             candidates=[
                 locator.FigureLocatorCandidateOutput(
-                    candidate_id=chunk.id,
+                    candidate_id="c0",
                     mentions=[
-                        locator.FigureLocatorMentionOutput.model_validate(mention)
+                        # canonical_reference in the corpus is the stored
+                        # annotation value; the application derives it.
+                        locator.FigureLocatorMentionOutput.model_validate(
+                            {
+                                key: value
+                                for key, value in mention.items()
+                                if key != "canonical_reference"
+                            }
+                        )
                         for mention in case["classifier_mentions"]
                     ],
                 )
@@ -268,7 +276,7 @@ async def test_selected_chunks_are_classified_once_as_a_batch(monkeypatch) -> No
         return_value=locator.FigureLocatorBatchOutput(
             candidates=[
                 locator.FigureLocatorCandidateOutput(
-                    candidate_id="chunk-0",
+                    candidate_id="c0",
                     mentions=[
                         locator.FigureLocatorMentionOutput(
                             text="Fig. 1A",
@@ -276,19 +284,17 @@ async def test_selected_chunks_are_classified_once_as_a_batch(monkeypatch) -> No
                             kind="figure",
                             number="1",
                             panels=["A"],
-                            canonical_reference="Figure 1A",
                         )
                     ],
                 ),
                 locator.FigureLocatorCandidateOutput(
-                    candidate_id="chunk-2",
+                    candidate_id="c1",
                     mentions=[
                         locator.FigureLocatorMentionOutput(
                             text="Table 2",
                             cardinality="single",
                             kind="table",
                             number="2",
-                            canonical_reference="Table 2",
                         )
                     ],
                 ),
@@ -333,10 +339,10 @@ async def test_selected_chunks_split_at_configured_prompt_char_budget(
         return locator.FigureLocatorBatchOutput(
             candidates=[
                 locator.FigureLocatorCandidateOutput(
-                    candidate_id=chunk.id,
+                    candidate_id=f"c{position}",
                     mentions=[],
                 )
-                for chunk, _text in candidates
+                for position in range(len(candidates))
             ]
         )
 
@@ -379,7 +385,7 @@ async def test_classifier_failure_propagates(monkeypatch) -> None:
 
 @pytest.mark.parametrize(
     "candidate_ids",
-    [[], ["chunk-0", "chunk-0"], ["unexpected-chunk"]],
+    [[], ["c0", "c0"], ["unexpected-chunk"]],
     ids=["missing", "duplicate", "unexpected"],
 )
 @pytest.mark.asyncio
@@ -419,7 +425,7 @@ async def test_multi_panel_shorthand_is_stored_without_singleton(monkeypatch) ->
             return_value=locator.FigureLocatorBatchOutput(
                 candidates=[
                     locator.FigureLocatorCandidateOutput(
-                        candidate_id=chunk.id,
+                        candidate_id="c0",
                         mentions=[
                             locator.FigureLocatorMentionOutput(
                                 text="Fig. 1A,B",
@@ -452,7 +458,7 @@ async def test_singleton_canonical_is_normalized_from_structured_panel(monkeypat
             return_value=locator.FigureLocatorBatchOutput(
                 candidates=[
                     locator.FigureLocatorCandidateOutput(
-                        candidate_id=chunk.id,
+                        candidate_id="c0",
                         mentions=[
                             locator.FigureLocatorMentionOutput(
                                 text="Fig. 1A",
@@ -460,7 +466,6 @@ async def test_singleton_canonical_is_normalized_from_structured_panel(monkeypat
                                 kind="figure",
                                 number="1",
                                 panels=["A"],
-                                canonical_reference="Figure 1",
                             )
                         ],
                     )
@@ -487,7 +492,7 @@ async def test_panel_only_singleton_without_figure_number_is_downgraded_to_uncer
             return_value=locator.FigureLocatorBatchOutput(
                 candidates=[
                     locator.FigureLocatorCandidateOutput(
-                        candidate_id=chunk.id,
+                        candidate_id="c0",
                         mentions=[
                             locator.FigureLocatorMentionOutput(
                                 text="(D)",
@@ -495,7 +500,6 @@ async def test_panel_only_singleton_without_figure_number_is_downgraded_to_uncer
                                 kind="figure",
                                 number=None,
                                 panels=["D"],
-                                canonical_reference=None,
                             )
                         ],
                     )
@@ -521,14 +525,13 @@ async def test_malformed_singleton_number_is_downgraded_to_uncertain(monkeypatch
             return_value=locator.FigureLocatorBatchOutput(
                 candidates=[
                     locator.FigureLocatorCandidateOutput(
-                        candidate_id=chunk.id,
+                        candidate_id="c0",
                         mentions=[
                             locator.FigureLocatorMentionOutput(
                                 text="Figures 2-4",
                                 cardinality="single",
                                 kind="figure",
                                 number="2-4",
-                                canonical_reference="Figure 2-4",
                             )
                         ],
                     )
@@ -566,14 +569,13 @@ async def test_invalid_verbatim_grounding_marks_candidate_uncertain(
             return_value=locator.FigureLocatorBatchOutput(
                 candidates=[
                     locator.FigureLocatorCandidateOutput(
-                        candidate_id=chunk.id,
+                        candidate_id="c0",
                         mentions=[
                             locator.FigureLocatorMentionOutput(
                                 text=mention_text,
                                 cardinality="single",
                                 kind="figure",
                                 number="1",
-                                canonical_reference="Figure 1",
                             )
                         ],
                     )
@@ -605,7 +607,7 @@ async def test_provider_caption_without_anchor_is_selected_and_structured(monkey
         return_value=locator.FigureLocatorBatchOutput(
             candidates=[
                 locator.FigureLocatorCandidateOutput(
-                    candidate_id=chunk.id,
+                    candidate_id="c0",
                     mentions=[],
                 )
             ]
@@ -663,14 +665,13 @@ async def test_provider_mention_offsets_ignore_repeated_wrapper_label(
             return_value=locator.FigureLocatorBatchOutput(
                 candidates=[
                     locator.FigureLocatorCandidateOutput(
-                        candidate_id=chunk.id,
+                        candidate_id="c0",
                         mentions=[
                             locator.FigureLocatorMentionOutput(
                                 text="Figure 1",
                                 cardinality="single",
                                 kind="figure",
                                 number="1",
-                                canonical_reference="Figure 1",
                             )
                         ],
                     )
@@ -713,7 +714,7 @@ async def test_provider_label_number_conflict_is_explicit(monkeypatch) -> None:
             return_value=locator.FigureLocatorBatchOutput(
                 candidates=[
                     locator.FigureLocatorCandidateOutput(
-                        candidate_id=chunk.id,
+                        candidate_id="c0",
                         mentions=[],
                     )
                 ]
@@ -755,7 +756,7 @@ async def test_unparsable_populated_provider_label_cannot_promote_number(
             return_value=locator.FigureLocatorBatchOutput(
                 candidates=[
                     locator.FigureLocatorCandidateOutput(
-                        candidate_id=chunk.id,
+                        candidate_id="c0",
                         mentions=[],
                     )
                 ]
@@ -797,7 +798,7 @@ async def test_common_supplementary_continuation_label_is_structured(
             return_value=locator.FigureLocatorBatchOutput(
                 candidates=[
                     locator.FigureLocatorCandidateOutput(
-                        candidate_id=chunk.id,
+                        candidate_id="c0",
                         mentions=[],
                     )
                 ]
@@ -871,10 +872,10 @@ async def test_provider_reference_ranges_exclude_cross_title_overlap(
         return locator.FigureLocatorBatchOutput(
             candidates=[
                 locator.FigureLocatorCandidateOutput(
-                    candidate_id=chunk.id,
+                    candidate_id=f"c{position}",
                     mentions=[],
                 )
-                for chunk, _candidate_text in candidates
+                for position in range(len(candidates))
             ]
         )
 
@@ -985,7 +986,7 @@ async def test_terra_xhigh_reasoning_is_accepted_from_catalog(monkeypatch) -> No
         return_value=locator.FigureLocatorBatchOutput(
             candidates=[
                 locator.FigureLocatorCandidateOutput(
-                    candidate_id="chunk-0",
+                    candidate_id="c0",
                     mentions=[],
                 )
             ]
@@ -1068,7 +1069,7 @@ async def test_catalog_compatible_model_uses_its_provider_without_openai_key(
     output = locator.FigureLocatorBatchOutput(
         candidates=[
             locator.FigureLocatorCandidateOutput(
-                candidate_id="chunk-0",
+                candidate_id="c0",
                 mentions=[],
             )
         ]
@@ -1103,3 +1104,119 @@ async def test_catalog_compatible_model_uses_its_provider_without_openai_key(
     assert agent_factory.call_args is not None
     assert agent_factory.call_args.kwargs["model"] is model_object
     runner.assert_awaited_once()
+
+
+_UUID_A = "0f5c1a52-8a4e-4c1e-9d7a-1b2c3d4e5f60"
+_UUID_B = "7e9d2b31-3c5f-4a2b-8e1d-6f5e4d3c2b10"
+
+
+def _uuid_chunk(chunk_id: str, content: str, index: int) -> DocumentChunk:
+    chunk = _chunk(f"chunk-{index}", content)
+    chunk.id = chunk_id
+    return chunk
+
+
+def test_classifier_prompt_sends_short_candidate_ids_not_chunk_uuids() -> None:
+    first = _uuid_chunk(_UUID_A, "Fig. 1A shows signal.", 0)
+    second = _uuid_chunk(_UUID_B, "Table 2 reports values.", 1)
+
+    prompt = locator._classifier_prompt(
+        [(first, first.content), (second, second.content)]
+    )
+
+    payload = json.loads(prompt[len(locator._CLASSIFIER_PROMPT_PREFIX):])
+    assert payload == [
+        {"candidate_id": "c0", "text": first.content},
+        {"candidate_id": "c1", "text": second.content},
+    ]
+    assert _UUID_A not in prompt
+    assert _UUID_B not in prompt
+
+
+def test_output_schema_has_no_canonical_reference_or_chunk_uuid() -> None:
+    schema = json.dumps(locator.FigureLocatorBatchOutput.model_json_schema())
+
+    assert "canonical_reference" not in schema
+    assert "canonical_reference" not in locator._CLASSIFIER_INSTRUCTIONS
+    mention_fields = set(locator.FigureLocatorMentionOutput.model_fields)
+    assert mention_fields == {"text", "cardinality", "kind", "number", "panels"}
+
+
+@pytest.mark.asyncio
+async def test_short_candidate_ids_map_back_to_chunks_by_batch_order(
+    contract_runner,
+) -> None:
+    runner, _telemetry = contract_runner
+    first = _uuid_chunk(_UUID_A, "Fig. 1A shows signal.", 0)
+    second = _uuid_chunk(_UUID_B, "Table 2 reports values.", 1)
+    # Results may arrive in any order; each short ID resolves by input position.
+    runner.return_value = SimpleNamespace(
+        final_output=locator.FigureLocatorBatchOutput(
+            candidates=[
+                locator.FigureLocatorCandidateOutput(
+                    candidate_id="c1",
+                    mentions=[
+                        locator.FigureLocatorMentionOutput(
+                            text="Table 2",
+                            cardinality="single",
+                            kind="table",
+                            number="2",
+                        )
+                    ],
+                ),
+                locator.FigureLocatorCandidateOutput(
+                    candidate_id="c0",
+                    mentions=[
+                        locator.FigureLocatorMentionOutput(
+                            text="Fig. 1A",
+                            cardinality="single",
+                            kind="figure",
+                            number="1",
+                            panels=["A"],
+                        )
+                    ],
+                ),
+            ]
+        )
+    )
+
+    await locator.resolve_figure_locators([first, second])
+
+    runner.assert_awaited_once()
+    first_annotation = _resolution_for(first).annotations[0]
+    second_annotation = _resolution_for(second).annotations[0]
+    assert first_annotation.text == "Fig. 1A"
+    assert first_annotation.canonical_reference == "Figure 1A"
+    assert second_annotation.text == "Table 2"
+    assert second_annotation.canonical_reference == "Table 2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "returned_ids",
+    [["c0"], ["c0", "c0", "c1"], ["c0", "c2"], [_UUID_A, _UUID_B], ["c00", "c1"]],
+    ids=["missing", "duplicate", "out_of_range", "echoed_uuid", "non_canonical"],
+)
+async def test_invalid_short_candidate_ids_fail_after_contract_retries(
+    contract_runner,
+    monkeypatch,
+    returned_ids,
+) -> None:
+    runner, telemetry = contract_runner
+    monkeypatch.setenv("FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES", "1")
+    first = _uuid_chunk(_UUID_A, "Fig. 1A shows signal.", 0)
+    second = _uuid_chunk(_UUID_B, "Table 2 reports values.", 1)
+    runner.return_value = _batch_result(returned_ids)
+
+    with pytest.raises(ValueError, match="exact candidate_id batch contract"):
+        await locator.resolve_figure_locators([first, second])
+
+    assert runner.await_count == 2
+    assert first.metadata.figure_locator_resolution is None
+    assert second.metadata.figure_locator_resolution is None
+    statuses = [
+        call.args[2]
+        for call in telemetry.call_args_list
+        if call.args[1] == "ai_curation.validation.status"
+    ]
+    assert statuses == ["retrying", "error"]

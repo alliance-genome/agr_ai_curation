@@ -193,6 +193,7 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
             captured["agent_kwargs"] = kwargs
             self.name = kwargs.get("name")
             self.model = kwargs.get("model")
+            self.instructions = kwargs.get("instructions")
 
     class FakeRunner:
         @staticmethod
@@ -245,14 +246,9 @@ class _FakeContextManager:
 async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch):
     output = hierarchy.HierarchyOutput(
         sections=[
-            hierarchy.SectionItem(
-                header="Intro",
-                parent_section="Introduction",
-                subsection=None,
-                is_top_level=True,
-            )
+            hierarchy.SectionClassification(idx=0, is_top_level=True),
         ],
-        abstract_section_title="Intro",
+        abstract_idx=0,
     )
     captured, fake_reasoning_cls = _install_fake_agent_modules(monkeypatch, final_output=output)
     sentry_calls = []
@@ -349,3 +345,247 @@ async def test_call_llm_for_hierarchy_handles_runtime_exception(monkeypatch):
             "phase": "hierarchy_resolution",
         },
     ) in sentry_calls
+
+
+# Titles from one paper, in document order, as the application sends them.
+_PAPER_SECTIONS = [
+    {"title": "Loss of wg disrupts wing growth", "preview": "Jane Doe, John Roe"},
+    {"title": "Abstract", "preview": "Wingless signaling controls growth."},
+    {"title": "Materials and Methods", "preview": ""},
+    {"title": "2.1. Fly strains", "preview": "Flies were raised at 25 C."},
+    {"title": "2.2. Immunostaining", "preview": "Wing discs were fixed."},
+    {"title": "Results", "preview": ""},
+    {"title": "wg is required for growth", "preview": "Clones lacking wg were small."},
+    {"title": "Discussion", "preview": "Our data show that wg is required."},
+]
+
+# The same classification the header-echo contract produced on this paper.
+_EXPECTED_PAPER_ITEMS = [
+    ("Loss of wg disrupts wing growth", "Loss of wg disrupts wing growth", None, True),
+    ("Abstract", "Abstract", None, True),
+    ("Materials and Methods", "Materials and Methods", None, True),
+    ("2.1. Fly strains", "Materials and Methods", "2.1. Fly strains", False),
+    ("2.2. Immunostaining", "Materials and Methods", "2.2. Immunostaining", False),
+    ("Results", "Results", None, True),
+    ("wg is required for growth", "Results", "wg is required for growth", False),
+    ("Discussion", "Discussion", None, True),
+]
+
+
+def _paper_output(**overrides):
+    sections = [
+        {"idx": 0, "is_top_level": True, "parent_idx": None},
+        {"idx": 1, "is_top_level": True, "parent_idx": None},
+        {"idx": 2, "is_top_level": True, "parent_idx": None},
+        {"idx": 3, "is_top_level": False, "parent_idx": 2},
+        {"idx": 4, "is_top_level": False, "parent_idx": 2},
+        {"idx": 5, "is_top_level": True, "parent_idx": None},
+        {"idx": 6, "is_top_level": False, "parent_idx": 5},
+        {"idx": 7, "is_top_level": True, "parent_idx": None},
+    ]
+    payload = {"sections": sections, "abstract_idx": 1}
+    payload.update(overrides)
+    return hierarchy.HierarchyOutput.model_validate(payload)
+
+
+def _install_sequenced_runner(monkeypatch, outputs):
+    captured, _ = _install_fake_agent_modules(monkeypatch, final_output=None)
+    calls = []
+
+    async def run(agent, user_prompt, max_turns, **_kwargs):
+        calls.append(
+            {"instructions": agent.instructions, "prompt": user_prompt}
+        )
+        return SimpleNamespace(final_output=outputs[len(calls) - 1])
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.runner.run_agent_with_owned_openai_resources",
+        run,
+    )
+    return captured, calls
+
+
+def _sentry_recorder(monkeypatch):
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        active = False
+
+        def set_data(self, key, value):
+            sentry_calls.append(("data", key, value))
+
+    monkeypatch.setattr(
+        hierarchy,
+        "gen_ai_invoke_agent_span",
+        lambda **kwargs: _FakeContextManager(FakeSentrySpan()),
+    )
+    return sentry_calls
+
+
+@pytest.fixture
+def hierarchy_env(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("HIERARCHY_LLM_REASONING", "low")
+    monkeypatch.setenv("HIERARCHY_RESOLUTION_CONTRACT_RETRIES", "1")
+
+
+def test_hierarchy_output_schema_has_indexes_not_echoed_titles():
+    schema = hierarchy.HierarchyOutput.model_json_schema()
+    item_schema = schema["$defs"][next(iter(schema["$defs"]))]
+
+    assert set(schema["properties"]) == {"sections", "abstract_idx"}
+    assert set(item_schema["properties"]) == {"idx", "is_top_level", "parent_idx"}
+    property_names = set(schema["properties"]) | {
+        name for definition in schema["$defs"].values()
+        for name in definition.get("properties", {})
+    }
+    assert property_names.isdisjoint(
+        {"header", "parent_section", "subsection", "abstract_section_title"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_call_llm_for_hierarchy_numbers_titles_and_maps_indexes_back(
+    monkeypatch, hierarchy_env
+):
+    _captured, calls = _install_sequenced_runner(monkeypatch, [_paper_output()])
+    _sentry_recorder(monkeypatch)
+
+    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+        _PAPER_SECTIONS
+    )
+
+    assert [
+        (item.header, item.parent_section, item.subsection, item.is_top_level)
+        for item in sections
+    ] == _EXPECTED_PAPER_ITEMS
+    assert abstract_title == "Abstract"
+    assert raw["sections_count"] == len(_PAPER_SECTIONS)
+    assert raw["abstract_section_title"] == "Abstract"
+    assert len(calls) == 1
+    assert '[0] "Loss of wg disrupts wing growth"' in calls[0]["prompt"]
+    assert '[7] "Discussion"' in calls[0]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_document_hierarchy_applies_index_output_to_elements(
+    monkeypatch, hierarchy_env
+):
+    _install_sequenced_runner(monkeypatch, [_paper_output()])
+    _sentry_recorder(monkeypatch)
+    elements = [
+        {"metadata": {"section_title": info["title"]}, "text": info["preview"]}
+        for info in _PAPER_SECTIONS
+    ]
+
+    updated, metadata = await hierarchy.resolve_document_hierarchy(elements)
+
+    assert updated[3]["section_title"] == "Materials and Methods > 2.1. Fly strains"
+    assert updated[3]["section_path"] == ["Materials and Methods", "2.1. Fly strains"]
+    assert updated[6]["parent_section"] == "Results"
+    assert updated[6]["subsection"] == "wg is required for growth"
+    assert updated[7]["section_path"] == ["Discussion"]
+    assert metadata is not None
+    assert metadata.abstract_section_title == "Abstract"
+    assert metadata.top_level_sections == [
+        "Loss of wg disrupts wing growth",
+        "Abstract",
+        "Materials and Methods",
+        "Results",
+        "Discussion",
+    ]
+
+
+_INVALID_SECTION_INDEX_OUTPUTS = {
+    "missing": {"sections": [{"idx": 0, "is_top_level": True, "parent_idx": None}]},
+    "duplicate": {
+        "sections": [
+            {"idx": i if i < 7 else 6, "is_top_level": True, "parent_idx": None}
+            for i in range(8)
+        ]
+    },
+    "out_of_range": {
+        "sections": [
+            {"idx": i + 1, "is_top_level": True, "parent_idx": None} for i in range(8)
+        ]
+    },
+    "negative": {
+        "sections": [
+            {"idx": i - 1, "is_top_level": True, "parent_idx": None} for i in range(8)
+        ]
+    },
+    "parent_is_subsection": {
+        "sections": [
+            {"idx": i, "is_top_level": i != 3 and i != 4, "parent_idx": 3 if i == 4 else (2 if i == 3 else None)}
+            for i in range(8)
+        ]
+    },
+    "parent_out_of_range": {
+        "sections": [
+            {"idx": i, "is_top_level": i != 3, "parent_idx": 9 if i == 3 else None}
+            for i in range(8)
+        ]
+    },
+    "subsection_without_parent": {
+        "sections": [
+            {"idx": i, "is_top_level": i != 3, "parent_idx": None} for i in range(8)
+        ]
+    },
+    "top_level_with_parent": {
+        "sections": [
+            {"idx": i, "is_top_level": True, "parent_idx": 0 if i == 1 else None}
+            for i in range(8)
+        ]
+    },
+    "abstract_out_of_range": {"abstract_idx": 8},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", sorted(_INVALID_SECTION_INDEX_OUTPUTS))
+async def test_invalid_section_indexes_fail_explicitly_after_contract_retries(
+    monkeypatch, hierarchy_env, case
+):
+    invalid = _paper_output(**_INVALID_SECTION_INDEX_OUTPUTS[case])
+    _captured, calls = _install_sequenced_runner(monkeypatch, [invalid, invalid])
+    sentry_calls = _sentry_recorder(monkeypatch)
+
+    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+        _PAPER_SECTIONS
+    )
+
+    assert (sections, abstract_title, raw) == ([], None, None)
+    assert len(calls) == 2
+    assert "Correction required" not in calls[0]["instructions"]
+    assert "Correction required" in calls[1]["instructions"]
+    statuses = [
+        call[2] for call in sentry_calls if call[1] == "ai_curation.validation.status"
+    ]
+    assert statuses == ["retrying", "error"]
+    detail = next(
+        call[2] for call in sentry_calls if call[1] == "ai_curation.error.detail"
+    )
+    assert "section index contract" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_section_index_contract_correction_recovers(monkeypatch, hierarchy_env):
+    invalid = _paper_output(**_INVALID_SECTION_INDEX_OUTPUTS["missing"])
+    _captured, calls = _install_sequenced_runner(
+        monkeypatch, [invalid, _paper_output()]
+    )
+    sentry_calls = _sentry_recorder(monkeypatch)
+
+    sections, abstract_title, _raw = await hierarchy._call_llm_for_hierarchy(
+        _PAPER_SECTIONS
+    )
+
+    assert len(sections) == len(_PAPER_SECTIONS)
+    assert abstract_title == "Abstract"
+    assert len(calls) == 2
+    assert calls[0]["prompt"] == calls[1]["prompt"]
+    statuses = [
+        call[2] for call in sentry_calls if call[1] == "ai_curation.validation.status"
+    ]
+    assert statuses == ["retrying", "accepted"]
