@@ -417,40 +417,71 @@ def test_generic_materializer_rejects_new_candidate_without_rationale(rationale)
     ]
 
 
-@pytest.mark.parametrize(
-    "object_type", ["generic_object", "generic_claim", "generic_reagent_candidate"]
-)
-def test_generic_classes_declare_optional_rationale_as_a_summary_field(object_type):
+_GENERIC_DETAILS_FIELDS = {
+    "generic_object": ["source_label", "description", "confidence"],
+    "generic_claim": ["claim_text", "confidence"],
+    "generic_reagent_candidate": ["source", "source_identifier", "count", "reagent_type"],
+}
+
+
+@pytest.mark.parametrize("object_type", sorted(_GENERIC_DETAILS_FIELDS))
+def test_generic_classes_declare_protected_rationale_in_its_own_group(object_type):
     pack = get_generated_generic_domain_pack()
     definition = next(
         obj for obj in pack.metadata.object_definitions if obj.object_type == object_type
     )
-    field = next(field for field in definition.fields if field.field_path == "rationale")
-    assert field.required is False
-    assert field.display_name == "Rationale"
-    assert field.metadata["protected"] is True
-    assert field.metadata["curator_action_note"] == "Written by the extraction agent; not editable."
+    fields = {field.field_path: field for field in definition.fields}
+    rationale = fields["rationale"]
+    assert rationale.required is False
+    assert rationale.display_name == "Rationale"
+    assert rationale.metadata["protected"] is True
+    assert rationale.metadata["curator_action_note"] == "Written by the extraction agent; not editable."
+    assert "hide_when_empty" not in rationale.metadata
     workspace_display = definition.metadata["workspace_display"]
-    # Generic review rows are built from summary_fields (absent values skipped,
-    # ungrouped); workspace groups would replace that with always-present fields.
-    assert "groups" not in workspace_display
-    assert workspace_display["summary_fields"][-1] == "rationale"
+    assert workspace_display["groups"] == [
+        {"id": "details", "label": "Details", "fields": _GENERIC_DETAILS_FIELDS[object_type]},
+        {"id": "rationale", "label": "Rationale", "fields": ["rationale"]},
+    ]
+    # summary_fields (secondary-label fallback, candidate summaries) stay as before.
+    assert workspace_display["summary_fields"] == _GENERIC_DETAILS_FIELDS[object_type]
+    for path in _GENERIC_DETAILS_FIELDS[object_type]:
+        assert fields[path].metadata["hide_when_empty"] is True
 
 
-def _generic_reagent_draft_fields(metadata: Any, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
-    from src.lib.curation_workspace.pipeline import _draft_fields_from_review_row
+@pytest.mark.parametrize("object_type", sorted(_GENERIC_DETAILS_FIELDS))
+def test_generic_rationale_stays_out_of_supervisor_manifest_summaries(object_type):
+    from src.lib.domain_packs.supervisor_manifest import supervisor_manifest_policy_for_object
+
+    # Each generic class declares its own supervisor_manifest, which wins over
+    # workspace_display, so the review-only rationale never reaches supervisor
+    # result summaries or inspect_results.
+    policy = supervisor_manifest_policy_for_object(
+        get_generated_generic_domain_pack().metadata, object_type
+    )
+    assert "rationale" not in policy.field_paths
+
+
+def _generic_pack_metadata() -> Any:
+    from src.lib.domain_packs.loader import load_domain_pack_metadata
+
+    return load_domain_pack_metadata(
+        REPO_ROOT / "packages" / "alliance" / "domain_packs" / "generic" / "domain_pack.yaml"
+    )
+
+
+def _generic_review_row(metadata: Any, object_type: str, payload: Mapping[str, Any]) -> Any:
     from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
     from src.schemas.domain_envelope import CuratableObjectStatus, DomainEnvelopeStatus
 
     envelope = DomainEnvelope(
-        envelope_id="generic-reagent-review",
+        envelope_id="generic-review",
         domain_pack_id=metadata.pack_id,
         domain_pack_version=metadata.version,
         status=DomainEnvelopeStatus.EXTRACTED,
         extracted_objects=[
             CuratableObjectEnvelope(
-                object_type="generic_reagent_candidate",
-                object_id="reagent-1",
+                object_type=object_type,
+                object_id="generic-1",
                 status=CuratableObjectStatus.PENDING,
                 payload=dict(payload),
             )
@@ -459,15 +490,17 @@ def _generic_reagent_draft_fields(metadata: Any, payload: Mapping[str, Any]) -> 
     row, = DomainPackMetadataReviewRowMaterializer(metadata).materialize(
         envelope, envelope_revision=1
     )
-    assert "workspace_fields" not in row.metadata
+    return row
+
+
+def _draft_fields(row: Any) -> list[dict[str, Any]]:
+    from src.lib.curation_workspace.pipeline import _draft_fields_from_review_row
+
     return [
         {
             "field_key": field.field_key,
             "value": field.value,
             "group_key": field.group_key,
-            "group_label": field.group_label,
-            "order": field.order,
-            "required": field.required,
             "read_only": field.read_only,
         }
         for field in _draft_fields_from_review_row(row)
@@ -475,18 +508,31 @@ def _generic_reagent_draft_fields(metadata: Any, payload: Mapping[str, Any]) -> 
 
 
 def _metadata_without_rationale(metadata: Any) -> Any:
-    """The generic pack as it was before rationale was declared."""
+    """The generic pack as it was before rationale and its groups were declared."""
 
     object_definitions = []
     for definition in metadata.object_definitions:
-        display = dict(definition.metadata["workspace_display"])
-        display["summary_fields"] = [
-            path for path in display["summary_fields"] if path != "rationale"
-        ]
+        display = {
+            key: value
+            for key, value in definition.metadata["workspace_display"].items()
+            if key != "groups"
+        }
         object_definitions.append(
             definition.model_copy(
                 update={
-                    "fields": [f for f in definition.fields if f.field_path != "rationale"],
+                    "fields": [
+                        field.model_copy(
+                            update={
+                                "metadata": {
+                                    key: value
+                                    for key, value in field.metadata.items()
+                                    if key != "hide_when_empty"
+                                }
+                            }
+                        )
+                        for field in definition.fields
+                        if field.field_path != "rationale"
+                    ],
                     "metadata": {**definition.metadata, "workspace_display": display},
                 },
                 deep=True,
@@ -495,38 +541,76 @@ def _metadata_without_rationale(metadata: Any) -> Any:
     return metadata.model_copy(update={"object_definitions": object_definitions}, deep=True)
 
 
-def test_generic_reagent_review_row_keeps_existing_fields_and_adds_rationale():
-    from src.lib.domain_packs.loader import load_domain_pack_metadata
+_REAGENT_WITHOUT_COUNT_OR_IDENTIFIER = {
+    "label": "TRiP.HMS00001",
+    "class_key": "generic:generic_reagent_candidate",
+    "source": "BDSC",
+    "reagent_type": "RNAi",
+    "classification_notes": ["The Methods list this RNAi line."],
+}
 
-    metadata = load_domain_pack_metadata(
-        REPO_ROOT / "packages" / "alliance" / "domain_packs" / "generic" / "domain_pack.yaml"
+
+def test_generic_reagent_review_row_adds_only_the_rationale_field():
+    metadata = _generic_pack_metadata()
+    before = _draft_fields(
+        _generic_review_row(
+            _metadata_without_rationale(metadata),
+            "generic_reagent_candidate",
+            _REAGENT_WITHOUT_COUNT_OR_IDENTIFIER,
+        )
     )
-    payload = {
-        "label": "TRiP.HMS00001",
-        "class_key": "generic:generic_reagent_candidate",
-        "source": "BDSC",
-        "reagent_type": "RNAi",
-        "classification_notes": ["The Methods list this RNAi line."],
-    }
-
-    before = _generic_reagent_draft_fields(_metadata_without_rationale(metadata), payload)
-    old_item = _generic_reagent_draft_fields(metadata, payload)
-    new_item = _generic_reagent_draft_fields(
-        metadata, {**payload, "rationale": "The knockdown line used for the screen phenotype."}
+    old_item = _draft_fields(
+        _generic_review_row(metadata, "generic_reagent_candidate", _REAGENT_WITHOUT_COUNT_OR_IDENTIFIER)
+    )
+    new_item = _draft_fields(
+        _generic_review_row(
+            metadata,
+            "generic_reagent_candidate",
+            {**_REAGENT_WITHOUT_COUNT_OR_IDENTIFIER, "rationale": "The knockdown line used for the screen."},
+        )
     )
 
-    # Absent count/source_identifier stay absent and ungrouped, exactly as before.
-    assert [field["field_key"] for field in before] == ["source", "reagent_type"]
-    assert {(field["group_key"], field["group_label"]) for field in before} == {(None, None)}
-    # A record stored before rationale existed renders unchanged.
-    assert old_item == before
-    # A new record adds only the rationale, after the existing fields.
-    assert new_item[:-1] == before
-    assert new_item[-1]["field_key"] == "rationale"
-    assert new_item[-1]["value"] == "The knockdown line used for the screen phenotype."
-    assert new_item[-1]["group_key"] is None
+    field_value = lambda fields: [(field["field_key"], field["value"]) for field in fields]  # noqa: E731
+    # Absent count/source_identifier stay absent: no always-empty decision columns.
+    assert field_value(before) == [("source", "BDSC"), ("reagent_type", "RNAi")]
+    # A record stored before rationale existed shows the same fields plus a
+    # rationale field with no value, which review renders as "Not recorded".
+    assert field_value(old_item) == [*field_value(before), ("rationale", None)]
+    assert field_value(new_item) == [
+        *field_value(before),
+        ("rationale", "The knockdown line used for the screen."),
+    ]
+    # Only the grouping header changes for existing fields.
+    assert [field["group_key"] for field in new_item] == ["details", "details", "rationale"]
     # Curators read the rationale; only the extraction agent writes it.
     assert new_item[-1]["read_only"] is True
+    assert old_item[-1]["read_only"] is True
+
+
+@pytest.mark.parametrize(
+    ("object_type", "payload"),
+    [
+        (
+            "generic_claim",
+            {"label": "Claim", "class_key": "generic:generic_claim", "claim_text": "X increases Y."},
+        ),
+        (
+            "generic_reagent_candidate",
+            {"label": "Reagent", "class_key": "generic:generic_reagent_candidate", "source": "BDSC"},
+        ),
+    ],
+)
+def test_generic_rationale_never_becomes_the_secondary_label(object_type, payload):
+    metadata = _generic_pack_metadata()
+    with_rationale = {**payload, "rationale": "Why this item was selected."}
+
+    assert _generic_review_row(
+        _metadata_without_rationale(metadata), object_type, payload
+    ).secondary_label is None
+    assert _generic_review_row(metadata, object_type, payload).secondary_label is None
+    row = _generic_review_row(metadata, object_type, with_rationale)
+    assert row.secondary_label is None
+    assert "rationale" not in [field.field_path for field in row.summary_fields]
 
 
 def test_generic_materializer_rejects_invalid_semantic_attributes():
