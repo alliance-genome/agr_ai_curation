@@ -648,7 +648,7 @@ async def test_section_index_contract_correction_recovers(monkeypatch, hierarchy
     assert ("data", "ai_curation.validation.retry_count", 1) in sentry_calls
     assert len(reports) == 1
     violation, kwargs = reports[0]
-    assert violation.component == "hierarchy_resolution"
+    assert violation.component == "hierarchy_resolution.recovered"
     assert kwargs["level"] == "warning"
     assert kwargs["correlation"]["outcome"] == "recovered"
     assert kwargs["correlation"]["contract_retries"] == 1
@@ -844,6 +844,10 @@ async def test_prompt_marks_only_cut_previews_and_omits_empty_ones(
     assert '[3] "2.1. Fly strains" → "Flies were raised at 25 C."\n' in prompt
     assert '[2] "Materials and Methods"\n' in prompt
     assert "(~100 characters)" not in calls[0]["instructions"]
+    # Parent chains may name a direct parent subsection, so the prompt must not
+    # restrict subsections to pointing at top-level sections.
+    assert "can only point to a section in the list" in calls[0]["instructions"]
+    assert "can only point to a top-level section" not in calls[0]["instructions"]
 
 
 @pytest.mark.asyncio
@@ -870,3 +874,100 @@ async def test_pdfx_fixture_previews_never_repeat_their_heading(monkeypatch):
         assert preview, title
         assert not preview.startswith(title), title
         assert len(preview) <= 100 + len("..."), title
+
+
+def _sentry_capture_recorder(monkeypatch):
+    from src.lib.observability import payload_contracts
+
+    captures = []
+
+    def _capture(exc, **kwargs):
+        captures.append({"exc": exc, **kwargs})
+        return True
+
+    monkeypatch.setattr(payload_contracts, "report_runtime_exception", _capture)
+    return captures
+
+
+@pytest.mark.asyncio
+async def test_failed_and_recovered_contract_reports_group_separately(
+    monkeypatch, hierarchy_env
+):
+    # Sentry groups payload-contract events by this fingerprint. A recovered
+    # retry (warning) must not share an issue with a real failure (error), or
+    # the real failure joins the warning issue and new-issue alerts never fire.
+    invalid = _paper_output(**_INVALID_SECTION_INDEX_OUTPUTS["missing"])
+    _sentry_recorder(monkeypatch)
+    captures = _sentry_capture_recorder(monkeypatch)
+
+    _install_sequenced_runner(monkeypatch, [invalid, invalid])
+    await hierarchy._call_llm_for_hierarchy(_PAPER_SECTIONS)
+    _install_sequenced_runner(monkeypatch, [invalid, _paper_output()])
+    await hierarchy._call_llm_for_hierarchy(_PAPER_SECTIONS)
+
+    assert [(c["fingerprint"], c["level"]) for c in captures] == [
+        (
+            ["payload_contract", "contract_serialization_failure", "hierarchy_resolution"],
+            "error",
+        ),
+        (
+            [
+                "payload_contract",
+                "contract_serialization_failure",
+                "hierarchy_resolution.recovered",
+            ],
+            "warning",
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_contract_retry_without_output_reports_failure_once(
+    monkeypatch, hierarchy_env
+):
+    invalid = _paper_output(**_INVALID_SECTION_INDEX_OUTPUTS["missing"])
+    _captured, calls = _install_sequenced_runner(monkeypatch, [invalid, None])
+    _sentry_recorder(monkeypatch)
+    reports = _contract_report_recorder(monkeypatch)
+
+    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+        _PAPER_SECTIONS
+    )
+
+    assert (sections, abstract_title) == ([], None)
+    assert raw["contract_retries"] == 1
+    assert len(calls) == 2
+    assert len(reports) == 1
+    violation, kwargs = reports[0]
+    assert violation.component == "hierarchy_resolution"
+    assert kwargs["level"] == "error"
+    assert kwargs["correlation"]["outcome"] == "failed"
+    assert "the correction retry returned no output" in violation.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", [True, False])
+async def test_reported_contract_failure_marks_the_logged_error_as_captured(
+    monkeypatch, hierarchy_env, caplog, accepted
+):
+    # The outer logger.error(exc_info=True) event is dropped by Sentry's
+    # before_send only when the reporter marked the raised error as captured.
+    invalid = _paper_output(**_INVALID_SECTION_INDEX_OUTPUTS["missing"])
+    _install_sequenced_runner(monkeypatch, [invalid, invalid])
+    _sentry_recorder(monkeypatch)
+    monkeypatch.setattr(
+        hierarchy,
+        "report_payload_contract_violation",
+        lambda violation, **kwargs: accepted,
+    )
+
+    with caplog.at_level("ERROR", logger=hierarchy.logger.name):
+        await hierarchy._call_llm_for_hierarchy(_PAPER_SECTIONS)
+
+    record = next(
+        r for r in caplog.records if "LLM hierarchy resolution failed" in r.getMessage()
+    )
+    error = record.exc_info[1]
+    assert isinstance(error, ValueError)
+    assert "section index contract" in str(error)
+    assert getattr(error, "_ai_curation_sentry_captured", False) is accepted

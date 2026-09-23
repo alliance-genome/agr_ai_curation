@@ -374,7 +374,7 @@ SPECIAL CASES:
 - Numbered sections like "2.1. Something" are subsections of the parent numbered section
 - Nested subsections (for example "2.1.1") belong to their outermost top-level section; their parent_idx may be that top-level section or their direct parent subsection (for example "2.1")
 - Short ambiguous titles like "Notes" or "Data" - use the preview to determine placement
-- A subsection can only point to a top-level section in the list. If the heading of the section it belongs to is not in the list, classify it as top-level
+- A subsection can only point to a section in the list (its top-level section or its direct parent subsection). If the heading of the section it belongs to is not in the list, classify it as top-level
 
 OUTPUT: Refer to sections only by their [n] numbers; never repeat title text. Return exactly one entry for every number in the input, each number once:
 - idx: the section's number
@@ -529,7 +529,18 @@ Common abstract locations when not explicitly labeled:
             set_redacted_ai_span_data(
                 sentry_span, "ai_curation.validation.retry_count", attempt
             )
-            if last_contract_error is not None and resolved is not None:
+            if last_contract_error is not None and resolved is None:
+                # The correction retry returned nothing, so the contract
+                # failure was never recovered.
+                _report_section_index_contract(
+                    f"{last_contract_error}; the correction retry returned no output",
+                    outcome="failed",
+                    retries=attempt,
+                    contract_retries=contract_retries,
+                    model_name=model_name,
+                    section_count=len(section_info_list),
+                )
+            elif last_contract_error is not None:
                 _report_section_index_contract(
                     last_contract_error,
                     outcome="recovered",
@@ -691,16 +702,23 @@ def _report_section_index_contract(
 ) -> bool:
     """Report a section-number contract failure once per classification.
 
-    ``failed`` means the correction budget was spent and the document keeps its
-    unclassified titles; ``recovered`` means a correction retry succeeded. The
-    detail names section numbers only, never titles or previews. Returns whether
-    Sentry accepted the report.
+    ``failed`` means the correction budget was spent, or a correction retry
+    returned no output, and the document keeps its unclassified titles;
+    ``recovered`` means a correction retry succeeded. Recovered retries report
+    under their own component so they group apart from real failures in Sentry
+    and a real failure still opens its own issue. The detail names section
+    numbers only, never titles or previews. Returns whether Sentry accepted the
+    report.
     """
     cost_context = current_cost_context()
     return report_payload_contract_violation(
         PayloadContractViolation(
             category="contract_serialization_failure",
-            component="hierarchy_resolution",
+            component=(
+                "hierarchy_resolution"
+                if outcome == "failed"
+                else "hierarchy_resolution.recovered"
+            ),
             message=(
                 f"Hierarchy classifier section-number contract {outcome} after "
                 f"{retries} correction retr{'y' if retries == 1 else 'ies'}: {detail}"
