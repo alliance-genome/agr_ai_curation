@@ -948,3 +948,14 @@ def test_allele_leaf_columns_match_the_shared_resolvable_headers():
             header = f"{parent} {suffix}"
             assert labels[(object_type, f"{prefix}{key}")] == header
             assert display_names[(object_type, f"{prefix}{key}")] == header
+
+
+def test_allele_taxon_is_part_of_the_validated_identity():
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, effective_value
+
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    spec = declared_resolvable_fields(pack.metadata, ALLELE_MENTION_OBJECT_TYPE)["allele"]
+    assert spec.identity_keys == ("primary_external_id", "allele_symbol", "taxon")
+
+    legacy = {"allele_symbol": "e190", "primary_external_id": "WB:WBVar00000190", "taxon": "NCBITaxon:6239"}
+    assert effective_value(legacy, spec, covered_by_validator=False)["taxon"] is None

@@ -51,7 +51,7 @@ PACK_PATHS = {
 SHAPES_PATH = REPO_ROOT / "backend" / "tests" / "fixtures" / "flows" / "display_value_shapes.json"
 
 ROLE_KEYS = {"label", "id", "state", "mention"}
-SPEC_KEYS = ROLE_KEYS | {"resolved_states", "compose", "separator"}
+SPEC_KEYS = ROLE_KEYS | {"resolved_states", "compose", "separator", "validated"}
 
 # Models no display can be declared for yet, each with the reason. Keep this list short:
 # a new structured model must declare display instead of being added here.
@@ -244,6 +244,9 @@ def _spec_errors(
             DomainPackFieldType.ARRAY,
         }:
             errors.append(f"{where}: {role} {spec[role]!r} must name a scalar leaf")
+    for key in spec.get("validated") or []:
+        if key not in children:
+            errors.append(f"{where}: validated leaf {key!r} is not a declared child path")
     if ("state" in spec) != ("resolved_states" in spec):
         errors.append(f"{where}: state and resolved_states must be declared together")
     resolved = spec.get("resolved_states")

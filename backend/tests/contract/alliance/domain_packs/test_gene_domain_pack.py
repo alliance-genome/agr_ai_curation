@@ -777,6 +777,38 @@ def test_gene_pack_declares_the_shared_resolution_vocabularies():
         "label": "gene_symbol",
         "id": "primary_external_id",
         "mention": "mention",
+        "validated": ["taxon"],
     }
     assert definition.metadata["workspace_display"]["primary_label_field"] == "gene_symbol"
     assert definition.metadata["supervisor_manifest"]["primary_label_field"] == "gene_symbol"
+
+
+def test_gene_taxon_is_part_of_the_validated_identity():
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, effective_value
+    from src.lib.flows.export_fields import PackagedExportSource
+
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    spec = declared_resolvable_fields(pack.metadata, GENE_MENTION_EVIDENCE_OBJECT_TYPE)[""]
+    assert spec.identity_keys == ("primary_external_id", "gene_symbol", "taxon")
+
+    # A staged (unresolved) gene carries no taxon; the extractor's stays a proposal.
+    staged = _materialize_one_candidate().payload["curatable_objects"][0]["payload"]
+    assert staged.get("taxon") is None
+    assert staged["proposed_taxon"] == "NCBITaxon:6239"
+
+    # A gene stored before ALL-1283 without a covering validator event: its taxon
+    # is not shown as validated anywhere.
+    legacy = {
+        "mention": "daf-16",
+        "gene_symbol": "daf-16",
+        "primary_external_id": "WB:WBGene00000912",
+        "taxon": "NCBITaxon:6239",
+    }
+    assert effective_value(legacy, spec, covered_by_validator=False)["taxon"] is None
+    exported = PackagedExportSource(pack).effective_item(
+        {"object_type": GENE_MENTION_EVIDENCE_OBJECT_TYPE, "payload": legacy, "metadata": {}}
+    )["payload"]
+    assert exported["taxon"] is None
+    assert exported["lookup_outcome"] == "legacy_unverified"
+    # Covered by a validator write-back, the stored taxon reads as validated.
+    assert effective_value(legacy, spec, covered_by_validator=True)["taxon"] == "NCBITaxon:6239"

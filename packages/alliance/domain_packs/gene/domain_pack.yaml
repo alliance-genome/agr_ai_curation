@@ -90,6 +90,8 @@ model_definitions:
         label: gene_symbol
         id: primary_external_id
         mention: mention
+        validated:
+          - taxon
 object_definitions:
   - object_type: gene_mention_evidence
     display_name: Gene mention

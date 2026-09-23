@@ -543,3 +543,19 @@ def test_gene_pack_leaf_columns_match_the_shared_resolvable_headers():
         assert labels[path] == header
         # The review screen's field name is the same column header.
         assert display_names[path] == header
+
+
+def test_gene_export_never_emits_an_unverified_taxon():
+    legacy = _export_record_for({"resolution_state": ..., "lookup_outcome": ...})
+    unresolved = _export_record_for(
+        {
+            "primary_external_id": None,
+            "gene_symbol": None,
+            "taxon": None,
+            "resolution_state": "unresolved",
+            "lookup_outcome": "not_found",
+        }
+    )
+
+    assert legacy["taxon"] is None
+    assert unresolved["taxon"] is None

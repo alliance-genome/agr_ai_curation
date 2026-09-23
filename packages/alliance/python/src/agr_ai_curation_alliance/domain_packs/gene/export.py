@@ -49,8 +49,9 @@ GENE_VALIDATED_REFERENCE_EXPORT_SCHEMA_VERSION = 1
 
 # The gene identity only a validator writes; a gene_mention_evidence object is itself the
 # resolvable value (mention = paper wording).
-_GENE_IDENTITY_SPEC = ResolvableSpec(id_key="primary_external_id", label_key="gene_symbol")
-_VALIDATED_IDENTITY_FIELDS = ("primary_external_id", "gene_symbol", "taxon")
+_GENE_IDENTITY_SPEC = ResolvableSpec(
+    id_key="primary_external_id", label_key="gene_symbol", validated_keys=("taxon",)
+)
 _RESOLUTION_FIELDS = (
     RESOLUTION_STATE_KEY,
     LOOKUP_OUTCOME_KEY,
@@ -189,7 +190,7 @@ def _gene_evidence_record(domain_object: CuratableObjectEnvelope) -> dict[str, A
         MENTION_KEY: _required_payload_value(gene, MENTION_KEY),
         "confidence": _required_payload_value(domain_object.payload, "confidence"),
     }
-    for field in _VALIDATED_IDENTITY_FIELDS:
+    for field in _GENE_IDENTITY_SPEC.identity_keys:
         reference[field] = _required_payload_value(gene, field) if resolved else None
     reference.update({field: gene.get(field) for field in _RESOLUTION_FIELDS})
     reference.update(

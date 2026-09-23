@@ -501,6 +501,8 @@ object_definitions:
             label: allele_symbol
             id: primary_external_id
             mention: mention
+            validated:
+              - taxon
       - field_path: allele.mention
         field_type: string
         display_name: Allele (paper wording)
