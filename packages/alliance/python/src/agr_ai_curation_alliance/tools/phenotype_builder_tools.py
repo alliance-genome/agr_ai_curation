@@ -62,12 +62,14 @@ from .agr_curation import (
     _ok,
 )
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import document_rationale_arg, normalize_rationale
 
 
 # Patch field paths that map staging-input names to phenotype candidate staged-field names.
 _PHENOTYPE_PATCH_FIELD_PATHS = frozenset(
     {
         "validation_guidance",
+        "rationale",
         "phenotype_annotation_object",
         "subject_identifier",
         "subject_label",
@@ -129,6 +131,7 @@ class PhenotypeStageInput(_StrictToolModel):
     )
     pending_ref_id: StrictStr
     phenotype_annotation_object: StrictStr
+    rationale: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
     source_mentions: List[StrictStr] = Field(
         min_length=1,
@@ -163,6 +166,11 @@ class PhenotypeStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("value must be non-empty")
         return cleaned
+
+    @field_validator("rationale")
+    @classmethod
+    def _valid_rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
     @field_validator("source_mentions")
     @classmethod
@@ -345,6 +353,7 @@ def _stage_payload_from_phenotype_input(stage_input: PhenotypeStageInput) -> dic
         "pending_ref_id": stage_input.pending_ref_id,
         "phenotype_annotation_object": stage_input.phenotype_annotation_object,
         "source_mentions": list(stage_input.source_mentions),
+        "rationale": stage_input.rationale,
         "negated": bool(stage_input.negated),
     }
     for field_name in (
@@ -367,11 +376,13 @@ def _stage_payload_from_phenotype_input(stage_input: PhenotypeStageInput) -> dic
     return payload
 
 
+@document_rationale_arg
 def _stage_phenotype_observation_impl(
     pending_ref_id: str,
     phenotype_annotation_object: str,
     evidence_record_ids: List[str],
     source_mentions: List[str],
+    rationale: str,
     subject_identifier: Optional[str] = None,
     subject_label: Optional[str] = None,
     subject_type: Optional[str] = None,
@@ -407,6 +418,7 @@ def _stage_phenotype_observation_impl(
             validation_guidance=validation_guidance,
             pending_ref_id=pending_ref_id,
             phenotype_annotation_object=phenotype_annotation_object,
+            rationale=rationale,
             evidence_record_ids=evidence_record_ids,
             source_mentions=source_mentions,
             subject_identifier=subject_identifier,
@@ -470,7 +482,12 @@ def _patch_phenotype_observation_impl(
     pending_ref_id: str,
     updates: List[Mapping[str, Any]],
 ) -> AgrQueryResult:
-    """Patch enumerated fields on one staged phenotype candidate."""
+    """Patch enumerated fields on one staged phenotype candidate.
+
+    Args:
+        updates: Field updates, each a ``field_path`` plus its new value. A `rationale`
+            update must be non-empty and at most 300 characters; it cannot be cleared.
+    """
 
     attempted_query = _attempt_query(
         "patch_phenotype_observation",
@@ -549,6 +566,17 @@ def _patch_phenotype_observation_impl(
             continue
         if update.field_path == "negated":
             payload["negated"] = bool(update.bool_value)
+            continue
+        if update.field_path == "rationale":
+            try:
+                payload["rationale"] = normalize_rationale(update.string_value or "")
+            except ValueError as exc:
+                return _phenotype_validation_result(
+                    message=f"rationale patch rejected: {exc}",
+                    issues=[{"field_path": "rationale", "reason": "invalid_rationale", "message": str(exc)}],
+                    method="patch_phenotype_observation",
+                    attempted_query=attempted_query,
+                )
             continue
         _set_phenotype_patch_value(payload, update.field_path, update.string_value)
 

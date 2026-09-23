@@ -3854,7 +3854,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -4055,7 +4055,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5394,6 +5394,12 @@
           "type": "array"
         },
         {
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
           "default": null,
           "description": "The Disease Ontology ID (DOID, a standard disease term ID) the agent proposes, if it found one; the disease specialist confirms it.",
           "name": "disease_curie",
@@ -5958,6 +5964,12 @@
           "name": "source_mentions",
           "required": true,
           "type": "array"
+        },
+        {
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
         },
         {
           "default": null,
