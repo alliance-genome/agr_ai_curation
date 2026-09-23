@@ -124,7 +124,10 @@ class ValidationCandidateMatch(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
-    label: str = Field(description="Display label for the candidate match")
+    label: Optional[str] = Field(
+        default=None,
+        description="Display label for the candidate match, when the validator gave one",
+    )
     identifier: Optional[str] = Field(
         default=None,
         description="Stable identifier or CURIE for the candidate match when available",

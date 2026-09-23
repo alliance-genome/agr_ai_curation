@@ -63,14 +63,12 @@ from src.lib.domain_packs.validator_result_policies import (
     allowed_term_policy_violations,
 )
 from src.lib.domain_packs.resolvable_values import (
-    REASON_INVALID_SCHEMA,
-    REASON_MISSING_EXPECTED_RESULT_FIELD,
-    RESOLUTION_REASON_KEY,
-    RESOLUTION_STATE_KEY,
-    RESOLVED,
-    UNRESOLVED,
+    OUTCOME_INVALID_SCHEMA,
+    OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
     VALIDATOR_MATERIALIZATION_METADATA_KEY,
+    copy_resolution,
     holds_resolution,
+    lookup_outcome_for_failure,
     mark_resolved,
     mark_unresolved,
     unresolved_header_text,
@@ -519,12 +517,14 @@ def _patch_target_object_from_resolved_values(
     if result.status != "resolved":
         if target is None or object_definition is None:
             return envelope, None
-        reason = validator_failure_classification(
-            result,
-            error_type=DomainEnvelopeMaterializationError,
+        outcome = lookup_outcome_for_failure(
+            validator_failure_classification(
+                result,
+                error_type=DomainEnvelopeMaterializationError,
+            )
         )
         return (
-            _with_unresolved_values(envelope, item, target, declared_fields, reason),
+            _with_unresolved_values(envelope, item, target, declared_fields, outcome),
             None,
         )
     if not result.resolved_values:
@@ -536,7 +536,7 @@ def _patch_target_object_from_resolved_values(
                 item,
                 target,
                 declared_fields,
-                REASON_MISSING_EXPECTED_RESULT_FIELD,
+                OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
             ),
             None,
         )
@@ -544,7 +544,7 @@ def _patch_target_object_from_resolved_values(
     if policy_violations:
         if target is not None and object_definition is not None:
             envelope = _with_unresolved_values(
-                envelope, item, target, declared_fields, REASON_INVALID_SCHEMA
+                envelope, item, target, declared_fields, OUTCOME_INVALID_SCHEMA
             )
         return envelope, "; ".join(
             violation.message for violation in policy_violations
@@ -600,7 +600,12 @@ def _patch_target_object_from_resolved_values(
         container = _payload_container(payload, container_path)
         if any(value is _MISSING for _, value in writes):
             # A partial identity is not a validated value.
-            mark_unresolved(container, REASON_MISSING_EXPECTED_RESULT_FIELD)
+            mark_unresolved(
+                container,
+                OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+                explanation=result.explanation,
+                curator_message=result.curator_message,
+            )
             for materialized_field_path, _ in writes:
                 _propagate_materialized_resolution_state(
                     payload, materialized_field_path, declared_fields=declared_fields
@@ -613,6 +618,8 @@ def _patch_target_object_from_resolved_values(
                 str(parse_field_path(materialized_field_path)[-1]): resolved_value
                 for materialized_field_path, resolved_value in writes
             },
+            explanation=result.explanation,
+            curator_message=result.curator_message,
         )
         for materialized_field_path, resolved_value in writes:
             _propagate_materialized_mirror_paths(
@@ -700,12 +707,13 @@ def _with_unresolved_values(
     item: ValidatorResultMaterializationInput,
     target: CuratableObjectEnvelope,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
-    reason: str,
+    outcome: str,
 ) -> DomainEnvelope:
     """Record why the resolvable values a binding writes stay unresolved.
 
-    Only the state and reason change; id/label and ``mention`` are untouched,
-    and plain fields keep whatever the extractor staged.
+    Only the state, lookup outcome and the validator's own explanation change;
+    id/label and ``mention`` are untouched, and plain fields keep whatever the
+    extractor staged.
     """
 
     payload = copy.deepcopy(target.payload)
@@ -721,7 +729,12 @@ def _with_unresolved_values(
         container_path = _resolvable_container_path(payload, materialized_field_path)
         if container_path is None:
             continue
-        mark_unresolved(_payload_container(payload, container_path), reason)
+        mark_unresolved(
+            _payload_container(payload, container_path),
+            outcome,
+            explanation=item.result.explanation,
+            curator_message=item.result.curator_message,
+        )
         _propagate_materialized_resolution_state(
             payload, materialized_field_path, declared_fields=declared_fields
         )
@@ -1202,7 +1215,7 @@ def _propagate_materialized_resolution_state(
     *,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
 ) -> None:
-    """Give each resolvable mirror of a written field its source value's state and reason."""
+    """Give each resolvable mirror of a written field its source value's resolution."""
 
     source_path = _resolvable_container_path(payload, materialized_field_path)
     if source_path is None:
@@ -1214,12 +1227,7 @@ def _propagate_materialized_resolution_state(
         mirror_container_path = _resolvable_container_path(payload, mirror_path)
         if mirror_container_path is None:
             continue
-        mirror = _payload_container(payload, mirror_container_path)
-        if source.get(RESOLUTION_STATE_KEY) == RESOLVED:
-            mirror[RESOLUTION_STATE_KEY] = RESOLVED
-            mirror[RESOLUTION_REASON_KEY] = None
-        elif source.get(RESOLUTION_STATE_KEY) == UNRESOLVED:
-            mark_unresolved(mirror, source[RESOLUTION_REASON_KEY])
+        copy_resolution(source, _payload_container(payload, mirror_container_path))
 
 
 def _append_materialized_objects(

@@ -26,10 +26,12 @@ from src.lib.chat_state import document_state
 from src.lib.context import get_current_session_id, get_current_user_id
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.domain_packs.resolvable_values import (
-    REASON_LEGACY_UNVERIFIED,
-    RESOLUTION_REASON_KEY,
+    LEGACY_EXPLANATION,
+    LOOKUP_OUTCOME_KEY,
+    OUTCOME_LEGACY_UNVERIFIED,
     RESOLUTION_STATE_KEY,
     UNRESOLVED,
+    VALIDATOR_EXPLANATION_KEY,
     has_resolution_state,
     holds_resolution,
     unresolved_header_text,
@@ -984,7 +986,7 @@ def _with_resolution_states(value: Any) -> Any:
     """Every resolvable value carries its state, so a mention never reads as the item.
 
     A value stored before ALL-1283 (no contract state) is marked unresolved
-    with reason legacy_unverified; nothing here can verify it.
+    with lookup outcome legacy_unverified; nothing here can verify it.
     """
 
     if isinstance(value, list):
@@ -994,7 +996,8 @@ def _with_resolution_states(value: Any) -> Any:
     annotated = {key: _with_resolution_states(item) for key, item in value.items()}
     if holds_resolution(value) and not has_resolution_state(value):
         annotated[RESOLUTION_STATE_KEY] = UNRESOLVED
-        annotated[RESOLUTION_REASON_KEY] = REASON_LEGACY_UNVERIFIED
+        annotated[LOOKUP_OUTCOME_KEY] = OUTCOME_LEGACY_UNVERIFIED
+        annotated[VALIDATOR_EXPLANATION_KEY] = LEGACY_EXPLANATION
     return annotated
 
 
@@ -1774,7 +1777,7 @@ def _details_response(
         state = _with_resolution_states(value)
         head.update(
             resolution_state=state[RESOLUTION_STATE_KEY],
-            resolution_reason=state[RESOLUTION_REASON_KEY],
+            lookup_outcome=state[LOOKUP_OUTCOME_KEY],
         )
     children = list(value.items()) if isinstance(value, Mapping) else list(enumerate(value))
 

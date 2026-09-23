@@ -24,6 +24,10 @@ generic keys; a term-like value holding only one of ``curie|id|identifier`` and
 one of ``name|label|display_name`` reads "label (id)"; any other value renders
 all its ``key: value`` pairs so nothing is dropped.
 
+A resolvable value's own vocabulary leaves (``resolution_state``,
+``lookup_outcome``) carry an internal ``value_labels`` spec so their codes read
+in plain words ("Matched", "Not found", ...).
+
 A resolvable value's state is the one stored with it. A value stored before
 that contract has no state and reads as unresolved unless the caller applied
 the read-time legacy rule (``resolvable_values.effective_payload``) first.
@@ -43,8 +47,7 @@ from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from src.lib.domain_packs.resolvable_values import (
-    MENTION_KEY,
-    RESOLUTION_REASON_KEY,
+    CONTRACT_KEYS,
     RESOLUTION_STATE_KEY,
     RESOLVED,
     UNRESOLVED_DISPLAY,
@@ -275,7 +278,6 @@ def _mapping_text(
     return f"{text} ({UNRESOLVED})" if marked and unplaced and text else text
 
 
-_RESOLUTION_KEYS = frozenset({MENTION_KEY, RESOLUTION_STATE_KEY, RESOLUTION_REASON_KEY})
 
 
 def _resolvable_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None) -> str:
@@ -296,7 +298,7 @@ def _resolvable_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None) -
     if label or identifier:
         return _labeled(label, identifier, False)
     # Undeclared identity keys: show the validated content, never the paper wording.
-    identity = {key: item for key, item in value.items() if key not in _RESOLUTION_KEYS}
+    identity = {key: item for key, item in value.items() if key not in CONTRACT_KEYS}
     return _pairs_text(identity, frozenset(), False)
 
 
@@ -354,6 +356,12 @@ def _render(
     if isinstance(value, Mapping):
         return _mapping_text(value, spec, paths, marked)
     text = _scalar_text(value)
+    if spec and spec.get("value_labels"):
+        # A controlled-vocabulary leaf (e.g. a lookup outcome) reads in plain words.
+        labels = spec["value_labels"]
+        if text not in labels:
+            raise ValueError(f"{text!r} is not a value of this field's controlled vocabulary")
+        return labels[text]
     return f"{text} ({UNRESOLVED})" if marked and paths and text else text
 
 

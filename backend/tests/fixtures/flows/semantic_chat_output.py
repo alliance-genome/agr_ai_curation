@@ -197,10 +197,10 @@ def _attributes(statement: dict[str, Any]) -> dict[str, Any]:
         # validated identity and its state.
         attributes[f"{prefix}_terms"] = [
             {"mention": label, "name": label, "curie": curie, "resolution_state": "resolved",
-             "resolution_reason": None}
+             "lookup_outcome": "matched"}
             if status == "resolved"
             else {"mention": label, "name": None, "curie": None, "resolution_state": "unresolved",
-                  "resolution_reason": "not_found"}
+                  "lookup_outcome": "not_found"}
             for label, curie, status in statement[key]
         ]
     return attributes

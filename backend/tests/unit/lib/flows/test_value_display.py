@@ -47,15 +47,15 @@ PRODUCTION_SHAPES = [
     ({"allele_symbol": "e1370", "primary_external_id": "WB:WBVar00143949", "taxon": "NCBITaxon:6239"},
      {"label": "allele_symbol", "id": "primary_external_id"}, "e1370 (WB:WBVar00143949)"),
     ({"subject_label": "daf-2", "subject_identifier": "WB:WBGene00000898", "subject_type": "gene",
-      "resolution_state": "resolved", "resolution_reason": None}, SUBJECT, "daf-2 (WB:WBGene00000898)"),
-    # A pre-ALL-1283 "resolved" (no resolution_reason) is legacy: unverified unless the
+      "resolution_state": "resolved", "lookup_outcome": "matched"}, SUBJECT, "daf-2 (WB:WBGene00000898)"),
+    # A pre-ALL-1283 "resolved" (no lookup_outcome) is legacy: unverified unless the
     # caller applied the read-time legacy rule with a covering validator event.
     ({"subject_label": "daf-2", "subject_identifier": "WB:WBGene00000898", "subject_type": "gene",
       "resolution_state": "resolved"}, SUBJECT, "UNRESOLVED"),
     ({"subject_label": "daf-2(e1370)", "resolution_state": "pending_lookup", "resolution_note": "n"},
      SUBJECT, "UNRESOLVED"),
     ({"curie": "WBPhenotype:0000154", "label": "reduced brood size", "resolution_state": "resolved",
-      "resolution_reason": None, "export_state": "ready", "write_blocked_reason": None}, PHENOTYPE_TERM,
+      "lookup_outcome": "matched", "export_state": "ready", "write_blocked_reason": None}, PHENOTYPE_TERM,
      "reduced brood size (WBPhenotype:0000154)"),
     ({"name": "is_expressed_in", "vocabulary": "Expression Relation", "id": 200000200},
      {"label": "name"}, "is_expressed_in"),
@@ -635,9 +635,9 @@ def test_packaged_object_label_never_falls_back_to_mention(monkeypatch):
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_gene_mention_step([
             {"gene_symbol": "unc-54", "primary_external_id": "WB:WBGene00006789", "mention": "UNC-54 myosin",
-             "resolution_state": "resolved", "resolution_reason": None},
+             "resolution_state": "resolved", "lookup_outcome": "matched"},
             {"gene_symbol": None, "primary_external_id": None, "mention": "PPIT-2", "symbol": "ppit-2",
-             "name": "PPIT", "resolution_state": "unresolved", "resolution_reason": "not_found"},
+             "name": "PPIT", "resolution_state": "unresolved", "lookup_outcome": "not_found"},
             # Stored before ALL-1283 and not covered by a validator event.
             {"gene_symbol": "egl-1", "primary_external_id": "WB:WBGene00001170", "mention": "EGL-1"},
         ])],
@@ -877,7 +877,7 @@ def _phenotype_objects(term_count=1):
     # Terms without a stored state: open findings place the marker (ALL-1283 states decide otherwise).
     terms = [{"curie": f"WBPhenotype:{index}", "label": f"term {index}"}
              for index in range(term_count)]
-    subject = {"resolution_state": "resolved", "resolution_reason": None, "subject_label": "daf-2",
+    subject = {"resolution_state": "resolved", "lookup_outcome": "matched", "subject_label": "daf-2",
                "subject_identifier": "WB:WBGene00000898", "subject_type": "gene", "taxon": "NCBITaxon:6239"}
     annotation = {
         "object_type": "PhenotypeAnnotation", "pending_ref_id": "ann-1",
@@ -974,9 +974,9 @@ def test_resolvable_values_read_label_id_or_the_literal_unresolved():
     """ALL-1283: resolved "label (ID)", unresolved UNRESOLVED, absent blank; never the mention."""
 
     resolved = {"curie": "WBbt:0005733", "name": "hypodermis", "mention": "hypodermal cells",
-                "resolution_state": "resolved", "resolution_reason": None}
+                "resolution_state": "resolved", "lookup_outcome": "matched"}
     unresolved = {"curie": None, "name": None, "mention": "structures associated with the residual body",
-                  "resolution_state": "unresolved", "resolution_reason": "not_found"}
+                  "resolution_state": "unresolved", "lookup_outcome": "not_found"}
     assert display_text(resolved, RESOLVABLE_TERM) == "hypodermis (WBbt:0005733)"
     assert display_text(unresolved, RESOLVABLE_TERM) == "UNRESOLVED"
     assert display_text(None, RESOLVABLE_TERM) == ""
@@ -993,12 +993,12 @@ def test_generic_reading_never_mixes_paper_wording_into_a_cell():
     """Custom profiles without a display spec (ALL-1283)."""
 
     assert display_text({"curie": "X:1", "name": "Y", "mention": "Z", "resolution_state": "resolved",
-                         "resolution_reason": None}) == "Y (X:1)"
+                         "lookup_outcome": "matched"}) == "Y (X:1)"
     assert display_text({"curie": None, "name": None, "mention": "Z", "resolution_state": "unresolved",
-                         "resolution_reason": "not_validated"}) == "UNRESOLVED"
+                         "lookup_outcome": "not_validated"}) == "UNRESOLVED"
     assert display_text({"curie": "X:1", "name": "Y", "mention": "Z"}) == "UNRESOLVED"
     assert display_text({"abbreviation": "WB", "mention": "WormBase", "resolution_state": "resolved",
-                         "resolution_reason": None}) == "abbreviation: WB"
+                         "lookup_outcome": "matched"}) == "abbreviation: WB"
 
 
 def test_display_mention_role_is_a_key_of_the_value():
@@ -1013,3 +1013,14 @@ def test_display_mention_role_is_a_key_of_the_value():
     with pytest.raises(ValidationError, match="takes no state"):
         DomainPackFieldDefinition(field_path="term", metadata={"display": {
             **RESOLVABLE_TERM, "state": "resolution_state", "resolved_states": ["resolved"]}})
+
+
+def test_vocabulary_leaves_read_in_plain_words():
+    from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOME_LABELS
+
+    spec = {"value_labels": LOOKUP_OUTCOME_LABELS}
+    assert display_text("not_found", spec) == "Not found"
+    assert display_text("ambiguous", spec) == "Several matches"
+    assert display_text(None, spec) == ""
+    with pytest.raises(ValueError, match="controlled vocabulary"):
+        display_text("something else", spec)

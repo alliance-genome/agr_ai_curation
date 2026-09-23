@@ -65,12 +65,24 @@ def _field_label(field: Any) -> str:
     return field.display_name or field.field_path.replace("_", " ")
 
 
+def _resolvable_leaf_key(field: Any, by_path: dict[str, Any], models: dict, object_models: dict) -> tuple[Any, str, str] | None:
+    """(parent field, leaf key, mention key) when ``field`` is a resolvable value's own leaf."""
+
+    parent_path, _, key = field.field_path.rpartition(".")
+    parent = by_path.get(parent_path)
+    parent_display = _declared_display(parent, models, object_models) if parent is not None else None
+    if not parent_display or not parent_display.get("mention"):
+        return None
+    return parent, key, str(parent_display["mention"])
+
+
 def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
-    from src.lib.domain_packs.resolvable_values import PAPER_WORDING_SUFFIX
+    from src.lib.domain_packs.resolvable_values import resolvable_leaf_header
 
     metadata = domain_pack.metadata
     models = {model.model_id: model for model in metadata.model_definitions}
     object_models = {obj.object_type: obj.model_ref for obj in metadata.object_definitions}
+    enums = {enum.enum_id: [value.value for value in enum.values] for enum in metadata.enum_definitions}
     result = []
     for obj in metadata.object_definitions:
         summary = obj.metadata.get("export_validation_summary")
@@ -80,13 +92,13 @@ def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
         by_path = {field.field_path: field for field in obj.fields}
         for field in obj.fields:
             label = _field_label(field)
-            # A resolvable value's paper wording is its own column (ALL-1283).
-            parent_path, _, key = field.field_path.rpartition(".")
-            parent = by_path.get(parent_path)
-            parent_display = _declared_display(parent, models, object_models) if parent is not None else None
-            if parent_display and parent_display.get("mention") == key:
-                label = f"{_field_label(parent)} {PAPER_WORDING_SUFFIX}"
-            result.append({
+            # A resolvable value's paper wording, status, lookup result and
+            # validator explanation are their own columns (ALL-1283).
+            leaf = _resolvable_leaf_key(field, by_path, models, object_models)
+            if leaf is not None:
+                parent, key, mention_key = leaf
+                label = resolvable_leaf_header(_field_label(parent), key, mention_key=mention_key) or label
+            entry = {
                 "ref": f"object.pack.{obj.object_type}.{field.field_path}",
                 "label": label,
                 "group": obj.display_name, "object_type": obj.object_type,
@@ -96,7 +108,11 @@ def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
                 "required": field.required, "nullable": not field.required,
                 "array_depth": int(field.multivalued),
                 "description": field.description,
-            })
+            }
+            if field.enum_ref is not None:
+                # Controlled vocabularies carry their allowed values.
+                entry["enum_values"] = list(enums[field.enum_ref])
+            result.append(entry)
     return result
 
 
@@ -217,15 +233,21 @@ class PackagedExportSource:
         their schema fingerprints do not change.
         """
 
+        from src.lib.domain_packs.resolvable_values import LEAF_VALUE_LABELS
+
         specs: dict[str, dict[str, Any]] = {}
         for obj in self.domain_pack.metadata.object_definitions:
             by_path = {field.field_path: field for field in obj.fields}
             for field in obj.fields:
+                ref = f"object.pack.{obj.object_type}.{field.field_path}"
                 display = self._field_display(field)
                 if display is not None:
-                    specs[f"object.pack.{obj.object_type}.{field.field_path}"] = self._resolved(
-                        display, field.field_path, by_path,
-                    )
+                    specs[ref] = self._resolved(display, field.field_path, by_path)
+                    continue
+                leaf = _resolvable_leaf_key(field, by_path, self._models, self._object_models)
+                if leaf is not None and leaf[1] in LEAF_VALUE_LABELS:
+                    # A resolvable value's status and lookup result read in plain words.
+                    specs[ref] = {"value_labels": dict(LEAF_VALUE_LABELS[leaf[1]])}
         return specs
 
     def _object_label_paths(self) -> dict[str, str]:

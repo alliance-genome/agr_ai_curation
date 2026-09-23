@@ -999,6 +999,53 @@ class DomainPackFixturePackRef(DomainPackMetadataBaseModel):
         return validated
 
 
+def _resolvable_vocabulary_errors(metadata: "DomainPackMetadata") -> list[str]:
+    """A resolvable value's resolution_state and lookup_outcome leaves are enums
+    whose values are exactly the shared controlled vocabularies (ALL-1283)."""
+
+    from src.lib.domain_packs.resolvable_values import (
+        LOOKUP_OUTCOME_KEY,
+        LOOKUP_OUTCOMES,
+        RESOLUTION_STATE_KEY,
+        RESOLUTION_STATES,
+    )
+
+    vocabularies = {RESOLUTION_STATE_KEY: RESOLUTION_STATES, LOOKUP_OUTCOME_KEY: LOOKUP_OUTCOMES}
+    enums = {item.enum_id: [value.value for value in item.values] for item in metadata.enum_definitions}
+    models = {item.model_id: item for item in metadata.model_definitions}
+    object_models = {item.object_type: item.model_ref for item in metadata.object_definitions}
+
+    def display(field: "DomainPackFieldDefinition") -> Any:
+        if field.metadata.get("display"):
+            return field.metadata["display"]
+        model_ref = field.model_ref or (
+            object_models.get(field.object_type_ref) if field.object_type_ref else None
+        )
+        model = models.get(model_ref) if model_ref else None
+        return model.metadata.get("display") if model is not None else None
+
+    errors: list[str] = []
+    for object_definition in metadata.object_definitions:
+        by_path = {field.field_path: field for field in object_definition.fields}
+        for field in object_definition.fields:
+            parent_path, _, key = field.field_path.rpartition(".")
+            if key not in vocabularies:
+                continue
+            parent = by_path.get(parent_path)
+            parent_display = display(parent) if parent is not None else None
+            if key == RESOLUTION_STATE_KEY and not (
+                isinstance(parent_display, dict) and parent_display.get("mention")
+            ):
+                continue
+            allowed = list(vocabularies[key])
+            if field.field_type is not DomainPackFieldType.ENUM or enums.get(field.enum_ref or "") != allowed:
+                errors.append(
+                    f"object_definitions.{object_definition.object_type}.fields.{field.field_path} "
+                    f"must be an enum field whose enum lists exactly {allowed}"
+                )
+    return errors
+
+
 class DomainPackMetadata(DomainPackMetadataBaseModel):
     """Top-level metadata contract for a provider-neutral domain pack."""
 
@@ -1087,6 +1134,8 @@ class DomainPackMetadata(DomainPackMetadataBaseModel):
                         f"{field_location}.object_type_ref references unknown object_type "
                         f"'{field_definition.object_type_ref}'"
                     )
+
+        errors.extend(_resolvable_vocabulary_errors(self))
 
         for fixture_pack in self.fixture_packs:
             for object_type in fixture_pack.object_types:

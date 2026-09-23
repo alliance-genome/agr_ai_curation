@@ -6,21 +6,28 @@ object. It keeps its domain's own id/label keys and adds:
 
 - ``mention``: the paper's wording (or the extractor's chosen text for a
   fixed-choice field). Written once by the builder; nothing overwrites it.
-- ``resolution_state``: exactly ``resolved`` or ``unresolved``.
-- ``resolution_reason``: None when resolved, otherwise one of
-  ``UNRESOLVED_REASONS``.
+- ``resolution_state``: the closed vocabulary ``ResolutionState``.
+- ``lookup_outcome``: the closed vocabulary ``LookupOutcome``; always set,
+  ``matched`` exactly when the value is resolved.
+- ``validator_explanation``: the validator's own explanation (free text,
+  nullable), and ``validator_curator_message``: its curator message, kept
+  apart from the explanation.
 
 The invariant: the state is ``resolved`` if and only if a validator (or a
-deterministic lookup that is the validation) supplied the identity; an
-unresolved value has empty id/label keys. A value the paper never mentions is
-absent, which is different from unresolved.
+deterministic lookup that is the validation) supplied the identity, if and
+only if the lookup outcome is ``matched``; an unresolved value has empty
+id/label keys. A value the paper never mentions is absent, which is different
+from unresolved.
 
 Values stored before this contract carry no contract state (no
-``resolution_state``, or another word there without a ``resolution_reason``).
-Their effective state is decided at read time (``effective_resolution``): resolved
-only when they hold an identity AND a validator write-back event
+``resolution_state`` and ``lookup_outcome`` pair). Their effective state is
+decided at read time (``effective_resolution``): resolved only when they hold
+an identity AND a validator write-back event
 (``metadata.validator_resolved_value_materialization``) covers their path;
-otherwise unresolved with reason ``legacy_unverified``.
+otherwise unresolved with outcome ``legacy_unverified``.
+
+Lookup outcomes are derived in code only: validator failure classifications
+map through one exhaustive table (``lookup_outcome_for_failure``).
 
 Domain builders, the materializer and every display surface use these helpers;
 none of them re-implements the rules.
@@ -30,48 +37,129 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
+from src.lib.domain_packs.validator_result_classification import ValidatorFailureClassification
 from src.schemas.domain_envelope import parse_field_path
 
 
 MENTION_KEY = "mention"
 RESOLUTION_STATE_KEY = "resolution_state"
-RESOLUTION_REASON_KEY = "resolution_reason"
-
-RESOLVED = "resolved"
-UNRESOLVED = "unresolved"
-RESOLUTION_STATES = (RESOLVED, UNRESOLVED)
-
-# Validator failure classifications (validator_result_classification.
-# validator_failure_classification) are stored as the reason unchanged.
-REASON_NOT_FOUND = "not_found"
-REASON_AMBIGUOUS = "ambiguous"
-REASON_CONFLICT = "conflict"
-REASON_BLOCKED = "blocked"
-REASON_TRANSIENT = "transient"
-REASON_INVALID_SCHEMA = "invalid_schema"
-REASON_MISSING_EXPECTED_RESULT_FIELD = "missing_expected_result_field"
-VALIDATOR_FAILURE_REASONS = (
-    REASON_NOT_FOUND,
-    REASON_AMBIGUOUS,
-    REASON_CONFLICT,
-    REASON_BLOCKED,
-    REASON_TRANSIENT,
-    REASON_INVALID_SCHEMA,
-    REASON_MISSING_EXPECTED_RESULT_FIELD,
+LOOKUP_OUTCOME_KEY = "lookup_outcome"
+VALIDATOR_EXPLANATION_KEY = "validator_explanation"
+VALIDATOR_CURATOR_MESSAGE_KEY = "validator_curator_message"
+# Every key the contract adds to a value; the rest are the domain's own keys.
+CONTRACT_KEYS = (
+    MENTION_KEY,
+    RESOLUTION_STATE_KEY,
+    LOOKUP_OUTCOME_KEY,
+    VALIDATOR_EXPLANATION_KEY,
+    VALIDATOR_CURATOR_MESSAGE_KEY,
 )
-# No validator ran yet: pending, binding in development, or skipped.
-REASON_NOT_VALIDATED = "not_validated"
-# Read time only, for values stored before this contract.
-REASON_LEGACY_UNVERIFIED = "legacy_unverified"
-STORED_UNRESOLVED_REASONS = (*VALIDATOR_FAILURE_REASONS, REASON_NOT_VALIDATED)
-UNRESOLVED_REASONS = (*STORED_UNRESOLVED_REASONS, REASON_LEGACY_UNVERIFIED)
+
+
+class ResolutionState(StrEnum):
+    """Closed vocabulary for ``resolution_state``."""
+
+    RESOLVED = "resolved"
+    UNRESOLVED = "unresolved"
+
+
+class LookupOutcome(StrEnum):
+    """Closed vocabulary for ``lookup_outcome``."""
+
+    MATCHED = "matched"
+    NOT_FOUND = "not_found"
+    AMBIGUOUS = "ambiguous"
+    CONFLICT = "conflict"
+    BLOCKED = "blocked"
+    TRANSIENT = "transient"
+    INVALID_SCHEMA = "invalid_schema"
+    MISSING_EXPECTED_RESULT_FIELD = "missing_expected_result_field"
+    # Every lookup succeeded, but the validator judged that no candidate fits.
+    REJECTED_CANDIDATES = "rejected_candidates"
+    # No validator ran yet: pending, binding in development, or skipped.
+    NOT_VALIDATED = "not_validated"
+    # Read time only, for values stored before this contract.
+    LEGACY_UNVERIFIED = "legacy_unverified"
+
+
+RESOLVED = ResolutionState.RESOLVED.value
+UNRESOLVED = ResolutionState.UNRESOLVED.value
+RESOLUTION_STATES = tuple(state.value for state in ResolutionState)
+LOOKUP_OUTCOMES = tuple(outcome.value for outcome in LookupOutcome)
+
+OUTCOME_MATCHED = LookupOutcome.MATCHED.value
+OUTCOME_NOT_FOUND = LookupOutcome.NOT_FOUND.value
+OUTCOME_AMBIGUOUS = LookupOutcome.AMBIGUOUS.value
+OUTCOME_CONFLICT = LookupOutcome.CONFLICT.value
+OUTCOME_BLOCKED = LookupOutcome.BLOCKED.value
+OUTCOME_TRANSIENT = LookupOutcome.TRANSIENT.value
+OUTCOME_INVALID_SCHEMA = LookupOutcome.INVALID_SCHEMA.value
+OUTCOME_MISSING_EXPECTED_RESULT_FIELD = LookupOutcome.MISSING_EXPECTED_RESULT_FIELD.value
+OUTCOME_REJECTED_CANDIDATES = LookupOutcome.REJECTED_CANDIDATES.value
+OUTCOME_NOT_VALIDATED = LookupOutcome.NOT_VALIDATED.value
+OUTCOME_LEGACY_UNVERIFIED = LookupOutcome.LEGACY_UNVERIFIED.value
+
+# The one table from validator failure classifications to lookup outcomes. It
+# must name every classification (a test enforces it).
+_OUTCOME_FOR_FAILURE: dict[ValidatorFailureClassification, LookupOutcome] = {
+    "not_found": LookupOutcome.NOT_FOUND,
+    "ambiguous": LookupOutcome.AMBIGUOUS,
+    "conflict": LookupOutcome.CONFLICT,
+    "blocked": LookupOutcome.BLOCKED,
+    "transient": LookupOutcome.TRANSIENT,
+    "invalid_schema": LookupOutcome.INVALID_SCHEMA,
+    "missing_expected_result_field": LookupOutcome.MISSING_EXPECTED_RESULT_FIELD,
+    "rejected_candidates": LookupOutcome.REJECTED_CANDIDATES,
+}
+# Outcomes a stored unresolved value may carry (legacy_unverified is read-time only).
+STORED_UNRESOLVED_OUTCOMES = tuple(
+    outcome.value
+    for outcome in LookupOutcome
+    if outcome not in (LookupOutcome.MATCHED, LookupOutcome.LEGACY_UNVERIFIED)
+)
+
+# Plain words for curators, e.g. a "(lookup result)" column.
+LOOKUP_OUTCOME_LABELS: dict[str, str] = {
+    OUTCOME_MATCHED: "Matched",
+    OUTCOME_NOT_FOUND: "Not found",
+    OUTCOME_AMBIGUOUS: "Several matches",
+    OUTCOME_CONFLICT: "Conflict",
+    OUTCOME_BLOCKED: "Blocked",
+    OUTCOME_TRANSIENT: "Temporary error",
+    OUTCOME_INVALID_SCHEMA: "Invalid validator output",
+    OUTCOME_MISSING_EXPECTED_RESULT_FIELD: "Validator result incomplete",
+    OUTCOME_REJECTED_CANDIDATES: "Candidates rejected",
+    OUTCOME_NOT_VALIDATED: "Not validated yet",
+    OUTCOME_LEGACY_UNVERIFIED: "Legacy, unverified",
+}
+RESOLUTION_STATE_LABELS: dict[str, str] = {RESOLVED: "Resolved", UNRESOLVED: "Unresolved"}
+
+NOT_VALIDATED_EXPLANATION = "Not validated yet."
+LEGACY_EXPLANATION = "Recorded before validation tracking; not verified."
 
 # The cell text for an unresolved value on every non-JSON surface.
 UNRESOLVED_DISPLAY = "UNRESOLVED"
-# Column header suffix for a resolvable value's ``.mention`` leaf.
+# Column header suffixes for a resolvable value's own leaves.
 PAPER_WORDING_SUFFIX = "(paper wording)"
+STATUS_SUFFIX = "(status)"
+LOOKUP_RESULT_SUFFIX = "(lookup result)"
+VALIDATOR_EXPLANATION_SUFFIX = "(validator explanation)"
+VALIDATOR_MESSAGE_SUFFIX = "(validator message)"
+_LEAF_HEADER_SUFFIXES = {
+    MENTION_KEY: PAPER_WORDING_SUFFIX,
+    RESOLUTION_STATE_KEY: STATUS_SUFFIX,
+    LOOKUP_OUTCOME_KEY: LOOKUP_RESULT_SUFFIX,
+    VALIDATOR_EXPLANATION_KEY: VALIDATOR_EXPLANATION_SUFFIX,
+    VALIDATOR_CURATOR_MESSAGE_KEY: VALIDATOR_MESSAGE_SUFFIX,
+}
+# Plain words for the stored codes of a resolvable value's vocabulary leaves.
+LEAF_VALUE_LABELS = {
+    RESOLUTION_STATE_KEY: RESOLUTION_STATE_LABELS,
+    LOOKUP_OUTCOME_KEY: LOOKUP_OUTCOME_LABELS,
+}
 # Appended to a legacy value's stored text, shown as paper wording.
 LEGACY_UNVERIFIED_SUFFIX = "(legacy, unverified)"
 
@@ -80,6 +168,32 @@ VALIDATOR_MATERIALIZATION_METADATA_KEY = "validator_resolved_value_materializati
 
 class ResolvableValueError(ValueError):
     """A resolvable value violates the extracted-vs-validated invariant."""
+
+
+def lookup_outcome_for_failure(classification: str) -> str:
+    """The lookup outcome for a ``validator_failure_classification`` result."""
+
+    try:
+        return _OUTCOME_FOR_FAILURE[classification].value  # type: ignore[index]
+    except KeyError as exc:
+        raise ResolvableValueError(
+            f"No lookup outcome for validator failure classification {classification!r}"
+        ) from exc
+
+
+def resolvable_leaf_header(parent_label: str, key: str, *, mention_key: str = MENTION_KEY) -> str | None:
+    """The column header for a resolvable value's own leaf, e.g. "Anatomy (lookup result)".
+
+    None for the value's domain keys (id, label, ...), which read under their own names.
+    """
+
+    if key == mention_key:
+        suffix = PAPER_WORDING_SUFFIX
+    elif key == MENTION_KEY:
+        suffix = None
+    else:
+        suffix = _LEAF_HEADER_SUFFIXES.get(key)
+    return f"{parent_label} {suffix}" if suffix else None
 
 
 @dataclass(frozen=True)
@@ -130,17 +244,17 @@ def _is_empty(value: Any) -> bool:
 
 
 def has_resolution_state(value: Any) -> bool:
-    """Whether a stored value carries the contract's explicit state.
+    """Whether a stored value carries the contract state.
 
-    That is a ``resolution_state`` of ``resolved`` or ``unresolved`` written
-    together with its ``resolution_reason`` key. Values stored before the
-    contract (including ones with other ``resolution_state`` words) do not.
+    That is a ``resolution_state`` and a ``lookup_outcome`` written together.
+    Values stored before the contract (no state, or another word in
+    ``resolution_state`` without a lookup outcome) do not.
     """
 
     return (
         isinstance(value, Mapping)
-        and value.get(RESOLUTION_STATE_KEY) in RESOLUTION_STATES
-        and RESOLUTION_REASON_KEY in value
+        and RESOLUTION_STATE_KEY in value
+        and LOOKUP_OUTCOME_KEY in value
     )
 
 
@@ -152,10 +266,16 @@ def holds_resolution(value: Any) -> bool:
     )
 
 
+def _optional_text(value: Any, key: str) -> None:
+    if value is not None and not isinstance(value, str):
+        raise ResolvableValueError(f"{key} must be text or null, got {type(value).__name__}")
+
+
 def check_resolvable_value(value: Any, *, identity_keys: Sequence[str]) -> None:
     """Raise ``ResolvableValueError`` unless ``value`` satisfies the invariant.
 
-    ``identity_keys`` are the id/label keys the caller's domain uses.
+    ``identity_keys`` are the id/label keys the caller's domain uses. The state
+    and outcome must be values of their closed vocabularies.
     """
 
     if not isinstance(value, Mapping):
@@ -165,30 +285,33 @@ def check_resolvable_value(value: Any, *, identity_keys: Sequence[str]) -> None:
     mention = value.get(MENTION_KEY)
     if MENTION_KEY in value and not (isinstance(mention, str) and mention.strip()):
         raise ResolvableValueError("mention must be the non-empty paper wording")
+    _optional_text(value.get(VALIDATOR_EXPLANATION_KEY), VALIDATOR_EXPLANATION_KEY)
+    _optional_text(value.get(VALIDATOR_CURATOR_MESSAGE_KEY), VALIDATOR_CURATOR_MESSAGE_KEY)
     state = value.get(RESOLUTION_STATE_KEY)
-    reason = value.get(RESOLUTION_REASON_KEY)
+    outcome = value.get(LOOKUP_OUTCOME_KEY)
+    if state not in RESOLUTION_STATES:
+        raise ResolvableValueError(f"resolution_state must be one of {RESOLUTION_STATES}, got {state!r}")
+    if outcome not in LOOKUP_OUTCOMES:
+        raise ResolvableValueError(f"lookup_outcome must be one of {LOOKUP_OUTCOMES}, got {outcome!r}")
     has_identity = any(not _is_empty(value.get(key)) for key in identity_keys)
     if state == RESOLVED:
-        if reason is not None:
-            raise ResolvableValueError(f"A resolved value has no resolution_reason, got {reason!r}")
+        if outcome != OUTCOME_MATCHED:
+            raise ResolvableValueError(f"A resolved value's lookup_outcome is matched, got {outcome!r}")
         if not has_identity:
             raise ResolvableValueError(
                 "A resolved value needs the identity a validator supplied "
                 f"(one of {', '.join(identity_keys)})"
             )
         return
-    if state == UNRESOLVED:
-        if reason not in STORED_UNRESOLVED_REASONS:
-            raise ResolvableValueError(
-                f"An unresolved value needs a resolution_reason in {STORED_UNRESOLVED_REASONS}, got {reason!r}"
-            )
-        if has_identity:
-            raise ResolvableValueError(
-                "An unresolved value never carries an identity; "
-                f"{', '.join(key for key in identity_keys if not _is_empty(value.get(key)))} must be empty"
-            )
-        return
-    raise ResolvableValueError(f"resolution_state must be one of {RESOLUTION_STATES}, got {state!r}")
+    if outcome not in STORED_UNRESOLVED_OUTCOMES:
+        raise ResolvableValueError(
+            f"An unresolved value's lookup_outcome is one of {STORED_UNRESOLVED_OUTCOMES}, got {outcome!r}"
+        )
+    if has_identity:
+        raise ResolvableValueError(
+            "An unresolved value never carries an identity; "
+            f"{', '.join(key for key in identity_keys if not _is_empty(value.get(key)))} must be empty"
+        )
 
 
 def _required_mention(mention: Any) -> str:
@@ -200,12 +323,15 @@ def _required_mention(mention: Any) -> str:
 def resolved_value(
     mention: str,
     identity: Mapping[str, Any],
+    *,
+    explanation: str | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
-    """A value whose identity a validator or deterministic lookup supplied.
+    """A value whose identity a deterministic lookup (that is the validation) supplied.
 
     ``identity`` holds the domain's id/label keys (e.g. ``{"curie": ..., "name": ...}``);
-    ``extra`` holds other domain keys kept alongside (e.g. ``vocabulary``).
+    ``extra`` holds other domain keys kept alongside (e.g. ``vocabulary``);
+    ``explanation`` says how the lookup matched, when the caller has it.
     """
 
     if not identity:
@@ -215,7 +341,8 @@ def resolved_value(
         **dict(identity),
         MENTION_KEY: _required_mention(mention),
         RESOLUTION_STATE_KEY: RESOLVED,
-        RESOLUTION_REASON_KEY: None,
+        LOOKUP_OUTCOME_KEY: OUTCOME_MATCHED,
+        VALIDATOR_EXPLANATION_KEY: explanation,
     }
     check_resolvable_value(value, identity_keys=tuple(identity))
     return value
@@ -225,48 +352,101 @@ def unresolved_value(
     mention: str,
     *,
     identity_keys: Sequence[str],
-    reason: str = REASON_NOT_VALIDATED,
+    outcome: str = OUTCOME_NOT_VALIDATED,
+    explanation: str | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
-    """A staged value no validator has resolved; its identity keys are written as null."""
+    """A staged value no validator has resolved; its identity keys are written as null.
 
+    A value staged for validation (``not_validated``) explains itself as
+    "Not validated yet."
+    """
+
+    if outcome == OUTCOME_NOT_VALIDATED and explanation is None:
+        explanation = NOT_VALIDATED_EXPLANATION
     value = {
         **extra,
         **{key: None for key in identity_keys},
         MENTION_KEY: _required_mention(mention),
         RESOLUTION_STATE_KEY: UNRESOLVED,
-        RESOLUTION_REASON_KEY: reason,
+        LOOKUP_OUTCOME_KEY: outcome,
+        VALIDATOR_EXPLANATION_KEY: explanation,
     }
     check_resolvable_value(value, identity_keys=identity_keys)
     return value
 
 
-def mark_resolved(value: MutableMapping[str, Any], identity: Mapping[str, Any]) -> None:
-    """Write a validator-supplied identity and the resolved state; ``mention`` is untouched."""
+def _write_validator_text(
+    value: MutableMapping[str, Any],
+    explanation: str | None,
+    curator_message: str | None,
+) -> None:
+    value[VALIDATOR_EXPLANATION_KEY] = explanation
+    value[VALIDATOR_CURATOR_MESSAGE_KEY] = curator_message
+
+
+def mark_resolved(
+    value: MutableMapping[str, Any],
+    identity: Mapping[str, Any],
+    *,
+    explanation: str | None,
+    curator_message: str | None = None,
+) -> None:
+    """Write a validator-supplied identity, the resolved state and the validator's own words.
+
+    ``mention`` is untouched. ``explanation`` and ``curator_message`` come from
+    the validator result and are stored apart, never merged.
+    """
 
     if not identity or all(_is_empty(item) for item in identity.values()):
         raise ResolvableValueError("mark_resolved needs the identity a validator supplied")
     value.update(identity)
     value[RESOLUTION_STATE_KEY] = RESOLVED
-    value[RESOLUTION_REASON_KEY] = None
+    value[LOOKUP_OUTCOME_KEY] = OUTCOME_MATCHED
+    _write_validator_text(value, explanation, curator_message)
     check_resolvable_value(value, identity_keys=tuple(identity))
 
 
-def mark_unresolved(value: MutableMapping[str, Any], reason: str) -> None:
+def mark_unresolved(
+    value: MutableMapping[str, Any],
+    outcome: str,
+    *,
+    explanation: str | None,
+    curator_message: str | None = None,
+) -> None:
     """Record why a value is unresolved; never touches its id/label or ``mention``.
 
     A value some earlier validator resolved keeps that identity and state:
     unresolved write-back only applies to values that were never resolved.
     """
 
-    if reason not in STORED_UNRESOLVED_REASONS:
+    if outcome not in STORED_UNRESOLVED_OUTCOMES:
         raise ResolvableValueError(
-            f"resolution_reason must be one of {STORED_UNRESOLVED_REASONS}, got {reason!r}"
+            f"lookup_outcome must be one of {STORED_UNRESOLVED_OUTCOMES}, got {outcome!r}"
         )
     if has_resolution_state(value) and value[RESOLUTION_STATE_KEY] == RESOLVED:
         return
     value[RESOLUTION_STATE_KEY] = UNRESOLVED
-    value[RESOLUTION_REASON_KEY] = reason
+    value[LOOKUP_OUTCOME_KEY] = outcome
+    _write_validator_text(value, explanation, curator_message)
+
+
+def copy_resolution(source: Mapping[str, Any], target: MutableMapping[str, Any]) -> None:
+    """Give a mirror copy its source value's state, outcome and validator text."""
+
+    if source.get(RESOLUTION_STATE_KEY) == RESOLVED:
+        target[RESOLUTION_STATE_KEY] = RESOLVED
+        target[LOOKUP_OUTCOME_KEY] = OUTCOME_MATCHED
+        _write_validator_text(
+            target, source.get(VALIDATOR_EXPLANATION_KEY), source.get(VALIDATOR_CURATOR_MESSAGE_KEY),
+        )
+    elif source.get(RESOLUTION_STATE_KEY) == UNRESOLVED:
+        mark_unresolved(
+            target,
+            source[LOOKUP_OUTCOME_KEY],
+            explanation=source.get(VALIDATOR_EXPLANATION_KEY),
+            curator_message=source.get(VALIDATOR_CURATOR_MESSAGE_KEY),
+        )
 
 
 # --- Lists of resolvable values ------------------------------------------------
@@ -288,11 +468,11 @@ def unresolved_list(
     mentions: Iterable[str],
     *,
     identity_keys: Sequence[str],
-    reason: str = REASON_NOT_VALIDATED,
+    outcome: str = OUTCOME_NOT_VALIDATED,
 ) -> list[dict[str, Any]]:
     """Stage each proposed mention as its own unresolved element."""
 
-    return [unresolved_value(mention, identity_keys=identity_keys, reason=reason) for mention in mentions]
+    return [unresolved_value(mention, identity_keys=identity_keys, outcome=outcome) for mention in mentions]
 
 
 def unresolved_positions(values: Sequence[Any]) -> list[int]:
@@ -301,7 +481,7 @@ def unresolved_positions(values: Sequence[Any]) -> list[int]:
     return [
         index
         for index, item in enumerate(values)
-        if not (isinstance(item, Mapping) and item.get(RESOLUTION_STATE_KEY) == RESOLVED)
+        if not (has_resolution_state(item) and item[RESOLUTION_STATE_KEY] == RESOLVED)
     ]
 
 
@@ -361,21 +541,26 @@ def effective_resolution(
     *,
     identity_keys: Sequence[str],
     covered_by_validator: bool,
-) -> tuple[str, str | None]:
-    """The (state, reason) a stored value reads with.
+) -> tuple[str, str]:
+    """The (resolution_state, lookup_outcome) a stored value reads with.
 
-    A value with the contract's explicit state reads as stored. A value
-    stored before the contract (no state, or another ``resolution_state``
-    word) is resolved only when it holds an identity and a validator
-    write-back event covers it (``validator_event_covers``); otherwise it is
-    unresolved with reason ``legacy_unverified``.
+    A value with the contract state reads as stored. A value stored before
+    the contract (no state, or another ``resolution_state`` word) is resolved
+    (``matched``) only when it holds an identity and a validator write-back
+    event covers it (``validator_event_covers``); otherwise it is unresolved
+    with outcome ``legacy_unverified``. Only vocabulary values come back.
     """
 
     if has_resolution_state(value):
-        return str(value.get(RESOLUTION_STATE_KEY)), value.get(RESOLUTION_REASON_KEY)
+        state, outcome = value.get(RESOLUTION_STATE_KEY), value.get(LOOKUP_OUTCOME_KEY)
+        if state not in RESOLUTION_STATES or outcome not in LOOKUP_OUTCOMES:
+            raise ResolvableValueError(
+                f"Stored resolution {state!r}/{outcome!r} is outside the controlled vocabulary"
+            )
+        return str(state), str(outcome)
     if covered_by_validator and any(not _is_empty(value.get(key)) for key in identity_keys):
-        return RESOLVED, None
-    return UNRESOLVED, REASON_LEGACY_UNVERIFIED
+        return RESOLVED, OUTCOME_MATCHED
+    return UNRESOLVED, OUTCOME_LEGACY_UNVERIFIED
 
 
 def _stored_text(value: Mapping[str, Any], spec: ResolvableSpec) -> str:
@@ -397,20 +582,22 @@ def effective_value(
 ) -> Any:
     """A read-time copy of a resolvable value with its effective state written in.
 
-    Values with an explicit state come back unchanged. A legacy value that is
-    not verified reads as unresolved/``legacy_unverified``: its identity keys
-    are emptied and its stored text becomes paper wording labelled
-    "(legacy, unverified)". Nothing is written back to storage.
+    Values with the contract state come back unchanged. A legacy value reads
+    with the explanation "Recorded before validation tracking; not verified."
+    When not verified it reads as unresolved/``legacy_unverified``: its
+    identity keys are emptied and its stored text becomes paper wording
+    labelled "(legacy, unverified)". Nothing is written back to storage.
     """
 
     if not isinstance(value, Mapping) or has_resolution_state(value):
         return value
-    state, reason = effective_resolution(
+    state, outcome = effective_resolution(
         value, identity_keys=spec.identity_keys, covered_by_validator=covered_by_validator,
     )
     annotated = dict(value)
     annotated[RESOLUTION_STATE_KEY] = state
-    annotated[RESOLUTION_REASON_KEY] = reason
+    annotated[LOOKUP_OUTCOME_KEY] = outcome
+    annotated[VALIDATOR_EXPLANATION_KEY] = LEGACY_EXPLANATION
     if state == UNRESOLVED:
         stored = _stored_text(value, spec)
         for key in spec.identity_keys:
@@ -531,7 +718,7 @@ def unresolved_header_text(
         return f"{mention} {PAPER_WORDING_SUFFIX}" if mention else UNRESOLVED_DISPLAY
     identity = [leaf] if target is not named else [
         item for key, item in target.items()
-        if key not in (MENTION_KEY, RESOLUTION_STATE_KEY, RESOLUTION_REASON_KEY)
+        if key not in CONTRACT_KEYS
     ]
     if any(not _is_empty(item) for item in identity) and validator_event_covers(
         object_metadata, _format_path(target_tokens)
@@ -542,39 +729,57 @@ def unresolved_header_text(
 
 
 __all__ = [
+    "CONTRACT_KEYS",
+    "LEAF_VALUE_LABELS",
+    "LEGACY_EXPLANATION",
     "LEGACY_UNVERIFIED_SUFFIX",
+    "LOOKUP_OUTCOMES",
+    "LOOKUP_OUTCOME_KEY",
+    "LOOKUP_OUTCOME_LABELS",
+    "LOOKUP_RESULT_SUFFIX",
+    "LookupOutcome",
     "MENTION_KEY",
+    "NOT_VALIDATED_EXPLANATION",
+    "OUTCOME_AMBIGUOUS",
+    "OUTCOME_BLOCKED",
+    "OUTCOME_CONFLICT",
+    "OUTCOME_INVALID_SCHEMA",
+    "OUTCOME_LEGACY_UNVERIFIED",
+    "OUTCOME_MATCHED",
+    "OUTCOME_MISSING_EXPECTED_RESULT_FIELD",
+    "OUTCOME_NOT_FOUND",
+    "OUTCOME_NOT_VALIDATED",
+    "OUTCOME_REJECTED_CANDIDATES",
+    "OUTCOME_TRANSIENT",
     "PAPER_WORDING_SUFFIX",
-    "REASON_AMBIGUOUS",
-    "REASON_BLOCKED",
-    "REASON_CONFLICT",
-    "REASON_INVALID_SCHEMA",
-    "REASON_LEGACY_UNVERIFIED",
-    "REASON_MISSING_EXPECTED_RESULT_FIELD",
-    "REASON_NOT_FOUND",
-    "REASON_NOT_VALIDATED",
-    "REASON_TRANSIENT",
-    "RESOLUTION_REASON_KEY",
     "RESOLUTION_STATES",
     "RESOLUTION_STATE_KEY",
+    "RESOLUTION_STATE_LABELS",
     "RESOLVED",
+    "ResolutionState",
     "ResolvableSpec",
     "ResolvableValueError",
-    "STORED_UNRESOLVED_REASONS",
+    "STATUS_SUFFIX",
+    "STORED_UNRESOLVED_OUTCOMES",
     "UNRESOLVED",
     "UNRESOLVED_DISPLAY",
-    "UNRESOLVED_REASONS",
-    "VALIDATOR_FAILURE_REASONS",
+    "VALIDATOR_CURATOR_MESSAGE_KEY",
+    "VALIDATOR_EXPLANATION_KEY",
+    "VALIDATOR_EXPLANATION_SUFFIX",
     "VALIDATOR_MATERIALIZATION_METADATA_KEY",
+    "VALIDATOR_MESSAGE_SUFFIX",
     "check_resolvable_list",
     "check_resolvable_value",
+    "copy_resolution",
     "effective_payload",
     "effective_resolution",
     "effective_value",
     "has_resolution_state",
     "holds_resolution",
+    "lookup_outcome_for_failure",
     "mark_resolved",
     "mark_unresolved",
+    "resolvable_leaf_header",
     "resolvable_spec_from_display",
     "resolved_value",
     "unresolved_header_text",

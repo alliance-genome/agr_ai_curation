@@ -13,20 +13,31 @@ from src.lib.domain_packs.materialization import (
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.resolvable_values import (
+    LEGACY_EXPLANATION,
     LEGACY_UNVERIFIED_SUFFIX,
-    REASON_LEGACY_UNVERIFIED,
-    REASON_NOT_FOUND,
-    REASON_NOT_VALIDATED,
+    LOOKUP_OUTCOME_LABELS,
+    LOOKUP_OUTCOMES,
+    NOT_VALIDATED_EXPLANATION,
+    OUTCOME_LEGACY_UNVERIFIED,
+    OUTCOME_MATCHED,
+    OUTCOME_NOT_FOUND,
+    OUTCOME_NOT_VALIDATED,
+    RESOLUTION_STATES,
     RESOLVED,
     UNRESOLVED,
+    LookupOutcome,
+    ResolutionState,
     ResolvableSpec,
     ResolvableValueError,
     check_resolvable_list,
     check_resolvable_value,
     effective_payload,
     effective_resolution,
+    effective_value,
+    lookup_outcome_for_failure,
     mark_resolved,
     mark_unresolved,
+    resolvable_leaf_header,
     resolvable_spec_from_display,
     resolved_value,
     unresolved_list,
@@ -38,12 +49,17 @@ from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
 )
+from src.lib.domain_packs.validator_result_classification import (
+    VALIDATOR_FAILURE_CLASSIFICATIONS,
+    validator_failure_classification,
+)
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
     DomainEnvelope,
 )
 from src.schemas.domain_pack_metadata import (
+    DomainPackEnumDefinition,
     DomainPackFieldDefinition,
     DomainPackFieldType,
     DomainPackMetadata,
@@ -55,14 +71,73 @@ from src.schemas.domain_validator import DomainValidatorResultBase
 TERM_KEYS = ("curie", "name")
 
 
-def test_builders_write_mention_state_and_reason():
+def test_vocabularies_are_closed_enums():
+    assert RESOLUTION_STATES == ("resolved", "unresolved")
+    assert LOOKUP_OUTCOMES == (
+        "matched", "not_found", "ambiguous", "conflict", "blocked", "transient", "invalid_schema",
+        "missing_expected_result_field", "rejected_candidates", "not_validated", "legacy_unverified",
+    )
+    assert tuple(ResolutionState) == RESOLUTION_STATES
+    assert tuple(LookupOutcome) == LOOKUP_OUTCOMES
+    assert set(LOOKUP_OUTCOME_LABELS) == set(LOOKUP_OUTCOMES)
+
+
+def test_every_validator_failure_classification_maps_to_a_lookup_outcome():
+    """Guard: a new classification without a mapping fails here."""
+
+    for classification in VALIDATOR_FAILURE_CLASSIFICATIONS:
+        assert lookup_outcome_for_failure(classification) in LOOKUP_OUTCOMES
+    with pytest.raises(ResolvableValueError):
+        lookup_outcome_for_failure("something_new")
+
+
+def test_the_classifier_only_returns_declared_classifications():
+    """Guard: a new literal returned by the classifier must be declared (and so mapped)."""
+
+    import ast
+    import inspect
+
+    source = inspect.getsource(validator_failure_classification)
+    returned = {
+        node.value.value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Constant)
+    }
+    assert returned and returned <= set(VALIDATOR_FAILURE_CLASSIFICATIONS)
+
+
+def _classify(outcomes):
+    return validator_failure_classification(DomainValidatorResultBase.model_validate({
+        "status": "unresolved", "request_id": "r", "validator_binding_id": "b",
+        "validator_agent": {"package_id": "p", "agent_id": "a"},
+        "target": {"domain_pack_id": "fixture.vocab", "object_type": "T"}, "resolved_values": {}, "resolved_objects": [],
+        "missing_expected_fields": [], "candidates": [],
+        "lookup_attempts": [
+            {"provider": "x", "method": "m", "query": {}, "result_count": 1, "outcome": outcome}
+            for outcome in outcomes
+        ],
+        "curator_message": None, "explanation": "e",
+    }))
+
+
+def test_all_lookups_succeeding_without_a_fit_is_rejected_candidates():
+    assert _classify(["success"]) == "rejected_candidates"
+    assert _classify(["success", "success"]) == "rejected_candidates"
+    assert _classify(["success", "not_found"]) == "not_found"
+    assert lookup_outcome_for_failure("rejected_candidates") == "rejected_candidates"
+    with pytest.raises(ValueError, match="Unable to classify"):
+        _classify([])
+
+
+def test_builders_write_mention_state_outcome_and_explanation():
     value = unresolved_value("residual body structures", identity_keys=TERM_KEYS)
     assert value == {
         "curie": None,
         "name": None,
         "mention": "residual body structures",
         "resolution_state": UNRESOLVED,
-        "resolution_reason": REASON_NOT_VALIDATED,
+        "lookup_outcome": OUTCOME_NOT_VALIDATED,
+        "validator_explanation": NOT_VALIDATED_EXPLANATION,
     }
     resolved = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"}, vocabulary="demo")
     assert resolved == {
@@ -71,7 +146,8 @@ def test_builders_write_mention_state_and_reason():
         "name": "epidermis",
         "mention": "skin",
         "resolution_state": RESOLVED,
-        "resolution_reason": None,
+        "lookup_outcome": OUTCOME_MATCHED,
+        "validator_explanation": None,
     }
 
 
@@ -79,18 +155,22 @@ def test_builders_write_mention_state_and_reason():
     "value",
     [
         # Resolved without the identity a validator supplied.
-        {"curie": None, "mention": "x", "resolution_state": "resolved", "resolution_reason": None},
-        # Resolved with a reason.
-        {"curie": "ONT:1", "mention": "x", "resolution_state": "resolved", "resolution_reason": "not_found"},
+        {"curie": None, "mention": "x", "resolution_state": "resolved", "lookup_outcome": "matched"},
+        # Resolved with any outcome but matched.
+        {"curie": "ONT:1", "mention": "x", "resolution_state": "resolved", "lookup_outcome": "not_found"},
         # Unresolved but carrying an identity.
-        {"curie": "ONT:1", "mention": "x", "resolution_state": "unresolved", "resolution_reason": "not_found"},
-        # Unresolved without a stored reason (legacy_unverified is read-time only).
-        {"curie": None, "mention": "x", "resolution_state": "unresolved", "resolution_reason": None},
-        {"curie": None, "mention": "x", "resolution_state": "unresolved", "resolution_reason": "legacy_unverified"},
-        # Any other state.
-        {"curie": "ONT:1", "mention": "x", "resolution_state": "validated", "resolution_reason": None},
-        # An empty mention.
-        {"curie": None, "mention": " ", "resolution_state": "unresolved", "resolution_reason": "not_validated"},
+        {"curie": "ONT:1", "mention": "x", "resolution_state": "unresolved", "lookup_outcome": "not_found"},
+        # Unresolved as matched, without an outcome, or with the read-time-only outcome.
+        {"curie": None, "mention": "x", "resolution_state": "unresolved", "lookup_outcome": "matched"},
+        {"curie": None, "mention": "x", "resolution_state": "unresolved", "lookup_outcome": None},
+        {"curie": None, "mention": "x", "resolution_state": "unresolved", "lookup_outcome": "legacy_unverified"},
+        # Words outside the vocabularies.
+        {"curie": "ONT:1", "mention": "x", "resolution_state": "validated", "lookup_outcome": "matched"},
+        {"curie": None, "mention": "x", "resolution_state": "unresolved", "lookup_outcome": "no idea"},
+        # An empty mention, or a non-text explanation.
+        {"curie": None, "mention": " ", "resolution_state": "unresolved", "lookup_outcome": "not_validated"},
+        {"curie": None, "mention": "x", "resolution_state": "unresolved", "lookup_outcome": "not_found",
+         "validator_explanation": ["not", "text"]},
     ],
 )
 def test_invariant_violations_raise(value):
@@ -98,32 +178,36 @@ def test_invariant_violations_raise(value):
         check_resolvable_value(value, identity_keys=TERM_KEYS)
 
 
-def test_builders_require_mention():
+def test_builders_require_mention_and_a_vocabulary_outcome():
     with pytest.raises(ResolvableValueError, match="paper wording"):
         unresolved_value("", identity_keys=TERM_KEYS)
     with pytest.raises(ResolvableValueError, match="paper wording"):
         resolved_value(None, {"curie": "ONT:1"})
+    with pytest.raises(ResolvableValueError, match="lookup_outcome"):
+        unresolved_value("skin", identity_keys=TERM_KEYS, outcome="free text reason")
 
 
-def test_mark_unresolved_never_touches_identity_or_mention():
-    value = {"mention": "skin", "curie": None, "name": None,
-             "resolution_state": UNRESOLVED, "resolution_reason": REASON_NOT_VALIDATED}
-    mark_unresolved(value, REASON_NOT_FOUND)
+def test_mark_writes_validator_words_and_never_touches_identity_or_mention():
+    value = unresolved_value("skin", identity_keys=TERM_KEYS)
+    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="No term matched skin.", curator_message="Check it.")
     assert value == {"mention": "skin", "curie": None, "name": None,
-                     "resolution_state": UNRESOLVED, "resolution_reason": REASON_NOT_FOUND}
-    mark_resolved(value, {"curie": "ONT:1", "name": "epidermis"})
+                     "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_FOUND,
+                     "validator_explanation": "No term matched skin.",
+                     "validator_curator_message": "Check it."}
+    mark_resolved(value, {"curie": "ONT:1", "name": "epidermis"}, explanation="Exact synonym.")
     assert value["mention"] == "skin"
-    assert (value["resolution_state"], value["resolution_reason"]) == (RESOLVED, None)
+    assert (value["resolution_state"], value["lookup_outcome"]) == (RESOLVED, OUTCOME_MATCHED)
+    assert (value["validator_explanation"], value["validator_curator_message"]) == ("Exact synonym.", None)
     # A later failure cannot un-resolve a value an earlier validator resolved.
-    mark_unresolved(value, REASON_NOT_FOUND)
+    mark_unresolved(value, OUTCOME_NOT_FOUND, explanation="x")
     assert value["resolution_state"] == RESOLVED
     with pytest.raises(ResolvableValueError):
-        mark_unresolved(value, "legacy_unverified")
+        mark_unresolved(value, "legacy_unverified", explanation=None)
 
 
 def test_list_helpers_keep_each_element_separate():
     values = unresolved_list(["IMP", "IDA"], identity_keys=("curie",))
-    mark_resolved(values[0], {"curie": "ECO:1"})
+    mark_resolved(values[0], {"curie": "ECO:1"}, explanation=None)
     check_resolvable_list(values, identity_keys=("curie",))
     assert unresolved_positions(values) == [1]
     values[1]["curie"] = "ECO:2"
@@ -138,6 +222,16 @@ def test_display_spec_mention_role_declares_a_resolvable_value():
     assert spec.identity_keys == ("curie", "name")
 
 
+def test_leaf_headers_name_each_part_in_plain_words():
+    assert resolvable_leaf_header("Anatomy", "mention") == "Anatomy (paper wording)"
+    assert resolvable_leaf_header("Anatomy", "resolution_state") == "Anatomy (status)"
+    assert resolvable_leaf_header("Anatomy", "lookup_outcome") == "Anatomy (lookup result)"
+    assert resolvable_leaf_header("Anatomy", "validator_explanation") == "Anatomy (validator explanation)"
+    assert resolvable_leaf_header("Anatomy", "curie") is None
+    assert LOOKUP_OUTCOME_LABELS["ambiguous"] == "Several matches"
+    assert LOOKUP_OUTCOME_LABELS["rejected_candidates"] == "Candidates rejected"
+
+
 def test_legacy_values_are_resolved_only_with_an_identity_and_a_covering_event():
     metadata = {"validator_resolved_value_materialization": [
         {"original_values": {"terms[1].name": "skin"}},
@@ -149,15 +243,35 @@ def test_legacy_values_are_resolved_only_with_an_identity_and_a_covering_event()
     assert not validator_event_covers(None, "site")
 
     assert effective_resolution({"curie": "ONT:1"}, identity_keys=TERM_KEYS, covered_by_validator=True) == (
-        RESOLVED, None)
+        RESOLVED, OUTCOME_MATCHED)
     assert effective_resolution({"curie": "ONT:1"}, identity_keys=TERM_KEYS, covered_by_validator=False) == (
-        UNRESOLVED, REASON_LEGACY_UNVERIFIED)
+        UNRESOLVED, OUTCOME_LEGACY_UNVERIFIED)
     assert effective_resolution({"name": None}, identity_keys=TERM_KEYS, covered_by_validator=True) == (
-        UNRESOLVED, REASON_LEGACY_UNVERIFIED)
-    # An explicit state always reads as stored.
-    stored = {"curie": None, "mention": "x", "resolution_state": UNRESOLVED, "resolution_reason": REASON_NOT_FOUND}
+        UNRESOLVED, OUTCOME_LEGACY_UNVERIFIED)
+    # A contract value always reads as stored; a stored word outside the vocabulary raises.
+    stored = {"curie": None, "mention": "x", "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_FOUND}
     assert effective_resolution(stored, identity_keys=TERM_KEYS, covered_by_validator=True) == (
-        UNRESOLVED, REASON_NOT_FOUND)
+        UNRESOLVED, OUTCOME_NOT_FOUND)
+    with pytest.raises(ResolvableValueError, match="controlled vocabulary"):
+        effective_resolution({**stored, "lookup_outcome": "whatever"}, identity_keys=TERM_KEYS,
+                             covered_by_validator=True)
+
+
+@pytest.mark.parametrize("covered", [True, False])
+@pytest.mark.parametrize("value", [
+    {"curie": "ONT:1", "name": "skin"},
+    {"curie": None, "name": "skin"},
+    {"name": "skin", "resolution_state": "pending_ontology_resolution"},
+    {"curie": "ONT:1", "resolution_state": "resolved"},
+    {"mention": "skin"},
+])
+def test_the_legacy_rule_only_emits_vocabulary_values(value, covered):
+    effective = effective_value(value, ResolvableSpec(id_key="curie", label_key="name"),
+                                covered_by_validator=covered)
+    assert effective["resolution_state"] in RESOLUTION_STATES
+    assert effective["lookup_outcome"] in LOOKUP_OUTCOMES
+    assert effective["lookup_outcome"] in (OUTCOME_MATCHED, OUTCOME_LEGACY_UNVERIFIED)
+    assert effective["validator_explanation"] == LEGACY_EXPLANATION
 
 
 def test_effective_payload_applies_the_legacy_rule_without_touching_storage():
@@ -167,7 +281,7 @@ def test_effective_payload_applies_the_legacy_rule_without_touching_storage():
         "terms": [{"curie": "ONT:2", "name": "gut"}, {"curie": None, "name": "unknown body part"}],
         "stage": {"curie": "ONT:3", "name": "adult"},
         "fresh": {"curie": None, "name": None, "mention": "tail",
-                  "resolution_state": UNRESOLVED, "resolution_reason": REASON_NOT_FOUND},
+                  "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_FOUND},
     }
     metadata = {"validator_resolved_value_materialization": [
         {"original_values": {"site.name": "skin", "terms[0].name": "gut"}},
@@ -181,13 +295,46 @@ def test_effective_payload_applies_the_legacy_rule_without_touching_storage():
     assert effective["terms"][0]["resolution_state"] == RESOLVED
     assert effective["terms"][1] == {
         "curie": None, "name": None, "mention": f"unknown body part {LEGACY_UNVERIFIED_SUFFIX}",
-        "resolution_state": UNRESOLVED, "resolution_reason": REASON_LEGACY_UNVERIFIED,
+        "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_LEGACY_UNVERIFIED,
+        "validator_explanation": LEGACY_EXPLANATION,
     }
     # No covering event: unverified, and its stored text is paper wording.
     assert effective["stage"]["mention"] == f"adult (ONT:3) {LEGACY_UNVERIFIED_SUFFIX}"
     assert effective["stage"]["curie"] is None
     assert effective["fresh"] == payload["fresh"]
     assert "resolution_state" not in payload["site"]
+
+
+def _vocabulary_pack(*, outcome_values, state_values=None):
+    state_values = state_values or list(RESOLUTION_STATES)
+    return DomainPackMetadata(
+        pack_id="fixture.vocab", display_name="Vocab", version="0.1.0", metadata_api_version="1.0.0",
+        enum_definitions=[
+            DomainPackEnumDefinition(enum_id="ResolutionState", display_name="State",
+                                     values=[{"value": value} for value in state_values]),
+            DomainPackEnumDefinition(enum_id="LookupOutcome", display_name="Outcome",
+                                     values=[{"value": value} for value in outcome_values]),
+        ],
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Observation", display_name="Observation", fields=[
+                DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT,
+                                          metadata={"display": {"label": "name", "id": "curie",
+                                                                "mention": "mention"}}),
+                DomainPackFieldDefinition(field_path="site.resolution_state",
+                                          field_type=DomainPackFieldType.ENUM, enum_ref="ResolutionState"),
+                DomainPackFieldDefinition(field_path="site.lookup_outcome",
+                                          field_type=DomainPackFieldType.ENUM, enum_ref="LookupOutcome"),
+            ],
+        )],
+    )
+
+
+def test_packs_declare_the_vocabularies_exactly():
+    _vocabulary_pack(outcome_values=list(LOOKUP_OUTCOMES))
+    with pytest.raises(ValueError, match="site.lookup_outcome must be an enum field"):
+        _vocabulary_pack(outcome_values=[*LOOKUP_OUTCOMES, "other"])
+    with pytest.raises(ValueError, match="site.resolution_state must be an enum field"):
+        _vocabulary_pack(outcome_values=list(LOOKUP_OUTCOMES), state_values=["resolved", "pending"])
 
 
 # --- Materializer write-back ---------------------------------------------------
@@ -314,7 +461,8 @@ def test_resolved_result_writes_identity_and_state_keeping_the_mention():
     patched = result.envelope.extracted_objects[0]
     assert patched.payload["site"] == {
         "curie": "ONT:1", "name": "epidermis", "mention": "skin",
-        "resolution_state": RESOLVED, "resolution_reason": None,
+        "resolution_state": RESOLVED, "lookup_outcome": OUTCOME_MATCHED,
+        "validator_explanation": "Fixture validator decision.", "validator_curator_message": None,
     }
     assert patched.status is CuratableObjectStatus.VALIDATED
     event = patched.metadata["validator_resolved_value_materialization"][-1]
@@ -324,6 +472,7 @@ def test_resolved_result_writes_identity_and_state_keeping_the_mention():
 @pytest.mark.parametrize(
     ("outcome", "missing", "reason"),
     [("not_found", (), "not_found"), ("ambiguous", (), "ambiguous"), ("error", (), "transient"),
+     ("success", (), "rejected_candidates"),
      ("not_found", ("curie", "name"), "missing_expected_result_field")],
 )
 def test_unresolved_state_agrees_with_the_finding_classification(outcome, missing, reason):
@@ -335,10 +484,11 @@ def test_unresolved_state_agrees_with_the_finding_classification(outcome, missin
 
     site = result.envelope.extracted_objects[0].payload["site"]
     assert site == {"curie": None, "name": None, "mention": "skin",
-                    "resolution_state": UNRESOLVED, "resolution_reason": reason}
+                    "resolution_state": UNRESOLVED, "lookup_outcome": reason,
+                    "validator_explanation": "Fixture validator decision.", "validator_curator_message": None}
     parent = next(finding for finding in result.appended_findings if finding.field_ref is None
                   or finding.field_ref.field_path == "site")
-    assert parent.details["failure_classification"] == site["resolution_reason"]
+    assert lookup_outcome_for_failure(parent.details["failure_classification"]) == site["lookup_outcome"]
     assert result.envelope.extracted_objects[0].status is CuratableObjectStatus.PENDING
 
 
@@ -352,7 +502,7 @@ def test_partial_resolved_result_leaves_the_value_unresolved():
     site = result.envelope.extracted_objects[0].payload["site"]
     # A partial identity is never written into an unresolved value.
     assert site["curie"] is None
-    assert (site["resolution_state"], site["resolution_reason"]) == (
+    assert (site["resolution_state"], site["lookup_outcome"]) == (
         UNRESOLVED, "missing_expected_result_field")
     missing = [finding for finding in result.appended_findings
                if finding.code == "domain_pack.validator_expected_field_missing"]
@@ -372,7 +522,8 @@ def test_mirror_copies_take_the_source_value_state():
     unresolved = materialize_validator_results_into_envelope(
         envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="not_found")],
     ).envelope.extracted_objects[0].payload
-    assert unresolved["copy"]["resolution_reason"] == "not_found"
+    assert unresolved["copy"]["lookup_outcome"] == "not_found"
+    assert unresolved["copy"]["validator_explanation"] == "Fixture validator decision."
 
 
 def test_plain_values_without_a_resolvable_container_patch_as_before():
@@ -402,4 +553,15 @@ def test_a_binding_skipped_for_missing_inputs_leaves_the_value_explicitly_not_va
 
     assert build_domain_validation_request(match).request is None
     site = envelope.extracted_objects[0].payload["site"]
-    assert (site["resolution_state"], site["resolution_reason"]) == (UNRESOLVED, REASON_NOT_VALIDATED)
+    assert (site["resolution_state"], site["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_VALIDATED)
+    assert site["validator_explanation"] == NOT_VALIDATED_EXPLANATION
+
+
+def test_workspace_candidate_matches_read_each_part_from_its_own_key():
+    from src.lib.curation_workspace.validation_runtime import _candidate_match_from_mapping
+
+    match = _candidate_match_from_mapping({"value": "ONT:1", "label": "epidermis", "score": 0.9})
+    assert (match.identifier, match.label, match.score) == ("ONT:1", "epidermis", 0.9)
+    # No label: the label stays missing, never the identifier or another field.
+    unlabeled = _candidate_match_from_mapping({"value": "ONT:2", "name": "skin", "symbol": "sk"})
+    assert (unlabeled.identifier, unlabeled.label) == ("ONT:2", None)
