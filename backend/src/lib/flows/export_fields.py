@@ -104,6 +104,9 @@ def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
             result.extend(summary_fields(obj.object_type, summary))
         by_path = {field.field_path: field for field in obj.fields}
         for field in obj.fields:
+            if field.metadata.get("exported") is False:
+                # Declared for validators only (e.g. an extractor's proposal); never a column.
+                continue
             label = _field_label(field)
             # A resolvable value's paper wording, status, lookup result and
             # validator explanation are their own columns (ALL-1283).

@@ -361,6 +361,7 @@ object_definitions:
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: phenotype_annotation_subject.resolution_state
         field_type: enum
         display_name: Subject status
@@ -452,12 +453,14 @@ object_definitions:
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: phenotype_terms.proposed_label
         field_type: string
         display_name: Phenotype term proposed name
         description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: phenotype_terms.resolution_state
         field_type: enum
         display_name: Phenotype term status
@@ -570,12 +573,14 @@ object_definitions:
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: phenotype_terms[0].proposed_label
         field_type: string
         display_name: First phenotype term proposed name
         description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: phenotype_terms[0].resolution_state
         field_type: enum
         display_name: First phenotype term status
@@ -904,6 +909,7 @@ object_definitions:
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: condition_relations.conditions.condition_class.resolution_state
         field_type: enum
         display_name: Condition class status
@@ -949,7 +955,6 @@ object_definitions:
                 - trigram_label
                 - trigram_synonym
                 - definition
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: zeco
@@ -992,6 +997,7 @@ object_definitions:
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: condition_relations.conditions.condition_id.resolution_state
         field_type: enum
         display_name: Condition status
@@ -1037,7 +1043,6 @@ object_definitions:
                 - trigram_label
                 - trigram_synonym
                 - definition
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: zeco
@@ -1080,6 +1085,7 @@ object_definitions:
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: condition_relations.conditions.condition_chemical.resolution_state
         field_type: enum
         display_name: Chemical status
@@ -1145,6 +1151,7 @@ object_definitions:
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: condition_relations.conditions.condition_taxon.resolution_state
         field_type: enum
         display_name: Condition taxon status
@@ -1275,6 +1282,7 @@ object_definitions:
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: resolution_state
         field_type: enum
         display_name: Subject status
@@ -1387,12 +1395,14 @@ object_definitions:
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: proposed_label
         field_type: string
         display_name: Phenotype term proposed name
         description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
+          exported: false
       - field_path: resolution_state
         field_type: enum
         display_name: Phenotype term status

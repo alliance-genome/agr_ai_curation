@@ -1781,3 +1781,57 @@ def test_previous_format_disease_record_reads_as_legacy_in_review_rows():
     assert fields["disease_relation.mention"] == "is_implicated_in (legacy, unverified)"
     assert fields["disease_relation.name"] is None
     assert envelope.extracted_objects[0].payload == _previous_format_payload()
+
+
+def test_old_disease_record_gets_exactly_the_one_previous_format_finding():
+    """The previous-format finding marks the object not validatable: structural checks and
+    validator dispatch skip it, so the curator sees only that one finding."""
+
+    from agr_ai_curation_alliance.domain_packs.disease.legacy import (
+        PREVIOUS_FORMAT_FINDING_CODE,
+        validate_disease_envelope,
+    )
+    from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+
+    envelope = DomainEnvelope(
+        envelope_id="disease-previous-format-pipeline-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneDiseaseAnnotation",
+                pending_ref_id="gene-disease-old",
+                payload=_previous_format_payload(),
+            )
+        ],
+    )
+    finding, = validate_disease_envelope(envelope)
+    assert finding.details["not_validatable"] is True
+    flagged = envelope.model_copy(update={"validation_findings": [finding]})
+
+    structural = run_domain_envelope_structural_checks(flagged, _disease_pack())
+
+    def runner(request, *, binding):
+        raise AssertionError(f"no validator runs on a previous-format record: {binding.binding_id}")
+
+    dispatched = dispatch_active_validator_bindings(flagged, _disease_pack(), runner=runner)
+
+    assert structural.appended_findings == ()
+    assert dispatched.appended_findings == ()
+    assert [item.code for item in flagged.validation_findings] == [PREVIOUS_FORMAT_FINDING_CODE]
+
+
+def test_extractor_proposals_are_declared_but_never_export_columns():
+    from src.lib.flows.export_fields import _pack_export_fields
+
+    pack = _disease_pack()
+    proposal_fields = [
+        field.field_path
+        for obj in pack.metadata.object_definitions
+        for field in obj.fields
+        if ".proposed_" in field.field_path
+    ]
+    catalog_paths = {entry["payload_path"] for entry in _pack_export_fields(pack)}
+
+    assert proposal_fields
+    assert catalog_paths.isdisjoint(proposal_fields)
+    assert "disease_annotation_object.mention" in catalog_paths

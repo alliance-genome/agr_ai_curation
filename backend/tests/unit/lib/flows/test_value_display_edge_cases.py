@@ -432,3 +432,30 @@ def test_nested_lists_inside_a_record_use_commas_between_items():
     assert display_text({"synonyms": ["a", "b"], "curie": "X:1"}) == "synonyms: a, b; curie: X:1"
     assert display_text([["heat", "cold"], ["dark"]]) == "heat, cold | dark"
     assert display_text(["heat", "diet"]) == "heat; diet"
+
+
+def test_a_field_declared_not_exported_is_never_an_export_column():
+    """Validator-only inputs (e.g. an extractor's proposal) stay out of the export catalog."""
+
+    from types import SimpleNamespace
+
+    from src.lib.flows.export_fields import _pack_export_fields
+    from src.schemas.domain_pack_metadata import (
+        DomainPackFieldDefinition, DomainPackFieldType, DomainPackMetadata, DomainPackObjectDefinition,
+    )
+
+    metadata = DomainPackMetadata(
+        pack_id="fixture.exported", display_name="Fixture", version="0.1.0", metadata_api_version="1.0.0",
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Observation", display_name="Observation", metadata={"object_role": "curatable_unit"},
+            fields=[
+                DomainPackFieldDefinition(field_path="term", field_type=DomainPackFieldType.OBJECT),
+                DomainPackFieldDefinition(field_path="term.proposed_curie", field_type=DomainPackFieldType.STRING,
+                                          metadata={"exported": False}),
+            ],
+        )],
+    )
+
+    paths = [entry["payload_path"] for entry in _pack_export_fields(SimpleNamespace(metadata=metadata))]
+
+    assert paths == ["term"]

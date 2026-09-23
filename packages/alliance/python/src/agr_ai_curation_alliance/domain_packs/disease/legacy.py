@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+from src.lib.domain_packs.not_validatable import NOT_VALIDATABLE_DETAIL_KEY
 from src.lib.domain_packs.resolvable_values import MENTION_KEY, ResolvableSpec, effective_value
 from src.schemas.curation_workspace import DomainEnvelopeReviewRow
 from src.schemas.domain_envelope import (
@@ -137,7 +138,8 @@ def validate_disease_envelope(envelope: DomainEnvelope) -> tuple[ValidationFindi
             code=PREVIOUS_FORMAT_FINDING_CODE,
             message=PREVIOUS_FORMAT_MESSAGE,
             object_ref=obj.to_object_ref(),
-            details={"previous_format": True},
+            # Structural checks and validator dispatch skip the object, so this is its one finding.
+            details={"previous_format": True, NOT_VALIDATABLE_DETAIL_KEY: True},
         )
         for obj in envelope.extracted_objects
         if obj.object_type in _ANNOTATION_OBJECT_TYPES and is_previous_format(obj.payload)
