@@ -78,7 +78,7 @@ function cell(
     readOnly: false,
     curatorOverride: overridden.length > 0,
     overrideDisagreements: overridden.flatMap((value) => value.override_disagreements),
-    overrideTarget: overridden[0] ?? null,
+    overrideTargets: overridden,
     staleValidation: false,
     state: 'resolved',
     fieldValidation: null,
@@ -264,13 +264,15 @@ describe('HorizontalGridFieldCellContent', () => {
 
     expect(slot(container, 'field-value')).toHaveTextContent(/^ONT:0000555$/)
     expect(slot(container, 'field-override-badge')).toHaveTextContent('Curator override')
+    // Without a display name the account id is never shown.
     expect(slot(container, 'field-lookup-result')).toHaveTextContent(
-      'Lookup result: Curator override. Curator override by curator-1 on 2026-09-23 20:00 UTC',
+      'Lookup result: Curator override. Curator override on 2026-09-23 20:00 UTC',
     )
+    expect(container).not.toHaveTextContent('curator-1')
     expect(slot(container, 'field-override-disagreement')).toBeNull()
     const button = screen.getByRole('button')
     expect(button).toHaveAccessibleName(/^Select Site for site: ONT:0000555, curator override\. Curator validated\.$/)
-    expect(button).toHaveAccessibleDescription(/Curator override by curator-1 on 2026-09-23 20:00 UTC/)
+    expect(button).toHaveAccessibleDescription(/Curator override on 2026-09-23 20:00 UTC/)
   })
 
   it('shows an open validator disagreement with the override in full', () => {

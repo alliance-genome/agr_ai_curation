@@ -3,37 +3,75 @@ import type {
   DomainEnvelopeReviewResolvedValue,
 } from '@/features/curation/types'
 
-// The backend's own wording for an override missing half its identity.
-export const HORIZONTAL_GRID_OVERRIDE_INCOMPLETE_MESSAGE =
-  'Enter both the identifier and the name for a curator override.'
-
-export interface HorizontalGridOverrideIdentity {
-  identifier: string
-  name: string
+// The backend's own wording for an override that leaves the id or label
+// empty, by which of the two the value declares (resolvable_values.py).
+const OVERRIDE_INCOMPLETE_MESSAGES: Record<string, string> = {
+  'true:true': 'Enter both the identifier and the name for a curator override.',
+  'true:false': 'Enter the identifier for a curator override.',
+  'false:true': 'Enter the name for a curator override.',
 }
+
+// Plain words for a key name inside a curator-facing label.
+const KEY_WORDS: Record<string, string> = { id: 'ID', curie: 'CURIE', uberon: 'UBERON' }
+
+/** The curator's text for each identity key of a value, keyed by the value's own key names. */
+export type HorizontalGridOverrideIdentity = Record<string, string>
 
 function text(value: unknown): string {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : ''
 }
 
-/** The identifier and name a value currently holds, for the override editor's inputs. */
+/** Every identity key a curator override sets: the identifier, the name, then validated keys. */
+export function horizontalGridIdentityKeys(value: DomainEnvelopeReviewResolvedValue): string[] {
+  return [value.id_key, value.label_key, ...value.validated_keys].filter(
+    (key): key is string => Boolean(key),
+  )
+}
+
+/** A curator-facing label for one identity key of a value. */
+export function horizontalGridIdentityKeyLabel(
+  value: DomainEnvelopeReviewResolvedValue,
+  key: string,
+): string {
+  if (key === value.id_key) {
+    return 'Identifier'
+  }
+  if (key === value.label_key) {
+    return 'Name'
+  }
+  const words = key.split('_').filter(Boolean).map((word) => KEY_WORDS[word] ?? word)
+  const phrase = words.join(' ')
+  return phrase.charAt(0).toUpperCase() + phrase.slice(1)
+}
+
+/** Each identity key's current text, for the override editor's inputs. */
 export function horizontalGridOverrideIdentity(
   value: DomainEnvelopeReviewResolvedValue,
 ): HorizontalGridOverrideIdentity {
-  return {
-    identifier: value.id_key ? text(value.stored_identity[value.id_key]) : '',
-    name: value.label_key ? text(value.stored_identity[value.label_key]) : '',
-  }
+  return Object.fromEntries(
+    horizontalGridIdentityKeys(value).map((key) => [key, text(value.stored_identity[key])]),
+  )
 }
 
-/** Why an override cannot be sent as entered, or null. Both declared keys are required. */
+/**
+ * Why an override cannot be sent as entered, or null. Every identity key is
+ * required: the identifier and name with the backend's own wording, then each
+ * validated key (e.g. a taxon) by name.
+ */
 export function horizontalGridOverrideProblem(
   value: DomainEnvelopeReviewResolvedValue,
   identity: HorizontalGridOverrideIdentity,
 ): string | null {
-  const missing = (value.id_key && !identity.identifier.trim())
-    || (value.label_key && !identity.name.trim())
-  return missing ? HORIZONTAL_GRID_OVERRIDE_INCOMPLETE_MESSAGE : null
+  const empty = (key: string | null) => Boolean(key) && !(identity[key as string] ?? '').trim()
+  if (empty(value.id_key) || empty(value.label_key)) {
+    return OVERRIDE_INCOMPLETE_MESSAGES[`${Boolean(value.id_key)}:${Boolean(value.label_key)}`]
+  }
+  const missing = value.validated_keys.filter((key) => empty(key))
+  if (missing.length === 0) {
+    return null
+  }
+  const labels = missing.map((key) => horizontalGridIdentityKeyLabel(value, key).toLowerCase())
+  return `Enter the ${labels.join(' and the ')} for a curator override.`
 }
 
 export interface HorizontalGridOverridePatch {
@@ -85,8 +123,9 @@ function overrideEdit(
 }
 
 /**
- * A curator override as one atomic edit of the value's identifier and name:
- * a ``replace_identity`` naming only identity keys, or for a saved profile's
+ * A curator override as one atomic edit of every identity key of the value
+ * (identifier, name and validated keys such as a taxon): a
+ * ``replace_identity`` naming only identity keys, or for a saved profile's
  * attribute value a whole-value ``replace``. Either way the paper wording,
  * validation state and proposals stay as they are.
  */
@@ -94,18 +133,20 @@ export function horizontalGridOverridePatch(
   value: DomainEnvelopeReviewResolvedValue,
   identity: HorizontalGridOverrideIdentity,
 ): HorizontalGridOverridePatch {
-  return overrideEdit(value, {
-    ...(value.id_key ? { [value.id_key]: identity.identifier.trim() } : {}),
-    ...(value.label_key ? { [value.label_key]: identity.name.trim() } : {}),
-  })
+  return overrideEdit(
+    value,
+    Object.fromEntries(
+      horizontalGridIdentityKeys(value).map((key) => [key, (identity[key] ?? '').trim()]),
+    ),
+  )
 }
 
 /** Remove an override: the same edit with every identity key (validated keys too) cleared. */
 export function horizontalGridRemoveOverridePatch(
   value: DomainEnvelopeReviewResolvedValue,
 ): HorizontalGridOverridePatch {
-  const keys = [value.id_key, value.label_key, ...value.validated_keys].filter(
-    (key): key is string => Boolean(key),
+  return overrideEdit(
+    value,
+    Object.fromEntries(horizontalGridIdentityKeys(value).map((key) => [key, null])),
   )
-  return overrideEdit(value, Object.fromEntries(keys.map((key) => [key, null])))
 }

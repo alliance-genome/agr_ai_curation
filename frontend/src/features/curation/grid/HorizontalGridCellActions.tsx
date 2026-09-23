@@ -44,8 +44,12 @@ export default function HorizontalGridCellActions({
   // A value's own leaves are read-only in the grid even where the draft field is not.
   const readOnly = cell.readOnly ?? true
   const mutationDisabled = readOnly || isSaving
-  // Only a value this cell can override can have its override removed here.
-  const removableOverride = cell.overrideTarget?.curator_override ? cell.overrideTarget : null
+  // A cell overriding one value can remove its override here; a list cell
+  // removes an element's override from the editor, which picks the element.
+  const [onlyTarget] = cell.overrideTargets
+  const removableOverride = cell.overrideTargets.length === 1 && onlyTarget?.curator_override
+    ? onlyTarget
+    : null
   const fieldValue = cell.displayText ?? 'Not available'
   const actionContext = `${field.label}: ${fieldValue} in ${recordLabel}`
 

@@ -163,7 +163,10 @@ export interface DomainEnvelopeReviewResolvedValue {
 }
 
 export interface DomainEnvelopeReviewCuratorOverride {
+  /** The curator's account id; never shown to curators. */
   actor_id: string
+  /** The curator's display name, when the override record has one. */
+  actor_display_name?: string | null
   /** ISO 8601 time of the override. */
   at: string
 }

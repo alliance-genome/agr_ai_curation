@@ -1181,7 +1181,7 @@ describe('buildHorizontalGridModel', () => {
       curatorOverride: true,
       overrideDisagreements: [],
       readOnly: false,
-      overrideTarget: overridden,
+      overrideTargets: [overridden],
     })
     expect(idCell!.resolutionDetails).toEqual([overridden])
     expect(nameCell).toMatchObject({ curatorOverride: true, resolutionDetails: [] })
@@ -1232,10 +1232,12 @@ describe('buildHorizontalGridModel', () => {
       curatorOverride: true,
       overrideDisagreements: [message],
       extractorComparison: { outcome: 'overridden', value: 'abc-1' },
-      // An identity field of the value is read-only, so no override is offered.
-      overrideTarget: null,
+      // An identity field of the value is read-only, so no override is offered,
+      // and a cell with validated values but nothing to override is read-only.
+      overrideTargets: [],
+      readOnly: true,
     })
-    expect(model.rows[0]!.cells[1]).toMatchObject({ readOnly: true, overrideTarget: null })
+    expect(model.rows[0]!.cells[1]).toMatchObject({ readOnly: true, overrideTargets: [] })
   })
 
   it('offers an override on a value that is the object itself when its identity fields are editable', () => {
@@ -1263,10 +1265,44 @@ describe('buildHorizontalGridModel', () => {
       row,
     })])
 
-    expect(model.rows[0]!.cells.map((cell) => cell.overrideTarget)).toEqual([rootValue, rootValue])
+    expect(model.rows[0]!.cells.map((cell) => cell.overrideTargets)).toEqual([[rootValue], [rootValue]])
   })
 
-  it('offers no override on a value whose own field is protected', () => {
+  it('gives each element of a list cell its own override target', () => {
+    const codes = ['IMP', 'IGI'].map((mention, index) => resolvedValue({
+      value_path: `evidence_codes[${index}]`,
+      display_text: 'UNRESOLVED',
+      mention,
+      resolution_state: 'unresolved',
+      lookup_outcome: 'not_found',
+      lookup_result: 'Not found',
+      identity_field_paths: [`evidence_codes[${index}].curie`],
+      id_key: 'curie',
+      label_key: null,
+    }))
+    const nested = resolvedValue({ value_path: 'conditions[0].component' })
+    const fields = [
+      draftField({ fieldKey: 'codes', fieldPath: 'evidence_codes', label: 'Evidence codes', order: 0, value: [] }),
+      draftField({ fieldKey: 'conditions', label: 'Conditions', order: 1, value: [] }),
+    ]
+    const row = reviewRowWithFields('object-list', [
+      { path: 'evidence_codes', resolution: { display_text: 'UNRESOLVED | UNRESOLVED', values: codes } },
+      { path: 'conditions', resolution: { display_text: 'component: gut (ONT:0000101)', values: [nested] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: candidate({ id: 'candidate-list', objectId: 'object-list', order: 0, fields }),
+      row,
+    })])
+
+    const [codesCell, conditionsCell] = model.rows[0]!.cells
+    expect(codesCell).toMatchObject({ readOnly: false, overrideTargets: codes })
+    // Validated values nested deeper than a list element have no override
+    // here, so the cell is read-only rather than a plain whole-list edit.
+    expect(conditionsCell).toMatchObject({ readOnly: true, overrideTargets: [] })
+  })
+
+  it('closes a cell whose value field is protected', () => {
     const protectedValue = resolvedValue({ container_protected: true })
     const fields = [draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: null })]
     const row = reviewRowWithFields('object-protected', [
@@ -1278,7 +1314,8 @@ describe('buildHorizontalGridModel', () => {
       row,
     })])
 
-    expect(model.rows[0]!.cells[0]).toMatchObject({ readOnly: false, overrideTarget: null })
+    // A protected value field closes the cell: no override and no plain edit.
+    expect(model.rows[0]!.cells[0]).toMatchObject({ readOnly: true, overrideTargets: [] })
   })
 
   it('shows each value\'s details once, on its first cell, and hides leaves that cell covers', () => {

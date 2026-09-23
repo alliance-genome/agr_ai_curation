@@ -96,7 +96,7 @@ function fieldCell(
     readOnly: hasField ? false : null,
     curatorOverride: false,
     overrideDisagreements: [],
-    overrideTarget: null,
+    overrideTargets: [],
     staleValidation: hasField ? false : null,
     state: hasField ? state : null,
     fieldValidation: null,

@@ -103,9 +103,10 @@ export interface HorizontalGridFieldCell {
   curatorOverride: boolean
   // Open warnings where a validator disagrees with the curator override.
   overrideDisagreements: string[]
-  // The value a curator override from this cell sets (its identifier and name
-  // in one atomic identity edit), or null when the cell cannot override one.
-  overrideTarget: DomainEnvelopeReviewResolvedValue | null
+  // The values a curator override from this cell can set, each in one atomic
+  // identity edit: the cell's own value, or each element of a list cell.
+  // Empty when the cell cannot override any.
+  overrideTargets: DomainEnvelopeReviewResolvedValue[]
   required: boolean | null
   readOnly: boolean | null
   staleValidation: boolean | null
@@ -549,32 +550,36 @@ function overriddenValues(
   return resolution.values.filter((value) => value.curator_override)
 }
 
-// A curator overrides one value, the object itself included, from a cell
-// that is that value or one of its identity keys. The identity fields decide:
-// the cell must be editable, and so must every identity field the candidate
-// carries as a draft field (the backend checks the rest). A protected value
-// field blocks an override.
-function overrideTarget(
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// A curator overrides one value, the object itself included, from a cell that
+// is that value, one of its identity keys, or the list holding it (each
+// element is its own value). The identity fields decide: every identity field
+// the candidate carries as a draft field must be editable (the backend checks
+// the rest), and a protected value field or an unreadable value blocks it.
+function overrideTargets(
   fieldPath: string,
   resolution: DomainEnvelopeReviewFieldResolution | null,
   readOnly: boolean,
   fieldsByPath: ReadonlyMap<string, CurationDraftField>,
-): DomainEnvelopeReviewResolvedValue | null {
-  if (readOnly || !resolution || resolution.leaf_key || resolution.values.length !== 1) {
-    return null
+): DomainEnvelopeReviewResolvedValue[] {
+  if (readOnly || !resolution || resolution.leaf_key) {
+    return []
   }
-  const [value] = resolution.values
-  if (
-    !value
-    || value.issue
-    || value.container_protected
-    || !(value.id_key || value.label_key)
-    || !(fieldPath === value.value_path || value.identity_field_paths.includes(fieldPath))
-    || value.identity_field_paths.some((path) => fieldsByPath.get(path)?.read_only)
-  ) {
-    return null
-  }
-  return value
+  const listElement = new RegExp(`^${escapeRegExp(fieldPath)}\\[\\d+\\]$`)
+  return resolution.values.filter((value) => (
+    !value.issue
+    && !value.container_protected
+    && Boolean(value.id_key || value.label_key)
+    && (
+      fieldPath === value.value_path
+      || value.identity_field_paths.includes(fieldPath)
+      || listElement.test(value.value_path)
+    )
+    && !value.identity_field_paths.some((path) => fieldsByPath.get(path)?.read_only)
+  ))
 }
 
 function rationaleForCandidate(candidate: CurationCandidate): HorizontalGridRowContext['rationale'] {
@@ -659,8 +664,17 @@ function projectRow(
       && hasUnresolvedValue(resolution)
     const overridden = field ? overriddenValues(resolution) : []
     // A value's own leaves (paper wording, status, lookup result, validator
-    // text) are set by extraction and validation; curators edit its identity.
-    const cellReadOnly = Boolean(field?.read_only || resolution?.leaf_key)
+    // text) are set by extraction and validation, and a protected value field
+    // is closed to curators; they edit a value's identity through an override.
+    const baseReadOnly = Boolean(
+      field?.read_only
+      || resolution?.leaf_key
+      || resolution?.values.some((value) => value.container_protected),
+    )
+    const targets = field ? overrideTargets(fieldPath, resolution, baseReadOnly, fieldsByPath) : []
+    // A cell showing validated values edits them only through an override;
+    // with none to override it is read-only, never a plain field edit.
+    const cellReadOnly = baseReadOnly || Boolean(resolution?.values.length && targets.length === 0)
     const overrideDisagreements = overridden.flatMap((value) => value.override_disagreements)
     const projectedComparison = field
       ? extractorComparison(row.candidate, field, fieldPath, canonicalUnresolved)
@@ -712,7 +726,7 @@ function projectRow(
       resolutionDescribedBy: [],
       curatorOverride: overridden.length > 0,
       overrideDisagreements,
-      overrideTarget: field ? overrideTarget(fieldPath, resolution, cellReadOnly, fieldsByPath) : null,
+      overrideTargets: targets,
       required: field?.required ?? null,
       readOnly: field ? cellReadOnly : null,
       staleValidation: field?.stale_validation ?? null,

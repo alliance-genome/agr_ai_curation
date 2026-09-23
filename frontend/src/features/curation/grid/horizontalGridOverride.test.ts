@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import type { DomainEnvelopeReviewResolvedValue } from '@/features/curation/types'
 import {
-  HORIZONTAL_GRID_OVERRIDE_INCOMPLETE_MESSAGE,
+  horizontalGridIdentityKeyLabel,
+  horizontalGridIdentityKeys,
+  horizontalGridOverrideIdentity,
   horizontalGridOverridePatch,
   horizontalGridOverrideProblem,
   horizontalGridRemoveOverridePatch,
@@ -24,21 +26,21 @@ function value(overrides: Partial<DomainEnvelopeReviewResolvedValue> = {}): Doma
     id_key: 'curie',
     label_key: 'name',
     validated_keys: ['taxon'],
-    stored_identity: { curie: null, name: null, taxon: null },
+    stored_identity: { curie: null, name: null, taxon: 'NCBITaxon:6239' },
     container_protected: false,
     ...overrides,
   }
 }
 
-const IDENTITY = { identifier: ' GENE:2 ', name: 'abc-2' }
+const IDENTITY = { curie: ' GENE:2 ', name: 'abc-2', taxon: 'NCBITaxon:7227' }
 
 describe('curator override patches', () => {
-  it('sends a field value as one replace_identity naming only its identity keys', () => {
+  it('sends every identity key of a field value, validated keys too, as one replace_identity', () => {
     expect(horizontalGridOverridePatch(value(), IDENTITY)).toEqual({
       operation: 'replace_identity',
       field_path: 'subject.curie',
-      value: { curie: 'GENE:2', name: 'abc-2' },
-      before: { curie: null, name: null },
+      value: { curie: 'GENE:2', name: 'abc-2', taxon: 'NCBITaxon:7227' },
+      before: { curie: null, name: null, taxon: 'NCBITaxon:6239' },
     })
     expect(horizontalGridRemoveOverridePatch(value({
       stored_identity: { curie: 'GENE:2', name: 'abc-2', taxon: 'TAXON:9' },
@@ -50,17 +52,36 @@ describe('curator override patches', () => {
     })
   })
 
+  it('prefills every identity key from the stored value and labels it for curators', () => {
+    const vocabularyTerm = value({
+      id_key: 'id',
+      label_key: 'name',
+      validated_keys: ['vocabulary', 'curie'],
+      stored_identity: { id: 'ONT:1', name: 'adult', vocabulary: 'stage_uberon_slim_terms', curie: null },
+    })
+
+    expect(horizontalGridIdentityKeys(vocabularyTerm)).toEqual(['id', 'name', 'vocabulary', 'curie'])
+    expect(horizontalGridOverrideIdentity(vocabularyTerm)).toEqual({
+      id: 'ONT:1', name: 'adult', vocabulary: 'stage_uberon_slim_terms', curie: '',
+    })
+    expect(horizontalGridIdentityKeys(vocabularyTerm).map((key) => horizontalGridIdentityKeyLabel(vocabularyTerm, key)))
+      .toEqual(['Identifier', 'Name', 'Vocabulary', 'CURIE'])
+    expect(horizontalGridIdentityKeyLabel(value(), 'reference_id')).toBe('Reference ID')
+  })
+
   it('names the bare identity field for a value that is the object itself', () => {
     const root = value({
       value_path: '',
       id_key: 'primary_external_id',
       label_key: 'gene_symbol',
-      stored_identity: { primary_external_id: null, gene_symbol: null },
+      stored_identity: { primary_external_id: null, gene_symbol: null, taxon: null },
     })
-    expect(horizontalGridOverridePatch(root, IDENTITY)).toMatchObject({
-      operation: 'replace_identity',
-      field_path: 'primary_external_id',
-    })
+    expect(horizontalGridOverridePatch(root, { primary_external_id: 'GENE:2', gene_symbol: 'abc-2', taxon: 'T:1' }))
+      .toMatchObject({
+        operation: 'replace_identity',
+        field_path: 'primary_external_id',
+        value: { primary_external_id: 'GENE:2', gene_symbol: 'abc-2', taxon: 'T:1' },
+      })
   })
 
   it('sends a profile attribute value as one whole-value replace', () => {
@@ -105,9 +126,15 @@ describe('curator override patches', () => {
       .toEqual([false, false, false])
   })
 
-  it('needs both the identifier and the name', () => {
-    expect(horizontalGridOverrideProblem(value(), { identifier: 'GENE:2', name: ' ' }))
-      .toBe(HORIZONTAL_GRID_OVERRIDE_INCOMPLETE_MESSAGE)
+  it('requires every identity key, with the backend\'s wording for the identifier and name', () => {
+    expect(horizontalGridOverrideProblem(value(), { ...IDENTITY, name: ' ' }))
+      .toBe('Enter both the identifier and the name for a curator override.')
+    expect(horizontalGridOverrideProblem(value({ label_key: null }), { curie: '', taxon: 'T:1' }))
+      .toBe('Enter the identifier for a curator override.')
+    expect(horizontalGridOverrideProblem(value({ id_key: null }), { name: '', taxon: 'T:1' }))
+      .toBe('Enter the name for a curator override.')
+    expect(horizontalGridOverrideProblem(value(), { ...IDENTITY, taxon: '' }))
+      .toBe('Enter the taxon for a curator override.')
     expect(horizontalGridOverrideProblem(value(), IDENTITY)).toBeNull()
   })
 })

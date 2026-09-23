@@ -13,6 +13,7 @@ const CONTRACT_KEYS = new Set([
   'lookup_outcome',
   'validator_explanation',
   'validator_curator_message',
+  'curator_override',
 ])
 
 // A validator's overruled identity (resolvable_values.OVERRULED_KEY_PREFIX):
@@ -166,7 +167,11 @@ export function horizontalGridLookupResult(
   return values.map((value) => value.lookup_result).join('; ')
 }
 
-/** "Curator override by <who> on <when>" for a value a curator resolved. */
+/**
+ * "Curator override by <name> on <when>" for a value a curator resolved. The
+ * curator's display name is shown when the record has one; the account id is
+ * never shown.
+ */
 export function horizontalGridOverrideText(value: DomainEnvelopeReviewResolvedValue): string | null {
   if (!value.curator_override) {
     return null
@@ -176,7 +181,8 @@ export function horizontalGridOverrideText(value: DomainEnvelopeReviewResolvedVa
   const when = Number.isNaN(at.getTime())
     ? value.curator_override.at
     : `${at.toISOString().slice(0, 16).replace('T', ' ')} UTC`
-  return `Curator override by ${value.curator_override.actor_id} on ${when}`
+  const name = value.curator_override.actor_display_name?.trim()
+  return name ? `Curator override by ${name} on ${when}` : `Curator override on ${when}`
 }
 
 /** Who overrode, the validator's own words, disagreements and any unreadable-value issue. */
