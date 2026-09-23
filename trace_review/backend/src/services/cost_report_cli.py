@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from .cost_report import build_report, report_csv, utc_time
+from .cost_report import USAGE_STATUSES, build_report, report_csv, utc_time
 
 
 def fetch_window(extractor, start: str, end: str, max_requests: int, page_limit: int):
@@ -104,9 +104,11 @@ def main(argv=None) -> int:
                           model_definitions=json.loads(args.model_definitions.read_text()) if args.model_definitions else None,
                           reconstruct_all=args.reconstruct_all, assumed_service_tier=args.assume_service_tier)
     report["source"] = source
-    if report["totals"]["unpriced_calls"]:
-        print(f"Cost coverage incomplete: {report['totals']['unpriced_calls']} unpriced calls; "
-              f"{report['totals']['missing_usage_calls']} missing usage.", file=sys.stderr)
+    totals = report["totals"]
+    if totals["unpriced_calls"] or not totals["usage_complete"]:
+        statuses = ", ".join(f"{totals[status + '_usage_calls']} {status}" for status in USAGE_STATUSES)
+        print(f"Coverage incomplete: {totals['unpriced_calls']} unpriced calls; "
+              f"usage status: {statuses}.", file=sys.stderr)
     print(report_csv(report) if args.format == "csv" else json.dumps(report, indent=2, default=str))
     return 0 if report["source_complete"] else 2
 
