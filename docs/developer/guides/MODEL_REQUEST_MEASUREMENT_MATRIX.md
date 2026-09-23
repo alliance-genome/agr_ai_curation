@@ -102,7 +102,31 @@ trace event, which is mirrored to Langfuse as an EVENT observation.
 Cost is not recorded here. It stays on the SDK response/generation span
 (`observability/cost_tracing.py`), which TraceReview counts once per provider
 response id. The measurement event is an EVENT observation, never a GENERATION,
-so it cannot add a second cost; `provider_response_id` joins the two.
+so it cannot add a second cost; `provider_response_id` joins the two, and the
+span's `cost_context.model_request_id` equals this record's `measurement_id`
+for every attempt, including cancelled and failed ones.
+
+## Usage on the generation observation (ALL-1288)
+
+Every SDK model attempt's generation observation carries the model and usage,
+or a `cost_context.usage_status` saying why it has none. Missing usage is never
+written as zero tokens.
+
+| `usage_status` | Meaning |
+| --- | --- |
+| `recorded` | provider usage attached (`langfuse.observation.usage_details`, `gen_ai.usage.*`) with `llm.model_name` |
+| `inconsistent` | provider usage has impossible token buckets; not attached |
+| `provider_omitted` | the provider returned a terminal response without usage (including the SDK's zero `Usage()` substitute) |
+| `failed` | the attempt errored before usage was returned (`attempt_outcome=error`) |
+| `cancelled` | the stream ended before the provider's terminal event: cancelled or closed by its consumer (`attempt_outcome=cancelled`) |
+
+The span also records `requested_model`, `provider` and `attempt` from the
+measured request. OpenInference exports the request input once as `input.value`
+(`hide_input_messages`); its per-message copies previously overflowed the
+128-attribute span limit on long tool loops and evicted model, usage and cost
+context (695 of 712 usage-less production generations, Sep 16-22 2026). Cost
+attributes and span-start identity are also written last before the span ends,
+so a large payload can no longer evict them.
 
 ## Limits and warnings
 

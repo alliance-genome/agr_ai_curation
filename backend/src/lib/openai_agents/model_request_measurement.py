@@ -28,6 +28,8 @@ value as zero:
 - ``provider_usage``: tokens the provider reported for the request, or
   ``status="not_reported"``. It is correlation only, never a second cost record:
   cost stays on the SDK response/generation span keyed by the provider response id.
+  That span's ``cost_context.model_request_id`` is this record's ``measurement_id``
+  (also for cancelled and failed attempts, which have no provider response id).
 
 Application-stored data sizes stay with ``runtime_payload_budget.provider_context_preflight``
 (``measurement_scope="application_payload"``).
@@ -50,6 +52,7 @@ import uuid
 
 from agents.models.interface import Model
 
+from src.lib.observability.cost_context import model_request_scope
 from src.lib.observability.payload_contracts import (
     PayloadContractViolation,
     report_payload_contract_violation,
@@ -66,6 +69,7 @@ _MEASURED_FLAG = "_ai_curation_model_request_measured"
 _SDK_GET_MODEL: Any = None
 _MEASURED_GET_MODEL: Any = None
 _REPORTED_BLOCKS_MAX = 1024
+_STREAM_END = object()
 _reported_blocks: "OrderedDict[tuple[Any, ...], None]" = OrderedDict()
 _reported_blocks_lock = threading.Lock()
 
@@ -892,18 +896,19 @@ class MeasuredModel(Model):
             prompt,
         )
         try:
-            response = await self._inner.get_response(
-                system_instructions,
-                input,
-                model_settings,
-                tools,
-                output_schema,
-                handoffs,
-                tracing,
-                previous_response_id=previous_response_id,
-                conversation_id=conversation_id,
-                prompt=prompt,
-            )
+            with model_request_scope(_span_identity(measurement)):
+                response = await self._inner.get_response(
+                    system_instructions,
+                    input,
+                    model_settings,
+                    tools,
+                    output_schema,
+                    handoffs,
+                    tracing,
+                    previous_response_id=previous_response_id,
+                    conversation_id=conversation_id,
+                    prompt=prompt,
+                )
         except BaseException as exc:
             record_outcome(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
             raise
@@ -955,12 +960,16 @@ class MeasuredModel(Model):
         terminal_response: Any = None
         terminal_type: str | None = None
         try:
-            async for event in stream:
+            # The adapter opens this attempt's tracing span on its first step.
+            with model_request_scope(_span_identity(measurement)):
+                event = await anext(stream, _STREAM_END)
+            while event is not _STREAM_END:
                 event_type = getattr(event, "type", None)
                 if event_type in {"response.completed", "response.incomplete", "response.failed"}:
                     terminal_response = getattr(event, "response", None)
                     terminal_type = event_type
                 yield event
+                event = await anext(stream, _STREAM_END)
         except BaseException as exc:
             if terminal_response is None:
                 record_outcome(
@@ -983,6 +992,17 @@ class MeasuredModel(Model):
                 )
             else:
                 record_outcome(measurement, outcome="stream_closed_without_terminal_event")
+
+
+def _span_identity(measurement: Mapping[str, Any]) -> dict[str, Any]:
+    """Measurement identity recorded on the SDK span of the same provider attempt."""
+
+    return {
+        "model_request_id": measurement["measurement_id"],
+        "requested_model": measurement.get("model"),
+        "provider": measurement["provider"],
+        "attempt": measurement.get("attempt"),
+    }
 
 
 def _failure_outcome(exc: BaseException) -> str:
