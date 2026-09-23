@@ -232,16 +232,15 @@ def test_supervisor_manifest_overrides_workspace_display_when_both_present():
     assert [field.path for field in policy.summary_fields] == ["curie"]
 
 
-def test_supervisor_manifest_rejects_a_primary_label_fallback_chain():
+@pytest.mark.parametrize("config_key", ["workspace_display", "supervisor_manifest"])
+def test_a_primary_label_fallback_chain_fails_at_pack_load(config_key):
     """ALL-1283: an item's label is one declared field; no other field fills it."""
 
-    metadata = _metadata(
-        object_metadata={
-            "object_role": "curatable_unit",
-            "workspace_display": {"primary_label_fields": ["label", "symbol"], "summary_fields": ["curie"]},
-        },
-        fields=_labeled_fields(),
-    )
-
-    with pytest.raises(SupervisorManifestPolicyError, match="single primary_label_field"):
-        supervisor_manifest_policy_for_object(metadata, "Assertion")
+    with pytest.raises(ValueError, match="single primary_label_field"):
+        _metadata(
+            object_metadata={
+                "object_role": "curatable_unit",
+                config_key: {"primary_label_fields": ["label", "symbol"], "summary_fields": ["curie"]},
+            },
+            fields=_labeled_fields(),
+        )

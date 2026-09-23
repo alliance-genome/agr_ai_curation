@@ -86,6 +86,12 @@ def _metadata() -> DomainPackMetadata:
                             if path.count(".") < 2 and not path.endswith("note")
                             else DomainPackFieldType.STRING
                         ),
+                        # The three values are declared resolvable (ALL-1283).
+                        metadata=(
+                            {"display": {"label": "name", "id": "curie", "mention": "mention"}}
+                            if path in ("setting.kind", "setting.agent", "setting.host")
+                            else {}
+                        ),
                     )
                     for path in paths
                 ],
@@ -271,3 +277,30 @@ def test_two_decisions_for_one_value_are_rejected():
 def test_field_resolutions_use_the_lookup_outcome_vocabulary(resolution):
     with pytest.raises(ValidationError):
         ValidatorFieldResolution.model_validate(resolution)
+
+
+def test_each_resolved_decision_obeys_the_allowed_term_list():
+    metadata, envelope = _metadata(), _envelope()
+    item = _item(
+        metadata, envelope, status="unresolved",
+        field_resolutions={
+            "class_curie": {"status": "resolved", "lookup_outcome": "matched",
+                            "resolved_values": {"class_curie": "ONT:1", "class_name": "heat"}},
+            "setting.agent": {"status": "unresolved", "lookup_outcome": "not_found"},
+        },
+    )
+    request = item.request.model_copy(
+        update={"selected_inputs": {**item.request.selected_inputs, "allowed_term_curies": ["ONT:9"]}}
+    )
+    result = materialize_validator_results_into_envelope(
+        envelope, metadata, [ValidatorResultMaterializationInput(match=item.match, request=request,
+                                                                 result=item.result)],
+    )
+
+    setting = result.envelope.extracted_objects[0].payload["setting"]
+    assert (setting["kind"]["resolution_state"], setting["kind"]["lookup_outcome"], setting["kind"]["curie"]) == (
+        UNRESOLVED, "invalid_schema", None)
+    # The other decision is still written, and the violation is reported.
+    assert setting["agent"]["lookup_outcome"] == "not_found"
+    [finding] = [f for f in result.appended_findings if f.code == "domain_pack.validator_materialization_invalid"]
+    assert "allowed term list" in finding.details["materialization_error"]

@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
+from src.lib.domain_packs.not_validatable import supersede_not_validatable_findings
 from src.lib.curation_workspace.execution_contracts import require_candidate_conformance
 
 from src.lib.curation_workspace.adapter_registry import (
@@ -565,10 +566,15 @@ def _dispatch_workspace_envelope_validation(
     package_appended_findings = ()
     package_envelope = refresh_scope.envelope
     if package_validator is not None and profile_context is None:
+        package_findings = package_validator(package_envelope)
         package_envelope, package_appended_findings = (
             append_validation_findings_to_envelope(
-                package_envelope,
-                package_validator(package_envelope),
+                supersede_not_validatable_findings(
+                    package_envelope,
+                    package_findings,
+                    actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
+                ),
+                package_findings,
                 actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
             )
         )

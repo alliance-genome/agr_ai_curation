@@ -745,3 +745,57 @@ async def test_details_preserves_existing_authorization_and_domain_boundaries(mo
     _patch_records(monkeypatch, [_InspectRecord()])
     denied = json.loads(await inspect_results_module.inspect_results(action='details', object_ref='assertion-1'))
     assert denied['error_code'] == 'field_not_supervisor_visible'
+
+
+def _resolvable_metadata() -> DomainPackMetadata:
+    return DomainPackMetadata(
+        pack_id="fixture.inspect",
+        display_name="Fixture Inspect Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="Assertion",
+                display_name="Assertion",
+                metadata={
+                    "object_role": "curatable_unit",
+                    "supervisor_manifest": {"primary_label_field": "label", "summary_fields": ["gene.curie"]},
+                },
+                fields=[
+                    DomainPackFieldDefinition(field_path="label", field_type=DomainPackFieldType.STRING),
+                    DomainPackFieldDefinition(
+                        field_path="gene", field_type=DomainPackFieldType.OBJECT,
+                        metadata={"display": {"label": "name", "id": "curie", "mention": "mention"}},
+                    ),
+                    DomainPackFieldDefinition(field_path="gene.curie", field_type=DomainPackFieldType.STRING,
+                                              display_name="Gene CURIE"),
+                    DomainPackFieldDefinition(field_path="gene.name", field_type=DomainPackFieldType.STRING),
+                ],
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("events", "shown"), [
+    ([], None),  # stored before the contract, never verified: no identity to show
+    ([{"materialized_field_paths": ["gene.curie"]}], "G:1"),  # a validator wrote it
+])
+async def test_supervisor_objects_read_values_like_exports(monkeypatch, events, shown):
+    """ALL-1283 review M7: the legacy rule and validator coverage apply to supervisor views."""
+
+    monkeypatch.setattr(
+        "src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id",
+        lambda domain_pack_id: _resolvable_metadata() if domain_pack_id == "fixture.inspect" else None,
+    )
+    payload = _payload()
+    payload["validation_findings"] = []
+    obj = payload["extracted_objects"][0]
+    obj["payload"] = {"label": "APOE association", "gene": {"curie": "G:1", "name": "unc-54"}}
+    obj["metadata"] = {"validator_resolved_value_materialization": events}
+    _patch_records(monkeypatch, [_InspectRecord(payload_json=payload)])
+
+    objects = json.loads(await inspect_results_module.inspect_results(
+        action="objects", result_ref=f"extraction-result:{RESULT_ID}"))
+
+    assert objects["objects"][0]["fields"].get("gene.curie") == shown
