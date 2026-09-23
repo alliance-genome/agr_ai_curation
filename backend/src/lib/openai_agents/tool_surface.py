@@ -33,8 +33,9 @@ import hashlib
 import json
 import logging
 import threading
-from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from agents import FunctionTool, ToolSearchTool, tool_namespace
 
@@ -44,6 +45,10 @@ MODE_DEFERRED = "deferred"
 MODE_EAGER_POLICY = "eager_policy"
 MODE_EAGER_PROVIDER_UNSUPPORTED = "eager_provider_unsupported"
 TERMINAL_TOOL_PREFIX = "finalize_"
+# Validators and supervisors keep every tool visible (ALL-1280 decision);
+# startup validation rejects a deferred policy for them.
+NEVER_DEFERRED_RUNTIMES = frozenset({"validator", "chat_supervisor", "flow_supervisor"})
+NEVER_DEFERRED_AGENT_CATEGORIES = frozenset({"Validation", "Routing"})
 
 NamespaceResolver = Callable[[str], "tuple[str, str] | None"]
 
@@ -401,9 +406,155 @@ def deferred_tools_note(surface: ToolSurface) -> str:
     return "\n".join(lines)
 
 
+def deferred_tool_namespaces(surface: ToolSurface) -> dict[str, str]:
+    """Return ``tool name -> namespace`` for the tools this surface defers."""
+
+    return {
+        tool.name: tool._tool_namespace
+        for tool in surface.tools
+        if getattr(tool, "_tool_namespace", None)
+    }
+
+
+def run_config_for_tool_surface(run_config: Any, surface: ToolSurface) -> Any:
+    """Return the run config that keeps a deferred run alive on a bare call.
+
+    The SDK looks a hosted-search function up by ``(namespace, name)``, so a
+    call to a deferred tool the model has not loaded yet (a bare ``name`` with
+    no namespace) is "not found". By default that raises
+    ``ModelBehaviorError`` and ends the run; on a deferred surface the model
+    instead gets an error output naming the tool group to load through tool
+    search. Eager surfaces keep the run config unchanged.
+    """
+
+    if surface.mode != MODE_DEFERRED:
+        return run_config
+    if run_config.tool_error_formatter is not None:
+        raise ToolSurfaceError(
+            f"{surface.runtime} agent {surface.agent_key} defers tools but its run "
+            "config already has a tool_error_formatter"
+        )
+    namespaces = deferred_tool_namespaces(surface)
+
+    def format_tool_error(args: Any) -> str | None:
+        if args.kind != "tool_not_found":
+            return None
+        tool_name = canonical_tool_name(args.tool_name)
+        namespace = namespaces.get(tool_name)
+        if namespace is None:
+            return None
+        return (
+            f"Tool '{tool_name}' is not loaded yet. It is in the '{namespace}' tool "
+            f"group: load the '{namespace}' group with tool search, then call "
+            f"'{tool_name}' again."
+        )
+
+    return replace(
+        run_config,
+        tool_not_found_behavior="return_error_to_model",
+        tool_error_formatter=format_tool_error,
+    )
+
+
+_TOOL_SEARCH_ITEM_TYPES = frozenset({"tool_search_call", "tool_search_output"})
+
+
+def replay_input_without_tool_search(
+    items: Sequence[Any],
+) -> tuple[list[Any], dict[str, int]]:
+    """Rewrite run history for a follow-up request that declares no tools.
+
+    ``tool_search_call`` / ``tool_search_output`` items only carry the search
+    and the loaded tool *definitions*; a request without ``ToolSearchTool``
+    has no surface for them, so they are removed. Function calls made through
+    a namespace keep their name, arguments and call id but lose the
+    ``namespace`` field (the request declares none). Every function call and
+    function call output -- the evidence the model gathered -- is kept.
+    Returns the rewritten items and what was changed.
+    """
+
+    replay: list[Any] = []
+    changes = {"tool_search_items_removed": 0, "function_call_namespaces_removed": 0}
+    for item in items:
+        item_type = item.get("type") if isinstance(item, Mapping) else None
+        if item_type in _TOOL_SEARCH_ITEM_TYPES:
+            changes["tool_search_items_removed"] += 1
+            continue
+        if item_type == "function_call" and item.get("namespace"):
+            item = {key: value for key, value in item.items() if key != "namespace"}
+            changes["function_call_namespaces_removed"] += 1
+        replay.append(item)
+    return replay, changes
+
+
+def record_tool_surface_prompt(prompt_agent: Any, surface: ToolSurface, *, target_agent: Any) -> None:
+    """Record the on-demand tool note as a runtime prompt layer.
+
+    ``apply_tool_surface`` appends :func:`deferred_tools_note` to the
+    instructions the model receives; the pending prompt run must carry the
+    same layer before it is committed so the prompt audit and TraceReview
+    reconstruction match the request.
+    """
+
+    if surface.mode != MODE_DEFERRED:
+        return
+    from src.lib.prompts.context import append_pending_prompt_runtime_context
+
+    append_pending_prompt_runtime_context(
+        prompt_agent,
+        layer_id_suffix="tool_surface_on_demand",
+        title="Tools loaded on demand",
+        content=deferred_tools_note(surface),
+        source_ref="src.lib.openai_agents.tool_surface:deferred_tools_note",
+        target_agent=target_agent,
+    )
+
+
+@contextmanager
+def tool_surface_trace_attributes(surface: ToolSurface) -> Iterator[None]:
+    """Tag the Langfuse observations a run creates with its tool-surface mode.
+
+    Enter around the SDK run creation: the run's background task copies this
+    context, so every model/tool observation of the run carries the tag and
+    metadata (evaluation arms filter on ``tool_surface:<mode>``).
+    """
+
+    from src.lib.openai_agents.langfuse_client import (
+        get_langfuse,
+        is_openai_agents_tracing_enabled,
+    )
+
+    if get_langfuse() is None or not is_openai_agents_tracing_enabled():
+        yield
+        return
+    from langfuse import propagate_attributes
+
+    with propagate_attributes(
+        tags=[f"tool_surface:{surface.mode}"],
+        metadata={
+            "tool_surface_mode": surface.mode,
+            "tool_surface_runtime": surface.runtime,
+            "tool_surface_fingerprint": surface.fingerprint,
+        },
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Declarative configuration
 # ---------------------------------------------------------------------------
+
+
+def tool_namespace_memberships(bindings: Iterable[Any]) -> dict[str, str]:
+    """Return ``tool_id -> namespace id`` from tool-binding metadata."""
+
+    memberships: dict[str, str] = {}
+    for binding in bindings:
+        metadata = binding.metadata if isinstance(binding.metadata, dict) else {}
+        namespace = metadata.get("namespace")
+        if namespace is not None:
+            memberships[binding.tool_id] = str(namespace)
+    return memberships
 
 
 def declared_tool_namespaces() -> dict[str, str]:
@@ -411,13 +562,7 @@ def declared_tool_namespaces() -> dict[str, str]:
 
     from src.lib.packages.tool_registry import load_tool_registry
 
-    memberships: dict[str, str] = {}
-    for binding in load_tool_registry().bindings:
-        metadata = binding.metadata if isinstance(binding.metadata, dict) else {}
-        namespace = metadata.get("namespace")
-        if namespace is not None:
-            memberships[binding.tool_id] = str(namespace)
-    return memberships
+    return tool_namespace_memberships(load_tool_registry().bindings)
 
 
 def declarative_namespace_resolver() -> NamespaceResolver:
@@ -575,6 +720,25 @@ def _no_namespace(_tool_name: str) -> None:
     return None
 
 
+def oversized_tool_namespaces(
+    tool_names: Iterable[str],
+    memberships: Mapping[str, str],
+    namespace_max: int,
+) -> dict[str, list[str]]:
+    """Return the namespaces holding more than ``namespace_max`` of ``tool_names``."""
+
+    per_namespace: dict[str, list[str]] = {}
+    for tool_name in dict.fromkeys(str(name) for name in tool_names):
+        namespace = memberships.get(tool_name)
+        if namespace is not None:
+            per_namespace.setdefault(namespace, []).append(tool_name)
+    return {
+        namespace: members
+        for namespace, members in sorted(per_namespace.items())
+        if len(members) > namespace_max
+    }
+
+
 # ---------------------------------------------------------------------------
 # Startup validation
 # ---------------------------------------------------------------------------
@@ -588,7 +752,8 @@ def validate_tool_surface_configuration() -> dict[str, Any]:
     runtime has a policy whose deferred namespaces exist and whose eager tools
     are known; each agent keeps at most TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS
     tools per namespace; agent ``tool_loading`` overrides only name the
-    agent's own tools and existing namespaces.
+    agent's own tools and existing namespaces; validator and supervisor
+    runtimes, and Validation/Routing agents, never defer.
     """
 
     from src.lib.config.agent_loader import load_agent_definitions
@@ -642,22 +807,30 @@ def validate_tool_surface_configuration() -> dict[str, Any]:
             if tool_name not in known_tools:
                 errors.append(f"{policy.source_label} names unknown eager tool '{tool_name}'")
 
+    for runtime in sorted(NEVER_DEFERRED_RUNTIMES & set(policies)):
+        if policies[runtime].mode == "deferred":
+            errors.append(
+                f"{policies[runtime].source_label} defers tools for runtime '{runtime}' "
+                "(validator and supervisor tools are always eager)"
+            )
+
     namespace_max = get_tool_surface_namespace_max_functions()
     for agent_id, definition in sorted(load_agent_definitions().items()):
-        per_namespace: dict[str, list[str]] = {}
-        for tool_name in definition.tools or []:
-            namespace = memberships.get(str(tool_name))
-            if namespace is not None:
-                per_namespace.setdefault(namespace, []).append(str(tool_name))
-        for namespace, members in sorted(per_namespace.items()):
-            if len(members) > namespace_max:
-                errors.append(
-                    f"Agent '{agent_id}' places {len(members)} tools in namespace "
-                    f"'{namespace}' (max {namespace_max})"
-                )
+        for namespace, members in oversized_tool_namespaces(
+            definition.tools or [], memberships, namespace_max
+        ).items():
+            errors.append(
+                f"Agent '{agent_id}' places {len(members)} tools in namespace "
+                f"'{namespace}' (max {namespace_max})"
+            )
         override = definition.tool_loading
         if override is None:
             continue
+        if override.mode == "deferred" and definition.category in NEVER_DEFERRED_AGENT_CATEGORIES:
+            errors.append(
+                f"Agent '{agent_id}' ({definition.category}) tool_loading defers tools "
+                "(validator and supervisor tools are always eager)"
+            )
         for namespace in override.deferred_namespaces or ():
             if namespace not in namespaces:
                 errors.append(f"Agent '{agent_id}' tool_loading defers unknown namespace '{namespace}'")

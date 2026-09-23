@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +26,7 @@ from src.lib.openai_agents.tool_surface import (
     MODE_DEFERRED,
     MODE_EAGER_POLICY,
     MODE_EAGER_PROVIDER_UNSUPPORTED,
+    ToolSurface,
     ToolSurfaceConfigurationError,
     ToolSurfaceError,
     apply_tool_surface,
@@ -445,6 +448,213 @@ def test_prompt_cache_key_binds_to_the_compiled_visible_and_deferred_surface():
 
 
 # ---------------------------------------------------------------------------
+# Deferred runs: bare calls, tool-less replay, prompt audit, trace tags
+# ---------------------------------------------------------------------------
+
+
+def _evidence_deferred_surface() -> ToolSurface:
+    return _compile(
+        [_tool("search_document"), _tool("read_chunk"), _tool("record_evidence")],
+        policy=ToolLoadingPolicy(mode="deferred", deferred_namespaces=("evidence_maintenance",)),
+    )
+
+
+def test_bare_call_to_a_deferred_tool_returns_a_load_hint_instead_of_ending_the_run():
+    import asyncio
+
+    from agents import Model, ModelResponse, RunConfig, Runner, Usage
+    from agents.exceptions import ModelBehaviorError
+    from openai.types.responses import (
+        ResponseFunctionToolCall,
+        ResponseOutputMessage,
+        ResponseOutputText,
+    )
+
+    class BareCallModel(Model):
+        def __init__(self):
+            self.inputs = []
+
+        async def get_response(self, system_instructions, input, *args, **kwargs):
+            self.inputs.append(list(input))
+            if len(self.inputs) == 1:
+                # The model calls a deferred tool by its bare name before loading it.
+                output = [ResponseFunctionToolCall(
+                    id="fc_1", call_id="call_1", name="record_evidence",
+                    arguments="{}", type="function_call",
+                )]
+            else:
+                output = [ResponseOutputMessage(
+                    id="msg_1", type="message", role="assistant", status="completed",
+                    content=[ResponseOutputText(type="output_text", text="done", annotations=[])],
+                )]
+            return ModelResponse(output=output, usage=Usage(), response_id=f"r{len(self.inputs)}")
+
+        async def stream_response(self, *args, **kwargs):
+            raise AssertionError("non-streaming run")
+            yield
+
+    surface = _evidence_deferred_surface()
+    assert surface.deferred_names == ("record_evidence",)
+    base_config = RunConfig(tracing_disabled=True)
+
+    model = BareCallModel()
+    agent = Agent(name="Extractor", instructions="x", model=model, tools=surface.tools)
+    result = asyncio.run(
+        Runner.run(agent, "go", run_config=tool_surface.run_config_for_tool_surface(base_config, surface))
+    )
+
+    assert result.final_output == "done"
+    [error_output] = [
+        item for item in model.inputs[1] if item.get("type") == "function_call_output"
+    ]
+    assert error_output["call_id"] == "call_1"
+    assert error_output["output"] == (
+        "Tool 'record_evidence' is not loaded yet. It is in the 'evidence_maintenance' "
+        "tool group: load the 'evidence_maintenance' group with tool search, then call "
+        "'record_evidence' again."
+    )
+    # Without the deferred-run config the SDK ends the run on the same call.
+    with pytest.raises(ModelBehaviorError, match="record_evidence not found"):
+        asyncio.run(Runner.run(
+            Agent(name="Extractor", instructions="x", model=BareCallModel(), tools=surface.tools),
+            "go",
+            run_config=base_config,
+        ))
+
+
+def test_eager_surface_keeps_its_run_config_and_formatter_conflicts_fail():
+    from agents import RunConfig
+
+    config = RunConfig(tracing_disabled=True)
+    eager = _compile([_tool("search_document")], policy=EAGER)
+
+    assert tool_surface.run_config_for_tool_surface(config, eager) is config
+    with pytest.raises(ToolSurfaceError, match="tool_error_formatter"):
+        tool_surface.run_config_for_tool_surface(
+            RunConfig(tool_error_formatter=lambda _args: None), _evidence_deferred_surface()
+        )
+
+
+def test_replay_without_tool_search_keeps_every_call_and_result():
+    history = [
+        {"role": "user", "content": "extract"},
+        {"type": "tool_search_call", "id": "ts_1", "call_id": None, "execution": "server",
+         "arguments": {"paths": ["evidence_maintenance"]}, "status": "completed"},
+        {"type": "tool_search_output", "id": "tso_1", "call_id": None, "execution": "server",
+         "status": "completed", "tools": [{"type": "namespace", "name": "evidence_maintenance"}]},
+        {"type": "function_call", "call_id": "c1", "name": "record_evidence",
+         "namespace": "evidence_maintenance", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "evidence e1"},
+        {"type": "function_call", "call_id": "c2", "name": "read_chunk", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c2", "output": "chunk text"},
+    ]
+
+    replay, changes = tool_surface.replay_input_without_tool_search(history)
+
+    assert changes == {"tool_search_items_removed": 2, "function_call_namespaces_removed": 1}
+    assert replay == [
+        history[0],
+        {"type": "function_call", "call_id": "c1", "name": "record_evidence", "arguments": "{}"},
+        history[4],
+        history[5],
+        history[6],
+    ]
+    assert history[3]["namespace"] == "evidence_maintenance"
+
+
+def test_recorded_prompt_matches_the_instructions_the_deferred_run_sends():
+    from src.lib.prompts import context as prompt_context
+
+    prompt_context.clear_prompt_context()
+    agent = Agent(name="Gene Extractor", instructions="Extract genes.", tools=[
+        _tool("search_document"), _tool("read_chunk"), _tool("record_evidence"),
+    ])
+    agent.tool_surface_runtime = "extractor"
+    run_id = prompt_context.set_pending_prompts(
+        "Gene Extractor",
+        [],
+        effective_prompt_hash="h0",
+        layer_manifest={"agent_id": "gene_extractor", "layers": [], "hash": "h0"},
+    )
+    prompt_context.bind_prompt_run(agent, run_id)
+    policy = ToolLoadingPolicy(mode="deferred", deferred_namespaces=("evidence_maintenance",))
+
+    runtime_agent = copy.copy(agent)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(tool_surface, "resolve_tool_loading_policy", lambda *_args: policy)
+        patch.setattr(tool_surface, "model_supports_tool_search", lambda *_args: True)
+        patch.setattr(tool_surface, "declarative_namespace_resolver", lambda: NAMESPACES.get)
+        surface = apply_tool_surface(runtime_agent)
+    tool_surface.record_tool_surface_prompt(agent, surface, target_agent=runtime_agent)
+    prompt_context.commit_pending_prompts(runtime_agent)
+
+    [prompt_run] = prompt_context.get_used_prompt_runs()
+    layers = prompt_run.assembly.layer_manifest["layers"]
+    assert surface.mode == MODE_DEFERRED
+    assert layers[-1]["id"] == "gene_extractor:runtime_context:tool_surface_on_demand"
+    assert layers[-1]["content"] == tool_surface.deferred_tools_note(surface)
+    assert runtime_agent.instructions == (
+        f"Extract genes.\n\n{tool_surface.deferred_tools_note(surface)}"
+    )
+    assert prompt_run.assembly.effective_prompt_hash != "h0"
+    prompt_context.clear_prompt_context()
+
+
+def test_eager_surface_adds_no_prompt_layer():
+    from src.lib.prompts import context as prompt_context
+
+    prompt_context.clear_prompt_context()
+    agent = Agent(name="Gene Validator", instructions="Validate.", tools=[_tool("search_document")])
+    run_id = prompt_context.set_pending_prompts(
+        "Gene Validator", [], effective_prompt_hash="h0",
+        layer_manifest={"agent_id": "gene_validation", "layers": [], "hash": "h0"},
+    )
+    prompt_context.bind_prompt_run(agent, run_id)
+
+    tool_surface.record_tool_surface_prompt(
+        agent, _compile(agent.tools, policy=EAGER), target_agent=agent
+    )
+    prompt_context.commit_pending_prompts(agent)
+
+    [prompt_run] = prompt_context.get_used_prompt_runs()
+    assert prompt_run.assembly.layer_manifest["layers"] == []
+    prompt_context.clear_prompt_context()
+
+
+def test_trace_attributes_tag_the_run_with_its_tool_surface_mode(monkeypatch):
+    import langfuse
+
+    from src.lib.openai_agents import langfuse_client
+
+    captured = []
+
+    @contextmanager
+    def fake_propagate_attributes(**kwargs):
+        captured.append(kwargs)
+        yield
+
+    surface = _evidence_deferred_surface()
+    monkeypatch.setattr(langfuse, "propagate_attributes", fake_propagate_attributes)
+    monkeypatch.setattr(langfuse_client, "is_openai_agents_tracing_enabled", lambda: True)
+    monkeypatch.setattr(langfuse_client, "get_langfuse", lambda: None)
+    with tool_surface.tool_surface_trace_attributes(surface):
+        pass
+    assert captured == []
+
+    monkeypatch.setattr(langfuse_client, "get_langfuse", lambda: object())
+    with tool_surface.tool_surface_trace_attributes(surface):
+        pass
+    assert captured == [{
+        "tags": ["tool_surface:deferred"],
+        "metadata": {
+            "tool_surface_mode": "deferred",
+            "tool_surface_runtime": "extractor",
+            "tool_surface_fingerprint": surface.fingerprint,
+        },
+    }]
+
+
+# ---------------------------------------------------------------------------
 # Declarative configuration and startup validation
 # ---------------------------------------------------------------------------
 
@@ -557,6 +767,7 @@ def test_startup_rejects_unknown_eager_tool_and_namespace(monkeypatch):
         agents={
             "reader": SimpleNamespace(
                 tools=["read_chunk"],
+                category="Extraction",
                 tool_loading=ToolLoadingPolicy(mode="deferred", eager_tools=("missing_tool",)),
             )
         },
@@ -569,6 +780,34 @@ def test_startup_rejects_unknown_eager_tool_and_namespace(monkeypatch):
     assert "ghost_namespace" in message
     assert "ghost_tool" in message
     assert "missing_tool" in message
+
+
+def test_startup_rejects_deferral_for_validators_and_supervisors(monkeypatch):
+    policies = {runtime: EAGER for runtime in TOOL_LOADING_RUNTIMES}
+    for runtime in ("validator", "chat_supervisor", "flow_supervisor"):
+        policies[runtime] = ToolLoadingPolicy(mode="deferred", source_label=f"{runtime} policy")
+    _patch_validation_sources(
+        monkeypatch,
+        bindings={"read_chunk": {"namespace": "document_reading"}},
+        agents={
+            f"{category.lower()}_agent": SimpleNamespace(
+                tools=["read_chunk"],
+                category=category,
+                tool_loading=ToolLoadingPolicy(mode="deferred"),
+            )
+            for category in ("Validation", "Routing", "Extraction")
+        },
+        policies=policies,
+    )
+
+    with pytest.raises(ToolSurfaceConfigurationError) as excinfo:
+        validate_tool_surface_configuration()
+    message = str(excinfo.value)
+    for runtime in ("validator", "chat_supervisor", "flow_supervisor"):
+        assert f"defers tools for runtime '{runtime}'" in message
+    assert "Agent 'validation_agent' (Validation) tool_loading defers tools" in message
+    assert "Agent 'routing_agent' (Routing) tool_loading defers tools" in message
+    assert "extraction_agent" not in message
 
 
 def test_agent_yaml_tool_loading_override_is_parsed():

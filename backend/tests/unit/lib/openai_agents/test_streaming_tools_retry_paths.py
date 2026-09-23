@@ -437,6 +437,42 @@ async def test_run_specialist_resets_evidence_workspace_after_stream_error(monke
 
 
 @pytest.mark.asyncio
+async def test_run_specialist_resets_run_state_when_the_tool_surface_fails(monkeypatch):
+    from src.lib.openai_agents import resolver_call_ledger
+    from src.lib.openai_agents.tool_surface import ToolSurfaceError
+
+    def _fail(*_args, **_kwargs):
+        raise ToolSurfaceError("namespace over the cap")
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "apply_tool_surface", _fail)
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: pytest.fail("the run must not start"),
+    )
+
+    with pytest.raises(ToolSurfaceError, match="namespace over the cap"):
+        await streaming_tools.run_specialist_with_events(
+            agent=SimpleNamespace(
+                name="Structured Specialist", tools=[], output_type=_Envelope,
+                instructions="", model="gpt-4o",
+            ),
+            input_text="extract structured output",
+            specialist_name="Structured Specialist",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    with pytest.raises(RuntimeError, match="No active evidence workspace"):
+        evidence_workspace._workspace_records()
+    with pytest.raises(RuntimeError, match="No active extraction builder workspace"):
+        builder.get_active_extraction_builder_workspace()
+    with pytest.raises(RuntimeError, match="No active resolver call ledger"):
+        resolver_call_ledger.get_active_resolver_call_ledger()
+
+
+@pytest.mark.asyncio
 async def test_run_specialist_retry_succeeds_when_initial_output_missing(monkeypatch):
     first = _FakeRunResult(events=[], final_output=None, new_items=[])
     second = _FakeRunResult(events=[], final_output=_Envelope(value="ok"), new_items=[])
@@ -512,6 +548,81 @@ async def test_run_specialist_retry_raises_when_retry_also_missing_output(monkey
     assert calls["count"] == 2
     assert any(e.get("type") == "SPECIALIST_RETRY" for e in captured_events)
     assert any(e.get("type") == "SPECIALIST_ERROR" for e in captured_events)
+
+
+_DEFERRED_RUN_HISTORY = [
+    {"role": "user", "content": "extract structured output"},
+    {"type": "tool_search_call", "id": "ts_1", "call_id": None, "execution": "server",
+     "arguments": {"paths": ["evidence_maintenance"]}, "status": "completed"},
+    {"type": "tool_search_output", "id": "tso_1", "call_id": None, "execution": "server",
+     "status": "completed", "tools": [{"type": "namespace", "name": "evidence_maintenance",
+                                      "description": "Record and maintain evidence.", "tools": []}]},
+    {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "record_evidence",
+     "namespace": "evidence_maintenance", "arguments": "{\"span_id\": \"s1\"}", "status": "completed"},
+    {"type": "function_call_output", "call_id": "call_1", "output": "evidence e1 recorded"},
+]
+
+
+@pytest.mark.asyncio
+async def test_structured_retry_request_replays_deferred_history_without_tool_search(monkeypatch):
+    """ALL-1280: the tool-less retry request carries every call/result, no search items."""
+    from agents import AgentOutputSchema, ModelSettings
+    from agents.models.openai_responses import OpenAIResponsesModel
+    from openai import AsyncOpenAI
+
+    class _DeferredHistoryRunResult(_FakeRunResult):
+        def to_input_list(self):
+            return [dict(item) for item in _DEFERRED_RUN_HISTORY]
+
+    first = _DeferredHistoryRunResult(events=[], final_output=None, new_items=[])
+    second = _FakeRunResult(events=[], final_output=_Envelope(value="ok"), new_items=[])
+    calls = []
+
+    def _run_streamed(agent, **kwargs):
+        calls.append((agent, kwargs))
+        return first if len(calls) == 1 else second
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", lambda _event: None)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
+
+    await streaming_tools.run_specialist_with_events(
+        agent=SimpleNamespace(
+            name="Structured Specialist", tools=[], output_type=_Envelope,
+            instructions="", model="gpt-4o",
+        ),
+        input_text="extract structured output",
+        specialist_name="Structured Specialist",
+        max_turns=3,
+        tool_name=None,
+    )
+
+    retry_agent, retry_kwargs = calls[1]
+    assert retry_agent.tools == []
+    request = OpenAIResponsesModel(
+        model="gpt-4o", openai_client=AsyncOpenAI(api_key="test-key")
+    )._build_response_create_kwargs(
+        system_instructions=retry_agent.instructions,
+        input=retry_kwargs["input"],
+        model_settings=ModelSettings(),
+        tools=retry_agent.tools,
+        output_schema=AgentOutputSchema(_Envelope),
+        handoffs=[],
+    )
+
+    item_types = [item.get("type") for item in request["input"]]
+    assert "tool_search_call" not in item_types
+    assert "tool_search_output" not in item_types
+    assert request["tools"] == []
+    [call] = [item for item in request["input"] if item.get("type") == "function_call"]
+    assert "namespace" not in call
+    assert (call["call_id"], call["name"], call["arguments"]) == (
+        "call_1", "record_evidence", '{"span_id": "s1"}',
+    )
+    [output] = [item for item in request["input"] if item.get("type") == "function_call_output"]
+    assert output == {"type": "function_call_output", "call_id": "call_1", "output": "evidence e1 recorded"}
+    assert request["input"][-1]["role"] == "user"
 
 
 def test_validator_lookup_audit_events_dedupe_identical_batch_attempts(monkeypatch):
