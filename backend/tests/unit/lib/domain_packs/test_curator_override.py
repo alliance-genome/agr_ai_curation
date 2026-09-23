@@ -194,7 +194,7 @@ def test_validator_writes_never_change_an_overridden_value():
     assert is_curator_override(value)
 
 
-def _metadata() -> DomainPackMetadata:
+def _metadata(display=DISPLAY) -> DomainPackMetadata:
     return DomainPackMetadata(
         pack_id="fixture.override",
         display_name="Fixture Override",
@@ -214,13 +214,14 @@ def _metadata() -> DomainPackMetadata:
             object_type="Observation", display_name="Observation", metadata={"object_role": "curatable_unit"},
             fields=[
                 DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT,
-                                          metadata={"display": DISPLAY, "editable": True}),
+                                          metadata={"display": display, "editable": True}),
                 DomainPackFieldDefinition(field_path="site.curie", field_type=DomainPackFieldType.STRING,
                                           metadata={"editable": True}),
                 DomainPackFieldDefinition(field_path="site.name", field_type=DomainPackFieldType.STRING,
                                           metadata={"editable": True}),
                 DomainPackFieldDefinition(field_path="site.mention", field_type=DomainPackFieldType.STRING,
                                           metadata={"editable": True}),
+                DomainPackFieldDefinition(field_path="site.taxon", field_type=DomainPackFieldType.STRING),
                 DomainPackFieldDefinition(field_path="site.lookup_outcome", field_type=DomainPackFieldType.ENUM,
                                           enum_ref="LookupOutcome", metadata={"editable": True}),
             ],
@@ -228,8 +229,8 @@ def _metadata() -> DomainPackMetadata:
     )
 
 
-def _pack() -> LoadedDomainPack:
-    metadata = _metadata()
+def _pack(display=DISPLAY) -> LoadedDomainPack:
+    metadata = _metadata(display)
     return LoadedDomainPack(
         pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
         pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
@@ -308,9 +309,9 @@ def test_a_non_decisive_validator_outcome_is_no_disagreement():
 # --- The curator edit path ----------------------------------------------------------------
 
 
-def _patch(envelope, field_path, value, *, before):
+def _patch(envelope, field_path, value, *, before, display=DISPLAY):
     return apply_curator_field_patch(
-        envelope, _pack(),
+        envelope, _pack(display),
         EnvelopeFieldPatch(envelope_id=envelope.envelope_id, expected_revision=1, object_id="obs-1",
                            field_path=field_path, before=before, value=value),
         current_revision=1, actor_id="curator-7",
@@ -393,3 +394,30 @@ def test_curators_cannot_edit_the_paper_wording_or_the_validation_state(field_pa
 
     assert result.status is EnvelopeFieldPatchStatus.REJECTED
     assert "set by extraction or validation" in result.errors[0]
+
+
+def test_a_whole_value_override_changes_only_the_identity():
+    """A container editable for whole-value overrides keeps its other keys closed."""
+
+    staged = _staged_envelope()
+    staged.extracted_objects[0].payload["site"]["entity_type"] = "tissue"
+    before = staged.extracted_objects[0].payload["site"]
+    identity = {"curie": "ONT:1", "name": "epidermis"}
+
+    for other in ({"entity_type": "cell"}, {"mention": "other words"}, {"lookup_outcome": "matched"},
+                  {"overruled_curie": "ONT:3"}, {"added_key": "x"}):
+        rejected = _patch(staged, "site", {**before, **identity, **other}, before=before)
+        assert rejected.status is EnvelopeFieldPatchStatus.REJECTED
+        assert rejected.errors == (
+            f"field_path 'site' cannot change {next(iter(other))}; "
+            "only the identifier and name can be changed in a curator override",)
+        assert rejected.envelope.extracted_objects[0].payload["site"] == before
+
+    accepted = _patch(staged, "site", {**before, **identity}, before=before)
+    site = accepted.envelope.extracted_objects[0].payload["site"]
+    assert (site["curie"], site["name"], site["entity_type"]) == ("ONT:1", "epidermis", "tissue")
+    # A declared validated key is part of the identity.
+    with_taxon = _patch(staged, "site", {**before, **identity, "taxon": "T:1"}, before=before,
+                        display={**DISPLAY, "validated": ["taxon"]})
+    assert with_taxon.status is EnvelopeFieldPatchStatus.ACCEPTED
+    assert with_taxon.envelope.extracted_objects[0].payload["site"]["taxon"] == "T:1"

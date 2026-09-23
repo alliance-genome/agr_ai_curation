@@ -349,6 +349,14 @@ def _set_by_validation(key: str) -> bool:
     return key in CONTRACT_KEYS or key.startswith((OVERRULED_KEY_PREFIX, EXTRACTOR_PROPOSAL_PREFIX))
 
 
+# Which identity a whole-value curator override may change, by the keys the value declares.
+_OVERRIDE_SCOPE_MESSAGE = {
+    (True, True): "only the identifier and name can be changed in a curator override",
+    (True, False): "only the identifier can be changed in a curator override",
+    (False, True): "only the name can be changed in a curator override",
+}
+
+
 def _resolvable_edit_errors(
     domain_object: CuratableObjectEnvelope,
     patch: EnvelopeFieldPatch,
@@ -359,7 +367,7 @@ def _resolvable_edit_errors(
     target = _resolvable_target(patch.field_path, resolvable_fields)
     if target is None:
         return []
-    value_path, _spec, key = target
+    value_path, spec, key = target
     if key is not None:
         if _set_by_validation(key):
             return [
@@ -371,16 +379,18 @@ def _resolvable_edit_errors(
         return [f"field_path '{patch.field_path}' is a resolvable value; edit its identity keys"]
     current = _payload_value(domain_object.payload, value_path)
     current = current if isinstance(current, Mapping) else {}
+    # A whole-value edit is a curator override: only the identity keys may change.
     changed = sorted(
         str(item_key) for item_key, item in patch.value.items()
-        if _set_by_validation(str(item_key)) and item != current.get(item_key)
+        if item_key not in spec.identity_keys and item != current.get(item_key)
     )
     if changed:
         return [
             f"field_path '{patch.field_path}' cannot change {', '.join(changed)}; "
-            "those are set by extraction or validation"
+            f"{_OVERRIDE_SCOPE_MESSAGE[(bool(spec.id_key), bool(spec.label_key))]}"
         ]
     return []
+
 
 
 def _apply_resolvable_edit(
@@ -394,8 +404,8 @@ def _apply_resolvable_edit(
     """Apply a curator's edit of a declared resolvable value's identity as a validation override.
 
     Returns (handled, override audit record). Not handled means an ordinary
-    field edit the caller sets; handled without a record means only a
-    value's other keys changed. Declared mirror copies follow an override.
+    field edit the caller sets; handled without a record means a whole-value
+    edit that changed nothing. Declared mirror copies follow an override.
     """
 
     resolvable_fields = declared_resolvable_fields(domain_pack.metadata, object_type)
@@ -412,10 +422,8 @@ def _apply_resolvable_edit(
     if key is not None:
         edits = {key: copy.deepcopy(patch.value)}
     else:
+        # Other keys cannot change (_resolvable_edit_errors); only the identity is applied.
         new_value = dict(patch.value)
-        for item_key, item in new_value.items():
-            if item_key not in spec.identity_keys and not _set_by_validation(str(item_key)):
-                container[item_key] = copy.deepcopy(item)
         edits = {
             identity_key: copy.deepcopy(new_value[identity_key])
             for identity_key in spec.identity_keys
