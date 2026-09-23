@@ -868,3 +868,24 @@ def test_validated_must_be_declared_leaves_of_a_resolvable_value():
         pack([], ["allele.taxon"])
     with pytest.raises(ValueError, match="validated key 'taxon' of 'allele'"):
         pack(["taxon"], [])
+
+
+def test_profile_validator_events_count_as_validator_coverage():
+    metadata = {"profile_validator_materialization": [
+        {"field_paths": ["attributes.gene.gene_id", "attributes.records[1].resolved_id",
+                         "attributes.terms[].curie"]},
+    ]}
+    assert validator_event_covers(metadata, "attributes.gene")
+    assert validator_event_covers(metadata, "attributes.records[1]")
+    assert not validator_event_covers(metadata, "attributes.records[0]")
+    # "[]" covers every element.
+    assert validator_event_covers(metadata, "attributes.terms[3]")
+    assert not validator_event_covers(metadata, "attributes.other")
+
+    spec = ResolvableSpec(id_key="gene_id", label_key="symbol")
+    payload = {"attributes": {"gene": {"gene_id": "G:1", "symbol": "unc-54"}}}
+    effective = effective_payload(payload, {"attributes.gene": spec}, object_metadata=metadata)
+    assert (effective["attributes"]["gene"]["resolution_state"],
+            effective["attributes"]["gene"]["lookup_outcome"]) == (RESOLVED, OUTCOME_MATCHED)
+    unverified = effective_payload(payload, {"attributes.gene": spec}, object_metadata={})
+    assert unverified["attributes"]["gene"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
