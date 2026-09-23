@@ -66,7 +66,15 @@ def _metadata() -> DomainPackMetadata:
                             {
                                 "id": "site",
                                 "label": "Site",
-                                "fields": ["site.curie", "site.name", "site.mention", "codes"],
+                                "fields": [
+                                    "site.curie",
+                                    "site.name",
+                                    "site.mention",
+                                    "site.resolution_state",
+                                    "site.lookup_outcome",
+                                    "site.validator_explanation",
+                                    "codes",
+                                ],
                             },
                             {"id": "context", "label": "Context", "fields": ["conditions", "note"]},
                         ],
@@ -169,8 +177,23 @@ def test_resolved_value_shows_label_and_id_with_paper_wording_apart():
     # An identity key of the value shows that key; the paper wording stays apart.
     assert _workspace_field(row, "site.curie").resolution.display_text == "ONT:0000101"
     assert _workspace_field(row, "site.name").resolution.display_text == "gut"
-    # The paper wording leaf and plain fields carry no resolution of their own.
-    assert _workspace_field(row, "site.mention").resolution is None
+    # The value's own leaves read in plain words and name their leaf.
+    leaves = {
+        path: _workspace_field(row, path).resolution
+        for path in (
+            "site.mention",
+            "site.resolution_state",
+            "site.lookup_outcome",
+            "site.validator_explanation",
+        )
+    }
+    assert {path: (leaf.display_text, leaf.leaf_key) for path, leaf in leaves.items()} == {
+        "site.mention": ("structures near the gut", "mention"),
+        "site.resolution_state": ("Resolved", "resolution_state"),
+        "site.lookup_outcome": ("Matched", "lookup_outcome"),
+        "site.validator_explanation": ("Exact synonym match.", "validator_explanation"),
+    }
+    assert _workspace_field(row, "site.curie").resolution.leaf_key is None
     assert _summary_field(row, "note").resolution is None
     assert row.display_label == "gut"
 
@@ -315,3 +338,48 @@ def test_resolved_value_vocabularies_are_closed():
             value_path="site", display_text=UNRESOLVED_DISPLAY, resolution_state="unresolved",
             lookup_outcome="not_found", lookup_result="Missing",
         )
+
+
+@pytest.mark.parametrize(
+    ("site", "issue"),
+    [
+        (
+            {"mention": "gut", "curie": "ONT:1", "name": "gut", "resolution_state": "resolved",
+             "lookup_outcome": "pending"},
+            "outside the controlled vocabulary",
+        ),
+        (
+            {"mention": "gut", "curie": None, "name": None, "resolution_state": "unresolved",
+             "lookup_outcome": None},
+            "outside the controlled vocabulary",
+        ),
+        (
+            {"mention": "gut", "curie": "ONT:1", "name": "gut", "resolution_state": "resolved",
+             "lookup_outcome": "not_found"},
+            "lookup_outcome is matched",
+        ),
+        (
+            {"mention": "gut", "curie": None, "name": None, "resolution_state": "unresolved",
+             "lookup_outcome": "not_found", "validator_explanation": {"text": "no"}},
+            "validator_explanation must be text",
+        ),
+    ],
+)
+def test_unreadable_stored_value_reads_unresolved_without_breaking_the_row(site, issue, caplog):
+    row = _row({"site": site, "note": "plain"})
+
+    for field in (
+        _summary_field(row, "site"),
+        _workspace_field(row, "site.curie"),
+        _workspace_field(row, "site.name"),
+    ):
+        assert field.resolution.display_text == UNRESOLVED_DISPLAY
+        [value] = field.resolution.values
+        assert value.resolution_state == "unresolved"
+        assert value.lookup_outcome is None
+        assert value.lookup_result == "Stored value unreadable"
+        assert value.mention == "gut"
+        assert issue in value.issue
+    assert _workspace_field(row, "site.lookup_outcome").resolution.display_text == "Stored value unreadable"
+    assert _summary_field(row, "note").value == "plain"
+    assert "unreadable resolvable value" in caplog.text

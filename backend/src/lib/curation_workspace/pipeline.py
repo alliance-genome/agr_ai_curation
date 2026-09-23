@@ -778,10 +778,6 @@ def _prepared_draft_field_from_review_row_field(
     materializes_to = _workspace_field_materializes_to_paths(field)
     if materializes_to:
         metadata["materializes_to_field_paths"] = list(materializes_to)
-    if field.resolution is not None:
-        # The seeded value as extracted vs as validated (ALL-1283); the review
-        # row regenerated for this revision stays the current reading.
-        metadata["resolution"] = field.resolution.model_dump(mode="json")
 
     return PreparedDraftFieldInput(
         field_key=field.field_path,

@@ -1151,6 +1151,85 @@ describe('buildHorizontalGridModel', () => {
     expect(model.rows[0]!.cells[0]!.resolution?.values[0]?.mention).toBe('structures near the residual body')
   })
 
+  it('shows each value\'s details once, on its first cell, and hides leaves that cell covers', () => {
+    const geneValue = resolvedValue({
+      value_path: '',
+      display_text: 'UNRESOLVED',
+      mention: 'abc-1',
+      resolution_state: 'unresolved',
+      lookup_outcome: 'not_found',
+      lookup_result: 'Not found',
+    })
+    const fields = [
+      draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: null }),
+      draftField({ fieldKey: 'identifier', label: 'Gene ID', order: 1, value: null }),
+      draftField({ fieldKey: 'mention', label: 'Paper mention', order: 2, value: 'abc-1' }),
+      draftField({ fieldKey: 'lookup_outcome', label: 'Lookup result', order: 3, value: 'not_found' }),
+    ]
+    const covered = candidate({ id: 'candidate-covered', objectId: 'object-covered', order: 0, fields })
+    const row = reviewRowWithFields('object-covered', [
+      { path: 'symbol', resolution: { display_text: 'UNRESOLVED', values: [geneValue] } },
+      { path: 'identifier', resolution: { display_text: 'UNRESOLVED', values: [geneValue] } },
+      { path: 'mention', resolution: { display_text: 'abc-1', values: [geneValue], leaf_key: 'mention' } },
+      {
+        path: 'lookup_outcome',
+        resolution: { display_text: 'Not found', values: [geneValue], leaf_key: 'lookup_outcome' },
+      },
+    ])
+
+    const model = modelForRows([workspaceRow({ candidate: covered, row })])
+
+    expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'symbol', 'identifier'])
+    expect(model.rows[0]!.cells.map((cell) => cell.resolutionDetails.length)).toEqual([1, 0])
+  })
+
+  it('shows a value\'s own leaf in plain words when no cell of its value is in the grid', () => {
+    const leafOnly = candidate({
+      id: 'candidate-leaf',
+      objectId: 'object-leaf',
+      order: 0,
+      fields: [
+        draftField({ fieldKey: 'lookup_outcome', label: 'Lookup result', order: 0, value: 'not_found' }),
+      ],
+    })
+    const row = reviewRowWithFields('object-leaf', [
+      {
+        path: 'lookup_outcome',
+        resolution: { display_text: 'Not found', values: [UNRESOLVED_SITE], leaf_key: 'lookup_outcome' },
+      },
+    ])
+
+    const model = modelForRows([workspaceRow({ candidate: leafOnly, row })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({ displayText: 'Not found', resolutionDetails: [] })
+  })
+
+  it('never presents an unresolved value as validated', () => {
+    const waived = candidate({
+      id: 'candidate-waived',
+      objectId: 'object-waived',
+      order: 0,
+      fields: [draftField({ fieldKey: 'site', label: 'Site', order: 0, value: null })],
+    })
+    const row = reviewRowWithFields('object-waived', [
+      { path: 'site', resolution: { display_text: 'UNRESOLVED', values: [UNRESOLVED_SITE] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: waived,
+      row,
+      validation: [validationProjection({
+        id: 'waived-site',
+        fieldPath: 'site',
+        status: 'waived',
+        findings: 1,
+        openFindings: 0,
+      })],
+    })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({ displayText: 'UNRESOLVED', state: 'needs-review' })
+  })
+
   it('never renders an object value as JSON', () => {
     const objectCandidate = candidate({
       id: 'candidate-object',
@@ -1170,15 +1249,30 @@ describe('buildHorizontalGridModel', () => {
           order: 2,
           value: [{ abbreviation: 'XB', tags: ['a', 'b'] }, { abbreviation: 'YB' }],
         }),
+        draftField({ fieldKey: 'aliases', label: 'Aliases', order: 3, value: ['one', 'two'] }),
+        draftField({
+          fieldKey: 'provider_ref',
+          label: 'Provider reference',
+          order: 4,
+          value: {
+            abbreviation: 'XB',
+            mention: 'Xenbase',
+            resolution_state: 'resolved',
+            lookup_outcome: 'matched',
+          },
+        }),
       ],
     })
 
     const model = modelForRows([workspaceRow({ candidate: objectCandidate })])
 
+    // The same readings as backend exports (value_display.py).
     expect(model.rows[0]!.cells.map((cell) => cell.displayText)).toEqual([
       'term one (ONT:1)',
       'UNRESOLVED',
       'abbreviation: XB; tags: a, b | abbreviation: YB',
+      'one; two',
+      'abbreviation: XB',
     ])
   })
 

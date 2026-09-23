@@ -1,3 +1,5 @@
+import { useId } from 'react'
+
 import FindInPageOutlinedIcon from '@mui/icons-material/FindInPageOutlined'
 import { Box, ButtonBase, IconButton, Stack, Tooltip, Typography } from '@mui/material'
 
@@ -20,6 +22,7 @@ import {
   horizontalGridLookupResult,
   horizontalGridPaperWording,
   horizontalGridValidationDetails,
+  horizontalGridValidatorWords,
 } from './horizontalGridFormatting'
 
 export function contextEvidenceFieldPath(
@@ -78,23 +81,44 @@ const RESOLUTION_LINE_SX = {
   WebkitLineClamp: 1,
 } as const
 
+// Read by screen readers, not shown; the clamped lines keep their full text in
+// the DOM, and the Details popover shows everything in full for keyboard users.
+const VISUALLY_HIDDEN_SX = {
+  border: 0,
+  clip: 'rect(0 0 0 0)',
+  height: '1px',
+  margin: '-1px',
+  overflow: 'hidden',
+  padding: 0,
+  position: 'absolute',
+  whiteSpace: 'nowrap',
+  width: '1px',
+} as const
+
 /**
  * The paper wording and the lookup result under a validated value (ALL-1283).
- * Each is its own labelled line; the validator's explanation and message are
- * in the lookup line's tooltip. A curator edit keeps the paper wording but
- * drops the lookup result, which described the seeded value.
+ * Each value's lines appear once per row, on the first cell that shows it.
+ * The validator's explanation and message follow the lookup result for
+ * screen readers and in the line's title. A curator edit keeps the paper
+ * wording but drops the lookup result, which described the seeded value.
  */
-export function HorizontalGridResolutionLines({ cell }: { cell: HorizontalGridFieldCell }) {
-  if (!cell.resolution) {
+export function HorizontalGridResolutionLines({
+  cell,
+  id,
+}: {
+  cell: HorizontalGridFieldCell
+  id?: string
+}) {
+  const values = cell.resolutionDetails
+  if (values.length === 0) {
     return null
   }
 
-  const paperWording = horizontalGridPaperWording(cell.resolution)
-  const lookupResult = horizontalGridLookupResult(cell.resolution)
-  const details = horizontalGridValidationDetails(cell.resolution)
+  const paperWording = horizontalGridPaperWording(values)
+  const validatorWords = horizontalGridValidatorWords(values)
 
   return (
-    <>
+    <Box data-slot="field-resolution" id={id} sx={{ minWidth: 0 }}>
       {paperWording ? (
         <Typography
           color="text.secondary"
@@ -107,33 +131,22 @@ export function HorizontalGridResolutionLines({ cell }: { cell: HorizontalGridFi
         </Typography>
       ) : null}
       {cell.dirty ? null : (
-        <Tooltip
-          arrow
-          title={(
-            <Stack spacing={0.75}>
-              {details.map((lines, index) => (
-                <Stack key={index} spacing={0.25}>
-                  {lines.map((line) => (
-                    <Typography key={line} variant="caption">{line}</Typography>
-                  ))}
-                </Stack>
-              ))}
-            </Stack>
-          )}
+        <Typography
+          color="text.secondary"
+          data-slot="field-lookup-result"
+          title={horizontalGridValidationDetails(values).map((lines) => lines.join('\n')).join('\n\n')}
+          sx={RESOLUTION_LINE_SX}
         >
-          <Typography
-            aria-label={details.map((lines) => lines.join('. ')).join(' | ')}
-            color="text.secondary"
-            data-slot="field-lookup-result"
-            tabIndex={0}
-            sx={RESOLUTION_LINE_SX}
-          >
-            <Box component="span" sx={{ fontWeight: 700 }}>Lookup result: </Box>
-            {lookupResult}
-          </Typography>
-        </Tooltip>
+          <Box component="span" sx={{ fontWeight: 700 }}>Lookup result: </Box>
+          {horizontalGridLookupResult(values)}
+          {validatorWords.length > 0 ? (
+            <Box component="span" data-slot="field-validator-words" sx={VISUALLY_HIDDEN_SX}>
+              {`. ${validatorWords.join('. ')}`}
+            </Box>
+          ) : null}
+        </Typography>
       )}
-    </>
+    </Box>
   )
 }
 
@@ -263,6 +276,7 @@ export function HorizontalGridFieldCellContent({
   onSelect: () => void
   state: FieldStateKind | null
 }) {
+  const resolutionId = useId()
   if (!field || !cell.hasField) {
     return (
       <Typography color="text.disabled" fontStyle="italic" variant="body2">
@@ -295,7 +309,8 @@ export function HorizontalGridFieldCellContent({
       width="100%"
     >
       <ButtonBase
-        aria-label={`Select ${field.label} for ${cell.fieldPath}. ${stateLabel}.`}
+        aria-describedby={cell.resolutionDetails.length > 0 ? resolutionId : undefined}
+        aria-label={`Select ${field.label} for ${cell.fieldPath}: ${value ?? 'Empty value'}. ${stateLabel}.`}
         aria-pressed={active}
         data-field-key={field.field_key}
         data-testid={`horizontal-grid-field-${field.field_key}`}
@@ -332,7 +347,7 @@ export function HorizontalGridFieldCellContent({
           </Typography>
         </Stack>
       </ButtonBase>
-      <HorizontalGridResolutionLines cell={cell} />
+      <HorizontalGridResolutionLines cell={cell} id={resolutionId} />
       {state === 'needs-review' || state === 'ai-unconfirmed' ? (
         <Tooltip
           arrow

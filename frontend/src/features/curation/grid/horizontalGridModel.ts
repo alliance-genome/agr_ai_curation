@@ -12,6 +12,7 @@ import type {
   DomainEnvelopeEvidenceAnchorProjection,
   DomainEnvelopeProjectionRef,
   DomainEnvelopeReviewFieldResolution,
+  DomainEnvelopeReviewResolvedValue,
   DomainEnvelopeReviewRow,
   DomainEnvelopeReviewRowSummaryField,
   DomainEnvelopeValidationStatus,
@@ -91,6 +92,9 @@ export interface HorizontalGridFieldCell {
   // The field's values as extracted vs as validated, from the review row
   // regenerated for this revision (ALL-1283); null for fields without any.
   resolution: DomainEnvelopeReviewFieldResolution | null
+  // The values whose paper wording and lookup result this cell shows: each
+  // value's details appear once per row, on the first cell that shows it.
+  resolutionDetails: DomainEnvelopeReviewResolvedValue[]
   required: boolean | null
   readOnly: boolean | null
   // Whether the curator changed the field from its AI seed value.
@@ -135,6 +139,7 @@ interface HorizontalGridSourceRow {
   candidate: CurationCandidate
   projectionRef: DomainEnvelopeProjectionRef | null
   reviewRow: DomainEnvelopeReviewRow | null
+  resolutions: Map<string, DomainEnvelopeReviewFieldResolution>
   evidenceAnchors: DomainEnvelopeEvidenceAnchorProjection[]
   validationSummaries: DomainEnvelopeValidationSummaryProjection[]
 }
@@ -215,6 +220,34 @@ function isProjectedAsCanonicalComparison(
   )
 }
 
+function hasUnresolvedValue(resolution: DomainEnvelopeReviewFieldResolution | null): boolean {
+  return resolution?.values.some((value) => value.resolution_state === 'unresolved') ?? false
+}
+
+// A value's own leaf (its paper wording, status, lookup result or validator
+// text) needs no column of its own when a grid cell of the same row already
+// shows that value, with those details on its lines.
+function isCoveredResolvableLeaf(row: HorizontalGridSourceRow, field: CurationDraftField): boolean {
+  const resolution = row.resolutions.get(resolveEnvelopeFieldPath(field))
+  if (!resolution?.leaf_key) {
+    return false
+  }
+  const valuePaths = new Set(resolution.values.map((value) => value.value_path))
+  return row.candidate.draft.fields.some((candidateField) => {
+    const owner = row.resolutions.get(resolveEnvelopeFieldPath(candidateField))
+    return Boolean(owner && !owner.leaf_key)
+      && owner!.values.some((value) => valuePaths.has(value.value_path))
+      && !isProjectedAsCanonicalComparison(row.candidate, candidateField)
+      && isHorizontalGridDecisionField(row.candidate, candidateField)
+  })
+}
+
+function isGridField(row: HorizontalGridSourceRow, field: CurationDraftField): boolean {
+  return !isProjectedAsCanonicalComparison(row.candidate, field)
+    && isHorizontalGridDecisionField(row.candidate, field)
+    && !isCoveredResolvableLeaf(row, field)
+}
+
 function fieldColumnKey(fieldPath: string): string {
   return `field:${encodeURIComponent(fieldPath)}`
 }
@@ -283,10 +316,7 @@ function buildFieldColumns(
       // When the candidate also has the canonical target, the proposal belongs in
       // that target's Details comparison—not in a peer grid column that could be
       // mistaken for a second authoritative or curator-editable value.
-      if (isProjectedAsCanonicalComparison(row.candidate, field)) {
-        continue
-      }
-      if (!isHorizontalGridDecisionField(row.candidate, field)) {
+      if (!isGridField(row, field)) {
         continue
       }
       const occurrence = fieldOccurrence(row.candidate, field)
@@ -495,10 +525,7 @@ function projectRow(
 ): HorizontalGridRow {
   const fieldsByPath = fieldsByCanonicalPath(row.candidate)
   const projectedFieldsByPath = new Map(
-    [...fieldsByPath.entries()].filter(([, field]) => (
-      !isProjectedAsCanonicalComparison(row.candidate, field)
-      && isHorizontalGridDecisionField(row.candidate, field)
-    )),
+    [...fieldsByPath.entries()].filter(([, field]) => isGridField(row, field)),
   )
   const evidence = [...row.evidenceAnchors].sort(compareEvidence)
   const validationSummaries = [...row.validationSummaries].sort(compareValidationSummaries)
@@ -506,7 +533,7 @@ function projectRow(
     fieldColumns.flatMap((column) => column.fieldPath === null ? [] : [column.fieldPath]),
   )
   const context = contextForRow(row)
-  const resolutions = resolutionsByFieldPath(row.reviewRow)
+  const detailedValuePaths = new Set<string>()
   const objectValidation = validationSummaries.filter((projection) =>
     isObjectLevelProjection(projection.field_path),
   )
@@ -537,10 +564,15 @@ function projectRow(
     )
 
     const baseState = field ? fieldState(field, cellValidation) : null
-    const resolution = field ? resolutions.get(fieldPath) ?? null : null
-    const canonicalUnresolved = !field?.dirty && (resolution?.values.some(
-      (value) => value.resolution_state === 'unresolved',
-    ) ?? false)
+    const resolution = field ? row.resolutions.get(fieldPath) ?? null : null
+    const canonicalUnresolved = Boolean(field && !field.dirty && !resolution?.leaf_key)
+      && hasUnresolvedValue(resolution)
+    const resolutionDetails = resolution && !resolution.leaf_key
+      ? resolution.values.filter((value) => !detailedValuePaths.has(value.value_path))
+      : []
+    for (const value of resolutionDetails) {
+      detailedValuePaths.add(value.value_path)
+    }
     const projectedComparison = field
       ? extractorComparison(row.candidate, field, fieldPath, canonicalUnresolved)
       : null
@@ -561,13 +593,17 @@ function projectRow(
             ? { ...projectedComparison, outcome: 'overridden' as const }
             : { ...projectedComparison, outcome: 'unresolved' as const }
       : null
-    const projectedState = field
+    const comparedState = field
       ? comparison?.outcome === 'different'
         ? 'needs-review'
         : comparison?.outcome === 'unresolved'
           ? baseState === 'needs-review' ? 'needs-review' : 'ai-unconfirmed'
           : baseState
       : null
+    // A value that reads unresolved is never presented as validated.
+    const projectedState = canonicalUnresolved && comparedState === 'resolved'
+      ? 'needs-review'
+      : comparedState
 
     return {
       columnKey: column.key,
@@ -577,6 +613,7 @@ function projectRow(
       value: field?.value ?? null,
       displayText: cellDisplayText(field, resolution, comparison),
       resolution,
+      resolutionDetails,
       required: field?.required ?? null,
       readOnly: field?.read_only ?? null,
       dirty: field?.dirty ?? null,
@@ -660,6 +697,7 @@ function sourceRows({
         candidate,
         projectionRef: candidate.projection_ref,
         reviewRow: envelopeReviewRow.reviewRow,
+        resolutions: resolutionsByFieldPath(envelopeReviewRow.reviewRow),
         evidenceAnchors: envelopeReviewRow.evidenceAnchors,
         validationSummaries: envelopeReviewRow.validationSummaries,
       }
@@ -675,6 +713,7 @@ function sourceRows({
       candidate,
       projectionRef: null,
       reviewRow: null,
+      resolutions: new Map(),
       evidenceAnchors: candidate.evidence_anchor_projections ?? [],
       validationSummaries: candidate.validation_summary_projections ?? [],
     }

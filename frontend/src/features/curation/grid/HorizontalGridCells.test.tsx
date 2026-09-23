@@ -1,5 +1,4 @@
 import { render, screen, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 import type {
@@ -65,6 +64,7 @@ function cell(
     value: null,
     displayText,
     resolution,
+    resolutionDetails: resolution?.values ?? [],
     required: false,
     readOnly: false,
     dirty,
@@ -105,14 +105,18 @@ describe('HorizontalGridFieldCellContent', () => {
       'Paper wording: structures near the gut',
     )
     const lookup = slot(container, 'field-lookup-result')!
-    expect(lookup).toHaveTextContent('Lookup result: Matched')
-    expect(lookup).toHaveAccessibleName(
-      'Lookup result: Matched. Validator explanation: Exact synonym match.',
+    expect(lookup).toHaveTextContent('Lookup result: Matched. Validator explanation: Exact synonym match.')
+    expect(slot(container, 'field-validator-words')).toHaveTextContent('Validator explanation: Exact synonym match.')
+    expect(lookup).not.toHaveAttribute('tabindex')
+    expect(lookup).not.toHaveAttribute('aria-label')
+    const button = screen.getByRole('button')
+    expect(button).toHaveAccessibleName(/^Select Site for site: gut \(ONT:0000101\)\./)
+    expect(button).toHaveAccessibleDescription(
+      /^Paper wording:\s*structures near the gut\s+Lookup result:\s*Matched\. Validator explanation: Exact synonym match\.$/,
     )
   })
 
-  it('shows UNRESOLVED as the value and keeps the paper wording out of it', async () => {
-    const user = userEvent.setup()
+  it('shows UNRESOLVED as the value and keeps the paper wording out of it', () => {
     const unresolved = resolvedValue({
       display_text: 'UNRESOLVED',
       mention: 'structures near the residual body',
@@ -131,11 +135,37 @@ describe('HorizontalGridFieldCellContent', () => {
       'Paper wording: structures near the residual body',
     )
     const lookup = slot(container, 'field-lookup-result')!
-    expect(lookup).toHaveTextContent('Lookup result: Not found')
+    expect(lookup).toHaveTextContent(/^Lookup result: Not found\./)
+    expect(slot(container, 'field-validator-words')).toHaveTextContent(
+      'Validator explanation: No term matched the wording.. Validator message: Pick a term by hand.',
+    )
+    expect(lookup).toHaveAttribute('title', [
+      'Value: UNRESOLVED',
+      'Paper wording: structures near the residual body',
+      'Lookup result: Not found',
+      'Validator explanation: No term matched the wording.',
+      'Validator message: Pick a term by hand.',
+    ].join('\n'))
+    expect(screen.getByRole('button')).toHaveAccessibleName(/^Select Site for site: UNRESOLVED\./)
+  })
 
-    await user.hover(lookup)
-    expect(await screen.findByText('Validator explanation: No term matched the wording.')).toBeInTheDocument()
-    expect(screen.getByText('Validator message: Pick a term by hand.')).toBeInTheDocument()
+  it('names an unreadable stored value and its issue', () => {
+    const unreadable = resolvedValue({
+      display_text: 'UNRESOLVED',
+      mention: 'gut',
+      resolution_state: 'unresolved',
+      lookup_outcome: null,
+      lookup_result: 'Stored value unreadable',
+      validator_explanation: null,
+      issue: "Stored resolution 'resolved'/'pending' is outside the controlled vocabulary",
+    })
+    const { container } = renderCell(cell('UNRESOLVED', { display_text: 'UNRESOLVED', values: [unreadable] }))
+
+    expect(slot(container, 'field-value')).toHaveTextContent(/^UNRESOLVED$/)
+    expect(slot(container, 'field-lookup-result')).toHaveTextContent(
+      "Lookup result: Stored value unreadable. Stored value issue: Stored resolution 'resolved'/'pending' "
+      + 'is outside the controlled vocabulary',
+    )
   })
 
   it('labels a legacy value as legacy, unverified', () => {
@@ -176,11 +206,22 @@ describe('HorizontalGridFieldCellContent', () => {
 
     expect(slot(container, 'field-paper-wording')).toHaveTextContent('Paper wording: IMP; IGI')
     const lookup = slot(container, 'field-lookup-result')!
-    expect(lookup).toHaveTextContent('Lookup result: Matched; Several matches')
-    expect(lookup).toHaveAccessibleName(
-      'Value: ONT:0000315. Paper wording: IMP. Lookup result: Matched | '
-      + 'Value: UNRESOLVED. Paper wording: IGI. Lookup result: Several matches. Validator explanation: Two codes fit.',
-    )
+    expect(lookup).toHaveTextContent(/^Lookup result: Matched; Several matches\./)
+    expect(lookup).toHaveAttribute('title', [
+      'Value: ONT:0000315\nPaper wording: IMP\nLookup result: Matched',
+      'Value: UNRESOLVED\nPaper wording: IGI\nLookup result: Several matches\n'
+        + 'Validator explanation: Two codes fit.',
+    ].join('\n\n'))
+  })
+
+  it('shows each value\'s lines only on the cell that carries its details', () => {
+    const gridCell = cell('ONT:0000101', { display_text: 'ONT:0000101', values: [resolvedValue()] })
+    gridCell.resolutionDetails = []
+    const { container } = renderCell(gridCell)
+
+    expect(slot(container, 'field-value')).toHaveTextContent(/^ONT:0000101$/)
+    expect(slot(container, 'field-resolution')).toBeNull()
+    expect(screen.getByRole('button')).not.toHaveAttribute('aria-describedby')
   })
 
   it("shows a curator's edit with the paper wording but not the seeded lookup result", () => {

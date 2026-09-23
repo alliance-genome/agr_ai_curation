@@ -989,7 +989,9 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
 
     Read from the stored value with the shared resolvable-value rules
     (``src.lib.domain_packs.resolvable_values``), including the read-time
-    legacy rule for values stored before resolution tracking (ALL-1283).
+    legacy rule for values stored before resolution tracking (ALL-1283). A
+    stored value outside the contract reads as unresolved with an ``issue``
+    and no lookup outcome.
     """
 
     value_path: str = Field(description="Payload path of the value; empty for the object itself")
@@ -999,7 +1001,10 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
         description='Paper wording; a legacy value\'s stored text reads "... (legacy, unverified)"',
     )
     resolution_state: str = Field(description="resolved or unresolved")
-    lookup_outcome: str = Field(description="Code of the lookup outcome")
+    lookup_outcome: str | None = Field(
+        default=None,
+        description="Code of the lookup outcome; null only for a stored value that cannot be read",
+    )
     lookup_result: str = Field(description='The lookup outcome in plain words, e.g. "Not found"')
     validator_explanation: str | None = Field(
         default=None,
@@ -1009,6 +1014,10 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
         default=None,
         description="The validator's curator message, kept apart from its explanation",
     )
+    issue: str | None = Field(
+        default=None,
+        description="Why the stored value could not be read; the value then reads as unresolved",
+    )
 
     @model_validator(mode="after")
     def _check_vocabularies(self) -> "DomainEnvelopeReviewResolvedValue":
@@ -1016,10 +1025,15 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
             LOOKUP_OUTCOME_LABELS,
             LOOKUP_OUTCOMES,
             RESOLUTION_STATES,
+            UNRESOLVED,
         )
 
         if self.resolution_state not in RESOLUTION_STATES:
             raise ValueError(f"resolution_state must be one of {RESOLUTION_STATES}")
+        if self.issue is not None:
+            if self.resolution_state != UNRESOLVED or self.lookup_outcome is not None:
+                raise ValueError("an unreadable value is unresolved and has no lookup_outcome")
+            return self
         if self.lookup_outcome not in LOOKUP_OUTCOMES:
             raise ValueError(f"lookup_outcome must be one of {LOOKUP_OUTCOMES}")
         if self.lookup_result != LOOKUP_OUTCOME_LABELS[self.lookup_outcome]:
@@ -1031,12 +1045,32 @@ class DomainEnvelopeReviewFieldResolution(CurationWorkspaceBaseModel):
     """What a review field shows for the validated values it is, belongs to, or contains."""
 
     display_text: str = Field(
-        description='Main cell text: the validated value, "label (ID)", or UNRESOLVED; never paper wording',
+        description=(
+            'Main cell text: the validated value, "label (ID)", or UNRESOLVED; for a '
+            "value's own leaf, that leaf in plain words"
+        ),
     )
     values: list[DomainEnvelopeReviewResolvedValue] = Field(
         min_length=1,
         description="Each validated value behind the field, in payload order",
     )
+    leaf_key: str | None = Field(
+        default=None,
+        description=(
+            "The contract key (mention, resolution_state, lookup_outcome, validator_explanation, "
+            "validator_curator_message) when the field is one of its value's own leaves"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_leaf_key(self) -> "DomainEnvelopeReviewFieldResolution":
+        from src.lib.domain_packs.resolvable_values import CONTRACT_KEYS
+
+        if self.leaf_key is not None and self.leaf_key not in CONTRACT_KEYS:
+            raise ValueError(f"leaf_key must be one of {CONTRACT_KEYS}")
+        if self.leaf_key is not None and len(self.values) != 1:
+            raise ValueError("a value's own leaf belongs to exactly one value")
+        return self
 
 
 class DomainEnvelopeReviewRowSummaryField(CurationWorkspaceBaseModel):

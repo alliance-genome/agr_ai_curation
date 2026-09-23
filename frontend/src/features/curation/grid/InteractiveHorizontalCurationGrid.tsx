@@ -224,6 +224,7 @@ export default function InteractiveHorizontalCurationGrid({
             fieldValue: args.cell.displayText ?? '—',
             onEvidence: navigateEvidence,
             projections: args.cell.evidence,
+            resolutionValues: args.cell.resolution?.values ?? [],
             sourceMention: args.row.contextCell.value.identityLabel,
             state: args.cell.state,
             validatorResolved: !args.cell.staleValidation
@@ -304,6 +305,7 @@ export default function InteractiveHorizontalCurationGrid({
           fieldValue: cell.value.identityLabel,
           onEvidence: navigateEvidence,
           projections: [projection],
+          resolutionValues: [],
           sourceMention: null,
           state: null,
           validatorResolved: false,

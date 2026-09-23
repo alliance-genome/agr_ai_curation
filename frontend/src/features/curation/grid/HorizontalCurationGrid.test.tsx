@@ -89,6 +89,7 @@ function fieldCell(
     value,
     displayText: hasField ? formatHorizontalGridValue(value) : null,
     resolution: null,
+    resolutionDetails: [],
     required: hasField ? false : null,
     readOnly: hasField ? false : null,
     dirty: hasField ? false : null,
@@ -200,6 +201,7 @@ describe('HorizontalCurationGrid', () => {
         }],
       },
     }
+    gridRow.cells[0].resolutionDetails = gridRow.cells[0].resolution!.values
     gridRow.cells[2] = {
       ...fieldCell('field:gamma', 'gamma', { curie: 'ONT:1', name: 'term one' }),
     }

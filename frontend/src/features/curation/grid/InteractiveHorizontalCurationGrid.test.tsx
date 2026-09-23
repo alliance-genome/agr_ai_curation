@@ -344,6 +344,7 @@ function buildModel({
             value: ['Ada Lovelace', 'Grace Hopper'],
             displayText: 'Ada Lovelace, Grace Hopper',
             resolution: null,
+            resolutionDetails: [],
             required: true,
             readOnly: false,
             dirty: false,
@@ -365,6 +366,7 @@ function buildModel({
             value: 'PMID:1',
             displayText: 'PMID:1',
             resolution: null,
+            resolutionDetails: [],
             required: false,
             readOnly: true,
             dirty: false,
@@ -383,6 +385,7 @@ function buildModel({
             value: null,
             displayText: null,
             resolution: null,
+            resolutionDetails: [],
             required: null,
             readOnly: null,
             dirty: null,
@@ -1004,21 +1007,31 @@ describe('InteractiveHorizontalCurationGrid', () => {
         validator_curator_message: null,
       }],
     }
+    symbolCell.resolutionDetails = symbolCell.resolution.values
 
     renderGrid({ model, workspace: buildWorkspace(candidate) })
-    const cell = screen.getByTestId(`horizontal-grid-field-${symbolField.field_key}`).parentElement!
+    const button = screen.getByTestId(`horizontal-grid-field-${symbolField.field_key}`)
+    const cell = button.parentElement!
     expect(within(cell).getByText('UNRESOLVED')).toHaveAttribute('data-slot', 'field-value')
+    expect(button).toHaveAccessibleName(/^Select Symbol for symbol: UNRESOLVED\./)
+    expect(button).toHaveAccessibleDescription(
+      /^Paper wording:\s*abc-1\s+Lookup result:\s*Candidates rejected\. Validator explanation: Every candidate was a different species\.$/,
+    )
     expect(cell.querySelector('[data-slot="field-paper-wording"]')).toHaveTextContent('Paper wording: abc-1')
-    expect(within(cell).getByLabelText(
-      'Lookup result: Candidates rejected. Validator explanation: Every candidate was a different species.',
-    )).toHaveTextContent('Lookup result: Candidates rejected')
+    expect(cell.querySelector('[data-slot="field-lookup-result"]')).not.toHaveAttribute('tabindex')
 
     await user.click(screen.getByRole('button', {
       name: /^Show evidence and validation details for Symbol: UNRESOLVED/,
     }))
     const details = screen.getByRole('dialog', { name: /Symbol:/ })
     expect(within(details).getByText('Symbol: UNRESOLVED')).toBeInTheDocument()
-    expect(within(details).queryByText(/abc-1/)).not.toBeInTheDocument()
+    const resolution = within(details).getByTestId('horizontal-grid-resolution-details')
+    expect([...resolution.querySelectorAll('p')].map((line) => line.textContent)).toEqual([
+      'Value: UNRESOLVED',
+      'Paper wording: abc-1',
+      'Lookup result: Candidates rejected',
+      'Validator explanation: Every candidate was a different species.',
+    ])
   })
 
   it('attributes a waived comparison to curator override rather than validator resolution', async () => {
