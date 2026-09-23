@@ -342,9 +342,15 @@ object_definitions:
       - field_path: phenotype_annotation_subject.subject_identifier
         field_type: string
         display_name: Subject identifier
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: phenotype_annotation_subject.subject_label
         field_type: string
         display_name: Subject label
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: phenotype_annotation_subject.subject_type
         field_type: string
         display_name: Subject type
@@ -417,12 +423,14 @@ object_definitions:
         field_type: string
         display_name: Phenotype term CURIE
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: phenotype_terms.label
         field_type: string
         display_name: Phenotype term label
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: phenotype_terms.source_mentions
         field_type: array
         display_name: Phenotype term source mentions
@@ -511,9 +519,10 @@ object_definitions:
         description: The phenotype term ID the ontology validator confirmed; empty until then.
         required: false
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           render_as: term-chip
           validator_binding_id: phenotype_term_ontology_validator
-          editable: true
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -532,10 +541,8 @@ object_definitions:
           The ontology label the validator confirmed, retained for curator review;
           Alliance LinkML PhenotypeTerm has no label slot. Empty until validated.
         metadata:
-          protected: true
-          curator_action_note: >-
-              Display-only label is not a LinkML edit target; updates grounded
-              phenotype term fields such as phenotype_terms[0].curie.
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: phenotype_terms[0].source_mentions
         field_type: array
         display_name: First phenotype term source mentions
@@ -629,9 +636,15 @@ object_definitions:
       - field_path: single_reference.reference_id
         field_type: integer
         display_name: Evidence reference ID
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: single_reference.title
         field_type: string
         display_name: Evidence reference title
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: single_reference.filename
         field_type: string
         display_name: Evidence reference filename
@@ -688,8 +701,8 @@ object_definitions:
         field_type: string
         display_name: Data provider abbreviation
         metadata:
-          protected: true
-          curator_action_note: Data provider is workflow context, not an extractor edit target.
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -855,6 +868,8 @@ object_definitions:
         field_type: string
         display_name: Condition relation type name
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: phenotype_condition_relation_lookup
           validator_state: active
@@ -940,6 +955,8 @@ object_definitions:
         field_type: string
         display_name: Condition class CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           # Per-condition component (ZECO). Grounded by the extractor via the term helper and
           # composed (not separately bound) by experimental_condition_validation at the condition grain.
           term_helper:
@@ -980,7 +997,8 @@ object_definitions:
         display_name: Condition class name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_id
         field_type: object
         display_name: Condition
@@ -1028,6 +1046,8 @@ object_definitions:
         field_type: string
         display_name: Condition ID CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           # Per-condition component (ZECO/XCO). Grounded by the extractor; composed by the
           # condition-grain composite validator.
           term_helper:
@@ -1068,7 +1088,8 @@ object_definitions:
         display_name: Condition name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_chemical
         field_type: object
         display_name: Chemical
@@ -1116,6 +1137,8 @@ object_definitions:
         field_type: string
         display_name: Chemical CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           # ChEBI is an ontology term in the curation DB (db_table: ontologyterm, ontologytermtype
           # CHEBITerm); the composite validator resolves it via agr_curation_query get_ontology_term.
           definition_state_category: complete
@@ -1134,7 +1157,8 @@ object_definitions:
         display_name: Chemical name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_taxon
         field_type: object
         display_name: Condition taxon
@@ -1182,6 +1206,8 @@ object_definitions:
         field_type: string
         display_name: Taxon CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -1198,7 +1224,8 @@ object_definitions:
         display_name: Condition taxon name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
@@ -1313,8 +1340,9 @@ object_definitions:
         field_type: string
         display_name: Subject identifier
         metadata:
-          validator_binding_id: phenotype_subject_entity_validator
           editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          validator_binding_id: phenotype_subject_entity_validator
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -1329,6 +1357,9 @@ object_definitions:
       - field_path: subject_label
         field_type: string
         display_name: Subject label
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: subject_type
         field_type: string
         display_name: Subject type
@@ -1435,6 +1466,8 @@ object_definitions:
         description: A structural copy of the annotation's staged term; the validator resolves the annotation's own phenotype_terms.
         required: false
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1448,6 +1481,9 @@ object_definitions:
       - field_path: label
         field_type: string
         display_name: Curator-facing label
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: source_mentions
         field_type: array
         display_name: Source mentions
@@ -1499,6 +1535,8 @@ object_definitions:
         field_type: integer
         display_name: Reference ID
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validator_binding_id: phenotype_reference_validator
           provider_refs:
             alliance_linkml:
@@ -1513,6 +1551,9 @@ object_definitions:
       - field_path: title
         field_type: string
         display_name: Title
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: filename
         field_type: string
         display_name: Filename

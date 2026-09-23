@@ -1919,3 +1919,89 @@ def test_a_later_unresolved_result_overrules_a_resolved_disease_term():
     )
     assert identity is None
     assert blocker["details"]["lookup_outcome"] == "not_found"
+
+
+# --- ALL-1283: the curator validation override ---------------------------------------------------
+
+
+def _override_envelope() -> DomainEnvelope:
+    payload = {
+        **_two_condition_payload(),
+        "disease_relation": unresolved_value("implicated in", identity_keys=("name",)),
+        "evidence_code_curies": _staged_list(["ECO:0000315", "IMP"], ("curie",)),
+        "annotation_type": unresolved_value("manually_curated", identity_keys=("name",)),
+    }
+    return DomainEnvelope(
+        envelope_id="disease-override-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        extracted_objects=[
+            CuratableObjectEnvelope(object_type="GeneDiseaseAnnotation", object_id="gda-1", payload=payload)
+        ],
+    )
+
+
+def _curator_patch(envelope: DomainEnvelope, field_path: str, value: Any, *, before: Any):
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+
+    return apply_curator_field_patch(
+        envelope,
+        _disease_pack(),
+        EnvelopeFieldPatch(
+            envelope_id=envelope.envelope_id, expected_revision=1, object_id="gda-1",
+            field_path=field_path, before=before, value=value,
+        ),
+        current_revision=1,
+        actor_id="curator-7",
+    )
+
+
+@pytest.mark.parametrize(("field_path", "value", "value_path"), [
+    ("disease_annotation_object.curie", "DOID:0050730", "disease_annotation_object"),
+    ("disease_relation.name", "is_implicated_in", "disease_relation"),
+    ("data_provider.abbreviation", "MGI", "data_provider"),
+    ("evidence_code_curies[1].curie", "ECO:0000315", "evidence_code_curies[1]"),
+    (
+        "condition_relations[0].conditions[1].condition_class.curie",
+        "ZECO:0000160",
+        "condition_relations[0].conditions[1].condition_class",
+    ),
+    (
+        "condition_relations[0].condition_relation_type.name",
+        "has_condition",
+        "condition_relations[0].condition_relation_type",
+    ),
+])
+def test_a_curator_can_override_any_disease_identity_leaf(field_path, value, value_path):
+    """Identity leaves, including fixed-choice values, list elements and condition components,
+    are curator-editable; an edit is a resolved curator_override value with its audit event."""
+
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+    from src.lib.domain_packs.resolvable_values import CURATOR_OVERRIDE_METADATA_KEY
+    from src.schemas.domain_envelope import parse_field_path
+
+    result = _curator_patch(_override_envelope(), field_path, value, before=None)
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    obj = result.envelope.extracted_objects[0]
+    overridden: Any = obj.payload
+    for part in parse_field_path(value_path):
+        overridden = overridden[part]
+    assert (overridden["resolution_state"], overridden["lookup_outcome"]) == (RESOLVED, "curator_override")
+    assert overridden["curator_override"]["actor_id"] == "curator-7"
+    [event] = obj.metadata[CURATOR_OVERRIDE_METADATA_KEY]
+    assert (event["value_path"], event["field_path"]) == (value_path, field_path)
+
+
+@pytest.mark.parametrize(("field_path", "value", "before"), [
+    ("disease_relation.mention", "is_model_of", "implicated in"),
+    ("disease_relation.lookup_outcome", "matched", "not_validated"),
+    ("evidence_code_curies[0].proposed_curie", "ECO:0000316", None),
+    ("annotation_type.name", "manually_curated", None),
+    ("rationale", "Edited.", None),
+])
+def test_disease_wording_state_hints_and_the_fixed_curation_method_stay_read_only(field_path, value, before):
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    result = _curator_patch(_override_envelope(), field_path, value, before=before)
+
+    assert result.status is EnvelopeFieldPatchStatus.REJECTED

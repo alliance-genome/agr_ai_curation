@@ -317,3 +317,50 @@ def test_curators_cannot_edit_the_paper_wording_or_the_validation_state(field_pa
 
     assert result.status is EnvelopeFieldPatchStatus.REJECTED
     assert "set by validation" in result.errors[0]
+
+
+def _list_pack() -> LoadedDomainPack:
+    metadata = _metadata()
+    fields = [
+        *metadata.object_definitions[0].fields,
+        DomainPackFieldDefinition(field_path="sites", field_type=DomainPackFieldType.ARRAY,
+                                  metadata={"display": DISPLAY, "multivalued": True}),
+        DomainPackFieldDefinition(field_path="sites.curie", field_type=DomainPackFieldType.STRING,
+                                  metadata={"editable": True}),
+    ]
+    definition = metadata.object_definitions[0].model_copy(update={"fields": fields})
+    metadata = metadata.model_copy(update={"object_definitions": [definition]})
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    )
+
+
+def test_a_list_element_identity_takes_its_bare_declaration():
+    """ALL-1283: ``sites[1].curie`` is edited under the declaration of ``sites.curie``; an index
+    through a field that is not multivalued is not a declared path."""
+
+    envelope = DomainEnvelope(
+        envelope_id="override-env", domain_pack_id="fixture.override",
+        extracted_objects=[CuratableObjectEnvelope(object_type="Observation", object_id="obs-1", payload={
+            "site": unresolved_value("skin", identity_keys=KEYS),
+            "sites": [unresolved_value("skin", identity_keys=KEYS), unresolved_value("gut", identity_keys=KEYS)],
+        })],
+    )
+
+    def patch(field_path):
+        return apply_curator_field_patch(
+            envelope, _list_pack(),
+            EnvelopeFieldPatch(envelope_id=envelope.envelope_id, expected_revision=1, object_id="obs-1",
+                               field_path=field_path, before=None, value="ONT:2"),
+            current_revision=1, actor_id="curator-7",
+        )
+
+    element = patch("sites[1].curie")
+    assert element.status is EnvelopeFieldPatchStatus.ACCEPTED, element.errors
+    edited = element.envelope.extracted_objects[0].payload["sites"][1]
+    assert (edited["curie"], edited["lookup_outcome"]) == ("ONT:2", OUTCOME_CURATOR_OVERRIDE)
+
+    not_a_list = patch("site[0].curie")
+    assert not_a_list.status is EnvelopeFieldPatchStatus.REJECTED
+    assert "is not declared" in not_a_list.errors[0]

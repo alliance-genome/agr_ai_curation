@@ -1449,3 +1449,54 @@ def test_tool_verified_converter_requires_subject_paper_wording():
 
     with pytest.raises(ValueError, match="subject_label"):
         build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
+
+
+def test_a_curator_can_override_each_phenotype_term_and_condition_part():
+    """ALL-1283: phenotype identity leaves (every term, condition components) are
+    curator-editable; the paper wording is not."""
+
+    from src.lib.domain_envelopes.patches import (
+        EnvelopeFieldPatch,
+        EnvelopeFieldPatchStatus,
+        apply_curator_field_patch,
+    )
+    from src.lib.domain_packs.resolvable_values import unresolved_value
+    from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+
+    pack = load_alliance_domain_pack_registry().get_pack(PHENOTYPE_DOMAIN_PACK_ID)
+    term = lambda mention: unresolved_value(mention, identity_keys=("curie", "label"))  # noqa: E731
+    envelope = DomainEnvelope(
+        envelope_id="phenotype-override-env",
+        domain_pack_id=PHENOTYPE_DOMAIN_PACK_ID,
+        extracted_objects=[CuratableObjectEnvelope(
+            object_type="PhenotypeAnnotation", object_id="pa-1",
+            payload={
+                "phenotype_annotation_object": "fewer progeny",
+                "phenotype_terms": [term("fewer progeny"), term("slow growth")],
+                "condition_relations": [{
+                    "condition_relation_type": unresolved_value("has_condition", identity_keys=("name",)),
+                    "conditions": [{"condition_class": unresolved_value(
+                        "heat", identity_keys=("curie", "name"))}],
+                }],
+            },
+        )],
+    )
+
+    def patch(field_path, value, before=None):
+        return apply_curator_field_patch(
+            envelope, pack,
+            EnvelopeFieldPatch(envelope_id=envelope.envelope_id, expected_revision=1, object_id="pa-1",
+                               field_path=field_path, before=before, value=value),
+            current_revision=1, actor_id="curator-7",
+        )
+
+    second_term = patch("phenotype_terms[1].curie", "WBPhenotype:0000059")
+    assert second_term.status is EnvelopeFieldPatchStatus.ACCEPTED, second_term.errors
+    edited = second_term.envelope.extracted_objects[0].payload["phenotype_terms"][1]
+    assert (edited["curie"], edited["lookup_outcome"]) == ("WBPhenotype:0000059", "curator_override")
+
+    condition = patch("condition_relations[0].conditions[0].condition_class.curie", "ZECO:0000160")
+    assert condition.status is EnvelopeFieldPatchStatus.ACCEPTED, condition.errors
+
+    wording = patch("phenotype_terms[0].mention", "other words", before="fewer progeny")
+    assert wording.status is EnvelopeFieldPatchStatus.REJECTED

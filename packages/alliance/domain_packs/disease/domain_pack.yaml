@@ -463,13 +463,14 @@ object_definitions:
         description: The Disease Ontology ID the ontology validator confirmed; empty until then.
         required: false
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           render_as: curie-chip
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
           validation_result_field: curie
           definition_state_category: complete
-          editable: true
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -486,12 +487,13 @@ object_definitions:
         display_name: Disease term name
         description: The Disease Ontology name the ontology validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
           validation_result_field: name
           definition_state_category: complete
-          editable: true
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -589,6 +591,8 @@ object_definitions:
         display_name: Disease relation name
         description: Disease Relation vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
           validator_state: active
@@ -684,18 +688,20 @@ object_definitions:
         field_type: string
         display_name: Subject label
         metadata:
-          definition_state_category: complete
           editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          definition_state_category: complete
         description: Subject symbol or label the subject validator confirmed; empty until then.
       - field_path: disease_annotation_subject.subject_identifier
         field_type: string
         display_name: Subject identifier
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
         description: Subject identifier the subject validator confirmed; empty until then.
       - field_path: disease_annotation_subject.mention
         field_type: string
@@ -807,6 +813,8 @@ object_definitions:
         display_name: Evidence code CURIE
         description: ECO term ID the ontology validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
@@ -946,6 +954,8 @@ object_definitions:
         display_name: Genetic sex name
         description: Genetic Sex vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -1019,6 +1029,8 @@ object_definitions:
         display_name: Disease qualifier name
         description: Disease Qualifier vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
@@ -1080,6 +1092,8 @@ object_definitions:
         display_name: With/from gene identifier
         description: Gene identifier the gene validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_with_gene_validation
           validator_state: active
@@ -1144,12 +1158,12 @@ object_definitions:
         display_name: Data provider abbreviation
         definition_state: stable
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
           definition_state_category: complete
-          protected: true
-          curator_action_note: Data provider is workflow context, not an extractor edit target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1325,6 +1339,8 @@ object_definitions:
         field_type: string
         display_name: Condition relation type name
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_condition_relation_lookup
           validator_state: active
@@ -1405,6 +1421,8 @@ object_definitions:
         field_type: string
         display_name: Condition class CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           term_helper:
             field_path: condition_relations.conditions.condition_class.curie
             authority: hint_only
@@ -1443,7 +1461,8 @@ object_definitions:
         display_name: Condition class name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_id
         field_type: object
         display_name: Condition
@@ -1491,6 +1510,8 @@ object_definitions:
         field_type: string
         display_name: Condition ID CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           term_helper:
             field_path: condition_relations.conditions.condition_id.curie
             authority: hint_only
@@ -1529,7 +1550,8 @@ object_definitions:
         display_name: Condition name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_chemical
         field_type: object
         display_name: Chemical
@@ -1577,6 +1599,8 @@ object_definitions:
         field_type: string
         display_name: Chemical CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -1593,7 +1617,8 @@ object_definitions:
         display_name: Chemical name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_taxon
         field_type: object
         display_name: Condition taxon
@@ -1641,6 +1666,8 @@ object_definitions:
         field_type: string
         display_name: Taxon CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -1657,7 +1684,8 @@ object_definitions:
         display_name: Condition taxon name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
@@ -1798,13 +1826,14 @@ object_definitions:
         description: The Disease Ontology ID the ontology validator confirmed; empty until then.
         required: false
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           render_as: curie-chip
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
           validation_result_field: curie
           definition_state_category: complete
-          editable: true
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -1821,12 +1850,13 @@ object_definitions:
         display_name: Disease term name
         description: The Disease Ontology name the ontology validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
           validation_result_field: name
           definition_state_category: complete
-          editable: true
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -1924,6 +1954,8 @@ object_definitions:
         display_name: Disease relation name
         description: Disease Relation vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
           validator_state: active
@@ -2013,18 +2045,20 @@ object_definitions:
         field_type: string
         display_name: Subject label
         metadata:
-          definition_state_category: complete
           editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          definition_state_category: complete
         description: Subject symbol or label the subject validator confirmed; empty until then.
       - field_path: disease_annotation_subject.subject_identifier
         field_type: string
         display_name: Subject identifier
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
         description: Subject identifier the subject validator confirmed; empty until then.
       - field_path: disease_annotation_subject.mention
         field_type: string
@@ -2136,6 +2170,8 @@ object_definitions:
         display_name: Evidence code CURIE
         description: ECO term ID the ontology validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
@@ -2275,6 +2311,8 @@ object_definitions:
         display_name: Genetic sex name
         description: Genetic Sex vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -2348,6 +2386,8 @@ object_definitions:
         display_name: Disease qualifier name
         description: Disease Qualifier vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
@@ -2409,6 +2449,8 @@ object_definitions:
         display_name: With/from gene identifier
         description: Gene identifier the gene validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_with_gene_validation
           validator_state: active
@@ -2473,12 +2515,12 @@ object_definitions:
         display_name: Data provider abbreviation
         definition_state: stable
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
           definition_state_category: complete
-          protected: true
-          curator_action_note: Data provider is workflow context, not an extractor edit target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2654,6 +2696,8 @@ object_definitions:
         field_type: string
         display_name: Condition relation type name
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_condition_relation_lookup
           validator_state: active
@@ -2734,6 +2778,8 @@ object_definitions:
         field_type: string
         display_name: Condition class CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           term_helper:
             field_path: condition_relations.conditions.condition_class.curie
             authority: hint_only
@@ -2772,7 +2818,8 @@ object_definitions:
         display_name: Condition class name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_id
         field_type: object
         display_name: Condition
@@ -2820,6 +2867,8 @@ object_definitions:
         field_type: string
         display_name: Condition ID CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           term_helper:
             field_path: condition_relations.conditions.condition_id.curie
             authority: hint_only
@@ -2858,7 +2907,8 @@ object_definitions:
         display_name: Condition name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_chemical
         field_type: object
         display_name: Chemical
@@ -2906,6 +2956,8 @@ object_definitions:
         field_type: string
         display_name: Chemical CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -2922,7 +2974,8 @@ object_definitions:
         display_name: Chemical name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_taxon
         field_type: object
         display_name: Condition taxon
@@ -2970,6 +3023,8 @@ object_definitions:
         field_type: string
         display_name: Taxon CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -2986,7 +3041,8 @@ object_definitions:
         display_name: Condition taxon name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
@@ -3121,13 +3177,14 @@ object_definitions:
         description: The Disease Ontology ID the ontology validator confirmed; empty until then.
         required: false
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           render_as: curie-chip
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
           validation_result_field: curie
           definition_state_category: complete
-          editable: true
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -3144,12 +3201,13 @@ object_definitions:
         display_name: Disease term name
         description: The Disease Ontology name the ontology validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
           validation_result_field: name
           definition_state_category: complete
-          editable: true
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -3247,6 +3305,8 @@ object_definitions:
         display_name: Disease relation name
         description: Disease Relation vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
           validator_state: active
@@ -3333,18 +3393,20 @@ object_definitions:
         field_type: string
         display_name: Subject label
         metadata:
-          definition_state_category: complete
           editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          definition_state_category: complete
         description: Subject symbol or label the subject validator confirmed; empty until then.
       - field_path: disease_annotation_subject.subject_identifier
         field_type: string
         display_name: Subject identifier
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
         description: Subject identifier the subject validator confirmed; empty until then.
       - field_path: disease_annotation_subject.mention
         field_type: string
@@ -3456,6 +3518,8 @@ object_definitions:
         display_name: Evidence code CURIE
         description: ECO term ID the ontology validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
@@ -3595,6 +3659,8 @@ object_definitions:
         display_name: Genetic sex name
         description: Genetic Sex vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -3668,6 +3734,8 @@ object_definitions:
         display_name: Disease qualifier name
         description: Disease Qualifier vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
@@ -3729,6 +3797,8 @@ object_definitions:
         display_name: With/from gene identifier
         description: Gene identifier the gene validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_with_gene_validation
           validator_state: active
@@ -3793,12 +3863,12 @@ object_definitions:
         display_name: Data provider abbreviation
         definition_state: stable
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
           definition_state_category: complete
-          protected: true
-          curator_action_note: Data provider is workflow context, not an extractor edit target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -3974,6 +4044,8 @@ object_definitions:
         field_type: string
         display_name: Condition relation type name
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_condition_relation_lookup
           validator_state: active
@@ -4054,6 +4126,8 @@ object_definitions:
         field_type: string
         display_name: Condition class CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           term_helper:
             field_path: condition_relations.conditions.condition_class.curie
             authority: hint_only
@@ -4092,7 +4166,8 @@ object_definitions:
         display_name: Condition class name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_id
         field_type: object
         display_name: Condition
@@ -4140,6 +4215,8 @@ object_definitions:
         field_type: string
         display_name: Condition ID CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           term_helper:
             field_path: condition_relations.conditions.condition_id.curie
             authority: hint_only
@@ -4178,7 +4255,8 @@ object_definitions:
         display_name: Condition name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_chemical
         field_type: object
         display_name: Chemical
@@ -4226,6 +4304,8 @@ object_definitions:
         field_type: string
         display_name: Chemical CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -4242,7 +4322,8 @@ object_definitions:
         display_name: Chemical name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_taxon
         field_type: object
         display_name: Condition taxon
@@ -4290,6 +4371,8 @@ object_definitions:
         field_type: string
         display_name: Taxon CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -4306,7 +4389,8 @@ object_definitions:
         display_name: Condition taxon name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
@@ -4441,13 +4525,14 @@ object_definitions:
         description: The Disease Ontology ID the ontology validator confirmed; empty until then.
         required: false
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           render_as: curie-chip
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
           validation_result_field: curie
           definition_state_category: complete
-          editable: true
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -4464,12 +4549,13 @@ object_definitions:
         display_name: Disease term name
         description: The Disease Ontology name the ontology validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
           validation_result_field: name
           definition_state_category: complete
-          editable: true
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -4567,6 +4653,8 @@ object_definitions:
         display_name: Disease relation name
         description: Disease Relation vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
           validator_state: active
@@ -4655,18 +4743,20 @@ object_definitions:
         field_type: string
         display_name: Subject label
         metadata:
-          definition_state_category: complete
           editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          definition_state_category: complete
         description: Subject symbol or label the subject validator confirmed; empty until then.
       - field_path: disease_annotation_subject.subject_identifier
         field_type: string
         display_name: Subject identifier
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
         description: Subject identifier the subject validator confirmed; empty until then.
       - field_path: disease_annotation_subject.mention
         field_type: string
@@ -4778,6 +4868,8 @@ object_definitions:
         display_name: Evidence code CURIE
         description: ECO term ID the ontology validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
@@ -4917,6 +5009,8 @@ object_definitions:
         display_name: Genetic sex name
         description: Genetic Sex vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -4990,6 +5084,8 @@ object_definitions:
         display_name: Disease qualifier name
         description: Disease Qualifier vocabulary term name the validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
@@ -5051,6 +5147,8 @@ object_definitions:
         display_name: With/from gene identifier
         description: Gene identifier the gene validator confirmed; empty until then.
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_with_gene_validation
           validator_state: active
@@ -5115,12 +5213,12 @@ object_definitions:
         display_name: Data provider abbreviation
         definition_state: stable
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
           definition_state_category: complete
-          protected: true
-          curator_action_note: Data provider is workflow context, not an extractor edit target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -5296,6 +5394,8 @@ object_definitions:
         field_type: string
         display_name: Condition relation type name
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_condition_relation_lookup
           validator_state: active
@@ -5376,6 +5476,8 @@ object_definitions:
         field_type: string
         display_name: Condition class CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           term_helper:
             field_path: condition_relations.conditions.condition_class.curie
             authority: hint_only
@@ -5414,7 +5516,8 @@ object_definitions:
         display_name: Condition class name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_id
         field_type: object
         display_name: Condition
@@ -5462,6 +5565,8 @@ object_definitions:
         field_type: string
         display_name: Condition ID CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           term_helper:
             field_path: condition_relations.conditions.condition_id.curie
             authority: hint_only
@@ -5500,7 +5605,8 @@ object_definitions:
         display_name: Condition name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_chemical
         field_type: object
         display_name: Chemical
@@ -5548,6 +5654,8 @@ object_definitions:
         field_type: string
         display_name: Chemical CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -5564,7 +5672,8 @@ object_definitions:
         display_name: Chemical name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_taxon
         field_type: object
         display_name: Condition taxon
@@ -5612,6 +5721,8 @@ object_definitions:
         field_type: string
         display_name: Taxon CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -5628,7 +5739,8 @@ object_definitions:
         display_name: Condition taxon name
         description: The ontology name the condition validator confirmed; empty until then.
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
