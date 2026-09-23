@@ -30,6 +30,7 @@ class ModelDefinition:
     curator_visible: bool = True
     supports_reasoning: bool = True
     supports_temperature: bool = True
+    supports_tool_search: bool = False
     reasoning_options: List[str] = field(default_factory=list)
     default_reasoning: Optional[str] = None
     reasoning_descriptions: Dict[str, str] = field(default_factory=dict)
@@ -65,6 +66,12 @@ class ModelDefinition:
                 f"default_reasoning='{default_reasoning}' "
                 f"which is not in reasoning_options"
             )
+        supports_tool_search = data.get("supports_tool_search", False)
+        if not isinstance(supports_tool_search, bool):
+            raise ValueError(
+                f"Model entry '{model_id}' in {source_label} field "
+                "'supports_tool_search' must be a boolean"
+            )
         reasoning_descriptions = _parse_string_map(
             data.get("reasoning_descriptions"),
             field_name=f"{model_id}.reasoning_descriptions",
@@ -82,6 +89,7 @@ class ModelDefinition:
             curator_visible=bool(data.get("curator_visible", True)),
             supports_reasoning=bool(data.get("supports_reasoning", True)),
             supports_temperature=bool(data.get("supports_temperature", True)),
+            supports_tool_search=supports_tool_search,
             reasoning_options=reasoning_options,
             default_reasoning=default_reasoning,
             reasoning_descriptions=reasoning_descriptions,

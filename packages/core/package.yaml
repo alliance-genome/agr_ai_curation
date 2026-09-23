@@ -25,6 +25,14 @@ exports:
     name: system
     path: config/agent_studio_system_prompt.md
     description: Neutral Agent Studio system prompt for core-only deployments
+  - kind: tool_namespaces
+    name: core_tool_namespaces
+    path: config/tool_namespaces.yaml
+    description: Core hosted tool-search namespaces
+  - kind: tool_loading
+    name: default_tool_loading
+    path: config/tool_loading.yaml
+    description: Default per-runtime tool loading policy
 agent_bundles:
   - name: curation_handoff
   - name: curation_prep

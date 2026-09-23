@@ -17,6 +17,7 @@ RUNTIME_CONFIG_FILES = (
     "models.yaml",
     "providers.yaml",
     "tool_policy_defaults.yaml",
+    "tool_loading.yaml",
 )
 
 
@@ -71,6 +72,16 @@ def test_core_package_manifest_exports_foundation_runtime_assets_only():
             ExportKind.AGENT_STUDIO_PROMPT,
             "system",
             "config/agent_studio_system_prompt.md",
+        ),
+        (
+            ExportKind.TOOL_NAMESPACES,
+            "core_tool_namespaces",
+            "config/tool_namespaces.yaml",
+        ),
+        (
+            ExportKind.TOOL_LOADING,
+            "default_tool_loading",
+            "config/tool_loading.yaml",
         ),
         (ExportKind.AGENT, "curation_handoff", "agents/curation_handoff"),
         (

@@ -4250,6 +4250,9 @@ Preferred-flow follow-up inspection context:
         model_settings=model_settings,
     )
     setattr(supervisor, "_flow_unavailable_steps", unavailable_steps)
+    # ALL-1280: runtime key for the tool loading policy; the surface is
+    # compiled at the run point (runner.py).
+    supervisor.tool_surface_runtime = "flow_supervisor"
     from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
     attach_agent_cost_identity(supervisor, {
         **agent_identity("supervisor", supervisor.name, "supervisor"),

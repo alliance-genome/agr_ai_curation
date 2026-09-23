@@ -169,7 +169,6 @@ def test_capability_search_can_be_eager_without_eager_detail_catalog():
             "studio_capabilities",
             "Authenticated catalog",
         ),
-        eager_tool_names=frozenset({"search_studio_capabilities"}),
     )
 
     function_tools = [tool for tool in tools if isinstance(tool, FunctionTool)]
@@ -517,7 +516,7 @@ def test_proposal_review_stops_only_after_valid_repair(tool_name, contract):
     output = {"contract_version": contract, "success": False, "valid": False, "pending_user_approval": False}
     async def executor(*_args):
         return runtime.ToolExecutionResult(full_output=dict(output), provider_output="bounded result")
-    tool = runtime._build_function_tool(_tool_definition(tool_name), executor=executor, state=state, defer_loading=False)
+    tool = runtime._build_function_tool(_tool_definition(tool_name), executor=executor, state=state)
     behavior = runtime._proposal_review_behavior(state)
     asyncio.run(tool.on_invoke_tool(SimpleNamespace(tool_call_id="invalid"), '{}'))
     assert behavior(None, []).is_final_output is False
@@ -556,7 +555,7 @@ def test_sdk_accepts_review_on_last_allowed_model_turn_without_another_request()
             "valid": True, "pending_user_approval": True,
         }, provider_output='{"valid":true}')
     tool = runtime._build_function_tool(_tool_definition("propose_workshop_draft_update"),
-        executor=executor, state=state, defer_loading=False)
+        executor=executor, state=state)
     model = ProposalModel()
     result = asyncio.run(Runner.run(Agent(name="Review", model=model, tools=[tool],
         tool_use_behavior=runtime._proposal_review_behavior(state)), "Make a draft",
@@ -595,7 +594,7 @@ def test_streamed_invalid_then_valid_proposal_finishes_on_last_turn(monkeypatch)
             "valid": valid, "pending_user_approval": valid,
         }, provider_output='{"valid":' + str(valid).lower() + '}')
     tool = runtime._build_function_tool(_tool_definition("propose_workshop_draft_update"),
-        executor=executor, state=state, defer_loading=False)
+        executor=executor, state=state)
     provider = SimpleNamespace(get_model=lambda _name: model)
     monkeypatch.setattr(runtime, 'build_owned_openai_responses_resources', lambda: SimpleNamespace(provider=provider))
     monkeypatch.setattr(runtime, '_run_config', lambda **_kwargs: RunConfig(model_provider=provider, tracing_disabled=True))

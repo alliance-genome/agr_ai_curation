@@ -1,0 +1,36 @@
+# =============================================================================
+# TOOL LOADING POLICY (ALL-1280)
+# =============================================================================
+# How each runtime exposes its already-authorized tools to the model.
+#
+# mode: eager     every tool definition is sent up front (no tool search).
+# mode: deferred  namespaced function tools are deferred behind OpenAI hosted
+#                 tool search (only deferred_namespaces when listed), except
+#                 eager_tools and forced/required/terminal tools, which always
+#                 stay eager.
+# on_unsupported_provider: eager (default) sends the eager surface and records
+#                 mode eager_provider_unsupported; fail refuses the run.
+#
+# Runtime override: config/tool_loading.yaml (or TOOL_LOADING_CONFIG_PATH)
+# replaces a runtime's whole policy. An agent.yaml may declare a tool_loading
+# block with the same fields for that agent only.
+# =============================================================================
+
+tool_loading_api_version: 1.0.0
+runtimes:
+  agent_studio:
+    mode: deferred
+    eager_tools:
+      - search_studio_capabilities
+  chat_supervisor:
+    mode: eager
+  flow_supervisor:
+    mode: eager
+  extractor:
+    mode: eager
+  validator:
+    mode: eager
+  formatter:
+    mode: eager
+  specialist:
+    mode: eager

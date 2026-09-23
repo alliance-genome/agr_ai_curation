@@ -4374,7 +4374,6 @@ async def chat_with_opus(
                 state=run_state,
                 namespace_for_tool=_agent_studio_tool_namespace,
                 forced_tool_name=forced_tool_name,
-                eager_tool_names=frozenset({"search_studio_capabilities"}),
             )
         except Exception as exc:
             _report_agent_studio_exception_once(

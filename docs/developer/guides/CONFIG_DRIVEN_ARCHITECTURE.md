@@ -101,6 +101,7 @@ agr_ai_curation/
 │   ├── models.yaml
 │   ├── providers.yaml
 │   ├── tool_policy_defaults.yaml
+│   ├── tool_loading.yaml                # Per-runtime hosted tool-search loading policy
 │   ├── groups.yaml.example
 │   ├── connections.yaml.example
 │   └── agents/                          # Explicit source-development agent overrides

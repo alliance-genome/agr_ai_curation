@@ -41,6 +41,7 @@ from agents import (
 from pydantic import ValidationError
 
 from .audit_labels import build_specialist_internal_friendly_name
+from .tool_surface import apply_tool_surface, canonical_tool_name
 from .config import (
     get_batching_nudge_threshold,
     get_layer2_force_tool_finalization_enabled,
@@ -3450,7 +3451,7 @@ def _enforce_run_state_tool_result_budget(tool_name: str, result: Any) -> Any:
     measured = serialized_size(result)
     if measured <= budget:
         return result
-    enforced = tool_name not in _RUN_STATE_OBSERVE_ONLY_TOOLS
+    enforced = canonical_tool_name(tool_name) not in _RUN_STATE_OBSERVE_ONLY_TOOLS
     report_tool_result_budget_escape(
         tool_name=tool_name,
         measured=measured,
@@ -5051,6 +5052,17 @@ async def run_specialist_with_events(
         if hasattr(runtime_tool, "profile_bound_schema"):
             assert_profile_tool_contract(runtime_tool)
 
+    # ALL-1280: compile the provider-facing tool surface LAST, after run-state
+    # rebinding (which rebuilds tools without deferral metadata).
+    apply_tool_surface(
+        runtime_agent,
+        required_tool_names=(
+            (structured_finalization_state.tool_name,)
+            if structured_finalization_state.required and structured_finalization_state.tool_name
+            else ()
+        ),
+    )
+
     # Run with streaming to capture internal events
     runner_create_started_at = time.monotonic()
     sentry_conversation_id = get_current_session_id()
@@ -5454,7 +5466,7 @@ async def run_specialist_with_events(
                         is_generating = False
 
                         tool_started_at = datetime.now(timezone.utc)
-                        current_tool_name = (
+                        current_tool_name = canonical_tool_name(
                             getattr(item, "name", None) or
                             getattr(item, "tool_name", None) or
                             getattr(getattr(item, "raw_item", None), "name", None) or

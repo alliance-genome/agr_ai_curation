@@ -1,0 +1,31 @@
+# =============================================================================
+# HOSTED TOOL SEARCH NAMESPACES (ALL-1280)
+# =============================================================================
+# Capability groups for OpenAI hosted tool search. When a runtime's loading
+# policy (tool_loading.yaml) defers a namespace, the model initially sees only
+# the namespace id and description below and loads the member tools by search.
+#
+# Membership is declared on each tool binding (metadata.namespace in a
+# package tools/bindings.yaml). Rules, validated at startup:
+# - descriptions name the capability (never tool names), <=160 characters;
+# - one agent may place at most TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS tools in
+#   one namespace;
+# - finalization/terminal tools never belong to a namespace.
+# =============================================================================
+
+namespaces:
+  - id: document_reading
+    description: Search the loaded paper and read its chunks, sections, and subsections.
+    owner: agr.core
+  - id: evidence_maintenance
+    description: Record, review, attach, update, or discard verified evidence quotes for this run.
+    owner: agr.core
+  - id: staged_object_corrections
+    description: Correct, find, or discard objects already staged in this run's extraction workspace.
+    owner: agr.core
+  - id: ontology_term_lookup
+    description: Search, inspect, and resolve controlled-vocabulary and ontology terms.
+    owner: agr.core
+  - id: reference_data_lookup
+    description: Look up species, literature, and curation database reference records.
+    owner: agr.core

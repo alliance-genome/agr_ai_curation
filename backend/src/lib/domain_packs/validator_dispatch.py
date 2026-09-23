@@ -1635,6 +1635,15 @@ def run_package_scoped_validator_agent(
         effective_max_tool_calls,
         minimum=4,
     )
+    # ALL-1280: compile the provider-facing tool surface last, after the
+    # compact finalize schema replacement.
+    from src.lib.openai_agents.tool_surface import apply_tool_surface
+
+    apply_tool_surface(
+        agent,
+        runtime="validator",
+        required_tool_names=("finalize_validator_result",),
+    )
     run_started_at = time.monotonic()
     conversation_context_manager = gen_ai_conversation_scope(request.request_id)
     sentry_span_context_manager = gen_ai_invoke_agent_span(
@@ -1876,6 +1885,15 @@ def run_package_scoped_validator_agent_batch(
     run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
         len(jobs) * effective_max_tool_calls,
         minimum=len(jobs) + 3,
+    )
+    # ALL-1280: compile the provider-facing tool surface last, after the
+    # compact finalize schema replacement.
+    from src.lib.openai_agents.tool_surface import apply_tool_surface
+
+    apply_tool_surface(
+        agent,
+        runtime="validator",
+        required_tool_names=("finalize_validator_batch_results",),
     )
     run_started_at = time.monotonic()
     first_request_id = jobs[0].request.request_id if jobs else None

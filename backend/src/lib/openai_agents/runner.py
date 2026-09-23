@@ -91,6 +91,7 @@ from .extraction_builder_workspace import (
     build_internal_extraction_result_event,
 )
 from .guardrails import enforce_uncited_negative_guardrail
+from .tool_surface import apply_tool_surface, canonical_tool_name
 from .models import Answer, file_ready_event_details
 from .evidence_summary import (
     build_record_evidence_summary_record,
@@ -1388,6 +1389,9 @@ async def _run_agent_with_owned_resources(
             for tool in agent.tools:
                 if hasattr(tool, "profile_bound_schema"):
                     assert_profile_tool_contract(tool)
+        # ALL-1280: compile the provider-facing tool surface LAST, after
+        # run-state rebinding.
+        apply_tool_surface(agent)
         result = Runner.run_streamed(
             agent,
             input=input_items,
@@ -1656,7 +1660,7 @@ async def _run_agent_with_owned_resources(
                         tool_calls_count += 1
                         is_generating = False  # Reset for next generation phase after tool completes
                         # Try multiple attributes to get tool name
-                        tool_name = (
+                        tool_name = canonical_tool_name(
                             getattr(item, "name", None) or
                             getattr(item, "tool_name", None) or
                             getattr(getattr(item, "raw_item", None), "name", None) or

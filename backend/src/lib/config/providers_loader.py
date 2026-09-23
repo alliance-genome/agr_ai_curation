@@ -30,6 +30,7 @@ class ProviderDefinition:
     default_for_runner: bool = False
     optional_for_runtime: bool = False
     supports_parallel_tool_calls: bool = True
+    supports_tool_search: bool = False
     request_extra_body: Dict[str, Any] = field(default_factory=dict)
     request_headers: Dict[str, str] = field(default_factory=dict)
     forbidden_request_fields: tuple[str, ...] = ()
@@ -83,6 +84,18 @@ class ProviderDefinition:
         if not isinstance(supports, dict):
             raise ValueError(
                 f"Provider '{provider_id}' in {source_label} field 'supports' must be a mapping"
+            )
+
+        supports_tool_search = supports.get("tool_search", False)
+        if not isinstance(supports_tool_search, bool):
+            raise ValueError(
+                f"Provider '{provider_id}' in {source_label} field 'supports.tool_search' "
+                "must be a boolean"
+            )
+        if supports_tool_search and api_mode != "responses":
+            raise ValueError(
+                f"Provider '{provider_id}' in {source_label} declares supports.tool_search "
+                f"but api_mode is '{api_mode}'; hosted tool search requires the Responses API"
             )
 
         base_url_env = str(data.get("base_url_env", "")).strip() or None
@@ -188,6 +201,7 @@ class ProviderDefinition:
             default_for_runner=default_for_runner,
             optional_for_runtime=optional_for_runtime,
             supports_parallel_tool_calls=bool(supports.get("parallel_tool_calls", True)),
+            supports_tool_search=supports_tool_search,
             request_extra_body=dict(request_extra_body),
             request_headers=dict(request_headers),
             forbidden_request_fields=tuple(

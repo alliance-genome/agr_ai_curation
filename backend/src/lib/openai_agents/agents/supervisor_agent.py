@@ -52,6 +52,7 @@ from src.lib.curation_workspace.extraction_results import (
     list_extraction_results,
 )
 from src.lib.openai_agents.inspect_results import inspect_results
+from src.lib.openai_agents.tool_surface import canonical_tool_name
 from src.lib.openai_agents.supervisor_context_tools import (
     inspect_chat_traces,
     recall_chat_history,
@@ -518,6 +519,7 @@ class SupervisorCallLedger:
 
         if not handoff.result_ref:
             return
+        tool_name = canonical_tool_name(tool_name)
         key = (tool_name, _normalize_ledger_query(query))
         if key not in self._extraction_handoffs:
             self._extraction_handoff_order.append(key)
@@ -545,6 +547,7 @@ class SupervisorCallLedger:
         distinct key, and only when budget allows.
         """
 
+        tool_name = canonical_tool_name(tool_name)
         key = (tool_name, _normalize_ledger_query(query))
 
         async with self._lock:
@@ -1878,6 +1881,9 @@ def create_supervisor_agent(
         input_guardrails=input_guardrails,
         tools=specialist_tools,
     )
+    # ALL-1280: runtime key for the tool loading policy; the surface is
+    # compiled at the run point (runner.py) after run-state rebinding.
+    supervisor.tool_surface_runtime = "chat_supervisor"
 
     from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
     attach_agent_cost_identity(supervisor, {**agent_identity(
