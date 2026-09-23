@@ -3408,3 +3408,28 @@ def get_flow_output_split_list_max_columns() -> int:
     A curator ``max_columns`` on the column can only lower it. Default 20.
     """
     return max(1, _get_env_int_with_fallback("FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS", 20))
+
+
+# =============================================================================
+# ALL-1292: Agent Studio on-demand reference guide
+# =============================================================================
+
+def get_agent_studio_guide_chunk_max_chars() -> int:
+    """Max exact guide characters returned by one read_studio_guide chunk (AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS).
+
+    Reference topics moved out of the always-sent Agent Studio instructions
+    are read on demand; longer topics continue through ``next_call``. The
+    default leaves room for chunk metadata and JSON escaping beneath the
+    provider's default 12,000-character inline-result boundary; a value at or
+    above AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS is rejected because
+    every chunk would be compacted instead of returned. Default 8000.
+    """
+    chunk_max_chars = max(
+        1, _get_env_int_with_fallback("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS", 8_000)
+    )
+    if chunk_max_chars >= get_agent_studio_provider_tool_result_inline_max_chars():
+        raise ValueError(
+            "AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS must be below "
+            "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS"
+        )
+    return chunk_max_chars

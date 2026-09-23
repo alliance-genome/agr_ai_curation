@@ -3,7 +3,21 @@ from types import SimpleNamespace
 
 from src.lib.agent_studio.models import ChatContext
 from src.lib.agent_studio.prompt_builder import build_opus_system_prompt
+from src.lib.agent_studio.studio_guide import read_studio_guide
 from src.lib.prompts.assembly import PromptLayer, PromptLayerBundle, PromptLayerKind
+
+
+def _guide_topic(topic: str) -> str:
+    """Read one exact core guide topic (ALL-1292 moved flow references there)."""
+
+    chunks = []
+    arguments = {"topic": topic}
+    while True:
+        result = read_studio_guide(template="", render_diagnostic_tools=str, **arguments)
+        chunks.append(result["content"])
+        if result["complete"]:
+            return "".join(chunks)
+        arguments = result["next_call"]["arguments"]
 
 
 def _layer(
@@ -70,7 +84,7 @@ def test_selected_agent_context_uses_canonical_group_prompt_layers_in_runtime_or
 
     prompt = build_opus_system_prompt(
         ChatContext(selected_agent_id="gene", selected_group_id="group-alpha"),
-        load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        load_template=lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
         list_model_definitions=lambda: [],
         get_prompt_catalog=lambda: service,
         prepare_trace_context=lambda _trace_id: None,
@@ -120,7 +134,7 @@ def test_flow_context_describes_grouped_output_sources(monkeypatch):
     )
     prompt = build_opus_system_prompt(
         ChatContext.model_validate({"active_tab": "flows"}),
-        load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        load_template=lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
         list_model_definitions=lambda: [],
         get_prompt_catalog=lambda: None,
         prepare_trace_context=lambda _trace_id: None,
@@ -130,8 +144,10 @@ def test_flow_context_describes_grouped_output_sources(monkeypatch):
         "one or more earlier extraction or typed validation nodes through ordered "
         "`source_steps`"
     ) in prompt
-    assert "grouped sources are projected together in that declared order" in prompt
-    assert "exactly one extraction node" not in prompt
+    assert "read studio guide topic `flow_design`" in prompt
+    flow_design = _guide_topic("flow_design")
+    assert "grouped sources are projected together in that declared order" in flow_design
+    assert "exactly one extraction node" not in prompt + flow_design
 
 
 def test_flow_context_describes_current_flow_manifest_and_detail_calls(monkeypatch):
@@ -141,7 +157,7 @@ def test_flow_context_describes_current_flow_manifest_and_detail_calls(monkeypat
     )
     prompt = build_opus_system_prompt(
         ChatContext.model_validate({"active_tab": "flows"}),
-        load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        load_template=lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
         list_model_definitions=lambda: [],
         get_prompt_catalog=lambda: None,
         prepare_trace_context=lambda _trace_id: None,
@@ -153,8 +169,9 @@ def test_flow_context_describes_current_flow_manifest_and_detail_calls(monkeypat
     assert "`output_node_ids` and `validation_sidecar_node_ids`" in prompt
     assert "`findings` and `has_critical_issues`" in prompt
     assert "targeted tools named in `detail_calls`" in prompt
-    assert "`get_domain_pack_validation_plan" in prompt
-    assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
+    verification = _guide_topic("flow_verification")
+    assert "`get_domain_pack_validation_plan" in verification
+    assert 'get_prompt(agent_id, group_id, view="summary")' in verification
     assert "Clean markdown representation" not in prompt
     assert "`domain_envelope_analysis`" not in prompt
 
@@ -166,12 +183,16 @@ def test_flow_context_requires_complete_targeted_verification_evidence(monkeypat
     )
     prompt = build_opus_system_prompt(
         ChatContext.model_validate({"active_tab": "flows"}),
-        load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        load_template=lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
         list_model_definitions=lambda: [],
         get_prompt_catalog=lambda: None,
         prepare_trace_context=lambda _trace_id: None,
     )
 
+    assert "read studio guide topic `flow_verification`" in prompt
+    assert "Duplicate `output_key` is HIGH unless authoritative validation" in prompt
+    assert '`compacted_tool_result`' in prompt
+    prompt = prompt + _guide_topic("flow_verification") + _guide_topic("flow_design")
     assert 'get_available_agents(category="Output")' in prompt
     assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
     assert 'view="effective_prompt"' in prompt
@@ -199,7 +220,7 @@ def test_flow_authoring_guidance_preserves_incremental_choices_and_explicit_over
     )
     prompt = build_opus_system_prompt(
         ChatContext.model_validate({"active_tab": "flows"}),
-        load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        load_template=lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
         list_model_definitions=lambda: [],
         get_prompt_catalog=lambda: None,
         prepare_trace_context=lambda _trace_id: None,

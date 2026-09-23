@@ -12,5 +12,39 @@
     "reason": "SUP-57 redundant-example deletion. The pre-rewrite '<examples>' carried a 'broad_paper_analysis' example ('What is this paper mainly about?' -> ask_pdf_extraction_specialist asking for the main biological question, core methods, principal findings, conclusions). That routing is fully specified by the Routing map row for `ask_pdf_extraction_specialist` (KEPT in SUP-17: 'Broad document content, methods, figures, paper-level analysis'; Triggers include 'what is this paper about', broad content questions) and by the <role>/<goal> synthesis framing. The example adds no distinct routing decision beyond the table row, so it is a redundant illustration. The `ask_pdf_extraction_specialist` routing for broad paper questions is KEPT (SUP-17). Deleted with no home; printed for review by the Phase C deleted-rules dump.",
     "old_source": "config/agents/supervisor/prompt.yaml:<examples>/broad_paper_analysis",
     "new_home": ""
+  },
+  {
+    "phrase": "Use only specialist tools that are installed and callable in this environment.",
+    "category": "deleted",
+    "reason": "ALL-1292 instruction-size dedup. The supervisor runtime availability note appended to every chat supervisor turn by supervisor_agent._build_runtime_tool_availability_note already states this rule (\"Only these specialist tools are currently installed and callable ... Do not mention or attempt any other specialist tools\" and \"RUNTIME TOOL DESCRIPTIONS ARE AUTHORITATIVE ... follow the live tool names and tool descriptions\"); the base prompt keeps the authority sentence and the Alliance-tuned-examples caveat.",
+    "old_source": "config/agents/supervisor/prompt.yaml:<runtime_tool_authority>",
+    "new_home": ""
+  },
+  {
+    "phrase": "follow the runtime names and descriptions.",
+    "category": "deleted",
+    "reason": "ALL-1292 instruction-size dedup. The supervisor runtime availability note appended to every chat supervisor turn by supervisor_agent._build_runtime_tool_availability_note already states this rule (\"Only these specialist tools are currently installed and callable ... Do not mention or attempt any other specialist tools\" and \"RUNTIME TOOL DESCRIPTIONS ARE AUTHORITATIVE ... follow the live tool names and tool descriptions\"); the base prompt keeps the authority sentence and the Alliance-tuned-examples caveat.",
+    "old_source": "config/agents/supervisor/prompt.yaml:<runtime_tool_authority>",
+    "new_home": ""
+  },
+  {
+    "phrase": "| ask_pdf_extraction_specialist | \"Uploaded Document\" |",
+    "category": "relocated",
+    "reason": "ALL-1292 instruction-size dedup. The separate Tool -> Display as table repeated every routing-map tool name; the labels are now a Display as column of the routing map.",
+    "old_source": "config/agents/supervisor/prompt.yaml:<output_and_handoff_contract>",
+    "new_home": "render",
+    "synonyms": [
+      "Document -> Evidence-backed extraction answer | \"Uploaded Document\" |"
+    ]
+  },
+  {
+    "phrase": "| ask_ontology_term_validation_specialist | \"Ontology Term Resolver\" |",
+    "category": "relocated",
+    "reason": "ALL-1292 instruction-size dedup. The separate Tool -> Display as table repeated every routing-map tool name; the labels are now a Display as column of the routing map.",
+    "old_source": "config/agents/supervisor/prompt.yaml:<output_and_handoff_contract>",
+    "new_home": "render",
+    "synonyms": [
+      "CURIE or typed label -> OntologyTermValidationResult | \"Ontology Term Resolver\" |"
+    ]
   }
 ]

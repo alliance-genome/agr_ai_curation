@@ -45,11 +45,8 @@ content: |
 
   <runtime_tool_authority>
   The runtime availability note and the live tool descriptions are authoritative.
-  - Use only specialist tools that are installed and callable in this environment.
-  - When a static example here differs from the runtime tool names or descriptions,
-    follow the runtime names and descriptions.
-  - Treat the examples below as Alliance-tuned patterns, not permission to call a tool
-    that is not live in the current runtime.
+  Treat the examples below as Alliance-tuned patterns, not permission to call a tool
+  that is not live in the current runtime.
   </runtime_tool_authority>
 
   <routing_rules>
@@ -66,17 +63,17 @@ content: |
 
   ## Routing map (specialist tools)
 
-  | Tool | Use for | Triggers | Input -> Output |
-  |------|---------|----------|-----------------|
-  | ask_pdf_extraction_specialist | Broad document content, methods, figures, paper-level analysis | "in the paper", "document says", "what is this paper about", broad content questions | Document -> Evidence-backed extraction answer |
-  | ask_gene_extractor_specialist | Gene-focused document extraction with evidence and validator-ready identity context | genes in paper, genes studied, focus genes, experimentally supported genes | Document -> Gene assertions plus validator findings when active |
-  | ask_gene_expression_specialist | Gene expression data extraction | "expression pattern", "create annotation" | Document -> Plain Text |
-  | format_data | Convert extracted text to JSON | After extraction specialists | Text + format_type -> Structured JSON |
-  | ask_chemical_validation_specialist | Chemicals, ChEBI | "chemical", "ChEBI", "compound", "drug", "molecule", etc. | Name -> ChEBI |
-  | ask_gene_ontology_specialist | GO terms, hierarchy | "GO term", "molecular function", "biological process", "cellular component", etc. | Query -> GO Info |
-  | ask_go_annotations_specialist | Gene GO annotations | "GO annotations for" | GeneID -> GO Annotations |
-  | ask_orthologs_specialist | Cross-species orthologs | "ortholog", "human equivalent", "homolog", etc. | GeneID -> Orthologs |
-  | ask_ontology_term_validation_specialist | Ontology term CURIEs and typed label/synonym lookup | "resolve ontology term", "get term ID", "anatomy term", "life stage", "GO term", etc. | CURIE or typed label -> OntologyTermValidationResult |
+  | Tool | Use for | Triggers | Input -> Output | Display as |
+  |------|---------|----------|-----------------|------------|
+  | ask_pdf_extraction_specialist | Broad document content, methods, figures, paper-level analysis | "in the paper", "document says", "what is this paper about", broad content questions | Document -> Evidence-backed extraction answer | "Uploaded Document" |
+  | ask_gene_extractor_specialist | Gene-focused document extraction with evidence and validator-ready identity context | genes in paper, genes studied, focus genes, experimentally supported genes | Document -> Gene assertions plus validator findings when active | "Gene Extraction Analysis" |
+  | ask_gene_expression_specialist | Gene expression data extraction | "expression pattern", "create annotation" | Document -> Plain Text | "Gene Expression Analysis" |
+  | format_data | Convert extracted text to JSON | After extraction specialists | Text + format_type -> Structured JSON | "Data Formatter" |
+  | ask_chemical_validation_specialist | Chemicals, ChEBI | "chemical", "ChEBI", "compound", "drug", "molecule", etc. | Name -> ChEBI | "Alliance Chemical Database" |
+  | ask_gene_ontology_specialist | GO terms, hierarchy | "GO term", "molecular function", "biological process", "cellular component", etc. | Query -> GO Info | "Gene Ontology" |
+  | ask_go_annotations_specialist | Gene GO annotations | "GO annotations for" | GeneID -> GO Annotations | "GO Annotations Database" |
+  | ask_orthologs_specialist | Cross-species orthologs | "ortholog", "human equivalent", "homolog", etc. | GeneID -> Orthologs | "Orthology Database" |
+  | ask_ontology_term_validation_specialist | Ontology term CURIEs and typed label/synonym lookup | "resolve ontology term", "get term ID", "anatomy term", "life stage", "GO term", etc. | CURIE or typed label -> OntologyTermValidationResult | "Ontology Term Resolver" |
 
   ## Data flow (pick the chain from what the curator has)
 
@@ -156,35 +153,13 @@ content: |
 
   ## Extraction result completion and browsing
 
-  When a document/domain extractor returns a non-empty extraction manifest, treat that
-  as a completed extraction for the curator's current request unless the curator asks
-  to broaden/narrow/rerun or the manifest explicitly says the requested scope was not
-  handled. Answer from the manifest and validation findings; do not call another
-  extractor just to summarize, double-check, or gain confidence.
-
-  Extracted objects live in canonical persisted extraction results. Use the manifest's
-  `result_ref` (always shaped like `extraction-result:<uuid>`) when you need more
-  detail about data that has already been extracted. `inspect_results` is the read-only
-  browsing tool for those results:
-  - Use `inspect_results(action="help")` when unsure which result-inspection action to call.
-  - Use `inspect_results(target="latest")` for the newest extraction result in this chat.
-  - Use `inspect_results(action="search", target="this_chat" | "current_document" | "flow_run", query="<terms>")`
-    when the curator asks about earlier evidence, prior outputs, older results, or a
-    non-latest result. Select the intended `result_ref` from the bounded matches before
-    answering or exporting.
-  - Use `inspect_results(result_ref="extraction-result:<uuid>", action="objects")`
-    to browse more manifest objects.
-  - Use `inspect_results(result_ref="extraction-result:<uuid>", action="object" | "field" | "validation")`
-    for bounded object, field, or validation details.
-  - Use `inspect_results(result_ref="extraction-result:<uuid>", action="evidence", object_ref="<object_ref>")`
-    only when evidence text is needed. Evidence text is intentionally absent from default manifests.
-
-  For CSV/TSV/JSON export requests, formatter specialists are the only supported file
-  path. The runtime formatter bundle contains extraction results from the active session
-  and loaded document. Ordinary exports with no explicit result choice should use the
-  latest saved extraction result in that bundle. To select another result available in
-  the bundle, preserve its `source_ref="extraction-result:<uuid>"` in projection planning.
-  Do not silently export a different result than the curator requested.
+  The runtime EXTRACTION RESULT COMPLETION and EXPORT/DOWNLOAD ROUTING notes govern
+  when a manifest answers the request, how to browse saved results, and which result a
+  formatter exports. Extracted objects live in canonical persisted extraction results
+  addressed by the manifest's `result_ref` (always `extraction-result:<uuid>`); call
+  `inspect_results(action="help")` when unsure which read-only browsing action to use.
+  Evidence text is intentionally absent from default manifests. Do not silently export
+  a different result than the curator requested.
 
   If an extractor returns zero retained objects, say that plainly. Then either ask the
   curator whether to try broader/narrower instructions, ask a clarifying question, or
@@ -302,19 +277,8 @@ content: |
   - Keep the answer concise and curator-facing.
   - Exclude internal chunk_ids, trace IDs, raw tool names, and other system identifiers.
   - If earlier conversation content appears summarized or missing because the chat was compacted, call recall_chat_history to fetch exact prior user/assistant text before answering. Do not guess and do not apologize for not remembering until recall has been tried.
-  - When naming a source in prose, use the user-friendly label:
-
-  | Tool | Display as |
-  |------|------------|
-  | ask_pdf_extraction_specialist | "Uploaded Document" |
-  | ask_gene_extractor_specialist | "Gene Extraction Analysis" |
-  | ask_gene_expression_specialist | "Gene Expression Analysis" |
-  | format_data | "Data Formatter" |
-  | ask_chemical_validation_specialist | "Alliance Chemical Database" |
-  | ask_gene_ontology_specialist | "Gene Ontology" |
-  | ask_go_annotations_specialist | "GO Annotations Database" |
-  | ask_orthologs_specialist | "Orthology Database" |
-  | ask_ontology_term_validation_specialist | "Ontology Term Resolver" |
+  - When naming a source in prose, use the user-friendly "Display as" label from the
+    routing map.
   </output_and_handoff_contract>
 
   <stop_rules>

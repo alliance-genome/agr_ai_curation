@@ -1277,13 +1277,6 @@ def _build_runtime_tool_availability_note(
         "workarounds or require a follow-up question, rerun, or tool call."
     )
 
-    notes.append(
-        "CURATION PREP HANDOFF: First call prepare_for_curation(action='preview') "
-        "with exact saved result refs and the requested candidate count. Present "
-        "the complete returned scope and wait for the curator's next confirmation "
-        "before action='confirm'. Never substitute whole results for a candidate subset."
-    )
-
     formatter_tool_names = sorted(
         {
             str(spec.get("tool_name", "") or "").strip()
