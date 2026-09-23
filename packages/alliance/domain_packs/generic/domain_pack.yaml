@@ -47,17 +47,7 @@ object_definitions:
           - source_label
           - description
           - confidence
-        groups:
-          - id: details
-            label: Details
-            fields:
-              - source_label
-              - description
-              - confidence
-          - id: rationale
-            label: Rationale
-            fields:
-              - rationale
+          - rationale
     fields:
       - field_path: label
         field_type: string
@@ -94,6 +84,9 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       - field_path: attributes
         field_type: object
         display_name: Attributes
@@ -124,16 +117,7 @@ object_definitions:
         summary_fields:
           - claim_text
           - confidence
-        groups:
-          - id: details
-            label: Details
-            fields:
-              - claim_text
-              - confidence
-          - id: rationale
-            label: Rationale
-            fields:
-              - rationale
+          - rationale
     fields:
       - field_path: label
         field_type: string
@@ -167,6 +151,9 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
   - object_type: generic_reagent_candidate
     display_name: Generic reagent candidate
     description: Evidence-backed stock, construct, RNAi, transgene, antibody, plasmid, or other reagent candidate.
@@ -199,18 +186,7 @@ object_definitions:
           - source_identifier
           - count
           - reagent_type
-        groups:
-          - id: details
-            label: Details
-            fields:
-              - source
-              - source_identifier
-              - count
-              - reagent_type
-          - id: rationale
-            label: Rationale
-            fields:
-              - rationale
+          - rationale
     fields:
       - field_path: label
         field_type: string
@@ -255,3 +231,6 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
