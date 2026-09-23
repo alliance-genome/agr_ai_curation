@@ -558,11 +558,16 @@ def tool_namespace_memberships(bindings: Iterable[Any]) -> dict[str, str]:
 
 
 def declared_tool_namespaces() -> dict[str, str]:
-    """Return ``tool_id -> namespace id`` from package tool-binding metadata."""
+    """Return ``tool_id -> namespace id`` from package tool-binding metadata.
 
-    from src.lib.packages.tool_registry import load_tool_registry
+    Reads the cached package tool registry that Agent Studio and the tool
+    runtime already share: loading the registry from disk takes ~28 ms, and
+    this runs for every deferred extractor run.
+    """
 
-    return tool_namespace_memberships(load_tool_registry().bindings)
+    from src.lib.agent_studio.catalog_service import _load_package_tool_registry
+
+    return tool_namespace_memberships(_load_package_tool_registry().bindings)
 
 
 def declarative_namespace_resolver() -> NamespaceResolver:
