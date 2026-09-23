@@ -15,7 +15,8 @@ from typing import Any
 from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS, LOOKUP_OUTCOME_KEY, LOOKUP_OUTCOMES, MENTION_KEY, RESOLUTION_STATE_KEY,
     RESOLUTION_STATES, VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY,
-    ResolvableSpec, ResolvableValueError, check_resolvable_value, has_resolution_state, unresolved_value,
+    ResolvableSpec, ResolvableValueError, check_resolvable_value, has_resolution_state, proposed_key,
+    unresolved_value,
 )
 from src.lib.openai_agents.config import (
     get_generic_profile_max_issues,
@@ -349,7 +350,9 @@ class ResolvedGenericProfile:
                 declared = declared_value_path(path)
                 identity = resolvable.get(declared)
                 owned = {key for key in fields if f"{declared}.{key}" in validator_owned}
-                system_keys = owned | (set(RESOLUTION_KEYS) if identity is not None else set())
+                # A validator that overrules a resolution keeps its identity as proposed_<key> hints.
+                hints = {proposed_key(key): key for key in identity or () if key in fields}
+                system_keys = owned | (set(RESOLUTION_KEYS) | set(hints) if identity is not None else set())
                 if identity is not None:
                     check_resolvable(value, identity, path)
                 for key in value:
@@ -379,6 +382,10 @@ class ResolvedGenericProfile:
                         continue
                     else:
                         visit(value[field.key], field.value_schema, field_path)
+                if not extractor_input:
+                    for hint, key in hints.items():
+                        if value.get(hint) is not None:
+                            visit(value[hint], fields[key].value_schema, f"{path}.{hint}")
             elif schema.kind == "array" and isinstance(value, list):
                 for index, item in enumerate(value):
                     if visited > value_limit or len(issues) >= issue_limit:

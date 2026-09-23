@@ -531,3 +531,19 @@ def test_profile_write_back_is_the_coverage_the_legacy_rule_reads(example):
     metadata = output.envelope.extracted_objects[0].metadata
     assert validator_event_covers(metadata, "attributes.gene")
     assert not validator_event_covers(metadata, "attributes.other")
+
+
+def test_validator_overrules_an_earlier_resolution_keeping_its_identity_as_a_hint(example):
+    """ALL-1302 with core aadd93a03: re-validation that comes back unresolved demotes the value."""
+
+    source, context = resolvable(example)
+    resolved = materialize_profile_validator_results(
+        source, context, results(source, context, [{"identifier": "EX:1"}])).envelope
+    output = materialize_profile_validator_results(
+        resolved, context, results(resolved, context, [{}], status="unresolved"))
+
+    gene = output.envelope.extracted_objects[0].payload["attributes"]["gene"]
+    assert gene == {"mention": "daf-16", "gene_id": None, "proposed_gene_id": "EX:1",
+                    "resolution_state": "unresolved", "lookup_outcome": "not_found",
+                    "validator_explanation": "Fixture lookup", "validator_curator_message": None}
+    context.profile.require_attributes(output.envelope.extracted_objects[0].payload["attributes"])

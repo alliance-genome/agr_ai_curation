@@ -21,7 +21,7 @@ from src.lib.agent_studio.profile_mapping_service import (
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.resolvable_values import (
     LOOKUP_OUTCOME_KEY, LOOKUP_OUTCOMES, RESOLUTION_STATE_KEY, RESOLUTION_STATES,
-    VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY, ResolvableSpec,
+    VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY, ResolvableSpec, proposed_key,
 )
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry, ValidatorBinding, ValidationAttachmentOption, ValidationBindingState,
@@ -175,7 +175,8 @@ def compile_profile_validation(
         bindings.append(binding)
         selected.append(capability)
 
-    fields, enums = _profile_fields(contract.fields, fanout_paths, profile.resolvable_specs())
+    fields, enums = _profile_fields(contract.fields, fanout_paths, profile.resolvable_specs(),
+                                   profile.resolvable_objects())
     # Only the closed profile's fields and bindings enter the overlay: no
     # generic-proxy aliases, source mirrors, inferred reference object classes,
     # packaged validators, or LinkML model claims leak into this context.
@@ -303,7 +304,7 @@ def profile_validation_attachment_metadata(context: ProfileValidationContext) ->
 
 
 def _profile_fields(profile_fields: list[ProfileField], fanout_paths: set[str],
-                    resolvable: Mapping[str, ResolvableSpec]):
+                    resolvable: Mapping[str, ResolvableSpec], identities: Mapping[str, tuple[str, ...]]):
     fields = [DomainPackFieldDefinition(field_path="semantic_class", field_type=DomainPackFieldType.STRING, required=True),
               DomainPackFieldDefinition(field_path="attributes", field_type=DomainPackFieldType.OBJECT, required=True),
               # Optional so records staged before the builder required a rationale still load.
@@ -314,6 +315,7 @@ def _profile_fields(profile_fields: list[ProfileField], fanout_paths: set[str],
     enums = []
     # Each resolvable value by its field path (array element values sit on the array field).
     resolvable_paths = {path.replace("[]", ""): spec for path, spec in resolvable.items()}
+    identity_paths = {path.replace("[]", ""): identity for path, identity in identities.items()}
 
     def enum_for(path: str, values) -> str:
         enum_id = "profile_" + sha256(path.encode()).hexdigest()
@@ -346,6 +348,7 @@ def _profile_fields(profile_fields: list[ProfileField], fanout_paths: set[str],
                     visit(child, path)
             if spec is not None:
                 resolution_leaves(path)
+                hint_leaves(path, {child.key: child for child in schema.fields})
 
     def resolution_leaves(path: str):
         """The resolvable value's state, lookup result and validator text, written by validation."""
@@ -355,6 +358,20 @@ def _profile_fields(profile_fields: list[ProfileField], fanout_paths: set[str],
                 field_path=leaf, field_type=field_type,
                 enum_ref=enum_for(leaf, values) if values else None,
                 display_name=key, required=False,
+                metadata={"nullable": True, "read_only": True},
+            ))
+
+    def hint_leaves(path: str, children: Mapping[str, ProfileField]):
+        """Identity a validator overruled, kept as proposed_<key> hints (ALL-1283)."""
+        for key in identity_paths[path]:
+            hint = proposed_key(key)
+            if key not in children or hint in children:
+                continue
+            kind = children[key].value_schema.kind
+            # An enum identity keeps its value as plain text in the hint.
+            field_type = DomainPackFieldType.STRING if kind == "enum" else DomainPackFieldType(kind)
+            fields.append(DomainPackFieldDefinition(
+                field_path=f"{path}.{hint}", field_type=field_type, display_name=hint, required=False,
                 metadata={"nullable": True, "read_only": True},
             ))
 

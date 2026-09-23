@@ -10,7 +10,9 @@ from copy import deepcopy
 from typing import Iterable
 from uuid import UUID
 
-from src.lib.agent_studio.profile_conformance import ProfileConformanceError, ResolvedGenericProfile
+from src.lib.agent_studio.profile_conformance import (
+    ProfileConformanceError, ResolvedGenericProfile, declared_value_path,
+)
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import (
@@ -197,8 +199,10 @@ def _resolution_updates(expected, result, context, target, *, unresolved):
         if unresolved is None and not any(missing_resolved_value(item) for item in identity.values()):
             mark_resolved(value, identity, explanation=result.explanation, curator_message=result.curator_message)
         else:
+            # The validator overrules an earlier resolution: its identity becomes proposed_<key> hints.
             mark_unresolved(value, unresolved or OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
-                            explanation=result.explanation, curator_message=result.curator_message)
+                            explanation=result.explanation, curator_message=result.curator_message,
+                            identity_keys=context.profile.resolvable_objects()[declared_value_path(path)])
         updates.append({"field_path": path, "value": value})
     return [*plain, *updates]
 
