@@ -146,8 +146,49 @@ def packaged_display_specs(agent_id: str, entry: dict | None = None) -> dict[str
     return specs
 
 
+def packaged_object_ref_fields(agent_id: str, entry: dict | None = None) -> dict[str, dict[str, str]]:
+    """Per object type: each object_ref field path and the object type it references."""
+
+    domain_pack = _packaged_domain_pack(agent_id, entry)
+    if domain_pack is None:
+        return {}
+    return {
+        obj.object_type: fields
+        for obj in domain_pack.metadata.object_definitions
+        if (fields := {
+            field.field_path: field.object_type_ref
+            for field in obj.fields
+            if getattr(field, "object_type_ref", None)
+        })
+    }
+
+
+def packaged_object_label_paths(agent_id: str, entry: dict | None = None) -> dict[str, str]:
+    """Declared object label path per object type (Chris, Sep 22).
+
+    The object-root model's display label, else workspace_display
+    primary_label_field; object types without either have no declared label.
+    """
+
+    domain_pack = _packaged_domain_pack(agent_id, entry)
+    if domain_pack is None:
+        return {}
+    models = {model.model_id: model for model in domain_pack.metadata.model_definitions}
+    paths: dict[str, str] = {}
+    for obj in domain_pack.metadata.object_definitions:
+        model = models.get(obj.model_ref) if obj.model_ref else None
+        display = model.metadata.get("display") if model is not None else None
+        if isinstance(display, dict) and display.get("label"):
+            paths[obj.object_type] = str(_checked_display(dict(display), f"Model '{model.model_id}'")["label"])
+            continue
+        primary = (obj.metadata.get("workspace_display") or {}).get("primary_label_field")
+        if isinstance(primary, str) and primary.strip():
+            paths[obj.object_type] = primary.strip()
+    return paths
+
+
 def packaged_default_layout(agent_id: str, entry: dict | None, object_types: list[str]) -> list[str]:
-    """Default export refs from each object's workspace_display, in order.
+    """Default export refs from each curatable unit's workspace_display, in order.
 
     Leaf paths collapse into their nearest declared parent that has a display
     spec, so a term reads as one "label (id)" column instead of its leaves.
@@ -156,10 +197,23 @@ def packaged_default_layout(agent_id: str, entry: dict | None, object_types: lis
     domain_pack = _packaged_domain_pack(agent_id, entry)
     if domain_pack is None:
         return []
+    from src.lib.domain_packs.materialization import _definition_object_role, _object_role_key
+
+    role_key = _object_role_key(domain_pack.metadata)
+    roles = {
+        obj.object_type: _definition_object_role(obj, object_role_key=role_key)
+        for obj in domain_pack.metadata.object_definitions
+    }
+    # The curatable units are the rows curators review; their supporting
+    # objects (validated references, evidence quotes) are not laid out. A
+    # pack without curatable units lays out the objects it declares.
+    has_units = "curatable_unit" in roles.values()
     specs = packaged_display_specs(agent_id, entry)
     refs: list[str] = []
     for obj in domain_pack.metadata.object_definitions:
         if obj.object_type not in object_types:
+            continue
+        if has_units and roles[obj.object_type] != "curatable_unit":
             continue
         layout = obj.metadata.get("workspace_display") or {}
         paths = list(layout.get("summary_fields") or [])

@@ -31,7 +31,7 @@ from src.schemas.domain_validator import ValidatorOutputProjection
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
 from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
-from src.lib.flows.value_display import display_text
+from src.lib.flows.value_display import display_text, path_tokens, relative_finding_path
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 
 ProfileResolver = Callable[[AgentExecutionReceipt], ResolvedGenericProfile | None]
@@ -288,8 +288,18 @@ class FlowOutputOverrideSpec(BaseModel):
     exclude: bool = False
 
 
+def _split_items(value: Any) -> list[Any]:
+    """Items a split column spreads: a list's items, or one non-empty single value."""
+
+    if isinstance(value, list):
+        return value
+    return [] if _is_empty(value) else [value]
+
+
 class FlowOutputSplitListSpec(BaseModel):
-    """Expand one list field into one column per item (never extra rows).
+    """Expand one field into one column per item (never extra rows).
+
+    A single non-empty value counts as a one-item list.
 
     Headers come from ``header_template`` (must contain ``{n}``; default
     "<header> {n}") or explicit ``headers``, not both.
@@ -396,6 +406,11 @@ class FlowOutputArtifact(BaseModel):
     rows_by_source: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     # Standard object columns from the source's declared layout, in order.
     default_object_refs: list[str] = Field(default_factory=list)
+    # Per object key ("object_id:<id>" / "pending_ref_id:<id>"): each declared
+    # object_ref field path and the keys of the objects it references, in the
+    # object's object_refs order, so a cell carries its referenced objects'
+    # open findings.
+    object_ref_links: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
 
 
 class FlowOutputArtifactBundle(BaseModel):
@@ -779,6 +794,26 @@ def _object_label(
         if value:
             return value
     return object_id
+
+
+def _declared_payload_label(item: Mapping[str, Any]) -> str | None:
+    """Custom and generic objects: their own payload ``label``, nothing else."""
+
+    raw = _object_payload(item).get("label")
+    text = display_text(raw)
+    return text or None
+
+
+def _declared_path_label(item: Mapping[str, Any], path: str | None) -> str | None:
+    """Packaged objects: the value at the pack-declared label path, nothing else."""
+
+    if not path:
+        return None
+    from src.lib.flows.export_fields import _walk_payload
+    from src.schemas.domain_envelope import parse_field_path
+
+    text = display_text(_walk_payload(_object_payload(item), list(parse_field_path(path))))
+    return text or None
 
 
 def _object_evidence_count(item: Mapping[str, Any]) -> int:
@@ -1640,11 +1675,17 @@ def _build_artifact_from_step(
         packaged_display_specs,
         packaged_export_fields,
         packaged_field_value,
+        packaged_object_label_paths,
+        packaged_object_ref_fields,
         profile_export_fields,
         source_catalog,
     )
     display_specs: dict[str, dict[str, Any]] = {}
     default_object_refs: list[str] = []
+    object_ref_links: dict[str, dict[str, list[str]]] = {}
+    # Object labels are the declared label only (Chris, Sep 22). The legacy
+    # label stays on the rows until here so record matching is unchanged.
+    declared_labels: list[Any] = [_declared_payload_label(item) for item in object_items]
     if profile_fields is not None:
         export_fields = profile_export_fields(profile_fields)
         # Custom profiles: top-level contract fields in declaration order.
@@ -1664,6 +1705,17 @@ def _build_artifact_from_step(
             pack_entry,
             sorted({str(item.get("object_type") or "") for item in object_items}),
         )
+        ref_fields = packaged_object_ref_fields(agent_id, pack_entry)
+        for row, item in zip(rows_by_source["object"], object_items):
+            links = _object_ref_links(item, ref_fields.get(str(item.get("object_type") or ""), {}))
+            if links:
+                object_ref_links.update({key: links for key in _object_keys(row)})
+        if domain_pack_id and domain_pack_id != "generic":
+            label_paths = packaged_object_label_paths(agent_id, pack_entry)
+            declared_labels = [
+                _declared_path_label(item, label_paths.get(str(item.get("object_type") or "")))
+                for item in object_items
+            ]
         for row, item in zip(rows_by_source["object"], object_items):
             for field in export_fields:
                 if "summary_key" not in field:
@@ -1674,6 +1726,18 @@ def _build_artifact_from_step(
             _explicit_validation_findings(payload) if isinstance(payload, Mapping) else [],
             export_fields, domain_pack_id,
         )
+    if shape == "structured_result":
+        # Validator result rows: the output projection's declared label fields.
+        label_fields = validator_projection.label_fields if validator_projection else ()
+        declared_labels = [
+            next(
+                (text for key in label_fields if (text := display_text(_object_payload(item).get(key)))),
+                None,
+            )
+            for item in object_items
+        ]
+    for row, label in zip(rows_by_source["object"], declared_labels):
+        row["object.label"] = label
     catalog = source_catalog(export_fields, receipt.model_dump(mode="json") if receipt else None)
     node_id = str(step.get("node_id") or "")
     for rows in rows_by_source.values():
@@ -1710,6 +1774,7 @@ def _build_artifact_from_step(
         warnings=warnings,
         rows_by_source=rows_by_source,
         default_object_refs=default_object_refs,
+        object_ref_links=object_ref_links,
     )
 
 
@@ -2590,15 +2655,7 @@ def _split_list_errors(
     if plan.format == "json":
         errors.append(f"{context} applies to CSV, TSV and chat output; JSON keeps lists lossless.")
     if column.transform is not None or not column.field_ref:
-        errors.append(f"{context} needs a list-valued field_ref, not a transform.")
-    elif any(
-        not isinstance(row.get(column.field_ref), list) and not _is_empty(row.get(column.field_ref))
-        for row in rows
-    ):
-        errors.append(
-            f"{context} needs a list-valued field; '{column.field_ref}' holds single values. "
-            "Choose a list field or remove split_list."
-        )
+        errors.append(f"{context} needs a field_ref, not a transform.")
     if split.header_template is not None and split.headers:
         errors.append(f"{context} takes header_template or headers, not both.")
     if split.header_template is not None and "{n}" not in split.header_template:
@@ -2643,8 +2700,7 @@ def _expand_split_columns(
             output.append(column)
             continue
         longest = max(
-            (len(row.get(column.field_ref or "")) for row in rows
-             if isinstance(row.get(column.field_ref or ""), list)),
+            (len(_split_items(row.get(column.field_ref or ""))) for row in rows),
             default=0,
         )
         count = max(1, longest, len(split.headers))
@@ -3108,64 +3164,117 @@ def _payload_path_for_ref(field_ref: str) -> str | None:
     return None
 
 
-def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[str, list[str]]:
-    """Open validation finding paths per object reference, relative to the payload.
+def _object_keys(row: Mapping[str, Any]) -> list[str]:
+    """Envelope-scoped keys of the object a row names (object_id and pending_ref_id)."""
 
-    Findings reference their object by object_id or pending_ref_id.
+    return [
+        f"{kind}:{reference}"
+        for kind in ("object_id", "pending_ref_id")
+        if (reference := _string_value(row.get(f"object.{kind}")))
+    ]
+
+
+def _ref_key(object_ref: Mapping[str, Any]) -> str | None:
+    for kind in ("object_id", "pending_ref_id"):
+        reference = _string_value(object_ref.get(kind))
+        if reference:
+            return f"{kind}:{reference}"
+    return None
+
+
+def _object_ref_links(
+    item: Mapping[str, Any], ref_fields: Mapping[str, str],
+) -> dict[str, list[str]]:
+    """Referenced object keys per object_ref field path, in object_refs order."""
+
+    object_refs = [ref for ref in item.get("object_refs") or [] if isinstance(ref, Mapping)]
+    links: dict[str, list[str]] = {}
+    for field_path, object_type in ref_fields.items():
+        keys = [
+            key
+            for ref in object_refs
+            if ref.get("object_type") == object_type and (key := _ref_key(ref))
+        ]
+        if keys:
+            links[field_path] = keys
+    return links
+
+
+def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[int, list[tuple[Any, ...]]]:
+    """Open validation finding paths per object row (keyed by ``id(row)``).
+
+    Pending ref ids restart in every envelope, so findings match objects only
+    within their own artifact. An object_ref field also carries the open
+    findings of the object it references: the n-th referenced object of the
+    field's type is the n-th element of a list field.
     """
 
-    paths: dict[str, list[str]] = defaultdict(list)
-    for row in bundle.rows_for_source("validation_finding"):
-        if str(row.get("validation.status") or "").strip().lower() != "open":
-            continue
-        field_path = _string_value(row.get("validation.field_path")).removeprefix("payload.")
-        if not field_path:
-            continue
-        for key in ("object.object_id", "object.pending_ref_id"):
-            reference = _string_value(row.get(key))
-            if reference:
-                paths[reference].append(field_path)
-    return paths
+    by_row: dict[int, list[tuple[Any, ...]]] = {}
+    for artifact in bundle.artifacts:
+        direct: dict[str, list[tuple[Any, ...]]] = defaultdict(list)
+        for row in artifact.rows_by_source.get("validation_finding") or []:
+            if str(row.get("validation.status") or "").strip().lower() != "open":
+                continue
+            field_path = _string_value(row.get("validation.field_path")).removeprefix("payload.")
+            tokens = path_tokens(field_path) if field_path else None
+            if tokens is None:
+                continue
+            for key in _object_keys(row):
+                direct[key].append(tokens)
+        for row in artifact.rows_by_source.get("object") or []:
+            paths: list[tuple[Any, ...]] = []
+            for key in _object_keys(row):
+                paths.extend(direct.get(key, []))
+                for field_path, ref_keys in artifact.object_ref_links.get(key, {}).items():
+                    tokens = path_tokens(field_path)
+                    flagged = [position for position, ref in enumerate(ref_keys) if direct.get(ref)]
+                    if tokens is None or not flagged:
+                        continue
+                    if isinstance(tokens[-1], int):
+                        # An indexed field is the referenced object at that position.
+                        if tokens[-1] in flagged:
+                            paths.append(tokens)
+                    elif len(ref_keys) == 1:
+                        paths.append(tokens)
+                    else:
+                        paths.extend((*tokens, position) for position in flagged)
+            if paths:
+                by_row[id(row)] = list(dict.fromkeys(paths))
+    return by_row
 
 
-def _unresolved_for(finding_paths: Sequence[str], payload_path: str | None) -> bool | frozenset[int]:
-    """Whole-value or per-element unresolved state from open findings."""
+def _unresolved_for(
+    finding_paths: Sequence[tuple[Any, ...]], payload_path: str | None,
+) -> frozenset[tuple[Any, ...]]:
+    """Open finding paths relative to the value a column reads.
 
-    if not payload_path:
-        return False
-    indexes: set[int] = set()
-    for finding_path in finding_paths:
-        if finding_path == payload_path or finding_path.startswith(payload_path + "."):
-            return True
-        if finding_path.startswith(payload_path + "["):
-            index_text = finding_path[len(payload_path) + 1 :].split("]", 1)[0]
-            if index_text.isdigit():
-                indexes.add(int(index_text))
-            else:
-                return True
-    return frozenset(indexes) if indexes else False
+    Indexed findings map onto fanned-out columns by position, so the marker
+    lands on the unresolved element.
+    """
+
+    target = path_tokens(payload_path) if payload_path else None
+    if target is None:
+        return frozenset()
+    return frozenset(
+        relative
+        for finding in finding_paths
+        if (relative := relative_finding_path(finding, target)) is not None
+    )
 
 
 def _display_renderer(
-    bundle: FlowOutputArtifactBundle,
-    plan: FlowOutputProjectionPlan,
-    row: Mapping[str, Any],
     specs: Mapping[str, Any],
-    open_paths: Mapping[str, list[str]],
+    finding_paths: Sequence[tuple[Any, ...]],
 ) -> ValueRenderer:
-    finding_paths = [
-        path
-        for reference in dict.fromkeys(
-            _string_value(row.get(key)) for key in ("object.object_id", "object.pending_ref_id")
-        )
-        if reference
-        for path in open_paths.get(reference, [])
-    ]
-
     def render(field_ref: str, value: Any, index: int | None) -> str:
         unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref))
-        if not isinstance(unresolved, bool) and (index is not None or not isinstance(value, list)):
-            unresolved = (index or 0) in unresolved
+        if index is not None:
+            # One split_list item: the findings on that position, or on every position.
+            unresolved = frozenset(
+                path[1:] if path and path[0] == index else path
+                for path in unresolved
+                if not path or not isinstance(path[0], int) or path[0] == index
+            )
         return display_text(value, specs.get(field_ref), unresolved=unresolved)
 
     return render
@@ -3175,18 +3284,25 @@ def _group_projected_rows(
     source_rows: Sequence[Mapping[str, Any]],
     projected_rows: Sequence[Mapping[str, Any]],
     group_by: Sequence[str],
+    *,
+    group_value: Callable[[str, Any], Any] | None = None,
 ) -> list[dict[str, Any]]:
-    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    """Group rows by their group_by values (raw JSON values unless ``group_value`` renders them)."""
+
+    groups: dict[str, dict[str, Any]] = {}
     for source_row, projected_row in zip(source_rows, projected_rows):
-        key = tuple(source_row.get(field_ref) for field_ref in group_by)
+        values = {
+            field_ref: (
+                group_value(field_ref, source_row.get(field_ref))
+                if group_value is not None
+                else _jsonable(source_row.get(field_ref))
+            )
+            for field_ref in group_by
+        }
+        # Structured values are unhashable; their canonical JSON is the key.
+        key = json.dumps(list(values.values()), sort_keys=True, default=str)
         if key not in groups:
-            groups[key] = {
-                "group": {
-                    field_ref: _jsonable(source_row.get(field_ref))
-                    for field_ref in group_by
-                },
-                "rows": [],
-            }
+            groups[key] = {"group": values, "rows": []}
         groups[key]["rows"].append(dict(projected_row))
     return list(groups.values())
 
@@ -3257,7 +3373,7 @@ def apply_projection_plan(
     preserve_empty = plan.selection_mode == "selected_fields"
     projected_rows = []
     for row in limited_rows:
-        render = _display_renderer(bundle, plan, row, specs, open_paths) if display else None
+        render = _display_renderer(specs, open_paths.get(id(row), [])) if display else None
         base = _project_row(
             row,
             base_columns,
@@ -3274,8 +3390,8 @@ def apply_projection_plan(
                 projected[column.key] = base[column.key]
                 continue
             source_column, position = split_items[column.key]
-            values = row.get(source_column.field_ref or "")
-            item = values[position] if isinstance(values, list) and position < len(values) else None
+            values = _split_items(row.get(source_column.field_ref or ""))
+            item = values[position] if position < len(values) else None
             if source_column.source_node_id and row.get("artifact.node_id") != source_column.source_node_id:
                 item = None
             if not _is_empty(item) and render is not None:
@@ -3319,7 +3435,8 @@ def apply_projection_plan(
                 "document_id": bundle.document_id,
                 "row_source": plan.row_source,
                 "field_catalog": [
-                    field.model_dump(mode="json")
+                    # Display specs only shape non-JSON cells; JSON stays byte-stable.
+                    field.model_dump(mode="json", exclude={"display"})
                     for field in bundle.field_catalog
                     if field.row_source == plan.row_source
                 ],
@@ -3333,7 +3450,13 @@ def apply_projection_plan(
         # by an explicit max_rows or an explicit preview request.
         if plan.group_by:
             chat_output = render_grouped_chat_projection(
-                groups=_group_projected_rows(limited_rows, projected_rows, plan.group_by),
+                # Chat groups read by display text: the grouping key and heading.
+                groups=_group_projected_rows(
+                    limited_rows,
+                    projected_rows,
+                    plan.group_by,
+                    group_value=lambda field_ref, value: display_text(value, specs.get(field_ref)),
+                ),
                 columns=columns,
                 layout=plan.chat_layout,
                 total_count=total_count,
