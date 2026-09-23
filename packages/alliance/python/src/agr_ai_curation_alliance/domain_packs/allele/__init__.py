@@ -12,7 +12,7 @@ from src.lib.domain_packs.resolvable_values import (
     RESOLVED,
     effective_resolution,
     unresolved_value,
-    validator_event_covers,
+    value_covered_by_validator,
 )
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -31,6 +31,7 @@ from src.schemas.domain_envelope import (
 from .constants import (
     ALLELE_ASSOCIATION_IDENTITY_KEYS,
     ALLELE_ASSOCIATION_KIND,
+    ALLELE_ASSOCIATION_SPEC,
     ALLELE_ASSOCIATION_MODEL_ID,
     ALLELE_ASSOCIATION_OBJECT_ROLE,
     ALLELE_ASSOCIATION_OBJECT_TYPE,
@@ -440,7 +441,9 @@ def validate_pending_allele_envelope(
         if association.payload.get("allele_identifier") and effective_resolution(
             association.payload,
             identity_keys=ALLELE_ASSOCIATION_IDENTITY_KEYS,
-            covered_by_validator=validator_event_covers(association.metadata, ""),
+            covered_by_validator=value_covered_by_validator(
+            association.metadata, "", ALLELE_ASSOCIATION_SPEC
+        ),
         )[0] != RESOLVED:
             findings.append(
                 ValidationFinding(

@@ -26,11 +26,11 @@ from src.schemas.domain_envelope import (
 from src.lib.domain_packs.resolvable_values import (
     RESOLVED,
     effective_resolution,
-    validator_event_covers,
+    value_covered_by_validator,
 )
 
 from .._export_utils import stable_object_id
-from .constants import ALLELE_ASSOCIATION_IDENTITY_KEYS
+from .constants import ALLELE_ASSOCIATION_IDENTITY_KEYS, ALLELE_ASSOCIATION_SPEC
 
 
 ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY = "allele_verified_association_targets"
@@ -282,7 +282,9 @@ def _association_submission_operations(
     state, outcome = effective_resolution(
         association.payload,
         identity_keys=ALLELE_ASSOCIATION_IDENTITY_KEYS,
-        covered_by_validator=validator_event_covers(association.metadata, ""),
+        covered_by_validator=value_covered_by_validator(
+            association.metadata, "", ALLELE_ASSOCIATION_SPEC
+        ),
     )
     if state != RESOLVED:
         blockers.append(

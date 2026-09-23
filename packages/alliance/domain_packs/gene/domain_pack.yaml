@@ -65,6 +65,8 @@ enum_definitions:
         label: Not validated yet
       - value: legacy_unverified
         label: Legacy, unverified
+      - value: curator_override
+        label: Curator override
 model_definitions:
   - model_id: GeneMentionEvidencePayload
     display_name: Gene mention evidence payload

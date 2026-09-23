@@ -24,7 +24,7 @@ from src.lib.domain_packs.resolvable_values import (
     VALIDATOR_EXPLANATION_KEY,
     ResolvableSpec,
     effective_value,
-    validator_event_covers,
+    value_covered_by_validator,
 )
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -183,7 +183,7 @@ def _gene_evidence_record(domain_object: CuratableObjectEnvelope) -> dict[str, A
     gene = effective_value(
         domain_object.payload,
         _GENE_IDENTITY_SPEC,
-        covered_by_validator=validator_event_covers(domain_object.metadata, ""),
+        covered_by_validator=value_covered_by_validator(domain_object.metadata, "", _GENE_IDENTITY_SPEC),
     )
     resolved = gene[RESOLUTION_STATE_KEY] == RESOLVED
     reference: dict[str, Any] = {

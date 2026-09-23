@@ -34,6 +34,7 @@ from src.schemas.domain_pack_metadata import (
     DomainPackFieldDefinition,
     DomainPackFieldType,
     DomainPackMetadata,
+    DomainPackModelDefinition,
     DomainPackObjectDefinition,
 )
 from src.schemas.domain_validator import DomainValidatorResultBase
@@ -77,6 +78,14 @@ def _metadata(*, loan_binding_id: str = BINDING_ID) -> DomainPackMetadata:
                 "under_development": [],
             }
         },
+        model_definitions=[
+            # The acquisition root is a declared resolvable value (its maker).
+            DomainPackModelDefinition(
+                model_id="AcquisitionPayload",
+                display_name="Acquisition payload",
+                metadata={"display": {"label": "maker_name", "id": "maker_id", "mention": "mention"}},
+            ),
+        ],
         object_definitions=[
             DomainPackObjectDefinition(
                 object_type="MakerMention",
@@ -96,6 +105,7 @@ def _metadata(*, loan_binding_id: str = BINDING_ID) -> DomainPackMetadata:
             DomainPackObjectDefinition(
                 object_type="Acquisition",
                 display_name="Acquisition",
+                model_ref="AcquisitionPayload",
                 metadata={"object_role": "curatable_unit"},
                 fields=[
                     _field("mention"),
@@ -347,3 +357,43 @@ def test_a_later_unresolved_result_overrules_the_referencing_value():
     # The link to the validated Maker is stale on an unresolved value, so it is dropped.
     assert acquisition.object_refs == [_MENTION_REF]
     assert any(obj.object_type == "Maker" for obj in result.envelope.extracted_objects)
+
+
+def test_a_curator_override_on_the_referencing_value_is_never_changed():
+    import copy
+
+    from src.lib.domain_packs.resolvable_values import apply_curator_identity
+
+    envelope = _envelope()
+    objects = []
+    for obj in envelope.extracted_objects:
+        if obj.pending_ref_id == "acquisition-1":
+            payload = copy.deepcopy(obj.payload)
+            apply_curator_identity(
+                payload,
+                {"maker_id": "GAL:M0007", "maker_name": "De Porceleyne Fles"},
+                identity_keys=("maker_id", "maker_name"),
+                actor_id="curator-1",
+                at="2026-09-23T20:00:00Z",
+            )
+            obj = obj.model_copy(update={"payload": payload})
+        objects.append(obj)
+    curated = envelope.model_copy(update={"extracted_objects": objects})
+
+    for result_fields in (
+        _RESOLVED,
+        {
+            "status": "unresolved",
+            "lookup_attempts": [
+                {
+                    "provider": "fixture_lookup",
+                    "method": "maker_search",
+                    "query": {"mention": "the Delft workshop"},
+                    "result_count": 0,
+                    "outcome": "not_found",
+                }
+            ],
+        },
+    ):
+        result = _materialize(curated, _metadata(), **result_fields)
+        assert _by_ref(result.envelope, "acquisition-1") == _by_ref(curated, "acquisition-1")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.lib.domain_packs.resolvable_values import ResolvableSpec
+
 from ..schema_refs import ALLIANCE_LINKML_COMMIT
 
 
@@ -36,6 +38,7 @@ ALLELE_IDENTITY_KEYS = ("primary_external_id", "allele_symbol", "taxon")
 # validated allele reaches allele_identifier/allele_label through the declared write-back
 # (fields naming the binding in ``validation_result_binding_id``).
 ALLELE_ASSOCIATION_IDENTITY_KEYS = ("allele_identifier", "allele_label")
+ALLELE_ASSOCIATION_SPEC = ResolvableSpec(id_key="allele_identifier", label_key="allele_label")
 
 # LinkML grounding (pinned commit). The abstract AlleleAssociation class is used only for
 # pending-envelope metadata; writes/exports stay blocked.
@@ -55,6 +58,7 @@ ALLELE_DOMAIN_PACK_CONVERTER_ID = "agr_ai_curation_alliance.domain_packs.allele"
 __all__ = [
     "ALLELE_ASSOCIATION_IDENTITY_KEYS",
     "ALLELE_ASSOCIATION_KIND",
+    "ALLELE_ASSOCIATION_SPEC",
     "ALLELE_ASSOCIATION_LINKML_SCHEMA_ID",
     "ALLELE_ASSOCIATION_MODEL_ID",
     "ALLELE_ASSOCIATION_OBJECT_ROLE",

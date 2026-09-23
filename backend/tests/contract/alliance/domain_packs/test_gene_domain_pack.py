@@ -857,3 +857,21 @@ def test_a_demoted_gene_keeps_the_extractor_proposals_apart_from_the_overruled_i
     assert payload["overruled_primary_external_id"] == "WB:WBGene00000912"
     assert payload["overruled_gene_symbol"] == "daf-16"
     assert payload["overruled_taxon"] == "NCBITaxon:6239"
+
+
+def test_every_staged_gene_contract_value_is_a_declared_resolvable_value():
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    declared = declared_resolvable_fields(pack.metadata, GENE_MENTION_EVIDENCE_OBJECT_TYPE)
+    staged = _materialize_one_candidate().payload["curatable_objects"][0]["payload"]
+    fixture = load_domain_fixture_pack(BUILDER_FIXTURE_PATH).fixtures[0].envelope
+
+    # The object root is the gene value; nothing below it carries contract state.
+    for payload in (staged, fixture.extracted_objects[0].payload):
+        assert "resolution_state" in payload
+        assert "" in declared
+        assert not [
+            key for key, value in payload.items()
+            if isinstance(value, dict) and ("resolution_state" in value or "lookup_outcome" in value)
+        ]
