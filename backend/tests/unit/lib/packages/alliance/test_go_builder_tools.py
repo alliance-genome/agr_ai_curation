@@ -41,6 +41,7 @@ from agr_ai_curation_alliance.domain_packs.go.values import (  # noqa: E402
     evidence_code_value,
     gene_product_value,
     go_term_value,
+    qualifier_value,
     reference_value,
     record_holds,
     with_from_value,
@@ -1082,7 +1083,7 @@ def test_go_term_curie_and_label_must_come_from_one_lookup_record():
         assert requirements == [{
             "field_path": "go_term",
             "tool_names": ["quickgo_api_call"],
-            "record": ["GO:0005515", "nucleus", "molecular_function"],
+            "record": {"identifier": "GO:0005515", "label": "nucleus", "aspect": "molecular_function"},
         }]
         assert [issue["reason"] for issue in issues] == ["unobserved_tool_value"]
         assert "Stage a value without an identifier only when no lookup returned one" in issues[0]["message"]
@@ -1098,5 +1099,56 @@ def test_go_term_curie_and_label_must_come_from_one_lookup_record():
 
 def test_finalization_rechecks_that_the_identity_comes_from_one_record():
     output = {"gene_product": {"curie": "RGD:619839", "symbol": "Cttn"}, "other": {"symbol": "Ago2"}}
-    assert record_holds(output, ["RGD:619839", "Cttn"])
-    assert not record_holds(output, ["RGD:619839", "Ago2"])
+    assert record_holds(output, {"identifier": "RGD:619839", "label": "Cttn"})
+    assert not record_holds(output, {"identifier": "RGD:619839", "label": "Ago2"})
+
+
+@pytest.mark.parametrize(
+    ("aspect", "mention", "expected"),
+    [
+        ("biological_process", "Involved in", ("resolved", "matched", "involved_in")),
+        ("cellular_component", "colocalizes-with", ("resolved", "matched", "colocalizes_with")),
+        ("molecular_function", "located_in", ("unresolved", "conflict", None)),
+        ("molecular_function", "strongly required for", ("unresolved", "not_found", None)),
+    ],
+)
+def test_go_qualifiers_resolve_only_through_the_aspect_vocabulary(aspect, mention, expected):
+    """ALL-1302: qualifiers are resolvable values; the builder's GO relation table is the lookup."""
+
+    value = qualifier_value(mention, aspect=aspect)
+
+    assert value["mention"] == mention
+    assert (value["resolution_state"], value["lookup_outcome"], value["name"]) == expected
+
+
+def test_go_patch_looks_qualifiers_up_again_against_the_terms_aspect(active_go_builder_context):
+    workspace, _events = active_go_builder_context
+    staged = _stage_with_rationale("The IPI assay binds Cttn directly.")
+    candidate_id = staged.data["candidate_id"]
+
+    patched = go_builder_tools._patch_go_recommendation_impl(
+        candidate_id, [{"field_path": "qualifiers", "value": ["contributes to", "made up"]}]
+    )
+
+    assert patched.status == "ok", patched.model_dump(mode="json")
+    qualifiers = workspace.get_candidate(candidate_id).staged_fields["payload"]["qualifiers"]
+    assert [(entry["mention"], entry["name"], entry["resolution_state"]) for entry in qualifiers] == [
+        ("contributes to", "contributes_to", "resolved"),
+        ("made up", None, "unresolved"),
+    ]
+    rejected = go_builder_tools._patch_go_recommendation_impl(
+        candidate_id, [{"field_path": "qualifiers", "value": [{"mention": "enables", "name": "enables"}]}]
+    )
+    assert rejected.status == "error"
+
+
+def test_record_holds_never_matches_a_label_echoed_as_the_query():
+    """ALL-1302 re-review: the resolver echoes the paper wording as ``query``; that is not a label."""
+
+    output = {
+        "query": "Cttn",
+        "resolved_gene_id": "RGD:619839",
+        "candidate_mappings": [{"gene_id": "RGD:619839", "symbol": "Cttn2"}],
+    }
+    assert not record_holds(output, {"identifier": "RGD:619839", "label": "Cttn"})
+    assert record_holds(output, {"identifier": "RGD:619839", "label": "Cttn2"})

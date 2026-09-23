@@ -53,6 +53,18 @@ def _with_from_entry(curie):
     }
 
 
+def _qualifier_entry(name):
+    """A qualifier as the GO candidate stores it once the builder matched it (ALL-1302)."""
+
+    return {
+        "mention": name.replace("_", " "),
+        "name": name,
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": None,
+    }
+
+
 def _result_payload(**overrides):
     violations = list(overrides.pop("policy_violations", []))
     insufficient = "insufficient_primary_evidence" in violations
@@ -345,7 +357,7 @@ def test_approved_submit_ready_rows_validate(fixture_name, overrides, monkeypatc
         (
             "unsupported_qualifier_abstains",
             {
-                "proposed_qualifiers": ["contributes_to"],
+                "proposed_qualifiers": [_qualifier_entry("contributes_to")],
                 "qualifiers_supported": False,
             },
             ["qualifier_unsupported"],
@@ -631,7 +643,7 @@ def test_validator_finalization_applies_the_typed_policy_schema(monkeypatch):
         ("proposed_aspect", "cellular_component"),
         ("proposed_go_term_curie", "GO:0005515"),
         ("proposed_with_from", [_with_from_entry("RGD:partner")]),
-        ("proposed_qualifiers", ["contributes_to"]),
+        ("proposed_qualifiers", [_qualifier_entry("contributes_to")]),
         ("proposed_annotation_extensions", ["occurs_in(CL:0000000)"]),
         ("proposed_negated", True),
         ("proposed_rationale", "A different rationale."),
@@ -826,3 +838,37 @@ def test_policy_compares_the_matched_code_not_the_paper_wording(monkeypatch):
 
     assert result.proposed_evidence_code == "IDA"
     assert result.policy_violations == []
+
+
+def test_policy_never_passes_a_proposal_with_an_unresolved_qualifier(monkeypatch):
+    """ALL-1302: a qualifier outside the GO relation vocabulary keeps the proposal in review."""
+
+    from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
+    from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)["RGDGOEvidencePolicyValidationResult"]
+    unmatched = {
+        "mention": "strongly required for",
+        "name": None,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_found",
+        "validator_explanation": "Not a GO relation qualifier in this workflow's qualifier vocabulary.",
+    }
+    original = _result_payload(proposed_qualifiers=[unmatched])
+    request = DomainValidationRequest(
+        request_id=original["request_id"], validator_binding_id=original["validator_binding_id"],
+        validator_agent=original["validator_agent"], target=original["target"],
+        selected_inputs=_selected_inputs_for_result(original),
+    )
+    contract = policy_decision_contract(request, schema)
+    decision = contract.decision_schema(
+        request_id=request.request_id, status="unresolved",
+        explanation="Assessment of the supplied evidence.",
+        scientific={name: original[name] for name in _SCIENTIFIC_FIELDS},
+    )
+
+    result = ValidatorDecisionWorkspace([contract]).assemble(decision)
+
+    assert result.policy_violations == ["qualifier_unresolved"]
+    assert (result.status, result.decision) == ("unresolved", "curator_review_required")

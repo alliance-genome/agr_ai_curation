@@ -1,7 +1,7 @@
 """GO records stored in the previous format, before ALL-1283 (read time only).
 
-The previous format kept the evidence code, its ECO CURIE, the reference and
-each With/From entry as plain strings, and the gene-product resolution state at
+The previous format kept the evidence code, its ECO CURIE, the reference,
+each With/From entry and each qualifier as plain strings, and the gene-product resolution state at
 the payload root. Such records are never rewritten. For display those strings
 are read as the current value objects through the shared legacy rule, so they
 show their stored text as "(legacy, unverified)" paper wording; the gene product
@@ -43,13 +43,17 @@ def is_previous_format(payload: Mapping[str, Any]) -> bool:
         or "evidence_eco_curie" in payload
         or isinstance(payload.get("reference_curie"), str)
         or "resolution_state" in payload
-        or (isinstance(with_from, list) and any(isinstance(item, str) for item in with_from))
+        or any(
+            isinstance(values, list) and any(isinstance(item, str) for item in values)
+            for values in (with_from, payload.get("qualifiers"))
+        )
     )
 
 
 # The display roles the pack declares for each value the previous format stored as a string.
 _EVIDENCE_CODE_SPEC = ResolvableSpec(id_key="eco_curie", label_key="code")
 _CURIE_SPEC = ResolvableSpec(id_key="curie")
+_QUALIFIER_SPEC = ResolvableSpec(label_key="name")
 
 
 def _legacy(spec: ResolvableSpec, **stored: Any) -> dict[str, Any]:
@@ -62,7 +66,7 @@ def _legacy(spec: ResolvableSpec, **stored: Any) -> dict[str, Any]:
 def previous_format_display_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """A read-time copy of a previous-format payload in the current value shape.
 
-    The old evidence code (with its ECO CURIE), reference and With/From strings
+    The old evidence code (with its ECO CURIE), reference, With/From and qualifier strings
     become value objects that read as unresolved, ``legacy_unverified``, with
     their stored text as "(legacy, unverified)" paper wording. The stored
     record is not changed.
@@ -82,6 +86,12 @@ def previous_format_display_payload(payload: Mapping[str, Any]) -> dict[str, Any
         display["with_from"] = [
             _legacy(_CURIE_SPEC, curie=item) if isinstance(item, str) else item
             for item in with_from
+        ]
+    qualifiers = display.get("qualifiers")
+    if isinstance(qualifiers, list):
+        display["qualifiers"] = [
+            _legacy(_QUALIFIER_SPEC, name=item) if isinstance(item, str) else item
+            for item in qualifiers
         ]
     return display
 

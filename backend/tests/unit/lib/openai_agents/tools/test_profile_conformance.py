@@ -799,3 +799,19 @@ def test_a_key_a_mapping_both_reads_and_writes_stays_the_extractors_input():
     assert set(gene["properties"]) == {"mention", "symbol"}
     assert profile.validate_attributes({"gene": {"mention": "daf-16", "symbol": "daf-16"}},
                                        extractor_input=True) == []
+
+
+def test_identifier_role_prefers_the_key_an_exact_identifier_slot_writes():
+    """ALL-1302 re-review: {taxon: gene.taxon_id, curie: gene.gene_id} picks gene_id."""
+
+    profile = _profile_with(
+        [{"key": "gene", "required": True, "value_schema": {"kind": "object", "fields": [
+            {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+            {"key": "taxon_id", "value_schema": {"kind": "string"}},
+            {"key": "gene_id", "value_schema": {"kind": "string"}},
+        ]}}],
+        outputs={"taxon": "attributes.gene.taxon_id", "curie": "attributes.gene.gene_id"},
+        inputs={"mention": {"field_path": "attributes.gene.mention"}},
+    )
+    spec = profile.resolvable_specs()["attributes.gene"]
+    assert (spec.id_key, spec.label_key) == ("gene_id", "taxon_id")

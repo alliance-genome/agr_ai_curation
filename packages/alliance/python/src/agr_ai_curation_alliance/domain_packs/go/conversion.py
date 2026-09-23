@@ -25,6 +25,7 @@ from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtracti
 
 from .constants import (
     GO_EVIDENCE_CODE_ECO,
+    GO_QUALIFIERS_BY_ASPECT,
     GO_MATERIALIZER_ID,
     GO_MODEL_ID,
     GO_OBJECT_ROLE,
@@ -484,6 +485,20 @@ def _validate_payload(
                 candidate_id,
             )
         )
+    qualifiers = payload.get("qualifiers")
+    aspect = _path_value(payload, "go_term.aspect")
+    for index, entry in enumerate(qualifiers if isinstance(qualifiers, list) else []):
+        if is_resolved(entry) and entry.get("name") not in GO_QUALIFIERS_BY_ASPECT.get(
+            aspect, frozenset()
+        ):
+            issues.append(
+                _issue(
+                    f"payload.qualifiers[{index}]",
+                    "qualifier_aspect_mismatch",
+                    "A resolved qualifier must be a GO relation allowed for the term's aspect.",
+                    candidate_id,
+                )
+            )
     identifier_checks = (
         ("go_term.curie", _GO_CURIE_PATTERN, "invalid_go_curie"),
         ("evidence_code.eco_curie", _ECO_CURIE_PATTERN, "invalid_eco_curie"),

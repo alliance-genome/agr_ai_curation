@@ -65,7 +65,9 @@ content: |
   records the value as matched. When no lookup confirms a value, still stage its
   paper wording without the identifier: the builder keeps it as unresolved for
   curator review. Never drop an unmatched value and never put paper wording in
-  an identifier or label field.
+  an identifier or label field. Pass each qualifier as the paper supports it;
+  the builder matches it to a GO relation allowed for the term's aspect and
+  keeps any other qualifier unresolved.
   1. Call `agr_literature_reference_lookup` for the active paper and use only
      its returned Alliance reference CURIE as `reference_curie`. Omit it and
      keep an unresolved blocker when the paper cannot be matched unambiguously.

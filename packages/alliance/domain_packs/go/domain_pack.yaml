@@ -372,6 +372,40 @@ object_definitions:
         field_type: array
         display_name: Qualifiers
         required: true
+        metadata:
+          display:
+            label: name
+            mention: mention
+      - field_path: qualifiers.mention
+        field_type: string
+        display_name: Qualifier (paper wording)
+        metadata:
+          protected: true
+      - field_path: qualifiers.name
+        field_type: string
+        display_name: Qualifier
+      - field_path: qualifiers.resolution_state
+        field_type: enum
+        display_name: Qualifier status
+        enum_ref: ResolutionState
+        metadata:
+          read_only: true
+      - field_path: qualifiers.lookup_outcome
+        field_type: enum
+        display_name: Qualifier lookup result
+        enum_ref: LookupOutcome
+        metadata:
+          read_only: true
+      - field_path: qualifiers.validator_explanation
+        field_type: string
+        display_name: Qualifier validator explanation
+        metadata:
+          read_only: true
+      - field_path: qualifiers.validator_curator_message
+        field_type: string
+        display_name: Qualifier validator message
+        metadata:
+          read_only: true
       - field_path: annotation_extensions
         field_type: array
         display_name: Annotation extensions

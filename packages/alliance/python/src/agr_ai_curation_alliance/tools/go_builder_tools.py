@@ -44,6 +44,7 @@ from agr_ai_curation_alliance.domain_packs.go.values import (
     evidence_code_value,
     is_resolved,
     gene_product_value,
+    qualifier_values,
     record_holds,
     go_term_value,
     reference_value,
@@ -453,7 +454,9 @@ def _stage_payload(stage_input: GOStageInput) -> dict[str, Any]:
             "evidence_code": evidence_code_value(stage_input.evidence_code),
             "reference_curie": stage_input.reference.value(),
             "with_from": _with_from_values(stage_input.with_from),
-            "qualifiers": list(stage_input.qualifiers),
+            "qualifiers": qualifier_values(
+                stage_input.qualifiers, aspect=stage_input.go_term.aspect
+            ),
             "annotation_extensions": list(stage_input.annotation_extensions),
             "negated": stage_input.negated,
             "rationale": stage_input.rationale,
@@ -508,12 +511,17 @@ def _append_grounding_requirements(
             requirements.append(requirement)
 
 
-def _resolved_identity(value: Any, keys: Sequence[str]) -> list[Any]:
-    """The identity leaves a resolved value claims came from a lookup; never its mention."""
+def _resolved_identity(value: Any, keys: Mapping[str, str]) -> dict[str, Any]:
+    """The identity a resolved value claims came from a lookup, by record role; never its mention.
+
+    ``keys`` maps each record role (identifier, label, aspect) to the value's key.
+    """
 
     if not is_resolved(value):
-        return []
-    return [value.get(key) for key in keys if value.get(key) not in (None, "")]
+        return {}
+    return {
+        role: value.get(key) for role, key in keys.items() if value.get(key) not in (None, "")
+    }
 
 
 def _append_record_requirement(
@@ -521,19 +529,22 @@ def _append_record_requirement(
     *,
     field_path: str,
     tool_names: set[str],
-    identity: list[Any],
+    identity: Mapping[str, Any],
 ) -> None:
-    """A resolved value's identifier and label must come from ONE lookup record."""
+    """A resolved value's identifier, label and aspect must come from ONE lookup record."""
 
     if not identity:
         return
-    if len(identity) == 1:
+    if set(identity) == {"identifier"}:
         _append_grounding_requirements(
-            requirements, field_path=field_path, tool_names=tool_names, values=identity
+            requirements,
+            field_path=field_path,
+            tool_names=tool_names,
+            values=identity["identifier"],
         )
         return
     requirements.append(
-        {"field_path": field_path, "tool_names": sorted(tool_names), "record": identity}
+        {"field_path": field_path, "tool_names": sorted(tool_names), "record": dict(identity)}
     )
 
 
@@ -544,7 +555,7 @@ def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     identity = provider_context.get("identity_resolution") or {}
     requirements: list[dict[str, Any]] = []
 
-    gene_identity = _resolved_identity(gene_product, ("curie", "label"))
+    gene_identity = _resolved_identity(gene_product, {"identifier": "curie", "label": "label"})
     _append_record_requirement(
         requirements,
         field_path="gene_product",
@@ -562,7 +573,9 @@ def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         requirements,
         field_path="go_term",
         tool_names=_TERM_TOOLS,
-        identity=_resolved_identity(payload.get("go_term"), ("curie", "label", "aspect")),
+        identity=_resolved_identity(
+            payload.get("go_term"), {"identifier": "curie", "label": "label", "aspect": "aspect"}
+        ),
     )
     if gene_identity:
         _append_grounding_requirements(
@@ -579,7 +592,7 @@ def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         requirements,
         field_path="reference_curie",
         tool_names=_REFERENCE_TOOLS,
-        values=_resolved_identity(payload.get("reference_curie"), ("curie",)),
+        values=list(_resolved_identity(payload.get("reference_curie"), {"identifier": "curie"}).values()),
     )
     with_from = payload.get("with_from")
     for index, entry in enumerate(with_from if isinstance(with_from, list) else []):
@@ -587,17 +600,15 @@ def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
             requirements,
             field_path=f"with_from[{index}]",
             tool_names=_WITH_FROM_TOOLS,
-            values=_resolved_identity(entry, ("curie",)),
+            values=list(_resolved_identity(entry, {"identifier": "curie"}).values()),
         )
-    for field_path in ("qualifiers", "annotation_extensions"):
-        value = payload.get(field_path)
-        if value in (None, "", []):
-            continue
+    annotation_extensions = payload.get("annotation_extensions")
+    if annotation_extensions not in (None, "", []):
         _append_grounding_requirements(
             requirements,
-            field_path=field_path,
+            field_path="annotation_extensions",
             tool_names=_CONTROLLED_VALUE_TOOLS,
-            values=value,
+            values=annotation_extensions,
         )
     return requirements
 
@@ -729,6 +740,10 @@ def _stage_go_recommendation_impl(
             returned it; leave it out when the paper could not be matched.
         with_from: With/From entries, each with the paper's wording and, when a lookup
             returned one, its identifier.
+        qualifiers: GO relation qualifiers as the paper supports them, for example
+            enables, involved_in, located_in, colocalizes_with, or contributes_to.
+            Each is looked up in the GO relation vocabulary for the term's aspect; one
+            that does not fit stays unresolved. Negation is its own field.
         blocking_reasons: Concrete reasons a curator must resolve before acceptance;
             required when the gene product has no confirmed CURIE.
         validation_guidance: Optional short sentence forwarding relevant rules from your
@@ -840,11 +855,12 @@ def _resolution_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
         for field_path in ("gene_product", "go_term", "evidence_code", "reference_curie")
         if isinstance(payload.get(field_path), Mapping)
     }
-    summary["with_from"] = [
-        entry.get("resolution_state")
-        for entry in payload.get("with_from") or []
-        if isinstance(entry, Mapping)
-    ]
+    for field_path in ("with_from", "qualifiers"):
+        summary[field_path] = [
+            entry.get("resolution_state")
+            for entry in payload.get(field_path) or []
+            if isinstance(entry, Mapping)
+        ]
     return summary
 
 
@@ -907,6 +923,8 @@ def _patch_go_recommendation_impl(
     Args:
         candidate_id: The staged candidate to correct.
         updates: Field corrections, each with field_path and value (or evidence_record_ids).
+            qualifiers takes the qualifiers as the paper supports them; the builder
+            looks each one up again against the GO term's aspect.
             A GO value (gene_product, go_term, reference_curie, each with_from entry) takes the
             same shape as staging: the paper wording as `mention` plus the identifier only
             when a lookup returned it; evidence_code takes the code. The builder works out
@@ -952,6 +970,9 @@ def _patch_go_recommendation_impl(
     staged_fields = dict(candidate.staged_fields)
     payload = dict(staged_fields.get("payload") or {})
     evidence_ids = list(candidate.evidence_record_ids)
+    qualifier_mentions = [
+        entry["mention"] for entry in payload.get("qualifiers") or [] if isinstance(entry, Mapping)
+    ]
     for update in patch_input.updates:
         if update.field_path == "evidence_record_ids":
             evidence_ids = [
@@ -999,6 +1020,26 @@ def _patch_go_recommendation_impl(
                     method="patch_go_recommendation",
                     attempted_query=attempted_query,
                 )
+        elif update.field_path == "qualifiers":
+            if not isinstance(update.value, list) or not all(
+                isinstance(item, str) and item.strip() for item in update.value
+            ):
+                return _go_validation_result(
+                    message="patch_go_recommendation rejected a GO value update.",
+                    issues=[
+                        {
+                            "field_path": "qualifiers",
+                            "reason": "invalid_value",
+                            "message": (
+                                "qualifiers takes the qualifiers as the paper supports them, "
+                                "a list of non-empty strings; the builder looks each one up."
+                            ),
+                        }
+                    ],
+                    method="patch_go_recommendation",
+                    attempted_query=attempted_query,
+                )
+            qualifier_mentions = [item.strip() for item in update.value]
         elif update.field_path in _RESOLVABLE_PATCH_FIELDS:
             try:
                 payload[update.field_path] = _patched_resolvable_value(
@@ -1021,6 +1062,10 @@ def _patch_go_recommendation_impl(
             payload.pop(update.field_path, None)
         else:
             payload[update.field_path] = update.value
+    go_term = payload.get("go_term")
+    if isinstance(go_term, Mapping):
+        # Qualifiers are looked up again against the term's aspect, which a patch may change.
+        payload["qualifiers"] = qualifier_values(qualifier_mentions, aspect=go_term.get("aspect"))
     staged_fields["payload"] = payload
     grounding_refs, grounding_requirements, grounding_issues = _ground_payload(payload)
     if grounding_issues:

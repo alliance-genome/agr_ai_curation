@@ -398,7 +398,7 @@ def test_previous_format_record_shows_its_stored_values_as_legacy_in_review():
 
     metadata, fixtures = _contracts()
     envelope = fixtures.fixtures[0].envelope
-    stored = {**_legacy_go_payload(), "with_from": ["RGD:619839"]}
+    stored = {**_legacy_go_payload(), "with_from": ["RGD:619839"], "qualifiers": ["colocalizes_with"]}
     legacy_object = envelope.extracted_objects[0].model_copy(update={"payload": stored})
     legacy_envelope = envelope.model_copy(update={"extracted_objects": [legacy_object]})
 
@@ -415,6 +415,8 @@ def test_previous_format_record_shows_its_stored_values_as_legacy_in_review():
     assert fields["reference_curie.curie"] is None
     assert fields["with_from"][0]["mention"] == f"RGD:619839 {LEGACY_UNVERIFIED_SUFFIX}"
     assert fields["with_from"][0]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+    assert fields["qualifiers"][0]["mention"] == f"colocalizes_with {LEGACY_UNVERIFIED_SUFFIX}"
+    assert fields["qualifiers"][0]["name"] is None
     assert rows[0].display_label == f"Lta protein {LEGACY_UNVERIFIED_SUFFIX}"
     assert legacy_object.payload == stored  # The stored record is never rewritten.
     assert "evidence_eco_curie" not in previous_format_display_payload(stored)

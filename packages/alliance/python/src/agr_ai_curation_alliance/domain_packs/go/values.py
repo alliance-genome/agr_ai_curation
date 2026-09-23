@@ -14,6 +14,7 @@ from typing import Any
 from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS,
     MENTION_KEY,
+    OUTCOME_CONFLICT,
     OUTCOME_NOT_FOUND,
     RESOLUTION_STATE_KEY,
     RESOLVED,
@@ -22,7 +23,7 @@ from src.lib.domain_packs.resolvable_values import (
     unresolved_value,
 )
 
-from .constants import GO_EVIDENCE_CODE_ECO
+from .constants import GO_EVIDENCE_CODE_ECO, GO_QUALIFIERS_BY_ASPECT
 
 
 GENE_PRODUCT_IDENTITY = ("curie", "label")
@@ -30,6 +31,7 @@ GO_TERM_IDENTITY = ("curie", "label")
 EVIDENCE_CODE_IDENTITY = ("code", "eco_curie")
 REFERENCE_IDENTITY = ("curie",)
 WITH_FROM_IDENTITY = ("curie",)
+QUALIFIER_IDENTITY = ("name",)
 
 # Single resolvable values and their identity keys; ``with_from`` is a list
 # whose every element is its own value.
@@ -39,41 +41,43 @@ RESOLVABLE_VALUE_FIELDS = {
     "evidence_code": EVIDENCE_CODE_IDENTITY,
     "reference_curie": REFERENCE_IDENTITY,
 }
-RESOLVABLE_LIST_FIELDS = {"with_from": WITH_FROM_IDENTITY}
+RESOLVABLE_LIST_FIELDS = {"with_from": WITH_FROM_IDENTITY, "qualifiers": QUALIFIER_IDENTITY}
 
 # Resolution keys only the builder and validators write; the extractor never does.
 BUILDER_OWNED_KEYS = frozenset(key for key in CONTRACT_KEYS if key != MENTION_KEY)
 
+UNKNOWN_QUALIFIER_EXPLANATION = "Not a GO relation qualifier in this workflow's qualifier vocabulary."
+QUALIFIER_ASPECT_EXPLANATION = "GO relation qualifier not allowed for the annotation's GO aspect."
 UNKNOWN_EVIDENCE_CODE_EXPLANATION = (
     "GO evidence code not supported by this workflow's ECO table."
 )
 
 
-def _holds(node: Any, value: Any) -> bool:
-    if isinstance(node, Mapping):
-        return any(_holds(item, value) for item in node.values())
-    if isinstance(node, list):
-        return any(_holds(item, value) for item in node)
-    return node == value
+# Record keys that carry a lookup record's own label; never echoes of the query.
+RECORD_LABEL_KEYS = ("symbol", "name", "label")
 
 
-def record_holds(output: Any, values: Sequence[Any]) -> bool:
-    """Whether one record of a lookup output carries every value together.
+def record_holds(output: Any, record: Mapping[str, Any]) -> bool:
+    """Whether one record of a lookup output carries a whole identity together.
 
-    The record is the object that holds the first value (the identifier)
-    directly; the other values (its label, aspect, ...) must sit in that same
-    record, never in another candidate of the same output.
+    ``record`` names the ``identifier``, and optionally the ``label`` and
+    ``aspect``. The identifier must be a value of one record object; the label
+    must be that same object's own symbol, name or label (never an echoed
+    ``query`` or any other key); the aspect must be its ``aspect``.
     """
 
-    identifier, *others = values
+    identifier = record["identifier"]
     if isinstance(output, Mapping):
-        if any(item == identifier for item in output.values()) and all(
-            _holds(output, value) for value in others
+        if (
+            any(item == identifier for item in output.values())
+            and ("label" not in record
+                 or any(output.get(key) == record["label"] for key in RECORD_LABEL_KEYS))
+            and ("aspect" not in record or output.get("aspect") == record["aspect"])
         ):
             return True
-        return any(record_holds(item, values) for item in output.values())
+        return any(record_holds(item, record) for item in output.values())
     if isinstance(output, list):
-        return any(record_holds(item, values) for item in output)
+        return any(record_holds(item, record) for item in output)
     return False
 
 
@@ -134,6 +138,30 @@ def reference_value(mention: str, *, curie: str | None) -> dict[str, Any]:
     return unresolved_value(mention, identity_keys=REFERENCE_IDENTITY)
 
 
+def qualifier_value(mention: str, *, aspect: str) -> dict[str, Any]:
+    """Look the proposed qualifier up in the builder's GO relation vocabulary for the aspect."""
+
+    name = "_".join(mention.strip().lower().replace("-", " ").split())
+    if name in GO_QUALIFIERS_BY_ASPECT.get(aspect, frozenset()):
+        return resolved_value(mention, {"name": name})
+    known = any(name in allowed for allowed in GO_QUALIFIERS_BY_ASPECT.values())
+    return unresolved_value(
+        mention,
+        identity_keys=QUALIFIER_IDENTITY,
+        outcome=OUTCOME_CONFLICT if known else OUTCOME_NOT_FOUND,
+        explanation=QUALIFIER_ASPECT_EXPLANATION if known else UNKNOWN_QUALIFIER_EXPLANATION,
+    )
+
+
+def qualifier_values(mentions: Sequence[str], *, aspect: str) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    for mention in mentions:
+        value = qualifier_value(mention, aspect=aspect)
+        if value not in values:
+            values.append(value)
+    return values
+
+
 def with_from_value(mention: str, *, curie: str | None) -> dict[str, Any]:
     if curie:
         return resolved_value(mention, {"curie": curie})
@@ -153,7 +181,10 @@ __all__ = [
     "evidence_code_value",
     "gene_product_value",
     "go_term_value",
+    "QUALIFIER_IDENTITY",
     "is_resolved",
+    "qualifier_value",
+    "qualifier_values",
     "record_holds",
     "reference_value",
     "with_from_value",

@@ -4014,7 +4014,7 @@
           "type": "string"
         },
         {
-          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA GO value (gene_product, go_term, reference_curie, each with_from entry) takes the\nsame shape as staging: the paper wording as `mention` plus the identifier only\nwhen a lookup returned it; evidence_code takes the code. The builder works out\nagain whether each value is matched or unresolved.\nA `rationale` update must be non-empty; it cannot be cleared.",
+          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nqualifiers takes the qualifiers as the paper supports them; the builder\nlooks each one up again against the GO term's aspect.\nA GO value (gene_product, go_term, reference_curie, each with_from entry) takes the\nsame shape as staging: the paper wording as `mention` plus the identifier only\nwhen a lookup returned it; evidence_code takes the code. The builder works out\nagain whether each value is matched or unresolved.\nA `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5886,6 +5886,7 @@
         },
         {
           "default": null,
+          "description": "GO relation qualifiers as the paper supports them, for example\nenables, involved_in, located_in, colocalizes_with, or contributes_to.\nEach is looked up in the GO relation vocabulary for the term's aspect; one\nthat does not fit stays unresolved. Negation is its own field.",
           "name": "qualifiers",
           "required": false,
           "type": "any"

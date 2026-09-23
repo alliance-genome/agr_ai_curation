@@ -57,6 +57,7 @@ RGDGOPolicyViolation = Literal[
     "go_term_unresolved",
     "reference_unresolved",
     "with_from_unresolved",
+    "qualifier_unresolved",
 ]
 ResolutionState = Literal["resolved", "unresolved"]
 
@@ -94,6 +95,27 @@ class RGDGOWithFromEntry(DomainValidatorBaseModel):
     )
     validator_curator_message: StrictStr | None = Field(
         default=None, description="Curator message recorded with the entry's lookup result"
+    )
+
+
+class RGDGOQualifierEntry(DomainValidatorBaseModel):
+    """One qualifier as the candidate stores it: paper wording and, when matched, its GO relation."""
+
+    mention: StrictStr = Field(description="Qualifier as the paper supports it")
+    name: StrictStr | None = Field(
+        default=None, description="GO relation the builder matched; null while unresolved"
+    )
+    resolution_state: Literal["resolved", "unresolved"] | None = Field(
+        default=None, description="Whether the qualifier matched an allowed GO relation"
+    )
+    lookup_outcome: StrictStr | None = Field(
+        default=None, description="Lookup result recorded for the qualifier"
+    )
+    validator_explanation: StrictStr | None = Field(
+        default=None, description="Explanation recorded with the qualifier's lookup result"
+    )
+    validator_curator_message: StrictStr | None = Field(
+        default=None, description="Curator message recorded with the qualifier's lookup result"
     )
 
 
@@ -135,7 +157,7 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
     proposed_with_from: list[RGDGOWithFromEntry] = Field(
         description="With/From entries copied from the candidate"
     )
-    proposed_qualifiers: list[StrictStr] = Field(
+    proposed_qualifiers: list[RGDGOQualifierEntry] = Field(
         description="Qualifiers copied from the candidate"
     )
     proposed_annotation_extensions: list[StrictStr] = Field(
@@ -275,6 +297,11 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
             for entry in self.proposed_with_from
         ):
             violations.append("with_from_unresolved")
+        if any(
+            RGDGOQualifierEntry.model_validate(entry).resolution_state != "resolved"
+            for entry in self.proposed_qualifiers
+        ):
+            violations.append("qualifier_unresolved")
 
         return violations
 
@@ -411,11 +438,11 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
 
     def _canonical_copy(self, field_name: str) -> object:
         value = getattr(self, field_name)
-        if field_name == "proposed_with_from":
+        if field_name in ("proposed_with_from", "proposed_qualifiers"):
             # Entries compare as the stored candidate objects they were copied from.
             return [
                 entry.model_dump(mode="json", exclude_unset=True)
-                if isinstance(entry, RGDGOWithFromEntry)
+                if isinstance(entry, (RGDGOWithFromEntry, RGDGOQualifierEntry))
                 else entry
                 for entry in value
             ]
@@ -453,6 +480,7 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
 
 __all__ = [
     "EVIDENCE_POLICY",
+    "RGDGOQualifierEntry",
     "RGDGOWithFromEntry",
     "INSUFFICIENT_EVIDENCE_MESSAGE",
     "PRIMARY_EVIDENCE_LOCATIONS",

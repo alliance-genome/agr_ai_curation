@@ -88,23 +88,27 @@ def resolvable_objects(contract: GenericProfileContract) -> dict[str, tuple[str,
     return {path: tuple(keys) for path, keys in objects.items() if path not in shared}
 
 
+_IDENTIFIER_SLOTS = frozenset({"curie", "identifier", "id"})
 _IDENTIFIER_NAME = re.compile(r"(?:^|_)(?:id|curie|identifier)$")
 
 
 def resolvable_specs(contract: GenericProfileContract) -> dict[str, ResolvableSpec]:
     """Each resolvable value's display roles: its identifier key and its label key.
 
-    The identifier is the identity key whose name, or the validator output slot
-    writing it, names an identifier (``..._id``, ``curie``, ``identifier``);
-    the label is its first other identity key.
+    The identifier is the identity key written by an output slot named exactly
+    ``curie``, ``identifier`` or ``id``; failing that, the key whose name or
+    writing slot names an identifier (``..._id``). The label is the first
+    other identity key.
     """
     destinations, _ = _mapped_paths(contract)
     specs: dict[str, ResolvableSpec] = {}
     for path, identity in resolvable_objects(contract).items():
-        def names_identifier(key: str) -> bool:
-            names = [key, *destinations.get(f"{path}.{key}", [])]
-            return any(_IDENTIFIER_NAME.search(name) for name in names)
-        id_key = next((key for key in identity if names_identifier(key)), None)
+        def slots(key: str) -> list[str]:
+            return destinations.get(f"{path}.{key}", [])
+        id_key = next((key for key in identity if _IDENTIFIER_SLOTS.intersection(slots(key))), None)
+        if id_key is None:
+            id_key = next((key for key in identity
+                           if any(_IDENTIFIER_NAME.search(name) for name in [key, *slots(key)])), None)
         label_key = next((key for key in identity if key != id_key), None)
         specs[path] = ResolvableSpec(id_key=id_key, label_key=label_key)
     return specs
