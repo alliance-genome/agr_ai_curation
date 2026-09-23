@@ -84,6 +84,9 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       - field_path: attributes
         field_type: object
         display_name: Attributes
@@ -148,6 +151,9 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
   - object_type: generic_reagent_candidate
     display_name: Generic reagent candidate
     description: Evidence-backed stock, construct, RNAi, transgene, antibody, plasmid, or other reagent candidate.
@@ -225,3 +231,6 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.

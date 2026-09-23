@@ -428,6 +428,8 @@ def test_generic_classes_declare_optional_rationale_as_a_summary_field(object_ty
     field = next(field for field in definition.fields if field.field_path == "rationale")
     assert field.required is False
     assert field.display_name == "Rationale"
+    assert field.metadata["protected"] is True
+    assert field.metadata["curator_action_note"] == "Written by the extraction agent; not editable."
     workspace_display = definition.metadata["workspace_display"]
     # Generic review rows are built from summary_fields (absent values skipped,
     # ungrouped); workspace groups would replace that with always-present fields.
@@ -523,6 +525,8 @@ def test_generic_reagent_review_row_keeps_existing_fields_and_adds_rationale():
     assert new_item[-1]["field_key"] == "rationale"
     assert new_item[-1]["value"] == "The knockdown line used for the screen phenotype."
     assert new_item[-1]["group_key"] is None
+    # Curators read the rationale; only the extraction agent writes it.
+    assert new_item[-1]["read_only"] is True
 
 
 def test_generic_materializer_rejects_invalid_semantic_attributes():
