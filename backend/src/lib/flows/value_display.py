@@ -8,15 +8,18 @@ model definition or a field (``metadata.display``):
   fallbacks. ``state`` plus ``resolved_states`` name an explicit resolution
   leaf. A declared value whose own label and id are empty renders empty.
 - ``{compose: [<child path>, ...], separator: "; "}`` joins the display text of
-  child values (each child carries its own resolved spec).
+  child values (each child carries its own resolved spec). An entry may be a
+  mapping ``{path, display}``; one without a path reads the value itself with
+  its ``display`` (e.g. "label (id)" followed by other parts).
 
 Without a spec a generic reading applies: a term-like value holding only one
 of ``curie|id|identifier`` and one of ``name|label|display_name`` reads
 "label (id)"; any other value renders all its ``key: value`` pairs so nothing
 is dropped.
-Lists join with "; ", and lists of structured records with " | " so record
-boundaries stay visible. CSV, TSV and chat cells therefore never contain JSON
-or Python object text; JSON output keeps the raw values.
+Lists join with "; ", and lists of structured records (or of lists) with " | "
+so record boundaries stay visible; a list nested inside a record joins its
+items with ", ". CSV, TSV and chat cells therefore never contain JSON or
+Python object text; JSON output keeps the raw values.
 
 Unresolved markers are placed on the part of a value an open finding names:
 ``unresolved`` is True for the whole value or a set of finding paths relative
@@ -34,6 +37,7 @@ GENERIC_ID_KEYS = ("curie", "id", "identifier")
 GENERIC_LABEL_KEYS = ("name", "label", "display_name")
 LIST_SEPARATOR = "; "
 RECORD_SEPARATOR = " | "
+NESTED_SEPARATOR = ", "
 UNRESOLVED = "unresolved"
 
 PathToken = str | int
@@ -145,40 +149,72 @@ def _child_paths(paths: FindingPaths, child: Sequence[PathToken]) -> FindingPath
     )
 
 
-def _pairs_text(value: Mapping[str, Any], paths: FindingPaths) -> str:
+def _pairs_text(value: Mapping[str, Any], paths: FindingPaths, marked: bool) -> str:
     parts = []
     for key, item in value.items():
         if _is_empty(item):
             continue
         item_paths = frozenset(path[1:] for path in paths if path[0] == key)
-        text = display_text(item, unresolved=item_paths)
+        text = _render(item, None, item_paths, nested=True, marked=marked)
         if text:
             parts.append(f"{key}: {text}")
     return LIST_SEPARATOR.join(parts)
 
 
-def _mapping_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None, paths: FindingPaths) -> str:
+def _compose_text(
+    value: Mapping[str, Any], spec: Mapping[str, Any], keyed: FindingPaths, whole: bool, marked: bool,
+) -> str:
+    separator = str(spec.get("separator") or LIST_SEPARATOR)
+    entries = []
+    for entry in spec["compose"]:
+        path = str(entry.get("path") or "") if isinstance(entry, Mapping) else str(entry)
+        child_spec = entry.get("display") if isinstance(entry, Mapping) else None
+        tokens = (path_tokens(path) or (path,)) if path else None
+        named = frozenset(
+            finding for finding in keyed
+            if tokens is not None and relative_finding_path(finding, tokens) is not None
+        )
+        entries.append((path, tokens, child_spec, named))
+    # A part carries only the findings on its own sub-path; a part that reads
+    # the value itself carries the unnamed findings on the leaves it displays.
+    # Findings on undisplayed fields stay unplaced and mark the composite.
+    unnamed = keyed.difference(*(named for *_rest, named in entries))
+    parts = []
+    unplaced = keyed
+    for path, tokens, child_spec, named in entries:
+        if tokens is None:
+            leaves = [
+                path_tokens(leaf) or (leaf,)
+                for role in ("label", "id", "state")
+                if (leaf := str((child_spec or {}).get(role) or ""))
+            ]
+            named = frozenset(
+                finding for finding in unnamed
+                if any(relative_finding_path(finding, leaf) is not None for leaf in leaves)
+            )
+            text = _mapping_text(value, child_spec, named, marked)
+        else:
+            own = _child_paths(keyed, tokens)
+            text = _render(_child(value, path), child_spec, own, nested=True, marked=marked)
+        if text:
+            parts.append(text)
+            unplaced -= named
+    # A composite renders only its declared parts; nothing else substitutes.
+    # A finding on an undisplayed part still marks the composite.
+    text = separator.join(parts)
+    return f"{text} ({UNRESOLVED})" if marked and (whole or unplaced) and text else text
+
+
+def _mapping_text(
+    value: Mapping[str, Any], spec: Mapping[str, Any] | None, paths: FindingPaths, marked: bool,
+) -> str:
     # Findings that name a key place their marker on that part; any other
     # finding on this value (the value itself, or an index into a mapping)
     # marks the value as a whole.
     keyed = frozenset(path for path in paths if path and isinstance(path[0], str))
     whole = paths != keyed
     if spec and spec.get("compose"):
-        separator = str(spec.get("separator") or LIST_SEPARATOR)
-        parts = []
-        for entry in spec["compose"]:
-            path = entry["path"] if isinstance(entry, Mapping) else str(entry)
-            child_spec = entry.get("display") if isinstance(entry, Mapping) else None
-            tokens = path_tokens(path) or (str(path),)
-            # Each part carries only the findings on its own sub-path.
-            text = display_text(_child(value, path), child_spec, unresolved=_child_paths(keyed, tokens))
-            if text:
-                parts.append(text)
-                keyed -= {finding for finding in keyed if relative_finding_path(finding, tokens) is not None}
-        # A composite renders only its declared parts; nothing else substitutes.
-        # A finding on an undisplayed part still marks the composite.
-        text = separator.join(parts)
-        return f"{text} ({UNRESOLVED})" if (whole or keyed) and text else text
+        return _compose_text(value, spec, keyed, whole, marked)
     unresolved = bool(paths)
     if spec and (spec.get("label") or spec.get("id")):
         label = _first(value, [spec["label"]]) if spec.get("label") else ""
@@ -196,7 +232,7 @@ def _mapping_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None, path
             unresolved = True
         # A declared field renders only its own label and id: when both are
         # empty the cell is empty, never another field such as a mention.
-        return _labeled(label, identifier, unresolved) if label or identifier else ""
+        return _labeled(label, identifier, unresolved and marked) if label or identifier else ""
     # The generic "label (id)" reading only applies to term-like values whose
     # content is exactly one label and/or one identifier; anything more renders
     # every key so no undeclared content (e.g. candidate matches or a second
@@ -211,10 +247,10 @@ def _mapping_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None, path
         label = _first(value, GENERIC_LABEL_KEYS)
         identifier = _first(value, GENERIC_ID_KEYS)
         if label or identifier:
-            return _labeled(label, identifier, unresolved)
-    text = _pairs_text(value, keyed)
+            return _labeled(label, identifier, unresolved and marked)
+    text = _pairs_text(value, keyed, marked)
     unplaced = whole or any(path[0] not in present for path in keyed)
-    return f"{text} ({UNRESOLVED})" if unplaced and text else text
+    return f"{text} ({UNRESOLVED})" if marked and unplaced and text else text
 
 
 def display_text(
@@ -222,16 +258,28 @@ def display_text(
     spec: Mapping[str, Any] | None = None,
     *,
     unresolved: bool | Collection[tuple[PathToken, ...]] = False,
+    marked: bool = True,
+    nested: bool = False,
 ) -> str:
     """Readable text for one stored value; empty values give "".
 
     ``unresolved`` is True for the whole value, or the open finding paths
     relative to the value; each marker lands on the part a finding names.
+    ``marked=False`` gives the value's text without any unresolved marker
+    (for keys such as map_value lookups, or a template that marks itself).
+    ``nested=True`` reads a value that is one item of a list (a split column
+    or a list element), so a list value joins its items with ", " as it does
+    inside the whole cell.
     """
 
+    return _render(value, spec, _finding_paths(unresolved), nested=nested, marked=marked)
+
+
+def _render(
+    value: Any, spec: Mapping[str, Any] | None, paths: FindingPaths, *, nested: bool, marked: bool,
+) -> str:
     if _is_empty(value):
         return ""
-    paths = _finding_paths(unresolved)
     if isinstance(value, (list, tuple)):
         # An index names one element; a key, or an index past the end, applies
         # to every element so no finding is dropped.
@@ -245,17 +293,21 @@ def display_text(
             item_paths = spread | frozenset(
                 path[1:] for path in paths if path and path[0] == index
             )
-            text = display_text(item, spec, unresolved=item_paths)
+            text = _render(item, spec, item_paths, nested=True, marked=marked)
             if text:
                 parts.append(text)
-        separator = (
-            RECORD_SEPARATOR if any(isinstance(item, Mapping) for item in value) else LIST_SEPARATOR
-        )
+        if nested:
+            # Items of a list inside a record: " | " and "; " keep their meaning.
+            separator = NESTED_SEPARATOR
+        elif any(isinstance(item, (Mapping, list, tuple)) for item in value):
+            separator = RECORD_SEPARATOR
+        else:
+            separator = LIST_SEPARATOR
         return separator.join(parts)
     if isinstance(value, Mapping):
-        return _mapping_text(value, spec, paths)
+        return _mapping_text(value, spec, paths, marked)
     text = _scalar_text(value)
-    return f"{text} ({UNRESOLVED})" if paths and text else text
+    return f"{text} ({UNRESOLVED})" if marked and paths and text else text
 
 
 __all__ = [
@@ -265,5 +317,7 @@ __all__ = [
     "GENERIC_ID_KEYS",
     "GENERIC_LABEL_KEYS",
     "LIST_SEPARATOR",
+    "NESTED_SEPARATOR",
     "RECORD_SEPARATOR",
+    "UNRESOLVED",
 ]

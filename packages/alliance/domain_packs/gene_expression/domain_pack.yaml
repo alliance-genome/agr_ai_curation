@@ -240,9 +240,14 @@ model_definitions:
             source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
             class: ExperimentalCondition
     metadata:
+      # "label (class id)" then the chemical, so no condition part is hidden.
       display:
-        label: condition_summary
-        id: condition_class.curie
+        compose:
+          - display:
+              label: condition_summary
+              id: condition_class.curie
+          - condition_chemical
+        separator: " with "
   - model_id: ExpressionPatternPayload
     display_name: Expression pattern payload
     description: Embedded expression pattern context for one annotation.

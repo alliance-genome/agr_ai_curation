@@ -7,7 +7,7 @@ from datetime import datetime
 import json
 import math
 import re
-from typing import Any, Callable, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -31,7 +31,7 @@ from src.schemas.domain_validator import ValidatorOutputProjection
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
 from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
-from src.lib.flows.value_display import display_text, path_tokens, relative_finding_path
+from src.lib.flows.value_display import UNRESOLVED, display_text, path_tokens, relative_finding_path
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 
 ProfileResolver = Callable[[AgentExecutionReceipt], ResolvedGenericProfile | None]
@@ -406,6 +406,9 @@ class FlowOutputArtifact(BaseModel):
     rows_by_source: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     # Standard object columns from the source's declared layout, in order.
     default_object_refs: list[str] = Field(default_factory=list)
+    # Object types a default plan lists as rows (the pack's curatable units);
+    # empty lists every object. Supporting objects stay selectable on request.
+    default_object_types: list[str] = Field(default_factory=list)
     # Per object key ("object_id:<id>" / "pending_ref_id:<id>"): each declared
     # object_ref field path and the keys of the objects it references, in the
     # object's object_refs order, so a cell carries its referenced objects'
@@ -1444,8 +1447,13 @@ def _artifact_source_key(
 
 
 def _build_artifact_from_step(
-    step: Mapping[str, Any], *, profile_resolver: ProfileResolver | None = None,
+    step: Mapping[str, Any],
+    *,
+    profile_resolver: ProfileResolver | None = None,
+    packaged_sources: dict[tuple[str, str], Any] | None = None,
 ) -> FlowOutputArtifact | None:
+    """One step's artifact; ``packaged_sources`` shares pack catalogs across a bundle."""
+
     candidate = _step_attr(step, "validated_candidate")
     if candidate is None:
         candidate = _step_attr(step, "candidate")
@@ -1671,17 +1679,14 @@ def _build_artifact_from_step(
         warnings.append("No canonical curation object rows are available for this artifact.")
 
     from src.lib.flows.export_fields import (
-        packaged_default_layout,
-        packaged_display_specs,
-        packaged_export_fields,
+        packaged_export_source,
         packaged_field_value,
-        packaged_object_label_paths,
-        packaged_object_ref_fields,
         profile_export_fields,
         source_catalog,
     )
     display_specs: dict[str, dict[str, Any]] = {}
     default_object_refs: list[str] = []
+    default_object_types: list[str] = []
     object_ref_links: dict[str, dict[str, list[str]]] = {}
     # Object labels are the declared label only (Chris, Sep 22). The legacy
     # label stays on the rows until here so record matching is unchanged.
@@ -1698,20 +1703,24 @@ def _build_artifact_from_step(
         # A persisted envelope declares its pack independently of whether the
         # producer was a custom agent with an execution receipt.
         pack_entry = {"curation": {"domain_pack_id": domain_pack_id}} if domain_pack_id else None
-        export_fields = packaged_export_fields(agent_id, pack_entry)
-        display_specs = packaged_display_specs(agent_id, pack_entry)
-        default_object_refs = packaged_default_layout(
-            agent_id,
-            pack_entry,
-            sorted({str(item.get("object_type") or "") for item in object_items}),
+        source = packaged_export_source(
+            agent_id, pack_entry, cache=packaged_sources if packaged_sources is not None else {},
         )
-        ref_fields = packaged_object_ref_fields(agent_id, pack_entry)
-        for row, item in zip(rows_by_source["object"], object_items):
-            links = _object_ref_links(item, ref_fields.get(str(item.get("object_type") or ""), {}))
-            if links:
-                object_ref_links.update({key: links for key in _object_keys(row)})
+        export_fields = source.fields if source is not None else []
+        if source is not None:
+            display_specs = source.display_specs
+            default_object_refs = source.default_layout(
+                sorted({str(item.get("object_type") or "") for item in object_items}),
+            )
+            default_object_types = list(source.curatable_unit_types)
+            for row, item in zip(rows_by_source["object"], object_items):
+                links = _object_ref_links(
+                    item, source.object_ref_fields.get(str(item.get("object_type") or ""), {}),
+                )
+                if links:
+                    object_ref_links.update({key: links for key in _object_keys(row)})
         if domain_pack_id and domain_pack_id != "generic":
-            label_paths = packaged_object_label_paths(agent_id, pack_entry)
+            label_paths = source.object_label_paths if source is not None else {}
             declared_labels = [
                 _declared_path_label(item, label_paths.get(str(item.get("object_type") or "")))
                 for item in object_items
@@ -1774,6 +1783,7 @@ def _build_artifact_from_step(
         warnings=warnings,
         rows_by_source=rows_by_source,
         default_object_refs=default_object_refs,
+        default_object_types=default_object_types,
         object_ref_links=object_ref_links,
     )
 
@@ -1898,10 +1908,13 @@ def build_flow_output_artifact_bundle(
 ) -> FlowOutputArtifactBundle:
     """Build the canonical projection bundle from completed flow steps."""
 
+    packaged_sources: dict[tuple[str, str], Any] = {}
     artifacts = [
         artifact
         for step in completed_steps
-        if (artifact := _build_artifact_from_step(step, profile_resolver=profile_resolver)) is not None
+        if (artifact := _build_artifact_from_step(
+            step, profile_resolver=profile_resolver, packaged_sources=packaged_sources,
+        )) is not None
     ]
     return _build_artifact_bundle(
         flow_name=flow_name,
@@ -1966,10 +1979,13 @@ def build_extraction_result_artifact_bundle(
         _step_from_extraction_result(extraction_result, step_number=index)
         for index, extraction_result in enumerate(extraction_results, start=1)
     ]
+    packaged_sources: dict[tuple[str, str], Any] = {}
     artifacts = [
         artifact
         for step in completed_steps
-        if (artifact := _build_artifact_from_step(step, profile_resolver=profile_resolver)) is not None
+        if (artifact := _build_artifact_from_step(
+            step, profile_resolver=profile_resolver, packaged_sources=packaged_sources,
+        )) is not None
     ]
     return _build_artifact_bundle(
         artifacts=artifacts,
@@ -2015,7 +2031,42 @@ def default_projection_plan(
         row_source=selected_row_source,
         row_strategy=row_strategy,
         columns=columns,
+        filters=(
+            default_object_filters(bundle, bundle.rows_for_source("object"))
+            if selected_row_source == "object"
+            else []
+        ),
     )
+
+
+def default_object_filters(
+    bundle: FlowOutputArtifactBundle,
+    rows: Sequence[Mapping[str, Any]],
+) -> list[FlowOutputFilterSpec]:
+    """Default object rows are each source's curatable units.
+
+    Supporting objects (subjects, terms, validated references) have their own
+    rows but their open findings already mark the annotation cells that
+    reference them, so a default plan leaves them out with an explicit, visible
+    ``object.object_type`` filter; a plan without it lists them. A source whose
+    units are absent keeps all of its rows.
+    """
+
+    row_ids = {id(row) for row in rows}
+    kept: list[str] = []
+    hidden = False
+    for artifact in bundle.artifacts:
+        present = list(dict.fromkeys(
+            str(row.get("object.object_type") or "")
+            for row in artifact.rows_by_source.get("object") or []
+            if id(row) in row_ids
+        ))
+        units = [object_type for object_type in present if object_type in artifact.default_object_types]
+        hidden = hidden or (bool(units) and len(units) < len(present))
+        kept.extend(object_type for object_type in (units or present) if object_type not in kept)
+    if not hidden:
+        return []
+    return [FlowOutputFilterSpec(field_ref="object.object_type", op="in", values=kept)]
 
 
 def default_columns_for_row_source(
@@ -2281,11 +2332,25 @@ def _pair_join_value_groups(left: Any, right: Any) -> list[tuple[Any, Any]]:
 
 
 # Renders one stored value (field ref, value, list element index) as display text.
-ValueRenderer = Callable[[str, Any, "int | None"], str]
+# ``nested`` marks one item of a list (split column, list element), so a list
+# item joins its own items with ", " as it does inside the whole cell.
+class ValueRenderer(Protocol):
+    def __call__(self, field_ref: str, value: Any, index: int | None, *, nested: bool = False) -> str: ...
 
 
-def _plain_text(_field_ref: str, value: Any, _index: int | None = None) -> str:
+def _plain_text(_field_ref: str, value: Any, _index: int | None = None, *, nested: bool = False) -> str:
     return str(value)
+
+
+# Text of one stored value without unresolved markers: the key a map_value
+# lookup matches, and a format_elements template value when the template
+# writes its own marker.
+class ValueKey(Protocol):
+    def __call__(self, field_ref: str, value: Any, *, nested: bool = False) -> str: ...
+
+
+def _generic_value_key(_field_ref: str, value: Any, *, nested: bool = False) -> str:
+    return display_text(value, marked=False, nested=nested)
 
 
 def _pair_join_value(
@@ -2368,6 +2433,7 @@ def _format_elements_value(
     *,
     missing_value: str | None,
     render: ValueRenderer | None = None,
+    value_key: ValueKey = _generic_value_key,
 ) -> str | None:
     refs = list(transform.field_refs)
     selector_ref = transform.field_ref
@@ -2375,6 +2441,8 @@ def _format_elements_value(
     if selector_ref:
         values.append(row.get(selector_ref))
     rendered: list[str] = []
+    # Values taken from a list are list items; the rest broadcast whole.
+    from_list = [isinstance(value, list) for value in values[: len(refs)]]
     elements = _aligned_elements(values)
     for position, element in enumerate(elements):
         field_values = element[: len(refs)]
@@ -2386,6 +2454,13 @@ def _format_elements_value(
             selector_key = str(selector).lower() if isinstance(selector, bool) else str(selector)
             if not _is_empty(selector) and selector_key in transform.mapping:
                 template = transform.mapping[selector_key]
+        # A one-value template that writes its own unresolved marker (saved
+        # plans from the earlier "template selected by status" guidance) owns
+        # the marker; with several values each keeps the application's marker.
+        marks_itself = (
+            UNRESOLVED in str(template).lower()
+            and len(set(_ELEMENT_PLACEHOLDER.findall(str(template)))) == 1
+        )
 
         def substitute(match: re.Match[str]) -> str:
             slot = int(match.group(1)) - 1
@@ -2394,7 +2469,10 @@ def _format_elements_value(
                 return missing_value or ""
             if render is None:
                 return _string_value(value)
-            return render(refs[slot], value, position if len(elements) > 1 else None)
+            nested = from_list[slot]
+            if marks_itself:
+                return value_key(refs[slot], value, nested=nested)
+            return render(refs[slot], value, position if len(elements) > 1 else None, nested=nested)
 
         rendered.append(_ELEMENT_PLACEHOLDER.sub(substitute, str(template)))
     return transform.separator.join(rendered) if rendered else missing_value
@@ -3048,6 +3126,7 @@ def _transform_value(
     *,
     missing_value: str,
     render: ValueRenderer | None = None,
+    value_key: ValueKey = _generic_value_key,
 ) -> Any:
     text = render or _plain_text
     if transform.type == "literal":
@@ -3080,7 +3159,7 @@ def _transform_value(
         value = row.get(ref)
         if isinstance(value, list):
             items = [
-                text(ref, item, index)
+                text(ref, item, index, nested=True)
                 for index, item in enumerate(value)
                 if not _is_empty(item)
             ]
@@ -3093,20 +3172,26 @@ def _transform_value(
         branch = transform.when_true if _row_matches_filter(row, condition) else transform.when_false
         if branch is None:
             raise ValueError("conditional selected an undefined branch.")
-        return _transform_value(row, branch, missing_value=missing_value, render=render)
+        return _transform_value(
+            row, branch, missing_value=missing_value, render=render, value_key=value_key,
+        )
     if transform.type == "count":
         value = row.get(transform.field_ref or "")
         if isinstance(value, (list, tuple, set, dict)):
             return len(value)
         return 0 if _is_empty(value) else 1
     if transform.type == "map_value":
-        value = row.get(transform.field_ref or "")
-        key = str(value)
+        ref = transform.field_ref or ""
+        value = row.get(ref)
+        # Structured values match by their display text, never Python repr.
+        key = value_key(ref, value) if isinstance(value, (Mapping, list, tuple)) else str(value)
         if key in transform.mapping:
             return transform.mapping[key]
         return transform.default if transform.default is not None else missing_value
     if transform.type == "format_elements":
-        return _format_elements_value(row, transform, missing_value=missing_value, render=render)
+        return _format_elements_value(
+            row, transform, missing_value=missing_value, render=render, value_key=value_key,
+        )
     if transform.type == "boolean_label":
         value = row.get(transform.field_ref or "")
         if isinstance(value, bool):
@@ -3127,6 +3212,7 @@ def _project_row(
     missing_value: str | None,
     preserve_empty: bool = False,
     render: ValueRenderer | None = None,
+    value_key: ValueKey = _generic_value_key,
 ) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for column in columns:
@@ -3134,7 +3220,7 @@ def _project_row(
             value = None
         elif column.transform is not None:
             value = _transform_value(
-                row, column.transform, missing_value=missing_value, render=render,
+                row, column.transform, missing_value=missing_value, render=render, value_key=value_key,
             )
         else:
             value = row.get(column.field_ref or "")
@@ -3266,7 +3352,7 @@ def _display_renderer(
     specs: Mapping[str, Any],
     finding_paths: Sequence[tuple[Any, ...]],
 ) -> ValueRenderer:
-    def render(field_ref: str, value: Any, index: int | None) -> str:
+    def render(field_ref: str, value: Any, index: int | None, *, nested: bool = False) -> str:
         unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref))
         if index is not None:
             # One split_list item: the findings on that position, or on every position.
@@ -3275,7 +3361,7 @@ def _display_renderer(
                 for path in unresolved
                 if not path or not isinstance(path[0], int) or path[0] == index
             )
-        return display_text(value, specs.get(field_ref), unresolved=unresolved)
+        return display_text(value, specs.get(field_ref), unresolved=unresolved, nested=nested)
 
     return render
 
@@ -3357,11 +3443,11 @@ def apply_projection_plan(
     )
     row_refs = [ref_by_row_id.get(id(row), "") for row in limited_rows]
     display = render_display and plan.format != "json"
-    specs = (
-        {field.ref: field.display for field in bundle.field_catalog if field.row_source == plan.row_source}
-        if display
-        else {}
-    )
+    specs = {field.ref: field.display for field in bundle.field_catalog if field.row_source == plan.row_source}
+
+    def value_key(field_ref: str, value: Any, *, nested: bool = False) -> str:
+        return display_text(value, specs.get(field_ref), marked=False, nested=nested)
+
     open_paths = _open_finding_paths(bundle) if display and plan.row_source == "object" else {}
     # Split lists are sized by the longest list across all filtered rows.
     output_columns, split_items = (
@@ -3380,6 +3466,7 @@ def apply_projection_plan(
             missing_value=plan.missing_value,
             preserve_empty=preserve_empty,
             render=render,
+            value_key=value_key,
         )
         if not split_items:
             projected_rows.append(base)
@@ -3390,12 +3477,15 @@ def apply_projection_plan(
                 projected[column.key] = base[column.key]
                 continue
             source_column, position = split_items[column.key]
-            values = _split_items(row.get(source_column.field_ref or ""))
+            source_value = row.get(source_column.field_ref or "")
+            values = _split_items(source_value)
             item = values[position] if position < len(values) else None
             if source_column.source_node_id and row.get("artifact.node_id") != source_column.source_node_id:
                 item = None
             if not _is_empty(item) and render is not None:
-                item = render(source_column.field_ref or "", item, position)
+                item = render(
+                    source_column.field_ref or "", item, position, nested=isinstance(source_value, list),
+                )
             if item is None or (not preserve_empty and _is_empty(item)):
                 item = plan.missing_value
             projected[column.key] = _jsonable(item)
@@ -3684,6 +3774,7 @@ __all__ = [
     "bundle_row_refs",
     "build_flow_output_artifact_bundle",
     "default_columns_for_row_source",
+    "default_object_filters",
     "default_projection_plan",
     "finalize_output_projection",
     "inspect_output_artifacts",

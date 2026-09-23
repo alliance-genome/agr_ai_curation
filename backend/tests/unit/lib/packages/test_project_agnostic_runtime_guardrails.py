@@ -132,6 +132,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Standard display rendering is checked against the installed Alliance
     # gene-expression pack and production value shapes (ALL-1282).
     Path("backend/tests/unit/lib/flows/test_value_display.py"),
+    # Display edge cases render the installed Alliance packs' declarations (ALL-1290).
+    Path("backend/tests/unit/lib/flows/test_value_display_edge_cases.py"),
     # Every phenotype term exports through the installed Alliance phenotype
     # pack's phenotype_terms list field (ALL-1289).
     Path("backend/tests/unit/lib/flows/test_phenotype_terms_export.py"),
