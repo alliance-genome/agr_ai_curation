@@ -1026,6 +1026,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
         label_key: 'name',
         validated_keys: [],
         stored_identity: {},
+        container_protected: false,
       }],
     }
     symbolCell.resolutionDetails = symbolCell.resolution.values
@@ -1098,6 +1099,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     label_key: 'name',
     validated_keys: ['taxon'],
     stored_identity: { curie: null, name: null, taxon: null },
+    container_protected: false,
   }
 
   const OVERRIDDEN_SUBJECT: DomainEnvelopeReviewResolvedValue = {
@@ -1108,6 +1110,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     lookup_result: 'Curator override',
     curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
     stored_identity: { curie: 'GENE:2', name: 'abc-2', taxon: null },
+    container_protected: false,
   }
 
   it('sets a first override with the identifier and name in one replace_identity edit', async () => {
@@ -1225,6 +1228,43 @@ describe('InteractiveHorizontalCurationGrid', () => {
     }))
   })
 
+  it('overrides a saved profile attribute value with one whole-value replace', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const stored = { mention: 'abc-1', curie: null, name: null, resolution_state: 'unresolved', lookup_outcome: 'not_found' }
+    const profileValue: DomainEnvelopeReviewResolvedValue = {
+      ...UNRESOLVED_SUBJECT,
+      value_path: 'attributes.gene',
+      identity_field_paths: ['attributes.gene.curie', 'attributes.gene.name'],
+      validated_keys: [],
+      stored_identity: { curie: null, name: null },
+      stored_value: stored,
+    }
+    const model = overrideModel(candidate, profileValue, 'UNRESOLVED')
+    candidate.draft.fields[0].metadata = { source_field_path: 'attributes.gene.curie' }
+    model.columns[1].fieldPath = 'attributes.gene.curie'
+    model.rows[0].cells[0].fieldPath = 'attributes.gene.curie'
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(new Error("field_path 'attributes.gene' is protected"))
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', { name: /^Edit Subject ID: UNRESOLVED/ }))
+    const editor = screen.getByRole('dialog', { name: 'Set Subject ID by curator override' })
+    await user.type(within(editor).getByLabelText('Identifier'), 'GENE:2')
+    await user.type(within(editor).getByLabelText('Name'), 'abc-2')
+    await user.click(within(editor).getByRole('button', { name: 'Save override' }))
+
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith(expect.objectContaining({
+      field_path: 'attributes.gene',
+      operation: 'replace',
+      before: stored,
+      value: { ...stored, curie: 'GENE:2', name: 'abc-2' },
+    }))
+    // A protected value field's rejection shows inline like the others.
+    expect(await within(editor).findByTestId('horizontal-grid-override-error')).toHaveTextContent(
+      "field_path 'attributes.gene' is protected",
+    )
+  })
+
   it('overrides a value that is the object itself with its bare identity field', async () => {
     const user = userEvent.setup()
     const candidate = buildCandidate()
@@ -1235,6 +1275,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
       id_key: 'primary_external_id',
       label_key: 'gene_symbol',
       stored_identity: { primary_external_id: null, gene_symbol: null, taxon: null },
+      container_protected: false,
     }
     const model = overrideModel(candidate, rootValue, 'UNRESOLVED')
     candidate.draft.fields[0].label = 'Gene symbol'

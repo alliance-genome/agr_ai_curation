@@ -35,6 +35,7 @@ function resolvedValue(
     label_key: 'name',
     validated_keys: [],
     stored_identity: {},
+    container_protected: false,
     ...overrides,
   }
 }

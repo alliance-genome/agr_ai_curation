@@ -247,6 +247,10 @@ class DomainPackMetadataReviewRowMaterializer:
                 envelope_id=envelope.envelope_id,
                 envelope_revision=envelope_revision,
                 override_disagreements=override_disagreements.get(object_id, {}),
+                field_definitions={
+                    field.field_path: field
+                    for field in (object_definition.fields if object_definition is not None else [])
+                },
             )
             summary_fields = _summary_fields(
                 domain_object,
@@ -3116,6 +3120,7 @@ def _review_value_reader(
     envelope_id: str,
     envelope_revision: int,
     override_disagreements: Mapping[str, Sequence[str]],
+    field_definitions: Mapping[str, DomainPackFieldDefinition],
 ) -> _ReviewValueReader | None:
     if not specs:
         return None
@@ -3148,6 +3153,7 @@ def _review_value_reader(
                     override_disagreements=override_disagreements.get(
                         _format_field_path(value_path), (),
                     ),
+                    field_definitions=field_definitions,
                 ),
             )
     ordered = [
@@ -3174,9 +3180,11 @@ def _read_review_value(
     envelope_id: str,
     envelope_revision: int,
     override_disagreements: Sequence[str],
+    field_definitions: Mapping[str, DomainPackFieldDefinition],
 ) -> _ValueReading:
     """Read one value from the read-time payload; a broken stored record says so plainly."""
 
+    from src.lib.domain_envelopes.patches import _field_editability, is_generic_attribute_path
     from src.lib.flows.value_display import display_text
 
     path_text = _format_field_path(value_path)
@@ -3258,6 +3266,16 @@ def _read_review_value(
             label_key=spec.label_key,
             validated_keys=list(spec.validated_keys),
             stored_identity={key: copy.deepcopy(stored.get(key)) for key in spec.identity_keys},
+            # A saved profile's attribute values take a whole-value replace
+            # (not replace_identity), whose `before` is the value as stored.
+            stored_value=(
+                copy.deepcopy(dict(stored)) if path_text and is_generic_attribute_path(path_text) else None
+            ),
+            # Curator overrides follow the patch rules: a protected value field blocks them.
+            container_protected=(
+                path_text in field_definitions
+                and _field_editability(field_definitions[path_text])[1]["protected"]
+            ),
         ),
         value=value,
     )

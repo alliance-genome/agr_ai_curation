@@ -1054,6 +1054,17 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
             "replace_identity curator override"
         ),
     )
+    stored_value: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "For a saved profile's attribute value only: the value as stored, the `before` of "
+            "its whole-value replace override (profile values take no replace_identity)"
+        ),
+    )
+    container_protected: bool = Field(
+        default=False,
+        description="The value's own field is protected, which blocks a curator override",
+    )
 
     @model_validator(mode="after")
     def _check_vocabularies(self) -> "DomainEnvelopeReviewResolvedValue":

@@ -208,6 +208,7 @@ describe('HorizontalCurationGrid', () => {
           label_key: 'name',
           validated_keys: [],
           stored_identity: {},
+          container_protected: false,
         }],
       },
     }
@@ -250,6 +251,7 @@ describe('HorizontalCurationGrid', () => {
       label_key: 'name',
       validated_keys: [],
       stored_identity: {},
+      container_protected: false,
     }
     gridRow.cells[0] = {
       ...fieldCell('field:alpha', 'alpha', 'ONT:1', true, 'needs-review'),

@@ -47,7 +47,7 @@ def _field(path: str, field_type: DomainPackFieldType = DomainPackFieldType.STRI
     return DomainPackFieldDefinition(field_path=path, field_type=field_type, **kwargs)
 
 
-def _metadata() -> DomainPackMetadata:
+def _metadata(*, site_protected: bool = False) -> DomainPackMetadata:
     return DomainPackMetadata(
         pack_id="fixture.resolution",
         display_name="Resolution fixture",
@@ -70,7 +70,7 @@ def _metadata() -> DomainPackMetadata:
                     "object_role": "curatable_unit",
                     "workspace_display": {
                         "primary_label_field": "site.name",
-                        "summary_fields": ["site", "note"],
+                        "summary_fields": ["site", "note", "attributes.gene"],
                         "groups": [
                             {
                                 "id": "site",
@@ -91,7 +91,11 @@ def _metadata() -> DomainPackMetadata:
                     },
                 },
                 fields=[
-                    _field("site", DomainPackFieldType.OBJECT, metadata={"display": TERM_DISPLAY}),
+                    _field(
+                        "site",
+                        DomainPackFieldType.OBJECT,
+                        metadata={"display": TERM_DISPLAY, **({"protected": True} if site_protected else {})},
+                    ),
                     # A curator edits a value's identity (a validation override).
                     _field("site.curie", metadata={"editable": True}),
                     _field("site.name", metadata={"editable": True}),
@@ -108,6 +112,9 @@ def _metadata() -> DomainPackMetadata:
                         metadata={"display": TERM_DISPLAY},
                     ),
                     _field("note"),
+                    _field("attributes.gene", DomainPackFieldType.OBJECT, metadata={"display": TERM_DISPLAY}),
+                    _field("attributes.gene.curie", metadata={"editable": True}),
+                    _field("attributes.gene.name", metadata={"editable": True}),
                 ],
             ),
             DomainPackObjectDefinition(
@@ -142,6 +149,7 @@ def _row(
     payload: dict,
     *,
     object_type: str = "Observation",
+    site_protected: bool = False,
     metadata: dict | None = None,
     findings: list[ValidationFinding] | None = None,
 ):
@@ -160,7 +168,7 @@ def _row(
         ],
         validation_findings=findings or [],
     )
-    rows = DomainPackMetadataReviewRowMaterializer(_metadata()).materialize(
+    rows = DomainPackMetadataReviewRowMaterializer(_metadata(site_protected=site_protected)).materialize(
         envelope, envelope_revision=1,
     )
     assert len(rows) == 1
@@ -586,3 +594,24 @@ def test_a_values_own_leaves_are_read_only_for_curators():
         assert metadata["read_only"] is True
         assert metadata["editable"] is False
     assert _workspace_field(row, "site.curie").metadata["read_only"] is False
+
+
+def test_a_protected_value_field_is_flagged_as_blocking_overrides():
+    open_row = _row({"site": _overridden_site()})
+    protected_row = _row({"site": _overridden_site()}, site_protected=True)
+
+    [open_value] = _workspace_field(open_row, "site.curie").resolution.values
+    [protected_value] = _workspace_field(protected_row, "site.curie").resolution.values
+    assert open_value.container_protected is False
+    assert protected_value.container_protected is True
+
+
+def test_only_profile_attribute_values_carry_their_stored_value():
+    gene = unresolved_value("abc one", identity_keys=TERM_KEYS, outcome="not_found")
+    row = _row({"site": _overridden_site(), "attributes": {"gene": gene}})
+
+    [attribute_value] = _summary_field(row, "attributes.gene").resolution.values
+    [site_value] = _workspace_field(row, "site.curie").resolution.values
+    # A profile value takes a whole-value replace, whose `before` is the value as stored.
+    assert attribute_value.stored_value == gene
+    assert site_value.stored_value is None

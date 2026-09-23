@@ -157,8 +157,8 @@ export default function InteractiveHorizontalCurationGrid({
     }
   }, [activeCandidateId, setActiveCandidate])
 
-  // A curator override is one atomic replace_identity edit: the value's
-  // identifier and name together, or every identity key cleared to remove it.
+  // A curator override is one atomic edit of the value's identifier and name
+  // (horizontalGridOverridePatch), or every identity key cleared to remove it.
   // A rejection (e.g. a missing name) is shown in the editor, which stays open.
   const submitOverride = useCallback(async (
     target: OverrideTarget,
@@ -183,7 +183,7 @@ export default function InteractiveHorizontalCurationGrid({
         expected_revision: projectionRef.envelope_revision,
         object_id: projectionRef.object_id,
         field_path: patch.field_path,
-        operation: 'replace_identity',
+        operation: patch.operation,
         before: patch.before,
         value: patch.value,
       })

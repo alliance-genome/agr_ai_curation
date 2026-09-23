@@ -256,6 +256,7 @@ function resolvedValue(
     label_key: 'name',
     validated_keys: [],
     stored_identity: {},
+    container_protected: false,
     ...overrides,
   }
 }
@@ -1200,6 +1201,7 @@ describe('buildHorizontalGridModel', () => {
       label_key: 'symbol',
       validated_keys: [],
       stored_identity: {},
+      container_protected: false,
     })
     const fields = [
       draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-2' }),
@@ -1262,6 +1264,21 @@ describe('buildHorizontalGridModel', () => {
     })])
 
     expect(model.rows[0]!.cells.map((cell) => cell.overrideTarget)).toEqual([rootValue, rootValue])
+  })
+
+  it('offers no override on a value whose own field is protected', () => {
+    const protectedValue = resolvedValue({ container_protected: true })
+    const fields = [draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: null })]
+    const row = reviewRowWithFields('object-protected', [
+      { path: 'site.curie', resolution: { display_text: 'UNRESOLVED', values: [protectedValue] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: candidate({ id: 'candidate-protected', objectId: 'object-protected', order: 0, fields }),
+      row,
+    })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({ readOnly: false, overrideTarget: null })
   })
 
   it('shows each value\'s details once, on its first cell, and hides leaves that cell covers', () => {

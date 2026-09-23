@@ -156,6 +156,10 @@ export interface DomainEnvelopeReviewResolvedValue {
   validated_keys: string[]
   /** Each identity key's value as stored (null when absent): a replace_identity `before`. */
   stored_identity: Record<string, unknown>
+  /** A saved profile's attribute value only: the value as stored, for its whole-value replace. */
+  stored_value?: Record<string, unknown> | null
+  /** The value's own field is protected, which blocks a curator override. */
+  container_protected: boolean
 }
 
 export interface DomainEnvelopeReviewCuratorOverride {

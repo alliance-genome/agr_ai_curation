@@ -550,9 +550,10 @@ function overriddenValues(
 }
 
 // A curator overrides one value, the object itself included, from a cell
-// that is that value or one of its identity keys. Only the identity fields
-// decide: the cell must be editable, and so must every identity field the
-// candidate carries as a draft field (the backend checks the rest).
+// that is that value or one of its identity keys. The identity fields decide:
+// the cell must be editable, and so must every identity field the candidate
+// carries as a draft field (the backend checks the rest). A protected value
+// field blocks an override.
 function overrideTarget(
   fieldPath: string,
   resolution: DomainEnvelopeReviewFieldResolution | null,
@@ -566,6 +567,7 @@ function overrideTarget(
   if (
     !value
     || value.issue
+    || value.container_protected
     || !(value.id_key || value.label_key)
     || !(fieldPath === value.value_path || value.identity_field_paths.includes(fieldPath))
     || value.identity_field_paths.some((path) => fieldsByPath.get(path)?.read_only)
