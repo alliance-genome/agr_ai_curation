@@ -104,7 +104,7 @@ export interface HorizontalGridFieldCell {
   // Open warnings where a validator disagrees with the curator override.
   overrideDisagreements: string[]
   // The value a curator override from this cell sets (its identifier and name
-  // in one whole-value edit), or null when the cell cannot override one.
+  // in one atomic identity edit), or null when the cell cannot override one.
   overrideTarget: DomainEnvelopeReviewResolvedValue | null
   required: boolean | null
   readOnly: boolean | null
@@ -549,13 +549,15 @@ function overriddenValues(
   return resolution.values.filter((value) => value.curator_override)
 }
 
-// A curator overrides one value from a cell that is that value or one of its
-// identity keys. The edit patches the whole value at its own payload path, so a
-// value that is the object itself (an empty path) is not overridden here.
+// A curator overrides one value, the object itself included, from a cell
+// that is that value or one of its identity keys. Only the identity fields
+// decide: the cell must be editable, and so must every identity field the
+// candidate carries as a draft field (the backend checks the rest).
 function overrideTarget(
   fieldPath: string,
   resolution: DomainEnvelopeReviewFieldResolution | null,
   readOnly: boolean,
+  fieldsByPath: ReadonlyMap<string, CurationDraftField>,
 ): DomainEnvelopeReviewResolvedValue | null {
   if (readOnly || !resolution || resolution.leaf_key || resolution.values.length !== 1) {
     return null
@@ -563,10 +565,10 @@ function overrideTarget(
   const [value] = resolution.values
   if (
     !value
-    || !value.value_path
     || value.issue
     || !(value.id_key || value.label_key)
     || !(fieldPath === value.value_path || value.identity_field_paths.includes(fieldPath))
+    || value.identity_field_paths.some((path) => fieldsByPath.get(path)?.read_only)
   ) {
     return null
   }
@@ -708,7 +710,7 @@ function projectRow(
       resolutionDescribedBy: [],
       curatorOverride: overridden.length > 0,
       overrideDisagreements,
-      overrideTarget: field ? overrideTarget(fieldPath, resolution, cellReadOnly) : null,
+      overrideTarget: field ? overrideTarget(fieldPath, resolution, cellReadOnly, fieldsByPath) : null,
       required: field?.required ?? null,
       readOnly: field ? cellReadOnly : null,
       staleValidation: field?.stale_validation ?? null,

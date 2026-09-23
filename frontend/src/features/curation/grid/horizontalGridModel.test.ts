@@ -255,7 +255,7 @@ function resolvedValue(
     id_key: 'curie',
     label_key: 'name',
     validated_keys: [],
-    stored_value: {},
+    stored_identity: {},
     ...overrides,
   }
 }
@@ -1196,10 +1196,10 @@ describe('buildHorizontalGridModel', () => {
       curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
       override_disagreements: [message],
       identity_field_paths: ['symbol', 'identifier'],
-      id_key: 'curie',
-      label_key: 'name',
+      id_key: 'identifier',
+      label_key: 'symbol',
       validated_keys: [],
-      stored_value: {},
+      stored_identity: {},
     })
     const fields = [
       draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-2' }),
@@ -1230,11 +1230,38 @@ describe('buildHorizontalGridModel', () => {
       curatorOverride: true,
       overrideDisagreements: [message],
       extractorComparison: { outcome: 'overridden', value: 'abc-1' },
-      // The value is the object itself (an empty path): no whole-value edit here.
+      // An identity field of the value is read-only, so no override is offered.
       overrideTarget: null,
     })
-    // A read-only identity cell never offers an override.
     expect(model.rows[0]!.cells[1]).toMatchObject({ readOnly: true, overrideTarget: null })
+  })
+
+  it('offers an override on a value that is the object itself when its identity fields are editable', () => {
+    const rootValue = resolvedValue({
+      value_path: '',
+      display_text: 'UNRESOLVED',
+      resolution_state: 'unresolved',
+      lookup_outcome: 'not_found',
+      lookup_result: 'Not found',
+      identity_field_paths: ['identifier', 'symbol'],
+      id_key: 'identifier',
+      label_key: 'symbol',
+    })
+    const fields = [
+      draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: null }),
+      draftField({ fieldKey: 'identifier', label: 'Gene ID', order: 1, value: null }),
+    ]
+    const row = reviewRowWithFields('object-root', [
+      { path: 'symbol', resolution: { display_text: 'UNRESOLVED', values: [rootValue] } },
+      { path: 'identifier', resolution: { display_text: 'UNRESOLVED', values: [rootValue] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: candidate({ id: 'candidate-root', objectId: 'object-root', order: 0, fields }),
+      row,
+    })])
+
+    expect(model.rows[0]!.cells.map((cell) => cell.overrideTarget)).toEqual([rootValue, rootValue])
   })
 
   it('shows each value\'s details once, on its first cell, and hides leaves that cell covers', () => {

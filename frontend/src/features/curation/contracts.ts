@@ -154,8 +154,8 @@ export interface DomainEnvelopeReviewResolvedValue {
   label_key: string | null
   /** Further identity keys only a validator fills (e.g. taxon). */
   validated_keys: string[]
-  /** The value exactly as stored: the `before` of a whole-value override patch. */
-  stored_value: Record<string, unknown>
+  /** Each identity key's value as stored (null when absent): a replace_identity `before`. */
+  stored_identity: Record<string, unknown>
 }
 
 export interface DomainEnvelopeReviewCuratorOverride {

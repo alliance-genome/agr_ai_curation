@@ -18,8 +18,8 @@ export function horizontalGridOverrideIdentity(
   value: DomainEnvelopeReviewResolvedValue,
 ): HorizontalGridOverrideIdentity {
   return {
-    identifier: value.id_key ? text(value.stored_value[value.id_key]) : '',
-    name: value.label_key ? text(value.stored_value[value.label_key]) : '',
+    identifier: value.id_key ? text(value.stored_identity[value.id_key]) : '',
+    name: value.label_key ? text(value.stored_identity[value.label_key]) : '',
   }
 }
 
@@ -33,31 +33,56 @@ export function horizontalGridOverrideProblem(
   return missing ? HORIZONTAL_GRID_OVERRIDE_INCOMPLETE_MESSAGE : null
 }
 
-/**
- * The whole value with the curator's identifier and name: one edit, so a first
- * override carries both. Every other key (paper wording, validation state,
- * validator words, overruled and proposed keys) passes through unchanged.
- */
-export function horizontalGridOverridePatchValue(
+export interface HorizontalGridOverridePatch {
+  // One identity field of the value: the bare key for the object itself.
+  field_path: string
+  value: Record<string, unknown>
+  before: Record<string, unknown>
+}
+
+function identityField(value: DomainEnvelopeReviewResolvedValue, key: string): string {
+  return value.value_path ? `${value.value_path}.${key}` : key
+}
+
+function identityPatch(
   value: DomainEnvelopeReviewResolvedValue,
-  identity: HorizontalGridOverrideIdentity,
-): Record<string, unknown> {
+  identity: Record<string, unknown>,
+): HorizontalGridOverridePatch {
+  const firstKey = value.id_key ?? value.label_key
+  if (!firstKey) {
+    throw new Error(`Resolvable value '${value.value_path}' declares no identifier or name key`)
+  }
   return {
-    ...value.stored_value,
-    ...(value.id_key ? { [value.id_key]: identity.identifier.trim() } : {}),
-    ...(value.label_key ? { [value.label_key]: identity.name.trim() } : {}),
+    field_path: identityField(value, firstKey),
+    value: identity,
+    // The current value of each key the patch names (null when absent).
+    before: Object.fromEntries(
+      Object.keys(identity).map((key) => [key, value.stored_identity[key] ?? null]),
+    ),
   }
 }
 
-/** The whole value with every identity key cleared, which withdraws a curator override. */
-export function horizontalGridRemoveOverridePatchValue(
+/**
+ * A curator override as one atomic ``replace_identity`` edit: the value's
+ * identifier and name together. Nothing but identity keys is sent, so the
+ * paper wording, validation state and proposals stay as they are.
+ */
+export function horizontalGridOverridePatch(
   value: DomainEnvelopeReviewResolvedValue,
-): Record<string, unknown> {
-  const cleared: Record<string, unknown> = { ...value.stored_value }
-  for (const key of [value.id_key, value.label_key, ...value.validated_keys]) {
-    if (key) {
-      cleared[key] = null
-    }
-  }
-  return cleared
+  identity: HorizontalGridOverrideIdentity,
+): HorizontalGridOverridePatch {
+  return identityPatch(value, {
+    ...(value.id_key ? { [value.id_key]: identity.identifier.trim() } : {}),
+    ...(value.label_key ? { [value.label_key]: identity.name.trim() } : {}),
+  })
+}
+
+/** Remove an override: the same edit with every identity key (validated keys too) cleared. */
+export function horizontalGridRemoveOverridePatch(
+  value: DomainEnvelopeReviewResolvedValue,
+): HorizontalGridOverridePatch {
+  const keys = [value.id_key, value.label_key, ...value.validated_keys].filter(
+    (key): key is string => Boolean(key),
+  )
+  return identityPatch(value, Object.fromEntries(keys.map((key) => [key, null])))
 }

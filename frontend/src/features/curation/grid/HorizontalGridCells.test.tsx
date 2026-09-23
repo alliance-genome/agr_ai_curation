@@ -34,7 +34,7 @@ function resolvedValue(
     id_key: 'curie',
     label_key: 'name',
     validated_keys: [],
-    stored_value: {},
+    stored_identity: {},
     ...overrides,
   }
 }

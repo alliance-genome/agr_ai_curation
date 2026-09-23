@@ -42,8 +42,9 @@ import HorizontalGridValidationPreviewRowActions from './HorizontalGridValidatio
 import { HORIZONTAL_GRID_UNRESOLVED_TEXT } from './horizontalGridFormatting'
 import type { HorizontalGridModel } from './horizontalGridModel'
 import {
-  horizontalGridOverridePatchValue,
-  horizontalGridRemoveOverridePatchValue,
+  horizontalGridOverridePatch,
+  horizontalGridRemoveOverridePatch,
+  type HorizontalGridOverridePatch,
 } from './horizontalGridOverride'
 import {
   applyHorizontalGridValidationPreview,
@@ -156,12 +157,12 @@ export default function InteractiveHorizontalCurationGrid({
     }
   }, [activeCandidateId, setActiveCandidate])
 
-  // A curator override is one whole-value edit at the value's own path: its
+  // A curator override is one atomic replace_identity edit: the value's
   // identifier and name together, or every identity key cleared to remove it.
   // A rejection (e.g. a missing name) is shown in the editor, which stays open.
   const submitOverride = useCallback(async (
     target: OverrideTarget,
-    nextValue: Record<string, unknown>,
+    patch: HorizontalGridOverridePatch,
   ) => {
     const candidate = candidateForRow(candidates, target.candidateId)
     const projectionRef = candidate.projection_ref
@@ -181,10 +182,10 @@ export default function InteractiveHorizontalCurationGrid({
         envelope_id: projectionRef.envelope_id,
         expected_revision: projectionRef.envelope_revision,
         object_id: projectionRef.object_id,
-        field_path: target.value.value_path,
-        operation: 'replace',
-        before: target.value.stored_value,
-        value: nextValue,
+        field_path: patch.field_path,
+        operation: 'replace_identity',
+        before: patch.before,
+        value: patch.value,
       })
       setWorkspace((current) => mergeEnvelopeFieldPatchIntoWorkspace(current, response))
       setOverrideTarget(null)
@@ -313,7 +314,7 @@ export default function InteractiveHorizontalCurationGrid({
           // returns the value to unresolved.
           void submitOverride(
             { candidateId: candidate.candidate_id, fieldLabel: field?.label ?? args.column.label, value },
-            horizontalGridRemoveOverridePatchValue(value),
+            horizontalGridRemoveOverridePatch(value),
           )
         }}
         onSelect={() => selectCandidate(candidate.candidate_id)}
@@ -483,12 +484,12 @@ export default function InteractiveHorizontalCurationGrid({
         }}
         onRemove={() => {
           if (overrideTarget) {
-            void submitOverride(overrideTarget, horizontalGridRemoveOverridePatchValue(overrideTarget.value))
+            void submitOverride(overrideTarget, horizontalGridRemoveOverridePatch(overrideTarget.value))
           }
         }}
         onSave={(identity) => {
           if (overrideTarget) {
-            void submitOverride(overrideTarget, horizontalGridOverridePatchValue(overrideTarget.value, identity))
+            void submitOverride(overrideTarget, horizontalGridOverridePatch(overrideTarget.value, identity))
           }
         }}
         value={overrideTarget?.value ?? null}

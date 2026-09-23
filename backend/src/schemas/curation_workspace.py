@@ -1047,11 +1047,11 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
         default_factory=list,
         description="Further identity keys only a validator fills (e.g. taxon)",
     )
-    stored_value: dict[str, Any] = Field(
+    stored_identity: dict[str, Any] = Field(
         default_factory=dict,
         description=(
-            "The value exactly as stored: the `before` of a whole-value curator override patch, "
-            "whose other keys pass through unchanged"
+            "Each identity key's value as stored (null when absent): the `before` of a "
+            "replace_identity curator override"
         ),
     )
 

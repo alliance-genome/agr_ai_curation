@@ -207,7 +207,7 @@ describe('HorizontalCurationGrid', () => {
           id_key: 'curie',
           label_key: 'name',
           validated_keys: [],
-          stored_value: {},
+          stored_identity: {},
         }],
       },
     }
@@ -249,7 +249,7 @@ describe('HorizontalCurationGrid', () => {
       id_key: 'curie',
       label_key: 'name',
       validated_keys: [],
-      stored_value: {},
+      stored_identity: {},
     }
     gridRow.cells[0] = {
       ...fieldCell('field:alpha', 'alpha', 'ONT:1', true, 'needs-review'),

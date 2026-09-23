@@ -84,6 +84,8 @@ export type CurationCandidateAction = (typeof CURATION_CANDIDATE_ACTIONS)[number
 
 export const CURATION_ENVELOPE_FIELD_PATCH_OPERATIONS = [
   'replace',
+  // One atomic curator override of a resolvable value's identity keys (ALL-1283).
+  'replace_identity',
 ] as const
 
 export type CurationEnvelopeFieldPatchOperation =
