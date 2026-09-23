@@ -73,6 +73,7 @@ from src.lib.domain_packs.resolvable_values import (
     holds_resolution,
     mark_resolved,
     mark_unresolved,
+    unresolved_header_text,
 )
 from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.lib.openai_agents.config import (
@@ -225,12 +226,10 @@ class DomainPackMetadataReviewRowMaterializer:
             )
             display_label = _display_label(
                 domain_object,
-                summary_fields=summary_fields,
                 display_config=display_config,
             )
             secondary_label = _secondary_label(
                 domain_object,
-                summary_fields=summary_fields,
                 display_config=display_config,
             )
 
@@ -1725,8 +1724,6 @@ def _lookup_attempt_details(
                 "lookup_status": lookup_status,
                 "candidate_count": payload["result_count"],
                 **({"coverage": payload["coverage"]} if payload.get("coverage") is not None else {}),
-                "resolved_id": _resolved_id(item.result),
-                "resolved_label": _resolved_label(item.result),
                 "explanation": payload.get("message") or item.result.explanation,
                 "provider": payload.get("provider"),
                 "method": payload.get("method"),
@@ -1853,25 +1850,6 @@ def _compact_validation_detail_value(value: Any) -> Any:
             )
         return compact_list
     return value
-
-
-def _resolved_id(result: DomainValidatorResultBase) -> str | None:
-    for value in result.resolved_values.values():
-        if isinstance(value, str) and value.strip():
-            return value
-    for resolved_object in result.resolved_objects:
-        value = resolved_object.get("canonical_id")
-        if isinstance(value, str) and value.strip():
-            return value
-    return None
-
-
-def _resolved_label(result: DomainValidatorResultBase) -> str | None:
-    for key in ("label", "symbol", "name"):
-        value = result.resolved_values.get(key)
-        if isinstance(value, str) and value.strip():
-            return value
-    return None
 
 
 def _match_object_ref(match: ValidatorBindingMatch) -> ObjectRef | None:
@@ -2479,73 +2457,53 @@ def _unavailable_capabilities_metadata(
 def _display_label(
     domain_object: CuratableObjectEnvelope,
     *,
-    summary_fields: Sequence[DomainEnvelopeReviewRowSummaryField],
     display_config: Mapping[str, Any],
 ) -> str:
-    for configured_field in _primary_label_field_candidates(display_config):
-        configured_value = _payload_value(domain_object.payload, configured_field)
-        if configured_value is not _MISSING:
-            normalized = _display_value(configured_value)
-            if normalized is not None:
-                return normalized
+    """The row's label: the pack's single primary_label_field, else the object id.
 
-    for field in summary_fields:
-        normalized = _display_value(field.value)
-        if normalized is not None:
-            return normalized
-    return stable_object_id(domain_object)
-
-
-def _primary_label_field_candidates(
-    display_config: Mapping[str, Any],
-) -> list[str]:
-    """Return ordered primary-label payload paths declared by a pack's workspace_display.
-
-    Packs may declare a single ``primary_label_field`` or an ordered
-    ``primary_label_fields`` fallback chain. The chain lets a pack name the best
-    label field plus deterministic fallbacks (e.g. an allele label, then the
-    associated gene symbol) so a curatable unit never falls back to its opaque
-    pending id when a real label is present on the payload. Both keys are generic
-    workspace_display metadata, so this stays domain-agnostic.
+    No other field fills an empty label. A label that names an unresolved
+    value reads as its paper wording, labelled as such (ALL-1283).
     """
 
-    candidates: list[str] = []
-    configured_fields = display_config.get("primary_label_fields")
-    if isinstance(configured_fields, Sequence) and not isinstance(
-        configured_fields, (str, bytes, bytearray)
-    ):
-        for raw_field in configured_fields:
-            if isinstance(raw_field, str) and raw_field.strip():
-                candidates.append(raw_field.strip())
+    if "primary_label_fields" in display_config:
+        raise DomainEnvelopeMaterializationError(
+            "workspace_display.primary_label_fields is a label fallback chain; "
+            "declare a single primary_label_field"
+        )
     configured_field = display_config.get("primary_label_field")
     if isinstance(configured_field, str) and configured_field.strip():
-        candidates.append(configured_field.strip())
-
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for candidate in candidates:
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        ordered.append(candidate)
-    return ordered
+        label = _declared_label_text(domain_object, configured_field.strip())
+        if label is not None:
+            return label
+    return stable_object_id(domain_object)
 
 
 def _secondary_label(
     domain_object: CuratableObjectEnvelope,
     *,
-    summary_fields: Sequence[DomainEnvelopeReviewRowSummaryField],
     display_config: Mapping[str, Any],
 ) -> str | None:
     configured_field = display_config.get("secondary_label_field")
-    if isinstance(configured_field, str):
-        configured_value = _payload_value(domain_object.payload, configured_field)
-        if configured_value is not _MISSING:
-            return _display_value(configured_value)
+    if isinstance(configured_field, str) and configured_field.strip():
+        return _declared_label_text(domain_object, configured_field.strip())
+    return None
 
-    if len(summary_fields) < 2:
+
+def _declared_label_text(
+    domain_object: CuratableObjectEnvelope,
+    field_path: str,
+) -> str | None:
+    paper_wording = unresolved_header_text(
+        domain_object.payload,
+        field_path,
+        object_metadata=domain_object.metadata,
+    )
+    if paper_wording is not None:
+        return paper_wording
+    configured_value = _payload_value(domain_object.payload, field_path)
+    if configured_value is _MISSING:
         return None
-    return _display_value(summary_fields[1].value)
+    return _display_value(configured_value)
 
 
 def _projection_type(display_config: Mapping[str, Any]) -> str:

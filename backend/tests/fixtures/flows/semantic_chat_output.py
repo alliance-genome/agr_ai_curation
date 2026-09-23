@@ -42,7 +42,7 @@ CURATOR_REQUEST = (
     "unresolved validation."
 )
 UNRESOLVED_CAVEAT = (
-    "Values marked [unresolved proposal] are paper-grounded proposals that "
+    "Values shown as UNRESOLVED are paper-grounded proposals that "
     "validation could not resolve to an ontology term; review them before submission."
 )
 
@@ -115,10 +115,12 @@ _STATEMENTS: list[dict[str, Any]] = [
 
 
 def _render_values(values: list[tuple[str, str | None, str]]) -> str:
+    # ALL-1283: the application reads a resolved value "label (ID)" and an
+    # unresolved one UNRESOLVED; the paper wording is never in the cell.
     if not values:
         return EM_DASH
     return "; ".join(
-        f"{label} [unresolved proposal]" if status == "unresolved_proposal" else f"{label} ({curie})"
+        "UNRESOLVED" if status == "unresolved_proposal" else f"{label} ({curie})"
         for label, curie, status in values
     )
 
@@ -139,17 +141,7 @@ EXCLUDED_REAGENT_VALUES = [statement["reagent"] for statement in _STATEMENTS]
 
 
 def _element_transform(prefix: str) -> dict[str, Any]:
-    return {
-        "type": "format_elements",
-        "field_refs": [
-            f"object.attribute.{prefix}_labels",
-            f"object.attribute.{prefix}_ids",
-        ],
-        "field_ref": f"object.attribute.{prefix}_status",
-        "mapping": {"unresolved_proposal": "{1} [unresolved proposal]"},
-        "default": "{1} ({2})",
-        "separator": "; ",
-    }
+    return {"type": "join_list", "field_ref": f"object.attribute.{prefix}_terms", "separator": "; "}
 
 
 SEMANTIC_CHAT_PLAN: dict[str, Any] = {
@@ -201,10 +193,16 @@ def _attributes(statement: dict[str, Any]) -> dict[str, Any]:
         ("life_stage", "stages"),
         ("cellular_component", "components"),
     ):
-        values = statement[key]
-        attributes[f"{prefix}_labels"] = [label for label, _curie, _status in values]
-        attributes[f"{prefix}_ids"] = [curie for _label, curie, _status in values]
-        attributes[f"{prefix}_status"] = [status for _label, _curie, status in values]
+        # Each term is a resolvable value (ALL-1283): the paper wording plus the
+        # validated identity and its state.
+        attributes[f"{prefix}_terms"] = [
+            {"mention": label, "name": label, "curie": curie, "resolution_state": "resolved",
+             "resolution_reason": None}
+            if status == "resolved"
+            else {"mention": label, "name": None, "curie": None, "resolution_state": "unresolved",
+                  "resolution_reason": "not_found"}
+            for label, curie, status in statement[key]
+        ]
     return attributes
 
 

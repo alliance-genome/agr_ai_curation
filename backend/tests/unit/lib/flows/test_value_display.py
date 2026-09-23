@@ -634,21 +634,29 @@ def test_packaged_object_label_never_falls_back_to_mention(monkeypatch):
     monkeypatch.setattr(export_fields, "_packaged_domain_pack", lambda *_args, **_kwargs: declared)
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_gene_mention_step([
-            {"gene_symbol": "unc-54", "primary_external_id": "WB:WBGene00006789", "mention": "UNC-54 myosin"},
-            {"gene_symbol": "", "mention": "PPIT-2", "symbol": "ppit-2", "name": "PPIT"},
+            {"gene_symbol": "unc-54", "primary_external_id": "WB:WBGene00006789", "mention": "UNC-54 myosin",
+             "resolution_state": "resolved", "resolution_reason": None},
+            {"gene_symbol": None, "primary_external_id": None, "mention": "PPIT-2", "symbol": "ppit-2",
+             "name": "PPIT", "resolution_state": "unresolved", "resolution_reason": "not_found"},
+            # Stored before ALL-1283 and not covered by a validator event.
+            {"gene_symbol": "egl-1", "primary_external_id": "WB:WBGene00001170", "mention": "EGL-1"},
         ])],
         flow_name="Genes", output_format="csv",
     )
     rows = bundle.rows_for_source("object")
-    assert [row["object.label"] for row in rows] == ["unc-54", None]
+    # The label never takes another field; an unresolved item's label is its
+    # paper wording, labelled as such (ALL-1283).
+    assert [row["object.label"] for row in rows] == [
+        "unc-54", "PPIT-2 (paper wording)", "EGL-1 (legacy, unverified)"]
     plan = FlowOutputProjectionPlan.model_validate({
         "format": "csv", "row_source": "object", "missing_value": "—",
         "columns": [{"key": "label", "header": "Label", "field_ref": "object.label"}],
     })
     result = finalize_output_projection(bundle, plan)
-    assert [row["label"] for row in result.rows] == ["unc-54", "—"]
+    assert [row["label"] for row in result.rows] == [
+        "unc-54", "PPIT-2 (paper wording)", "EGL-1 (legacy, unverified)"]
     json_result = finalize_output_projection(bundle, plan.model_copy(update={"format": "json"}))
-    assert json_result.rows[1]["label"] == "—" or json_result.rows[1]["label"] is None
+    assert json_result.rows[1]["label"] == "PPIT-2 (paper wording)"
 
 
 def test_custom_profile_object_label_is_its_payload_label():

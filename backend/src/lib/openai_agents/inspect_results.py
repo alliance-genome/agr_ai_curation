@@ -25,6 +25,15 @@ from src.lib.observability.runtime import report_runtime_exception
 from src.lib.chat_state import document_state
 from src.lib.context import get_current_session_id, get_current_user_id
 from src.lib.curation_workspace.extraction_results import list_extraction_results
+from src.lib.domain_packs.resolvable_values import (
+    REASON_LEGACY_UNVERIFIED,
+    RESOLUTION_REASON_KEY,
+    RESOLUTION_STATE_KEY,
+    UNRESOLVED,
+    has_resolution_state,
+    holds_resolution,
+    unresolved_header_text,
+)
 from src.lib.domain_packs.supervisor_manifest import (
     SupervisorManifestPolicy,
     supervisor_manifest_policy_for_object,
@@ -971,9 +980,33 @@ def _descriptor(value: Any, *, read: Mapping[str, Any]) -> dict[str, Any]:
     return descriptor
 
 
-def _value_view(value: Any, *, read: Mapping[str, Any]) -> Any:
-    """Inline a value up to the per-field allowance; otherwise describe it."""
+def _with_resolution_states(value: Any) -> Any:
+    """Every resolvable value carries its state, so a mention never reads as the item.
 
+    A value stored before ALL-1283 (no contract state) is marked unresolved
+    with reason legacy_unverified; nothing here can verify it.
+    """
+
+    if isinstance(value, list):
+        return [_with_resolution_states(item) for item in value]
+    if not isinstance(value, Mapping):
+        return value
+    annotated = {key: _with_resolution_states(item) for key, item in value.items()}
+    if holds_resolution(value) and not has_resolution_state(value):
+        annotated[RESOLUTION_STATE_KEY] = UNRESOLVED
+        annotated[RESOLUTION_REASON_KEY] = REASON_LEGACY_UNVERIFIED
+    return annotated
+
+
+def _value_view(value: Any, *, read: Mapping[str, Any], payload_value: bool = False) -> Any:
+    """Inline a value up to the per-field allowance; otherwise describe it.
+
+    ``payload_value`` marks a curation object's payload value, whose
+    resolvable values are shown with their state.
+    """
+
+    if payload_value:
+        value = _with_resolution_states(value)
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
@@ -1408,18 +1441,22 @@ def _object_row(
         "object_type": obj.object_type,
         "status": obj.status.value,
     }
-    for field in policy.primary_label_fields:
+    # One declared field each; an unresolved value reads as its paper wording (ALL-1283).
+    for key, field in (
+        ("display_label", policy.primary_label_field),
+        ("secondary_label", policy.secondary_label_field),
+    ):
+        if field is None:
+            continue
+        paper_wording = unresolved_header_text(obj.payload, field.path, object_metadata=obj.metadata)
+        if paper_wording is not None:
+            row[key] = paper_wording
+            continue
         value = _payload_path_value(obj.payload, field.path)
         if value not in (None, ""):
-            row["display_label"] = _value_view(value, read=read(field.path))
-            break
-    if policy.secondary_label_field is not None:
-        path = policy.secondary_label_field.path
-        value = _payload_path_value(obj.payload, path)
-        if value not in (None, ""):
-            row["secondary_label"] = _value_view(value, read=read(path))
+            row[key] = _value_view(value, read=read(field.path), payload_value=True)
     row["fields"] = {
-        path: _value_view(value, read=read(path))
+        path: _value_view(value, read=read(path), payload_value=True)
         for path in selected
         if path in policy.field_paths
         and (value := _payload_path_value(obj.payload, path)) is not None
@@ -1473,7 +1510,7 @@ def _objects_response(
         labels = {
             field.path: field.label
             for field in (
-                *policy.primary_label_fields,
+                *((policy.primary_label_field,) if policy.primary_label_field else ()),
                 *((policy.secondary_label_field,) if policy.secondary_label_field else ()),
                 *policy.summary_fields,
             )
@@ -1547,7 +1584,7 @@ def _object_response(result: _Result, *, object_ref: str | None) -> dict[str, An
     policy = _policies(metadata, [obj.object_type])[obj.object_type]
     findings = _object_findings(obj, _findings_by_object(result.envelope))
     labels = {field.path: field.label for field in (
-        *policy.primary_label_fields,
+        *((policy.primary_label_field,) if policy.primary_label_field else ()),
         *((policy.secondary_label_field,) if policy.secondary_label_field else ()),
         *policy.summary_fields,
     )}
@@ -1556,7 +1593,7 @@ def _object_response(result: _Result, *, object_ref: str | None) -> dict[str, An
         return result.call("field", object_ref=object_ref, field_path=path)
 
     values = {
-        path: _value_view(value, read=read(path))
+        path: _value_view(value, read=read(path), payload_value=True)
         for path in policy.field_paths
         if (value := _payload_path_value(obj.payload, path)) is not None
     }
@@ -1730,6 +1767,14 @@ def _details_response(
             expected_sha=expected_sha,
             cursor=cursor,
             message="Saved detail value is ready.",
+        )
+    if holds_resolution(value):
+        # A resolvable value states whether it is resolved, so its mention is
+        # never read as the item (ALL-1283).
+        state = _with_resolution_states(value)
+        head.update(
+            resolution_state=state[RESOLUTION_STATE_KEY],
+            resolution_reason=state[RESOLUTION_REASON_KEY],
         )
     children = list(value.items()) if isinstance(value, Mapping) else list(enumerate(value))
 

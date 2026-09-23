@@ -115,7 +115,7 @@ def test_generic_display_keeps_both_identifiers():
     )
 
 
-# --- Saved plans that template the marker by status ----------------------------------------
+# --- A template is never chosen by another field's value (ALL-1283) ------------------------
 
 TERMS_REF = "object.pack.PhenotypeAnnotation.phenotype_terms"
 STATE_REF = "object.pack.PhenotypeAnnotation.phenotype_terms.resolution_state"
@@ -132,43 +132,26 @@ def _status_template_bundle(findings=()):
     return _bundle(rows, catalog, findings)
 
 
-def _status_template_plan(output_format="csv"):
-    # The pre-ALL-1282 guidance: a format_elements template selected by status.
-    return _plan(output_format, [{"key": "terms", "transform": {
-        "type": "format_elements", "field_refs": [TERMS_REF], "field_ref": STATE_REF,
-        "default": "{1}", "mapping": {"pending_lookup": "{1} (unresolved)"}, "separator": "; ",
-    }}])
-
-
-@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
-def test_status_selected_template_does_not_double_the_marker(output_format):
-    finding = {"object.object_id": "p1", "validation.status": "open",
-               "validation.field_path": "phenotype_terms[1]"}
-    for bundle in (_status_template_bundle(), _status_template_bundle([finding])):
-        [row] = apply_projection_plan(bundle, _status_template_plan(output_format)).rows
-        assert row["terms"] == "slow (WBPhenotype:1); small (WBPhenotype:2) (unresolved)"
-        assert row["terms"].count("unresolved") == 1
-    # A template without its own marker keeps the application's marker.
-    other = {"object.object_id": "p1", "validation.status": "open", "validation.field_path": "phenotype_terms[0]"}
-    [row] = apply_projection_plan(_status_template_bundle([other]), _status_template_plan(output_format)).rows
-    assert row["terms"] == "slow (WBPhenotype:1, unresolved); small (WBPhenotype:2) (unresolved)"
-
-
-def test_multi_value_template_keeps_the_application_marker_per_value():
-    organs = "object.pack.PhenotypeAnnotation.organs"
-    bundle = _status_template_bundle([{"object.object_id": "p1", "validation.status": "open",
-                                       "validation.field_path": "organs[1]"}])
-    bundle.artifacts[0].rows_by_source["object"][0][organs] = ["head", "tail"]
-    bundle.field_catalog.append(FlowOutputField(ref=organs, label="Organs", value_type="list", row_source="object"))
+@pytest.mark.parametrize("selector", [
+    {"field_ref": STATE_REF, "mapping": {"pending_lookup": "{1} (unresolved)"}},
+    {"field_ref": STATE_REF},
+    {"mapping": {"pending_lookup": "{1} (unresolved)"}},
+])
+def test_format_elements_rejects_a_per_element_template_selector(selector):
     plan = _plan("csv", [{"key": "terms", "transform": {
-        "type": "format_elements", "field_refs": [TERMS_REF, organs], "field_ref": STATE_REF,
-        "default": "{1} in {2}", "mapping": {"pending_lookup": "{1} (unresolved) in {2}"}, "separator": "; ",
+        "type": "format_elements", "field_refs": [TERMS_REF], "default": "{1}", "separator": "; ", **selector,
     }}])
-    [row] = apply_projection_plan(bundle, plan).rows
-    # The template's marker cannot say which value it means, so each value keeps its own.
-    assert row["terms"] == (
-        "slow (WBPhenotype:1) in head; small (WBPhenotype:2) (unresolved) in tail (unresolved)"
-    )
+    with pytest.raises(ValueError, match="template selector is not supported"):
+        apply_projection_plan(_status_template_bundle(), plan)
+
+
+def test_format_elements_renders_every_element_with_its_one_template():
+    finding = {"object.object_id": "p1", "validation.status": "open", "validation.field_path": "phenotype_terms[1]"}
+    plan = _plan("csv", [{"key": "terms", "transform": {
+        "type": "format_elements", "field_refs": [TERMS_REF], "default": "[{1}]", "separator": " ",
+    }}])
+    [row] = apply_projection_plan(_status_template_bundle([finding]), plan).rows
+    assert row["terms"] == "[slow (WBPhenotype:1)] [small (WBPhenotype:2, unresolved)]"
 
 
 def test_list_elements_join_their_items_like_the_whole_cell():

@@ -484,6 +484,63 @@ def _annotate_at(
     return updated
 
 
+def _walk(node: Any, tokens: Sequence[str | int]) -> Any:
+    for token in tokens:
+        if isinstance(token, int):
+            if not isinstance(node, list) or token >= len(node):
+                return None
+            node = node[token]
+        elif isinstance(node, Mapping):
+            node = node.get(token)
+        else:
+            return None
+    return node
+
+
+def unresolved_header_text(
+    payload: Mapping[str, Any],
+    field_path: str,
+    *,
+    object_metadata: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Explicit paper wording for a header (row label, summary) naming an unresolved value.
+
+    ``field_path`` names a resolvable value or one of its keys (e.g. a label
+    field). Returns None when it names no resolvable value or the value is
+    resolved; the caller then shows the stored value. Otherwise returns the
+    paper wording labelled "(paper wording)" (or, for a legacy value, its
+    stored text labelled "(legacy, unverified)"), and UNRESOLVED when no
+    wording was stored. A header never shows paper wording as the item.
+    """
+
+    tokens = _path_tokens(field_path)
+    if not tokens:
+        return None
+    named = _walk(payload, tokens)
+    if holds_resolution(named):
+        target, target_tokens, leaf = named, tokens, None
+    elif isinstance(tokens[-1], str) and holds_resolution(parent := _walk(payload, tokens[:-1])):
+        target, target_tokens, leaf = parent, tokens[:-1], named
+    else:
+        return None
+    mention = target.get(MENTION_KEY)
+    mention = mention.strip() if isinstance(mention, str) and mention.strip() else None
+    if has_resolution_state(target):
+        if target[RESOLUTION_STATE_KEY] == RESOLVED:
+            return None
+        return f"{mention} {PAPER_WORDING_SUFFIX}" if mention else UNRESOLVED_DISPLAY
+    identity = [leaf] if target is not named else [
+        item for key, item in target.items()
+        if key not in (MENTION_KEY, RESOLUTION_STATE_KEY, RESOLUTION_REASON_KEY)
+    ]
+    if any(not _is_empty(item) for item in identity) and validator_event_covers(
+        object_metadata, _format_path(target_tokens)
+    ):
+        return None
+    stored = mention or (str(leaf).strip() if leaf is not None and not isinstance(leaf, (Mapping, list)) else "")
+    return f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else UNRESOLVED_DISPLAY
+
+
 __all__ = [
     "LEGACY_UNVERIFIED_SUFFIX",
     "MENTION_KEY",
@@ -520,6 +577,7 @@ __all__ = [
     "mark_unresolved",
     "resolvable_spec_from_display",
     "resolved_value",
+    "unresolved_header_text",
     "unresolved_list",
     "unresolved_positions",
     "unresolved_value",

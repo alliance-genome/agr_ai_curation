@@ -2341,6 +2341,8 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
                         "gene_symbol": "crb",
                         "taxon": "NCBITaxon:7227",
                         "verified_quote": "Crumbs regulates R8 cell fate.",
+                        "resolution_state": "resolved",
+                        "resolution_reason": None,
                     },
                 }
             ],

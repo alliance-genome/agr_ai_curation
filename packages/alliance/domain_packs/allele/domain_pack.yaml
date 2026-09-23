@@ -131,8 +131,7 @@ object_definitions:
         summary_fields:
           - allele_identifier
       workspace_display:
-        primary_label_fields:
-          - allele_label
+        primary_label_field: allele_label
         summary_fields:
           - allele_label
           - allele_identifier

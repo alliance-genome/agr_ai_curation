@@ -21,7 +21,6 @@ class SupervisorManifestPolicyError(ValueError):
 _SUPERVISOR_MANIFEST_ALLOWED_KEYS = frozenset(
     {
         "primary_label_field",
-        "primary_label_fields",
         "secondary_label_field",
         "summary_fields",
     }
@@ -72,13 +71,13 @@ class SupervisorManifestPolicy:
 
     object_type: str
     source: str
-    primary_label_fields: tuple[SupervisorManifestField, ...]
+    primary_label_field: SupervisorManifestField | None
     secondary_label_field: SupervisorManifestField | None
     summary_fields: tuple[SupervisorManifestField, ...]
 
     @property
     def field_paths(self) -> tuple[str, ...]:
-        paths = [field.path for field in self.primary_label_fields]
+        paths = [self.primary_label_field.path] if self.primary_label_field is not None else []
         if self.secondary_label_field is not None:
             paths.append(self.secondary_label_field.path)
         paths.extend(field.path for field in self.summary_fields)
@@ -152,6 +151,13 @@ def _policy_for_definition(
                 f"contains unknown key(s): {', '.join(unknown_keys)}"
             )
 
+    if "primary_label_fields" in config:
+        # A label chain fills the label from another field when the first is
+        # empty; an item's label is one declared field (ALL-1283).
+        raise SupervisorManifestPolicyError(
+            f"{metadata.pack_id}.{object_definition.object_type}.{source} declares "
+            "primary_label_fields; declare a single primary_label_field instead"
+        )
     field_definitions = {
         field.field_path: field for field in object_definition.fields
     }
@@ -159,10 +165,14 @@ def _policy_for_definition(
         metadata,
         object_definition,
         field_definitions,
-        _field_list(config, "primary_label_fields")
-        + _field_list(config, "primary_label_field"),
-        f"{source}.primary_label",
+        _field_list(config, "primary_label_field"),
+        f"{source}.primary_label_field",
     )
+    if len(primary_label_fields) > 1:
+        raise SupervisorManifestPolicyError(
+            f"{metadata.pack_id}.{object_definition.object_type}.{source} "
+            "must declare at most one primary_label_field"
+        )
     secondary_label_fields = _manifest_fields(
         metadata,
         object_definition,
@@ -209,7 +219,7 @@ def _policy_for_definition(
     return SupervisorManifestPolicy(
         object_type=object_definition.object_type,
         source=source,
-        primary_label_fields=tuple(primary_label_fields),
+        primary_label_field=primary_label_fields[0] if primary_label_fields else None,
         secondary_label_field=secondary_label_field,
         summary_fields=tuple(summary_fields),
     )

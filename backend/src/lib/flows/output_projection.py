@@ -31,7 +31,13 @@ from src.schemas.domain_validator import ValidatorOutputProjection
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
 from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
-from src.lib.flows.value_display import UNRESOLVED, display_text, path_tokens, relative_finding_path
+from src.lib.domain_packs.resolvable_values import holds_resolution
+from src.lib.flows.value_display import (
+    LIST_SEPARATOR,
+    display_text,
+    path_tokens,
+    relative_finding_path,
+)
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 
 ProfileResolver = Callable[[AgentExecutionReceipt], ResolvedGenericProfile | None]
@@ -595,8 +601,14 @@ def _scalar_attribute_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
         normalized_key = _normalize_attribute_key(key)
         if not normalized_key:
             continue
-        if _is_scalar_attribute_value(value) or (
-            isinstance(value, list) and all(_is_scalar_attribute_value(item) for item in value)
+        # Resolvable values (ALL-1283) are selectable too; they read "label (ID)"
+        # or UNRESOLVED like any other structured value.
+        if _is_scalar_attribute_value(value) or holds_resolution(value) or (
+            isinstance(value, list)
+            and (
+                all(_is_scalar_attribute_value(item) for item in value)
+                or all(holds_resolution(item) for item in value)
+            )
         ):
             fields.setdefault(normalized_key, value)
     return fields
@@ -754,6 +766,14 @@ def _object_validation_status(item: Mapping[str, Any]) -> str:
     return ""
 
 
+def _declared_label_fields_text(payload: Mapping[str, Any], label_fields: Sequence[str]) -> str:
+    """Every declared label field, joined; one never stands in for another (ALL-1283)."""
+
+    return LIST_SEPARATOR.join(
+        text for key in label_fields if (text := display_text(payload.get(key)))
+    )
+
+
 def _object_label(
     item: Mapping[str, Any],
     payload: Mapping[str, Any],
@@ -761,38 +781,39 @@ def _object_label(
     *,
     label_fields: Sequence[str] = (),
 ) -> str:
-    for key in dict.fromkeys(
-        (*label_fields, "label", "symbol", "name", "normalized_symbol", "mention", "entity")
-    ):
-        raw = payload.get(key)
-        # Structured label values read as display text, never JSON.
-        value = display_text(raw) if isinstance(raw, (Mapping, list)) else _string_value(raw)
-        if value:
-            return value
-    for key in ("label", "symbol", "name"):
-        value = _string_value(item.get(key))
-        if value:
-            return value
-    return object_id
+    return (
+        _declared_label_fields_text(payload, label_fields) if label_fields else _declared_payload_label(item)
+    ) or object_id
+
+
+def _object_metadata(item: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    metadata = item.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else None
 
 
 def _declared_payload_label(item: Mapping[str, Any]) -> str | None:
     """Custom and generic objects: their own payload ``label``, nothing else."""
 
-    raw = _object_payload(item).get("label")
-    text = display_text(raw)
-    return text or None
+    return _declared_path_label(item, "label")
 
 
 def _declared_path_label(item: Mapping[str, Any], path: str | None) -> str | None:
-    """Packaged objects: the value at the pack-declared label path, nothing else."""
+    """Packaged objects: the value at the pack-declared label path, nothing else.
+
+    A label naming an unresolved value reads as its paper wording (ALL-1283).
+    """
 
     if not path:
         return None
+    from src.lib.domain_packs.resolvable_values import unresolved_header_text
     from src.lib.flows.export_fields import _walk_payload
     from src.schemas.domain_envelope import parse_field_path
 
-    text = display_text(_walk_payload(_object_payload(item), list(parse_field_path(path))))
+    payload = _object_payload(item)
+    paper_wording = unresolved_header_text(payload, path, object_metadata=_object_metadata(item))
+    if paper_wording is not None:
+        return paper_wording
+    text = display_text(_walk_payload(payload, list(parse_field_path(path))))
     return text or None
 
 
@@ -1721,10 +1742,7 @@ def _build_artifact_from_step(
         # Validator result rows: the output projection's declared label fields.
         label_fields = validator_projection.label_fields if validator_projection else ()
         declared_labels = [
-            next(
-                (text for key in label_fields if (text := display_text(_object_payload(item).get(key)))),
-                None,
-            )
+            _declared_label_fields_text(_object_payload(item), label_fields) or None
             for item in object_items
         ]
     for row, label in zip(rows_by_source["object"], declared_labels):
@@ -2271,8 +2289,7 @@ def _plain_text(_field_ref: str, value: Any, _index: int | None = None, *, neste
 
 
 # Text of one stored value without unresolved markers: the key a map_value
-# lookup matches, and a format_elements template value when the template
-# writes its own marker.
+# lookup matches.
 class ValueKey(Protocol):
     def __call__(self, field_ref: str, value: Any, *, nested: bool = False) -> str: ...
 
@@ -2316,9 +2333,14 @@ def _element_template_errors(transform: FlowOutputTransformSpec) -> list[str]:
         errors.append("format_elements requires at least one field_ref in field_refs.")
     if transform.values:
         errors.append("format_elements uses field_refs and templates; values are not supported.")
-    templates = [("default", transform.default)]
-    templates.extend((f"mapping[{key!r}]", value) for key, value in transform.mapping.items())
-    for name, template in templates:
+    if transform.field_ref is not None or transform.mapping:
+        # A per-element template chosen by another field's value is a conditional
+        # output (ALL-1283); every element renders with the one template.
+        errors.append(
+            "format_elements renders every element with its default template; "
+            "a field_ref/mapping template selector is not supported."
+        )
+    for name, template in (("default", transform.default),):
         if not isinstance(template, str) or not template:
             errors.append(f"format_elements {name} must be a non-empty template string.")
             continue
@@ -2361,34 +2383,17 @@ def _format_elements_value(
     *,
     missing_value: str | None,
     render: ValueRenderer | None = None,
-    value_key: ValueKey = _generic_value_key,
 ) -> str | None:
     refs = list(transform.field_refs)
-    selector_ref = transform.field_ref
     values = [row.get(ref) for ref in refs]
-    if selector_ref:
-        values.append(row.get(selector_ref))
     rendered: list[str] = []
     # Values taken from a list are list items; the rest broadcast whole.
-    from_list = [isinstance(value, list) for value in values[: len(refs)]]
+    from_list = [isinstance(value, list) for value in values]
     elements = _aligned_elements(values)
-    for position, element in enumerate(elements):
-        field_values = element[: len(refs)]
+    template = str(transform.default)
+    for position, field_values in enumerate(elements):
         if all(_is_empty(value) for value in field_values):
             continue
-        template = transform.default
-        if selector_ref:
-            selector = element[len(refs)]
-            selector_key = str(selector).lower() if isinstance(selector, bool) else str(selector)
-            if not _is_empty(selector) and selector_key in transform.mapping:
-                template = transform.mapping[selector_key]
-        # A one-value template that writes its own unresolved marker (saved
-        # plans from the earlier "template selected by status" guidance) owns
-        # the marker; with several values each keeps the application's marker.
-        marks_itself = (
-            UNRESOLVED in str(template).lower()
-            and len(set(_ELEMENT_PLACEHOLDER.findall(str(template)))) == 1
-        )
 
         def substitute(match: re.Match[str]) -> str:
             slot = int(match.group(1)) - 1
@@ -2398,11 +2403,9 @@ def _format_elements_value(
             if render is None:
                 return _string_value(value)
             nested = from_list[slot]
-            if marks_itself:
-                return value_key(refs[slot], value, nested=nested)
             return render(refs[slot], value, position if len(elements) > 1 else None, nested=nested)
 
-        rendered.append(_ELEMENT_PLACEHOLDER.sub(substitute, str(template)))
+        rendered.append(_ELEMENT_PLACEHOLDER.sub(substitute, template))
     return transform.separator.join(rendered) if rendered else missing_value
 
 
@@ -3095,9 +3098,7 @@ def _transform_value(
             return transform.mapping[key]
         return transform.default if transform.default is not None else missing_value
     if transform.type == "format_elements":
-        return _format_elements_value(
-            row, transform, missing_value=missing_value, render=render, value_key=value_key,
-        )
+        return _format_elements_value(row, transform, missing_value=missing_value, render=render)
     if transform.type == "boolean_label":
         value = row.get(transform.field_ref or "")
         if isinstance(value, bool):

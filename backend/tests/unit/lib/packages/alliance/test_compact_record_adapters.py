@@ -28,7 +28,7 @@ def schemas(monkeypatch):
     ("GOTermResultEnvelope", {"id": "GO:1", "name": "binding", "aspect": "molecular_function", "definition": {"text": "A definition"}, "synonyms": [{"name": "an alias"}]}, "results", "GO:1"),
     ("ReferenceValidationResult", {"curie": "PMID:1", "title": "A title", "cross_references": ["DOI:example"]}, "candidate_references", "PMID:1"),
     ("OrthologsResult", {"geneToGeneOrthologyGenerated": {"subjectGene": {"primaryExternalId": "RGD:1"}, "objectGene": {"primaryExternalId": "MGI:2", "symbol": "Abc"}, "confidence": {"name": "high"}, "isBestScore": {"name": "Yes"}, "predictionMethodsMatched": [{"name": "method"}]}}, "orthologs", "MGI:2"),
-    ("ChemicalValidationResult", {"id": "CHEBI:1", "name": "compound"}, None, "CHEBI:1"),
+    ("ChemicalValidationResult", {"chebi_accession": "CHEBI:1", "name": "compound"}, None, "CHEBI:1"),
     ("DiseaseValidationResult", {"curie": "DOID:1", "name": "disease"}, None, "DOID:1"),
 ])
 def test_provider_record_projection(schemas, schema, record, field, identity):
@@ -462,3 +462,34 @@ def test_standalone_preserves_structured_inputs_and_new_runtime_evidence(schemas
         "status": "unresolved", "explanation": "No database match yet."})
     assert result.status == "unresolved"
     assert contract.request.evidence == evidence
+
+
+@pytest.mark.parametrize("schema, record", [
+    # ALL-1283: an internal database id is never a record's identity.
+    ("GeneResultEnvelope", {"id": 42, "symbol": "Abc"}),
+    ("OntologyTermValidationResult", {"internal_id": 7, "name": "tissue"}),
+    ("ChemicalValidationResult", {"id": 17234, "name": "glucose"}),
+])
+def test_records_without_their_identity_never_fall_through_to_internal_ids(schemas, schema, record):
+    from agr_ai_curation_alliance.compact_validation import canonical_record
+    with pytest.raises(ValueError, match="no authoritative identity"):
+        canonical_record(record, schemas[schema])
+
+
+def test_subject_label_reads_the_subject_type_label_only(schemas):
+    from types import SimpleNamespace
+
+    from agr_ai_curation_alliance.compact_validation import canonical_record
+
+    def request(subject_type):
+        return SimpleNamespace(selected_inputs={"subject_type": subject_type},
+                               target=SimpleNamespace(input_values={}))
+
+    schema = schemas["SubjectEntityValidationResult"]
+    gene = canonical_record({"curie": "RGD:1", "symbol": "Abc", "name": "a gene"}, schema, request=request("gene"))
+    assert gene.values["subject_label"] == "Abc"
+    agm = canonical_record({"curie": "ZFIN:1", "name": "strain"}, schema, request=request("agm"))
+    assert agm.values["subject_label"] == "strain"
+    # No symbol: the label is absent, never another field.
+    allele = canonical_record({"curie": "MGI:1", "name": "an allele"}, schema, request=request("allele"))
+    assert allele.values["subject_label"] is None

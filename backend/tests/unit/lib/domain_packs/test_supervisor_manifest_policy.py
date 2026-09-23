@@ -194,8 +194,8 @@ def test_supervisor_manifest_falls_back_to_workspace_display_policy_source():
     policy = supervisor_manifest_policy_for_object(metadata, "Assertion")
 
     assert policy.source == "workspace_display"
-    assert [field.path for field in policy.primary_label_fields] == ["label"]
-    assert policy.primary_label_fields[0].label == "Label"
+    assert policy.primary_label_field.path == "label"
+    assert policy.primary_label_field.label == "Label"
     assert policy.secondary_label_field is not None
     assert policy.secondary_label_field.path == "symbol"
     assert policy.secondary_label_field.label == "Symbol"
@@ -226,7 +226,22 @@ def test_supervisor_manifest_overrides_workspace_display_when_both_present():
     policy = supervisor_manifest_policy_for_object(metadata, "Assertion")
 
     assert policy.source == "supervisor_manifest"
-    assert [field.path for field in policy.primary_label_fields] == ["symbol"]
+    assert policy.primary_label_field.path == "symbol"
     # The broader workspace_display secondary label is not used when overridden.
     assert policy.secondary_label_field is None
     assert [field.path for field in policy.summary_fields] == ["curie"]
+
+
+def test_supervisor_manifest_rejects_a_primary_label_fallback_chain():
+    """ALL-1283: an item's label is one declared field; no other field fills it."""
+
+    metadata = _metadata(
+        object_metadata={
+            "object_role": "curatable_unit",
+            "workspace_display": {"primary_label_fields": ["label", "symbol"], "summary_fields": ["curie"]},
+        },
+        fields=_labeled_fields(),
+    )
+
+    with pytest.raises(SupervisorManifestPolicyError, match="single primary_label_field"):
+        supervisor_manifest_policy_for_object(metadata, "Assertion")

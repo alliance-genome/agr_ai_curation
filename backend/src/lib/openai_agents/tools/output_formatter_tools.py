@@ -1221,13 +1221,12 @@ def _capabilities_payload(
                 "equal-length lists zip, and incompatible list lengths are rejected."
             ),
             "format_elements": (
-                "Render aligned list elements with a template. field_refs are the element "
-                "values ({1}, {2}, ... in templates); default is the template; optional "
-                "field_ref is an element-aligned selector whose value picks a template from "
-                "mapping (for example a per-value resolution status). Lists must have equal "
-                "lengths, scalars broadcast, empty placeholders render missing_value, and "
-                "elements are joined with separator. A template that writes its own "
-                "\"(unresolved)\" gets the value text without the application's marker."
+                "Render aligned list elements with one template. field_refs are the element "
+                "values ({1}, {2}, ... in the template); default is the template, used for "
+                "every element (no field_ref or mapping: a template is never chosen by "
+                "another field's value). Lists must have equal lengths, scalars broadcast, "
+                "empty placeholders render missing_value, and elements are joined with "
+                "separator."
             ),
         },
         "overrides": (
@@ -1250,11 +1249,13 @@ def _capabilities_payload(
             "CSV, TSV and chat cells render structured values as display text: "
             "\"label (ID)\" from the pack's declared roles (generic curie/id plus "
             "name/label otherwise), lists joined with \"; \" (lists of structured records "
-            "with \" | \", lists inside a record with \", \"), and unresolved values "
-            "marked \"(unresolved)\" from declared resolution state, open validation "
-            "findings on that field or on the object it references, or a declared ID "
-            "that is missing. map_value matches a structured value by that display text "
-            "without the marker. Select the parent "
+            "with \" | \", lists inside a record with \", \"), a validated value "
+            "(one with resolution_state) as \"label (ID)\" when resolved and the word "
+            "UNRESOLVED otherwise, never its paper wording; its paper wording is the "
+            "separate <field>.mention field (\"<Field> (paper wording)\"). Other values are "
+            "marked \"(unresolved)\" from open validation findings on that field or on the "
+            "object it references, or a declared ID that is missing. map_value matches a "
+            "structured value by that display text without the marker. Select the parent "
             "structured field instead of composing leaves. JSON keeps raw values."
         ),
         "detail_access": (

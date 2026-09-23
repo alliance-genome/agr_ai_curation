@@ -83,7 +83,7 @@ def simple_decision_contract(request, result_schema, *, profile_mapped=False, sc
             values = deepcopy(payload["resolved_values"])
             if selected:
                 values["terms"] = [{"curie": record.candidate.value,
-                                    "name": record.values.get("name", record.candidate.label)} for record in selected]
+                                    "name": record.values.get("name")} for record in selected]
             additions["resolved_values"] = values
         if name == "SubjectEntityValidationResult":
             from .compact_validation import normalized_subject_type

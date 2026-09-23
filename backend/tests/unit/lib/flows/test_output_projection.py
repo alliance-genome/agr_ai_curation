@@ -2431,7 +2431,8 @@ def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():
     )
 
     row = bundle.rows_for_source("object")[0]
-    assert row["object.label"] == "signaling"
+    # Every declared label field reads; one never stands in for another (ALL-1283).
+    assert row["object.label"] == "signaling; daf-16"
     assert row["object.payload.gene_id"] == "WB:WBGene00000898"
     assert row["object.payload.gene_symbol"] == "daf-16"
 
