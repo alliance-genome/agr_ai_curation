@@ -664,6 +664,12 @@ def test_go_stage_tool_schema_carries_the_shared_rationale_description():
 
     properties = go_builder_tools.stage_go_recommendation.params_json_schema["properties"]
     assert properties["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+    imp_rule = (
+        "For IMP annotations, the rationale must name the perturbation and the phenotype "
+        "in the paper's exact wording; that is required, not a restated quote."
+    )
+    assert imp_rule in " ".join(go_builder_tools.stage_go_recommendation.description.split())
+    assert RATIONALE_ARG_DESCRIPTION not in go_builder_tools.stage_go_recommendation.description
     patch_updates = go_builder_tools.patch_go_recommendation.params_json_schema[
         "properties"
     ]["updates"]

@@ -548,6 +548,9 @@ def _stage_go_recommendation_impl(
 ) -> AgrQueryResult:
     """Stage one evidence-backed GO recommendation for canonical finalization.
 
+    For IMP annotations, the rationale must name the perturbation and the phenotype in
+    the paper's exact wording; that is required, not a restated quote.
+
     Args:
         validation_guidance: Optional short sentence forwarding relevant rules from your
             configured prompt and case-specific paper context to this finding's validators.

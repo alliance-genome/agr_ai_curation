@@ -479,14 +479,15 @@ afterEach(() => {
 })
 
 describe('InteractiveHorizontalCurationGrid', () => {
-  it('shows an absent rationale as not recorded inside the selectable row context', () => {
+  it('shows the rationale read-only inside the selectable row context', () => {
     const model = buildModel()
     model.rows[0]!.contextCell.value.rationale = { value: null }
     renderGrid({ model })
 
-    expect(
-      within(screen.getByTestId('horizontal-grid-context-candidate-1')).getByText('Not recorded'),
-    ).toBeInTheDocument()
+    const context = screen.getByTestId('horizontal-grid-context-candidate-1')
+    expect(within(context).getByText('Not recorded')).toBeInTheDocument()
+    expect(context.querySelector('input, textarea, [contenteditable="true"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: /edit.*rationale/i })).toBeNull()
   })
 
   it('selects canonical candidates and dispatches exact field and context evidence commands', async () => {

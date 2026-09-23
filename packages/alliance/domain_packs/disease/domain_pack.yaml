@@ -803,6 +803,9 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       - field_path: evidence_records[0].evidence_record_id
         field_type: string
         display_name: First evidence record ID
@@ -1242,6 +1245,9 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
       - field_path: annotation_type_name
         field_type: string
@@ -1693,6 +1699,9 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
       - field_path: annotation_type_name
         field_type: string
@@ -2142,6 +2151,9 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
       - field_path: annotation_type_name
         field_type: string

@@ -511,6 +511,9 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       # EXPERIMENTAL CONDITIONS: condition_relations[] is the OUTER multivalued list (one
       # ConditionRelation per entry: relation_type + its conditions[]). Declared multivalued so
       # the nested fan-out engine indexes condition_relations[i] when fanning the inner

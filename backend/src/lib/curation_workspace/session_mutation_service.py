@@ -612,6 +612,14 @@ def update_candidate_draft(
             if field_change.revert_to_seed
             else field_change.value
         )
+        if (
+            _draft_field_protected(current_field)
+            and not _draft_values_equal(next_value, current_field.value)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_protected_draft_field_detail(current_field),
+            )
         next_dirty = not _draft_values_equal(next_value, current_field.seed_value)
         next_field = current_field.model_copy(
             update={
@@ -720,6 +728,21 @@ def update_candidate_draft(
         validation_snapshot=validation_snapshot,
         action_log_entry=_action_log_entry(action_log_row),
     )
+
+
+def _draft_field_protected(field: CurationDraftFieldSchema) -> bool:
+    # Pack-protected fields (for example the extractor's rationale) record what the
+    # extraction wrote; curators cannot change them on any candidate, envelope-backed
+    # or not. Agent builder tools write them before the draft exists.
+    field_metadata = field.metadata.get("field_metadata")
+    return isinstance(field_metadata, Mapping) and field_metadata.get("protected") is True
+
+
+def _protected_draft_field_detail(field: CurationDraftFieldSchema) -> str:
+    field_metadata = field.metadata.get("field_metadata")
+    note = field_metadata.get("curator_action_note") if isinstance(field_metadata, Mapping) else None
+    detail = f"Draft field {field.field_key} is protected"
+    return f"{detail}: {note}" if isinstance(note, str) and note.strip() else detail
 
 
 def _domain_envelope_candidate(candidate: CurationCandidate) -> bool:

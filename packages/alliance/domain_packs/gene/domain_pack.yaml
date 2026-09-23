@@ -335,6 +335,9 @@ object_definitions:
         display_name: Rationale
         required: false
         description: Curator-facing reason the extractor selected this gene as curatable from the paper, written at extraction time; separate from how the gene identity was resolved.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       - field_path: evidence_record_id
         field_type: string
         display_name: Evidence record ID
