@@ -13,6 +13,7 @@ from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 _context: ContextVar[str] = ContextVar("model_cost_context", default="{}")
+_model_request: ContextVar[str] = ContextVar("model_request_identity", default="{}")
 FIELDS = frozenset({
     "paper", "paper_category", "related_papers", "document_id", "artifact_revision",
     "run_id", "workflow_id", "node_id", "job_id", "activity", "environment", "deployment",
@@ -35,6 +36,24 @@ def cost_scope(context: Mapping[str, Any]):
         yield
     finally:
         _context.reset(token)
+
+
+def current_model_request() -> dict[str, Any]:
+    return json.loads(_model_request.get())
+
+
+@contextmanager
+def model_request_scope(identity: Mapping[str, Any]):
+    """Expose one measured model request to the tracing span its adapter opens.
+
+    Held only while the provider adapter starts the attempt, so the SDK
+    response/generation span records which measured request it carries.
+    """
+    token = _model_request.set(json.dumps({k: v for k, v in identity.items() if v is not None}))
+    try:
+        yield
+    finally:
+        _model_request.reset(token)
 
 
 def execution_context(*, activity: str, document_id: str | None = None,

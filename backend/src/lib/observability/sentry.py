@@ -568,6 +568,7 @@ _AI_CURATION_NUMERIC_DATA_KEYS = {
     "ai_curation.validator.batch_size",
     "ai_curation.tool_call.count",
     "ai_curation.validation.error_count",
+    "ai_curation.validation.retry_count",
     "ai_curation.sentry.spans.dropped_by_redactor",
     "ai_curation.sentry.spans.retained_by_redactor",
     "ai_curation.sentry.spans.total_before_redactor",

@@ -75,7 +75,7 @@ EXEMPT_MODELS = {
     ),
     ("agr.alliance.phenotype", "PhenotypeAnnotationPayload"): (
         "curatable-unit row whose only own label leaf is the free-text statement; the "
-        "resolved phenotype terms render through the phenotype_terms[0] field"
+        "phenotype terms render through the phenotype_terms list field"
     ),
     ("agr.alliance.disease", "VocabularyTermSnapshotPayload"): (
         "declared but referenced by no field (condition_relation_type leaves are declared directly)"

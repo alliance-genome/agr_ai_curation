@@ -134,6 +134,13 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/flows/test_value_display.py"),
     # Display edge cases render the installed Alliance packs' declarations (ALL-1290).
     Path("backend/tests/unit/lib/flows/test_value_display_edge_cases.py"),
+    # Every phenotype term exports through the installed Alliance phenotype
+    # pack's phenotype_terms list field (ALL-1289).
+    Path("backend/tests/unit/lib/flows/test_phenotype_terms_export.py"),
+    # Custom-agent contract lookup exercises Alliance group visibility and
+    # packaged validator bindings (ALL-1295).
+    Path("backend/tests/unit/lib/test_agent_contract_custom_agents.py"),
+    Path("backend/tests/integration/persistence/test_agent_contract_custom_visibility_persistence.py"),
     # Immutable execution migrations preserve the shipped Alliance group prompts
     # and packaged builder identities, including historical access boundaries.
     Path("backend/tests/integration/persistence/test_agent_execution_revision_persistence.py"),

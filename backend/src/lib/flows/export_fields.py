@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import json
+import re
 from typing import Any
 
 from src.schemas.domain_envelope import parse_field_path
@@ -73,6 +74,9 @@ def source_catalog(fields: list[dict], receipt: Any = None) -> dict:
     identity = {"fields": declared, "execution_receipt": receipt}
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), default=str)
     return {**identity, "schema_fingerprint": "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()}
+
+
+_LIST_INDEX = re.compile(r"\[\d+\]")
 
 
 class PackagedExportSource:
@@ -185,7 +189,9 @@ class PackagedExportSource:
 
         Leaf paths collapse into their nearest declared parent that has a display
         spec, so a term reads as one "label (id)" column instead of its leaves. A
-        pack without curatable units lays out the objects it declares.
+        path that reads one list element (``terms[0].label``) collapses into the
+        declared list field itself, so the default export carries every element.
+        A pack without curatable units lays out the objects it declares.
         """
 
         has_units = bool(self.curatable_unit_types)
@@ -200,16 +206,28 @@ class PackagedExportSource:
             for group in layout.get("groups") or []:
                 paths.extend(group.get("fields") or [])
             declared = {field.field_path for field in obj.fields}
+            lists = {field.field_path for field in obj.fields if field.multivalued}
             chosen_paths: list[str] = []
             for path in paths:
                 chosen = path
                 parts = path.split(".")
-                # The path itself when it has a display, else its nearest parent that does.
-                for size in range(len(parts), 0, -1):
-                    candidate = ".".join(parts[:size])
-                    if f"object.pack.{obj.object_type}.{candidate}" in self.display_specs:
-                        chosen = candidate
-                        break
+                list_field = next(
+                    (
+                        path[: match.start()]
+                        for match in _LIST_INDEX.finditer(path)
+                        if path[: match.start()] in lists
+                    ),
+                    None,
+                )
+                if list_field is not None:
+                    chosen = list_field
+                else:
+                    # The path itself when it has a display, else its nearest parent that does.
+                    for size in range(len(parts), 0, -1):
+                        candidate = ".".join(parts[:size])
+                        if f"object.pack.{obj.object_type}.{candidate}" in self.display_specs:
+                            chosen = candidate
+                            break
                 if chosen not in declared:
                     continue
                 # Skip a column already covered by a chosen ancestor or descendant.

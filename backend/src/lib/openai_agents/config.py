@@ -1378,6 +1378,29 @@ def get_hierarchy_resolution_max_turns() -> int:
     return _get_single_shot_output_agent_max_turns("HIERARCHY_RESOLUTION_MAX_TURNS")
 
 
+def get_hierarchy_resolution_contract_retries() -> int:
+    """Correction attempts for the hierarchy section-number contract (HIERARCHY_RESOLUTION_CONTRACT_RETRIES).
+
+    The hierarchy classifier answers with input section numbers instead of
+    echoed titles. A missing, duplicate, or out-of-range number, or a parent
+    chain that does not reach a top-level section, triggers a correction retry;
+    after the budget is spent the result is rejected. Provider failures are not
+    retried. Default 2, matching FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES.
+    """
+    return max(0, _get_env_int_with_fallback("HIERARCHY_RESOLUTION_CONTRACT_RETRIES", 2))
+
+
+def get_hierarchy_resolution_preview_max_chars() -> int:
+    """Body-text preview length per section for the hierarchy classifier (HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS).
+
+    Each section title is sent with the opening of the first body text under
+    it, never the heading repeated. Longer text is cut and marked with "...";
+    stored document text is unaffected. 0 sends titles only. Default 100,
+    matching the preview length used before previews skipped headings.
+    """
+    return max(0, _get_env_int_with_fallback("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", 100))
+
+
 def get_figure_locator_resolution_max_turns() -> int:
     """Turn budget for the one-shot figure locator classifier.
 
@@ -1614,45 +1637,13 @@ def get_supervisor_field_text_limit() -> int:
 
 
 def get_inspect_results_evidence_text_limit() -> int:
-    """Char limit for one inspect_results evidence text field.
+    """Char length of one inspect_results search snippet (INSPECT_RESULTS_EVIDENCE_TEXT_LIMIT).
 
-    Truncates quote/evidence text returned only by
-    inspect_results(action="evidence"). Default 500.
+    Search matches show a snippet of the matching evidence or field text marked
+    ``snippet_complete=false`` when shorter than the source; the complete text
+    is read with the match's ``read`` call. Default 500.
     """
     return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_EVIDENCE_TEXT_LIMIT", 500))
-
-
-def get_inspect_results_validation_detail_list_limit() -> int:
-    """Max list items returned inside one inspect_results validation detail value.
-
-    Bounds nested list values inside validation finding details returned to the
-    supervisor. Default 5.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback("INSPECT_RESULTS_VALIDATION_DETAIL_LIST_LIMIT", 5),
-    )
-
-
-def get_inspect_results_json_depth_limit() -> int:
-    """Max nested JSON depth returned by inspect_results detail views.
-
-    Bounds recursive JSON compaction for validation/evidence detail payloads.
-    Default 6.
-    """
-    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_JSON_DEPTH_LIMIT", 6))
-
-
-def get_inspect_results_json_object_item_limit() -> int:
-    """Max mapping keys returned by inspect_results compact JSON views.
-
-    Bounds object/mapping entries inside nested JSON returned to the supervisor.
-    Default 25.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback("INSPECT_RESULTS_JSON_OBJECT_ITEM_LIMIT", 25),
-    )
 
 
 def get_supervisor_max_list_limit() -> int:
@@ -3408,3 +3399,28 @@ def get_flow_output_split_list_max_columns() -> int:
     A curator ``max_columns`` on the column can only lower it. Default 20.
     """
     return max(1, _get_env_int_with_fallback("FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS", 20))
+
+
+# =============================================================================
+# ALL-1287: Supervisor result exploration pages
+# =============================================================================
+
+def get_inspect_results_object_page_size() -> int:
+    """Default page size for inspect_results object pages (INSPECT_RESULTS_OBJECT_PAGE_SIZE).
+
+    Rows returned by ``objects``, the evidence inventory and ``validator_results``
+    when no explicit limit is supplied. Every page also ends early at
+    TOOL_RESULT_MAX_BYTES and continues with ``next_call``. The supervisor starts
+    from the counts-only ``summary`` and filters, so a small default keeps
+    browsing cheap. Default 20.
+    """
+    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_OBJECT_PAGE_SIZE", 20))
+
+
+def get_inspect_results_object_max_page_size() -> int:
+    """Largest requested inspect_results object page (INSPECT_RESULTS_OBJECT_MAX_PAGE_SIZE).
+
+    Larger requested limits are clamped and reported in the page's ``limit``
+    block. Pages still end at TOOL_RESULT_MAX_BYTES. Default 100.
+    """
+    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_OBJECT_MAX_PAGE_SIZE", 100))
