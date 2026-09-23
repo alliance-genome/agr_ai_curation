@@ -213,6 +213,8 @@ class ResolvableSpec:
     id_key: str | None = None
     label_key: str | None = None
     mention_key: str = MENTION_KEY
+    # Further keys only a validator fills (e.g. a taxon); part of the identity.
+    validated_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not (self.id_key or self.label_key):
@@ -220,14 +222,17 @@ class ResolvableSpec:
 
     @property
     def identity_keys(self) -> tuple[str, ...]:
-        return tuple(key for key in (self.id_key, self.label_key) if key)
+        """Every key a validator supplies: id, label and the declared ``validated`` keys."""
+
+        return tuple(key for key in (self.id_key, self.label_key, *self.validated_keys) if key)
 
 
 def resolvable_spec_from_display(display: Mapping[str, Any] | None) -> ResolvableSpec | None:
     """The resolvable spec a pack display declaration names, or None.
 
     A display spec declares a resolvable value by naming a ``mention`` role
-    next to its ``label``/``id`` roles (``src.lib.flows.value_display``).
+    next to its ``label``/``id`` roles (``src.lib.flows.value_display``); an
+    optional ``validated`` list names further keys only a validator fills.
     """
 
     if not isinstance(display, Mapping) or not display.get("mention"):
@@ -236,6 +241,7 @@ def resolvable_spec_from_display(display: Mapping[str, Any] | None) -> Resolvabl
         id_key=display.get("id") or None,
         label_key=display.get("label") or None,
         mention_key=str(display["mention"]),
+        validated_keys=tuple(str(key) for key in display.get("validated") or ()),
     )
 
 
@@ -283,7 +289,11 @@ def _check_contract_fields(value: Any) -> tuple[str, str]:
     if not isinstance(value, Mapping):
         raise ResolvableValueError(f"A resolvable value must be an object, not {type(value).__name__}")
     mention = value.get(MENTION_KEY)
-    if MENTION_KEY in value and not (isinstance(mention, str) and mention.strip()):
+    # No paper wording (absent or null) marks a container stored before the
+    # contract: the builder helpers always write a non-empty mention and the
+    # validator write-back never touches it, so such a container can be
+    # re-validated any number of times.
+    if mention is not None and not (isinstance(mention, str) and mention.strip()):
         raise ResolvableValueError("mention must be the non-empty paper wording")
     _optional_text(value.get(VALIDATOR_EXPLANATION_KEY), VALIDATOR_EXPLANATION_KEY)
     _optional_text(value.get(VALIDATOR_CURATOR_MESSAGE_KEY), VALIDATOR_CURATOR_MESSAGE_KEY)
@@ -538,27 +548,75 @@ def _path_tokens(path: str) -> tuple[str | int, ...] | None:
         return None
 
 
+# Write-back events that count as validator coverage: packaged domain-pack
+# bindings (materialization.py) and closed-profile validator mappings
+# (profile_materialization.py), which record their payload paths as
+# ``field_paths`` (e.g. ``attributes.gene.gene_id``).
+PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY = "profile_validator_materialization"
+# An event path segment ``[]`` names every element of a list.
+_ANY_INDEX = -1
+
+
+def _event_path_tokens(path: str) -> tuple[str | int, ...] | None:
+    """Tokens of an event's recorded payload path; ``[]`` becomes an any-element index."""
+
+    if "[]" not in path:
+        return _path_tokens(path)
+    tokens: list[str | int] = []
+    for segment in path.split("."):
+        key, _, brackets = segment.partition("[")
+        if not key:
+            return None
+        tokens.append(key)
+        for bracket in filter(None, f"[{brackets}".split("[")) if brackets else ():
+            index = bracket.rstrip("]")
+            if index == "":
+                tokens.append(_ANY_INDEX)
+            elif index.isdigit():
+                tokens.append(int(index))
+            else:
+                return None
+    return tuple(tokens)
+
+
 def validator_materialized_paths(object_metadata: Mapping[str, Any] | None) -> tuple[tuple[str | int, ...], ...]:
-    """Payload paths a validator write-back event recorded for one object."""
+    """Payload paths validator write-back events recorded for one object.
+
+    Both packaged binding events (``materialized_field_paths`` and the keys of
+    ``original_values``) and closed-profile validator events (``field_paths``)
+    count.
+    """
 
     if not isinstance(object_metadata, Mapping):
         return ()
+    recorded: list[Any] = []
     events = object_metadata.get(VALIDATOR_MATERIALIZATION_METADATA_KEY)
-    if not isinstance(events, list):
-        return ()
-    paths: list[tuple[str | int, ...]] = []
-    for event in events:
+    for event in events if isinstance(events, list) else ():
         if not isinstance(event, Mapping):
             continue
-        recorded = [*(event.get("materialized_field_paths") or [])]
+        recorded.extend(event.get("materialized_field_paths") or [])
         original_values = event.get("original_values")
         if isinstance(original_values, Mapping):
             recorded.extend(original_values)
-        for path in recorded:
-            tokens = _path_tokens(str(path))
-            if tokens:
-                paths.append(tokens)
+    profile_events = object_metadata.get(PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY)
+    for event in profile_events if isinstance(profile_events, list) else ():
+        if isinstance(event, Mapping) and isinstance(event.get("field_paths"), list):
+            recorded.extend(event["field_paths"])
+    paths: list[tuple[str | int, ...]] = []
+    for path in recorded:
+        tokens = _event_path_tokens(str(path))
+        if tokens:
+            paths.append(tokens)
     return tuple(paths)
+
+
+def _covers(path: Sequence[str | int], target: Sequence[str | int]) -> bool:
+    if len(path) < len(target):
+        return False
+    return all(
+        recorded == wanted or (recorded == _ANY_INDEX and isinstance(wanted, int))
+        for recorded, wanted in zip(path, target)
+    )
 
 
 def validator_event_covers(
@@ -574,7 +632,7 @@ def validator_event_covers(
     target = _path_tokens(value_path)
     if target is None:
         return False
-    return any(path[: len(target)] == target for path in validator_materialized_paths(object_metadata))
+    return any(_covers(path, target) for path in validator_materialized_paths(object_metadata))
 
 
 def effective_resolution(
@@ -637,6 +695,8 @@ def effective_value(
         problem = stored_state_problem(value, identity_keys=spec.identity_keys)
         if problem is None:
             return value
+        if _is_revalidated_legacy_leftover(value, spec):
+            return _legacy_leftover_value(value, spec)
         return _invalid_record_value(value, spec, problem)
     state, outcome = effective_resolution(
         value, identity_keys=spec.identity_keys, covered_by_validator=covered_by_validator,
@@ -650,6 +710,31 @@ def effective_value(
         for key in spec.identity_keys:
             annotated[key] = None
         annotated[spec.mention_key] = f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else None
+    return annotated
+
+
+def _is_revalidated_legacy_leftover(value: Mapping[str, Any], spec: ResolvableSpec) -> bool:
+    """A pre-contract container a validator left unresolved, still holding its old identity.
+
+    The validator write-back never touches id/label, so an old container
+    (no paper wording) re-validated as unresolved keeps the identity the old
+    extractor proposed; that identity was never verified.
+    """
+
+    if value.get(spec.mention_key) is not None or value.get(RESOLUTION_STATE_KEY) != UNRESOLVED:
+        return False
+    cleared = {**value, **{key: None for key in spec.identity_keys}}
+    return stored_state_problem(cleared, identity_keys=spec.identity_keys) is None
+
+
+def _legacy_leftover_value(value: Mapping[str, Any], spec: ResolvableSpec) -> dict[str, Any]:
+    """Read an old identity left in an unresolved pre-contract container as unverified paper wording."""
+
+    annotated = dict(value)
+    stored = _stored_text(value, spec)
+    for key in spec.identity_keys:
+        annotated[key] = None
+    annotated[spec.mention_key] = f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else None
     return annotated
 
 
@@ -715,11 +800,15 @@ def effective_payload(
     if not resolvable_fields:
         return payload
     result: Any = dict(payload)
-    for field_path, spec in sorted(resolvable_fields.items(), key=lambda item: len(item[0])):
+    # Each concrete value is read once per pass: a pack may declare both a list
+    # field and one of its elements (``terms`` and ``terms[0]``); the most
+    # specific declaration reads the element, and the list pass skips it.
+    annotated: set[tuple[str | int, ...]] = set()
+    for field_path, spec in sorted(resolvable_fields.items(), key=lambda item: -len(item[0])):
         tokens = _path_tokens(field_path)
         if tokens is None:
             continue
-        result = _annotate_at(result, tokens, (), spec, object_metadata)
+        result = _annotate_at(result, tokens, (), spec, object_metadata, annotated)
     return result
 
 
@@ -739,6 +828,7 @@ def _annotate_at(
     walked: tuple[str | int, ...],
     spec: ResolvableSpec,
     object_metadata: Mapping[str, Any] | None,
+    annotated: set[tuple[str | int, ...]],
 ) -> Any:
     if isinstance(node, list):
         if remaining and isinstance(remaining[0], int):
@@ -748,17 +838,18 @@ def _annotate_at(
                 return node
             updated_list = list(node)
             updated_list[index] = _annotate_at(
-                node[index], remaining[1:], (*walked, index), spec, object_metadata
+                node[index], remaining[1:], (*walked, index), spec, object_metadata, annotated
             )
             return updated_list
         # A declared path without an index names every element; each is its own value.
         return [
-            _annotate_at(item, remaining, (*walked, index), spec, object_metadata)
+            _annotate_at(item, remaining, (*walked, index), spec, object_metadata, annotated)
             for index, item in enumerate(node)
         ]
     if not remaining:
-        if not isinstance(node, Mapping):
+        if not isinstance(node, Mapping) or walked in annotated:
             return node
+        annotated.add(walked)
         return effective_value(
             node,
             spec,
@@ -770,7 +861,9 @@ def _annotate_at(
     if key not in node:
         return node
     updated = dict(node)
-    updated[key] = _annotate_at(node[key], remaining[1:], (*walked, key), spec, object_metadata)
+    updated[key] = _annotate_at(
+        node[key], remaining[1:], (*walked, key), spec, object_metadata, annotated
+    )
     return updated
 
 
@@ -880,7 +973,13 @@ def unresolved_header_text(
     if has_resolution_state(target):
         if is_resolved(target, identity_keys=spec.identity_keys if spec is not None else ()):
             return None
-        return f"{mention} {PAPER_WORDING_SUFFIX}" if mention else UNRESOLVED_DISPLAY
+        if mention:
+            return f"{mention} {PAPER_WORDING_SUFFIX}"
+        # A pre-contract container re-validated as unresolved: its old text is unverified.
+        stored = _stored_text(target, spec) if spec is not None else (
+            str(leaf).strip() if leaf is not None and not isinstance(leaf, (Mapping, list)) else ""
+        )
+        return f"{stored} {LEGACY_UNVERIFIED_SUFFIX}" if stored else UNRESOLVED_DISPLAY
     if spec is not None:
         identity = [target.get(key) for key in spec.identity_keys]
     elif target is not named:
@@ -926,6 +1025,7 @@ __all__ = [
     "OUTCOME_REJECTED_CANDIDATES",
     "OUTCOME_TRANSIENT",
     "PAPER_WORDING_SUFFIX",
+    "PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY",
     "RESOLUTION_STATES",
     "RESOLUTION_STATE_KEY",
     "RESOLUTION_STATE_LABELS",

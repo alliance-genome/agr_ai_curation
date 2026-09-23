@@ -1164,7 +1164,10 @@ GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
         "pages by section. The summary reports active automatic validation defaults, "
         "under-development validator metadata, section counts, and valid detail "
         "requests. Request validator_bindings or validation_attachments details to "
-        "find validator agent IDs for get_prompt(agent_id=...)."
+        "find validator agent IDs for get_prompt(agent_id=...). object_definitions "
+        "items give each object type's field_count and its resolvable (extracted vs "
+        "validated) value paths, not every field; page section=fields with "
+        "object_type=<type> for the field paths themselves."
     ),
     "input_schema": {
         "type": "object",
