@@ -37,6 +37,11 @@ if str(ALLIANCE_PYTHON_SRC) not in sys.path:
     sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
 
 from agr_ai_curation_alliance.curation_adapters import register_curation_adapters  # noqa: E402
+from agr_ai_curation_alliance.domain_packs.go.legacy import (  # noqa: E402
+    PREVIOUS_FORMAT_FINDING_CODE,
+    previous_format_display_payload,
+    validate_go_envelope,
+)
 from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
     load_alliance_domain_pack_registry,
 )
@@ -154,7 +159,7 @@ def test_rgd_policy_dispatch_materializes_established_finding_and_group_trace():
     ]
     request = requests[0]
     assert request.validator_binding_id == "rgd_go_evidence_policy_validation"
-    assert request.selected_inputs["evidence_code"] == "IDA"
+    assert request.selected_inputs["evidence_code"]["code"] == "IDA"
     assert request.selected_inputs["go_term"]["aspect"] == "cellular_component"
     assert request.selected_inputs["provider_context"]["provider_key"] == "RGD"
     assert request.selected_inputs["evidence_quotes"][0]["verified_quote"] == (
@@ -266,7 +271,7 @@ def test_protein_fixture_survives_review_row_candidate_and_evidence_projection()
     assert candidate_fields["go_term.curie"] == "GO:0005615"
     assert candidate_fields["evidence_code.code"] == "IDA"
     assert candidate_fields["evidence_code.eco_curie"] == "ECO:0000314"
-    assert candidate_fields["reference.curie"] == "AGRKB:101000000400377"
+    assert candidate_fields["reference_curie.curie"] == "AGRKB:101000000400377"
     assert candidate_fields["with_from"] == []
     assert candidate_fields["qualifiers"] == []
     assert candidate_fields["annotation_extensions"] == []
@@ -350,7 +355,6 @@ def _legacy_go_payload() -> dict:
     }
     payload["evidence_code"] = "IDA"
     payload["evidence_eco_curie"] = "ECO:0000314"
-    payload.pop("reference")
     payload["reference_curie"] = "AGRKB:101000000400377"
     payload["resolution_state"] = "resolved"
     return payload
@@ -381,3 +385,51 @@ def test_legacy_gene_product_reads_as_legacy_unverified_without_a_validator_even
     assert effective["gene_product"]["resolution_state"] == "unresolved"
     assert effective["gene_product"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
     assert effective["gene_product"]["curie"] is None
+
+
+def _registered_go_materializer():
+    registry = CurationAdapterRegistry()
+    register_curation_adapters(registry)
+    return registry.get_review_row_materializer_for_domain_pack("agr.alliance.go")
+
+
+def test_previous_format_record_shows_its_stored_values_as_legacy_in_review():
+    """ALL-1302 review #2: old evidence code, ECO CURIE, reference and With/From are not blank."""
+
+    metadata, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    stored = {**_legacy_go_payload(), "with_from": ["RGD:619839"]}
+    legacy_object = envelope.extracted_objects[0].model_copy(update={"payload": stored})
+    legacy_envelope = envelope.model_copy(update={"extracted_objects": [legacy_object]})
+
+    rows = _registered_go_materializer().materialize(legacy_envelope, envelope_revision=1)
+
+    fields = {
+        field.field_key: field.value
+        for field in workspace_pipeline._draft_fields_from_review_row(rows[0])
+    }
+    assert fields["evidence_code.mention"] == f"IDA (ECO:0000314) {LEGACY_UNVERIFIED_SUFFIX}"
+    assert fields["evidence_code.code"] is None
+    assert fields["evidence_code.resolution_state"] == "unresolved"
+    assert fields["reference_curie.mention"] == f"AGRKB:101000000400377 {LEGACY_UNVERIFIED_SUFFIX}"
+    assert fields["reference_curie.curie"] is None
+    assert fields["with_from"][0]["mention"] == f"RGD:619839 {LEGACY_UNVERIFIED_SUFFIX}"
+    assert fields["with_from"][0]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+    assert rows[0].display_label == f"Lta protein {LEGACY_UNVERIFIED_SUFFIX}"
+    assert legacy_object.payload == stored  # The stored record is never rewritten.
+    assert "evidence_eco_curie" not in previous_format_display_payload(stored)
+
+
+def test_previous_format_record_gets_one_clear_revalidation_finding():
+    """ALL-1302 review #2: re-validating an old record says to re-run extraction."""
+
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    legacy_object = envelope.extracted_objects[0].model_copy(update={"payload": _legacy_go_payload()})
+    legacy_envelope = envelope.model_copy(update={"extracted_objects": [legacy_object]})
+
+    finding, = validate_go_envelope(legacy_envelope)
+    assert finding.code == PREVIOUS_FORMAT_FINDING_CODE
+    assert finding.message == "Recorded in the previous GO format; re-run extraction to validate."
+    assert finding.severity.value == "blocker"
+    assert validate_go_envelope(envelope) == ()

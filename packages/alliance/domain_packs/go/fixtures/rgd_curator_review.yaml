@@ -43,7 +43,7 @@ fixtures:
               resolution_state: resolved
               lookup_outcome: matched
               validator_explanation: null
-            reference:
+            reference_curie:
               mention: PMID:12345678
               curie: AGRKB:101000000400377
               resolution_state: resolved
@@ -130,7 +130,7 @@ fixtures:
               resolution_state: resolved
               lookup_outcome: matched
               validator_explanation: null
-            reference:
+            reference_curie:
               mention: PMID:23456789
               curie: AGRKB:101000000400377
               resolution_state: resolved

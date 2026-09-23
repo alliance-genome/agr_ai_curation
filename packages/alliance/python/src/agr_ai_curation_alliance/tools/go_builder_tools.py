@@ -44,6 +44,7 @@ from agr_ai_curation_alliance.domain_packs.go.values import (
     evidence_code_value,
     is_resolved,
     gene_product_value,
+    record_holds,
     go_term_value,
     reference_value,
     with_from_value,
@@ -68,7 +69,7 @@ _GO_PATCH_FIELD_PATHS = frozenset(
         "gene_product",
         "go_term",
         "evidence_code",
-        "reference",
+        "reference_curie",
         "with_from",
         "qualifiers",
         "annotation_extensions",
@@ -450,7 +451,7 @@ def _stage_payload(stage_input: GOStageInput) -> dict[str, Any]:
             "gene_product": stage_input.gene_product.value(),
             "go_term": stage_input.go_term.value(),
             "evidence_code": evidence_code_value(stage_input.evidence_code),
-            "reference": stage_input.reference.value(),
+            "reference_curie": stage_input.reference.value(),
             "with_from": _with_from_values(stage_input.with_from),
             "qualifiers": list(stage_input.qualifiers),
             "annotation_extensions": list(stage_input.annotation_extensions),
@@ -512,7 +513,28 @@ def _resolved_identity(value: Any, keys: Sequence[str]) -> list[Any]:
 
     if not is_resolved(value):
         return []
-    return [value.get(key) for key in keys]
+    return [value.get(key) for key in keys if value.get(key) not in (None, "")]
+
+
+def _append_record_requirement(
+    requirements: list[dict[str, Any]],
+    *,
+    field_path: str,
+    tool_names: set[str],
+    identity: list[Any],
+) -> None:
+    """A resolved value's identifier and label must come from ONE lookup record."""
+
+    if not identity:
+        return
+    if len(identity) == 1:
+        _append_grounding_requirements(
+            requirements, field_path=field_path, tool_names=tool_names, values=identity
+        )
+        return
+    requirements.append(
+        {"field_path": field_path, "tool_names": sorted(tool_names), "record": identity}
+    )
 
 
 def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -523,11 +545,11 @@ def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     requirements: list[dict[str, Any]] = []
 
     gene_identity = _resolved_identity(gene_product, ("curie", "label"))
-    _append_grounding_requirements(
+    _append_record_requirement(
         requirements,
         field_path="gene_product",
         tool_names=_IDENTITY_TOOLS,
-        values=gene_identity,
+        identity=gene_identity,
     )
     if identity:
         _append_grounding_requirements(
@@ -536,11 +558,11 @@ def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
             tool_names=_IDENTITY_TOOLS,
             values=identity,
         )
-    _append_grounding_requirements(
+    _append_record_requirement(
         requirements,
         field_path="go_term",
         tool_names=_TERM_TOOLS,
-        values=_resolved_identity(payload.get("go_term"), ("curie", "label", "aspect")),
+        identity=_resolved_identity(payload.get("go_term"), ("curie", "label", "aspect")),
     )
     if gene_identity:
         _append_grounding_requirements(
@@ -555,9 +577,9 @@ def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         )
     _append_grounding_requirements(
         requirements,
-        field_path="reference",
+        field_path="reference_curie",
         tool_names=_REFERENCE_TOOLS,
-        values=_resolved_identity(payload.get("reference"), ("curie",)),
+        values=_resolved_identity(payload.get("reference_curie"), ("curie",)),
     )
     with_from = payload.get("with_from")
     for index, entry in enumerate(with_from if isinstance(with_from, list) else []):
@@ -578,6 +600,21 @@ def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
             values=value,
         )
     return requirements
+
+
+def _matching_tool_output(ledger: Any, requirement: Mapping[str, Any]) -> Any:
+    tool_names = set(requirement["tool_names"])
+    if "record" not in requirement:
+        return ledger.find_tool_output_containing(
+            tool_names=tool_names, value=requirement["value"]
+        )
+    for tool_call_id in ledger.snapshot()["tool_output_ids"]:
+        entry = ledger.get_tool_output(tool_call_id)
+        if entry.tool_name in tool_names and record_holds(
+            entry.raw_output, requirement["record"]
+        ):
+            return entry
+    return None
 
 
 def _ground_payload(
@@ -602,18 +639,17 @@ def _ground_payload(
     refs: list[str] = []
     issues: list[dict[str, Any]] = []
     for requirement in requirements:
-        entry = ledger.find_tool_output_containing(
-            tool_names=set(requirement["tool_names"]), value=requirement["value"]
-        )
+        entry = _matching_tool_output(ledger, requirement)
         if entry is None:
             issues.append(
                 {
                     "field_path": requirement["field_path"],
                     "reason": "unobserved_tool_value",
                     "message": (
-                        "The staged value does not match a run-scoped output from an "
-                        "authoritative read-only tool. Look the identifier up first, or "
-                        "leave the identifier out to stage the paper wording unresolved."
+                        "The staged identifier does not match one record of a lookup "
+                        "result from this run. Copy the identifier and its label together, "
+                        "exactly as one lookup result returned them. Stage a value without "
+                        "an identifier only when no lookup returned one for it."
                     ),
                 }
             )
@@ -801,7 +837,7 @@ def _resolution_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     summary: dict[str, Any] = {
         field_path: payload[field_path].get("resolution_state")
-        for field_path in ("gene_product", "go_term", "evidence_code", "reference")
+        for field_path in ("gene_product", "go_term", "evidence_code", "reference_curie")
         if isinstance(payload.get(field_path), Mapping)
     }
     summary["with_from"] = [
@@ -840,7 +876,7 @@ def _patched_resolvable_value(field_path: str, value: Any) -> Any:
             return GOGeneProductInput.model_validate(value).value()
         if field_path == "go_term":
             return GOTermInput.model_validate(value).value()
-        if field_path == "reference":
+        if field_path == "reference_curie":
             return GOReferenceInput.model_validate(value).value()
         if field_path == "evidence_code":
             if not isinstance(value, str) or not value.strip():
@@ -858,7 +894,7 @@ def _patched_resolvable_value(field_path: str, value: Any) -> Any:
 
 
 _RESOLVABLE_PATCH_FIELDS = frozenset(
-    {"gene_product", "go_term", "evidence_code", "reference", "with_from"}
+    {"gene_product", "go_term", "evidence_code", "reference_curie", "with_from"}
 )
 
 
@@ -871,7 +907,7 @@ def _patch_go_recommendation_impl(
     Args:
         candidate_id: The staged candidate to correct.
         updates: Field corrections, each with field_path and value (or evidence_record_ids).
-            A GO value (gene_product, go_term, reference, each with_from entry) takes the
+            A GO value (gene_product, go_term, reference_curie, each with_from entry) takes the
             same shape as staging: the paper wording as `mention` plus the identifier only
             when a lookup returned it; evidence_code takes the code. The builder works out
             again whether each value is matched or unresolved.

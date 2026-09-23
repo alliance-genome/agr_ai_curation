@@ -17,6 +17,10 @@ from agr_ai_curation_alliance.domain_packs.generic import (
     get_generated_generic_domain_pack,
 )
 from agr_ai_curation_alliance.domain_packs.loader import get_alliance_domain_pack
+from agr_ai_curation_alliance.domain_packs.go.legacy import (
+    GOReviewRowMaterializer,
+    validate_go_envelope,
+)
 from agr_ai_curation_alliance.domain_packs.gene_expression import (
     GeneExpressionExportAdapter,
     GeneExpressionSubmissionAdapter,
@@ -65,6 +69,10 @@ _DOMAIN_SUBMISSION_TRANSPORTS = {
 }
 _DOMAIN_ENVELOPE_VALIDATORS = {
     "gene_expression": validate_pending_gene_expression_envelope,
+    "go": validate_go_envelope,
+}
+_REVIEW_ROW_MATERIALIZERS = {
+    "go": GOReviewRowMaterializer,
 }
 _EXTRACTION_PAYLOAD_NORMALIZERS = {
     "gene": normalize_gene_extraction_payload,
@@ -88,9 +96,9 @@ def register_curation_adapters(registry) -> None:
             domain_pack=domain_pack,
             domain_envelope_validator=_domain_envelope_validator_for(adapter_key),
             extraction_payload_normalizer=_extraction_payload_normalizer_for(adapter_key),
-            review_row_materializer=DomainPackMetadataReviewRowMaterializer(
-                metadata=domain_pack.metadata,
-            ),
+            review_row_materializer=_REVIEW_ROW_MATERIALIZERS.get(
+                adapter_key, DomainPackMetadataReviewRowMaterializer
+            )(metadata=domain_pack.metadata),
         )
 
     registry.register_adapter(

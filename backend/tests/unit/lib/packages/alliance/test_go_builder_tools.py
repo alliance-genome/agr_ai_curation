@@ -42,6 +42,7 @@ from agr_ai_curation_alliance.domain_packs.go.values import (  # noqa: E402
     gene_product_value,
     go_term_value,
     reference_value,
+    record_holds,
     with_from_value,
 )
 from agr_ai_curation_alliance.tools import go_builder_tools  # noqa: E402
@@ -90,7 +91,7 @@ def _candidate(*, resolution_state: str = "resolved", evidence_ids=None):
             aspect="molecular_function",
         ),
         "evidence_code": evidence_code_value("IPI"),
-        "reference": reference_value("PMID:12345678", curie="AGRKB:101000000400377"),
+        "reference_curie": reference_value("PMID:12345678", curie="AGRKB:101000000400377"),
         "with_from": [with_from_value("Ago2", curie="RGD:621255")],
         "qualifiers": [],
         "annotation_extensions": [],
@@ -183,7 +184,7 @@ def _ground_candidate(candidate, ledger):
         ),
         "call-reference": (
             "agr_literature_reference_lookup",
-            {"match": {"reference_curie": payload["reference"]["curie"]}},
+            {"match": {"reference_curie": payload["reference_curie"]["curie"]}},
         ),
     }
     for call_id, (tool_name, output) in outputs.items():
@@ -320,11 +321,11 @@ def test_reference_curie_grounding_requires_literature_lookup():
     reference_requirements = [
         requirement
         for requirement in requirements
-        if requirement["field_path"] == "reference"
+        if requirement["field_path"] == "reference_curie"
     ]
     assert reference_requirements == [
         {
-            "field_path": "reference",
+            "field_path": "reference_curie",
             "tool_names": ["agr_literature_reference_lookup"],
             "value": "AGRKB:101000000400377",
         }
@@ -518,7 +519,7 @@ def test_go_builder_rejects_invented_or_malformed_identifiers():
         ("gene_product.curie", "RGD:999999999"),
         ("go_term.curie", "GO:9999999"),
         ("evidence_code.eco_curie", "ECO:9999999"),
-        ("reference.curie", "PMID:99999999"),
+        ("reference_curie.curie", "PMID:99999999"),
         ("with_from", [with_from_value("Ago1", curie="RGD:999999998")]),
         (
             "provider_context.existing_annotation_context.provenance",
@@ -816,9 +817,10 @@ def test_go_stage_never_grounds_paper_wording(active_go_builder_context):
     requirements = workspace.get_candidate(staged.data["candidate_id"]).staged_fields[
         "source_grounding"
     ]["requirements"]
-    assert "a wording no tool returned" not in {
-        requirement["value"] for requirement in requirements
-    }
+    assert all(
+        "a wording no tool returned" not in [requirement.get("value"), *requirement.get("record", [])]
+        for requirement in requirements
+    )
     assert "resolution_state" not in payload
     assert staged.data["resolution"]["gene_product"] == "unresolved"
 
@@ -841,7 +843,7 @@ def test_go_stage_resolves_only_looked_up_identifiers(active_go_builder_context)
     assert payload["go_term"]["mention"] == "binds"
     assert payload["evidence_code"]["code"] == "IPI"
     assert payload["evidence_code"]["eco_curie"] == "ECO:0000353"
-    assert payload["reference"]["resolution_state"] == "resolved"
+    assert payload["reference_curie"]["resolution_state"] == "resolved"
     assert payload["with_from"][0]["mention"] == "Ago2"
     assert payload["with_from"][0]["resolution_state"] == "resolved"
 
@@ -850,7 +852,7 @@ def test_go_stage_resolves_only_looked_up_identifiers(active_go_builder_context)
     ("overrides", "field_path"),
     [
         ({"go_term_curie": "GO:0009999", "go_term_label": "invented"}, "go_term"),
-        ({"reference_curie": "AGRKB:999"}, "reference"),
+        ({"reference_curie": "AGRKB:999"}, "reference_curie"),
         ({"with_from": [{"mention": "Ago1", "curie": "RGD:999999998"}]}, "with_from[0]"),
     ],
 )
@@ -910,10 +912,10 @@ def test_go_stage_keeps_unmatched_values_unresolved(active_go_builder_context):
         "resolution_state": "unresolved",
         "lookup_outcome": "not_found",
         "validator_explanation": (
-            "Not a GO experimental evidence code with a known ECO class."
+            "GO evidence code not supported by this workflow's ECO table."
         ),
     }
-    assert payload["reference"]["curie"] is None
+    assert payload["reference_curie"]["curie"] is None
     assert payload["with_from"] == [
         {
             "curie": None,
@@ -985,13 +987,13 @@ def test_go_patch_rederives_resolution_and_rejects_state_keys(active_go_builder_
         candidate_id,
         [
             {
-                "field_path": "reference",
+                "field_path": "reference_curie",
                 "value": {"mention": "PMID:1", "curie": "AGRKB:invented"},
             }
         ],
     )
     assert ungrounded.status == "error"
-    assert payload["reference"]["curie"] == "AGRKB:101000000400377"
+    assert payload["reference_curie"]["curie"] == "AGRKB:101000000400377"
 
 
 @pytest.mark.parametrize(
@@ -1058,3 +1060,43 @@ def test_go_conversion_rejects_a_resolved_evidence_code_with_another_eco_class()
     result = _materialize(candidate, ground=False)
 
     assert "eco_mapping_mismatch" in {issue["reason"] for issue in result.issues}
+
+
+def test_go_term_curie_and_label_must_come_from_one_lookup_record():
+    """ALL-1302 review #8: a CURIE from one candidate and a label from another is rejected."""
+
+    ledger = resolver_call_ledger.ResolverCallLedger(trace_id="go-same-record")
+    ledger.record_tool_output(
+        tool_call_id="call-term",
+        tool_name="quickgo_api_call",
+        output={"results": [
+            {"id": "GO:0005515", "name": "protein binding", "aspect": "molecular_function"},
+            {"id": "GO:0005634", "name": "nucleus", "aspect": "cellular_component"},
+        ]},
+    )
+    token = resolver_call_ledger.set_active_resolver_call_ledger(ledger)
+    try:
+        mixed = {"go_term": go_term_value("binds", curie="GO:0005515", label="nucleus",
+                                          aspect="molecular_function")}
+        _, requirements, issues = go_builder_tools._ground_payload(mixed)
+        assert requirements == [{
+            "field_path": "go_term",
+            "tool_names": ["quickgo_api_call"],
+            "record": ["GO:0005515", "nucleus", "molecular_function"],
+        }]
+        assert [issue["reason"] for issue in issues] == ["unobserved_tool_value"]
+        assert "Stage a value without an identifier only when no lookup returned one" in issues[0]["message"]
+        assert "leave the identifier out to stage" not in issues[0]["message"]
+
+        matched = {"go_term": go_term_value("binds", curie="GO:0005515", label="protein binding",
+                                            aspect="molecular_function")}
+        refs, _, issues = go_builder_tools._ground_payload(matched)
+        assert (refs, issues) == (["call-term"], [])
+    finally:
+        resolver_call_ledger.reset_active_resolver_call_ledger(token)
+
+
+def test_finalization_rechecks_that_the_identity_comes_from_one_record():
+    output = {"gene_product": {"curie": "RGD:619839", "symbol": "Cttn"}, "other": {"symbol": "Ago2"}}
+    assert record_holds(output, ["RGD:619839", "Cttn"])
+    assert not record_holds(output, ["RGD:619839", "Ago2"])

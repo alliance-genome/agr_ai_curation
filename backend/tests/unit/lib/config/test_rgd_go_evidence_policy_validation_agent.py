@@ -95,8 +95,11 @@ def _result_payload(**overrides):
         "evidence_basis": "direct_assay",
         "proposed_evidence_code": "IDA",
         "proposed_evidence_eco_curie": "ECO:0000314",
+        "proposed_evidence_code_resolution_state": "resolved",
         "proposed_aspect": "molecular_function",
         "proposed_go_term_curie": "GO:0003674",
+        "proposed_go_term_resolution_state": "resolved",
+        "proposed_reference_resolution_state": "resolved",
         "proposed_with_from": [],
         "proposed_qualifiers": [],
         "proposed_annotation_extensions": [],
@@ -454,11 +457,22 @@ def test_imp_requires_perturbation_and_phenotype_in_rationale(monkeypatch):
 def _selected_inputs_for_result(payload):
     return {
         "go_term": {
+            "mention": "the proposed process",
             "curie": payload["proposed_go_term_curie"],
             "aspect": payload["proposed_aspect"],
+            "resolution_state": payload["proposed_go_term_resolution_state"],
         },
-        "evidence_code": payload["proposed_evidence_code"],
-        "evidence_eco_curie": payload["proposed_evidence_eco_curie"],
+        "evidence_code": {
+            "mention": "ida",
+            "code": payload["proposed_evidence_code"],
+            "eco_curie": payload["proposed_evidence_eco_curie"],
+            "resolution_state": payload["proposed_evidence_code_resolution_state"],
+        },
+        "reference_curie": {
+            "mention": "PMID:12345678",
+            "curie": "AGRKB:101000000400377",
+            "resolution_state": payload["proposed_reference_resolution_state"],
+        },
         "with_from": payload["proposed_with_from"],
         "qualifiers": payload["proposed_qualifiers"],
         "annotation_extensions": payload["proposed_annotation_extensions"],
@@ -526,8 +540,9 @@ def test_compact_policy_reads_with_from_entries_and_an_unmatched_evidence_code(m
         "validator_explanation": "Not validated yet.",
     }
     original = _result_payload(
-        proposed_evidence_code="TAS",
+        proposed_evidence_code=None,
         proposed_evidence_eco_curie=None,
+        proposed_evidence_code_resolution_state="unresolved",
         proposed_with_from=[partner],
     )
     request = DomainValidationRequest(
@@ -546,7 +561,9 @@ def test_compact_policy_reads_with_from_entries_and_an_unmatched_evidence_code(m
 
     assert result.policy_violations == [
         "evidence_code_mismatch", "eco_mapping_mismatch", "with_from_forbidden",
+        "evidence_code_unresolved", "with_from_unresolved",
     ]
+    assert result.proposed_evidence_code is None
     assert result.proposed_evidence_eco_curie is None
     assert [entry.model_dump(mode="json", exclude_unset=True) for entry in result.proposed_with_from] == [partner]
 
@@ -743,3 +760,69 @@ def test_typed_finalization_accepts_imp_facts_in_rationale_and_exact_evidence(
     )
 
     assert feedback.accepted_result is not None
+
+
+@pytest.mark.parametrize(
+    ("unresolved", "violation"),
+    [
+        ({"proposed_go_term_curie": None, "proposed_go_term_resolution_state": "unresolved"},
+         "go_term_unresolved"),
+        ({"proposed_reference_resolution_state": "unresolved"}, "reference_unresolved"),
+        ({"proposed_evidence_code": None, "proposed_evidence_eco_curie": None,
+          "proposed_evidence_code_resolution_state": "unresolved"}, "evidence_code_unresolved"),
+    ],
+)
+def test_compact_policy_never_passes_a_proposal_with_an_unresolved_value(monkeypatch, unresolved, violation):
+    """ALL-1302 review #1: an unresolved GO term (null CURIE) is valid input, and blocks submit_ready."""
+
+    from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
+    from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)["RGDGOEvidencePolicyValidationResult"]
+    original = _result_payload(**unresolved)
+    request = DomainValidationRequest(
+        request_id=original["request_id"], validator_binding_id=original["validator_binding_id"],
+        validator_agent=original["validator_agent"], target=original["target"],
+        selected_inputs=_selected_inputs_for_result(original),
+    )
+    contract = policy_decision_contract(request, schema)
+    decision = contract.decision_schema(
+        request_id=request.request_id, status="unresolved",
+        explanation="Assessment of the supplied evidence.",
+        scientific={name: original[name] for name in _SCIENTIFIC_FIELDS},
+    )
+
+    result = ValidatorDecisionWorkspace([contract]).assemble(decision)
+
+    assert violation in result.policy_violations
+    assert (result.status, result.decision) == ("unresolved", "curator_review_required")
+
+
+def test_policy_compares_the_matched_code_not_the_paper_wording(monkeypatch):
+    """ALL-1302 review #7: a lower-case mention of IDA matches through its normalised code."""
+
+    from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
+    from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)["RGDGOEvidencePolicyValidationResult"]
+    original = _result_payload()
+    selected = _selected_inputs_for_result(original)
+    assert selected["evidence_code"]["mention"] == "ida"
+    request = DomainValidationRequest(
+        request_id=original["request_id"], validator_binding_id=original["validator_binding_id"],
+        validator_agent=original["validator_agent"], target=original["target"],
+        selected_inputs=selected,
+    )
+    contract = policy_decision_contract(request, schema)
+    decision = contract.decision_schema(
+        request_id=request.request_id, status="resolved",
+        explanation="Assessment of the supplied evidence.",
+        scientific={name: original[name] for name in _SCIENTIFIC_FIELDS},
+    )
+
+    result = ValidatorDecisionWorkspace([contract]).assemble(decision)
+
+    assert result.proposed_evidence_code == "IDA"
+    assert result.policy_violations == []

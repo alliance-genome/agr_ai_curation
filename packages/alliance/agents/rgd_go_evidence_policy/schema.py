@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Literal
 
 from pydantic import Field, StrictBool, StrictStr, ValidationInfo, model_validator
@@ -52,7 +53,12 @@ RGDGOPolicyViolation = Literal[
     "negation_unsupported",
     "negated_binding_disallowed",
     "negated_extension_disallowed",
+    "evidence_code_unresolved",
+    "go_term_unresolved",
+    "reference_unresolved",
+    "with_from_unresolved",
 ]
+ResolutionState = Literal["resolved", "unresolved"]
 
 EVIDENCE_POLICY: dict[str, tuple[str, str]] = {
     "direct_assay": ("IDA", "ECO:0000314"),
@@ -105,17 +111,26 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
     evidence_basis: RGDGOEvidenceBasis = Field(
         description="Evidence class supported by the cited primary paper evidence"
     )
-    proposed_evidence_code: StrictStr = Field(
-        description="GO evidence code proposed for the candidate"
+    proposed_evidence_code: StrictStr | None = Field(
+        description="GO evidence code the builder matched for the candidate; null while unresolved"
     )
     proposed_evidence_eco_curie: StrictStr | None = Field(
-        description="ECO CURIE the builder matched to the proposed code; null when the code has no known ECO class"
+        description="ECO CURIE the builder matched to the evidence code; null while unresolved"
+    )
+    proposed_evidence_code_resolution_state: ResolutionState = Field(
+        description="Whether the evidence code matched a supported code"
     )
     proposed_aspect: RGDGOAspect = Field(
         description="GO aspect copied from the candidate term"
     )
-    proposed_go_term_curie: StrictStr = Field(
-        description="GO CURIE copied from the candidate term"
+    proposed_go_term_curie: StrictStr | None = Field(
+        description="GO CURIE copied from the candidate term; null while the term is unresolved"
+    )
+    proposed_go_term_resolution_state: ResolutionState = Field(
+        description="Whether a lookup matched the candidate's GO term"
+    )
+    proposed_reference_resolution_state: ResolutionState = Field(
+        description="Whether a lookup matched the candidate's reference"
     )
     proposed_with_from: list[RGDGOWithFromEntry] = Field(
         description="With/From entries copied from the candidate"
@@ -247,8 +262,52 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
             violations.append("negated_binding_disallowed")
         if self.proposed_negated and self.proposed_annotation_extensions:
             violations.append("negated_extension_disallowed")
+        # A proposal is never submit-ready while any of its values is unresolved.
+        if self.proposed_evidence_code_resolution_state != "resolved":
+            violations.append("evidence_code_unresolved")
+        if self.proposed_go_term_resolution_state != "resolved":
+            violations.append("go_term_unresolved")
+        if self.proposed_reference_resolution_state != "resolved":
+            violations.append("reference_unresolved")
+        # Entries are validated here too: the compact path builds this model unvalidated.
+        if any(
+            RGDGOWithFromEntry.model_validate(entry).resolution_state != "resolved"
+            for entry in self.proposed_with_from
+        ):
+            violations.append("with_from_unresolved")
 
         return violations
+
+    @classmethod
+    def proposal_facts(cls, selected_inputs: Mapping[str, object]) -> dict[str, object]:
+        """The proposal fields as the candidate stores them; the only source for the copies."""
+
+        go_term = selected_inputs.get("go_term")
+        evidence_code = selected_inputs.get("evidence_code")
+        reference = selected_inputs.get("reference_curie")
+        if not isinstance(go_term, Mapping):
+            raise ValueError("selected_inputs.go_term must be a mapping")
+        if not isinstance(evidence_code, Mapping):
+            raise ValueError("selected_inputs.evidence_code must be a mapping")
+        if not isinstance(reference, Mapping):
+            raise ValueError("selected_inputs.reference_curie must be a mapping")
+        return {
+            "proposed_evidence_code": evidence_code.get("code"),
+            "proposed_evidence_eco_curie": evidence_code.get("eco_curie"),
+            "proposed_evidence_code_resolution_state": evidence_code.get("resolution_state"),
+            "proposed_aspect": go_term.get("aspect"),
+            "proposed_go_term_curie": go_term.get("curie"),
+            "proposed_go_term_resolution_state": go_term.get("resolution_state"),
+            "proposed_reference_resolution_state": reference.get("resolution_state"),
+            "proposed_with_from": deepcopy(selected_inputs.get("with_from", [])),
+            "proposed_qualifiers": deepcopy(selected_inputs.get("qualifiers", [])),
+            "proposed_annotation_extensions": deepcopy(
+                selected_inputs.get("annotation_extensions", [])
+            ),
+            "proposed_negated": selected_inputs.get("negated"),
+            "proposed_rationale": selected_inputs.get("rationale"),
+            "proposed_resolution_state": selected_inputs.get("resolution_state"),
+        }
 
     def _validate_policy_consequences(self, violations: list[str]) -> None:
 
@@ -322,23 +381,7 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
         if not isinstance(selected_inputs, Mapping):
             return
 
-        go_term = selected_inputs.get("go_term")
-        if not isinstance(go_term, Mapping):
-            raise ValueError("selected_inputs.go_term must be a mapping")
-        expected_values = {
-            "proposed_evidence_code": selected_inputs.get("evidence_code"),
-            "proposed_evidence_eco_curie": selected_inputs.get("evidence_eco_curie"),
-            "proposed_aspect": go_term.get("aspect"),
-            "proposed_go_term_curie": go_term.get("curie"),
-            "proposed_with_from": selected_inputs.get("with_from", []),
-            "proposed_qualifiers": selected_inputs.get("qualifiers", []),
-            "proposed_annotation_extensions": selected_inputs.get(
-                "annotation_extensions", []
-            ),
-            "proposed_negated": selected_inputs.get("negated"),
-            "proposed_rationale": selected_inputs.get("rationale"),
-            "proposed_resolution_state": selected_inputs.get("resolution_state"),
-        }
+        expected_values = self.proposal_facts(selected_inputs)
         drifted = [
             field_name
             for field_name, expected in expected_values.items()

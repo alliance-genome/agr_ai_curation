@@ -491,6 +491,32 @@ def _payload_for_entry(
     return unresolved_payload(payload, resolvable_fields=entry.resolvable_fields)
 
 
+def missing_staged_payload_fields(
+    staged_fields: Mapping[str, Any],
+    *,
+    entry: GenericClassCatalogEntry,
+) -> list[str]:
+    """Required class fields a staged candidate lacks, checked when it is staged.
+
+    Evidence location fields are left out: they come from the verified
+    evidence record when the extraction is finalized.
+    """
+
+    payload = _payload_for_entry(
+        staged_fields,
+        entry=entry,
+        label=_clean_text(staged_fields.get("label")) or "",
+        first_evidence_record=None,
+    )
+    return [
+        field_path
+        for field_path in _missing_required_payload_fields(
+            payload, required_payload_fields=entry.required_payload_fields
+        )
+        if field_path not in EVIDENCE_SOURCE_FIELDS
+    ]
+
+
 def _set_declared_payload_value(
     payload: dict[str, Any],
     key: str,
@@ -679,4 +705,5 @@ __all__ = [
     "GenericBuilderExtractionOutput",
     "GenericMaterializationResult",
     "materialize_generic_builder_state",
+    "missing_staged_payload_fields",
 ]

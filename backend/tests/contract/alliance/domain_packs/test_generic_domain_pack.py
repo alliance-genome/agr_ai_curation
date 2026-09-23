@@ -1282,3 +1282,32 @@ def test_generic_staged_paper_wording_materializes_unresolved_not_validated(
         code["resolution_state"] == "unresolved" and code["curie"] is None for code in payload["codes"]
     )
 
+
+
+def test_generic_required_fields_are_checked_when_staged(active_generic_builder_workspace):
+    """ALL-1302 review #5: a missing required field fails at staging, not only at finalize."""
+
+    claim = generic_builder_tools._stage_generic_object_impl(
+        class_key="generic:generic_claim",
+        label="principal finding",
+        description="The screen identified TRiP.HMS00001.",
+        evidence_record_ids=["evidence-generic-1"],
+        classification_notes=["This is a paper-level result claim."],
+        rationale="The paper names this item in its Results.",
+    )
+    assert claim.status == "error"
+    assert ("payload.claim_text", "missing_required_payload_field") in {
+        (issue["field_path"], issue["reason"]) for issue in claim.data["validation_issues"]
+    }
+
+    staged = _gene_proxy_staged()
+    gene = generic_builder_tools._stage_generic_object_impl(
+        class_key=staged["class_key"],
+        label=staged["label"],
+        confidence=staged["confidence"],
+        evidence_record_ids=["evidence-generic-1"],
+        classification_notes=staged["classification_notes"],
+        rationale=staged["rationale"],
+        payload=staged["payload"],
+    )
+    assert gene.status == "ok", gene

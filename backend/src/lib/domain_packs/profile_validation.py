@@ -20,8 +20,8 @@ from src.lib.agent_studio.profile_mapping_service import (
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.resolvable_values import (
-    LOOKUP_OUTCOME_KEY, LOOKUP_OUTCOMES, MENTION_KEY, RESOLUTION_STATE_KEY, RESOLUTION_STATES,
-    VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY, resolvable_leaf_header,
+    LOOKUP_OUTCOME_KEY, LOOKUP_OUTCOMES, RESOLUTION_STATE_KEY, RESOLUTION_STATES,
+    VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY, ResolvableSpec,
 )
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry, ValidatorBinding, ValidationAttachmentOption, ValidationBindingState,
@@ -175,7 +175,7 @@ def compile_profile_validation(
         bindings.append(binding)
         selected.append(capability)
 
-    fields, enums = _profile_fields(contract.fields, fanout_paths, profile.resolvable_objects())
+    fields, enums = _profile_fields(contract.fields, fanout_paths, profile.resolvable_specs())
     # Only the closed profile's fields and bindings enter the overlay: no
     # generic-proxy aliases, source mirrors, inferred reference object classes,
     # packaged validators, or LinkML model claims leak into this context.
@@ -303,7 +303,7 @@ def profile_validation_attachment_metadata(context: ProfileValidationContext) ->
 
 
 def _profile_fields(profile_fields: list[ProfileField], fanout_paths: set[str],
-                    resolvable: Mapping[str, tuple[str, ...]]):
+                    resolvable: Mapping[str, ResolvableSpec]):
     fields = [DomainPackFieldDefinition(field_path="semantic_class", field_type=DomainPackFieldType.STRING, required=True),
               DomainPackFieldDefinition(field_path="attributes", field_type=DomainPackFieldType.OBJECT, required=True),
               # Optional so records staged before the builder required a rationale still load.
@@ -312,8 +312,8 @@ def _profile_fields(profile_fields: list[ProfileField], fanout_paths: set[str],
                                         metadata={"protected": True,
                                                   "curator_action_note": "Written by the extraction agent; not editable."})]
     enums = []
-    # A resolvable value's own leaves, keyed by its path without array markers.
-    resolvable_paths = {path.replace("[]", ""): identity for path, identity in resolvable.items()}
+    # Each resolvable value by its field path (array element values sit on the array field).
+    resolvable_paths = {path.replace("[]", ""): spec for path, spec in resolvable.items()}
 
     def enum_for(path: str, values) -> str:
         enum_id = "profile_" + sha256(path.encode()).hexdigest()
@@ -321,41 +321,40 @@ def _profile_fields(profile_fields: list[ProfileField], fanout_paths: set[str],
                                              values=[DomainPackEnumValue(value=value) for value in values]))
         return enum_id
 
-    def visit(field: ProfileField, prefix: str, parent_label: str | None = None):
+    def visit(field: ProfileField, prefix: str):
         path = prefix + "." + field.key
         schema = field.value_schema
         enum_id = None
         if schema.kind == "enum":
             enum_id = enum_for(path, schema.values)
-        display_name = field.display_name or field.key
-        if parent_label is not None and field.key == MENTION_KEY:
-            # The paper wording is its own column, labelled as such (ALL-1283).
-            display_name = resolvable_leaf_header(parent_label, MENTION_KEY)
+        spec = resolvable_paths.get(path)
+        metadata = {"nullable": field.nullable, "multivalued": path in fanout_paths,
+                    "editable": True, "description": field.description}
+        if spec is not None:
+            # A resolvable value reads "label (id)" or UNRESOLVED, its paper wording apart (ALL-1283).
+            metadata["display"] = {role: key for role, key in (
+                ("label", spec.label_key), ("id", spec.id_key), ("mention", spec.mention_key)) if key}
         fields.append(DomainPackFieldDefinition(
             field_path=path, field_type=DomainPackFieldType(schema.kind), required=field.required, enum_ref=enum_id,
-            display_name=display_name,
-            metadata={"nullable": field.nullable, "multivalued": path in fanout_paths,
-                      "editable": True, "description": field.description},
+            display_name=field.display_name or field.key, metadata=metadata,
         ))
         if schema.kind == "array":
             schema = schema.items
         if schema.kind == "object":
-            identity = resolvable_paths.get(path)
-            label = (field.display_name or field.key) if identity is not None else None
             for child in schema.fields:
-                if identity is None or (child.key not in _RESOLUTION_LEAVES):
-                    visit(child, path, label)
-            if identity is not None:
-                resolution_leaves(path, label)
+                if spec is None or child.key not in _RESOLUTION_LEAVES:
+                    visit(child, path)
+            if spec is not None:
+                resolution_leaves(path)
 
-    def resolution_leaves(path: str, label: str):
+    def resolution_leaves(path: str):
         """The resolvable value's state, lookup result and validator text, written by validation."""
         for key, field_type, values in _RESOLUTION_LEAVES.values():
             leaf = path + "." + key
             fields.append(DomainPackFieldDefinition(
                 field_path=leaf, field_type=field_type,
                 enum_ref=enum_for(leaf, values) if values else None,
-                display_name=resolvable_leaf_header(label, key), required=False,
+                display_name=key, required=False,
                 metadata={"nullable": True, "read_only": True},
             ))
 

@@ -34,6 +34,7 @@ from .values import (
     RESOLVABLE_LIST_FIELDS,
     RESOLVABLE_VALUE_FIELDS,
     is_resolved,
+    record_holds,
 )
 
 
@@ -55,7 +56,7 @@ _SUPPORTED_EVIDENCE_FIELD_ROOTS = frozenset(
         "gene_product",
         "go_term",
         "evidence_code",
-        "reference",
+        "reference_curie",
         "with_from",
         "qualifiers",
         "annotation_extensions",
@@ -72,7 +73,7 @@ _REQUIRED_PAYLOAD_PATHS = (
     "go_term.mention",
     "go_term.aspect",
     "evidence_code.mention",
-    "reference.mention",
+    "reference_curie.mention",
     "with_from",
     "qualifiers",
     "annotation_extensions",
@@ -486,7 +487,7 @@ def _validate_payload(
     identifier_checks = (
         ("go_term.curie", _GO_CURIE_PATTERN, "invalid_go_curie"),
         ("evidence_code.eco_curie", _ECO_CURIE_PATTERN, "invalid_eco_curie"),
-        ("reference.curie", _CURIE_PATTERN, "invalid_reference_curie"),
+        ("reference_curie.curie", _CURIE_PATTERN, "invalid_reference_curie"),
     )
     for field_path, pattern, reason in identifier_checks:
         value = _path_value(payload, field_path)
@@ -750,11 +751,9 @@ def _validate_source_grounding(
         if not isinstance(requirement, Mapping):
             continue
         allowed_tools = set(requirement.get("tool_names") or [])
-        value = requirement.get("value")
         if not any(
             getattr(entry, "tool_name", None) in allowed_tools
-            and callable(getattr(entry, "contains", None))
-            and entry.contains(value)
+            and _satisfies(entry, requirement)
             for entry in entries
         ):
             issues.append(
@@ -765,6 +764,14 @@ def _validate_source_grounding(
                     candidate_id,
                 )
             )
+
+
+def _satisfies(entry: Any, requirement: Mapping[str, Any]) -> bool:
+    """A lookup output backs a requirement: one value, or one record holding a whole identity."""
+
+    if "record" in requirement:
+        return record_holds(getattr(entry, "raw_output", None), requirement["record"])
+    return callable(getattr(entry, "contains", None)) and entry.contains(requirement.get("value"))
 
 
 def _pending_ref_id(

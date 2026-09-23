@@ -489,9 +489,19 @@ def test_overlay_declares_a_resolvable_values_paper_wording_and_resolution_leave
     metadata = context.registry.domain_pack.metadata
     fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
     enums = {enum.enum_id: [value.value for value in enum.values] for enum in metadata.enum_definitions}
-    assert fields["attributes.gene.mention"].display_name == "Gene (paper wording)"
+    # The value reads "label (id)" or UNRESOLVED; the core legacy rule and headers use this spec.
+    assert fields["attributes.gene"].metadata["display"] == {"id": "gene_id", "mention": "mention"}
     assert enums[fields["attributes.gene.resolution_state"].enum_ref] == list(RESOLUTION_STATES)
     assert enums[fields["attributes.gene.lookup_outcome"].enum_ref] == list(LOOKUP_OUTCOMES)
-    assert fields["attributes.gene.lookup_outcome"].display_name == "Gene (lookup result)"
     assert fields["attributes.gene.validator_explanation"].field_type.value == "string"
     assert "attributes.gene.validator_curator_message" in fields
+    # A value stored before the contract goes through the shared legacy rule.
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, effective_payload
+    from src.lib.flows.value_display import display_text
+
+    specs = declared_resolvable_fields(metadata, "generic_object")
+    legacy = effective_payload({"attributes": {"gene": {"mention": "daf-16", "gene_id": "EX:1"}}},
+                               specs, object_metadata={})
+    assert legacy["attributes"]["gene"]["lookup_outcome"] == "legacy_unverified"
+    assert legacy["attributes"]["gene"]["gene_id"] is None
+    assert display_text(legacy["attributes"]["gene"], fields["attributes.gene"].metadata["display"]) == "UNRESOLVED"

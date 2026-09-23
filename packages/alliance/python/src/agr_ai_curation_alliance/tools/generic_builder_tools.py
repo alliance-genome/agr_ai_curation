@@ -39,6 +39,7 @@ from agr_ai_curation_alliance.domain_packs.generic.attributes import (
     normalize_generic_attributes,
     normalized_attribute_keys,
 )
+from agr_ai_curation_alliance.domain_packs.generic.conversion import missing_staged_payload_fields
 from agr_ai_curation_alliance.domain_packs.generic.values import extractor_payload_issues
 
 from .agr_curation import (
@@ -442,17 +443,30 @@ def _validate_payload_keys_for_entry(
         )
 
 
-def _extractor_payload_issues(payload: Any, *, entry: Any) -> list[dict[str, str]]:
-    """Fields the extractor may not write, and resolvable values missing their paper wording."""
+def _extractor_payload_issues(staged_fields: Mapping[str, Any], *, entry: Any) -> list[dict[str, str]]:
+    """Fields the extractor may not write, resolvable values missing their paper
+    wording, and required class fields the candidate lacks."""
 
-    if not isinstance(payload, Mapping):
-        return []
-    return extractor_payload_issues(
-        payload,
+    payload = staged_fields.get("payload")
+    issues = extractor_payload_issues(
+        payload if isinstance(payload, Mapping) else {},
         resolvable_fields=entry.resolvable_fields,
         validator_owned_fields=entry.validator_owned_fields,
         payload_fields=entry.payload_fields,
     )
+    if issues:
+        return issues
+    return [
+        {
+            "field_path": f"payload.{field_path}",
+            "reason": "missing_required_payload_field",
+            "message": (
+                f"{entry.class_key} requires {field_path}; stage it from the paper, "
+                "nothing fills it in from another field."
+            ),
+        }
+        for field_path in missing_staged_payload_fields(staged_fields, entry=entry)
+    ]
 
 
 def _list_generic_object_classes_impl(
@@ -582,7 +596,9 @@ def _stage_generic_object_impl(
                 attempted_query=attempted_query,
             )
         staged_payload = _stage_payload_from_generic_input(stage_input, entry=entry)
-        payload_issues = _extractor_payload_issues(stage_input.payload, entry=entry)
+        payload_issues = (
+            [] if profile is not None else _extractor_payload_issues(staged_payload, entry=entry)
+        )
         if payload_issues:
             return _generic_validation_result(
                 message="stage_generic_object rejected payload values the extractor does not write.",
@@ -876,7 +892,9 @@ def _patch_generic_object_impl(
                 method="patch_generic_object",
                 attempted_query=attempted_query,
             )
-        payload_issues = _extractor_payload_issues(raw_payload, entry=entry)
+        payload_issues = (
+            [] if profile is not None else _extractor_payload_issues(staged_payload, entry=entry)
+        )
         if payload_issues:
             return _generic_validation_result(
                 message="patch_generic_object rejected payload values the extractor does not write.",

@@ -15,7 +15,7 @@ from typing import Any
 from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS, LOOKUP_OUTCOME_KEY, LOOKUP_OUTCOMES, MENTION_KEY, RESOLUTION_STATE_KEY,
     RESOLUTION_STATES, VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY,
-    ResolvableValueError, check_resolvable_value, has_resolution_state, unresolved_value,
+    ResolvableSpec, ResolvableValueError, check_resolvable_value, has_resolution_state, unresolved_value,
 )
 from src.lib.openai_agents.config import (
     get_generic_profile_max_issues,
@@ -39,27 +39,75 @@ def declared_value_path(path: str) -> str:
     return re.sub(r"\[[0-9]+\]", "[]", path)
 
 
+def _mapped_paths(contract: GenericProfileContract) -> tuple[dict[str, list[str]], set[str]]:
+    """({destination: [output slot names]}, {field paths mappings read}), in declared ``[]`` notation."""
+    destinations: dict[str, list[str]] = {}
+    reads: set[str] = set()
+    for mapping in contract.validator_mappings:
+        for slot, destination in mapping.outputs.items():
+            destinations.setdefault(destination, []).append(slot)
+        reads.update(item.field_path for item in mapping.inputs.values()
+                     if item.source == "field" and item.field_path)
+    return destinations, reads
+
+
+def validator_owned_paths(contract: GenericProfileContract) -> set[str]:
+    """Mapped destinations the extractor never writes: validation fills them in.
+
+    A destination a mapping also reads stays the extractor's to write, so
+    saved profiles keep their validator input.
+    """
+    destinations, reads = _mapped_paths(contract)
+    return {destination for destination in destinations if destination not in reads}
+
+
 def resolvable_objects(contract: GenericProfileContract) -> dict[str, tuple[str, ...]]:
     """The profile's resolvable values: {declared object path: identity keys}.
 
     An object is resolvable when it declares a string ``mention`` field (the
-    paper wording) and a validator mapping writes into it; the keys mappings
-    write are its identity (ALL-1283). Other mapped destinations stay plain.
+    paper wording) and validator mappings write into it without reading what
+    they write; the keys they write are its identity (ALL-1283). Other mapped
+    destinations stay plain.
     """
+    destinations, reads = _mapped_paths(contract)
     objects: dict[str, list[str]] = {}
-    for mapping in contract.validator_mappings:
-        for destination in mapping.outputs.values():
-            parent, _, key = destination.rpartition(".")
-            schema = _declared_schema(contract.fields, parent)
-            if not isinstance(schema, ObjectValueSchema):
-                continue
-            mention = next((field for field in schema.fields if field.key == MENTION_KEY), None)
-            if mention is None or mention.value_schema.kind != "string":
-                continue
-            keys = objects.setdefault(parent, [])
-            if key not in keys:
-                keys.append(key)
-    return {path: tuple(keys) for path, keys in objects.items()}
+    shared: set[str] = set()
+    for destination in destinations:
+        parent, _, key = destination.rpartition(".")
+        schema = _declared_schema(contract.fields, parent)
+        if not isinstance(schema, ObjectValueSchema):
+            continue
+        mention = next((field for field in schema.fields if field.key == MENTION_KEY), None)
+        if mention is None or mention.value_schema.kind != "string":
+            continue
+        if destination in reads or key == MENTION_KEY:
+            shared.add(parent)
+        keys = objects.setdefault(parent, [])
+        if key not in keys:
+            keys.append(key)
+    return {path: tuple(keys) for path, keys in objects.items() if path not in shared}
+
+
+_IDENTIFIER_NAME = re.compile(r"(?:^|_)(?:id|curie|identifier)$")
+
+
+def resolvable_specs(contract: GenericProfileContract) -> dict[str, ResolvableSpec]:
+    """Each resolvable value's display roles: its identifier key and its label key.
+
+    The identifier is the identity key whose name, or the validator output slot
+    writing it, names an identifier (``..._id``, ``curie``, ``identifier``);
+    the label is its first other identity key.
+    """
+    destinations, _ = _mapped_paths(contract)
+    specs: dict[str, ResolvableSpec] = {}
+    for path, identity in resolvable_objects(contract).items():
+        def names_identifier(key: str) -> bool:
+            names = [key, *destinations.get(f"{path}.{key}", [])]
+            return any(_IDENTIFIER_NAME.search(name) for name in names)
+        id_key = next((key for key in identity if names_identifier(key)), None)
+        label_key = next((key for key in identity if key != id_key), None)
+        specs[path] = ResolvableSpec(id_key=id_key, label_key=label_key)
+    return specs
 
 
 def _declared_schema(fields: list[ProfileField], path: str) -> ValueSchema | None:
@@ -145,6 +193,15 @@ class ResolvedGenericProfile:
     def resolvable_objects(self) -> dict[str, tuple[str, ...]]:
         return resolvable_objects(self.contract)
 
+    def resolvable_specs(self) -> dict[str, ResolvableSpec]:
+        return resolvable_specs(self.contract)
+
+    def validator_owned_paths(self) -> set[str]:
+        return validator_owned_paths(self.contract)
+
+    def _extractor_shape(self) -> "_ExtractorShape":
+        return _ExtractorShape(self.resolvable_objects(), self.validator_owned_paths())
+
     def resolvable_container(self, destination: str) -> tuple[str, str] | None:
         """(concrete container path, identity key) when a mapped destination sits in a resolvable value."""
         parent, _, key = destination.rpartition(".")
@@ -188,15 +245,15 @@ class ResolvedGenericProfile:
         A resolvable value takes only what the extractor writes: its paper
         wording and its other declared fields, never its identity or state.
         """
-        return _object_schema(self.contract.fields, "attributes", self.resolvable_objects())
+        return _object_schema(self.contract.fields, "attributes", self._extractor_shape())
 
     def patch_schema(self) -> dict[str, Any]:
         """Typed canonical paths, including array index and subtree replacements."""
         variants = []
-        resolvable = self.resolvable_objects()
+        shape = self._extractor_shape()
 
         def add(path_pattern: str, declared: str, schema: ValueSchema, nullable: bool = False) -> None:
-            value = _value_schema(schema, declared, resolvable)
+            value = _value_schema(schema, declared, shape)
             if nullable:
                 value = {"anyOf": [value, {"type": "null"}]}
             variants.append({"type": "object", "additionalProperties": False,
@@ -205,7 +262,7 @@ class ResolvedGenericProfile:
                                  "value": value,
                              }})
             if schema.kind == "object":
-                for field in _extractor_fields(schema.fields, resolvable.get(declared)):
+                for field in shape.fields(schema.fields, declared):
                     add(path_pattern + r"\." + re.escape(field.key), declared + "." + field.key,
                         field.value_schema, field.nullable)
             elif schema.kind == "array":
@@ -235,6 +292,7 @@ class ResolvedGenericProfile:
         """
         issues: list[dict[str, Any]] = []
         resolvable = self.resolvable_objects()
+        validator_owned = self.validator_owned_paths()
         issue_limit = get_generic_profile_max_issues()
         value_limit = get_generic_profile_max_record_values()
         visited = 0
@@ -284,14 +342,17 @@ class ResolvedGenericProfile:
                       "Choose one of the declared values: " + ", ".join(schema.values))
             elif schema.kind == "object" and isinstance(value, dict):
                 fields = {field.key: field for field in schema.fields}
-                identity = resolvable.get(declared_value_path(path))
-                system_keys = () if identity is None else (*identity, *RESOLUTION_KEYS)
+                declared = declared_value_path(path)
+                identity = resolvable.get(declared)
+                owned = {key for key in fields if f"{declared}.{key}" in validator_owned}
+                system_keys = owned | (set(RESOLUTION_KEYS) if identity is not None else set())
                 if identity is not None:
                     check_resolvable(value, identity, path)
                 for key in value:
                     if key in system_keys and extractor_input:
                         issue(f"{path}.{key}", "validator_owned_field", "paper wording", _kind(value[key]),
-                              "Validation fills this in; write only the paper wording in mention.")
+                              "Validation fills this in; do not write it. Write the paper's wording "
+                              "in the value's mention field.")
                     elif key not in fields and key not in system_keys:
                         issue(f"{path}.{key}", "undeclared_field", "declared canonical field", _kind(value[key]),
                               "Remove the undeclared field; source labels are not output keys.")
@@ -299,8 +360,8 @@ class ResolvedGenericProfile:
                     field_path = f"{path}.{field.key}"
                     if field.key in system_keys and (extractor_input or field.key in RESOLUTION_KEYS):
                         continue
-                    if identity is not None and field.key in identity and value.get(field.key) is None:
-                        continue  # An unresolved value's identity is empty.
+                    if field.key in owned and value.get(field.key) is None:
+                        continue  # Filled in by validation; empty until it resolves.
                     if identity is not None and extractor_input and field.key == MENTION_KEY and (
                             not isinstance(value.get(MENTION_KEY), str) or not value[MENTION_KEY].strip()):
                         issue(field_path, "missing_paper_wording", "string", _kind(value.get(MENTION_KEY)),
@@ -496,21 +557,26 @@ def _patch_issue(candidate_id: str | None, path: str, message: str) -> dict[str,
             "expected": "declared path", "actual_kind": "path", "message": message}
 
 
-def _extractor_fields(fields: list[ProfileField], identity: tuple[str, ...] | None) -> list[ProfileField]:
-    """The fields an extractor writes; a resolvable value's identity and state are the validator's."""
-    if identity is None:
-        return fields
-    return [field for field in fields if field.key not in identity and field.key not in RESOLUTION_KEYS]
+class _ExtractorShape:
+    """What the extractor writes: never a validator-owned field or a resolvable value's state."""
+
+    def __init__(self, resolvable: dict[str, tuple[str, ...]], owned: set[str]):
+        self.resolvable = resolvable
+        self.owned = owned
+
+    def fields(self, fields: list[ProfileField], path: str) -> list[ProfileField]:
+        excluded = set(RESOLUTION_KEYS) if path in self.resolvable else set()
+        return [field for field in fields
+                if field.key not in excluded and f"{path}.{field.key}" not in self.owned]
 
 
 def _object_schema(fields: list[ProfileField], path: str = "attributes",
-                   resolvable: dict[str, tuple[str, ...]] | None = None) -> dict[str, Any]:
-    resolvable = resolvable or {}
-    identity = resolvable.get(path)
-    fields = _extractor_fields(fields, identity)
+                   shape: _ExtractorShape | None = None) -> dict[str, Any]:
+    resolvable = path in shape.resolvable if shape is not None else False
+    fields = shape.fields(fields, path) if shape is not None else fields
     properties = {}
     for field in fields:
-        schema: dict[str, Any] = _value_schema(field.value_schema, f"{path}.{field.key}", resolvable)
+        schema: dict[str, Any] = _value_schema(field.value_schema, f"{path}.{field.key}", shape)
         if field.nullable:
             schema = {"anyOf": [schema, {"type": "null"}]}
         description = field.description
@@ -521,15 +587,15 @@ def _object_schema(fields: list[ProfileField], path: str = "attributes",
         properties[field.key] = schema
     return {"type": "object", "properties": properties, "additionalProperties": False,
             "required": [field.key for field in fields
-                         if field.required or (identity is not None and field.key == MENTION_KEY)]}
+                         if field.required or (resolvable and field.key == MENTION_KEY)]}
 
 
 def _value_schema(schema: ValueSchema, path: str = "attributes",
-                  resolvable: dict[str, tuple[str, ...]] | None = None) -> dict[str, Any]:
+                  shape: _ExtractorShape | None = None) -> dict[str, Any]:
     if schema.kind == "object":
-        return _object_schema(schema.fields, path, resolvable)
+        return _object_schema(schema.fields, path, shape)
     if schema.kind == "array":
-        return {"type": "array", "items": _value_schema(schema.items, path + "[]", resolvable)}
+        return {"type": "array", "items": _value_schema(schema.items, path + "[]", shape)}
     if schema.kind == "enum":
         return {"type": "string", "enum": list(schema.values)}
     return {"type": schema.kind}

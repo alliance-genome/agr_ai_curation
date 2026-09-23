@@ -10,7 +10,7 @@ from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.capabilities import object_capabilities
 from src.lib.domain_packs.resolvable_values import (
     ResolvableSpec,
-    resolvable_spec_from_display,
+    declared_resolvable_fields,
 )
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -379,48 +379,40 @@ def _entry_from_object_definition(
             source_pack.metadata, object_definition,
             active_validators=len(active), development_validators=len(under_dev),
         ),
-        resolvable_fields=_resolvable_fields(source_pack, object_definition),
-        validator_owned_fields=tuple(
-            dict.fromkeys(
-                str(field_path)
-                for binding in registry.bindings
-                if _binding_applies_to_object(
-                    binding,
-                    source_pack_id=source_pack.pack_id,
-                    object_definition=object_definition,
-                )
-                for field_path in binding.expected_result_fields.values()
-            )
+        resolvable_fields=declared_resolvable_fields(
+            source_pack.metadata, object_definition.object_type
+        ),
+        validator_owned_fields=_validator_owned_fields(
+            registry, source_pack_id=source_pack.pack_id, object_definition=object_definition
         ),
     )
 
 
-def _resolvable_fields(
-    source_pack: LoadedDomainPack,
+def _validator_owned_fields(
+    registry: DomainPackValidationRegistry,
+    *,
+    source_pack_id: str,
     object_definition: DomainPackObjectDefinition,
-) -> dict[str, ResolvableSpec]:
-    """The object's declared resolvable values: a display spec with a mention role.
+) -> tuple[str, ...]:
+    """Payload fields a binding writes back; one it also reads stays the extractor's input."""
 
-    The object's own model declares the root value; a field declares its value
-    on the field or on the model its value uses.
-    """
-
-    models = {model.model_id: model for model in source_pack.metadata.model_definitions}
-
-    def model_display(model_ref: str | None) -> Any:
-        model = models.get(model_ref) if model_ref else None
-        return model.metadata.get("display") if model is not None else None
-
-    specs: dict[str, ResolvableSpec] = {}
-    root = resolvable_spec_from_display(model_display(object_definition.model_ref))
-    if root is not None:
-        specs[""] = root
-    for field_definition in object_definition.fields:
-        display = field_definition.metadata.get("display") or model_display(field_definition.model_ref)
-        spec = resolvable_spec_from_display(display)
-        if spec is not None:
-            specs[field_definition.field_path] = spec
-    return specs
+    owned: list[str] = []
+    for binding in registry.bindings:
+        if not _binding_applies_to_object(
+            binding, source_pack_id=source_pack_id, object_definition=object_definition
+        ):
+            continue
+        reads = {
+            selector.path
+            for selector in binding.input_fields.values()
+            if selector.source == "payload"
+        }
+        owned.extend(
+            str(field_path)
+            for field_path in binding.expected_result_fields.values()
+            if field_path not in reads
+        )
+    return tuple(dict.fromkeys(owned))
 
 
 def _binding_summary(binding: ValidatorBinding) -> GenericValidatorBindingSummary:

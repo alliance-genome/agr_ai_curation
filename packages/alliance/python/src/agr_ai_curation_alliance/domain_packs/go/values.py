@@ -8,6 +8,7 @@ evidence-code table. Anything else is staged unresolved.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from src.lib.domain_packs.resolvable_values import (
@@ -36,7 +37,7 @@ RESOLVABLE_VALUE_FIELDS = {
     "gene_product": GENE_PRODUCT_IDENTITY,
     "go_term": GO_TERM_IDENTITY,
     "evidence_code": EVIDENCE_CODE_IDENTITY,
-    "reference": REFERENCE_IDENTITY,
+    "reference_curie": REFERENCE_IDENTITY,
 }
 RESOLVABLE_LIST_FIELDS = {"with_from": WITH_FROM_IDENTITY}
 
@@ -44,8 +45,36 @@ RESOLVABLE_LIST_FIELDS = {"with_from": WITH_FROM_IDENTITY}
 BUILDER_OWNED_KEYS = frozenset(key for key in CONTRACT_KEYS if key != MENTION_KEY)
 
 UNKNOWN_EVIDENCE_CODE_EXPLANATION = (
-    "Not a GO experimental evidence code with a known ECO class."
+    "GO evidence code not supported by this workflow's ECO table."
 )
+
+
+def _holds(node: Any, value: Any) -> bool:
+    if isinstance(node, Mapping):
+        return any(_holds(item, value) for item in node.values())
+    if isinstance(node, list):
+        return any(_holds(item, value) for item in node)
+    return node == value
+
+
+def record_holds(output: Any, values: Sequence[Any]) -> bool:
+    """Whether one record of a lookup output carries every value together.
+
+    The record is the object that holds the first value (the identifier)
+    directly; the other values (its label, aspect, ...) must sit in that same
+    record, never in another candidate of the same output.
+    """
+
+    identifier, *others = values
+    if isinstance(output, Mapping):
+        if any(item == identifier for item in output.values()) and all(
+            _holds(output, value) for value in others
+        ):
+            return True
+        return any(record_holds(item, values) for item in output.values())
+    if isinstance(output, list):
+        return any(record_holds(item, values) for item in output)
+    return False
 
 
 def is_resolved(value: Any) -> bool:
@@ -125,6 +154,7 @@ __all__ = [
     "gene_product_value",
     "go_term_value",
     "is_resolved",
+    "record_holds",
     "reference_value",
     "with_from_value",
 ]

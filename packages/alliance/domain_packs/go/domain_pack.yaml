@@ -99,9 +99,9 @@ object_definitions:
               - evidence_code.code
               - evidence_code.eco_curie
               - evidence_code.resolution_state
-              - reference.mention
-              - reference.curie
-              - reference.resolution_state
+              - reference_curie.mention
+              - reference_curie.curie
+              - reference_curie.resolution_state
               - with_from
               - qualifiers
               - annotation_extensions
@@ -286,7 +286,7 @@ object_definitions:
         display_name: Evidence code validator message
         metadata:
           read_only: true
-      - field_path: reference
+      - field_path: reference_curie
         field_type: object
         display_name: Reference
         required: true
@@ -294,36 +294,36 @@ object_definitions:
           display:
             id: curie
             mention: mention
-      - field_path: reference.mention
+      - field_path: reference_curie.mention
         field_type: string
         display_name: Reference (paper wording)
         required: true
         metadata:
           protected: true
-      - field_path: reference.curie
+      - field_path: reference_curie.curie
         field_type: string
         display_name: Reference CURIE
         required: false
         metadata:
           render_as: curie-chip
-      - field_path: reference.resolution_state
+      - field_path: reference_curie.resolution_state
         field_type: enum
         display_name: Reference status
         enum_ref: ResolutionState
         metadata:
           read_only: true
-      - field_path: reference.lookup_outcome
+      - field_path: reference_curie.lookup_outcome
         field_type: enum
         display_name: Reference lookup result
         enum_ref: LookupOutcome
         metadata:
           read_only: true
-      - field_path: reference.validator_explanation
+      - field_path: reference_curie.validator_explanation
         field_type: string
         display_name: Reference validator explanation
         metadata:
           read_only: true
-      - field_path: reference.validator_curator_message
+      - field_path: reference_curie.validator_curator_message
         field_type: string
         display_name: Reference validator message
         metadata:
@@ -462,14 +462,10 @@ metadata:
             path: go_term
           evidence_code:
             source: payload
-            path: evidence_code.mention
-          evidence_eco_curie:
+            path: evidence_code
+          reference_curie:
             source: payload
-            path: evidence_code.eco_curie
-            required: false
-          reference:
-            source: payload
-            path: reference
+            path: reference_curie
           with_from:
             source: payload
             path: with_from

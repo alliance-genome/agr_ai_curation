@@ -745,3 +745,57 @@ def test_runtime_instruction_explains_paper_wording_only_for_resolvable_profiles
 
     assert "write the paper's wording in mention" in profile_runtime_instruction(resolvable_profile)
     assert "mention" not in profile_runtime_instruction(profile)
+
+
+def _profile_with(fields, outputs, inputs):
+    mapping = {**_MAPPING, "mode": "whole", "inputs": inputs, "outputs": outputs}
+    contract = GenericProfileContract.model_validate({
+        "name": "Records", "semantic_class": "record", "fields": fields, "validator_mappings": [mapping],
+    })
+    pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1,
+                            fingerprint=contract.fingerprint())
+    return ResolvedGenericProfile(pin, contract)
+
+
+def test_resolvable_value_display_roles_name_the_identifier_and_label(resolvable_profile):
+    spec = resolvable_profile.resolvable_specs()["attributes.genes[]"]
+    assert (spec.id_key, spec.label_key, spec.mention_key) == ("gene_id", "symbol", "mention")
+
+
+def test_flat_mapping_destination_is_validator_owned():
+    """ALL-1302 review #4: the extractor never writes a flat scalar a validator fills in."""
+
+    profile = _profile_with(
+        [{"key": "paper_name", "required": True, "value_schema": {"kind": "string"}},
+         {"key": "resolved_id", "required": True, "value_schema": {"kind": "string"}}],
+        outputs={"identifier": "attributes.resolved_id"},
+        inputs={"mention": {"field_path": "attributes.paper_name"}},
+    )
+    assert profile.validator_owned_paths() == {"attributes.resolved_id"}
+    assert set(profile.attributes_schema()["properties"]) == {"paper_name"}
+    assert not any("resolved_id" in variant["properties"]["field_path"].get("pattern", "")
+                   for variant in profile.patch_schema()["items"]["anyOf"])
+    issues = profile.validate_attributes({"paper_name": "A", "resolved_id": "EX:1"}, extractor_input=True)
+    assert [issue["reason"] for issue in issues] == ["validator_owned_field"]
+    # Staged without it, then filled in by validation.
+    profile.require_attributes({"paper_name": "A"})
+    profile.require_attributes({"paper_name": "A", "resolved_id": "EX:1"})
+
+
+def test_a_key_a_mapping_both_reads_and_writes_stays_the_extractors_input():
+    """ALL-1302 review #4: saved profiles that read and write the same field keep their input."""
+
+    profile = _profile_with(
+        [{"key": "gene", "required": True, "value_schema": {"kind": "object", "fields": [
+            {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+            {"key": "symbol", "required": True, "value_schema": {"kind": "string"}},
+        ]}}],
+        outputs={"identifier": "attributes.gene.symbol"},
+        inputs={"mention": {"field_path": "attributes.gene.symbol"}},
+    )
+    assert profile.resolvable_objects() == {}
+    assert profile.validator_owned_paths() == set()
+    gene = profile.attributes_schema()["properties"]["gene"]
+    assert set(gene["properties"]) == {"mention", "symbol"}
+    assert profile.validate_attributes({"gene": {"mention": "daf-16", "symbol": "daf-16"}},
+                                       extractor_input=True) == []
