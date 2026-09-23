@@ -22,6 +22,7 @@ from src.lib.domain_packs.materialization import (
 from src.lib.domain_packs.resolvable_values import (
     OUTCOME_MATCHED,
     RESOLVED,
+    resolved_value,
     unresolved_value,
 )
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
@@ -1958,7 +1959,6 @@ def _curator_patch(envelope: DomainEnvelope, field_path: str, value: Any, *, bef
 @pytest.mark.parametrize(("field_path", "value", "value_path"), [
     ("disease_annotation_object.curie", "DOID:0050730", "disease_annotation_object"),
     ("disease_relation.name", "is_implicated_in", "disease_relation"),
-    ("data_provider.abbreviation", "MGI", "data_provider"),
     ("evidence_code_curies[1].curie", "ECO:0000315", "evidence_code_curies[1]"),
     (
         "condition_relations[0].conditions[1].condition_class.curie",
@@ -1997,6 +1997,7 @@ def test_a_curator_can_override_any_disease_identity_leaf(field_path, value, val
     ("disease_relation.lookup_outcome", "matched", "not_validated"),
     ("evidence_code_curies[0].proposed_curie", "ECO:0000316", None),
     ("annotation_type.name", "manually_curated", None),
+    ("data_provider.abbreviation", "ZFIN", None),
     ("rationale", "Edited.", None),
 ])
 def test_disease_wording_state_hints_and_the_fixed_curation_method_stay_read_only(field_path, value, before):
@@ -2005,3 +2006,45 @@ def test_disease_wording_state_hints_and_the_fixed_curation_method_stay_read_onl
     result = _curator_patch(_override_envelope(), field_path, value, before=before)
 
     assert result.status is EnvelopeFieldPatchStatus.REJECTED
+
+
+def _resolved_gene_subject_envelope() -> DomainEnvelope:
+    envelope = _override_envelope()
+    envelope.extracted_objects[0].payload["disease_annotation_subject"] = resolved_value(
+        "Pax6",
+        {"subject_identifier": "MGI:97490", "subject_label": "Pax6"},
+        subject_type="gene",
+    )
+    return envelope
+
+
+def test_a_curator_cannot_reroute_a_resolved_subject_from_gene_to_allele():
+    """subject_type picks the export subtype and the subject check writes it, so neither a
+    leaf edit nor a whole-subject edit may change it (reviewer probe: gene -> allele)."""
+
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _resolved_gene_subject_envelope()
+    subject = copy.deepcopy(envelope.extracted_objects[0].payload["disease_annotation_subject"])
+
+    leaf = _curator_patch(envelope, "disease_annotation_subject.subject_type", "allele", before="gene")
+    whole = _curator_patch(
+        envelope, "disease_annotation_subject", {**subject, "subject_type": "allele"}, before=subject,
+    )
+
+    assert leaf.status is EnvelopeFieldPatchStatus.REJECTED
+    assert whole.status is EnvelopeFieldPatchStatus.REJECTED
+    assert whole.envelope.extracted_objects[0].payload["disease_annotation_subject"]["subject_type"] == "gene"
+
+
+def test_a_curator_override_of_the_subject_identity_keeps_the_subject_type():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    result = _curator_patch(
+        _resolved_gene_subject_envelope(), "disease_annotation_subject.subject_identifier",
+        "MGI:97491", before="MGI:97490",
+    )
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    subject = result.envelope.extracted_objects[0].payload["disease_annotation_subject"]
+    assert (subject["subject_type"], subject["lookup_outcome"]) == ("gene", "curator_override")

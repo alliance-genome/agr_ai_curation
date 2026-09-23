@@ -665,7 +665,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
+          protected: true
+          curator_action_note: Edit the subject identifier or label to override the subject check; the subject type is set by that check.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -683,7 +684,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
+          protected: true
+          curator_action_note: The subject check sets the subject type, and it decides how the annotation is exported; it cannot be edited.
       - field_path: disease_annotation_subject.subject_label
         field_type: string
         display_name: Subject label
@@ -884,6 +886,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           protected: true
+          curator_action_note: The backend fixes the annotation type (manually_curated); if its vocabulary lookup fails, ask a developer, because curators cannot override it.
       - field_path: annotation_type.vocabulary
         field_type: string
         display_name: Annotation type vocabulary
@@ -1158,8 +1161,8 @@ object_definitions:
         display_name: Data provider abbreviation
         definition_state: stable
         metadata:
-          editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          protected: true
+          curator_action_note: Data provider is workflow context, not a curator edit target.
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
@@ -2022,7 +2025,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
+          protected: true
+          curator_action_note: Edit the subject identifier or label to override the subject check; the subject type is set by that check.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2040,7 +2044,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
+          protected: true
+          curator_action_note: The subject check sets the subject type, and it decides how the annotation is exported; it cannot be edited.
       - field_path: disease_annotation_subject.subject_label
         field_type: string
         display_name: Subject label
@@ -2241,6 +2246,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           protected: true
+          curator_action_note: The backend fixes the annotation type (manually_curated); if its vocabulary lookup fails, ask a developer, because curators cannot override it.
       - field_path: annotation_type.vocabulary
         field_type: string
         display_name: Annotation type vocabulary
@@ -2515,8 +2521,8 @@ object_definitions:
         display_name: Data provider abbreviation
         definition_state: stable
         metadata:
-          editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          protected: true
+          curator_action_note: Data provider is workflow context, not a curator edit target.
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
@@ -3370,7 +3376,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
+          protected: true
+          curator_action_note: Edit the subject identifier or label to override the subject check; the subject type is set by that check.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -3388,7 +3395,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
+          protected: true
+          curator_action_note: The subject check sets the subject type, and it decides how the annotation is exported; it cannot be edited.
       - field_path: disease_annotation_subject.subject_label
         field_type: string
         display_name: Subject label
@@ -3589,6 +3597,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           protected: true
+          curator_action_note: The backend fixes the annotation type (manually_curated); if its vocabulary lookup fails, ask a developer, because curators cannot override it.
       - field_path: annotation_type.vocabulary
         field_type: string
         display_name: Annotation type vocabulary
@@ -3863,8 +3872,8 @@ object_definitions:
         display_name: Data provider abbreviation
         definition_state: stable
         metadata:
-          editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          protected: true
+          curator_action_note: Data provider is workflow context, not a curator edit target.
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
@@ -4720,7 +4729,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
+          protected: true
+          curator_action_note: Edit the subject identifier or label to override the subject check; the subject type is set by that check.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -4738,7 +4748,8 @@ object_definitions:
           validator_binding_id: disease_subject_materialization
           validator_state: active
           definition_state_category: complete
-          editable: true
+          protected: true
+          curator_action_note: The subject check sets the subject type, and it decides how the annotation is exported; it cannot be edited.
       - field_path: disease_annotation_subject.subject_label
         field_type: string
         display_name: Subject label
@@ -4939,6 +4950,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           protected: true
+          curator_action_note: The backend fixes the annotation type (manually_curated); if its vocabulary lookup fails, ask a developer, because curators cannot override it.
       - field_path: annotation_type.vocabulary
         field_type: string
         display_name: Annotation type vocabulary
@@ -5213,8 +5225,8 @@ object_definitions:
         display_name: Data provider abbreviation
         definition_state: stable
         metadata:
-          editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          protected: true
+          curator_action_note: Data provider is workflow context, not a curator edit target.
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
@@ -6246,7 +6258,7 @@ metadata:
         display_name: Annotation type lookup
         curator_label: Confirm the annotation type against the Annotation Type vocabulary
         description: Checks that the annotation type on each disease record is a term in the Annotation Type vocabulary. Records from this pipeline carry manually_curated.
-        when_off: If you turn this check off, these values stay unresolved and the annotation cannot be exported until they are validated.
+        when_off: If you turn this check off, the annotation type stays unresolved and cannot be exported, and since curators cannot override it, a failing lookup needs a developer.
         definition_notes:
           - Runs through the controlled-vocabulary package validator binding (vocabulary Annotation Type, curation-method constant manually_curated) (R4).
         validator_agent:

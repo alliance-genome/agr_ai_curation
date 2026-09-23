@@ -1453,7 +1453,7 @@ def test_tool_verified_converter_requires_subject_paper_wording():
 
 def test_a_curator_can_override_each_phenotype_term_and_condition_part():
     """ALL-1283: phenotype identity leaves (every term, condition components) are
-    curator-editable; the paper wording is not."""
+    curator-editable; the paper wording and the data provider are not."""
 
     from src.lib.domain_envelopes.patches import (
         EnvelopeFieldPatch,
@@ -1473,6 +1473,7 @@ def test_a_curator_can_override_each_phenotype_term_and_condition_part():
             payload={
                 "phenotype_annotation_object": "fewer progeny",
                 "phenotype_terms": [term("fewer progeny"), term("slow growth")],
+                "data_provider": unresolved_value("WB", identity_keys=("abbreviation",)),
                 "condition_relations": [{
                     "condition_relation_type": unresolved_value("has_condition", identity_keys=("name",)),
                     "conditions": [{"condition_class": unresolved_value(
@@ -1500,3 +1501,7 @@ def test_a_curator_can_override_each_phenotype_term_and_condition_part():
 
     wording = patch("phenotype_terms[0].mention", "other words", before="fewer progeny")
     assert wording.status is EnvelopeFieldPatchStatus.REJECTED
+
+    # Workflow context, not an override target: it decides whose provider the export carries.
+    provider = patch("data_provider.abbreviation", "MGI")
+    assert provider.status is EnvelopeFieldPatchStatus.REJECTED

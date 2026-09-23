@@ -161,10 +161,8 @@ def test_phenotype_annotation_declares_protected_data_provider_fields():
 
     abbreviation = fields_by_path["data_provider.abbreviation"]
     assert abbreviation.field_type == "string"
-    # The identity leaf is the curator override target (ALL-1283); the extractor still stages
-    # the provider as workflow context and the object itself stays protected.
-    assert abbreviation.metadata["editable"] is True
-    assert "protected" not in abbreviation.metadata
+    # Workflow context: a curator override here would submit under another group's provider.
+    assert abbreviation.metadata["protected"] is True
     assert "validator_binding_id" not in abbreviation.metadata
     assert abbreviation.metadata["provider_refs"]["alliance_linkml"] == {
         "schema_ref": "alliance.linkml",

@@ -701,8 +701,8 @@ object_definitions:
         field_type: string
         display_name: Data provider abbreviation
         metadata:
-          editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          protected: true
+          curator_action_note: Data provider is workflow context, not an extractor edit target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml

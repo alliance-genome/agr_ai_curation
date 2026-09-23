@@ -527,10 +527,18 @@ def test_alliance_validator_binding_capability_groups_have_explicit_policies():
                 assert binding["blocking"] is True
                 assert binding["allow_opt_out"] is True
                 assert binding["curator_override"] == {"allowed": False}
-                assert binding["when_off"] == (
-                    "If you turn this check off, these values stay unresolved and the "
-                    "annotation cannot be exported until they are validated."
-                )
+                if binding["binding_id"] == "disease_annotation_type_cv_lookup":
+                    # The backend fixes the annotation type, so no curator override exists.
+                    assert binding["when_off"] == (
+                        "If you turn this check off, the annotation type stays unresolved and "
+                        "cannot be exported, and since curators cannot override it, a failing "
+                        "lookup needs a developer."
+                    )
+                else:
+                    assert binding["when_off"] == (
+                        "If you turn this check off, these values stay unresolved and the "
+                        "annotation cannot be exported until they are validated."
+                    )
             else:
                 assert binding["blocking"] is False
                 assert binding["allow_opt_out"] is True
