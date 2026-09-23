@@ -767,6 +767,35 @@ def validate_custom_agent_authoring_draft(
                 )
             )
 
+    from src.lib.agent_studio.catalog_service import _load_package_tool_registry
+    from src.lib.openai_agents.config import get_tool_surface_namespace_max_functions
+    from src.lib.openai_agents.tool_surface import (
+        oversized_tool_namespaces,
+        tool_group_cap_message,
+        tool_namespace_memberships,
+    )
+
+    # A run loads at most this many tools of one group (ALL-1280). Blocking,
+    # and the curator is sent to the developers rather than asked to trim.
+    namespace_max = get_tool_surface_namespace_max_functions()
+    for namespace, members in oversized_tool_namespaces(
+        normalized_tool_ids,
+        tool_namespace_memberships(_load_package_tool_registry().bindings),
+        namespace_max,
+    ).items():
+        findings.append(
+            AuthoringValidationFinding(
+                code="tool_group_too_large",
+                severity="error",
+                path="custom_agent.tool_ids",
+                message=tool_group_cap_message(namespace, len(members), namespace_max),
+                fix_hint=(
+                    "Contact the AI Curation developers and include this message. "
+                    f"Tools from this group on the agent: {', '.join(members)}."
+                ),
+            )
+        )
+
     schema_key = draft.output_schema_key
     if schema_key is not None and schema_key not in sources.output_schema_keys:
         findings.append(

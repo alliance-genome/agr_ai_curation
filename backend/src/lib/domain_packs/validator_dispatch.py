@@ -1635,6 +1635,15 @@ def run_package_scoped_validator_agent(
         effective_max_tool_calls,
         minimum=4,
     )
+    # ALL-1280: compile the provider-facing tool surface last, after the
+    # compact finalize schema replacement.
+    from src.lib.openai_agents.tool_surface import apply_tool_surface
+
+    apply_tool_surface(
+        agent,
+        runtime="validator",
+        required_tool_names=("finalize_validator_result",),
+    )
     run_started_at = time.monotonic()
     conversation_context_manager = gen_ai_conversation_scope(request.request_id)
     sentry_span_context_manager = gen_ai_invoke_agent_span(
@@ -1877,6 +1886,15 @@ def run_package_scoped_validator_agent_batch(
         len(jobs) * effective_max_tool_calls,
         minimum=len(jobs) + 3,
     )
+    # ALL-1280: compile the provider-facing tool surface last, after the
+    # compact finalize schema replacement.
+    from src.lib.openai_agents.tool_surface import apply_tool_surface
+
+    apply_tool_surface(
+        agent,
+        runtime="validator",
+        required_tool_names=("finalize_validator_batch_results",),
+    )
     run_started_at = time.monotonic()
     first_request_id = jobs[0].request.request_id if jobs else None
     conversation_context_manager = gen_ai_conversation_scope(first_request_id)
@@ -2118,7 +2136,7 @@ def _validator_document_tools(
 
     assert runtime_context is not None
     return resolve_tools(
-        ["search_document", "read_chunk", "read_section", "read_subsection"],
+        ["search_document", "read_chunk"],
         ToolExecutionContext(
             document_id=str(runtime_context.document_id),
             user_id=str(runtime_context.user_id),
@@ -2147,11 +2165,8 @@ def _validator_scoped_evidence_tools(
     user_id = str(runtime_context.user_id)
 
     from src.lib.openai_agents.tools.evidence_workspace import (
-        create_attach_evidence_to_object_tool,
-        create_detach_evidence_from_object_tool,
         create_get_recorded_evidence_tool,
         create_list_recorded_evidence_tool,
-        create_update_recorded_evidence_metadata_tool,
     )
     from src.lib.openai_agents.tools.record_evidence import create_record_evidence_tool
 
@@ -2178,26 +2193,6 @@ def _validator_scoped_evidence_tools(
             document_id,
             user_id,
             **common_scope,
-        ),
-        create_attach_evidence_to_object_tool(
-            document_id,
-            user_id,
-            **common_scope,
-            required_object_id=scope.object_id,
-            required_pending_ref_id=scope.pending_ref_id,
-            required_field_path=scope.field_path,
-        ),
-        create_detach_evidence_from_object_tool(
-            document_id,
-            user_id,
-            **common_scope,
-            allow_detach=False,
-        ),
-        create_update_recorded_evidence_metadata_tool(
-            document_id,
-            user_id,
-            **common_scope,
-            required_field_path=scope.field_path,
         ),
     ]
 
@@ -2334,7 +2329,7 @@ def _append_validator_source_context_instructions(
     )
     paper_tool_text = (
         "If supplied quotes are missing, irrelevant, or incomplete, use "
-        "`search_document`, `read_chunk`, `read_section`, or `read_subsection` "
+        "`search_document` or `read_chunk` "
         "to inspect the same paper. Search results are discovery only; exact "
         "source support must come from `read_chunk` spans or supplied verified quotes."
         if paper_tools_available

@@ -319,10 +319,13 @@ async def test_read_studio_guide_tool_is_available_on_every_tab_and_dispatched(m
 
 
 def test_read_studio_guide_is_eager_so_the_index_can_name_it():
-    import src.api.agent_studio as api
+    from src.api.agent_studio_opus_tools import READ_STUDIO_GUIDE_TOOL_NAME
+    from src.lib.config.tool_loading_loader import load_tool_loading_policies
 
-    assert "read_studio_guide" in api._EAGER_STUDIO_TOOL_NAMES
-    assert "search_studio_capabilities" in api._EAGER_STUDIO_TOOL_NAMES
+    eager_tools = load_tool_loading_policies()["agent_studio"].eager_tools
+    assert READ_STUDIO_GUIDE_TOOL_NAME == "read_studio_guide"
+    assert "read_studio_guide" in eager_tools
+    assert "search_studio_capabilities" in eager_tools
 
 
 def test_guide_requests_with_invalid_arguments_fail_explicitly():

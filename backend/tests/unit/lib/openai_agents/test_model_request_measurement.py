@@ -952,7 +952,6 @@ def test_agent_studio_run_measures_visible_and_deferred_tools(monkeypatch, publi
         executor=executor,
         state=state,
         namespace_for_tool=lambda name: ("studio_tools", "Studio tools"),
-        eager_tool_names=frozenset({"search_studio_capabilities"}),
     )
 
     async def collect():

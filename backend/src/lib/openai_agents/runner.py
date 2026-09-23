@@ -91,6 +91,13 @@ from .extraction_builder_workspace import (
     build_internal_extraction_result_event,
 )
 from .guardrails import enforce_uncited_negative_guardrail
+from .tool_surface import (
+    apply_tool_surface,
+    canonical_tool_name,
+    record_tool_surface_prompt,
+    run_config_for_tool_surface,
+    tool_surface_trace_attributes,
+)
 from .models import Answer, file_ready_event_details
 from .evidence_summary import (
     build_record_evidence_summary_record,
@@ -1388,13 +1395,19 @@ async def _run_agent_with_owned_resources(
             for tool in agent.tools:
                 if hasattr(tool, "profile_bound_schema"):
                     assert_profile_tool_contract(tool)
-        result = Runner.run_streamed(
-            agent,
-            input=input_items,
-            max_turns=max_turns,
-            run_config=run_config,
-            session=sdk_session,
-        )
+        # ALL-1280: compile the provider-facing tool surface LAST, after
+        # run-state rebinding, then commit the prompts the model receives.
+        tool_surface = apply_tool_surface(agent)
+        record_tool_surface_prompt(agent, tool_surface, target_agent=agent)
+        commit_pending_prompts(agent)
+        with tool_surface_trace_attributes(tool_surface):
+            result = Runner.run_streamed(
+                agent,
+                input=input_items,
+                max_turns=max_turns,
+                run_config=run_config_for_tool_surface(run_config, tool_surface),
+                session=sdk_session,
+            )
     except BaseException as exc:
         sentry_stream_finalization_status = (
             "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
@@ -1656,7 +1669,7 @@ async def _run_agent_with_owned_resources(
                         tool_calls_count += 1
                         is_generating = False  # Reset for next generation phase after tool completes
                         # Try multiple attributes to get tool name
-                        tool_name = (
+                        tool_name = canonical_tool_name(
                             getattr(item, "name", None) or
                             getattr(item, "tool_name", None) or
                             getattr(getattr(item, "raw_item", None), "name", None) or
@@ -2463,20 +2476,18 @@ async def run_agent_streamed(
             current_user_request=user_message,
         )
         agent_name = agent.name
-        agent_for_prompt_commit = agent
     else:
         # Custom agent provided (e.g., flow supervisor)
         agent_name = getattr(agent, 'name', 'Custom Agent')
-        agent_for_prompt_commit = agent
         logger.info(
             "Using provided agent: %s",
             agent_name,
             extra={"user_id": user_id, "session_id": session_id},
         )
 
-    # Commit pending prompts for whichever agent we're using
-    # (supervisor runs immediately after creation, unlike specialists which are on-demand)
-    commit_pending_prompts(agent_for_prompt_commit)
+    # Pending prompts for this agent are committed right before its run starts
+    # (_run_agent_with_owned_resources), once the compiled tool surface has
+    # added any runtime prompt layer.
 
     def _emit_provider_context_preflight(trace_id: str) -> None:
         model_name = str(getattr(agent, "model", "") or "")

@@ -6,6 +6,8 @@
 # environment variables for API keys and base URLs.
 #
 # Exactly one provider must set default_for_runner: true.
+# supports.tool_search (default false) marks OpenAI Responses hosted tool search
+# support; a model may set supports_tool_search only on such a provider.
 # API key values are NEVER stored here — only env var names.
 #
 # Used by: providers_loader.py, config.py (agent model resolution)
@@ -20,6 +22,7 @@ providers:
     default_for_runner: true
     supports:
       parallel_tool_calls: true
+      tool_search: true
 
   gemini:
     driver: openai_compatible

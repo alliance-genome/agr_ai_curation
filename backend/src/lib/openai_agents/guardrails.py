@@ -466,7 +466,10 @@ class ToolCallTracker:
         self._tool_names: List[str] = []
 
     def record_call(self, tool_name: str) -> None:
-        """Record that a tool was called."""
+        """Record that a tool was called (qualified wire names are normalized)."""
+        from .tool_surface import canonical_tool_name
+
+        tool_name = canonical_tool_name(tool_name)
         self._call_count += 1
         self._tool_names.append(tool_name)
         logger.debug('[ToolCallTracker] Recorded call #%s: %s', self._call_count, tool_name)

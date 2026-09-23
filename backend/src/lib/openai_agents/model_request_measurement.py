@@ -67,6 +67,7 @@ from src.lib.observability.payload_contracts import (
     PayloadContractViolation,
     report_payload_contract_violation,
 )
+from src.lib.openai_agents.tool_surface import ToolSurface, canonical_tool_name
 from src.lib.runtime_payload_budget import estimate_tokens_from_chars
 
 logger = logging.getLogger(__name__)
@@ -224,6 +225,8 @@ def _measure_input(input_value: Any) -> dict[str, Any]:
         "definition_chars": 0,
         **_empty_size(),
     }
+    loaded_names: set[str] = set()
+    tool_search_calls = 0
     other = {"count": 0, **_empty_size()}
     largest_result: dict[str, Any] | None = None
     call_names: dict[str, str] = {}
@@ -248,6 +251,14 @@ def _measure_input(input_value: Any) -> dict[str, Any]:
             loaded_tool_definitions["definition_chars"] += sum(
                 _size(definition)["chars"] for definition in definitions
             )
+            loaded_names.update(
+                name
+                for name in (
+                    canonical_tool_name(_as_mapping(definition).get("name"))
+                    for definition in definitions
+                )
+                if name
+            )
             _add(loaded_tool_definitions, size)
         elif item_type.endswith("_call_output"):
             tool_results["count"] += 1
@@ -256,9 +267,11 @@ def _measure_input(input_value: Any) -> dict[str, Any]:
         elif item_type.endswith("_call") or item_type == "tool_search_call":
             tool_calls["count"] += 1
             _add(tool_calls, size)
+            if item_type == "tool_search_call":
+                tool_search_calls += 1
             call_id = item.get("call_id")
             if call_id and item.get("name"):
-                call_names[str(call_id)] = str(item.get("name"))
+                call_names[str(call_id)] = canonical_tool_name(item.get("name"))
         elif item_type == "reasoning":
             reasoning["count"] += 1
             _add(reasoning, size)
@@ -284,10 +297,13 @@ def _measure_input(input_value: Any) -> dict[str, Any]:
         "item_count": len(items),
         **total,
         "messages_by_role": messages,
-        "tool_calls": tool_calls,
+        "tool_calls": {**tool_calls, "tool_search_calls": tool_search_calls},
         "tool_results": {**tool_results, "largest": largest_result},
         "reasoning_items": reasoning,
-        "loaded_deferred_tool_definitions": loaded_tool_definitions,
+        "loaded_deferred_tool_definitions": {
+            **loaded_tool_definitions,
+            "names": sorted(loaded_names),
+        },
         "other_items": other,
     }
 
@@ -325,6 +341,7 @@ def _measure_tools(tools: Any, handoffs: Any) -> dict[str, Any]:
     visible = {"count": 0, **_empty_size()}
     deferred = {"count": 0, **_empty_size()}
     hosted_types: list[str] = []
+    namespace_headers: dict[str, Any] = {}
     for tool in list(tools or []):
         definition, is_deferred, is_hosted = _tool_definition(tool)
         size = _size(definition)
@@ -333,6 +350,15 @@ def _measure_tools(tools: Any, handoffs: Any) -> dict[str, Any]:
         _add(bucket, size)
         if is_hosted:
             hosted_types.append(type(tool).__name__)
+        namespace = definition.get("namespace") if not is_hosted else None
+        if namespace and namespace not in namespace_headers:
+            namespace_headers[namespace] = {
+                "name": namespace,
+                "description": getattr(tool, "_tool_namespace_description", None),
+            }
+    headers = {"count": len(namespace_headers), **_empty_size()}
+    for header in namespace_headers.values():
+        _add(headers, _size(header))
     handoff_size = {"count": 0, **_empty_size()}
     for handoff in list(handoffs or []):
         handoff_size["count"] += 1
@@ -350,6 +376,7 @@ def _measure_tools(tools: Any, handoffs: Any) -> dict[str, Any]:
         "initially_visible": visible,
         "deferred": deferred,
         "hosted_tool_types": sorted(set(hosted_types)),
+        "namespace_headers": headers,
         "handoffs": handoff_size,
     }
 
@@ -1045,6 +1072,16 @@ class MeasuredModel(Model):
         enforce_and_announce(measurement)
         return measurement
 
+    def _observe_tool_surface(self, measurement: dict[str, Any], response: Any) -> None:
+        """Fold this response into the run's tool surface and record it (ALL-1280)."""
+
+        surface = getattr(self._agent, "tool_surface", None)
+        if not isinstance(surface, ToolSurface):
+            return
+        if response is not None:
+            surface.observe_response_output(getattr(response, "output", None))
+        measurement["tool_surface"] = surface.summary()
+
     async def get_response(
         self,
         system_instructions,
@@ -1089,8 +1126,10 @@ class MeasuredModel(Model):
                     prompt=prompt,
                 )
         except BaseException as exc:
+            self._observe_tool_surface(measurement, None)
             record_outcome(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
             raise
+        self._observe_tool_surface(measurement, response)
         record_outcome(
             measurement,
             outcome="completed",
@@ -1156,6 +1195,7 @@ class MeasuredModel(Model):
                 event = await anext(stream, _STREAM_END)
         except BaseException as exc:
             if terminal_response is None:
+                self._observe_tool_surface(measurement, None)
                 record_outcome(
                     measurement,
                     outcome=_failure_outcome(exc),
@@ -1167,6 +1207,7 @@ class MeasuredModel(Model):
             if callable(aclose):
                 await aclose()
             if terminal_response is not None:
+                self._observe_tool_surface(measurement, terminal_response)
                 record_outcome(
                     measurement,
                     outcome=(terminal_type or "response.completed").removeprefix("response."),
@@ -1175,6 +1216,7 @@ class MeasuredModel(Model):
                     provider_request_id=getattr(terminal_response, "_request_id", None),
                 )
             else:
+                self._observe_tool_surface(measurement, None)
                 record_outcome(measurement, outcome="stream_closed_without_terminal_event")
 
 

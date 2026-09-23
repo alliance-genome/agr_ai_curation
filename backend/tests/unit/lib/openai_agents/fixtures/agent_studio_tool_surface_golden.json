@@ -1,0 +1,513 @@
+{
+ "authoring_turn": {
+  "counts": {
+   "candidate_count": 9,
+   "deferred_count": 8,
+   "eager_count": 1,
+   "namespace_count": 6
+  },
+  "payload": {
+   "includes": [],
+   "tools": [
+    {
+     "execution": "server",
+     "type": "tool_search"
+    },
+    {
+     "description": "Run search_studio_capabilities for the curator.",
+     "name": "search_studio_capabilities",
+     "parameters": {
+      "additionalProperties": false,
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "value": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "value"
+      ],
+      "type": "object"
+     },
+     "strict": false,
+     "type": "function"
+    },
+    {
+     "description": "Conversation recall, feedback, and failure reporting",
+     "name": "studio_history",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run get_chat_history for the curator.",
+       "name": "get_chat_history",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    },
+    {
+     "description": "Live authenticated Agent Studio resource discovery",
+     "name": "studio_capabilities",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run get_studio_capability_detail for the curator.",
+       "name": "get_studio_capability_detail",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    },
+    {
+     "description": "Exact trace payload and reconstruction inspection",
+     "name": "trace_payload",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run get_trace_payload for the curator.",
+       "name": "get_trace_payload",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    },
+    {
+     "description": "Trace discovery, summaries, conversation, and cost",
+     "name": "trace_overview",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run get_trace_summary for the curator.",
+       "name": "get_trace_summary",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      },
+      {
+       "defer_loading": true,
+       "description": "Run search_traces for the curator.",
+       "name": "search_traces",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    },
+    {
+     "description": "Workshop inspection and curator-reviewed complete agent proposals",
+     "name": "workshop_authoring",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run propose_workshop_draft_update for the curator.",
+       "name": "propose_workshop_draft_update",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      },
+      {
+       "defer_loading": true,
+       "description": "Run refresh_workshop_prompt for the curator.",
+       "name": "refresh_workshop_prompt",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    },
+    {
+     "description": "Curator-reviewed flow proposals, templates, and validation",
+     "name": "flow_authoring",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run validate_flow for the curator.",
+       "name": "validate_flow",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    }
+   ]
+  }
+ },
+ "forced_refresh_turn": {
+  "counts": {
+   "candidate_count": 9,
+   "deferred_count": 7,
+   "eager_count": 2,
+   "namespace_count": 6
+  },
+  "payload": {
+   "includes": [],
+   "tools": [
+    {
+     "execution": "server",
+     "type": "tool_search"
+    },
+    {
+     "description": "Run refresh_workshop_prompt for the curator.",
+     "name": "refresh_workshop_prompt",
+     "parameters": {
+      "additionalProperties": false,
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "value": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "value"
+      ],
+      "type": "object"
+     },
+     "strict": false,
+     "type": "function"
+    },
+    {
+     "description": "Run search_studio_capabilities for the curator.",
+     "name": "search_studio_capabilities",
+     "parameters": {
+      "additionalProperties": false,
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "value": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "value"
+      ],
+      "type": "object"
+     },
+     "strict": false,
+     "type": "function"
+    },
+    {
+     "description": "Conversation recall, feedback, and failure reporting",
+     "name": "studio_history",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run get_chat_history for the curator.",
+       "name": "get_chat_history",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    },
+    {
+     "description": "Live authenticated Agent Studio resource discovery",
+     "name": "studio_capabilities",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run get_studio_capability_detail for the curator.",
+       "name": "get_studio_capability_detail",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    },
+    {
+     "description": "Exact trace payload and reconstruction inspection",
+     "name": "trace_payload",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run get_trace_payload for the curator.",
+       "name": "get_trace_payload",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    },
+    {
+     "description": "Trace discovery, summaries, conversation, and cost",
+     "name": "trace_overview",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run get_trace_summary for the curator.",
+       "name": "get_trace_summary",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      },
+      {
+       "defer_loading": true,
+       "description": "Run search_traces for the curator.",
+       "name": "search_traces",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    },
+    {
+     "description": "Workshop inspection and curator-reviewed complete agent proposals",
+     "name": "workshop_authoring",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run propose_workshop_draft_update for the curator.",
+       "name": "propose_workshop_draft_update",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    },
+    {
+     "description": "Curator-reviewed flow proposals, templates, and validation",
+     "name": "flow_authoring",
+     "tools": [
+      {
+       "defer_loading": true,
+       "description": "Run validate_flow for the curator.",
+       "name": "validate_flow",
+       "parameters": {
+        "additionalProperties": false,
+        "properties": {
+         "limit": {
+          "type": "integer"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "strict": false,
+       "type": "function"
+      }
+     ],
+     "type": "namespace"
+    }
+   ]
+  }
+ }
+}

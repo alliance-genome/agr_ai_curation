@@ -66,6 +66,7 @@ tools:
         callable_factory: agr_ai_curation_alliance.tools.agr_curation:create_groq_agr_curation_query_tool
         description: Compact method and payload_json wrapper for Groq tool schema constraints
     metadata:
+      namespace: reference_data_lookup
       name: AGR Curation Query
       category: Database
       audit:
@@ -596,6 +597,7 @@ tools:
     description: Work out the species, the Alliance group, and the standard species ID for a paper, without looking up any genes or alleles.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      namespace: reference_data_lookup
       name: AGR Species Context Lookup
       category: Database
       audit:
@@ -684,6 +686,7 @@ tools:
     description: Look at one ontology term in detail, plus a limited view of its neighbors in the term tree (broader terms above it, narrower terms below it, or terms beside it).
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      namespace: ontology_term_lookup
       name: Inspect Ontology Term
       category: Database
       audit:
@@ -839,6 +842,7 @@ tools:
     description: Make small, allowed corrections to a draft gene-expression observation that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Gene Expression Observation
       category: Database
       builder_output_mode: domain
@@ -867,6 +871,7 @@ tools:
     description: Drop one draft gene-expression observation from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Gene Expression Observation
       category: Database
       builder_output_mode: domain
@@ -919,6 +924,7 @@ tools:
     description: Find specific draft gene-expression observations by what they contain or by their id, without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Gene Expression Observations
       category: Database
       builder_output_mode: domain
@@ -1065,6 +1071,7 @@ tools:
     description: Make small, allowed corrections to a draft gene that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Gene Mention Evidence
       category: Database
       builder_output_mode: domain
@@ -1093,6 +1100,7 @@ tools:
     description: Drop one draft gene from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Gene Mention Evidence
       category: Database
       builder_output_mode: domain
@@ -1146,6 +1154,7 @@ tools:
     description: Find specific draft genes by what they contain or by their id, without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Gene Mention Evidence
       category: Database
       builder_output_mode: domain
@@ -1301,6 +1310,7 @@ tools:
     description: Make small corrections to a generic object that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Generic Object
       category: Database
       builder_output_mode: generic
@@ -1325,6 +1335,7 @@ tools:
     description: Drop one staged generic object when it is wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Generic Object
       category: Database
       builder_output_mode: generic
@@ -1377,6 +1388,7 @@ tools:
     description: Find staged generic objects by content or id without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Generic Objects
       category: Database
       builder_output_mode: generic
@@ -1512,6 +1524,7 @@ tools:
     description: Make small, allowed corrections to a draft allele that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Allele Observation
       category: Database
       builder_output_mode: domain
@@ -1540,6 +1553,7 @@ tools:
     description: Drop one draft allele from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Allele Observation
       category: Database
       builder_output_mode: domain
@@ -1593,6 +1607,7 @@ tools:
     description: Find specific draft alleles by what they contain or by their id, without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Allele Observations
       category: Database
       builder_output_mode: domain
@@ -1756,6 +1771,7 @@ tools:
     description: Make small, allowed corrections to a draft phenotype annotation that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Phenotype Observation
       category: Database
       builder_output_mode: domain
@@ -1784,6 +1800,7 @@ tools:
     description: Drop one draft phenotype annotation from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Phenotype Observation
       category: Database
       builder_output_mode: domain
@@ -1837,6 +1854,7 @@ tools:
     description: Find specific draft phenotype annotations by what they contain or by their id, without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Phenotype Observations
       category: Database
       builder_output_mode: domain
@@ -2022,6 +2040,7 @@ tools:
     description: Make small, allowed corrections to a draft disease annotation that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Disease Observation
       category: Database
       builder_output_mode: domain
@@ -2050,6 +2069,7 @@ tools:
     description: Drop one draft disease annotation from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Disease Observation
       category: Database
       builder_output_mode: domain
@@ -2103,6 +2123,7 @@ tools:
     description: Find specific draft disease annotations by what they contain or by their id, without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Disease Observations
       category: Database
       builder_output_mode: domain
@@ -2178,6 +2199,7 @@ tools:
     description: Search the uploaded PDF for passages relevant to a query, using meaning-based matching, exact word matching, or a blend.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: document_reading
       name: Search Document
       category: Document
       documentation:
@@ -2213,6 +2235,7 @@ tools:
     description: Read the full text of one passage from the PDF and get back the exact pieces of it that can be saved as evidence.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: document_reading
       name: Read Chunk
       category: PDF Extraction
       documentation:
@@ -2235,6 +2258,7 @@ tools:
     description: Read the full text of a named section of the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: document_reading
       name: Read Section
       category: PDF Extraction
       documentation:
@@ -2265,6 +2289,7 @@ tools:
     description: Read the full text of a named subsection inside a section of the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: document_reading
       name: Read Subsection
       category: PDF Extraction
       documentation:
@@ -2299,6 +2324,7 @@ tools:
     description: Save one piece of supporting evidence from the PDF, using snippets picked out of a passage that was read.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Record Evidence
       category: PDF Extraction
       documentation:
@@ -2325,6 +2351,7 @@ tools:
     description: Review the evidence saved so far in this run before finishing, one page at a time.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: List Recorded Evidence
       category: PDF Extraction
       documentation:
@@ -2363,6 +2390,7 @@ tools:
     description: Look at one saved piece of evidence from this run in full detail.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Get Recorded Evidence
       category: PDF Extraction
       documentation:
@@ -2397,6 +2425,7 @@ tools:
     description: Link a saved piece of evidence to the specific field it supports.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Attach Evidence To Object
       category: PDF Extraction
       documentation:
@@ -2427,6 +2456,7 @@ tools:
     description: Remove a link between a saved piece of evidence and a finding it was wrongly tied to.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Detach Evidence From Object
       category: PDF Extraction
       documentation:
@@ -2457,6 +2487,7 @@ tools:
     description: Withdraw a saved piece of evidence that turned out to be wrong or too weak, while keeping it in the run's history.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Discard Recorded Evidence
       category: PDF Extraction
       documentation:
@@ -2479,6 +2510,7 @@ tools:
     description: Update the editable notes on a saved piece of evidence.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Update Evidence Metadata
       category: PDF Extraction
       documentation:
@@ -2508,6 +2540,7 @@ tools:
     description: Run a direct query against the Alliance Curation Database to look up Disease Ontology terms and how they relate to one another.
     source_file: python/src/agr_ai_curation_alliance/tools/sql.py
     metadata:
+      namespace: reference_data_lookup
       name: Curation Database SQL
       category: Database
       documentation:
@@ -2625,6 +2658,7 @@ tools:
     description: Correct an allowed field on a staged RGD GO recommendation.
     source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch GO Recommendation
       category: Database
       builder_output_mode: domain
@@ -2640,6 +2674,7 @@ tools:
     description: Discard a staged RGD GO recommendation that is unsupported or out of scope.
     source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard GO Recommendation
       category: Database
       builder_output_mode: domain
@@ -2670,6 +2705,7 @@ tools:
     description: Find an RGD GO draft by identity, evidence, content, or candidate ID.
     source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged GO Recommendations
       category: Database
       builder_output_mode: domain
@@ -2833,6 +2869,7 @@ tools:
     description: Resolve genes, precursor loci, and mature RNA products to typed evidence-backed Alliance gene candidates.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_product_resolution.py
     metadata:
+      namespace: reference_data_lookup
       name: Alliance Gene Product Resolver
       category: Database
       documentation:
@@ -2899,6 +2936,7 @@ tools:
     description: Look up which genes are counterparts of each other across species (orthology).
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
+      namespace: reference_data_lookup
       name: Alliance Orthology API
       category: API
       documentation:
@@ -2927,6 +2965,7 @@ tools:
     description: Look up a paper in the Alliance literature collection by its ID, or find candidate papers by title or citation text.
     source_file: python/src/agr_ai_curation_alliance/tools/literature_references.py
     metadata:
+      namespace: reference_data_lookup
       name: AGR Literature Reference Lookup
       category: Literature
       audit:

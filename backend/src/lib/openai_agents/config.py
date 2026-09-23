@@ -3576,3 +3576,18 @@ def get_agent_studio_guide_chunk_max_chars() -> int:
             "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS"
         )
     return chunk_max_chars
+
+
+# =============================================================================
+# ALL-1280: Hosted tool search surface
+# =============================================================================
+
+def get_tool_surface_namespace_max_functions() -> int:
+    """Max function tools one agent may place in one hosted-search namespace (TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS).
+
+    OpenAI tool-search guidance keeps each namespace under ten functions so the
+    namespace description stays specific. Startup validation and the tool
+    surface compiler fail explicitly above this; tools are never dropped or
+    moved to another namespace. Default 10.
+    """
+    return max(1, _get_env_int_with_fallback("TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS", 10))

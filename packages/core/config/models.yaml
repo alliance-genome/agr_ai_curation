@@ -8,6 +8,7 @@ models:
     curator_visible: true
     supports_reasoning: true
     supports_temperature: false
+    supports_tool_search: true
     reasoning_options: [low, medium, high, xhigh]
     default_reasoning: low
     reasoning_descriptions:
@@ -29,6 +30,7 @@ models:
     default: true
     supports_reasoning: true
     supports_temperature: false
+    supports_tool_search: true
     reasoning_options:
       - low
       - medium
@@ -55,6 +57,7 @@ models:
     default: false
     supports_reasoning: true
     supports_temperature: false
+    supports_tool_search: true
     reasoning_options:
       - low
       - medium
@@ -80,6 +83,7 @@ models:
     default: false
     supports_reasoning: true
     supports_temperature: true
+    supports_tool_search: false
     recommended_for:
       - Explicit OpenRouter route evaluation
     avoid_for:

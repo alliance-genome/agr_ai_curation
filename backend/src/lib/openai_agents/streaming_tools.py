@@ -42,6 +42,16 @@ from pydantic import ValidationError
 
 from .audit_labels import build_specialist_internal_friendly_name
 from .langfuse_client import is_openai_agents_tracing_enabled
+from .tool_surface import (
+    MODE_DEFERRED,
+    ToolGroupCapError,
+    apply_tool_surface,
+    canonical_tool_name,
+    record_tool_surface_prompt,
+    replay_input_without_tool_search,
+    run_config_for_tool_surface,
+    tool_surface_trace_attributes,
+)
 from .config import (
     PROMPT_CACHE_KEY_FIELD,
     PromptCacheIdentity,
@@ -3460,7 +3470,7 @@ def _enforce_run_state_tool_result_budget(tool_name: str, result: Any) -> Any:
     measured = serialized_size(result)
     if measured <= budget:
         return result
-    enforced = tool_name not in _RUN_STATE_OBSERVE_ONLY_TOOLS
+    enforced = canonical_tool_name(tool_name) not in _RUN_STATE_OBSERVE_ONLY_TOOLS
     report_tool_result_budget_escape(
         tool_name=tool_name,
         measured=measured,
@@ -5019,9 +5029,9 @@ async def run_specialist_with_events(
                 extra={"specialist_name": specialist_name, "tool_name": tool_name},
             )
 
-    # Commit pending prompts for this specialist - moves from pending to used
-    # This is where the agent ACTUALLY executes, so we log the prompts now
-    commit_pending_prompts(runtime_agent)
+    # Prompts are committed right before the run starts, once the compiled
+    # tool surface has added its runtime layer (see below).
+    prompt_agent = runtime_agent
 
     effective_config = _run_config_with_full_trace_payloads(run_config)
 
@@ -5076,19 +5086,65 @@ async def run_specialist_with_events(
     # contextvars set above do not reliably appear; a closure does (it rides in the
     # function object), so each tool resolves its run state regardless of the thread
     # boundary. Tool bodies and the package contract are unchanged.
-    runtime_agent = _bind_run_state_into_tools(
-        runtime_agent,
-        evidence_records=live_evidence_records,
-        builder_workspace=builder_workspace,
-        resolver_ledger=resolver_call_ledger,
+    # The caller's agent is shared by every invocation of this specialist tool
+    # (including concurrent ones); run-state binding and the compiled tool
+    # surface below are per run, so they go on a per-run copy (ALL-1280).
+    try:
+        if runtime_agent is agent:
+            runtime_agent = copy.copy(agent)
+        runtime_agent = _bind_run_state_into_tools(
+            runtime_agent,
+            evidence_records=live_evidence_records,
+            builder_workspace=builder_workspace,
+            resolver_ledger=resolver_call_ledger,
+        )
+
+        # Validate the actual post-adapter, post-rebinding schema sent to the SDK.
+        from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
+
+        for runtime_tool in runtime_agent.tools:
+            if hasattr(runtime_tool, "profile_bound_schema"):
+                assert_profile_tool_contract(runtime_tool)
+
+        # ALL-1280: compile the provider-facing tool surface LAST, after run-state
+        # rebinding (which rebuilds tools without deferral metadata).
+        tool_surface = apply_tool_surface(
+            runtime_agent,
+            required_tool_names=(
+                (structured_finalization_state.tool_name,)
+                if structured_finalization_state.required and structured_finalization_state.tool_name
+                else ()
+            ),
+        )
+        record_tool_surface_prompt(prompt_agent, tool_surface, target_agent=runtime_agent)
+        # The specialist run gets tool-not-found recovery for its deferred
+        # tools; the tool-less structured-output retry keeps effective_config.
+        specialist_run_config = run_config_for_tool_surface(effective_config, tool_surface)
+    except BaseException as exc:
+        if isinstance(exc, ToolGroupCapError):
+            # Curator-facing: the audit trail and a flow's failure message show
+            # this text (a chat run error is replaced by a generic message).
+            add_specialist_event({
+                "type": "SPECIALIST_ERROR",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "specialist": specialist_name,
+                    "error": str(exc),
+                    "message": str(exc),
+                    "reason": "tool_group_too_large",
+                    "severity": "error",
+                },
+            })
+        reset_active_evidence_records(evidence_workspace_token)
+        reset_active_resolver_call_ledger(resolver_call_ledger_token)
+        reset_active_extraction_builder_workspace(builder_workspace_token)
+        raise
+
+    # Commit pending prompts for this specialist - moves from pending to used
+    # This is where the agent ACTUALLY executes, so we log the prompts now
+    commit_pending_prompts(
+        runtime_agent if tool_surface.mode == MODE_DEFERRED else prompt_agent
     )
-
-    # Validate the actual post-adapter, post-rebinding schema sent to the SDK.
-    from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
-
-    for runtime_tool in runtime_agent.tools:
-        if hasattr(runtime_tool, "profile_bound_schema"):
-            assert_profile_tool_contract(runtime_tool)
 
     # Run with streaming to capture internal events
     runner_create_started_at = time.monotonic()
@@ -5200,12 +5256,13 @@ async def run_specialist_with_events(
             ):
                 pass
     try:
-        result = Runner.run_streamed(
-            runtime_agent,
-            input=input_text,
-            max_turns=max_turns,
-            run_config=effective_config
-        )
+        with tool_surface_trace_attributes(tool_surface):
+            result = Runner.run_streamed(
+                runtime_agent,
+                input=input_text,
+                max_turns=max_turns,
+                run_config=specialist_run_config
+            )
     except BaseException as exc:
         sentry_stream_finalization_status = (
             "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
@@ -5228,6 +5285,9 @@ async def run_specialist_with_events(
         finally:
             sentry_span_context_manager.__exit__(None, None, None)
             conversation_context_manager.__exit__(None, None, None)
+            reset_active_evidence_records(evidence_workspace_token)
+            reset_active_resolver_call_ledger(resolver_call_ledger_token)
+            reset_active_extraction_builder_workspace(builder_workspace_token)
         raise
     phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
     write_extraction_trace_event(
@@ -5493,7 +5553,7 @@ async def run_specialist_with_events(
                         is_generating = False
 
                         tool_started_at = datetime.now(timezone.utc)
-                        current_tool_name = (
+                        current_tool_name = canonical_tool_name(
                             getattr(item, "name", None) or
                             getattr(item, "tool_name", None) or
                             getattr(getattr(item, "raw_item", None), "name", None) or
@@ -6092,15 +6152,25 @@ async def run_specialist_with_events(
                 try:
                     # Get conversation history from the failed run so the model knows what was searched
                     # This is CRITICAL - without history, the model has no context to synthesize
-                    previous_items = result.to_input_list()
+                    # The retry agent declares no tools, so hosted tool-search
+                    # items and namespaces are rewritten for a tool-less request;
+                    # every tool call and result is kept (ALL-1280).
+                    previous_items, replay_changes = replay_input_without_tool_search(
+                        result.to_input_list()
+                    )
 
                     # Append nudge prompt to the conversation history
                     retry_input = previous_items + [{"role": "user", "content": nudge_prompt}]
 
                     logger.info(
-                        "%s retry: including %s previous items plus nudge prompt",
+                        "%s retry: including %s previous items plus nudge prompt "
+                        "(tool search items removed=%s, reasoning items removed=%s, "
+                        "function call namespaces removed=%s)",
                         specialist_name,
                         len(previous_items),
+                        replay_changes["tool_search_items_removed"],
+                        replay_changes["reasoning_items_removed"],
+                        replay_changes["function_call_namespaces_removed"],
                     )
 
                     # Create a simplified "retry agent" WITHOUT output_guardrails

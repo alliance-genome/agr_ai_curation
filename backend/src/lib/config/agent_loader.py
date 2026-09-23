@@ -37,6 +37,7 @@ from src.schemas.domain_validator import (
 )
 
 from .agent_sources import resolve_agent_config_sources
+from .tool_loading_loader import ToolLoadingPolicy, parse_tool_loading_policy
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,7 @@ class AgentDefinition:
         group_rules_enabled: Whether to inject group-specific rules
         group_tool_policy: Package-owned authenticated-group tool exposure rules
         frontend: Frontend display settings
+        tool_loading: Optional per-agent hosted tool-search loading policy
         tool_name: Generated supervisor tool name (ask_{canonical_system_agent_key}_specialist)
     """
 
@@ -185,6 +187,7 @@ class AgentDefinition:
     documentation: Optional[Dict[str, Any]] = None
     structured_finalization: Optional[Dict[str, Any]] = None
     output_projection: ValidatorOutputProjection | None = None
+    tool_loading: ToolLoadingPolicy | None = None
     # model_config is required for agents that are actually executed; that is
     # enforced at the real use-point (from_yaml requires a model; building the
     # agent registry / config raises on a missing model_config). It stays optional
@@ -301,6 +304,14 @@ class AgentDefinition:
             if isinstance(structured_finalization_data, dict)
             else None
         )
+        tool_loading = (
+            parse_tool_loading_policy(
+                data["tool_loading"],
+                label=f"Agent '{folder_name}' tool_loading",
+            )
+            if data.get("tool_loading") is not None
+            else None
+        )
         retired_agent_ids_data = data.get("retired_agent_ids", [])
         if not isinstance(retired_agent_ids_data, list):
             raise ValueError(
@@ -341,6 +352,7 @@ class AgentDefinition:
             group_tool_policy=group_tool_policy,
             documentation=data.get("documentation"),
             structured_finalization=structured_finalization,
+            tool_loading=tool_loading,
             output_projection=(
                 ValidatorOutputProjection.model_validate(data["output_projection"])
                 if data.get("output_projection") is not None

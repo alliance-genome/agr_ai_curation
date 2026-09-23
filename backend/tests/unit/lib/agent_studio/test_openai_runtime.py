@@ -156,7 +156,7 @@ def test_tools_use_one_hosted_search_surface_and_keep_forced_tool_eager():
     }
 
 
-def test_capability_search_can_be_eager_without_eager_detail_catalog():
+def test_capability_search_and_studio_guide_stay_eager_without_eager_detail_catalog():
     state = runtime.AgentStudioRunState(trace_id="trace-catalog")
 
     async def execute(_name, _arguments, _call_id):
@@ -165,6 +165,7 @@ def test_capability_search_can_be_eager_without_eager_detail_catalog():
     tools, metrics = runtime.build_agent_studio_tools(
         [
             _tool_definition("search_studio_capabilities"),
+            _tool_definition("read_studio_guide"),
             _tool_definition("get_studio_capability_detail"),
         ],
         executor=execute,
@@ -173,7 +174,6 @@ def test_capability_search_can_be_eager_without_eager_detail_catalog():
             "studio_capabilities",
             "Authenticated catalog",
         ),
-        eager_tool_names=frozenset({"search_studio_capabilities"}),
     )
 
     function_tools = [tool for tool in tools if isinstance(tool, FunctionTool)]
@@ -183,8 +183,11 @@ def test_capability_search_can_be_eager_without_eager_detail_catalog():
     detail = next(
         tool for tool in function_tools if "get_studio_capability_detail" in tool.name
     )
+    assert next(
+        tool for tool in function_tools if tool.name == "read_studio_guide"
+    ).defer_loading is False
     assert detail.defer_loading is True
-    assert metrics["eager_count"] == 1
+    assert metrics["eager_count"] == 2
     assert metrics["deferred_count"] == 1
 
 
@@ -532,7 +535,7 @@ def test_proposal_review_stops_only_after_valid_repair(tool_name, contract):
     output = {"contract_version": contract, "success": False, "valid": False, "pending_user_approval": False}
     async def executor(*_args):
         return runtime.ToolExecutionResult(full_output=dict(output), provider_output="bounded result")
-    tool = runtime._build_function_tool(_tool_definition(tool_name), executor=executor, state=state, defer_loading=False)
+    tool = runtime._build_function_tool(_tool_definition(tool_name), executor=executor, state=state)
     behavior = runtime._proposal_review_behavior(state)
     asyncio.run(tool.on_invoke_tool(SimpleNamespace(tool_call_id="invalid"), '{}'))
     assert behavior(None, []).is_final_output is False
@@ -571,7 +574,7 @@ def test_sdk_accepts_review_on_last_allowed_model_turn_without_another_request()
             "valid": True, "pending_user_approval": True,
         }, provider_output='{"valid":true}')
     tool = runtime._build_function_tool(_tool_definition("propose_workshop_draft_update"),
-        executor=executor, state=state, defer_loading=False)
+        executor=executor, state=state)
     model = ProposalModel()
     result = asyncio.run(Runner.run(Agent(name="Review", model=model, tools=[tool],
         tool_use_behavior=runtime._proposal_review_behavior(state)), "Make a draft",
@@ -610,7 +613,7 @@ def test_streamed_invalid_then_valid_proposal_finishes_on_last_turn(monkeypatch)
             "valid": valid, "pending_user_approval": valid,
         }, provider_output='{"valid":' + str(valid).lower() + '}')
     tool = runtime._build_function_tool(_tool_definition("propose_workshop_draft_update"),
-        executor=executor, state=state, defer_loading=False)
+        executor=executor, state=state)
     provider = SimpleNamespace(get_model=lambda _name: model)
     monkeypatch.setattr(runtime, 'build_owned_openai_responses_resources', lambda: SimpleNamespace(provider=provider))
     monkeypatch.setattr(runtime, '_run_config', lambda **_kwargs: RunConfig(model_provider=provider, tracing_disabled=True))

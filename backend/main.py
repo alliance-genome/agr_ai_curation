@@ -314,6 +314,21 @@ async def lifespan(app: FastAPI):
         logger.error("FATAL: Unexpected provider validation error: %s", e)
         raise
 
+    # Validate hosted tool-search namespaces and loading policies (ALL-1280).
+    try:
+        from src.lib.openai_agents.tool_surface import validate_tool_surface_configuration
+
+        tool_surface_report = validate_tool_surface_configuration()
+        logger.info(
+            "Tool surface configuration validated (namespaces=%s namespaced_tools=%s policies=%s)",
+            tool_surface_report["namespace_count"],
+            tool_surface_report["namespaced_tool_count"],
+            tool_surface_report["policies"],
+        )
+    except Exception as e:
+        logger.error("FATAL: %s", e)
+        raise
+
     try:
         prewarmed = maybe_prepare_package_tool_environments_on_start()
         if prewarmed:

@@ -535,6 +535,37 @@ class TestAgentTestEndpoint:
         assert "boom stream" in caplog.text
         assert not any(event.get("type") == "DONE" for event in error_events)
 
+        # A curator-facing RUN_ERROR (custom agent over the per-group tool cap,
+        # ALL-1280) keeps its message; other runner errors stay generic.
+        cap_message = (
+            "This agent has 11 tools from the 'staged object corrections' group, and custom "
+            "agents can use at most 10 tools from one group. Please contact the AI Curation "
+            "developers for help setting up this agent."
+        )
+
+        async def _run_error_stream(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "cap-trace"}}
+            yield {"type": "RUN_ERROR", "data": {"message": cap_message, "error_type": "ToolGroupCapError"}}
+            yield {"type": "RUN_ERROR", "data": {"message": "internal detail", "error_type": "ValueError"}}
+
+        monkeypatch.setattr(api_module, "run_agent_streamed", _run_error_stream)
+        response = asyncio.run(
+            api_module.test_agent_endpoint(
+                agent_id="gene",
+                request=api_module.AgentTestRequest(input="test", session_id="sess-cap"),
+                user={"sub": "auth-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+        run_errors = [
+            event for event in _parse_sse_payloads(asyncio.run(_consume(response)))
+            if event.get("type") == "RUN_ERROR"
+        ]
+        assert [event["message"] for event in run_errors] == [
+            cap_message,
+            "Agent test failed unexpectedly.",
+        ]
+
 
 class TestAgentWorkshopSystemPrompt:
     """Tests for agent workshop context injection into Opus system prompt."""

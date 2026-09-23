@@ -1147,9 +1147,11 @@ def _build_tool_registry() -> Dict[str, Dict[str, Any]]:
             "package_export_name": binding.source.export_name,
         }
         if binding.metadata:
+            # ``namespace`` is hosted tool-search loading metadata (ALL-1280),
+            # not served tool documentation.
             registry[binding.tool_id] = _merge_tool_metadata(
                 registry[binding.tool_id],
-                dict(binding.metadata),
+                {key: value for key, value in binding.metadata.items() if key != "namespace"},
             )
 
     registry.update(_build_runtime_formatter_tool_registry_entries())

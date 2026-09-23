@@ -188,7 +188,10 @@ from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.runtime_payload_budget import json_size, provider_context_preflight
 from src.lib.observability.runtime import report_runtime_exception
 from src.lib.openai_agents import run_agent_streamed
-from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+from src.lib.openai_agents.event_types import (
+    INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+    curator_facing_run_error_message,
+)
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.models.sql.agent import Agent as UnifiedAgent
 from src.models.sql import SessionLocal, get_db
@@ -1297,10 +1300,13 @@ async def test_agent_endpoint(
                             agent_id,
                             extra={"session_id": session_id, "trace_id": trace_id or flat.get("trace_id")},
                         )
-                    flat["message"] = "Agent test failed unexpectedly."
+                    public_message = (
+                        curator_facing_run_error_message(flat) or "Agent test failed unexpectedly."
+                    )
+                    flat["message"] = public_message
                     details = flat.get("details")
                     if isinstance(details, dict) and "error" in details:
-                        flat["details"] = {**details, "error": "Agent test failed unexpectedly."}
+                        flat["details"] = {**details, "error": public_message}
                 yield f"data: {json.dumps(flat, default=str)}\n\n"
 
             done_event = {
@@ -1419,13 +1425,6 @@ def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
         logger=logger,
         is_allowed=_is_tool_allowed_for_context,
     )
-
-
-# Always visible: capability discovery and the reference guide the system
-# prompt's topic index tells the model to read (ALL-1292).
-_EAGER_STUDIO_TOOL_NAMES = frozenset(
-    {"search_studio_capabilities", READ_STUDIO_GUIDE_TOOL_NAME}
-)
 
 
 def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
@@ -4396,7 +4395,6 @@ async def chat_with_opus(
                 state=run_state,
                 namespace_for_tool=_agent_studio_tool_namespace,
                 forced_tool_name=forced_tool_name,
-                eager_tool_names=_EAGER_STUDIO_TOOL_NAMES,
             )
         except Exception as exc:
             _report_agent_studio_exception_once(

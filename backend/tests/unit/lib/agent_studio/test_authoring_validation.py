@@ -428,3 +428,41 @@ def test_unexpected_engine_reporting_contains_only_sanitized_metadata(monkeypatc
         "validation_phase": "pre_apply",
     }
     assert kwargs["context"] == {"finding_count": 0, "failure_id": error.failure_id}
+
+
+_CORRECTION_TOOLS = [
+    f"{verb}_{target}"
+    for target in (
+        "gene_expression_observation",
+        "allele_observation",
+        "phenotype_observation",
+        "disease_observation",
+    )
+    for verb in ("patch", "discard")
+] + [
+    "find_staged_gene_expression_observations",
+    "find_staged_allele_observations",
+    "find_staged_phenotype_observations",
+]
+
+
+def test_tool_group_above_the_on_demand_cap_is_rejected_at_save_time():
+    # Eleven tools from one tool group (ALL-1280): blocking at save, and the
+    # curator is sent to the developers.
+    oversized = _agent_result(_agent(tool_ids=["search", *_CORRECTION_TOOLS]), phase="save")
+    one_builder = _agent_result(
+        _agent(tool_ids=["search", *_CORRECTION_TOOLS[:2], _CORRECTION_TOOLS[8]]), phase="save"
+    )
+
+    finding = next(item for item in oversized.errors if item.code == "tool_group_too_large")
+    assert finding.path == "custom_agent.tool_ids"
+    assert finding.message == (
+        "This agent has 11 tools from the 'staged object corrections' group, and custom "
+        "agents can use at most 10 tools from one group. Please contact the AI Curation "
+        "developers for help setting up this agent."
+    )
+    assert finding.fix_hint.startswith(
+        "Contact the AI Curation developers and include this message."
+    )
+    assert "patch_allele_observation" in finding.fix_hint
+    assert "tool_group_too_large" not in {item.code for item in one_builder.errors}

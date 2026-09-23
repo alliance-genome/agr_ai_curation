@@ -353,6 +353,18 @@ Use `runtime/config/providers.yaml`, `runtime/config/models.yaml`, and
 `runtime/config/tool_policy_defaults.yaml` for deployment-local overrides. Use a
 custom package when you want a reusable bundle that can move across installs.
 
+Hosted tool search (ALL-1280) uses two more package exports. `tool_namespaces`
+declares namespaces (`id`, one description of at most 160 characters, `owner`);
+tools join one with `metadata.namespace` in the package `tools/bindings.yaml`.
+`tool_loading` declares each runtime's loading policy (`eager` or `deferred`).
+Namespace ids are unique across packages (startup fails on a duplicate); a later
+`tool_loading` source replaces a runtime's whole policy, and an optional
+`runtime/config/tool_loading.yaml` loads last. A runtime override
+`providers.yaml`/`models.yaml` replaces whole definitions, so it must carry
+`supports.tool_search` / `supports_tool_search` for OpenAI Responses routes that
+should keep hosted tool search; otherwise a deferred policy runs eagerly and is
+recorded as `eager_provider_unsupported`.
+
 ### Agents
 
 - Agent bundle names must be unique across all loaded packages.
