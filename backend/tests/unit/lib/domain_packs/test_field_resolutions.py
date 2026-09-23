@@ -86,6 +86,12 @@ def _metadata() -> DomainPackMetadata:
                             if path.count(".") < 2 and not path.endswith("note")
                             else DomainPackFieldType.STRING
                         ),
+                        # The three values are declared resolvable (ALL-1283).
+                        metadata=(
+                            {"display": {"label": "name", "id": "curie", "mention": "mention"}}
+                            if path in ("setting.kind", "setting.agent", "setting.host")
+                            else {}
+                        ),
                     )
                     for path in paths
                 ],

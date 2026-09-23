@@ -21,9 +21,10 @@ model definition or a field (``metadata.display``):
   mapping ``{path, display}``; one without a path reads the value itself with
   its ``display`` (e.g. "label (id)" followed by other parts).
 
-Without a spec a generic reading applies: a stored resolvable value (one
-carrying ``resolution_state`` or a paper ``mention``) reads as above with the
-generic keys; a term-like value holding only one of ``curie|id|identifier`` and
+Without a spec a generic reading applies: a value stored with the contract
+state (``resolution_state`` and ``lookup_outcome``) reads as above with the
+generic keys; a mapping that merely holds a ``mention`` key is not a
+resolvable value; a term-like value holding only one of ``curie|id|identifier`` and
 one of ``name|label|display_name`` reads "label (id)"; any other value renders
 all its ``key: value`` pairs so nothing is dropped.
 
@@ -53,7 +54,7 @@ from typing import Any
 from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS,
     UNRESOLVED_DISPLAY,
-    holds_resolution,
+    has_resolution_state,
     is_resolved,
     resolvable_spec_from_display,
     without_overruled,
@@ -247,7 +248,9 @@ def _mapping_text(
     if spec and spec.get("compose"):
         return _compose_text(value, spec, keyed, whole, marked)
     unresolved = bool(paths)
-    if (spec and spec.get("mention")) or holds_resolution(value):
+    # A declared resolvable value, or a value stored with the contract state;
+    # a mapping that merely holds a ``mention`` key is read like any other.
+    if (spec and spec.get("mention")) or has_resolution_state(value):
         return _resolvable_text(value, spec)
     if spec and (spec.get("label") or spec.get("id")):
         label = _first(value, [spec["label"]]) if spec.get("label") else ""

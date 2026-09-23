@@ -29,7 +29,7 @@ from src.lib.domain_packs.resolvable_values import (
     LOOKUP_OUTCOME_KEY,
     RESOLUTION_STATE_KEY,
     declared_resolvable_fields,
-    holds_resolution,
+    has_resolution_state,
     stated_value,
     unresolved_header_text,
     without_overruled,
@@ -1773,7 +1773,7 @@ def _details_response(
             cursor=cursor,
             message="Saved detail value is ready.",
         )
-    if holds_resolution(value):
+    if has_resolution_state(value):
         # A resolvable value states whether it is resolved, so its mention is
         # never read as the item (ALL-1283).
         state = _with_resolution_states(value)

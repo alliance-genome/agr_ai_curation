@@ -848,11 +848,6 @@ def test_validator_result_materialization_promotes_builder_after_active_binding_
         "primary_external_id": "FB:FBgn0259685",
         "gene_symbol": "crb",
         "taxon": "NCBITaxon:7227",
-        # The object root carries the paper mention, so it is the resolvable value (ALL-1283).
-        "resolution_state": "resolved",
-        "lookup_outcome": "matched",
-        "validator_explanation": "Fixture validator decision.",
-        "validator_curator_message": None,
     }
     patch_event = patched.metadata["validator_resolved_value_materialization"][0]
     assert patch_event["validator_binding_id"] == "fixture.gene_lookup"
@@ -1177,10 +1172,6 @@ def test_validator_result_materialization_warns_for_unmapped_expected_result_fie
         "mention": "crumbs",
         "primary_external_id": "FB:FBgn0259685",
         "gene_symbol": "crb",
-        "resolution_state": "resolved",
-        "lookup_outcome": "matched",
-        "validator_explanation": "Fixture validator decision.",
-        "validator_curator_message": None,
     }
     warning = next(
         finding

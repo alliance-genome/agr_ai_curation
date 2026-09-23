@@ -279,14 +279,6 @@ def has_resolution_state(value: Any) -> bool:
     )
 
 
-def holds_resolution(value: Any) -> bool:
-    """Whether a stored mapping is a resolvable value (it has a state or a paper mention)."""
-
-    return isinstance(value, Mapping) and (
-        RESOLUTION_STATE_KEY in value or isinstance(value.get(MENTION_KEY), str)
-    )
-
-
 def _optional_text(value: Any, key: str) -> None:
     if value is not None and not isinstance(value, str):
         raise ResolvableValueError(f"{key} must be text or null, got {type(value).__name__}")
@@ -671,11 +663,17 @@ def validator_materialized_paths(object_metadata: Mapping[str, Any] | None) -> t
     return tuple(paths)
 
 
-def _covers(path: Sequence[str | int], target: Sequence[str | int]) -> bool:
+def _covers(
+    path: Sequence[str | int],
+    target: Sequence[str | int],
+    identity_keys: Sequence[str] = (),
+) -> bool:
     """Whether a recorded write path covers the value at ``target``.
 
-    It covers the value when it wrote the value or one of its keys, or when
-    it wrote the whole list the value is an element (or part of an element) of.
+    It covers the value when it wrote the whole value, one of its identity
+    keys (any key when none are given, except at the object root), or the
+    whole list the value is an element (or part of an element) of. A write
+    elsewhere on the object never covers the object root itself.
     """
 
     shared = min(len(path), len(target))
@@ -684,23 +682,35 @@ def _covers(path: Sequence[str | int], target: Sequence[str | int]) -> bool:
         for recorded, wanted in zip(path[:shared], target[:shared])
     ):
         return False
-    return len(path) >= len(target) or isinstance(target[len(path)], int)
+    if len(path) < len(target):
+        return isinstance(target[len(path)], int)
+    if len(path) == len(target):
+        return bool(target)
+    if identity_keys:
+        return path[len(target)] in identity_keys
+    return bool(target)
 
 
 def validator_event_covers(
     object_metadata: Mapping[str, Any] | None,
     value_path: str,
+    identity_keys: Sequence[str] = (),
+    *,
+    recorded_paths: Sequence[tuple[str | int, ...]] | None = None,
 ) -> bool:
     """Whether a validator write-back event on this object covers the value at ``value_path``.
 
-    ``value_path`` is the value's own payload path ("" for the object root);
-    an event covers it when it wrote the value or one of its keys.
+    ``value_path`` is the value's own payload path ("" for the object root).
+    With ``identity_keys`` an event must have written one of them (always so
+    for the object root). ``recorded_paths`` (``validator_materialized_paths``)
+    may be passed to read one object's events only once.
     """
 
     target = _path_tokens(value_path)
     if target is None:
         return False
-    return any(_covers(path, target) for path in validator_materialized_paths(object_metadata))
+    paths = validator_materialized_paths(object_metadata) if recorded_paths is None else recorded_paths
+    return any(_covers(path, target, identity_keys) for path in paths)
 
 
 def value_covered_by_validator(
@@ -710,10 +720,13 @@ def value_covered_by_validator(
 ) -> bool:
     """Validator coverage of one value: its own path, or a declared mirror source (``covered_by``)."""
 
-    if validator_event_covers(object_metadata, value_path):
+    recorded = validator_materialized_paths(object_metadata)
+    identity_keys = spec.identity_keys if spec is not None else ()
+    if validator_event_covers(object_metadata, value_path, identity_keys, recorded_paths=recorded):
         return True
     return spec is not None and any(
-        validator_event_covers(object_metadata, source) for source in spec.covered_by
+        validator_event_covers(object_metadata, source, recorded_paths=recorded)
+        for source in spec.covered_by
     )
 
 
@@ -839,30 +852,25 @@ def _invalid_record_value(value: Mapping[str, Any], spec: ResolvableSpec, proble
 def stated_value(value: Any) -> Any:
     """A read-time copy of a resolvable value that states a valid resolution, without a spec.
 
-    For surfaces that do not know the pack's declarations (e.g. supervisor
-    views): a legacy value reads unresolved/``legacy_unverified``, an invalid
-    stored one unresolved/``invalid_schema``; a valid one comes back unchanged.
+    For surfaces reading a value that carries the contract state outside a
+    pack declaration (e.g. custom attributes): an invalid stored one reads
+    unresolved/``invalid_schema``; a valid one, or any value without the
+    contract state, comes back unchanged. Declared values read through
+    ``effective_payload`` instead.
     """
 
-    if not holds_resolution(value):
+    if not has_resolution_state(value):
         return value
-    if has_resolution_state(value):
-        problem = stored_state_problem(value)
-        if problem is None:
-            return value
-        _log.warning("Stored resolvable value breaks the contract and reads as unresolved: %s", problem)
-        return {
-            **value,
-            RESOLUTION_STATE_KEY: UNRESOLVED,
-            LOOKUP_OUTCOME_KEY: OUTCOME_INVALID_SCHEMA,
-            VALIDATOR_EXPLANATION_KEY: INVALID_RECORD_EXPLANATION,
-            VALIDATOR_CURATOR_MESSAGE_KEY: None,
-        }
+    problem = stored_state_problem(value)
+    if problem is None:
+        return value
+    _log.warning("Stored resolvable value breaks the contract and reads as unresolved: %s", problem)
     return {
         **value,
         RESOLUTION_STATE_KEY: UNRESOLVED,
-        LOOKUP_OUTCOME_KEY: OUTCOME_LEGACY_UNVERIFIED,
-        VALIDATOR_EXPLANATION_KEY: LEGACY_EXPLANATION,
+        LOOKUP_OUTCOME_KEY: OUTCOME_INVALID_SCHEMA,
+        VALIDATOR_EXPLANATION_KEY: INVALID_RECORD_EXPLANATION,
+        VALIDATOR_CURATOR_MESSAGE_KEY: None,
     }
 
 
@@ -1076,9 +1084,9 @@ def unresolved_header_text(
         target, target_tokens, leaf, spec = named, tokens, None, named_spec
     elif parent_spec is not None and isinstance(parent, Mapping):
         target, target_tokens, leaf, spec = parent, parent_tokens, named, parent_spec
-    elif holds_resolution(named):
+    elif has_resolution_state(named):
         target, target_tokens, leaf = named, tokens, None
-    elif parent_tokens is not None and holds_resolution(parent):
+    elif parent_tokens is not None and has_resolution_state(parent):
         target, target_tokens, leaf = parent, parent_tokens, named
     else:
         return None
@@ -1167,7 +1175,6 @@ __all__ = [
     "effective_resolution",
     "effective_value",
     "has_resolution_state",
-    "holds_resolution",
     "is_resolved",
     "lookup_outcome_for_failure",
     "mark_resolved",

@@ -346,9 +346,14 @@ def test_packs_declare_the_vocabularies_exactly():
 # --- Materializer write-back ---------------------------------------------------
 
 
-def _metadata(*, expected=None, mirror=False, input_path="site.mention") -> DomainPackMetadata:
+_SITE_DISPLAY = {"label": "name", "id": "curie", "mention": "mention"}
+
+
+def _metadata(*, expected=None, mirror=False, input_path="site.mention", declared=True) -> DomainPackMetadata:
+    display = {"display": _SITE_DISPLAY} if declared else {}
     fields = [
-        DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT),
+        DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT, metadata=display),
+        DomainPackFieldDefinition(field_path="copy", field_type=DomainPackFieldType.OBJECT, metadata=display),
         DomainPackFieldDefinition(
             field_path="site.curie",
             field_type=DomainPackFieldType.STRING,
@@ -533,7 +538,7 @@ def test_mirror_copies_take_the_source_value_state():
 
 
 def test_plain_values_without_a_resolvable_container_patch_as_before():
-    metadata = _metadata(input_path="site.name")
+    metadata = _metadata(input_path="site.name", declared=False)
     envelope = _envelope({"site": {"curie": None, "name": "skin"}})
     item = _item(metadata, envelope, values={"curie": "ONT:1", "name": "epidermis"})
 
@@ -1146,3 +1151,81 @@ def test_overruled_identities_are_informational_only():
     # A fresh resolution replaces the overruled identity.
     mark_resolved(value, {"curie": "ONT:2", "name": "skin"}, explanation="Matched.")
     assert not any(key.startswith("overruled_") for key in value)
+
+
+# --- H1: resolvable values come only from declarations --------------------------
+
+
+def _annotation_metadata():
+    def binding(binding_id, input_path, expected):
+        return {
+            "binding_id": binding_id,
+            "display_name": binding_id,
+            "validator_agent": {"package_id": "fixture.validators", "agent_id": "cv_validator"},
+            "applies_to": {"domain_pack_id": "fixture.annotation", "object_types": ["Annotation"]},
+            "input_fields": {"text": {"source": "payload", "path": input_path}},
+            "expected_result_fields": expected,
+        }
+
+    return DomainPackMetadata(
+        pack_id="fixture.annotation", display_name="Annotation", version="0.1.0", metadata_api_version="1.0.0",
+        metadata={"validator_bindings": {"active": [
+            binding("fixture.annotation_type", "mention", {"term_name": "annotation_type_name"}),
+            binding("fixture.relation", "mention", {"term_name": "relation_name"}),
+        ], "under_development": []}},
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Annotation", display_name="Annotation", metadata={"object_role": "curatable_unit"},
+            fields=[DomainPackFieldDefinition(field_path=path, field_type=DomainPackFieldType.STRING)
+                    for path in ("mention", "annotation_type_name", "relation_name")],
+        )],
+    )
+
+
+def test_an_undeclared_object_root_with_a_mention_is_not_a_resolvable_value():
+    metadata = _annotation_metadata()
+    envelope = DomainEnvelope(
+        envelope_id="annotation-env", domain_pack_id="fixture.annotation",
+        extracted_objects=[CuratableObjectEnvelope(
+            object_type="Annotation", pending_ref_id="annotation-1",
+            payload={"mention": "paper sentence", "annotation_type_name": None, "relation_name": None},
+        )],
+    )
+    registry = DomainPackValidationRegistry.from_domain_pack(LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    ))
+    items = []
+    for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE]):
+        request = build_domain_validation_request(match).request
+        resolved = request.validator_binding_id == "fixture.annotation_type"
+        result = DomainValidatorResultBase.model_validate({
+            "status": "resolved" if resolved else "unresolved", "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
+            "target": request.target, "resolved_values": {"term_name": "manually_curated"} if resolved else {},
+            "resolved_objects": [], "missing_expected_fields": [], "candidates": [],
+            "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 1,
+                                 "outcome": "success" if resolved else "not_found"}],
+            "curator_message": None, "explanation": "e",
+        })
+        items.append(ValidatorResultMaterializationInput(match=match, request=request, result=result))
+
+    for ordered in (items, list(reversed(items))):
+        payload = materialize_validator_results_into_envelope(
+            envelope, metadata, ordered).envelope.extracted_objects[0].payload
+        # Plain top-level fields: the resolved one is written; nothing is wiped
+        # or given a root "state", whatever order the bindings come back in.
+        assert payload == {"mention": "paper sentence", "annotation_type_name": "manually_curated",
+                           "relation_name": None}
+
+
+def test_object_root_coverage_needs_an_event_on_its_identity_keys():
+    metadata = {"validator_resolved_value_materialization": [{"materialized_field_paths": ["relation_name"]}]}
+    assert not validator_event_covers(metadata, "")
+    assert not validator_event_covers(metadata, "", ("gene_symbol", "primary_external_id"))
+    covered = {"validator_resolved_value_materialization": [{"materialized_field_paths": ["gene_symbol"]}]}
+    assert validator_event_covers(covered, "", ("gene_symbol", "primary_external_id"))
+    spec = ResolvableSpec(id_key="primary_external_id", label_key="gene_symbol")
+    legacy_root = {"gene_symbol": "unc-54", "primary_external_id": "G:1"}
+    assert effective_payload(legacy_root, {"": spec}, object_metadata=metadata)["lookup_outcome"] == (
+        OUTCOME_LEGACY_UNVERIFIED)
+    assert effective_payload(legacy_root, {"": spec}, object_metadata=covered)["lookup_outcome"] == OUTCOME_MATCHED

@@ -72,7 +72,6 @@ from src.lib.domain_packs.resolvable_values import (
     declared_resolvable_fields,
     declared_spec_for,
     validator_event_covers,
-    holds_resolution,
     lookup_outcome_for_failure,
     mark_resolved,
     mark_unresolved,
@@ -473,6 +472,7 @@ def materialize_validator_results_into_envelope(
                     object_definitions=object_definitions,
                     materialized_objects=new_objects,
                     source_envelope_revision=source_envelope_revision,
+                    resolvable_fields_by_type=resolvable_fields_by_type,
                 )
             )
             continue
@@ -1036,7 +1036,14 @@ def _resolvable_container_path(
     *,
     resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> str | None:
-    """The path of the resolvable value holding ``field_path`` ("" for the root), or None."""
+    """The path of the declared resolvable value holding ``field_path`` ("" for the root), or None.
+
+    Only the pack's declarations (``declared_resolvable_fields``) make a
+    container a resolvable value, never the keys it happens to hold: an
+    object root with a ``mention`` key is not a resolvable value unless its
+    model declares it. A declared value stored before the contract (no state,
+    no mention) is written as one too, so it takes the contract shape.
+    """
 
     try:
         parts = parse_field_path(field_path)
@@ -1045,14 +1052,9 @@ def _resolvable_container_path(
     if not parts or not isinstance(parts[-1], str):
         return None
     container_path = _format_field_path(parts[:-1])
-    container = _payload_container(payload, container_path)
-    if holds_resolution(container):
-        return container_path
-    # A value the pack declares resolvable but stored before the contract
-    # (no state, no mention) is written as one too, so it takes the contract shape.
     if (
         resolvable_fields
-        and isinstance(container, dict)
+        and isinstance(_payload_container(payload, container_path), dict)
         and declared_spec_for(resolvable_fields, parts[:-1]) is not None
     ):
         return container_path
@@ -1722,6 +1724,7 @@ def _field_findings_for_expected_result_fields(
     object_definitions: Mapping[str, DomainPackObjectDefinition],
     materialized_objects: Sequence[CuratableObjectEnvelope],
     source_envelope_revision: int | None,
+    resolvable_fields_by_type: Mapping[str, Mapping[str, ResolvableSpec]],
 ) -> list[ValidationFinding]:
     if not item.request.expected_result_fields:
         return []
@@ -1760,7 +1763,9 @@ def _field_findings_for_expected_result_fields(
                 and field_resolution is None
                 and materialized_paths
                 and _resolvable_container_path(
-                    target.domain_object.payload, materialized_paths[0]
+                    target.domain_object.payload,
+                    materialized_paths[0],
+                    resolvable_fields=resolvable_fields_by_type.get(target.domain_object.object_type),
                 ) is not None
             ):
                 # A composite validator made no decision for this value: no write, no finding.
