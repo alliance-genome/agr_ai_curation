@@ -128,3 +128,18 @@ def test_a_resolved_flag_no_longer_skips_the_object():
         _envelope(flagged_status=ValidationFindingStatus.RESOLVED), _pack(),
     )
     assert _object_ids(result.appended_findings) == {"old-1", "old-2"}
+
+
+def test_a_package_validator_rerun_supersedes_its_own_stale_flag():
+    from src.lib.domain_packs.not_validatable import supersede_not_validatable_findings
+
+    envelope = _envelope()
+    still_flagged = [envelope.validation_findings[0].model_copy(update={"finding_id": None})]
+
+    # The record is no longer in the previous format: the fresh run raises no flag.
+    refreshed = supersede_not_validatable_findings(envelope, [])
+    assert refreshed.validation_findings[0].status is ValidationFindingStatus.RESOLVED
+    assert not_validatable_object_keys(refreshed) == set()
+    # Still in the previous format: the flag stays open.
+    kept = supersede_not_validatable_findings(envelope, still_flagged)
+    assert kept.validation_findings[0].status is ValidationFindingStatus.OPEN

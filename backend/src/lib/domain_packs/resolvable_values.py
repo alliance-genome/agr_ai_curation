@@ -451,15 +451,26 @@ def mark_resolved(
     *,
     explanation: str | None,
     curator_message: str | None = None,
+    identity_keys: Sequence[str] = (),
 ) -> None:
     """Write a validator-supplied identity, the resolved state and the validator's own words.
 
     ``mention`` is untouched. ``explanation`` and ``curator_message`` come from
-    the validator result and are stored apart, never merged.
+    the validator result and are stored apart, never merged. Any of the
+    value's ``identity_keys`` the validator did not supply is cleared, so no
+    stale label (or other key) sits beside the new identity; the extractor's
+    proposals for those keys (``proposed_<key>``) and any overruled identity
+    are dropped too.
     """
 
     if not identity or all(_is_empty(item) for item in identity.values()):
         raise ResolvableValueError("mark_resolved needs the identity a validator supplied")
+    for key in identity_keys:
+        if key not in identity and key in value:
+            value[key] = None
+        value.pop(f"{_EXTRACTOR_PROPOSAL_PREFIX}{key}", None)
+    for key in identity:
+        value.pop(f"{_EXTRACTOR_PROPOSAL_PREFIX}{key}", None)
     value.update(identity)
     _drop_overruled(value)
     value[RESOLUTION_STATE_KEY] = RESOLVED

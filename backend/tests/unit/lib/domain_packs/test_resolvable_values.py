@@ -1458,3 +1458,16 @@ def test_plain_text_stored_at_a_declared_path_reads_as_legacy_paper_wording():
     assert unresolved_header_text(payload, "site", resolvable_fields={"site": spec}) == (
         f"hypodermis {LEGACY_UNVERIFIED_SUFFIX}")
     assert payload["site"] == "hypodermis"
+
+
+# --- LOW: a fresh resolution leaves no stale identity or proposal ---------------
+
+
+def test_mark_resolved_clears_identity_keys_the_validator_did_not_supply():
+    value = {"mention": "hypodermal cells", "curie": None, "name": "hypodermis",
+             "proposed_curie": "ONT:9", "overruled_curie": "ONT:8",
+             "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_VALIDATED}
+    mark_resolved(value, {"curie": "ONT:1"}, explanation="Matched by CURIE.", identity_keys=TERM_KEYS)
+    assert (value["curie"], value["name"]) == ("ONT:1", None)
+    assert "proposed_curie" not in value and "overruled_curie" not in value
+    assert value["mention"] == "hypodermal cells"

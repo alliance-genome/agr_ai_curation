@@ -705,6 +705,9 @@ def _patch_target_object_from_resolved_values(
             },
             explanation=result.explanation,
             curator_message=result.curator_message,
+            identity_keys=_container_identity_keys(
+                item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+            ),
         )
         for materialized_field_path, resolved_value in writes:
             _propagate_materialized_mirror_paths(
@@ -845,6 +848,9 @@ def _patch_target_object_from_field_resolutions(
                 {str(parse_field_path(path)[-1]): value for path, value in values.items()},
                 explanation=resolution.explanation,
                 curator_message=resolution.curator_message,
+                identity_keys=_container_identity_keys(
+                    item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+                ),
             )
             for materialized_field_path, value in values.items():
                 _propagate_materialized_mirror_paths(
@@ -2943,11 +2949,6 @@ def _display_label(
     value reads as its paper wording, labelled as such (ALL-1283).
     """
 
-    if "primary_label_fields" in display_config:
-        raise DomainEnvelopeMaterializationError(
-            "workspace_display.primary_label_fields is a label fallback chain; "
-            "declare a single primary_label_field"
-        )
     configured_field = display_config.get("primary_label_field")
     if isinstance(configured_field, str) and configured_field.strip():
         label = _declared_label_text(domain_object, configured_field.strip(), resolvable_fields)
