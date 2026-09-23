@@ -499,14 +499,15 @@ def test_every_go_value_the_builder_stages_is_declared_resolvable():
             assert set(contract_paths(obj.payload)) <= set(declared)
 
 
-def _curator_patch(envelope, object_id, field_path, *, before, value):
-    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch
+def _curator_patch(envelope, object_id, field_path, *, before, value, operation="replace"):
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, EnvelopeFieldPatchOperation
 
     return EnvelopeFieldPatch(
-        patch_id=f"curator-field-patch:{field_path}",
+        patch_id=f"curator-field-patch:{operation}:{field_path}",
         envelope_id=envelope.envelope_id,
         expected_revision=1,
         object_id=object_id,
+        operation=EnvelopeFieldPatchOperation(operation),
         field_path=field_path,
         before=before,
         value=value,
@@ -514,35 +515,42 @@ def _curator_patch(envelope, object_id, field_path, *, before, value):
     )
 
 
+def _mirna_envelope():
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[1].envelope
+    return envelope, envelope.extracted_objects[0]
+
+
 @pytest.mark.parametrize(
-    ("field_path", "identity"),
+    ("field_path", "identity", "operation"),
     [
-        ("gene_product", {"curie": "RGD:2325", "label": "Mir21"}),
-        ("go_term", {"curie": "GO:0005654", "label": "nucleoplasm"}),
-        ("evidence_code", {"code": "IMP", "eco_curie": "ECO:0000315"}),
-        ("reference_curie.curie", {"curie": "AGRKB:101000000999999"}),
+        ("gene_product.curie", {"curie": "RGD:2325", "label": "Mir21"}, "replace_identity"),
+        ("go_term.curie", {"curie": "GO:0005654", "label": "nucleoplasm"}, "replace_identity"),
+        ("evidence_code.code", {"code": "IMP", "eco_curie": "ECO:0000315"}, "replace_identity"),
+        ("reference_curie.curie", {"curie": "AGRKB:101000000999999"}, "replace"),
     ],
 )
-def test_a_curator_identity_edit_on_a_go_value_is_a_curator_override(field_path, identity):
-    """ALL-1302 override note: GO identity leaves are curator-editable, and an edit is an audited override."""
+def test_a_curator_identity_edit_on_a_go_value_is_a_curator_override(field_path, identity, operation):
+    """ALL-1302 override note: GO identity leaves are curator-editable, and an edit is an audited override.
+
+    Two-key values take both keys in one ``replace_identity`` patch (core 89e74a356).
+    """
 
     from src.lib.domain_envelopes.patches import apply_curator_field_patch
     from src.lib.domain_packs.resolvable_values import CURATOR_OVERRIDE_METADATA_KEY
 
     pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
-    _, fixtures = _contracts()
-    envelope = fixtures.fixtures[1].envelope
-    obj = envelope.extracted_objects[0]
-    if "." in field_path:
-        value_path, _, key = field_path.rpartition(".")
-        before, value = obj.payload[value_path].get(key), identity[key]
+    envelope, obj = _mirna_envelope()
+    value_path, _, key = field_path.rpartition(".")
+    current = obj.payload[value_path]
+    if operation == "replace_identity":
+        before, value = {name: current.get(name) for name in identity}, identity
     else:
-        value_path = field_path
-        before = obj.payload[value_path]
-        value = {**before, **identity}
+        before, value = current.get(key), identity[key]
 
     result = apply_curator_field_patch(
-        envelope, pack, _curator_patch(envelope, obj.object_id, field_path, before=before, value=value),
+        envelope, pack,
+        _curator_patch(envelope, obj.object_id, field_path, before=before, value=value, operation=operation),
         current_revision=1, actor_id="curator-1",
     )
 
@@ -552,20 +560,18 @@ def test_a_curator_identity_edit_on_a_go_value_is_a_curator_override(field_path,
     assert {name: changed[name] for name in identity} == identity
     assert (changed["resolution_state"], changed["lookup_outcome"]) == ("resolved", "curator_override")
     assert changed["curator_override"]["actor_id"] == "curator-1"
-    assert changed["mention"] == obj.payload[value_path]["mention"]
+    assert changed["mention"] == current["mention"]
     audit, = edited.metadata[CURATOR_OVERRIDE_METADATA_KEY]
     assert audit["field_path"] == field_path
 
 
 def test_a_go_curator_override_needs_both_the_identifier_and_the_name():
-    """Core 7df09b2c2: a first override that leaves the name (or the identifier) empty is rejected."""
+    """Core 7df09b2c2: a single-leaf first override leaves the name empty and is rejected."""
 
     from src.lib.domain_envelopes.patches import apply_curator_field_patch
 
     pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
-    _, fixtures = _contracts()
-    envelope = fixtures.fixtures[1].envelope
-    obj = envelope.extracted_objects[0]
+    envelope, obj = _mirna_envelope()
 
     result = apply_curator_field_patch(
         envelope, pack, _curator_patch(envelope, obj.object_id, "gene_product.curie", before=None, value="RGD:2325"),
@@ -574,6 +580,26 @@ def test_a_go_curator_override_needs_both_the_identifier_and_the_name():
 
     assert not result.accepted
     assert "Enter both the identifier and the name" in result.errors[0]
+
+
+def test_a_go_whole_value_override_may_not_change_other_keys():
+    """Core cbb92a769: a whole-value edit that changes gene_product.entity_type is rejected."""
+
+    from src.lib.domain_envelopes.patches import apply_curator_field_patch
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    envelope, obj = _mirna_envelope()
+    current = obj.payload["gene_product"]
+
+    result = apply_curator_field_patch(
+        envelope, pack,
+        _curator_patch(envelope, obj.object_id, "gene_product", before=current,
+                       value={**current, "curie": "RGD:2325", "label": "Mir21", "entity_type": "gene"}),
+        current_revision=1, actor_id="curator-1",
+    )
+
+    assert not result.accepted
+    assert "only the identifier and name can be changed" in result.errors[0]
 
 
 @pytest.mark.parametrize(
@@ -612,8 +638,6 @@ def test_go_identity_leaves_are_the_editable_fields_and_the_catalog_ignores_it()
     fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
     editable = {path for path, field in fields.items() if field.metadata.get("editable")}
     assert editable == {
-        # Two-key values also take a whole-value edit, so a first override carries both keys.
-        "gene_product", "go_term", "evidence_code",
         "gene_product.curie", "gene_product.label", "go_term.curie", "go_term.label",
         "evidence_code.code", "evidence_code.eco_curie", "reference_curie.curie",
         "with_from.curie", "qualifiers.name",

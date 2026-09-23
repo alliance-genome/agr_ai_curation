@@ -141,6 +141,69 @@ def test_profile_identity_edit_goes_through_the_curator_override_path(tmp_path):
     assert audit["field_path"] == "attributes.gene.gene_id"
 
 
+def test_profile_two_key_override_is_a_whole_value_replace_and_rejects_replace_identity(tmp_path):
+    """ALL-1302 with core 89e74a356: the grid sends a profile value's override as a whole-value replace."""
+
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, EnvelopeFieldPatchOperation
+
+    contract = GenericProfileContract.model_validate({
+        "name": "Genes", "semantic_class": "gene_mention",
+        "fields": [{"key": "gene", "required": True, "value_schema": {"kind": "object", "fields": [
+            {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+            {"key": "gene_id", "value_schema": {"kind": "string"}},
+            {"key": "symbol", "value_schema": {"kind": "string"}},
+            {"key": "role", "value_schema": {"kind": "string"}},
+        ]}}],
+        "validator_mappings": [{
+            "mapping_id": "gene_lookup",
+            "capability_ref": {"package_id": "example", "package_version": "1.0.0", "domain_pack_id": "example.record",
+                               "domain_pack_version": "1.0.0", "binding_id": "lookup"},
+            "capability_fingerprint": "sha256:" + "d" * 64,
+            "inputs": {"mention": {"field_path": "attributes.gene.mention"}},
+            "outputs": {"curie": "attributes.gene.gene_id", "symbol": "attributes.gene.symbol"},
+            "policy": {"unresolved": "requires_curator_review", "blocks_readiness": False},
+        }],
+    })
+    pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1, fingerprint=contract.fingerprint())
+    profile = ResolvedGenericProfile(pin, contract)
+    metadata = DomainPackMetadata.model_validate({
+        "pack_id": "generic", "display_name": "Generic", "version": "0.1.0",
+        "metadata_api_version": "1.0.0", "status": "active",
+        "object_definitions": [{"object_type": "generic_object", "display_name": "Object", "fields": [
+            {"field_path": "attributes", "field_type": "object", "metadata": {"editable": True}},
+        ]}],
+    })
+    pack = LoadedDomainPack(pack_id="generic", display_name="Generic", version="0.1.0", pack_path=tmp_path,
+                            metadata_path=tmp_path / "domain_pack.yaml", metadata=metadata)
+    gene = profile.unresolved_attributes({"gene": {"mention": "daf-16", "role": "subject"}})["gene"]
+    envelope = DomainEnvelope(envelope_id="env-1", domain_pack_id="generic", extracted_objects=[
+        CuratableObjectEnvelope(object_type="generic_object", object_id="gene-1", payload={
+            "semantic_class": "gene_mention", "attributes": {"gene": gene},
+        }, metadata={"generic_profile_ref": pin.model_dump(mode="json")}),
+    ])
+
+    whole = apply_curator_field_patch(
+        envelope, pack,
+        _patch("attributes.gene", before=gene, value={**gene, "gene_id": "EX:9", "symbol": "daf-16"}),
+        current_revision=1, actor_id="curator-1", profile=profile,
+    )
+    assert whole.accepted
+    edited = whole.envelope.extracted_objects[0].payload["attributes"]["gene"]
+    assert (edited["gene_id"], edited["symbol"], edited["lookup_outcome"], edited["role"]) == (
+        "EX:9", "daf-16", "curator_override", "subject")
+
+    identity_patch = EnvelopeFieldPatch(
+        patch_id="curator-field-patch:identity", envelope_id="env-1", expected_revision=1, object_id="gene-1",
+        operation=EnvelopeFieldPatchOperation.REPLACE_IDENTITY, field_path="attributes.gene.gene_id",
+        before={"gene_id": None, "symbol": None}, value={"gene_id": "EX:9", "symbol": "daf-16"},
+        reason="Curator override.",
+    )
+    rejected = apply_curator_field_patch(envelope, pack, identity_patch, current_revision=1,
+                                         actor_id="curator-1", profile=profile)
+    assert not rejected.accepted
+    assert "not supported for profile fields" in rejected.errors[0]
+
+
 def _pack_text() -> str:
     return """
 pack_id: fixture.curator_patch
