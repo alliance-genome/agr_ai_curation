@@ -254,7 +254,7 @@ async def test_assembled_results_are_identical_to_assembly_from_the_captured_rec
     captured = capture_lookup(direct.contracts["allele-1"], "agr_curation_query", deepcopy(arguments), deepcopy(payload))
     direct_refs = direct.workspace.record_lookup("allele-1", call_id="call-1", attempt=captured.attempt,
                                                  records=captured.records, source_payload=payload)
-    assert [(ref["value"], ref["label"], ref["source_path"], ref["available_fields"])
+    assert [(ref["value"], ref["label"], ref["source_path"], _fields_of(response, ref))
             for ref in response["validator_record_refs"]] == [
         (record.candidate.value, record.candidate.label, record.source_path, list(record.values))
         for record in captured.records
@@ -287,3 +287,132 @@ async def test_paged_lean_view_keeps_refs_with_rows_and_exact_detail_reads(schem
     detail = json.loads(await wrapped.on_invoke_tool(SimpleNamespace(tool_call_id="detail"), json.dumps(
         {"method": "search_alleles", **first["result_page"]["detail_call"], "detail_path": "data.3"})))
     assert json.loads(detail["detail"]["content"]) == payload["data"][3]
+
+
+# ALL-1291: every candidate of a lookup usually offers the same field names, so
+# the model view lists them once; a ref lists its own only when they differ.
+SHARED_FIELDS = "validator_record_available_fields"
+
+
+def _fields_of(response, ref):
+    """The field names the model may copy from one record ref."""
+    return ref.get("available_fields", response.get(SHARED_FIELDS))
+
+
+def _captured(runtime, request_id, payload, arguments):
+    from agr_ai_curation_alliance.compact_adapter import capture_lookup
+    return capture_lookup(runtime.contracts[request_id], "agr_curation_query", deepcopy(arguments), deepcopy(payload))
+
+
+def _per_ref_view(response, records):
+    """The ALL-1285 view: the same response with the field list on every ref."""
+    refs = [{**{key: value for key, value in ref.items() if key != "available_fields"},
+             "available_fields": list(record.values)} for ref, record in zip(response["validator_record_refs"], records)]
+    return {**{key: value for key, value in response.items() if key != SHARED_FIELDS}, "validator_record_refs": refs}
+
+
+@pytest.mark.asyncio
+async def test_available_fields_are_listed_once_per_lookup_result(schemas, query):
+    payload = query(method="search_alleles", allele_symbol="H2-Ab1", data_provider="MGI", limit=20)
+    arguments = {"method": "search_alleles", "allele_symbol": "H2-Ab1"}
+    runtime = _runtime(schemas, [_request("allele-1", "H2-Ab1")])
+    response, _ = await _call(runtime, payload, arguments)
+    records = _captured(runtime, "allele-1", payload, arguments).records
+
+    refs = response["validator_record_refs"]
+    assert len(refs) == len(records) == 8
+    assert response[SHARED_FIELDS] == list(records[0].values)
+    assert all("available_fields" not in ref for ref in refs)
+    for ref, record in zip(refs, records):
+        assert set(_fields_of(response, ref)) == set(record.values)
+    assert json.dumps(response).count('"fullname_attribution"') == 1
+    # The stored ledger and detail reads are untouched.
+    assert runtime.workspace.source_payloads("allele-1") == {"call-1": payload}
+
+    before, after = serialized_size(_per_ref_view(response, records)), serialized_size(response)
+    # Measured on this 8-candidate search_alleles lookup: 10,431 -> 8,215 bytes
+    # (-21%); the 20-name list (297 bytes) travelled with each of 8 refs.
+    assert before - after >= 7 * serialized_size(list(records[0].values)), (before, after)
+    assert after <= before * 0.82, (before, after)
+
+
+@pytest.mark.asyncio
+async def test_a_ref_lists_its_own_available_fields_only_where_they_differ(schemas, query):
+    payload = query(method="search_alleles", allele_symbol="H2-Ab1", data_provider="MGI", limit=20)
+    del payload["data"][2]["mutation_types"]
+    arguments = {"method": "search_alleles", "allele_symbol": "H2-Ab1"}
+    runtime = _runtime(schemas, [_request("allele-1", "H2-Ab1")])
+    response, _ = await _call(runtime, payload, arguments)
+    records = _captured(runtime, "allele-1", payload, arguments).records
+
+    refs = response["validator_record_refs"]
+    assert "mutation_types" not in records[2].values
+    assert response[SHARED_FIELDS] == list(records[0].values)
+    assert [index for index, ref in enumerate(refs) if "available_fields" in ref] == [2]
+    assert refs[2]["available_fields"] == list(records[2].values)
+    for ref, record in zip(refs, records):
+        assert set(_fields_of(response, ref)) == set(record.values)
+
+
+@pytest.mark.asyncio
+async def test_bulk_lookup_lists_available_fields_once_across_requests(schemas, query):
+    payload = query(method="search_alleles_bulk", allele_symbols=["H2-Ab1", "Cd4"], data_provider="MGI", limit=20)
+    runtime = _runtime(schemas, [_request("a", "H2-Ab1"), _request("b", "Cd4")])
+    response, _ = await _call(runtime, payload, {"method": "search_alleles_bulk", "validator_request_ids": ["a", "b"]})
+
+    refs = response["validator_record_refs"]
+    assert {ref["request_id"] for ref in refs} == {"a", "b"} and len(refs) == 16
+    assert all("available_fields" not in ref for ref in refs)
+    assert json.dumps(response).count('"fullname_attribution"') == 1
+    records = []
+    for request_id in ("a", "b"):
+        own_records = _captured(runtime, request_id, payload, {"method": "search_alleles_bulk"}).records
+        own = [ref for ref in refs if ref["request_id"] == request_id]
+        assert [set(_fields_of(response, ref)) for ref in own] == [set(record.values) for record in own_records]
+        records.extend(own_records)
+    before, after = serialized_size(_per_ref_view(response, records)), serialized_size(response)
+    # Measured on this 2-input x 8-candidate search_alleles_bulk lookup:
+    # 21,801 -> 17,033 bytes (-22%).
+    assert after <= before * 0.8, (before, after)
+
+
+@pytest.mark.asyncio
+async def test_every_paged_lookup_page_carries_the_shared_field_list(schemas, query, monkeypatch):
+    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
+    payload = query(method="search_alleles", allele_symbol="H2-Ab1", data_provider="MGI", limit=20)
+    del payload["data"][5]["mutation_types"]
+    arguments = {"method": "search_alleles", "allele_symbol": "H2-Ab1"}
+    runtime = _runtime(schemas, [_request("allele-1", "H2-Ab1")])
+    first, wrapped = await _call(runtime, payload, arguments)
+    records = _captured(runtime, "allele-1", payload, arguments).records
+    pages = [first]
+    while pages[-1]["result_page"]["next_call"] is not None:
+        pages.append(json.loads(await wrapped.on_invoke_tool(SimpleNamespace(tool_call_id="page"), json.dumps(
+            {"method": "search_alleles", **pages[-1]["result_page"]["next_call"]}))))
+
+    assert len(pages) > 1 and all(serialized_size(page) <= 4096 for page in pages)
+    resolved = []
+    for page in pages:
+        # Each page is self-describing: its refs resolve without an earlier page.
+        assert page["validator_record_refs"]
+        assert page[SHARED_FIELDS] == list(records[0].values)
+        resolved.extend(set(_fields_of(page, ref)) for ref in page["validator_record_refs"])
+    assert resolved == [set(record.values) for record in records]
+    assert [ref.get("available_fields") is not None for page in pages for ref in page["validator_record_refs"]] == [
+        index == 5 for index in range(8)]
+
+
+def test_finalization_guidance_names_the_shared_field_list(schemas):
+    from src.lib.domain_packs.compact_runtime import compact_finalization_instruction
+    runtime = _runtime(schemas, [_request("allele-1", "H2-Ab1")])
+    instruction = compact_finalization_instruction(runtime, tool_name="finalize_validator_result")
+    assert SHARED_FIELDS in instruction
+    assert "available_fields" in instruction
+
+
+@pytest.mark.asyncio
+async def test_provider_payload_cannot_supply_the_shared_field_list(schemas):
+    runtime = _runtime(schemas, [_request("allele-1", "H2-Ab1")])
+    forged = {"lookup_status": "success", "data": [], SHARED_FIELDS: ["curie"]}
+    with pytest.raises(ValueError, match="reserved"):
+        await _call(runtime, forged, {"method": "search_alleles"})

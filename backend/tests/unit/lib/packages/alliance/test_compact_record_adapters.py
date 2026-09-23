@@ -335,7 +335,9 @@ def test_condition_context_contract_is_exposed_and_assembles_without_copied_fact
     assert [item["component_type"] for item in guidance["components"]] == ["condition_class", "relation", "evidence_quotes"]
     assert guidance["components"][0]["allowed_statuses"] == ["resolved", "unresolved"]
     assert all(item["allowed_statuses"] == ["not_checked"] for item in guidance["components"][1:])
-    assert guidance["component_slots"]["namesake_fields"] == "validator_record_refs.available_fields"
+    namesake = guidance["component_slots"]["namesake_fields"]
+    assert "validator_record_available_fields" in namesake and "available_fields" in namesake.replace(
+        "validator_record_available_fields", "")
     assert guidance["component_slots"]["root_slots_are_component_slots"] is False
     result = runtime.assemble(decision)
     assert result.status == "resolved"

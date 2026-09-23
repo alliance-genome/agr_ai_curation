@@ -194,7 +194,8 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                                     "lookup_methods": sorted(_METHODS.get(component.owner, ())),
                                 } for component in components.values()],
                                 "component_slots": {
-                                    "namesake_fields": "validator_record_refs.available_fields",
+                                    "namesake_fields": "validator_record_available_fields, or the record ref's own "
+                                                       "available_fields where it lists them",
                                     "aliases": _COMPONENT_FIELD_ALIASES,
                                     "root_slots_are_component_slots": False,
                                     "rule": "Copy a selected record's available field into the same-named component slot, "
