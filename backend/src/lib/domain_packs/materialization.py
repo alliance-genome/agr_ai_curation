@@ -1014,7 +1014,8 @@ def _write_back_to_referencing_objects(
     Resolved (every declared result field came back): the declared values and
     refs are written, a resolvable value holding the scalars is marked resolved,
     and a write-back event is recorded. Otherwise nothing is written except the
-    lookup outcome on such a resolvable value; its id/label stay untouched.
+    lookup outcome on such a resolvable value (an identity it held is overruled
+    into hints), and the declared object_ref fields drop their stale refs.
     ``validated_references`` is None when the result could not be materialized
     (an invalid result or validated reference), which never counts as resolved.
     """
@@ -1114,9 +1115,12 @@ def _referencing_object_with_result(
                 curator_message=result.curator_message,
                 identity_keys=tuple(identity_keys),
             )
-        if payload == domain_object.payload:
+        # A link to a validated reference would be stale on a value the validator did
+        # not (or no longer does) resolve, so the declared object_ref fields lose it.
+        object_refs = [ref for ref in domain_object.object_refs if ref.object_type not in ref_types]
+        if payload == domain_object.payload and object_refs == list(domain_object.object_refs):
             return domain_object
-        return domain_object.model_copy(update={"payload": payload})
+        return domain_object.model_copy(update={"payload": payload, "object_refs": object_refs})
 
     for field_path, value in scalar_writes.items():
         if not any(field_path in paths for paths in containers.values()):

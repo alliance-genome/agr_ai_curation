@@ -959,3 +959,67 @@ def test_allele_taxon_is_part_of_the_validated_identity():
 
     legacy = {"allele_symbol": "e190", "primary_external_id": "WB:WBVar00000190", "taxon": "NCBITaxon:6239"}
     assert effective_value(legacy, spec, covered_by_validator=False)["taxon"] is None
+
+
+def test_a_later_unresolved_allele_drops_the_association_allele_link():
+    resolved = _validate_allele_mention(
+        _staged_allele_envelope(),
+        status="resolved",
+        resolved_values={
+            "curie": "WB:WBVar00000190",
+            "symbol": "e190",
+            "taxon": "NCBITaxon:6239",
+        },
+        explanation="Exact symbol match in WB.",
+        curator_message="Resolved unc-54(e190).",
+    ).envelope
+    assert [ref for ref in _association(resolved).object_refs if ref.object_type == "Allele"]
+
+    result = _validate_allele_mention(
+        resolved,
+        status="unresolved",
+        resolved_values={},
+        lookup_attempts=[
+            {
+                "provider": "agr_curation_query",
+                "method": "search_alleles",
+                "query": {"allele_symbol": "unc-54(e190)"},
+                "result_count": 2,
+                "outcome": "ambiguous",
+            }
+        ],
+        explanation="Two WB alleles now share this designation.",
+        curator_message="Pick the allele in review.",
+    )
+    association = _association(result.envelope)
+
+    assert association.payload["resolution_state"] == "unresolved"
+    assert association.payload["lookup_outcome"] == "ambiguous"
+    assert association.payload["allele_identifier"] is None
+    assert association.payload["allele_label"] is None
+    assert not [ref for ref in association.object_refs if ref.object_type == "Allele"]
+    assert _association_label(result.envelope) == "unc-54(e190) (paper wording)"
+    assert "alliance.allele.allele_unresolved" in _blocker_codes(result.envelope)
+
+
+def test_validated_allele_rows_read_the_allele_symbol():
+    from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+
+    result = _validate_allele_mention(
+        _staged_allele_envelope(),
+        status="resolved",
+        resolved_values={
+            "curie": "WB:WBVar00000190",
+            "symbol": "e190",
+            "taxon": "NCBITaxon:6239",
+        },
+        explanation="Exact symbol match in WB.",
+        curator_message="Resolved unc-54(e190).",
+    )
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    rows = DomainPackMetadataReviewRowMaterializer(pack.metadata).materialize(
+        result.envelope, envelope_revision=1
+    )
+    allele_rows = [row for row in rows if row.object_type == "Allele"]
+
+    assert [row.display_label for row in allele_rows] == ["e190"]

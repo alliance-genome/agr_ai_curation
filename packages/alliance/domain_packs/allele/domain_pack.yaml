@@ -351,6 +351,7 @@ object_definitions:
     metadata:
       object_role: validated_reference
       workspace_display:
+        primary_label_field: allele_symbol
         summary_fields:
           - allele_symbol
           - primary_external_id

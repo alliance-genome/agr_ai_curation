@@ -344,3 +344,6 @@ def test_a_later_unresolved_result_overrules_the_referencing_value():
     assert acquisition.payload["proposed_maker_id"] == "GAL:M0042"
     assert acquisition.payload["proposed_maker_name"] == "De Grieksche A"
     assert acquisition.payload["mention"] == "the Delft workshop"
+    # The link to the validated Maker is stale on an unresolved value, so it is dropped.
+    assert acquisition.object_refs == [_MENTION_REF]
+    assert any(obj.object_type == "Maker" for obj in result.envelope.extracted_objects)
