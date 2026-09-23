@@ -548,27 +548,75 @@ def _path_tokens(path: str) -> tuple[str | int, ...] | None:
         return None
 
 
+# Write-back events that count as validator coverage: packaged domain-pack
+# bindings (materialization.py) and closed-profile validator mappings
+# (profile_materialization.py), which record their payload paths as
+# ``field_paths`` (e.g. ``attributes.gene.gene_id``).
+PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY = "profile_validator_materialization"
+# An event path segment ``[]`` names every element of a list.
+_ANY_INDEX = -1
+
+
+def _event_path_tokens(path: str) -> tuple[str | int, ...] | None:
+    """Tokens of an event's recorded payload path; ``[]`` becomes an any-element index."""
+
+    if "[]" not in path:
+        return _path_tokens(path)
+    tokens: list[str | int] = []
+    for segment in path.split("."):
+        key, _, brackets = segment.partition("[")
+        if not key:
+            return None
+        tokens.append(key)
+        for bracket in filter(None, f"[{brackets}".split("[")) if brackets else ():
+            index = bracket.rstrip("]")
+            if index == "":
+                tokens.append(_ANY_INDEX)
+            elif index.isdigit():
+                tokens.append(int(index))
+            else:
+                return None
+    return tuple(tokens)
+
+
 def validator_materialized_paths(object_metadata: Mapping[str, Any] | None) -> tuple[tuple[str | int, ...], ...]:
-    """Payload paths a validator write-back event recorded for one object."""
+    """Payload paths validator write-back events recorded for one object.
+
+    Both packaged binding events (``materialized_field_paths`` and the keys of
+    ``original_values``) and closed-profile validator events (``field_paths``)
+    count.
+    """
 
     if not isinstance(object_metadata, Mapping):
         return ()
+    recorded: list[Any] = []
     events = object_metadata.get(VALIDATOR_MATERIALIZATION_METADATA_KEY)
-    if not isinstance(events, list):
-        return ()
-    paths: list[tuple[str | int, ...]] = []
-    for event in events:
+    for event in events if isinstance(events, list) else ():
         if not isinstance(event, Mapping):
             continue
-        recorded = [*(event.get("materialized_field_paths") or [])]
+        recorded.extend(event.get("materialized_field_paths") or [])
         original_values = event.get("original_values")
         if isinstance(original_values, Mapping):
             recorded.extend(original_values)
-        for path in recorded:
-            tokens = _path_tokens(str(path))
-            if tokens:
-                paths.append(tokens)
+    profile_events = object_metadata.get(PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY)
+    for event in profile_events if isinstance(profile_events, list) else ():
+        if isinstance(event, Mapping) and isinstance(event.get("field_paths"), list):
+            recorded.extend(event["field_paths"])
+    paths: list[tuple[str | int, ...]] = []
+    for path in recorded:
+        tokens = _event_path_tokens(str(path))
+        if tokens:
+            paths.append(tokens)
     return tuple(paths)
+
+
+def _covers(path: Sequence[str | int], target: Sequence[str | int]) -> bool:
+    if len(path) < len(target):
+        return False
+    return all(
+        recorded == wanted or (recorded == _ANY_INDEX and isinstance(wanted, int))
+        for recorded, wanted in zip(path, target)
+    )
 
 
 def validator_event_covers(
@@ -584,7 +632,7 @@ def validator_event_covers(
     target = _path_tokens(value_path)
     if target is None:
         return False
-    return any(path[: len(target)] == target for path in validator_materialized_paths(object_metadata))
+    return any(_covers(path, target) for path in validator_materialized_paths(object_metadata))
 
 
 def effective_resolution(
@@ -752,11 +800,15 @@ def effective_payload(
     if not resolvable_fields:
         return payload
     result: Any = dict(payload)
-    for field_path, spec in sorted(resolvable_fields.items(), key=lambda item: len(item[0])):
+    # Each concrete value is read once per pass: a pack may declare both a list
+    # field and one of its elements (``terms`` and ``terms[0]``); the most
+    # specific declaration reads the element, and the list pass skips it.
+    annotated: set[tuple[str | int, ...]] = set()
+    for field_path, spec in sorted(resolvable_fields.items(), key=lambda item: -len(item[0])):
         tokens = _path_tokens(field_path)
         if tokens is None:
             continue
-        result = _annotate_at(result, tokens, (), spec, object_metadata)
+        result = _annotate_at(result, tokens, (), spec, object_metadata, annotated)
     return result
 
 
@@ -776,6 +828,7 @@ def _annotate_at(
     walked: tuple[str | int, ...],
     spec: ResolvableSpec,
     object_metadata: Mapping[str, Any] | None,
+    annotated: set[tuple[str | int, ...]],
 ) -> Any:
     if isinstance(node, list):
         if remaining and isinstance(remaining[0], int):
@@ -785,17 +838,18 @@ def _annotate_at(
                 return node
             updated_list = list(node)
             updated_list[index] = _annotate_at(
-                node[index], remaining[1:], (*walked, index), spec, object_metadata
+                node[index], remaining[1:], (*walked, index), spec, object_metadata, annotated
             )
             return updated_list
         # A declared path without an index names every element; each is its own value.
         return [
-            _annotate_at(item, remaining, (*walked, index), spec, object_metadata)
+            _annotate_at(item, remaining, (*walked, index), spec, object_metadata, annotated)
             for index, item in enumerate(node)
         ]
     if not remaining:
-        if not isinstance(node, Mapping):
+        if not isinstance(node, Mapping) or walked in annotated:
             return node
+        annotated.add(walked)
         return effective_value(
             node,
             spec,
@@ -807,7 +861,9 @@ def _annotate_at(
     if key not in node:
         return node
     updated = dict(node)
-    updated[key] = _annotate_at(node[key], remaining[1:], (*walked, key), spec, object_metadata)
+    updated[key] = _annotate_at(
+        node[key], remaining[1:], (*walked, key), spec, object_metadata, annotated
+    )
     return updated
 
 
@@ -969,6 +1025,7 @@ __all__ = [
     "OUTCOME_REJECTED_CANDIDATES",
     "OUTCOME_TRANSIENT",
     "PAPER_WORDING_SUFFIX",
+    "PROFILE_VALIDATOR_MATERIALIZATION_METADATA_KEY",
     "RESOLUTION_STATES",
     "RESOLUTION_STATE_KEY",
     "RESOLUTION_STATE_LABELS",
