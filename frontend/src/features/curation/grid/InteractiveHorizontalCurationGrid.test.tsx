@@ -10,6 +10,7 @@ import type {
   CurationCandidate,
   CurationWorkspace,
   DomainEnvelopeEvidenceAnchorProjection,
+  DomainEnvelopeReviewResolvedValue,
   DomainEnvelopeValidationSummaryProjection,
 } from '@/features/curation/types'
 import {
@@ -28,6 +29,7 @@ import {
 const serviceMocks = vi.hoisted(() => ({
   fetchCurationWorkspace: vi.fn(),
   fetchCurationWorkspaceEnvelopeReviewRows: vi.fn(),
+  patchCurationEnvelopeField: vi.fn(),
   validateCurationCandidate: vi.fn(),
 }))
 
@@ -36,6 +38,7 @@ vi.mock('@/features/curation/services/curationWorkspaceService', async (importOr
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
   fetchCurationWorkspaceEnvelopeReviewRows:
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows,
+  patchCurationEnvelopeField: serviceMocks.patchCurationEnvelopeField,
   validateCurationCandidate: serviceMocks.validateCurationCandidate,
 }))
 
@@ -342,8 +345,16 @@ function buildModel({
             fieldPath: 'citation.authors',
             hasField: true,
             value: ['Ada Lovelace', 'Grace Hopper'],
+            displayText: 'Ada Lovelace, Grace Hopper',
+            resolution: null,
+            resolutionDetails: [],
+            resolutionLinesId: null,
+            resolutionDescribedBy: [],
             required: true,
             readOnly: false,
+            curatorOverride: false,
+            overrideDisagreements: [],
+            overrideTarget: null,
             staleValidation: false,
             state: authorsValidation.statuses.length > 0
               && authorsValidation.statuses.every((status) => status === 'resolved' || status === 'waived')
@@ -353,7 +364,6 @@ function buildModel({
             evidence: authorsEvidence,
             validation: authorsValidation,
             extractorComparison: null,
-            valueSource: 'canonical',
           },
           {
             columnKey: 'field:locked',
@@ -361,15 +371,22 @@ function buildModel({
             fieldPath: 'identifiers.pmid',
             hasField: true,
             value: 'PMID:1',
+            displayText: 'PMID:1',
+            resolution: null,
+            resolutionDetails: [],
+            resolutionLinesId: null,
+            resolutionDescribedBy: [],
             required: false,
             readOnly: true,
+            curatorOverride: false,
+            overrideDisagreements: [],
+            overrideTarget: null,
             staleValidation: false,
             state: 'ai-unconfirmed',
             fieldValidation: null,
             evidence: [],
             validation: emptyValidation,
             extractorComparison: null,
-            valueSource: 'canonical',
           },
           {
             columnKey: 'field:missing',
@@ -377,15 +394,22 @@ function buildModel({
             fieldPath: 'citation.title',
             hasField: false,
             value: null,
+            displayText: null,
+            resolution: null,
+            resolutionDetails: [],
+            resolutionLinesId: null,
+            resolutionDescribedBy: [],
             required: null,
             readOnly: null,
+            curatorOverride: false,
+            overrideDisagreements: [],
+            overrideTarget: null,
             staleValidation: null,
             state: null,
             fieldValidation: null,
             evidence: [],
             validation: emptyValidation,
             extractorComparison: null,
-            valueSource: 'canonical',
           },
         ],
         evidence: [...objectEvidence, ...authorsEvidence],
@@ -857,6 +881,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const taxonCell = model.rows[0].cells[0]
     taxonCell.fieldPath = 'taxon'
     taxonCell.value = 'NCBITaxon:7227'
+    taxonCell.displayText = 'NCBITaxon:7227'
     taxonCell.extractorComparison = {
       fieldKey: 'proposed_taxon',
       fieldPath: 'proposed_taxon',
@@ -898,6 +923,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const symbolCell = model.rows[0].cells[0]
     symbolCell.fieldPath = 'symbol'
     symbolCell.value = 'abc'
+    symbolCell.displayText = 'abc'
     symbolCell.state = 'needs-review'
     symbolCell.extractorComparison = {
       fieldKey: 'proposed_symbol',
@@ -927,7 +953,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(within(details).getByLabelText('Current status: Needs review')).toBeInTheDocument()
   })
 
-  it('labels an extractor fallback without attributing an unvalidated draft value to the validator', async () => {
+  it('shows UNRESOLVED, never the extractor proposal, in the validated slot', async () => {
     const user = userEvent.setup()
     const candidate = buildCandidate()
     const symbolField = candidate.draft.fields[0]
@@ -940,8 +966,8 @@ describe('InteractiveHorizontalCurationGrid', () => {
     model.columns[1].label = 'Symbol'
     const symbolCell = model.rows[0].cells[0]
     symbolCell.fieldPath = 'symbol'
-    symbolCell.value = 'extracted-symbol'
-    symbolCell.valueSource = 'extractor'
+    symbolCell.value = null
+    symbolCell.displayText = 'UNRESOLVED'
     symbolCell.state = 'needs-review'
     symbolCell.extractorComparison = {
       fieldKey: 'proposed_symbol',
@@ -952,7 +978,13 @@ describe('InteractiveHorizontalCurationGrid', () => {
     }
 
     renderGrid({ model, workspace: buildWorkspace(candidate) })
-    expect(screen.getByText('extracted-symbol · Extractor value')).toBeInTheDocument()
+    const symbolValue = within(screen.getByTestId(`horizontal-grid-field-${symbolField.field_key}`))
+      .getByText('UNRESOLVED')
+    expect(symbolValue).toHaveAttribute('data-slot', 'field-value')
+    expect(screen.queryByText(/Extractor value/)).not.toBeInTheDocument()
+    expect(screen.getByRole('img', {
+      name: /Extractor proposed extracted-symbol, but the validator did not resolve a canonical value/,
+    })).toBeInTheDocument()
     await user.click(screen.getByRole('button', {
       name: /^Show evidence and validation details for Symbol:/,
     }))
@@ -960,6 +992,336 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const comparison = screen.getByTestId('horizontal-grid-extractor-comparison')
     expect(within(comparison).getByText('Not resolved')).toBeInTheDocument()
     expect(within(comparison).queryByText('draft-seed')).not.toBeInTheDocument()
+  })
+
+  it('shows paper wording and the lookup result apart from the validated value', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = null
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const model = buildModel({ authorsEvidence: [] })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = null
+    symbolCell.displayText = 'UNRESOLVED'
+    symbolCell.resolution = {
+      display_text: 'UNRESOLVED',
+      values: [{
+        value_path: '',
+        display_text: 'UNRESOLVED',
+        mention: 'abc-1',
+        resolution_state: 'unresolved',
+        lookup_outcome: 'rejected_candidates',
+        lookup_result: 'Candidates rejected',
+        validator_explanation: 'Every candidate was a different species.',
+        validator_curator_message: null,
+        override_disagreements: [],
+        identity_field_paths: ['symbol'],
+        id_key: 'curie',
+        label_key: 'name',
+        validated_keys: [],
+        stored_identity: {},
+        container_protected: false,
+      }],
+    }
+    symbolCell.resolutionDetails = symbolCell.resolution.values
+    symbolCell.resolutionLinesId = 'lines-symbol'
+    symbolCell.resolutionDescribedBy = ['lines-symbol']
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    const button = screen.getByTestId(`horizontal-grid-field-${symbolField.field_key}`)
+    const cell = button.parentElement!
+    expect(within(cell).getByText('UNRESOLVED')).toHaveAttribute('data-slot', 'field-value')
+    expect(button).toHaveAccessibleName(/^Select Symbol for symbol: UNRESOLVED\./)
+    expect(button).toHaveAccessibleDescription(
+      /^Paper wording:\s*abc-1\s+Lookup result:\s*Candidates rejected\. Validator explanation: Every candidate was a different species\.$/,
+    )
+    expect(cell.querySelector('[data-slot="field-paper-wording"]')).toHaveTextContent('Paper wording: abc-1')
+    expect(cell.querySelector('[data-slot="field-lookup-result"]')).not.toHaveAttribute('tabindex')
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol: UNRESOLVED/,
+    }))
+    const details = screen.getByRole('dialog', { name: /Symbol:/ })
+    expect(within(details).getByText('Symbol: UNRESOLVED')).toBeInTheDocument()
+    const resolution = within(details).getByTestId('horizontal-grid-resolution-details')
+    expect([...resolution.querySelectorAll('p')].map((line) => line.textContent)).toEqual([
+      'Value: UNRESOLVED',
+      'Paper wording: abc-1',
+      'Lookup result: Candidates rejected',
+      'Validator explanation: Every candidate was a different species.',
+    ])
+  })
+
+  function overrideModel(
+    candidate: CurationCandidate,
+    value: DomainEnvelopeReviewResolvedValue,
+    displayText: string,
+  ): HorizontalGridModel {
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Subject ID'
+    symbolField.value = value.stored_identity.curie ?? null
+    symbolField.metadata = { source_field_path: 'subject.curie' }
+    const model = buildModel({ authorsEvidence: [] })
+    model.columns[1].fieldPath = 'subject.curie'
+    model.columns[1].label = 'Subject ID'
+    const cell = model.rows[0].cells[0]
+    cell.fieldPath = 'subject.curie'
+    cell.value = symbolField.value
+    cell.displayText = displayText
+    cell.state = value.curator_override ? 'resolved' : 'ai-unconfirmed'
+    cell.curatorOverride = Boolean(value.curator_override)
+    cell.resolution = { display_text: displayText, values: [value] }
+    cell.resolutionDetails = [value]
+    cell.resolutionLinesId = 'lines-subject'
+    cell.resolutionDescribedBy = ['lines-subject']
+    cell.overrideTarget = value
+    return model
+  }
+
+  const UNRESOLVED_SUBJECT: DomainEnvelopeReviewResolvedValue = {
+    value_path: 'subject',
+    display_text: 'UNRESOLVED',
+    mention: 'abc-1',
+    resolution_state: 'unresolved',
+    lookup_outcome: 'not_found',
+    lookup_result: 'Not found',
+    validator_explanation: 'No gene matched the wording.',
+    validator_curator_message: null,
+    override_disagreements: [],
+    identity_field_paths: ['subject.curie', 'subject.name'],
+    id_key: 'curie',
+    label_key: 'name',
+    validated_keys: ['taxon'],
+    stored_identity: { curie: null, name: null, taxon: null },
+    container_protected: false,
+  }
+
+  const OVERRIDDEN_SUBJECT: DomainEnvelopeReviewResolvedValue = {
+    ...UNRESOLVED_SUBJECT,
+    display_text: 'abc-2 (GENE:2)',
+    resolution_state: 'resolved',
+    lookup_outcome: 'curator_override',
+    lookup_result: 'Curator override',
+    curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
+    stored_identity: { curie: 'GENE:2', name: 'abc-2', taxon: null },
+    container_protected: false,
+  }
+
+  it('sets a first override with the identifier and name in one replace_identity edit', async () => {
+    const user = userEvent.setup()
+    const autosave = createAutosave()
+    const candidate = buildCandidate()
+    const model = overrideModel(candidate, UNRESOLVED_SUBJECT, 'UNRESOLVED')
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValue({
+      accepted: true,
+      envelope_id: 'envelope-1',
+      previous_revision: 3,
+      envelope_revision: 4,
+      object_id: 'object-1',
+      field_path: 'subject',
+      operation: 'replace',
+      projection_ref: { envelope_id: 'envelope-1', object_id: 'object-1', envelope_revision: 4 },
+      history_event_ids: [],
+      projection_candidate_ids: [],
+    })
+
+    renderGrid({ autosave, model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', { name: /^Edit Subject ID: UNRESOLVED/ }))
+    const editor = screen.getByRole('dialog', { name: 'Set Subject ID by curator override' })
+    expect(within(editor).getByText('abc-1')).toBeInTheDocument()
+
+    // Half an identity is refused before anything is sent, and the editor stays open.
+    await user.type(within(editor).getByLabelText('Identifier'), 'GENE:2')
+    await user.click(within(editor).getByRole('button', { name: 'Save override' }))
+    expect(within(editor).getByTestId('horizontal-grid-override-error')).toHaveTextContent(
+      'Enter both the identifier and the name for a curator override.',
+    )
+    expect(serviceMocks.patchCurationEnvelopeField).not.toHaveBeenCalled()
+
+    await user.type(within(editor).getByLabelText('Name'), 'abc-2')
+    await user.click(within(editor).getByRole('button', { name: 'Save override' }))
+
+    expect(autosave.flush).toHaveBeenCalled()
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      envelope_id: 'envelope-1',
+      expected_revision: 3,
+      object_id: 'object-1',
+      field_path: 'subject.curie',
+      operation: 'replace_identity',
+      // Only identity keys are sent: paper wording, state and the proposal stay as they are.
+      before: { curie: null, name: null },
+      value: { curie: 'GENE:2', name: 'abc-2' },
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /curator override/ })).not.toBeInTheDocument())
+  })
+
+  it('keeps the editor open with the rejection when the backend refuses the override', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const model = overrideModel(candidate, UNRESOLVED_SUBJECT, 'UNRESOLVED')
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(
+      new Error('Enter both the identifier and the name for a curator override.'),
+    )
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', { name: /^Edit Subject ID: UNRESOLVED/ }))
+    const editor = screen.getByRole('dialog', { name: 'Set Subject ID by curator override' })
+    await user.type(within(editor).getByLabelText('Identifier'), 'GENE:2')
+    await user.type(within(editor).getByLabelText('Name'), 'abc-2')
+    await user.click(within(editor).getByRole('button', { name: 'Save override' }))
+
+    expect(await within(editor).findByTestId('horizontal-grid-override-error')).toHaveTextContent(
+      'Enter both the identifier and the name for a curator override.',
+    )
+    expect(within(editor).getByLabelText('Identifier')).toHaveValue('GENE:2')
+    expect(within(editor).getByLabelText('Name')).toHaveValue('abc-2')
+  })
+
+  it('shows a curator override with who and when, and removes it with one clearing edit', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const model = overrideModel(candidate, OVERRIDDEN_SUBJECT, 'GENE:2')
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValue({
+      accepted: true,
+      envelope_id: 'envelope-1',
+      previous_revision: 3,
+      envelope_revision: 4,
+      object_id: 'object-1',
+      field_path: 'subject',
+      operation: 'replace',
+      projection_ref: { envelope_id: 'envelope-1', object_id: 'object-1', envelope_revision: 4 },
+      history_event_ids: [],
+      projection_candidate_ids: [],
+    })
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    const button = screen.getByTestId(`horizontal-grid-field-${candidate.draft.fields[0].field_key}`)
+    expect(within(button.parentElement!).getByText('Curator override', { selector: '[data-slot="field-override-badge"]' }))
+      .toBeInTheDocument()
+    expect(button).toHaveAccessibleName(/^Select Subject ID for subject\.curie: GENE:2, curator override\. Curator validated\.$/)
+    expect(button).toHaveAccessibleDescription(/Curator override by curator-1 on 2026-09-23 20:00 UTC/)
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Subject ID: GENE:2/,
+    }))
+    const details = screen.getByRole('dialog', { name: /Subject ID:/ })
+    expect(within(details).getByTestId('horizontal-grid-resolution-details')).toHaveTextContent(
+      'Curator override by curator-1 on 2026-09-23 20:00 UTC',
+    )
+
+    await user.click(screen.getByRole('button', {
+      name: /^Remove curator override for Subject ID: GENE:2 .*The value returns to unresolved\.$/,
+    }))
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith(expect.objectContaining({
+      field_path: 'subject.curie',
+      operation: 'replace_identity',
+      before: { curie: 'GENE:2', name: 'abc-2', taxon: null },
+      // Every identity key cleared in one edit, validated keys included.
+      value: { curie: null, name: null, taxon: null },
+    }))
+  })
+
+  it('overrides a saved profile attribute value with one whole-value replace', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const stored = { mention: 'abc-1', curie: null, name: null, resolution_state: 'unresolved', lookup_outcome: 'not_found' }
+    const profileValue: DomainEnvelopeReviewResolvedValue = {
+      ...UNRESOLVED_SUBJECT,
+      value_path: 'attributes.gene',
+      identity_field_paths: ['attributes.gene.curie', 'attributes.gene.name'],
+      validated_keys: [],
+      stored_identity: { curie: null, name: null },
+      stored_value: stored,
+    }
+    const model = overrideModel(candidate, profileValue, 'UNRESOLVED')
+    candidate.draft.fields[0].metadata = { source_field_path: 'attributes.gene.curie' }
+    model.columns[1].fieldPath = 'attributes.gene.curie'
+    model.rows[0].cells[0].fieldPath = 'attributes.gene.curie'
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(new Error("field_path 'attributes.gene' is protected"))
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', { name: /^Edit Subject ID: UNRESOLVED/ }))
+    const editor = screen.getByRole('dialog', { name: 'Set Subject ID by curator override' })
+    await user.type(within(editor).getByLabelText('Identifier'), 'GENE:2')
+    await user.type(within(editor).getByLabelText('Name'), 'abc-2')
+    await user.click(within(editor).getByRole('button', { name: 'Save override' }))
+
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith(expect.objectContaining({
+      field_path: 'attributes.gene',
+      operation: 'replace',
+      before: stored,
+      value: { ...stored, curie: 'GENE:2', name: 'abc-2' },
+    }))
+    // A protected value field's rejection shows inline like the others.
+    expect(await within(editor).findByTestId('horizontal-grid-override-error')).toHaveTextContent(
+      "field_path 'attributes.gene' is protected",
+    )
+  })
+
+  it('overrides a value that is the object itself with its bare identity field', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const rootValue: DomainEnvelopeReviewResolvedValue = {
+      ...UNRESOLVED_SUBJECT,
+      value_path: '',
+      identity_field_paths: ['primary_external_id', 'gene_symbol', 'taxon'],
+      id_key: 'primary_external_id',
+      label_key: 'gene_symbol',
+      stored_identity: { primary_external_id: null, gene_symbol: null, taxon: null },
+      container_protected: false,
+    }
+    const model = overrideModel(candidate, rootValue, 'UNRESOLVED')
+    candidate.draft.fields[0].label = 'Gene symbol'
+    candidate.draft.fields[0].metadata = { source_field_path: 'gene_symbol' }
+    model.columns[1].fieldPath = 'gene_symbol'
+    model.columns[1].label = 'Gene symbol'
+    model.rows[0].cells[0].fieldPath = 'gene_symbol'
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(
+      new Error("field_path 'primary_external_id' takes no curator override: taxon not declared editable"),
+    )
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', { name: /^Edit Gene symbol: UNRESOLVED/ }))
+    const editor = screen.getByRole('dialog', { name: 'Set Gene symbol by curator override' })
+    await user.type(within(editor).getByLabelText('Identifier'), 'GENE:2')
+    await user.type(within(editor).getByLabelText('Name'), 'abc-2')
+    await user.click(within(editor).getByRole('button', { name: 'Save override' }))
+
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith(expect.objectContaining({
+      field_path: 'primary_external_id',
+      operation: 'replace_identity',
+      before: { primary_external_id: null, gene_symbol: null },
+      value: { primary_external_id: 'GENE:2', gene_symbol: 'abc-2' },
+    }))
+    expect(await within(editor).findByTestId('horizontal-grid-override-error')).toHaveTextContent(
+      'takes no curator override: taxon not declared editable',
+    )
+  })
+
+  it('keeps a value\'s own leaves read-only in the grid', () => {
+    const candidate = buildCandidate()
+    const leafField = candidate.draft.fields[0]
+    leafField.label = 'Lookup result'
+    leafField.read_only = false
+    leafField.metadata = { source_field_path: 'site.lookup_outcome' }
+
+    const model = buildModel({ authorsEvidence: [] })
+    model.columns[1].fieldPath = 'site.lookup_outcome'
+    model.columns[1].label = 'Lookup result'
+    const leafCell = model.rows[0].cells[0]
+    leafCell.fieldPath = 'site.lookup_outcome'
+    leafCell.readOnly = true
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    expect(screen.getByRole('button', { name: /^Edit unavailable for Lookup result: .*Read-only field\.$/ }))
+      .toBeDisabled()
   })
 
   it('attributes a waived comparison to curator override rather than validator resolution', async () => {
@@ -985,6 +1347,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const symbolCell = model.rows[0].cells[0]
     symbolCell.fieldPath = 'symbol'
     symbolCell.value = 'curator-symbol'
+    symbolCell.displayText = 'curator-symbol'
     symbolCell.state = 'resolved'
     symbolCell.extractorComparison = {
       fieldKey: 'proposed_symbol',
@@ -1031,8 +1394,8 @@ describe('InteractiveHorizontalCurationGrid', () => {
     model.columns[1].label = 'Symbol'
     const symbolCell = model.rows[0].cells[0]
     symbolCell.fieldPath = 'symbol'
-    symbolCell.value = 'extracted-symbol'
-    symbolCell.valueSource = 'extractor'
+    symbolCell.value = 'edited-symbol'
+    symbolCell.displayText = 'UNRESOLVED'
     symbolCell.staleValidation = true
     symbolCell.state = 'ai-unconfirmed'
     symbolCell.extractorComparison = {

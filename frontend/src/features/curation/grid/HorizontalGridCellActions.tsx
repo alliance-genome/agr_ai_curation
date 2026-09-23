@@ -1,6 +1,7 @@
 import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import FindInPageOutlinedIcon from '@mui/icons-material/FindInPageOutlined'
+import UndoOutlinedIcon from '@mui/icons-material/UndoOutlined'
 import {
   IconButton,
   Stack,
@@ -8,8 +9,7 @@ import {
 } from '@mui/material'
 
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
-import type { CurationDraftField } from '@/features/curation/types'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import type { CurationDraftField, DomainEnvelopeReviewResolvedValue } from '@/features/curation/types'
 import type { HorizontalGridFieldCell } from './horizontalGridModel'
 
 export interface HorizontalGridCellActionsProps {
@@ -18,6 +18,7 @@ export interface HorizontalGridCellActionsProps {
   isSaving: boolean
   onEdit: (field: CurationDraftField) => void
   onDetails: (anchorEl: HTMLElement) => void
+  onRemoveOverride: (value: DomainEnvelopeReviewResolvedValue) => void
   onSelect: () => void
   onToggleValidationPreview: (field: CurationDraftField) => void
   previewState: FieldStateKind | null
@@ -30,6 +31,7 @@ export default function HorizontalGridCellActions({
   isSaving,
   onEdit,
   onDetails,
+  onRemoveOverride,
   onSelect,
   onToggleValidationPreview,
   previewState,
@@ -39,8 +41,12 @@ export default function HorizontalGridCellActions({
     return null
   }
 
-  const mutationDisabled = field.read_only || isSaving
-  const fieldValue = formatHorizontalGridValue(cell.value) ?? 'Not available'
+  // A value's own leaves are read-only in the grid even where the draft field is not.
+  const readOnly = cell.readOnly ?? true
+  const mutationDisabled = readOnly || isSaving
+  // Only a value this cell can override can have its override removed here.
+  const removableOverride = cell.overrideTarget?.curator_override ? cell.overrideTarget : null
+  const fieldValue = cell.displayText ?? 'Not available'
   const actionContext = `${field.label}: ${fieldValue} in ${recordLabel}`
 
   return (
@@ -131,10 +137,10 @@ export default function HorizontalGridCellActions({
         {/* Keep the Details -> review check -> Edit rhythm stable for every real field.
             Read-only context retains a disabled pencil instead of silently
             losing an action, while only canonical editable fields open the editor. */}
-        <Tooltip title={field.read_only ? 'Read-only field' : 'Edit field'}>
+        <Tooltip title={readOnly ? 'Read-only field' : 'Edit field'}>
           <span>
             <IconButton
-              aria-label={field.read_only
+              aria-label={readOnly
                 ? `Edit unavailable for ${actionContext}. Read-only field.`
                 : `Edit ${actionContext}`}
               disabled={mutationDisabled}
@@ -149,6 +155,25 @@ export default function HorizontalGridCellActions({
             </IconButton>
           </span>
         </Tooltip>
+        {removableOverride ? (
+          <Tooltip title="Remove curator override: clears the value, which returns to unresolved">
+            <span>
+              <IconButton
+                aria-label={`Remove curator override for ${actionContext}. The value returns to unresolved.`}
+                data-testid={`horizontal-grid-remove-override-${field.field_key}`}
+                disabled={isSaving}
+                onClick={() => {
+                  onSelect()
+                  onRemoveOverride(removableOverride)
+                }}
+                size="small"
+                sx={{ borderRadius: '4px', height: 23, width: 23 }}
+              >
+                <UndoOutlinedIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+        ) : null}
     </Stack>
   )
 }

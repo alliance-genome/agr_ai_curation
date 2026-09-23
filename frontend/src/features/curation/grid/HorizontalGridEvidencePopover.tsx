@@ -19,8 +19,14 @@ import { alpha } from '@mui/material/styles'
 
 import { buildNavigationCommandFromEnvelopeEvidenceProjection } from '@/features/curation/evidence'
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
-import type { DomainEnvelopeEvidenceAnchorProjection } from '@/features/curation/types'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import type {
+  DomainEnvelopeEvidenceAnchorProjection,
+  DomainEnvelopeReviewResolvedValue,
+} from '@/features/curation/types'
+import {
+  formatHorizontalGridValue,
+  horizontalGridValidationDetails,
+} from './horizontalGridFormatting'
 import type { HorizontalGridExtractorComparison } from './horizontalGridModel'
 
 export interface HorizontalGridEvidencePopoverTarget {
@@ -31,6 +37,8 @@ export interface HorizontalGridEvidencePopoverTarget {
   fieldValue: string
   onEvidence: (projection: DomainEnvelopeEvidenceAnchorProjection) => void
   projections: readonly DomainEnvelopeEvidenceAnchorProjection[]
+  // Each validated value behind the field, in full (ALL-1283).
+  resolutionValues: readonly DomainEnvelopeReviewResolvedValue[]
   sourceMention: string | null
   state: FieldStateKind | null
   validatorResolved: boolean
@@ -164,7 +172,6 @@ export default function HorizontalGridEvidencePopover({
       modifiers={popperModifiers}
       open={target !== null}
       placement="bottom"
-      strategy="fixed"
       sx={(theme) => ({ zIndex: theme.zIndex.modal })}
     >
       {({ placement }) => target ? (
@@ -453,6 +460,23 @@ export default function HorizontalGridEvidencePopover({
               >
                 Resolution
               </Typography>
+              {target.resolutionValues.length > 0 ? (
+                <Stack
+                  data-testid="horizontal-grid-resolution-details"
+                  spacing="6px"
+                  sx={{ mt: '4px' }}
+                >
+                  {horizontalGridValidationDetails(target.resolutionValues).map((lines, valueIndex) => (
+                    <Box key={`${valueIndex}:${target.resolutionValues[valueIndex]!.value_path}`}>
+                      {lines.map((line, lineIndex) => (
+                        <Typography key={lineIndex} sx={{ fontSize: 12, lineHeight: 1.45 }}>
+                          {line}
+                        </Typography>
+                      ))}
+                    </Box>
+                  ))}
+                </Stack>
+              ) : null}
               {target.canonicalFieldValue && target.validatorResolved ? (
                 <Typography sx={{ fontSize: 12.5, fontWeight: 700, lineHeight: 1.45, mt: '4px' }}>
                   {target.fieldLabel} resolved to {target.canonicalFieldValue}.

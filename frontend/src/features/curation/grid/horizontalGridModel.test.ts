@@ -4,6 +4,8 @@ import type {
   CurationCandidate,
   CurationDraftField,
   DomainEnvelopeEvidenceAnchorProjection,
+  DomainEnvelopeReviewFieldResolution,
+  DomainEnvelopeReviewResolvedValue,
   DomainEnvelopeReviewRow,
   DomainEnvelopeValidationStatus,
   DomainEnvelopeValidationSummaryProjection,
@@ -236,6 +238,57 @@ function validationProjection({
   }
 }
 
+function resolvedValue(
+  overrides: Partial<DomainEnvelopeReviewResolvedValue> = {},
+): DomainEnvelopeReviewResolvedValue {
+  return {
+    value_path: 'site',
+    display_text: 'gut (ONT:0000101)',
+    mention: 'structures near the gut',
+    resolution_state: 'resolved',
+    lookup_outcome: 'matched',
+    lookup_result: 'Matched',
+    validator_explanation: 'Exact synonym match.',
+    validator_curator_message: null,
+    override_disagreements: [],
+    identity_field_paths: ['site.curie', 'site.name'],
+    id_key: 'curie',
+    label_key: 'name',
+    validated_keys: [],
+    stored_identity: {},
+    container_protected: false,
+    ...overrides,
+  }
+}
+
+const UNRESOLVED_SITE: DomainEnvelopeReviewResolvedValue = resolvedValue({
+  display_text: 'UNRESOLVED',
+  mention: 'structures near the residual body',
+  resolution_state: 'unresolved',
+  lookup_outcome: 'not_found',
+  lookup_result: 'Not found',
+  validator_explanation: 'No term matched the wording.',
+})
+
+function reviewRowWithFields(
+  objectId: string,
+  fields: Array<{ path: string; resolution: DomainEnvelopeReviewFieldResolution | null }>,
+  { workspace = true }: { workspace?: boolean } = {},
+): DomainEnvelopeReviewRow {
+  const rowFields = fields.map(({ path, resolution }, index) => ({
+    field_path: path,
+    label: path,
+    value: null,
+    field_type: 'string',
+    metadata: { workspace_order: index },
+    resolution,
+  }))
+  const row = reviewRow(objectId, `Review ${objectId}`)
+  return workspace
+    ? { ...row, metadata: { ...row.metadata, workspace_fields: rowFields } }
+    : { ...row, summary_fields: rowFields }
+}
+
 describe('buildHorizontalGridModel', () => {
   it('keeps gene supporting envelope context out of the curator decision grid', () => {
     const geneCandidate = candidate({
@@ -306,10 +359,12 @@ describe('buildHorizontalGridModel', () => {
       'gene_symbol',
       'species',
     ])
+    // An unvalidated value reads UNRESOLVED; the extractor's proposal stays in
+    // the comparison and never takes the validated value's place.
     expect(model.rows[0]!.cells[0]).toMatchObject({
       extractorComparison: { outcome: 'unresolved', value: 'abc' },
       value: 'abc',
-      valueSource: 'extractor',
+      displayText: 'UNRESOLVED',
     })
   })
 
@@ -559,40 +614,46 @@ describe('buildHorizontalGridModel', () => {
     expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'symbol'])
     expect(model.rows[0]!.cells[0]).toMatchObject({
       value: 'abc',
-      valueSource: 'canonical',
+      displayText: 'abc',
       extractorComparison: { outcome: 'confirmed', value: 'abc' },
     })
     expect(model.rows[1]!.cells[0]).toMatchObject({
       state: 'needs-review',
       value: 'abc',
-      valueSource: 'canonical',
+      displayText: 'abc',
       extractorComparison: { outcome: 'different', value: 'abcd' },
     })
+    // The canonical slot keeps the canonical value; an unresolved one reads
+    // UNRESOLVED and the extractor's proposal stays in the comparison.
     expect(model.rows[2]!.cells[0]).toMatchObject({
       state: 'ai-unconfirmed',
-      value: 'abcd',
-      valueSource: 'extractor',
+      value: null,
+      displayText: 'UNRESOLVED',
       extractorComparison: { outcome: 'unresolved', value: 'abcd' },
     })
     expect(model.rows[3]!.cells[0]).toMatchObject({
       state: 'resolved',
       value: 'curator-symbol',
-      valueSource: 'canonical',
+      displayText: 'curator-symbol',
       extractorComparison: { outcome: 'overridden', value: 'extracted-symbol' },
     })
     expect(model.rows[4]!.cells[0]).toMatchObject({
       state: 'ai-unconfirmed',
-      value: 'extracted-symbol',
-      valueSource: 'extractor',
+      value: null,
+      displayText: 'UNRESOLVED',
       extractorComparison: { outcome: 'unresolved', value: 'extracted-symbol' },
     })
     expect(model.rows[5]!.cells[0]).toMatchObject({
       state: 'needs-review',
-      value: 'extracted-symbol',
-      valueSource: 'extractor',
+      value: 'edited-symbol',
+      displayText: 'UNRESOLVED',
       staleValidation: true,
       extractorComparison: { outcome: 'unresolved', value: 'extracted-symbol' },
     })
+    for (const row of model.rows) {
+      expect(row.cells[0]!.displayText).not.toBe('extracted-symbol')
+      expect(row.cells[0]!.displayText).not.toBe('abcd')
+    }
   })
 
   it('orders canonical-path columns and heterogeneous rows deterministically', () => {
@@ -958,6 +1019,504 @@ describe('buildHorizontalGridModel', () => {
       findingCount: 6,
       openFindingCount: 3,
     })
+  })
+
+  it('shows each validated field as validated, with its paper wording kept apart', () => {
+    const siteCandidate = candidate({
+      id: 'candidate-site',
+      objectId: 'object-site',
+      order: 0,
+      fields: [
+        draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: 'ONT:0000101' }),
+        draftField({ fieldKey: 'site-name', fieldPath: 'site.name', label: 'Site', order: 1, value: 'gut' }),
+        draftField({ fieldKey: 'note', label: 'Note', order: 2, value: 'plain' }),
+      ],
+    })
+    const otherCandidate = candidate({
+      id: 'candidate-other',
+      objectId: 'object-other',
+      order: 1,
+      fields: [
+        draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: null }),
+        draftField({ fieldKey: 'site-name', fieldPath: 'site.name', label: 'Site', order: 1, value: null }),
+        draftField({ fieldKey: 'note', label: 'Note', order: 2, value: null }),
+      ],
+    })
+    const resolvedRow = reviewRowWithFields('object-site', [
+      { path: 'site.curie', resolution: { display_text: 'ONT:0000101', values: [resolvedValue()] } },
+      { path: 'site.name', resolution: { display_text: 'gut', values: [resolvedValue()] } },
+      { path: 'note', resolution: null },
+    ])
+    const unresolvedRow = reviewRowWithFields('object-other', [
+      { path: 'site.curie', resolution: { display_text: 'UNRESOLVED', values: [UNRESOLVED_SITE] } },
+      { path: 'site.name', resolution: { display_text: 'UNRESOLVED', values: [UNRESOLVED_SITE] } },
+      { path: 'note', resolution: null },
+    ])
+
+    const model = modelForRows([
+      workspaceRow({ candidate: siteCandidate, row: resolvedRow }),
+      workspaceRow({ candidate: otherCandidate, row: unresolvedRow }),
+    ])
+
+    expect(model.rows[0]!.cells.map((cell) => cell.displayText)).toEqual(['ONT:0000101', 'gut', 'plain'])
+    expect(model.rows[0]!.cells[0]!.resolution?.values[0]).toMatchObject({
+      mention: 'structures near the gut',
+      lookup_result: 'Matched',
+    })
+    expect(model.rows[0]!.cells[2]!.resolution).toBeNull()
+    expect(model.rows[1]!.cells.map((cell) => cell.displayText)).toEqual(['UNRESOLVED', 'UNRESOLVED', null])
+    expect(model.rows[1]!.cells[1]!.resolution?.values[0]).toMatchObject({
+      mention: 'structures near the residual body',
+      lookup_result: 'Not found',
+      validator_explanation: 'No term matched the wording.',
+    })
+  })
+
+  it('reads resolutions from summary fields when the pack declares no workspace fields', () => {
+    const siteCandidate = candidate({
+      id: 'candidate-site',
+      objectId: 'object-site',
+      order: 0,
+      fields: [draftField({ fieldKey: 'site', label: 'Site', order: 0, value: { mention: 'gut lining' } })],
+    })
+    const row = reviewRowWithFields(
+      'object-site',
+      [{ path: 'site', resolution: { display_text: 'UNRESOLVED', values: [UNRESOLVED_SITE] } }],
+      { workspace: false },
+    )
+
+    const model = modelForRows([workspaceRow({ candidate: siteCandidate, row })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({ displayText: 'UNRESOLVED', value: { mention: 'gut lining' } })
+  })
+
+  it('reads a legacy, unverified stored value as unresolved, even against an extractor proposal', () => {
+    const legacyValue = resolvedValue({
+      display_text: 'UNRESOLVED',
+      mention: 'abc-1 (legacy, unverified)',
+      resolution_state: 'unresolved',
+      lookup_outcome: 'legacy_unverified',
+      lookup_result: 'Legacy, unverified',
+      validator_explanation: 'Recorded before validation tracking; not verified.',
+    })
+    const legacyCandidate = candidate({
+      id: 'candidate-legacy',
+      objectId: 'object-legacy',
+      order: 0,
+      fields: [
+        draftField({ fieldKey: 'symbol', fieldPath: 'symbol', label: 'Symbol', order: 0, value: 'abc-1' }),
+        draftField({
+          fieldKey: 'proposed-symbol',
+          fieldPath: 'proposed_symbol',
+          label: 'Proposed symbol',
+          order: 1,
+          value: 'abc-1',
+          readOnly: true,
+          renderAs: 'divergence',
+        }),
+      ],
+    })
+    const row = reviewRowWithFields('object-legacy', [
+      { path: 'symbol', resolution: { display_text: 'UNRESOLVED', values: [legacyValue] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: legacyCandidate,
+      row,
+      validation: [validationProjection({
+        id: 'legacy-symbol',
+        fieldPath: 'symbol',
+        status: 'resolved',
+        findings: 0,
+        openFindings: 0,
+      })],
+    })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({
+      value: 'abc-1',
+      displayText: 'UNRESOLVED',
+      extractorComparison: { outcome: 'unresolved', value: 'abc-1' },
+    })
+    expect(model.rows[0]!.cells[0]!.resolution?.values[0]?.mention).toBe('abc-1 (legacy, unverified)')
+  })
+
+  it('reads a saved curator edit from the regenerated review row, as a curator override', () => {
+    const overridden = resolvedValue({
+      display_text: 'midgut (ONT:0000555)',
+      mention: 'gut lining',
+      lookup_outcome: 'curator_override',
+      lookup_result: 'Curator override',
+      curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
+    })
+    const fields = [
+      { ...draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: 'ONT:0000555' }), dirty: true },
+      { ...draftField({ fieldKey: 'site-name', fieldPath: 'site.name', label: 'Site', order: 1, value: 'midgut' }), dirty: true },
+      draftField({
+        fieldKey: 'site-lookup',
+        fieldPath: 'site.lookup_outcome',
+        label: 'Site lookup',
+        order: 2,
+        value: 'curator_override',
+      }),
+    ]
+    const row = reviewRowWithFields('object-override', [
+      { path: 'site.curie', resolution: { display_text: 'ONT:0000555', values: [overridden] } },
+      { path: 'site.name', resolution: { display_text: 'midgut', values: [overridden] } },
+      {
+        path: 'site.lookup_outcome',
+        resolution: { display_text: 'Curator override', values: [overridden], leaf_key: 'lookup_outcome' },
+      },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: candidate({ id: 'candidate-override', objectId: 'object-override', order: 0, fields }),
+      row,
+    })])
+
+    const [idCell, nameCell] = model.rows[0]!.cells
+    expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'site.curie', 'site.name'])
+    expect(idCell).toMatchObject({
+      displayText: 'ONT:0000555',
+      state: 'resolved',
+      curatorOverride: true,
+      overrideDisagreements: [],
+      readOnly: false,
+      overrideTarget: overridden,
+    })
+    expect(idCell!.resolutionDetails).toEqual([overridden])
+    expect(nameCell).toMatchObject({ curatorOverride: true, resolutionDetails: [] })
+  })
+
+  it('shows needs review with an open validator disagreement, and a proposal as overridden', () => {
+    const message = "Validator disagrees with the curator override: it resolved symbol 'abc-9'."
+    const overridden = resolvedValue({
+      value_path: '',
+      display_text: 'abc-2 (GENE:2)',
+      lookup_outcome: 'curator_override',
+      lookup_result: 'Curator override',
+      curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
+      override_disagreements: [message],
+      identity_field_paths: ['symbol', 'identifier'],
+      id_key: 'identifier',
+      label_key: 'symbol',
+      validated_keys: [],
+      stored_identity: {},
+      container_protected: false,
+    })
+    const fields = [
+      draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-2' }),
+      draftField({ fieldKey: 'identifier', label: 'Gene ID', order: 1, value: 'GENE:2', readOnly: true }),
+      draftField({
+        fieldKey: 'proposed-symbol',
+        fieldPath: 'proposed_symbol',
+        label: 'Proposed symbol',
+        order: 2,
+        value: 'abc-1',
+        readOnly: true,
+        renderAs: 'divergence',
+      }),
+    ]
+    const row = reviewRowWithFields('object-disagree', [
+      { path: 'symbol', resolution: { display_text: 'abc-2', values: [overridden] } },
+      { path: 'identifier', resolution: { display_text: 'GENE:2', values: [overridden] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: candidate({ id: 'candidate-disagree', objectId: 'object-disagree', order: 0, fields }),
+      row,
+    })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({
+      displayText: 'abc-2',
+      state: 'needs-review',
+      curatorOverride: true,
+      overrideDisagreements: [message],
+      extractorComparison: { outcome: 'overridden', value: 'abc-1' },
+      // An identity field of the value is read-only, so no override is offered.
+      overrideTarget: null,
+    })
+    expect(model.rows[0]!.cells[1]).toMatchObject({ readOnly: true, overrideTarget: null })
+  })
+
+  it('offers an override on a value that is the object itself when its identity fields are editable', () => {
+    const rootValue = resolvedValue({
+      value_path: '',
+      display_text: 'UNRESOLVED',
+      resolution_state: 'unresolved',
+      lookup_outcome: 'not_found',
+      lookup_result: 'Not found',
+      identity_field_paths: ['identifier', 'symbol'],
+      id_key: 'identifier',
+      label_key: 'symbol',
+    })
+    const fields = [
+      draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: null }),
+      draftField({ fieldKey: 'identifier', label: 'Gene ID', order: 1, value: null }),
+    ]
+    const row = reviewRowWithFields('object-root', [
+      { path: 'symbol', resolution: { display_text: 'UNRESOLVED', values: [rootValue] } },
+      { path: 'identifier', resolution: { display_text: 'UNRESOLVED', values: [rootValue] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: candidate({ id: 'candidate-root', objectId: 'object-root', order: 0, fields }),
+      row,
+    })])
+
+    expect(model.rows[0]!.cells.map((cell) => cell.overrideTarget)).toEqual([rootValue, rootValue])
+  })
+
+  it('offers no override on a value whose own field is protected', () => {
+    const protectedValue = resolvedValue({ container_protected: true })
+    const fields = [draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: null })]
+    const row = reviewRowWithFields('object-protected', [
+      { path: 'site.curie', resolution: { display_text: 'UNRESOLVED', values: [protectedValue] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: candidate({ id: 'candidate-protected', objectId: 'object-protected', order: 0, fields }),
+      row,
+    })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({ readOnly: false, overrideTarget: null })
+  })
+
+  it('shows each value\'s details once, on its first cell, and hides leaves that cell covers', () => {
+    const geneValue = resolvedValue({
+      value_path: '',
+      display_text: 'UNRESOLVED',
+      mention: 'abc-1',
+      resolution_state: 'unresolved',
+      lookup_outcome: 'not_found',
+      lookup_result: 'Not found',
+    })
+    const fields = [
+      draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: null }),
+      draftField({ fieldKey: 'identifier', label: 'Gene ID', order: 1, value: null }),
+      draftField({ fieldKey: 'mention', label: 'Paper mention', order: 2, value: 'abc-1' }),
+      draftField({ fieldKey: 'lookup_outcome', label: 'Lookup result', order: 3, value: 'not_found' }),
+    ]
+    const covered = candidate({ id: 'candidate-covered', objectId: 'object-covered', order: 0, fields })
+    const row = reviewRowWithFields('object-covered', [
+      { path: 'symbol', resolution: { display_text: 'UNRESOLVED', values: [geneValue] } },
+      { path: 'identifier', resolution: { display_text: 'UNRESOLVED', values: [geneValue] } },
+      { path: 'mention', resolution: { display_text: 'abc-1', values: [geneValue], leaf_key: 'mention' } },
+      {
+        path: 'lookup_outcome',
+        resolution: { display_text: 'Not found', values: [geneValue], leaf_key: 'lookup_outcome' },
+      },
+    ])
+
+    const model = modelForRows([workspaceRow({ candidate: covered, row })])
+
+    expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'symbol', 'identifier'])
+    const [symbolCell, identifierCell] = model.rows[0]!.cells
+    expect(model.rows[0]!.cells.map((cell) => cell.resolutionDetails.length)).toEqual([1, 0])
+    expect(symbolCell!.resolutionLinesId).not.toBeNull()
+    expect(identifierCell!.resolutionLinesId).toBeNull()
+    // The second identity cell is described by the first cell's lines.
+    expect(symbolCell!.resolutionDescribedBy).toEqual([symbolCell!.resolutionLinesId])
+    expect(identifierCell!.resolutionDescribedBy).toEqual([symbolCell!.resolutionLinesId])
+  })
+
+  it('puts a value\'s details on its first cell, edited or not', () => {
+    const geneValue = resolvedValue({ value_path: '', display_text: 'abc-1 (GENE:1)', mention: 'abc-1' })
+    const covered = candidate({
+      id: 'candidate-edited-owner',
+      objectId: 'object-edited-owner',
+      order: 0,
+      fields: [
+        { ...draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-2' }), dirty: true },
+        draftField({ fieldKey: 'identifier', label: 'Gene ID', order: 1, value: 'GENE:1' }),
+      ],
+    })
+    const row = reviewRowWithFields('object-edited-owner', [
+      { path: 'symbol', resolution: { display_text: 'abc-1', values: [geneValue] } },
+      { path: 'identifier', resolution: { display_text: 'GENE:1', values: [geneValue] } },
+    ])
+
+    const model = modelForRows([workspaceRow({ candidate: covered, row })])
+
+    const [symbolCell, identifierCell] = model.rows[0]!.cells
+    expect(symbolCell!.resolutionDetails).toEqual([geneValue])
+    expect(identifierCell!.resolutionDetails).toEqual([])
+    expect(identifierCell!.resolutionDescribedBy).toEqual([symbolCell!.resolutionLinesId])
+  })
+
+  it('shows a covered leaf in its row when another row needs the leaf column', () => {
+    const geneValue = resolvedValue({
+      value_path: '',
+      display_text: 'UNRESOLVED',
+      mention: 'abc-1',
+      resolution_state: 'unresolved',
+      lookup_outcome: 'not_found',
+      lookup_result: 'Not found',
+    })
+    const projected = candidate({
+      id: 'candidate-projected',
+      objectId: 'object-projected',
+      order: 0,
+      fields: [
+        draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: null }),
+        draftField({ fieldKey: 'lookup_outcome', label: 'Lookup result', order: 1, value: 'not_found' }),
+      ],
+    })
+    const manual = candidate({
+      id: 'candidate-manual',
+      objectId: 'object-manual',
+      order: 1,
+      fields: [
+        draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-3' }),
+        draftField({ fieldKey: 'lookup_outcome', label: 'Lookup result', order: 1, value: 'matched' }),
+      ],
+    })
+    manual.projection_ref = null
+    const row = reviewRowWithFields('object-projected', [
+      { path: 'symbol', resolution: { display_text: 'UNRESOLVED', values: [geneValue] } },
+      {
+        path: 'lookup_outcome',
+        resolution: { display_text: 'Not found', values: [geneValue], leaf_key: 'lookup_outcome' },
+      },
+    ])
+
+    const model = buildHorizontalGridModel({
+      candidates: [projected, manual],
+      envelopeReviewRows: [workspaceRow({ candidate: projected, row })],
+    })
+
+    expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'symbol', 'lookup_outcome'])
+    expect(model.rows[0]!.cells[1]).toMatchObject({ hasField: true, displayText: 'Not found' })
+    expect(model.rows[1]!.cells[1]).toMatchObject({ hasField: true, displayText: 'matched' })
+  })
+
+  it('shows a value\'s own leaf in plain words when no cell of its value is in the grid', () => {
+    const leafOnly = candidate({
+      id: 'candidate-leaf',
+      objectId: 'object-leaf',
+      order: 0,
+      fields: [
+        draftField({ fieldKey: 'lookup_outcome', label: 'Lookup result', order: 0, value: 'not_found' }),
+      ],
+    })
+    const row = reviewRowWithFields('object-leaf', [
+      {
+        path: 'lookup_outcome',
+        resolution: { display_text: 'Not found', values: [UNRESOLVED_SITE], leaf_key: 'lookup_outcome' },
+      },
+    ])
+
+    const model = modelForRows([workspaceRow({ candidate: leafOnly, row })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({ displayText: 'Not found', resolutionDetails: [] })
+  })
+
+  it('never presents an unresolved value as validated', () => {
+    const waived = candidate({
+      id: 'candidate-waived',
+      objectId: 'object-waived',
+      order: 0,
+      fields: [draftField({ fieldKey: 'site', label: 'Site', order: 0, value: null })],
+    })
+    const row = reviewRowWithFields('object-waived', [
+      { path: 'site', resolution: { display_text: 'UNRESOLVED', values: [UNRESOLVED_SITE] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: waived,
+      row,
+      validation: [validationProjection({
+        id: 'waived-site',
+        fieldPath: 'site',
+        status: 'waived',
+        findings: 1,
+        openFindings: 0,
+      })],
+    })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({ displayText: 'UNRESOLVED', state: 'needs-review' })
+  })
+
+  it('never renders an object value as JSON', () => {
+    const objectCandidate = candidate({
+      id: 'candidate-object',
+      objectId: 'object-object',
+      order: 0,
+      fields: [
+        draftField({ fieldKey: 'term', label: 'Term', order: 0, value: { curie: 'ONT:1', name: 'term one' } }),
+        draftField({
+          fieldKey: 'staged',
+          label: 'Staged',
+          order: 1,
+          value: { mention: 'a wording', curie: null, resolution_state: 'unresolved', lookup_outcome: 'not_validated' },
+        }),
+        draftField({
+          fieldKey: 'provider',
+          label: 'Provider',
+          order: 2,
+          value: [{ abbreviation: 'XB', tags: ['a', 'b'] }, { abbreviation: 'YB' }],
+        }),
+        draftField({ fieldKey: 'aliases', label: 'Aliases', order: 3, value: ['one', 'two'] }),
+        draftField({
+          fieldKey: 'demoted',
+          label: 'Demoted',
+          order: 5,
+          value: {
+            mention: 'gut lining',
+            curie: null,
+            overruled_curie: 'ONT:1',
+            proposed_curie: 'ONT:2',
+            resolution_state: 'unresolved',
+            lookup_outcome: 'rejected_candidates',
+          },
+        }),
+        draftField({
+          fieldKey: 'reresolved',
+          label: 'Re-resolved',
+          order: 6,
+          value: {
+            abbreviation: 'XB',
+            proposed_abbreviation: 'YB',
+            overruled_abbreviation: 'ZB',
+            mention: 'Xenbase',
+            resolution_state: 'resolved',
+            lookup_outcome: 'matched',
+          },
+        }),
+        draftField({
+          fieldKey: 'record',
+          label: 'Record',
+          order: 7,
+          value: { relation: 'has_condition', overruled_curie: 'ONT:3' },
+        }),
+        draftField({
+          fieldKey: 'provider_ref',
+          label: 'Provider reference',
+          order: 4,
+          value: {
+            abbreviation: 'XB',
+            mention: 'Xenbase',
+            resolution_state: 'resolved',
+            lookup_outcome: 'matched',
+          },
+        }),
+      ],
+    })
+
+    const model = modelForRows([workspaceRow({ candidate: objectCandidate })])
+
+    // The same readings as backend exports (value_display.py).
+    expect(model.rows[0]!.cells.map((cell) => cell.displayText)).toEqual([
+      'term one (ONT:1)',
+      'UNRESOLVED',
+      'abbreviation: XB; tags: a, b | abbreviation: YB',
+      'one; two',
+      'abbreviation: XB',
+      // Neither a validator's overruled identity nor the extractor's proposal
+      // ever reads as the value.
+      'UNRESOLVED',
+      'abbreviation: XB',
+      'relation: has_condition',
+    ])
   })
 
   it('rejects multiple draft fields with the same canonical path', () => {

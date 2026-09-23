@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import logging
 from pathlib import Path
 from typing import Any, Protocol, TYPE_CHECKING
 
@@ -17,6 +18,9 @@ from sqlalchemy.orm import Session
 
 from src.schemas.curation_workspace import (
     DomainEnvelopeEvidenceAnchorProjection,
+    DomainEnvelopeReviewCuratorOverride,
+    DomainEnvelopeReviewFieldResolution,
+    DomainEnvelopeReviewResolvedValue,
     DomainEnvelopeReviewRow,
     DomainEnvelopeReviewRowsResponse,
     DomainEnvelopeReviewRowSummaryField,
@@ -65,29 +69,39 @@ from src.lib.domain_packs.validator_result_policies import (
     allowed_term_policy_violations,
 )
 from src.lib.domain_packs.resolvable_values import (
+    CURATOR_OVERRIDE_KEY,
     DECISIVE_OUTCOMES,
+    INVALID_RECORD_EXPLANATION,
+    LEAF_VALUE_LABELS,
     LOOKUP_OUTCOME_KEY,
     LOOKUP_OUTCOME_LABELS,
-    RESOLUTION_STATE_KEY,
-    RESOLVED,
+    MENTION_KEY,
     OUTCOME_INVALID_SCHEMA,
     OUTCOME_MATCHED,
     OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
-    VALIDATOR_MATERIALIZATION_METADATA_KEY,
-    VALIDATOR_CURATOR_MESSAGE_KEY,
-    VALIDATOR_EXPLANATION_KEY,
+    RESOLUTION_STATE_KEY,
+    RESOLVED,
     ResolvableSpec,
     ResolvableValueError,
+    UNRESOLVED,
+    UNRESOLVED_DISPLAY,
+    VALIDATOR_CURATOR_MESSAGE_KEY,
+    VALIDATOR_EXPLANATION_KEY,
+    VALIDATOR_MATERIALIZATION_METADATA_KEY,
     copy_resolution,
     declared_resolvable_fields,
     declared_spec_for,
+    effective_payload,
+    effective_value,
     has_resolution_state,
     is_curator_override,
-    validator_event_covers,
     lookup_outcome_for_failure,
     mark_resolved,
     mark_unresolved,
+    stored_state_problem,
     unresolved_header_text,
+    validator_event_covers,
+    value_covered_by_validator,
 )
 from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.lib.openai_agents.config import (
@@ -96,6 +110,8 @@ from src.lib.openai_agents.config import (
     get_validation_detail_string_limit,
 )
 
+
+logger = logging.getLogger(__name__)
 
 REVIEW_ROW_PROJECTION_TYPE = "workspace_review_row"
 _MISSING = object()
@@ -197,6 +213,8 @@ class DomainPackMetadataReviewRowMaterializer:
             for definition in self.metadata.object_definitions
         }
         validation_state_by_object = _validation_state_by_object(envelope)
+        value_display_source = _review_value_display_source(self.metadata)
+        override_disagreements = _open_override_disagreements(envelope)
         unavailable_capabilities = _unavailable_validator_capabilities_by_target(
             envelope,
             metadata=self.metadata,
@@ -222,6 +240,19 @@ class DomainPackMetadataReviewRowMaterializer:
             display_config = _workspace_display_config(domain_object, object_definition)
             if self.profile_context is not None:
                 display_config = object_definition.metadata.get("workspace_display", {}) if object_definition else {}
+            resolvable_fields = declared_resolvable_fields(self.metadata, domain_object.object_type)
+            value_reader = _review_value_reader(
+                domain_object,
+                resolvable_fields,
+                value_display_source,
+                envelope_id=envelope.envelope_id,
+                envelope_revision=envelope_revision,
+                override_disagreements=override_disagreements.get(object_id, {}),
+                field_definitions={
+                    field.field_path: field
+                    for field in (object_definition.fields if object_definition is not None else [])
+                },
+            )
             summary_fields = _summary_fields(
                 domain_object,
                 object_definition=object_definition,
@@ -229,6 +260,7 @@ class DomainPackMetadataReviewRowMaterializer:
                 unavailable_capabilities_by_field=(
                     unavailable_capabilities["by_field"]
                 ),
+                value_reader=value_reader,
             )
             workspace_fields = _workspace_fields(
                 domain_object,
@@ -237,8 +269,8 @@ class DomainPackMetadataReviewRowMaterializer:
                 unavailable_capabilities_by_field=(
                     unavailable_capabilities["by_field"]
                 ),
+                value_reader=value_reader,
             )
-            resolvable_fields = declared_resolvable_fields(self.metadata, domain_object.object_type)
             display_label = _display_label(
                 domain_object,
                 display_config=display_config,
@@ -656,6 +688,10 @@ def _as_curator_override_finding(finding: ValidationFinding) -> ValidationFindin
     })
 
 
+# An open finding: a validator disagrees with a curator override (the override stands).
+CURATOR_OVERRIDE_DISAGREEMENT_CODE = "domain_pack.validator_disagrees_with_curator_override"
+
+
 def _curator_override_disagreements(
     item: ValidatorResultMaterializationInput,
     overrides: _CuratorOverrides,
@@ -710,7 +746,7 @@ def _curator_override_disagreements(
         findings.append(ValidationFinding(
             severity=ValidationFindingSeverity.WARNING,
             status=ValidationFindingStatus.OPEN,
-            code="domain_pack.validator_disagrees_with_curator_override",
+            code=CURATOR_OVERRIDE_DISAGREEMENT_CODE,
             message=f"Validator disagrees with the curator override: {detail}.",
             object_ref=None if container_path else object_ref,
             field_ref=FieldRef(object_ref=object_ref, field_path=container_path) if container_path else None,
@@ -3140,6 +3176,7 @@ def _summary_fields(
     object_definition: DomainPackObjectDefinition | None,
     display_config: Mapping[str, Any],
     unavailable_capabilities_by_field: Mapping[tuple[str, str], tuple[dict[str, Any], ...]],
+    value_reader: _ReviewValueReader | None,
 ) -> list[DomainEnvelopeReviewRowSummaryField]:
     field_definitions = {
         field.field_path: field
@@ -3177,6 +3214,7 @@ def _summary_fields(
                 )
             )
         )
+        resolution = value_reader.resolution(field_path) if value_reader is not None else None
         summary_fields.append(
             DomainEnvelopeReviewRowSummaryField(
                 field_path=field_path,
@@ -3187,7 +3225,8 @@ def _summary_fields(
                     if field_definition is not None
                     else _value_field_type(value)
                 ),
-                metadata=metadata,
+                metadata=_with_resolution_edit_policy(metadata, resolution),
+                resolution=resolution,
             )
         )
 
@@ -3200,6 +3239,7 @@ def _workspace_fields(
     object_definition: DomainPackObjectDefinition | None,
     display_config: Mapping[str, Any],
     unavailable_capabilities_by_field: Mapping[tuple[str, str], tuple[dict[str, Any], ...]],
+    value_reader: _ReviewValueReader | None,
 ) -> list[DomainEnvelopeReviewRowSummaryField]:
     field_definitions = {
         field.field_path: field
@@ -3232,6 +3272,7 @@ def _workspace_fields(
         if value is _MISSING:
             value = None
 
+        resolution = value_reader.resolution(field_path) if value_reader is not None else None
         workspace_fields.append(
             DomainEnvelopeReviewRowSummaryField(
                 field_path=field_path,
@@ -3242,10 +3283,10 @@ def _workspace_fields(
                     if field_definition is not None
                     else _value_field_type(value)
                 ),
-                metadata={
-                    **metadata,
-                    "workspace_order": order,
-                },
+                metadata=_with_resolution_edit_policy(
+                    {**metadata, "workspace_order": order}, resolution,
+                ),
+                resolution=resolution,
             )
         )
 
@@ -3259,6 +3300,364 @@ def _is_empty_projection_value(value: Any) -> bool:
         return True
     return False
 
+
+# --- Extracted vs validated values on review fields (ALL-1283) -----------------
+
+# Curator-facing; the technical detail goes to the log only.
+_UNREADABLE_ISSUE = (
+    "This stored value could not be read; please re-run validation or contact the "
+    "AI Curation developers."
+)
+# A value's own leaves; the paper-wording key is the spec's mention key.
+_VALUE_LEAF_KEYS = (
+    RESOLUTION_STATE_KEY,
+    LOOKUP_OUTCOME_KEY,
+    VALIDATOR_EXPLANATION_KEY,
+    VALIDATOR_CURATOR_MESSAGE_KEY,
+)
+
+
+@dataclass(frozen=True)
+class _ValueReading:
+    """One resolvable value as a review field reads it."""
+
+    path: tuple[str | int, ...]
+    spec: ResolvableSpec
+    reviewed: DomainEnvelopeReviewResolvedValue
+    # The read-time value (legacy and invalid-record rules applied).
+    value: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _ReviewValueReader:
+    """Reads one object's declared resolvable values for its review fields.
+
+    ``payload`` is the object's read-time payload (``effective_payload``: the
+    legacy rule applied and invalid stored records read as unresolved);
+    ``readings`` holds each resolvable value; ``field_displays`` holds the
+    declared display spec per field path.
+    """
+
+    payload: Mapping[str, Any]
+    readings: tuple[_ValueReading, ...]
+    field_displays: Mapping[str, Mapping[str, Any]]
+
+    def resolution(self, field_path: str) -> DomainEnvelopeReviewFieldResolution | None:
+        """The extracted-vs-validated reading of one review field, or None.
+
+        A field that is, or contains, resolvable values reads through its
+        declared display ("label (ID)" or UNRESOLVED per value). A field that
+        is one identity key of a value (its id, label or a declared validated
+        key such as a taxon) shows that key when the value is resolved and
+        UNRESOLVED otherwise. A field that is one of the value's own leaves
+        (paper wording, status, lookup result, validator text) shows that
+        leaf in plain words. Paper wording, the extractor's ``proposed_*``
+        keys and a validator's ``overruled_*`` keys never fill a validated
+        value's text.
+        """
+
+        from src.lib.flows.value_display import display_text
+
+        try:
+            field_tokens = parse_field_path(field_path)
+        except ValueError:
+            return None
+        key = field_tokens[-1]
+        for reading in self.readings:
+            if field_tokens[:-1] != reading.path or not isinstance(key, str):
+                continue
+            if key in reading.spec.identity_keys:
+                resolved = reading.reviewed.resolution_state == RESOLVED
+                return DomainEnvelopeReviewFieldResolution(
+                    display_text=(
+                        display_text(reading.value.get(key)) if resolved else UNRESOLVED_DISPLAY
+                    ),
+                    values=[reading.reviewed],
+                )
+            if key == reading.spec.mention_key or key in _VALUE_LEAF_KEYS:
+                leaf_key = MENTION_KEY if key == reading.spec.mention_key else key
+                return DomainEnvelopeReviewFieldResolution(
+                    display_text=_value_leaf_text(reading.reviewed, leaf_key),
+                    values=[reading.reviewed],
+                    leaf_key=leaf_key,
+                )
+
+        contained = [
+            reading
+            for reading in self.readings
+            if reading.path[: len(field_tokens)] == field_tokens
+        ]
+        if not contained:
+            return None
+        field_value = _payload_value(self.payload, field_path)
+        return DomainEnvelopeReviewFieldResolution(
+            display_text=display_text(
+                None if field_value is _MISSING else field_value,
+                self.field_displays.get(field_path),
+            ),
+            values=[reading.reviewed for reading in contained],
+        )
+
+
+def _with_resolution_edit_policy(
+    metadata: dict[str, Any],
+    resolution: DomainEnvelopeReviewFieldResolution | None,
+) -> dict[str, Any]:
+    """A value's own leaves (paper wording, status, lookup result, validator
+    text) are set by extraction and validation, never edited by a curator.
+
+    A curator edits a value's identity keys instead, which records a
+    validation override (``resolvable_values.apply_curator_identity``).
+    """
+
+    if resolution is None or resolution.leaf_key is None:
+        return metadata
+    return {**metadata, "editable": False, "read_only": True}
+
+
+def _value_leaf_text(reviewed: DomainEnvelopeReviewResolvedValue, leaf_key: str) -> str:
+    """A value's own leaf in the plain words exports use (resolvable_values labels)."""
+
+    if leaf_key == MENTION_KEY:
+        return reviewed.mention or ""
+    if leaf_key == RESOLUTION_STATE_KEY:
+        return LEAF_VALUE_LABELS[RESOLUTION_STATE_KEY][reviewed.resolution_state]
+    if leaf_key == LOOKUP_OUTCOME_KEY:
+        return reviewed.lookup_result
+    if leaf_key == VALIDATOR_EXPLANATION_KEY:
+        return reviewed.validator_explanation or ""
+    return reviewed.validator_curator_message or ""
+
+
+def _review_value_display_source(metadata: DomainPackMetadata) -> Any:
+    """The pack's declared display specs, as exports resolve them."""
+
+    from src.lib.flows.export_fields import PackagedExportSource
+
+    return PackagedExportSource(
+        LoadedDomainPack(
+            pack_id=metadata.pack_id,
+            display_name=metadata.display_name,
+            version=metadata.version,
+            pack_path=Path("."),
+            metadata_path=Path("."),
+            metadata=metadata,
+        )
+    )
+
+
+def _review_value_reader(
+    domain_object: CuratableObjectEnvelope,
+    specs: Mapping[str, ResolvableSpec],
+    display_source: Any,
+    *,
+    envelope_id: str,
+    envelope_revision: int,
+    override_disagreements: Mapping[str, Sequence[str]],
+    field_definitions: Mapping[str, DomainPackFieldDefinition],
+) -> _ReviewValueReader | None:
+    if not specs:
+        return None
+    payload = effective_payload(
+        domain_object.payload, specs, object_metadata=domain_object.metadata,
+    )
+    readings: dict[tuple[str | int, ...], tuple[int, _ValueReading]] = {}
+    declared = list(specs.items())
+    # The most specific declaration reads a value declared both as a list and
+    # as one of its elements, as effective_payload does; readings keep the
+    # pack's declaration order, then payload order.
+    for order, (declared_path, spec) in sorted(
+        enumerate(declared), key=lambda item: -len(item[1][0]),
+    ):
+        try:
+            tokens = parse_field_path(declared_path) if declared_path else ()
+        except ValueError:
+            continue
+        for value_path in _concrete_value_paths(payload, tokens, ()):
+            if value_path in readings:
+                continue
+            readings[value_path] = (
+                order,
+                _read_review_value(
+                    domain_object,
+                    value_path,
+                    spec,
+                    envelope_id=envelope_id,
+                    envelope_revision=envelope_revision,
+                    override_disagreements=override_disagreements.get(
+                        _format_field_path(value_path), (),
+                    ),
+                    field_definitions=field_definitions,
+                ),
+            )
+    ordered = [
+        reading
+        for _order, reading in sorted(readings.values(), key=lambda item: item[0])
+    ]
+    prefix = f"object.pack.{domain_object.object_type}."
+    return _ReviewValueReader(
+        payload=payload,
+        readings=tuple(ordered),
+        field_displays={
+            ref[len(prefix):]: spec
+            for ref, spec in display_source.display_specs.items()
+            if ref.startswith(prefix)
+        },
+    )
+
+
+def _read_review_value(
+    domain_object: CuratableObjectEnvelope,
+    value_path: tuple[str | int, ...],
+    spec: ResolvableSpec,
+    *,
+    envelope_id: str,
+    envelope_revision: int,
+    override_disagreements: Sequence[str],
+    field_definitions: Mapping[str, DomainPackFieldDefinition],
+) -> _ValueReading:
+    """Read one value from the read-time payload; a broken stored record says so plainly."""
+
+    from src.lib.domain_envelopes.patches import _field_editability, is_generic_attribute_path
+    from src.lib.flows.value_display import display_text
+
+    path_text = _format_field_path(value_path)
+    # Read the stored value as effective_payload does; the read-time copy
+    # already carries a legacy state and must not be read a second time.
+    stored = _payload_container(domain_object.payload, path_text)
+    value = effective_value(
+        stored,
+        spec,
+        covered_by_validator=value_covered_by_validator(domain_object.metadata, path_text, spec),
+    )
+    problem = (
+        stored_state_problem(stored, identity_keys=spec.identity_keys)
+        if has_resolution_state(stored)
+        else None
+    )
+    if problem is None:
+        problem = next(
+            (
+                f"{text_key} must be text or null"
+                for text_key in (VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY)
+                if value.get(text_key) is not None and not isinstance(value.get(text_key), str)
+            ),
+            None,
+        )
+    # A value re-read under the legacy rule (an old container a validator left
+    # unresolved) is not a broken record; only one read as invalid is.
+    broken = problem is not None and (
+        value.get(VALIDATOR_EXPLANATION_KEY) == INVALID_RECORD_EXPLANATION
+        or not has_resolution_state(stored)
+    )
+    if broken:
+        logger.warning(
+            "Review row reads an unreadable resolvable value as unresolved: "
+            "envelope_id=%s envelope_revision=%s object_id=%s object_type=%s value_path=%r: %s",
+            envelope_id, envelope_revision, stable_object_id(domain_object),
+            domain_object.object_type, path_text, problem,
+        )
+    state, outcome = str(value[RESOLUTION_STATE_KEY]), str(value[LOOKUP_OUTCOME_KEY])
+    mention = value.get(spec.mention_key)
+    override = value.get(CURATOR_OVERRIDE_KEY) if not broken and is_curator_override(value) else None
+    return _ValueReading(
+        path=value_path,
+        spec=spec,
+        reviewed=DomainEnvelopeReviewResolvedValue(
+            value_path=path_text,
+            display_text=display_text(
+                value,
+                {
+                    role: key
+                    for role, key in (
+                        ("label", spec.label_key),
+                        ("id", spec.id_key),
+                        ("mention", spec.mention_key),
+                    )
+                    if key
+                }
+                | ({"validated": list(spec.validated_keys)} if spec.validated_keys else {}),
+            ),
+            mention=mention.strip() if isinstance(mention, str) and mention.strip() else None,
+            resolution_state=UNRESOLVED if broken else state,
+            lookup_outcome=OUTCOME_INVALID_SCHEMA if broken else outcome,
+            lookup_result=LOOKUP_OUTCOME_LABELS[OUTCOME_INVALID_SCHEMA if broken else outcome],
+            validator_explanation=None if broken else value.get(VALIDATOR_EXPLANATION_KEY),
+            validator_curator_message=None if broken else value.get(VALIDATOR_CURATOR_MESSAGE_KEY),
+            issue=_UNREADABLE_ISSUE if broken else None,
+            curator_override=(
+                DomainEnvelopeReviewCuratorOverride(
+                    actor_id=str(override["actor_id"]), at=str(override["at"]),
+                )
+                if override is not None
+                else None
+            ),
+            override_disagreements=list(override_disagreements) if override is not None else [],
+            identity_field_paths=[
+                f"{path_text}.{key}" if path_text else key for key in spec.identity_keys
+            ],
+            id_key=spec.id_key,
+            label_key=spec.label_key,
+            validated_keys=list(spec.validated_keys),
+            stored_identity={key: copy.deepcopy(stored.get(key)) for key in spec.identity_keys},
+            # A saved profile's attribute values take a whole-value replace
+            # (not replace_identity), whose `before` is the value as stored.
+            stored_value=(
+                copy.deepcopy(dict(stored)) if path_text and is_generic_attribute_path(path_text) else None
+            ),
+            # Curator overrides follow the patch rules: a protected value field blocks them.
+            container_protected=(
+                path_text in field_definitions
+                and _field_editability(field_definitions[path_text])[1]["protected"]
+            ),
+        ),
+        value=value,
+    )
+
+
+def _open_override_disagreements(envelope: DomainEnvelope) -> dict[str, dict[str, list[str]]]:
+    """Open validator-disagrees-with-override warnings: {object id: {value path: [messages]}}.
+
+    The warning names the overridden value's payload path, or the object
+    itself for a resolvable object root (value path "").
+    """
+
+    object_id_by_ref = _object_id_by_ref(envelope)
+    disagreements: dict[str, dict[str, list[str]]] = {}
+    for finding in envelope.validation_findings:
+        if (
+            finding.code != CURATOR_OVERRIDE_DISAGREEMENT_CODE
+            or finding.status is not ValidationFindingStatus.OPEN
+        ):
+            continue
+        object_id, field_path = _finding_target(finding, object_id_by_ref)
+        if object_id is None:
+            continue
+        disagreements.setdefault(object_id, {}).setdefault(field_path or "", []).append(finding.message)
+    return disagreements
+
+def _concrete_value_paths(
+    node: Any,
+    tokens: Sequence[str | int],
+    walked: tuple[str | int, ...],
+) -> Iterable[tuple[str | int, ...]]:
+    """Payload paths of the mappings a declared path names; unindexed lists fan out."""
+
+    if tokens and isinstance(tokens[0], int):
+        if isinstance(node, list) and tokens[0] < len(node):
+            yield from _concrete_value_paths(node[tokens[0]], tokens[1:], (*walked, tokens[0]))
+        return
+    if isinstance(node, list):
+        for index, item in enumerate(node):
+            yield from _concrete_value_paths(item, tokens, (*walked, index))
+        return
+    if not isinstance(node, Mapping):
+        return
+    if not tokens:
+        yield walked
+        return
+    if tokens[0] in node:
+        yield from _concrete_value_paths(node[tokens[0]], tokens[1:], (*walked, tokens[0]))
 
 def _workspace_group_fields(
     display_config: Mapping[str, Any],

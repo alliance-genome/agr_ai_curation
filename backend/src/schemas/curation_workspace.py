@@ -988,6 +988,141 @@ class DomainEnvelopeValidationSummaryProjection(CurationWorkspaceBaseModel):
     findings: list[DomainEnvelopeValidationFindingProjection] = Field(default_factory=list)
 
 
+class DomainEnvelopeReviewCuratorOverride(CurationWorkspaceBaseModel):
+    """Who set a value's identity by curator validation override, and when."""
+
+    actor_id: str = Field(description="The curator who made the override")
+    at: str = Field(description="When the override was made (ISO 8601)")
+
+
+class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
+    """One validated value a review field shows: the paper's wording and the validation result.
+
+    Read from the stored value with the shared resolvable-value rules
+    (``src.lib.domain_packs.resolvable_values``), including the read-time
+    legacy rule for values stored before resolution tracking (ALL-1283). A
+    stored value that breaks the contract reads as unresolved/invalid_schema
+    with a curator-facing ``issue``.
+    """
+
+    value_path: str = Field(description="Payload path of the value; empty for the object itself")
+    display_text: str = Field(description='The value as validated: "label (ID)", or UNRESOLVED')
+    mention: str | None = Field(
+        default=None,
+        description='Paper wording; a legacy value\'s stored text reads "... (legacy, unverified)"',
+    )
+    resolution_state: str = Field(description="resolved or unresolved")
+    lookup_outcome: str = Field(description="Code of the lookup outcome")
+    lookup_result: str = Field(description='The lookup outcome in plain words, e.g. "Not found"')
+    validator_explanation: str | None = Field(
+        default=None,
+        description="The validator's own explanation, or the fixed not-validated/legacy sentence",
+    )
+    validator_curator_message: str | None = Field(
+        default=None,
+        description="The validator's curator message, kept apart from its explanation",
+    )
+    issue: str | None = Field(
+        default=None,
+        description=(
+            "A curator-facing sentence when the stored value could not be read; the value "
+            "then reads as unresolved (the technical detail is logged)"
+        ),
+    )
+    curator_override: DomainEnvelopeReviewCuratorOverride | None = Field(
+        default=None,
+        description="Set when a curator's identity edit resolved the value (lookup_outcome curator_override)",
+    )
+    override_disagreements: list[str] = Field(
+        default_factory=list,
+        description="Open warnings where a validator disagrees with the curator override",
+    )
+    identity_field_paths: list[str] = Field(
+        default_factory=list,
+        description="Payload paths of the value's identity keys (what a curator edits or clears)",
+    )
+    id_key: str | None = Field(default=None, description="The value's identifier key (e.g. curie)")
+    label_key: str | None = Field(default=None, description="The value's name key (e.g. name)")
+    validated_keys: list[str] = Field(
+        default_factory=list,
+        description="Further identity keys only a validator fills (e.g. taxon)",
+    )
+    stored_identity: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Each identity key's value as stored (null when absent): the `before` of a "
+            "replace_identity curator override"
+        ),
+    )
+    stored_value: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "For a saved profile's attribute value only: the value as stored, the `before` of "
+            "its whole-value replace override (profile values take no replace_identity)"
+        ),
+    )
+    container_protected: bool = Field(
+        default=False,
+        description="The value's own field is protected, which blocks a curator override",
+    )
+
+    @model_validator(mode="after")
+    def _check_vocabularies(self) -> "DomainEnvelopeReviewResolvedValue":
+        from src.lib.domain_packs.resolvable_values import (
+            LOOKUP_OUTCOME_LABELS,
+            LOOKUP_OUTCOMES,
+            OUTCOME_CURATOR_OVERRIDE,
+            RESOLUTION_STATES,
+            UNRESOLVED,
+        )
+
+        if self.resolution_state not in RESOLUTION_STATES:
+            raise ValueError(f"resolution_state must be one of {RESOLUTION_STATES}")
+        if self.issue is not None and self.resolution_state != UNRESOLVED:
+            raise ValueError("an unreadable stored value reads as unresolved")
+        if (self.curator_override is not None) != (self.lookup_outcome == OUTCOME_CURATOR_OVERRIDE):
+            raise ValueError("a curator_override outcome carries its override record, and only it")
+        if self.override_disagreements and self.curator_override is None:
+            raise ValueError("only a curator override has override disagreements")
+        if self.lookup_outcome not in LOOKUP_OUTCOMES:
+            raise ValueError(f"lookup_outcome must be one of {LOOKUP_OUTCOMES}")
+        if self.lookup_result != LOOKUP_OUTCOME_LABELS[self.lookup_outcome]:
+            raise ValueError("lookup_result must be the plain words for lookup_outcome")
+        return self
+
+
+class DomainEnvelopeReviewFieldResolution(CurationWorkspaceBaseModel):
+    """What a review field shows for the validated values it is, belongs to, or contains."""
+
+    display_text: str = Field(
+        description=(
+            'Main cell text: the validated value, "label (ID)", or UNRESOLVED; for a '
+            "value's own leaf, that leaf in plain words"
+        ),
+    )
+    values: list[DomainEnvelopeReviewResolvedValue] = Field(
+        min_length=1,
+        description="Each validated value behind the field, in payload order",
+    )
+    leaf_key: str | None = Field(
+        default=None,
+        description=(
+            "The contract key (mention, resolution_state, lookup_outcome, validator_explanation, "
+            "validator_curator_message) when the field is one of its value's own leaves"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_leaf_key(self) -> "DomainEnvelopeReviewFieldResolution":
+        from src.lib.domain_packs.resolvable_values import CONTRACT_KEYS
+
+        if self.leaf_key is not None and self.leaf_key not in CONTRACT_KEYS:
+            raise ValueError(f"leaf_key must be one of {CONTRACT_KEYS}")
+        if self.leaf_key is not None and len(self.values) != 1:
+            raise ValueError("a value's own leaf belongs to exactly one value")
+        return self
+
+
 class DomainEnvelopeReviewRowSummaryField(CurationWorkspaceBaseModel):
     """One provider-neutral summary field projected from a domain envelope object."""
 
@@ -1001,6 +1136,13 @@ class DomainEnvelopeReviewRowSummaryField(CurationWorkspaceBaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Domain-pack-owned metadata for this projected field",
+    )
+    resolution: DomainEnvelopeReviewFieldResolution | None = Field(
+        default=None,
+        description=(
+            "Extracted vs validated reading when the field is, belongs to, or contains "
+            "declared resolvable values"
+        ),
     )
 
 
@@ -2627,6 +2769,9 @@ __all__ = [
     "CurationWorkspaceResponse",
     "DomainEnvelopeEvidenceAnchorProjection",
     "DomainEnvelopeProjectionRef",
+    "DomainEnvelopeReviewCuratorOverride",
+    "DomainEnvelopeReviewFieldResolution",
+    "DomainEnvelopeReviewResolvedValue",
     "DomainEnvelopeReviewRow",
     "DomainEnvelopeReviewRowSummaryField",
     "DomainEnvelopeReviewRowsResponse",

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import theme, { createAppTheme } from '@/theme'
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
 import HorizontalCurationGrid from './HorizontalCurationGrid'
+import { formatHorizontalGridValue } from './horizontalGridFormatting'
 import {
   HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
   type HorizontalGridColumn,
@@ -86,15 +87,22 @@ function fieldCell(
     fieldPath,
     hasField,
     value,
+    displayText: hasField ? formatHorizontalGridValue(value) : null,
+    resolution: null,
+    resolutionDetails: [],
+    resolutionLinesId: null,
+    resolutionDescribedBy: [],
     required: hasField ? false : null,
     readOnly: hasField ? false : null,
+    curatorOverride: false,
+    overrideDisagreements: [],
+    overrideTarget: null,
     staleValidation: hasField ? false : null,
     state: hasField ? state : null,
     fieldValidation: null,
     evidence: [],
     validation: emptyValidation,
     extractorComparison: null,
-    valueSource: 'canonical',
   }
 }
 
@@ -176,6 +184,90 @@ describe('HorizontalCurationGrid', () => {
       'Rationale: Knockdown removed the phenotype.',
       'Rationale: Not recorded',
     ])
+  })
+
+  it('shows validated values or UNRESOLVED, with the paper wording on its own line', () => {
+    const gridRow = row()
+    gridRow.cells[0] = {
+      ...fieldCell('field:alpha', 'alpha', null),
+      displayText: 'UNRESOLVED',
+      resolution: {
+        display_text: 'UNRESOLVED',
+        values: [{
+          value_path: 'alpha',
+          display_text: 'UNRESOLVED',
+          mention: 'the wording in the paper',
+          resolution_state: 'unresolved',
+          lookup_outcome: 'not_validated',
+          lookup_result: 'Not validated yet',
+          validator_explanation: 'Not validated yet.',
+          validator_curator_message: null,
+          override_disagreements: [],
+          identity_field_paths: ['alpha'],
+          id_key: 'curie',
+          label_key: 'name',
+          validated_keys: [],
+          stored_identity: {},
+          container_protected: false,
+        }],
+      },
+    }
+    gridRow.cells[0].resolutionDetails = gridRow.cells[0].resolution!.values
+    gridRow.cells[0].resolutionLinesId = 'lines-alpha'
+    gridRow.cells[0].resolutionDescribedBy = ['lines-alpha']
+    gridRow.cells[2] = {
+      ...fieldCell('field:gamma', 'gamma', { curie: 'ONT:1', name: 'term one' }),
+    }
+
+    renderGrid(model([gridRow]))
+
+    const values = [...document.querySelectorAll('[data-slot="field-value"]')].map((node) => node.textContent)
+    expect(values).toEqual(['UNRESOLVED', 'term one (ONT:1)'])
+    expect(document.querySelector('[data-slot="field-paper-wording"]')).toHaveTextContent(
+      'Paper wording: the wording in the paper',
+    )
+    expect(document.querySelector('[data-slot="field-lookup-result"]')).toHaveTextContent(
+      'Lookup result: Not validated yet',
+    )
+    expect(screen.queryByText(/"curie"/)).not.toBeInTheDocument()
+  })
+
+  it('marks a curator override and shows an open validator disagreement', () => {
+    const message = 'Validator disagrees with the curator override: its lookup result is Not found.'
+    const gridRow = row()
+    const value = {
+      value_path: 'alpha',
+      display_text: 'term one (ONT:1)',
+      mention: 'the wording in the paper',
+      resolution_state: 'resolved' as const,
+      lookup_outcome: 'curator_override',
+      lookup_result: 'Curator override',
+      validator_explanation: null,
+      validator_curator_message: null,
+      curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
+      override_disagreements: [message],
+      identity_field_paths: ['alpha'],
+      id_key: 'curie',
+      label_key: 'name',
+      validated_keys: [],
+      stored_identity: {},
+      container_protected: false,
+    }
+    gridRow.cells[0] = {
+      ...fieldCell('field:alpha', 'alpha', 'ONT:1', true, 'needs-review'),
+      displayText: 'ONT:1',
+      resolution: { display_text: 'ONT:1', values: [value] },
+      resolutionDetails: [value],
+      resolutionLinesId: 'lines-alpha',
+      resolutionDescribedBy: ['lines-alpha'],
+      curatorOverride: true,
+      overrideDisagreements: [message],
+    }
+
+    renderGrid(model([gridRow]))
+
+    expect(document.querySelector('[data-slot="field-override-badge"]')).toHaveTextContent('Curator override')
+    expect(document.querySelector('[data-slot="field-override-disagreement"]')).toHaveTextContent(message)
   })
 
   it('ports the prototype compact state surfaces and anchored action layout in light mode', () => {

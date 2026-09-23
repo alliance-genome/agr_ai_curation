@@ -32,8 +32,12 @@ import {
   type HorizontalGridModel,
   type HorizontalGridRow,
 } from './horizontalGridModel'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
-import { HorizontalGridRationaleLine } from './HorizontalGridCells'
+import { HORIZONTAL_GRID_UNRESOLVED_TEXT } from './horizontalGridFormatting'
+import {
+  HorizontalGridOverrideBadge,
+  HorizontalGridRationaleLine,
+  HorizontalGridResolutionLines,
+} from './HorizontalGridCells'
 import { horizontalGridValidationPreviewCounts } from './horizontalGridValidationPreview'
 
 const CONTEXT_COLUMN_WIDTH = 220
@@ -91,15 +95,21 @@ function DefaultFieldCell({ cell }: HorizontalGridFieldRenderArgs) {
     )
   }
 
-  const value = formatHorizontalGridValue(cell.value)
+  const value = cell.displayText
   return (
-    <Typography
-      aria-label={value === null ? 'Empty value' : undefined}
-      sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}
-      variant="body2"
-    >
-      {value ?? '—'}
-    </Typography>
+    <Stack minWidth={0} spacing={0.25}>
+      <Typography
+        aria-label={value === null ? 'Empty value' : undefined}
+        color={value === HORIZONTAL_GRID_UNRESOLVED_TEXT ? 'error.main' : undefined}
+        data-slot="field-value"
+        sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}
+        variant="body2"
+      >
+        {value ?? '—'}
+      </Typography>
+      <HorizontalGridOverrideBadge cell={cell} />
+      <HorizontalGridResolutionLines cell={cell} />
+    </Stack>
   )
 }
 

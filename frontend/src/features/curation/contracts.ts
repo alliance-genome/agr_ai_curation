@@ -124,12 +124,68 @@ export interface DomainEnvelopeValidationSummaryProjection {
   findings: DomainEnvelopeValidationFindingProjection[]
 }
 
+export type ResolutionState = 'resolved' | 'unresolved'
+
+/** One validated value behind a review field: the paper's wording and the validation result. */
+export interface DomainEnvelopeReviewResolvedValue {
+  value_path: string
+  /** "label (ID)" when resolved, otherwise the literal UNRESOLVED. */
+  display_text: string
+  /** Paper wording; a legacy value reads "... (legacy, unverified)". */
+  mention?: string | null
+  resolution_state: ResolutionState
+  /** Backend-owned lookup outcome code (resolvable_values.LookupOutcome). */
+  lookup_outcome: string
+  /** The lookup outcome in plain words, e.g. "Not found". */
+  lookup_result: string
+  validator_explanation?: string | null
+  validator_curator_message?: string | null
+  /** A plain sentence when the stored value could not be read; it then reads as unresolved. */
+  issue?: string | null
+  /** Set when a curator's identity edit resolved the value (lookup_outcome curator_override). */
+  curator_override?: DomainEnvelopeReviewCuratorOverride | null
+  /** Open warnings where a validator disagrees with the curator override. */
+  override_disagreements: string[]
+  /** Payload paths of the value's identity keys: what a curator edits, or clears to remove an override. */
+  identity_field_paths: string[]
+  /** The value's identifier key (e.g. curie). */
+  id_key: string | null
+  /** The value's name key (e.g. name). */
+  label_key: string | null
+  /** Further identity keys only a validator fills (e.g. taxon). */
+  validated_keys: string[]
+  /** Each identity key's value as stored (null when absent): a replace_identity `before`. */
+  stored_identity: Record<string, unknown>
+  /** A saved profile's attribute value only: the value as stored, for its whole-value replace. */
+  stored_value?: Record<string, unknown> | null
+  /** The value's own field is protected, which blocks a curator override. */
+  container_protected: boolean
+}
+
+export interface DomainEnvelopeReviewCuratorOverride {
+  actor_id: string
+  /** ISO 8601 time of the override. */
+  at: string
+}
+
+export interface DomainEnvelopeReviewFieldResolution {
+  /**
+   * Main cell text: the validated value or UNRESOLVED, never paper wording.
+   * For one of a value's own leaves, that leaf in plain words.
+   */
+  display_text: string
+  values: DomainEnvelopeReviewResolvedValue[]
+  /** Set when the field is one of its value's own leaves (mention, lookup_outcome, ...). */
+  leaf_key?: string | null
+}
+
 export interface DomainEnvelopeReviewRowSummaryField {
   field_path: string
   label: string
   value?: unknown | null
   field_type?: string | null
   metadata: Record<string, unknown>
+  resolution?: DomainEnvelopeReviewFieldResolution | null
 }
 
 export interface DomainEnvelopeReviewRow {
@@ -162,7 +218,7 @@ export interface DomainEnvelopeReviewRowsResponse {
 }
 
 export interface ValidationCandidateMatch {
-  label: string
+  label: string | null
   identifier?: string | null
   matched_value?: string | null
   score?: number | null

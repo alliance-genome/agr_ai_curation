@@ -156,6 +156,48 @@ describe('workspace envelope object review rows', () => {
     expect(rows.every((row) => row.reviewRow?.metadata.semantic_source === 'domain_envelope.extracted_objects')).toBe(true)
   })
 
+  it('carries each field\'s extracted vs validated reading with the regenerated review row', () => {
+    const row = reviewRow('tmem67-disease', 'Disease')
+    row.summary_fields = [
+      {
+        field_path: 'disease_term',
+        label: 'Disease term',
+        value: { mention: 'kidney cysts', curie: null, name: null },
+        field_type: 'object',
+        metadata: {},
+        resolution: {
+          display_text: 'UNRESOLVED',
+          values: [
+            {
+              value_path: 'disease_term',
+              display_text: 'UNRESOLVED',
+              mention: 'kidney cysts',
+              resolution_state: 'unresolved',
+              lookup_outcome: 'ambiguous',
+              lookup_result: 'Several matches',
+              validator_explanation: 'Two terms fit the wording equally well.',
+              validator_curator_message: null,
+              override_disagreements: [],
+              identity_field_paths: ['disease_term.curie', 'disease_term.name'],
+              id_key: 'curie',
+              label_key: 'name',
+              validated_keys: [],
+              stored_identity: {},
+              container_protected: false,
+            },
+          ],
+        },
+      },
+    ]
+
+    const [projected] = buildWorkspaceEnvelopeObjectReviewRows({
+      candidates: [candidateForObject('tmem67-disease')],
+      reviewRowResponses: [reviewRowsResponse([row])],
+    })
+
+    expect(projected.reviewRow?.summary_fields[0]?.resolution).toEqual(row.summary_fields[0]!.resolution)
+  })
+
   it('keeps missing review rows explicit instead of reading candidate draft semantics', () => {
     const [row] = buildWorkspaceEnvelopeObjectReviewRows({
       candidates: [candidateForObject('tmem67-gene')],
