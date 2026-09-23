@@ -15,6 +15,7 @@ from src.lib.config import agent_loader, agent_sources, schema_discovery
 from src.lib.curation_workspace.extraction_results import (
     build_extraction_envelope_candidate_with_evidence,
 )
+from src.lib.domain_packs.resolvable_values import UNRESOLVED, unresolved_value
 from src.schemas.models import LEGACY_SEMANTIC_LIST_FIELDS
 
 
@@ -102,11 +103,14 @@ def test_disease_extractor_schema_accepts_pending_disease_annotation_output():
     assert obj.object_role == "curatable_unit"
     assert obj.model_ref == DISEASE_MODEL_ID
     assert obj.definition_state.value == "in_development"
-    assert obj.payload["disease_annotation_object"] == {
-        "curie": "DOID:0050434",
-        "name": "Andersen-Tawil syndrome",
-    }
-    assert obj.payload["data_provider"] == {"abbreviation": "ZFIN"}
+    # The extractor's DOID/name are proposals; the term is unresolved until validated.
+    assert obj.payload["disease_annotation_object"] == unresolved_value(
+        "Andersen-Tawil syndrome",
+        identity_keys=("curie", "name"),
+        proposed_curie="DOID:0050434",
+        proposed_name="Andersen-Tawil syndrome",
+    )
+    assert obj.payload["data_provider"] == unresolved_value("ZFIN", identity_keys=("abbreviation",))
     assert obj.evidence_record_ids == [
         "ats-model-evidence-1",
         "ats-cohort-evidence-1",
@@ -119,14 +123,32 @@ def test_disease_extractor_schema_accepts_pending_disease_annotation_output():
 
 def test_disease_extractor_schema_accepts_label_backed_pending_disease_candidates():
     payload = _valid_disease_extractor_payload()
-    del payload["curatable_objects"][0]["payload"]["disease_annotation_object"]["curie"]
+    del payload["curatable_objects"][0]["payload"]["disease_annotation_object"]["proposed_curie"]
 
     envelope = _validate_disease_extractor_payload(payload)
 
     obj = envelope.curatable_objects[0]
-    assert obj.payload["disease_annotation_object"] == {
-        "name": "Andersen-Tawil syndrome",
-    }
+    assert obj.payload["disease_annotation_object"] == unresolved_value(
+        "Andersen-Tawil syndrome",
+        identity_keys=("curie", "name"),
+        proposed_name="Andersen-Tawil syndrome",
+    )
+
+
+def test_disease_extractor_raw_mentions_never_fall_back_to_the_disease_term_name():
+    """Regression (ALL-1283, schema.py :73-77): an inferred raw mention is the paper's
+    ``mention`` only; the disease term name never stands in for a missing one."""
+
+    payload = _valid_disease_extractor_payload()
+    payload["metadata"]["raw_mentions"] = []
+    disease_payload = payload["curatable_objects"][0]["payload"]
+    disease_payload["disease_annotation_object"]["name"] = "Andersen-Tawil syndrome"
+    del disease_payload["mention"]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _validate_disease_extractor_payload(payload)
+
+    assert "metadata.raw_mentions" in str(exc_info.value)
 
 
 def test_disease_extractor_schema_canonicalizes_pending_scaffold_fields():
@@ -193,15 +215,15 @@ def test_disease_extractor_schema_rejects_legacy_flat_disease_payload_fields():
 
     message = str(exc_info.value)
     assert "legacy flat disease helper fields" in message
-    assert "disease_annotation_object.name with optional curie" in message
+    assert "disease_annotation_object.mention (validators fill name and curie)" in message
 
 
 @pytest.mark.parametrize(
     "field_path",
     [
         "mention",
-        "disease_annotation_object.name",
-        "data_provider.abbreviation",
+        "disease_annotation_object.mention",
+        "data_provider.mention",
     ],
 )
 def test_disease_extractor_schema_rejects_blank_required_payload_values(
@@ -383,9 +405,10 @@ def test_disease_extractor_fixture_converts_to_pending_domain_envelope():
     assert converted.domain_pack_id == DISEASE_DOMAIN_PACK_ID
     assert converted.extracted_objects[0].object_type == DISEASE_OBJECT_TYPE
     assert converted.extracted_objects[0].status.value == "pending"
-    assert converted.extracted_objects[0].payload["disease_annotation_object"]["curie"] == (
-        "DOID:0050434"
-    )
+    disease_term = converted.extracted_objects[0].payload["disease_annotation_object"]
+    assert disease_term["proposed_curie"] == "DOID:0050434"
+    assert disease_term["curie"] is None
+    assert disease_term["resolution_state"] == UNRESOLVED
     assert converted.metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert converted.metadata["legacy_semantic_lists"] == []
     assert validate_pending_disease_envelope(converted) == ()
@@ -395,8 +418,8 @@ def test_disease_extractor_fixture_converts_to_pending_domain_envelope():
     "field_path",
     [
         "mention",
-        "disease_annotation_object.name",
-        "data_provider.abbreviation",
+        "disease_annotation_object.mention",
+        "data_provider.mention",
     ],
 )
 def test_pending_disease_validator_rejects_blank_required_payload_values(

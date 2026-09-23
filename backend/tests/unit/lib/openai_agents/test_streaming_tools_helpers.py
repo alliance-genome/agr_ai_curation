@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from src.lib.curation_workspace import adapter_registry
 import src.lib.curation_workspace.domain_envelope_normalization as domain_envelope_normalization
 from src.lib.config import schema_discovery
+from src.lib.domain_packs.resolvable_values import unresolved_value
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.models import (
     GeneExtractionResultEnvelope,
@@ -3157,20 +3158,27 @@ def _chat_dispatch_domain_cases():
                     CuratableObjectEnvelope(
                         object_type="DiseaseAnnotation",
                         pending_ref_id="disease-annotation-1",
+                        # ALL-1283: every value is staged with its paper wording and the
+                        # extractor's proposals; validators read those.
                         payload={
-                            "disease_annotation_object": {
-                                "curie": "DOID:0050434",
-                                "name": "Andersen-Tawil syndrome",
-                            },
-                            "disease_relation_name": "is_model_of",
+                            "disease_annotation_object": unresolved_value(
+                                "Andersen-Tawil syndrome",
+                                identity_keys=("curie", "name"),
+                                proposed_curie="DOID:0050434",
+                            ),
+                            "disease_relation": unresolved_value(
+                                "is_model_of", identity_keys=("name",)
+                            ),
                             "condition_relations": [
                                 {
-                                    "condition_relation_type": {
-                                        "name": "has_condition",
-                                    }
+                                    "condition_relation_type": unresolved_value(
+                                        "has_condition", identity_keys=("name",)
+                                    ),
                                 }
                             ],
-                            "data_provider": {"abbreviation": "MGI"},
+                            "data_provider": unresolved_value(
+                                "MGI", identity_keys=("abbreviation",)
+                            ),
                         },
                     )
                 ],

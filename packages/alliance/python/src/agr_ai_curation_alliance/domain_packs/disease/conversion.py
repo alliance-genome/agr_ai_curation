@@ -28,6 +28,14 @@ from src.schemas.domain_envelope import (
 )
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
+from .._resolvable_payloads import (
+    CONDITION_TERM_COMPONENTS,
+    CONDITION_TERM_IDENTITY_KEYS,
+    ONTOLOGY_TERM_IDENTITY_KEYS,
+    VOCABULARY_TERM_IDENTITY_KEYS,
+    staged_list,
+    staged_value,
+)
 from ..schema_refs import (
     ALLIANCE_LINKML_COMMIT,
     ALLIANCE_LINKML_PROVIDER_KEY,
@@ -127,15 +135,24 @@ class ToolVerifiedDiseaseEvidenceRecord(BaseModel):
 
 
 class ToolVerifiedDiseaseSubject(BaseModel):
-    """Extractor-observed subject context for a pending disease assertion."""
+    """Extractor-observed subject context for a pending disease assertion.
+
+    ``subject_label`` is the subject as the paper names it; ``subject_identifier``
+    is the extractor's proposal, which a validator confirms.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     subject_type: Literal["gene", "allele", "agm", "unknown"]
-    subject_label: StrictStr | None = None
+    subject_label: StrictStr
     subject_identifier: StrictStr | None = None
 
-    @field_validator("subject_label", "subject_identifier", mode="before")
+    @field_validator("subject_label", mode="before")
+    @classmethod
+    def _validate_required_strings(cls, value: object, info) -> object:
+        return _strip_required_string(value, info.field_name)
+
+    @field_validator("subject_identifier", mode="before")
     @classmethod
     def _validate_optional_strings(cls, value: object) -> object:
         return _strip_optional_string(value)
@@ -168,6 +185,11 @@ class ToolVerifiedDiseaseCondition(BaseModel):
     def _validate_has_context(self) -> "ToolVerifiedDiseaseCondition":
         if not any(self.model_dump(exclude_none=True).values()):
             raise ValueError("condition entries must include at least one populated field")
+        for component in CONDITION_TERM_COMPONENTS:
+            if getattr(self, f"{component}_curie") and not getattr(self, f"{component}_name"):
+                raise ValueError(
+                    f"{component}_curie needs {component}_name, the paper's wording for it"
+                )
         return self
 
 
@@ -604,7 +626,7 @@ def validate_disease_extraction_objects(
             errors.append(
                 f"{location}.payload uses legacy flat disease helper fields "
                 f"{', '.join(forbidden_payload_fields)}; use "
-                "disease_annotation_object.name with optional curie instead"
+                "disease_annotation_object.mention (validators fill name and curie) instead"
             )
 
         missing_payload_fields = _missing_or_empty_payload_fields(obj.payload)
@@ -684,32 +706,39 @@ def _evidence_payload(evidence: ToolVerifiedDiseaseEvidenceRecord) -> dict[str, 
 
 
 def _subject_payload(subject: ToolVerifiedDiseaseSubject) -> dict[str, Any]:
-    return subject.model_dump(mode="json", exclude_none=True)
+    return staged_value(
+        subject.subject_label,
+        identity_keys=("subject_identifier", "subject_label"),
+        proposals={"subject_identifier": subject.subject_identifier},
+        subject_type=subject.subject_type,
+    )
 
 
 def _condition_payload(condition: ToolVerifiedDiseaseCondition) -> dict[str, Any]:
+    """One tool-verified condition as resolvable values.
+
+    Each component's name is its paper wording and its CURIE the extractor's
+    proposal; the relation type is the extractor's chosen vocabulary text.
+    """
+
     source = condition.model_dump(mode="json", exclude_none=True)
     relation: dict[str, Any] = {}
     if "condition_relation_type_name" in source:
-        relation["condition_relation_type"] = {
-            "name": source.pop("condition_relation_type_name")
-        }
+        relation["condition_relation_type"] = staged_value(
+            source.pop("condition_relation_type_name"),
+            identity_keys=VOCABULARY_TERM_IDENTITY_KEYS,
+        )
 
     experimental_condition: dict[str, Any] = {}
-    term_specs = (
-        ("condition_class", "condition_class_curie", "condition_class_name"),
-        ("condition_id", "condition_id_curie", "condition_id_name"),
-        ("condition_chemical", "condition_chemical_curie", "condition_chemical_name"),
-        ("condition_taxon", "condition_taxon_curie", "condition_taxon_name"),
-    )
-    for target_key, curie_key, name_key in term_specs:
-        term_payload: dict[str, Any] = {}
-        if curie_key in source:
-            term_payload["curie"] = source.pop(curie_key)
-        if name_key in source:
-            term_payload["name"] = source.pop(name_key)
-        if term_payload:
-            experimental_condition[target_key] = term_payload
+    for component in CONDITION_TERM_COMPONENTS:
+        mention = source.pop(f"{component}_name", None)
+        curie = source.pop(f"{component}_curie", None)
+        if mention is not None:
+            experimental_condition[component] = staged_value(
+                mention,
+                identity_keys=CONDITION_TERM_IDENTITY_KEYS,
+                proposals={"curie": curie},
+            )
 
     for key in (
         "condition_free_text",
@@ -730,15 +759,18 @@ def _payload_for_assertion(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "mention": assertion.mention,
-        "disease_annotation_object": {
-            "curie": assertion.disease_curie,
-            "name": assertion.disease_name,
-        },
+        # The tool-verified DOID/name are the extractor's proposals; only a validator resolves
+        # the term (ALL-1283).
+        "disease_annotation_object": staged_value(
+            assertion.mention,
+            identity_keys=ONTOLOGY_TERM_IDENTITY_KEYS,
+            proposals={"curie": assertion.disease_curie, "name": assertion.disease_name},
+        ),
         "role": assertion.role,
         "confidence": assertion.confidence,
-        "data_provider": {
-            "abbreviation": assertion.data_provider_abbreviation,
-        },
+        "data_provider": staged_value(
+            assertion.data_provider_abbreviation, identity_keys=("abbreviation",)
+        ),
         "evidence_record_ids": list(assertion.evidence_record_ids),
         "evidence_records": [
             _evidence_payload(evidence_by_id[evidence_id])
@@ -747,7 +779,9 @@ def _payload_for_assertion(
     }
 
     if assertion.disease_relation_name is not None:
-        payload["disease_relation_name"] = assertion.disease_relation_name
+        payload["disease_relation"] = staged_value(
+            assertion.disease_relation_name, identity_keys=VOCABULARY_TERM_IDENTITY_KEYS
+        )
     if assertion.subject is not None:
         payload["disease_annotation_subject"] = _subject_payload(assertion.subject)
     if assertion.conditions:
@@ -756,7 +790,9 @@ def _payload_for_assertion(
             for condition in assertion.conditions
         ]
     if assertion.evidence_code_curies:
-        payload["evidence_code_curies"] = list(assertion.evidence_code_curies)
+        payload["evidence_codes"] = staged_list(
+            assertion.evidence_code_curies, identity_keys=("curie",)
+        )
     return payload
 
 

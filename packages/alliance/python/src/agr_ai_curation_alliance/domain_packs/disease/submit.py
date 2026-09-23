@@ -22,7 +22,7 @@ DISEASE_SUBMISSION_BLOCKED_OPERATIONS = (
 DISEASE_REQUIRED_BEFORE_WRITE = (
     "Resolve disease_annotation_subject to a concrete Gene, Allele, or AGM row.",
     "Resolve single_reference.reference_id to the curation DB reference target.",
-    "Resolve evidence_code_curies to curation DB ECO terms.",
+    "Resolve evidence_codes to curation DB ECO terms.",
     "Verify the concrete disease annotation write service.",
 )
 

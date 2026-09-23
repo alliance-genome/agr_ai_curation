@@ -814,12 +814,13 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert disease_relation_binding.input_fields["vocabulary"].value == (
         "Disease Relation"
     )
+    # The extractor's chosen relation text is the input; the validator writes the term.
     assert disease_relation_binding.input_fields["term_name"].path == (
-        "disease_relation_name"
+        "disease_relation.mention"
     )
     assert (
         disease_relation_binding.expected_result_fields["internal_id"]
-        == "disease_relation_id"
+        == "disease_relation.id"
     )
 
     disease_condition_binding = disease_bindings["disease_condition_relation_lookup"]
@@ -1114,7 +1115,8 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "disease",
                 "accepted_prefixes": ["DOID"],
-                "optional_inputs": ["curie", "label"],
+                # The paper wording (label) is required; the proposals are optional.
+                "optional_inputs": ["curie", "name"],
                 "expected_result_fields": {
                     "curie": "disease_annotation_object.curie",
                     "label": "disease_annotation_object.name",
@@ -1127,7 +1129,7 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "accepted_prefixes": ["ECO"],
                 "optional_inputs": ["curie"],
                 "expected_result_fields": {
-                    "curie": "evidence_code_curies",
+                    "curie": "evidence_codes.curie",
                 },
             },
         },

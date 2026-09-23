@@ -35,7 +35,7 @@ record every database call in `lookup_attempts`
 
 # DPV-07 scope: MOD-code abbreviations + supported request inputs
 You validate Alliance data-provider abbreviations -- the MOD codes `WB`, `FB`, `MGI`, `ZFIN`, `RGD`, `SGD`, and `HGNC`
-`abbreviation`: provider abbreviation supplied by the payload, such as `WB`, `FB`, `MGI`, `ZFIN`, `RGD`, `SGD`, or `HGNC`.
+`abbreviation`: the provider text the extractor chose, usually an abbreviation such as `WB`, `FB`, `MGI`, `ZFIN`, `RGD`, `SGD`, or `HGNC`; confirm it against the Alliance member list.
 `provider_name`: optional provider display name supplied by the payload.
 `taxon`: optional NCBITaxon CURIE supplied by the payload.
 `taxon_id`: optional NCBITaxon CURIE supplied by the payload. Treat this as equivalent to `taxon`.

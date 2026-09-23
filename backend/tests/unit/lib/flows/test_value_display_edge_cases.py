@@ -71,7 +71,6 @@ CHEMICAL_RELATIONS = [{
 
 
 @pytest.mark.parametrize("agent_id,pack_id,object_type", [
-    ("disease", "agr.alliance.disease", "DiseaseAnnotation"),
     ("gene_expression", "agr.alliance.gene_expression", "GeneExpressionAnnotation"),
 ])
 @pytest.mark.parametrize("output_format", ["csv", "chat"])
@@ -111,11 +110,15 @@ def _condition_value(mention, curie=None, **extra):
             "lookup_outcome": "matched" if resolved else "not_validated"}
 
 
+@pytest.mark.parametrize("agent_id,pack_id,object_type", [
+    ("phenotype", "agr.alliance.phenotype", "PhenotypeAnnotation"),
+    ("disease", "agr.alliance.disease", "DiseaseAnnotation"),
+])
 @pytest.mark.parametrize("output_format", ["csv", "chat"])
-def test_phenotype_condition_cell_shows_each_part_by_its_own_state(output_format):
-    """ALL-1283: every phenotype condition part is a resolvable value; paper wording stays out."""
+def test_condition_cell_shows_each_part_by_its_own_state(agent_id, pack_id, object_type, output_format):
+    """ALL-1283: every condition part is a resolvable value; paper wording stays out."""
 
-    ref = "object.pack.PhenotypeAnnotation.condition_relations"
+    ref = f"object.pack.{object_type}.condition_relations"
     relations = [{
         "condition_relation_type": {"name": "has_condition", "mention": "has_condition",
                                     "resolution_state": "resolved", "lookup_outcome": "matched"},
@@ -126,10 +129,10 @@ def test_phenotype_condition_cell_shows_each_part_by_its_own_state(output_format
              "condition_summary": "treated with 3 pM rapamycin"},
         ],
     }]
-    item = {"object_type": "PhenotypeAnnotation", "object_id": "a1",
+    item = {"object_type": object_type, "object_id": "a1",
             "payload": {"condition_relations": deepcopy(relations)}}
     bundle = build_flow_output_artifact_bundle(
-        completed_steps=[_envelope_step("phenotype", "agr.alliance.phenotype", [item])],
+        completed_steps=[_envelope_step(agent_id, pack_id, [item])],
         flow_name="C", output_format=output_format,
     )
     [row] = apply_projection_plan(bundle, _plan(output_format, [{"key": "c", "field_ref": ref}])).rows

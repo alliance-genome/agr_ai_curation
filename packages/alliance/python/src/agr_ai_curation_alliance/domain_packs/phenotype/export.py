@@ -27,10 +27,7 @@ from .._export_utils import (
     string_value,
 )
 from .._resolvable_payloads import (
-    CONDITION_TERM_COMPONENTS,
-    CONDITION_TERM_IDENTITY_KEYS,
-    CONDITION_TEXT_FIELDS,
-    VOCABULARY_TERM_IDENTITY_KEYS,
+    export_condition_relations,
     export_identity,
 )
 from ..schema_refs import ALLIANCE_LINKML_COMMIT
@@ -257,8 +254,8 @@ def _project_phenotype_candidate(
             blockers.append(term_blocker)
         elif term is not None:
             phenotype_terms.append(term)
-    condition_relations, condition_blockers = _resolved_condition_relations(
-        candidate, payload
+    condition_relations, condition_blockers = export_condition_relations(
+        candidate=candidate, payload=payload, code=_UNRESOLVED_VALUE_CODE
     )
     blockers.extend(condition_blockers)
 
@@ -362,56 +359,6 @@ def _project_phenotype_candidate(
         },
         [],
     )
-
-
-def _resolved_condition_relations(
-    candidate: Mapping[str, Any],
-    payload: Mapping[str, Any],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Condition relations as validated identities, or blockers for every unresolved part."""
-
-    relations: list[dict[str, Any]] = []
-    blockers: list[dict[str, Any]] = []
-    for relation_index, raw_relation in enumerate(list_value(payload, "condition_relations")):
-        relation_path = f"condition_relations[{relation_index}]"
-        relation_type, blocker = export_identity(
-            candidate=candidate,
-            payload=payload,
-            field_path=f"{relation_path}.condition_relation_type",
-            identity_keys=VOCABULARY_TERM_IDENTITY_KEYS,
-            code=_UNRESOLVED_VALUE_CODE,
-            label=f"Condition relation type {relation_index + 1}",
-        )
-        if blocker is not None:
-            blockers.append(blocker)
-        conditions: list[dict[str, Any]] = []
-        raw_conditions = raw_relation.get("conditions") if isinstance(raw_relation, Mapping) else None
-        for condition_index, raw_condition in enumerate(raw_conditions or []):
-            if not isinstance(raw_condition, Mapping):
-                continue
-            condition_path = f"{relation_path}.conditions[{condition_index}]"
-            condition: dict[str, Any] = {}
-            for component in CONDITION_TERM_COMPONENTS:
-                identity, blocker = export_identity(
-                    candidate=candidate,
-                    payload=payload,
-                    field_path=f"{condition_path}.{component}",
-                    identity_keys=CONDITION_TERM_IDENTITY_KEYS,
-                    code=_UNRESOLVED_VALUE_CODE,
-                    label=f"Condition {component.removeprefix('condition_')} "
-                    f"({relation_index + 1}.{condition_index + 1})",
-                )
-                if blocker is not None:
-                    blockers.append(blocker)
-                elif identity is not None:
-                    condition[component] = identity
-            for text_key in CONDITION_TEXT_FIELDS:
-                if isinstance(raw_condition.get(text_key), str):
-                    condition[text_key] = raw_condition[text_key]
-            conditions.append(condition)
-        if relation_type is not None:
-            relations.append({"condition_relation_type": relation_type, "conditions": conditions})
-    return relations, blockers
 
 
 def _warnings_for(payload_json: Mapping[str, Any]) -> tuple[str, ...]:

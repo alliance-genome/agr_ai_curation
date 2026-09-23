@@ -214,19 +214,6 @@ def missing_field_blockers(
     return blockers
 
 
-def first_string(
-    payload: Mapping[str, Any],
-    field_paths: Sequence[str],
-) -> tuple[str | None, str | None]:
-    """Return the first populated string among field paths and the matched path."""
-
-    for field_path in field_paths:
-        value = string_value(payload, field_path)
-        if value is not None:
-            return value, field_path
-    return None, None
-
-
 def source_reference_id_from_context(
     *,
     candidate: Mapping[str, Any],

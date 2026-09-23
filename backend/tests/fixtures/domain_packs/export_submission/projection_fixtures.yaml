@@ -8,22 +8,45 @@ disease:
     domain_pack_id: agr.alliance.disease
     object_id: disease-annotation-1
     object_type: DiseaseAnnotation
+    # Every value here was resolved by a validator (ALL-1283 extracted-vs-validated shape).
     payload:
       disease_annotation_subject:
         subject_type: gene
         subject_identifier: SGD:S000004578
         subject_label: RAD52
+        mention: Rad52
+        resolution_state: resolved
+        lookup_outcome: matched
+        validator_explanation: Exact identifier match.
       disease_annotation_object:
         curie: DOID:0050730
         name: breast cancer
-      relation:
+        mention: breast cancer
+        resolution_state: resolved
+        lookup_outcome: matched
+        validator_explanation: Exact label match.
+      disease_relation:
         name: is_implicated_in
+        vocabulary: Disease Relation
+        id: "4011"
+        mention: is_implicated_in
+        resolution_state: resolved
+        lookup_outcome: matched
+        validator_explanation: Term found in the Gene Disease Relation subset.
       single_reference:
         reference_id: 508744
-      evidence_code_curies:
-        - ECO:0000314
+      evidence_codes:
+        - curie: ECO:0000314
+          mention: ECO:0000314
+          resolution_state: resolved
+          lookup_outcome: matched
+          validator_explanation: ECO term found.
       data_provider:
         abbreviation: SGD
+        mention: SGD
+        resolution_state: resolved
+        lookup_outcome: matched
+        validator_explanation: Alliance member.
       negated: false
 phenotype:
   candidate:

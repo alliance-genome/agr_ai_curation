@@ -21,12 +21,16 @@ from .._export_utils import (
     candidate_object_type,
     candidate_payload,
     canonical_json,
-    first_string,
-    list_value,
     malformed_payload_blocker,
     mapping_value,
     missing_field_blockers,
     string_value,
+)
+from .._resolvable_payloads import (
+    VOCABULARY_TERM_IDENTITY_KEYS,
+    export_condition_relations,
+    export_identity,
+    export_identity_list,
 )
 from ..schema_refs import ALLIANCE_LINKML_COMMIT
 from .constants import (
@@ -57,15 +61,20 @@ _SUBJECT_TARGETS = {
 }
 
 _REQUIRED_DISEASE_FIELD_PATHS = (
-    "disease_annotation_object.curie",
-    "disease_annotation_subject.subject_type",
-    "disease_annotation_subject.subject_identifier",
+    "disease_annotation_object",
+    "disease_annotation_subject",
+    "disease_relation",
     "single_reference.reference_id",
-    # evidence_code_curies is now a `multivalued: true` field; the bare path requires a
-    # non-empty list (bool([]) is False), identical to the retired `[0]` presence check.
-    "evidence_code_curies",
-    "data_provider.abbreviation",
+    # evidence_codes is a `multivalued: true` field; the bare path requires a non-empty list.
+    "evidence_codes",
+    "data_provider",
 )
+_UNRESOLVED_VALUE_CODE = "alliance.disease.export.unresolved_value"
+_TERM_IDENTITY_KEYS = ("curie", "name")
+_SUBJECT_IDENTITY_KEYS = ("subject_identifier", "subject_label")
+_DATA_PROVIDER_IDENTITY_KEYS = ("abbreviation",)
+_WITH_GENE_IDENTITY_KEYS = ("primary_external_id",)
+_EVIDENCE_CODE_IDENTITY_KEYS = ("curie",)
 
 
 class DiseaseAnnotationExportAdapter(DeterministicExportAdapter):
@@ -205,26 +214,55 @@ def _project_disease_candidate(
         message_prefix="Disease annotation export is missing required context",
     )
 
-    relation_name, relation_field = first_string(
-        payload,
-        ("relation.name", "disease_relation_name"),
-    )
-    if relation_name is None:
-        blockers.append(
-            adapter_blocker(
-                candidate=candidate,
-                code="alliance.disease.export.required_context_missing",
-                field_path="relation.name",
-                message="Disease annotation export is missing required context: relation.name.",
-                details={
-                    "accepted_field_paths": ["relation.name", "disease_relation_name"]
-                },
-            )
+    def identity(field_path: str, identity_keys: tuple[str, ...], label: str) -> dict[str, Any] | None:
+        value, blocker = export_identity(
+            candidate=candidate,
+            payload=payload,
+            field_path=field_path,
+            identity_keys=identity_keys,
+            code=_UNRESOLVED_VALUE_CODE,
+            label=label,
         )
+        if blocker is not None:
+            blockers.append(blocker)
+        return value
 
-    subject_type = string_value(
-        payload,
-        "disease_annotation_subject.subject_type",
+    def identities(field_path: str, identity_keys: tuple[str, ...], label: str) -> list[dict[str, Any]]:
+        values, list_blockers = export_identity_list(
+            candidate=candidate,
+            payload=payload,
+            field_path=field_path,
+            identity_keys=identity_keys,
+            code=_UNRESOLVED_VALUE_CODE,
+            label=label,
+        )
+        blockers.extend(list_blockers)
+        return values
+
+    disease_object = identity("disease_annotation_object", _TERM_IDENTITY_KEYS, "Disease term")
+    subject = identity("disease_annotation_subject", _SUBJECT_IDENTITY_KEYS, "Disease annotation subject")
+    relation = identity("disease_relation", VOCABULARY_TERM_IDENTITY_KEYS, "Disease relation")
+    data_provider = identity("data_provider", _DATA_PROVIDER_IDENTITY_KEYS, "Data provider")
+    evidence_codes = identities("evidence_codes", _EVIDENCE_CODE_IDENTITY_KEYS, "Evidence code")
+    # R4 optional slots. annotation_type is the curation-method constant (manually_curated) the
+    # backend always stages; genetic_sex, disease_qualifiers, and with_or_from are only projected
+    # when the extractor staged them. Each is exported only as its validated identity.
+    annotation_type = identity("annotation_type", VOCABULARY_TERM_IDENTITY_KEYS, "Annotation type")
+    genetic_sex = identity("genetic_sex", VOCABULARY_TERM_IDENTITY_KEYS, "Genetic sex")
+    disease_qualifiers = identities("disease_qualifiers", VOCABULARY_TERM_IDENTITY_KEYS, "Disease qualifier")
+    with_genes = identities("with_genes", _WITH_GENE_IDENTITY_KEYS, "With/from gene")
+    condition_relations, condition_blockers = export_condition_relations(
+        candidate=candidate, payload=payload, code=_UNRESOLVED_VALUE_CODE
+    )
+    blockers.extend(condition_blockers)
+    reference = mapping_value(payload, "single_reference")
+
+    # The subject validator writes subject_type with the subject identity; it is read only once
+    # the subject is resolved.
+    subject_type = (
+        string_value(payload, "disease_annotation_subject.subject_type")
+        if subject is not None
+        else None
     )
     target = _SUBJECT_TARGETS.get(subject_type or "")
     if subject_type and target is None:
@@ -244,61 +282,37 @@ def _project_disease_candidate(
             )
         )
 
-    if blockers or target is None or relation_name is None:
+    if (
+        blockers
+        or target is None
+        or disease_object is None
+        or subject is None
+        or relation is None
+        or data_provider is None
+    ):
         return None, blockers
-
-    disease_object = mapping_value(payload, "disease_annotation_object")
-    subject = mapping_value(payload, "disease_annotation_subject")
-    reference = mapping_value(payload, "single_reference")
-    data_provider = mapping_value(payload, "data_provider")
-    evidence_code_curies = [
-        value.strip()
-        for value in list_value(payload, "evidence_code_curies")
-        if isinstance(value, str) and value.strip()
-    ]
-    condition_relations = list_value(payload, "condition_relations")
-
-    # R4 optional slots. annotation_type is the curation-method constant (manually_curated) the
-    # backend always materializes; it is NOT added to the required field paths. genetic_sex,
-    # disease_qualifiers, and with_or_from are only projected when the extractor staged them.
-    annotation_type_name = string_value(payload, "annotation_type_name")
-    genetic_sex_name = string_value(payload, "genetic_sex_name")
-    disease_qualifier_names = [
-        value.strip()
-        for value in list_value(payload, "disease_qualifier_names")
-        if isinstance(value, str) and value.strip()
-    ]
-    with_gene_identifiers = [
-        value.strip()
-        for value in list_value(payload, "with_gene_identifiers")
-        if isinstance(value, str) and value.strip()
-    ]
 
     linkml_payload = {
         "disease_annotation_subject": {
             "subject_type": subject_type,
-            "primary_external_id": subject.get("subject_identifier"),
-            "label": subject.get("subject_label"),
+            "primary_external_id": subject["subject_identifier"],
+            "label": subject["subject_label"],
         },
         "disease_annotation_object": disease_object,
-        "relation": {"name": relation_name},
+        "relation": relation,
         "negated": bool(payload.get("negated", False)),
         "single_reference": reference,
-        "evidence_codes": [{"curie": curie} for curie in evidence_code_curies],
+        "evidence_codes": evidence_codes,
         "data_provider": data_provider,
     }
-    if annotation_type_name:
-        linkml_payload["annotation_type"] = {"name": annotation_type_name}
-    if genetic_sex_name:
-        linkml_payload["genetic_sex"] = {"name": genetic_sex_name}
-    if disease_qualifier_names:
-        linkml_payload["disease_qualifiers"] = [
-            {"name": name} for name in disease_qualifier_names
-        ]
-    if with_gene_identifiers:
-        linkml_payload["with_or_from"] = [
-            {"gene": {"primary_external_id": gid}} for gid in with_gene_identifiers
-        ]
+    if annotation_type is not None:
+        linkml_payload["annotation_type"] = annotation_type
+    if genetic_sex is not None:
+        linkml_payload["genetic_sex"] = genetic_sex
+    if disease_qualifiers:
+        linkml_payload["disease_qualifiers"] = disease_qualifiers
+    if with_genes:
+        linkml_payload["with_or_from"] = [{"gene": gene} for gene in with_genes]
     if condition_relations:
         linkml_payload["condition_relations"] = condition_relations
 
@@ -320,13 +334,12 @@ def _project_disease_candidate(
                     "diseaseannotationobject_id": {
                         "table": "public.ontologyterm",
                         "lookup_by": "curie",
-                        "value": disease_object.get("curie"),
+                        "value": disease_object["curie"],
                     },
                     "relation_id": {
                         "table": "public.vocabularyterm",
                         "lookup_by": "name",
-                        "value": relation_name,
-                        "source_field": relation_field,
+                        "value": relation["name"],
                     },
                     "evidenceitem_id": {
                         "table": "public.reference",
@@ -336,12 +349,12 @@ def _project_disease_candidate(
                     "dataprovider_id": {
                         "table": "public.organization",
                         "lookup_by": "abbreviation",
-                        "value": data_provider.get("abbreviation"),
+                        "value": data_provider["abbreviation"],
                     },
                     target["subject_fk_column"]: {
                         "table": "public.biologicalentity",
                         "lookup_by": "primaryexternalid",
-                        "value": subject.get("subject_identifier"),
+                        "value": subject["subject_identifier"],
                     },
                 },
                 "condition_relation_join_table": (

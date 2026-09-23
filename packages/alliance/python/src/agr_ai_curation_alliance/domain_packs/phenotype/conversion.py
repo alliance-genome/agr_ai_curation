@@ -796,10 +796,8 @@ def materialize_phenotype_builder_state(
             )
             continue
 
-        evidence_ids = _unique_strings(
-            getattr(candidate, "evidence_record_ids", None)
-            or staged_fields.get("evidence_record_ids")
-        )
+        # The builder workspace owns a candidate's evidence ids; no staged field stands in.
+        evidence_ids = _unique_strings(getattr(candidate, "evidence_record_ids", None))
         if not evidence_ids:
             issues.append(
                 _materialization_issue(

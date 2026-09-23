@@ -19,6 +19,11 @@ from src.lib.domain_packs.materialization import (
     materialize_validator_results_into_envelope,
     project_validation_summary_projections,
 )
+from src.lib.domain_packs.resolvable_values import (
+    OUTCOME_MATCHED,
+    RESOLVED,
+    unresolved_value,
+)
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -105,6 +110,12 @@ def _disease_object_definition():
     )
 
 
+def _staged_list(mentions: list[str], identity_keys: tuple[str, ...]) -> list[dict[str, Any]]:
+    """An extractor-proposed list as the builder stages it: one unresolved value per entry."""
+
+    return [unresolved_value(mention, identity_keys=identity_keys) for mention in mentions]
+
+
 def _load_raw_disease_fixture() -> dict[str, Any]:
     return yaml.safe_load(DISEASE_RAW_FIXTURE_PATH.read_text(encoding="utf-8"))
 
@@ -176,8 +187,8 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     assert {
         "disease_annotation_object",
         "disease_annotation_subject",
-        "disease_relation_name",
-        "evidence_code_curies",
+        "disease_relation",
+        "evidence_codes",
         "condition_relations",
         "data_provider",
     } <= set(definition_state_summary["complete"])
@@ -244,14 +255,21 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "package_id": "agr.alliance",
         "agent_id": "ontology_term_validation",
     }
+    # The paper wording and the extractor's proposals are the inputs (ALL-1283); only the
+    # validator result writes curie/name.
     assert disease_term_binding["input_fields"]["curie"] == {
         "source": "payload",
-        "path": "disease_annotation_object.curie",
+        "path": "disease_annotation_object.proposed_curie",
         "required": False,
     }
     assert disease_term_binding["input_fields"]["label"] == {
         "source": "payload",
-        "path": "disease_annotation_object.name",
+        "path": "disease_annotation_object.mention",
+        "required": True,
+    }
+    assert disease_term_binding["input_fields"]["name"] == {
+        "source": "payload",
+        "path": "disease_annotation_object.proposed_name",
         "required": False,
     }
     assert disease_term_binding["input_fields"]["source_mentions"] == {
@@ -285,7 +303,7 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     )
     assert evidence_code_binding["input_fields"]["curie"] == {
         "source": "payload",
-        "path": "evidence_code_curies",
+        "path": "evidence_codes.mention",
         "required": False,
     }
     assert evidence_code_binding["input_fields"]["ontology_term_type"]["source"] == (
@@ -301,7 +319,7 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "ECO"
     ]
     assert evidence_code_binding["expected_result_fields"] == {
-        "curie": "evidence_code_curies",
+        "curie": "evidence_codes.curie",
     }
 
 
@@ -392,7 +410,8 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields(monkeypa
     assert required_fields == {
         "mention",
         "disease_annotation_object",
-        "disease_annotation_object.name",
+        # The paper wording is required; the validated name is empty until a validator runs.
+        "disease_annotation_object.mention",
         "role",
         "confidence",
         "evidence_record_ids",
@@ -459,12 +478,19 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields(monkeypa
         "condition_relations.conditions"
     ]
     # Per-condition component input_fields use BARE nested paths (the engine substitutes (i, j)).
+    # The extractor's CURIE is a proposal and the component's paper wording rides alongside.
     assert composite_binding["input_fields"]["condition_class_curie"]["path"] == (
-        "condition_relations.conditions.condition_class.curie"
+        "condition_relations.conditions.condition_class.proposed_curie"
     )
+    assert composite_binding["input_fields"]["condition_class_name"]["path"] == (
+        "condition_relations.conditions.condition_class.mention"
+    )
+    assert composite_binding["expected_result_fields"] == {
+        "condition_class_curie": "condition_relations.conditions.condition_class.curie"
+    }
     # The relation context is a sibling under the OUTER multivalued list.
     assert composite_binding["input_fields"]["condition_relation_type"]["path"] == (
-        "condition_relations.condition_relation_type.name"
+        "condition_relations.condition_relation_type.mention"
     )
     assert composite_binding["input_fields"]["evidence_quotes"] == {
         "source": "evidence_record",
@@ -500,7 +526,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields(monkeypa
     # D2 + D3 full LinkML alignment: subject and ECO evidence-code fields are now ACTIVE (unblocked).
     activated_fields = {
         "disease_annotation_subject.subject_identifier": "disease_subject_materialization",
-        "evidence_code_curies": "disease_evidence_code_lookup",
+        "evidence_codes": "disease_evidence_code_lookup",
     }
     for field_path, binding_id in activated_fields.items():
         field = fields_by_path[field_path]
@@ -513,9 +539,9 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields(monkeypa
     # with/from gene identifiers are declared multivalued (bare field_path +
     # multivalued: true), so every staged element is validated, not just [0].
     for multivalued_path in (
-        "evidence_code_curies",
-        "disease_qualifier_names",
-        "with_gene_identifiers",
+        "evidence_codes",
+        "disease_qualifiers",
+        "with_genes",
     ):
         multivalued_field = fields_by_path[multivalued_path]
         assert multivalued_field.metadata["multivalued"] is True
@@ -604,13 +630,22 @@ def test_tool_verified_disease_fixture_converts_to_pending_envelope():
     )
 
     payload = converted_envelope.extracted_objects[0].payload
-    assert payload["disease_annotation_object"] == {
-        "curie": "DOID:0050434",
-        "name": "Andersen-Tawil syndrome",
-    }
-    assert payload["data_provider"] == {"abbreviation": "ZFIN"}
+    # The tool-verified DOID/name are proposals: the term stays unresolved until a validator
+    # resolves it (ALL-1283).
+    assert payload["disease_annotation_object"] == unresolved_value(
+        "Andersen-Tawil syndrome",
+        identity_keys=("curie", "name"),
+        proposed_curie="DOID:0050434",
+        proposed_name="Andersen-Tawil syndrome",
+    )
+    assert payload["data_provider"] == unresolved_value("ZFIN", identity_keys=("abbreviation",))
     assert field_path_exists(payload, "evidence_records[0].verified_quote")
-    assert payload["disease_relation_name"] == "is_model_of"
+    assert payload["disease_relation"] == unresolved_value("is_model_of", identity_keys=("name",))
+    assert payload["disease_annotation_subject"] == unresolved_value(
+        "kcnj2",
+        identity_keys=("subject_identifier", "subject_label"),
+        subject_type="gene",
+    )
 
 
 def test_converted_disease_envelope_omits_legacy_semantic_stores():
@@ -659,9 +694,18 @@ def test_tool_verified_disease_fixture_rejects_malformed_required_data():
     with pytest.raises(ValidationError, match="subject_type"):
         tool_verified_disease_output_to_pending_envelope(missing_subject_type)
 
+    # A subject is named by its paper wording; an identifier alone is not a subject.
+    missing_subject_wording = copy.deepcopy(raw_fixture)
+    missing_subject_wording["disease_assertions"][0]["subject"] = {
+        "subject_type": "gene",
+        "subject_identifier": "ZFIN:ZDB-GENE-000000-1",
+    }
+    with pytest.raises(ValidationError, match="subject_label"):
+        tool_verified_disease_output_to_pending_envelope(missing_subject_wording)
+
 
 def test_disease_evidence_code_lookup_validates_every_staged_element():
-    """A 2+-element evidence_code_curies payload fans out to one validator target
+    """A 2+-element evidence_codes payload fans out to one validator target
     per element — every ECO code is validated, not just ``[0]``."""
 
     pack = _disease_pack()
@@ -674,7 +718,7 @@ def test_disease_evidence_code_lookup_validates_every_staged_element():
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
-                payload={"evidence_code_curies": evidence_codes},
+                payload={"evidence_codes": _staged_list(evidence_codes, ("curie",))},
             )
         ],
     )
@@ -692,9 +736,9 @@ def test_disease_evidence_code_lookup_validates_every_staged_element():
     # One match per staged element, each indexed.
     assert [match.element_index for match in evidence_matches] == [0, 1, 2]
     assert [match.field_path for match in evidence_matches] == [
-        "evidence_code_curies[0]",
-        "evidence_code_curies[1]",
-        "evidence_code_curies[2]",
+        "evidence_codes[0]",
+        "evidence_codes[1]",
+        "evidence_codes[2]",
     ]
 
     # Each element resolves its own curie into the validator request and write-back.
@@ -705,14 +749,14 @@ def test_disease_evidence_code_lookup_validates_every_staged_element():
     assert [
         request.expected_result_fields["curie"] for request in requests
     ] == [
-        "evidence_code_curies[0]",
-        "evidence_code_curies[1]",
-        "evidence_code_curies[2]",
+        "evidence_codes[0].curie",
+        "evidence_codes[1].curie",
+        "evidence_codes[2].curie",
     ]
 
 
 def test_disease_qualifier_cv_lookup_validates_every_staged_element():
-    """A 2+-element disease_qualifier_names payload fans out to one validator target
+    """A 2+-element disease_qualifiers payload fans out to one validator target
     per element — every qualifier name is validated, not just ``[0]``."""
 
     pack = _disease_pack()
@@ -725,7 +769,7 @@ def test_disease_qualifier_cv_lookup_validates_every_staged_element():
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
-                payload={"disease_qualifier_names": qualifier_names},
+                payload={"disease_qualifiers": _staged_list(qualifier_names, ("name",))},
             )
         ],
     )
@@ -743,9 +787,9 @@ def test_disease_qualifier_cv_lookup_validates_every_staged_element():
     # One match per staged element, each indexed.
     assert [match.element_index for match in qualifier_matches] == [0, 1, 2]
     assert [match.field_path for match in qualifier_matches] == [
-        "disease_qualifier_names[0]",
-        "disease_qualifier_names[1]",
-        "disease_qualifier_names[2]",
+        "disease_qualifiers[0]",
+        "disease_qualifiers[1]",
+        "disease_qualifiers[2]",
     ]
 
     # Each element resolves its own term_name into the validator request and write-back.
@@ -758,9 +802,9 @@ def test_disease_qualifier_cv_lookup_validates_every_staged_element():
     assert [
         request.expected_result_fields["term_name"] for request in requests
     ] == [
-        "disease_qualifier_names[0]",
-        "disease_qualifier_names[1]",
-        "disease_qualifier_names[2]",
+        "disease_qualifiers[0].name",
+        "disease_qualifiers[1].name",
+        "disease_qualifiers[2].name",
     ]
 
 
@@ -775,8 +819,14 @@ def test_disease_relation_lookup_projects_sibling_expected_result_fields():
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
                 payload={
-                    "disease_relation_name": "is_implicated_in",
-                    "disease_annotation_subject": {"subject_type": "gene"},
+                    "disease_relation": unresolved_value(
+                        "implicated in", identity_keys=("name",)
+                    ),
+                    "disease_annotation_subject": unresolved_value(
+                        "Appl",
+                        identity_keys=("subject_identifier", "subject_label"),
+                        subject_type="gene",
+                    ),
                 },
             )
         ],
@@ -834,9 +884,18 @@ def test_disease_relation_lookup_projects_sibling_expected_result_fields():
     )
 
     payload = result.envelope.extracted_objects[0].payload
-    assert payload["disease_relation_name"] == "is_implicated_in"
-    assert payload["disease_relation_vocabulary"] == "Gene Disease Relation"
-    assert payload["disease_relation_id"] == "4011"
+    # The validator's term, vocabulary and id land on the relation value; the extractor's
+    # chosen text stays as the value's mention.
+    assert payload["disease_relation"] == {
+        "name": "is_implicated_in",
+        "vocabulary": "Gene Disease Relation",
+        "id": "4011",
+        "mention": "implicated in",
+        "resolution_state": RESOLVED,
+        "lookup_outcome": OUTCOME_MATCHED,
+        "validator_explanation": "Resolved relation vocabulary from fixture.",
+        "validator_curator_message": "Resolved disease relation.",
+    }
     summaries = project_validation_summary_projections(
         result.envelope,
         envelope_revision=1,
@@ -847,9 +906,9 @@ def test_disease_relation_lookup_projects_sibling_expected_result_fields():
         for summary in summaries
         if summary.field_path is not None
     } == {
-        "disease_relation_name": "resolved",
-        "disease_relation_vocabulary": "resolved",
-        "disease_relation_id": "resolved",
+        "disease_relation.name": "resolved",
+        "disease_relation.vocabulary": "resolved",
+        "disease_relation.id": "resolved",
     }
 
 
@@ -866,9 +925,9 @@ def test_disease_condition_relation_lookup_projects_indexed_sibling_fields():
                 payload={
                     "condition_relations": [
                         {
-                            "condition_relation_type": {
-                                "name": "has_condition",
-                            },
+                            "condition_relation_type": unresolved_value(
+                                "has_condition", identity_keys=("name",)
+                            ),
                             "conditions": [
                                 {
                                     "condition_summary": "heat shock",
@@ -945,6 +1004,11 @@ def test_disease_condition_relation_lookup_projects_indexed_sibling_fields():
         "name": "has_condition",
         "vocabulary": "Condition Relation Type",
         "id": "200000001",
+        "mention": "has_condition",
+        "resolution_state": RESOLVED,
+        "lookup_outcome": OUTCOME_MATCHED,
+        "validator_explanation": "Resolved condition relation from fixture.",
+        "validator_curator_message": "Resolved condition relation.",
     }
     summaries = project_validation_summary_projections(
         result.envelope,
@@ -963,7 +1027,7 @@ def test_disease_condition_relation_lookup_projects_indexed_sibling_fields():
 
 
 def test_disease_with_gene_validation_validates_every_staged_element():
-    """A 2+-element with_gene_identifiers payload fans out to one validator target
+    """A 2+-element with_genes payload fans out to one validator target
     per element — every with/from gene is validated, not just ``[0]``."""
 
     pack = _disease_pack()
@@ -976,7 +1040,7 @@ def test_disease_with_gene_validation_validates_every_staged_element():
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
-                payload={"with_gene_identifiers": gene_identifiers},
+                payload={"with_genes": _staged_list(gene_identifiers, ("primary_external_id",))},
             )
         ],
     )
@@ -994,9 +1058,9 @@ def test_disease_with_gene_validation_validates_every_staged_element():
     # One match per staged element, each indexed.
     assert [match.element_index for match in with_gene_matches] == [0, 1, 2]
     assert [match.field_path for match in with_gene_matches] == [
-        "with_gene_identifiers[0]",
-        "with_gene_identifiers[1]",
-        "with_gene_identifiers[2]",
+        "with_genes[0]",
+        "with_genes[1]",
+        "with_genes[2]",
     ]
 
     # Each element resolves its own gene_id into the validator request and write-back.
@@ -1009,9 +1073,9 @@ def test_disease_with_gene_validation_validates_every_staged_element():
     assert [
         request.expected_result_fields["primary_external_id"] for request in requests
     ] == [
-        "with_gene_identifiers[0]",
-        "with_gene_identifiers[1]",
-        "with_gene_identifiers[2]",
+        "with_genes[0].primary_external_id",
+        "with_genes[1].primary_external_id",
+        "with_genes[2].primary_external_id",
     ]
 
 
@@ -1091,7 +1155,7 @@ def test_three_multivalued_disease_bindings_are_batch_enabled():
 
 
 def test_evidence_code_multivalued_field_groups_into_one_batch():
-    """A 2-element evidence_code_curies field drives EXACTLY ONE batch run that
+    """A 2-element evidence_codes field drives EXACTLY ONE batch run that
     receives both jobs and maps each result back to its own request_id resolved
     — proving the batched-agent path resolves the same elements the individual
     path would, with no regression to unresolved."""
@@ -1105,7 +1169,7 @@ def test_evidence_code_multivalued_field_groups_into_one_batch():
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-batch-1",
-                payload={"evidence_code_curies": evidence_codes},
+                payload={"evidence_codes": _staged_list(evidence_codes, ("curie",))},
             )
         ],
     )
@@ -1166,15 +1230,27 @@ def test_evidence_code_multivalued_field_groups_into_one_batch():
     assert len({item.request_id for item in evidence_results}) == 2
 
 
+def _condition_relation_type(mention: str) -> dict[str, Any]:
+    return unresolved_value(mention, identity_keys=("name",))
+
+
+def _condition_term(mention: str, proposed_curie: str) -> dict[str, Any]:
+    return unresolved_value(mention, identity_keys=("curie",), proposed_curie=proposed_curie)
+
+
 def _two_condition_payload() -> dict[str, Any]:
     """A disease annotation carrying one relation with TWO experimental conditions."""
 
     return {
         "mention": "rapamycin-modulated disease model",
-        "disease_annotation_object": {"curie": "DOID:0050730", "name": "x"},
+        "disease_annotation_object": unresolved_value(
+            "rapamycin-modulated disease model",
+            identity_keys=("curie", "name"),
+            proposed_curie="DOID:0050730",
+        ),
         "role": "primary",
         "confidence": "high",
-        "data_provider": {"abbreviation": "MGI"},
+        "data_provider": unresolved_value("MGI", identity_keys=("abbreviation",)),
         "source_mentions": ["rapamycin-modulated disease model"],
         "evidence_record_ids": ["evidence-1"],
         "evidence_records": [
@@ -1188,15 +1264,15 @@ def _two_condition_payload() -> dict[str, Any]:
         ],
         "condition_relations": [
             {
-                "condition_relation_type": {"name": "has_condition"},
+                "condition_relation_type": _condition_relation_type("has_condition"),
                 "conditions": [
                     {
-                        "condition_class": {"curie": "ZECO:0000111"},
-                        "condition_chemical": {"curie": "CHEBI:9168"},
+                        "condition_class": _condition_term("chemical treatment", "ZECO:0000111"),
+                        "condition_chemical": _condition_term("rapamycin", "CHEBI:9168"),
                         "condition_summary": "treated with 3 pM rapamycin",
                     },
                     {
-                        "condition_class": {"curie": "ZECO:0000160"},
+                        "condition_class": _condition_term("temperature exposure", "ZECO:0000160"),
                         "condition_summary": "incubated at 37C",
                     },
                 ],
@@ -1257,8 +1333,11 @@ def test_experimental_condition_binding_fans_out_one_composite_per_condition():
     assert first is not None
     assert second is not None
 
+    # Each component's proposed CURIE and paper wording reach the composite validator.
     assert first.selected_inputs["condition_class_curie"] == "ZECO:0000111"
+    assert first.selected_inputs["condition_class_name"] == "chemical treatment"
     assert first.selected_inputs["condition_chemical_curie"] == "CHEBI:9168"
+    assert first.selected_inputs["condition_chemical_name"] == "rapamycin"
     assert first.selected_inputs["condition_statement"] == "treated with 3 pM rapamycin"
     # Relation context substituted from the OUTER multivalued index (relation 0).
     assert first.selected_inputs["condition_relation_type"] == "has_condition"
@@ -1292,10 +1371,10 @@ def test_two_relations_fan_out_per_relation_and_per_condition():
     # Add a SECOND relation holding one condition.
     payload["condition_relations"].append(
         {
-            "condition_relation_type": {"name": "induced_by"},
+            "condition_relation_type": _condition_relation_type("induced_by"),
             "conditions": [
                 {
-                    "condition_class": {"curie": "ZECO:0000240"},
+                    "condition_class": _condition_term("radiation exposure", "ZECO:0000240"),
                     "condition_summary": "exposed to ionizing radiation",
                 }
             ],
@@ -1355,3 +1434,152 @@ def test_two_relations_fan_out_per_relation_and_per_condition():
         ]
         == "has_condition"
     )
+
+
+# --- ALL-1283: validator write-back onto resolvable values --------------------------------------
+
+
+def _validator_result(request, *, status: str, resolved_values: dict[str, Any], outcome: str):
+    return DomainValidatorResultBase(
+        status=status,
+        request_id=request.request_id,
+        validator_binding_id=request.validator_binding_id,
+        validator_agent=request.validator_agent,
+        target=request.target,
+        resolved_values=resolved_values,
+        resolved_objects=[],
+        missing_expected_fields=[],
+        candidates=[],
+        lookup_attempts=[
+            {
+                "provider": "agr_curation_query",
+                "method": "search_ontology_terms",
+                "query": {"term": "fixture"},
+                "result_count": 1 if outcome == "success" else 0,
+                "outcome": outcome,
+            }
+        ],
+        curator_message="Fixture decision.",
+        explanation="Fixture explanation.",
+    )
+
+
+def _materialize(envelope: DomainEnvelope, binding_id: str, decide) -> dict[str, Any]:
+    pack = _disease_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    matches = [
+        match
+        for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
+        if match.binding.binding_id == binding_id
+    ]
+    inputs = []
+    seen: set[str] = set()
+    for match in matches:
+        request = build_domain_validation_request(match).request
+        assert request is not None
+        if request.request_id in seen:
+            continue
+        seen.add(request.request_id)
+        inputs.append(
+            ValidatorResultMaterializationInput(match=match, request=request, result=decide(request))
+        )
+    result = materialize_validator_results_into_envelope(envelope, pack.metadata, inputs)
+    return result.envelope.extracted_objects[0].payload
+
+
+def _term_envelope() -> DomainEnvelope:
+    return DomainEnvelope(
+        envelope_id="disease-writeback-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneDiseaseAnnotation",
+                pending_ref_id="gene-disease-1",
+                payload={
+                    "mention": "Andersen syndrome",
+                    "disease_annotation_object": unresolved_value(
+                        "Andersen syndrome",
+                        identity_keys=("curie", "name"),
+                        proposed_curie="DOID:0050434",
+                    ),
+                    "source_mentions": ["Andersen syndrome"],
+                },
+            )
+        ],
+    )
+
+
+def test_disease_term_resolves_in_place_and_keeps_the_paper_wording():
+    def decide(request):
+        assert request.selected_inputs["label"] == "Andersen syndrome"
+        assert request.selected_inputs["curie"] == "DOID:0050434"
+        return _validator_result(
+            request,
+            status="resolved",
+            resolved_values={"curie": "DOID:0050434", "label": "Andersen-Tawil syndrome"},
+            outcome="success",
+        )
+
+    payload = _materialize(_term_envelope(), "disease_ontology_term_lookup", decide)
+
+    assert payload["disease_annotation_object"] == {
+        "proposed_curie": "DOID:0050434",
+        "curie": "DOID:0050434",
+        "name": "Andersen-Tawil syndrome",
+        "mention": "Andersen syndrome",
+        "resolution_state": RESOLVED,
+        "lookup_outcome": OUTCOME_MATCHED,
+        "validator_explanation": "Fixture explanation.",
+        "validator_curator_message": "Fixture decision.",
+    }
+
+
+def test_unresolved_disease_term_records_why_and_never_gains_an_identity():
+    def decide(request):
+        return _validator_result(request, status="unresolved", resolved_values={}, outcome="not_found")
+
+    payload = _materialize(_term_envelope(), "disease_ontology_term_lookup", decide)
+
+    term = payload["disease_annotation_object"]
+    assert term["resolution_state"] == "unresolved"
+    assert term["lookup_outcome"] == "not_found"
+    assert term["curie"] is None
+    assert term["name"] is None
+    assert term["mention"] == "Andersen syndrome"
+    assert term["validator_explanation"] == "Fixture explanation."
+
+
+def test_each_evidence_code_records_its_own_validator_result():
+    envelope = DomainEnvelope(
+        envelope_id="disease-eco-writeback-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneDiseaseAnnotation",
+                pending_ref_id="gene-disease-1",
+                payload={"evidence_codes": _staged_list(["ECO:0000315", "IMP"], ("curie",))},
+            )
+        ],
+    )
+
+    def decide(request):
+        if request.selected_inputs["curie"] == "ECO:0000315":
+            return _validator_result(
+                request, status="resolved", resolved_values={"curie": "ECO:0000315"}, outcome="success"
+            )
+        return _validator_result(request, status="unresolved", resolved_values={}, outcome="not_found")
+
+    payload = _materialize(envelope, "disease_evidence_code_lookup", decide)
+
+    resolved, unresolved = payload["evidence_codes"]
+    assert (resolved["curie"], resolved["resolution_state"], resolved["mention"]) == (
+        "ECO:0000315",
+        RESOLVED,
+        "ECO:0000315",
+    )
+    assert (unresolved["curie"], unresolved["resolution_state"], unresolved["lookup_outcome"]) == (
+        None,
+        "unresolved",
+        "not_found",
+    )
+    assert unresolved["mention"] == "IMP"

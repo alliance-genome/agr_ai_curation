@@ -5354,13 +5354,13 @@
           "type": "string"
         },
         {
-          "description": "The exact wording for this entity as it appears in the paper.",
+          "description": "The disease exactly as the paper words it. It stays as the paper's wording and is kept even when no Disease Ontology term matches; the disease specialist decides the term.",
           "name": "mention",
           "required": true,
           "type": "string"
         },
         {
-          "description": "The disease name as the agent read it from the paper.",
+          "description": "The Disease Ontology name the agent proposes for this disease; the disease specialist checks it, and it never replaces the paper's wording.",
           "name": "disease_name",
           "required": true,
           "type": "string"
@@ -5378,7 +5378,7 @@
           "type": "string"
         },
         {
-          "description": "The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).",
+          "description": "The Alliance group the agent chooses for this finding, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human); the data provider specialist confirms it.",
           "name": "data_provider",
           "required": true,
           "type": "string"
@@ -5417,14 +5417,14 @@
         },
         {
           "default": null,
-          "description": "The ID of the gene, allele, or model the disease is associated with.",
+          "description": "The ID the agent proposes for the gene, allele, or model the disease is associated with; the subject specialist confirms it.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The name of the gene, allele, or model the disease is associated with.",
+          "description": "The gene, allele, or model the disease is associated with, as the paper names it. Needed whenever a subject type or ID is given; it stays as the paper's wording.",
           "name": "subject_label",
           "required": false,
           "type": "any"
@@ -5466,7 +5466,7 @@
         },
         {
           "default": null,
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Each condition part carries the paper's wording, plus any term ID the agent proposes for the condition specialist to check. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"
@@ -5987,15 +5987,21 @@
           "type": "string"
         },
         {
+          "description": "The phenotype term as the paper words it. It is kept as the paper wording and staged even when no ontology term matches; the phenotype term specialist decides the term.",
+          "name": "term_mention",
+          "required": true,
+          "type": "string"
+        },
+        {
           "default": null,
-          "description": "The ID of the gene, allele, or model that shows this phenotype.",
+          "description": "The ID the agent proposes for the gene, allele, or model that shows this phenotype; a specialist confirms it before it counts as the subject's ID.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The name of the gene, allele, or model that shows this phenotype.",
+          "description": "The gene, allele, or model that shows this phenotype, as the paper names it. Needed whenever any other subject detail is given.",
           "name": "subject_label",
           "required": false,
           "type": "any"
@@ -6016,14 +6022,14 @@
         },
         {
           "default": null,
-          "description": "The phenotype term ID the agent proposes, if it found one; a term specialist confirms it.",
+          "description": "The phenotype term ID the agent proposes, if the paper gives one; a term specialist confirms it, and it is never shown as the confirmed ID.",
           "name": "term_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The phenotype term name the agent proposes.",
+          "description": "The phenotype term name the agent proposes; kept apart from the confirmed term name.",
           "name": "term_label",
           "required": false,
           "type": "any"
@@ -6044,7 +6050,7 @@
         },
         {
           "default": null,
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Each part of a condition carries the paper's wording, plus any ID the agent proposes for a specialist to confirm. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"

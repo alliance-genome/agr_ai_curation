@@ -78,9 +78,6 @@ EXEMPT_MODELS = {
         "curatable-unit row whose only own label leaf is the free-text statement; the "
         "phenotype terms render through the phenotype_terms list field"
     ),
-    ("agr.alliance.disease", "VocabularyTermSnapshotPayload"): (
-        "declared but referenced by no field (condition_relation_type leaves are declared directly)"
-    ),
 }
 EXEMPT_FIELDS = {
     ("agr.alliance.go", "GOCuratableObject", "provider_context"): (

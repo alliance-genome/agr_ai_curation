@@ -1977,11 +1977,11 @@ tools:
           - name: mention
             type: string
             required: true
-            description: The exact wording for this entity as it appears in the paper.
+            description: The disease exactly as the paper words it. It stays as the paper's wording and is kept even when no Disease Ontology term matches; the disease specialist decides the term.
           - name: disease_name
             type: string
             required: true
-            description: The disease name as the agent read it from the paper.
+            description: The Disease Ontology name the agent proposes for this disease; the disease specialist checks it, and it never replaces the paper's wording.
           - name: role
             type: string
             required: true
@@ -1993,7 +1993,7 @@ tools:
           - name: data_provider
             type: string
             required: true
-            description: The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).
+            description: The Alliance group the agent chooses for this finding, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human); the data provider specialist confirms it.
           - name: evidence_record_ids
             type: array
             required: true
@@ -2020,12 +2020,12 @@ tools:
             type: any
             required: false
             default: null
-            description: The ID of the gene, allele, or model the disease is associated with.
+            description: The ID the agent proposes for the gene, allele, or model the disease is associated with; the subject specialist confirms it.
           - name: subject_label
             type: any
             required: false
             default: null
-            description: The name of the gene, allele, or model the disease is associated with.
+            description: The gene, allele, or model the disease is associated with, as the paper names it. Needed whenever a subject type or ID is given; it stays as the paper's wording.
           - name: disease_relation_name
             type: any
             required: false
@@ -2055,7 +2055,7 @@ tools:
             type: any
             required: false
             default: null
-            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.
+            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Each condition part carries the paper's wording, plus any term ID the agent proposes for the condition specialist to check. Left empty when the paper states no conditions.
           - name: negated
             type: any
             required: false
