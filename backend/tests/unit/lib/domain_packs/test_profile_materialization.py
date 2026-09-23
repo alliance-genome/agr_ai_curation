@@ -475,3 +475,47 @@ def test_genuine_profile_violation_keeps_curator_wording(example):
         )
 
     assert str(exc.value) == "Record does not conform to its saved output structure"
+
+
+# --- ALL-1302: write-back into a profile's resolvable value --------------------
+
+def resolvable(example):
+    raw, cap, pack = example
+    raw["fields"] = [{"key": "gene", "required": True, "value_schema": {"kind": "object", "fields": [
+        {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+        {"key": "gene_id", "value_schema": {"kind": "string"}},
+    ]}}]
+    raw["validator_mappings"][0].update(inputs={"mention": {"field_path": "attributes.gene.mention"}},
+                                        outputs={"identifier": "attributes.gene.gene_id"})
+    staged = {"gene": {"mention": "daf-16", "gene_id": None, "resolution_state": "unresolved",
+                       "lookup_outcome": "not_validated", "validator_explanation": "Not validated yet."}}
+    return prepared(example, attributes=staged)
+
+
+def test_resolved_result_marks_the_value_resolved_and_keeps_its_paper_wording(example):
+    source, context = resolvable(example)
+    output = materialize_profile_validator_results(source, context, results(source, context, [{"identifier": "EX:1"}]))
+    assert output.envelope.extracted_objects[0].payload["attributes"]["gene"] == {
+        "mention": "daf-16", "gene_id": "EX:1", "resolution_state": "resolved", "lookup_outcome": "matched",
+        "validator_explanation": "Fixture lookup", "validator_curator_message": None,
+    }
+    assert output.appended_findings[0].details["materialization"] == "accepted"
+
+
+def test_unresolved_result_records_why_without_touching_identity_or_wording(example):
+    source, context = resolvable(example)
+    output = materialize_profile_validator_results(
+        source, context, results(source, context, [{}], status="unresolved"))
+    gene = output.envelope.extracted_objects[0].payload["attributes"]["gene"]
+    assert gene == {"mention": "daf-16", "gene_id": None, "resolution_state": "unresolved",
+                    "lookup_outcome": "not_found", "validator_explanation": "Fixture lookup",
+                    "validator_curator_message": None}
+    assert output.appended_findings[0].code == "domain_pack.validator_unresolved"
+
+
+def test_resolved_result_without_its_identity_stays_unresolved(example):
+    source, context = resolvable(example)
+    output = materialize_profile_validator_results(source, context, results(source, context, [{}]))
+    gene = output.envelope.extracted_objects[0].payload["attributes"]["gene"]
+    assert (gene["gene_id"], gene["resolution_state"], gene["lookup_outcome"]) == (
+        None, "unresolved", "missing_expected_result_field")

@@ -471,3 +471,27 @@ def test_allele_capability_persistence_uses_new_version_identity(example):
     assert "0.1.1" in select.compile(dialect=postgresql.dialect()).params.values()
     assert "0.1.0" not in select.compile(dialect=postgresql.dialect()).params.values()
     assert db.add.call_args.args[0].capability_fingerprint == cap.fingerprint()
+
+
+def test_overlay_declares_a_resolvable_values_paper_wording_and_resolution_leaves(example):
+    from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOMES, RESOLUTION_STATES
+
+    raw, cap, pack = example
+    raw["fields"] = [{"key": "gene", "display_name": "Gene", "required": True, "value_schema": {
+        "kind": "object", "fields": [
+            {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+            {"key": "gene_id", "value_schema": {"kind": "string"}},
+        ]}}]
+    raw["validator_mappings"][0].update(inputs={"mention": {"field_path": "attributes.gene.mention"}},
+                                        outputs={"identifier": "attributes.gene.gene_id"})
+    receipt, profile = resolve(raw)
+    context = compile_profile_validation(receipt, profile, pack, capabilities=[cap])
+    metadata = context.registry.domain_pack.metadata
+    fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
+    enums = {enum.enum_id: [value.value for value in enum.values] for enum in metadata.enum_definitions}
+    assert fields["attributes.gene.mention"].display_name == "Gene (paper wording)"
+    assert enums[fields["attributes.gene.resolution_state"].enum_ref] == list(RESOLUTION_STATES)
+    assert enums[fields["attributes.gene.lookup_outcome"].enum_ref] == list(LOOKUP_OUTCOMES)
+    assert fields["attributes.gene.lookup_outcome"].display_name == "Gene (lookup result)"
+    assert fields["attributes.gene.validator_explanation"].field_type.value == "string"
+    assert "attributes.gene.validator_curator_message" in fields

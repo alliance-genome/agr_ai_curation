@@ -1294,7 +1294,7 @@ tools:
           - name: source_label
             type: string
             required: false
-            description: The source-paper label or mention when it differs from label.
+            description: The paper's own wording for this object. It is kept as the paper wording; the label is never used in its place.
           - name: description
             type: string
             required: false
@@ -1310,7 +1310,7 @@ tools:
           - name: payload
             type: object
             required: false
-            description: Class-specific evidence-backed payload fields.
+            description: Class-specific evidence-backed payload fields. Write each value's paper wording in the class's paper_wording_fields; never write its system_written_payload_fields, which validation, the builder or the verified evidence record fill in.
           - name: attributes
             type: object
             required: false

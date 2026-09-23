@@ -19,6 +19,7 @@ from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtracti
 from .attributes import normalize_generic_attributes
 from .catalog import GenericClassCatalogEntry, load_generic_class_catalog
 from .constants import GENERIC_MATERIALIZER_ID
+from .values import EVIDENCE_SOURCE_FIELDS, extractor_payload_issues, unresolved_payload
 
 
 class GenericBuilderExtractionOutput(DomainEnvelopeExtractionResult):
@@ -231,6 +232,26 @@ def materialize_generic_builder_state(
                 )
             continue
 
+        raw_payload = staged_fields.get("payload")
+        payload_issues = extractor_payload_issues(
+            raw_payload if isinstance(raw_payload, Mapping) else {},
+            resolvable_fields=entry.resolvable_fields,
+            validator_owned_fields=entry.validator_owned_fields,
+            payload_fields=entry.payload_fields,
+        )
+        if payload_issues:
+            for issue in payload_issues:
+                issues.append(
+                    _issue(
+                        field_path=issue["field_path"],
+                        reason=issue["reason"],
+                        message=issue["message"],
+                        candidate_id=candidate_id,
+                        class_key=class_key,
+                    )
+                )
+            continue
+
         raw_attributes = staged_fields.get("attributes")
         if raw_attributes not in (None, "", []) and not isinstance(raw_attributes, Mapping):
             issues.append(
@@ -244,7 +265,8 @@ def materialize_generic_builder_state(
             )
             continue
         if profile is not None:
-            normalized_attributes, attribute_issues = copy.deepcopy(raw_attributes or {}), []
+            # Staged paper wording enters validation as unresolved, not yet validated.
+            normalized_attributes, attribute_issues = profile.unresolved_attributes(raw_attributes or {}), []
         else:
             normalized_attributes, attribute_issues = normalize_generic_attributes(
                 raw_attributes if isinstance(raw_attributes, Mapping) else {}
@@ -310,9 +332,12 @@ def materialize_generic_builder_state(
                 )
             continue
         pending_ref_id = _pending_ref_id(candidate, staged_fields, index)
-        metadata_refs = [
-            {"metadata_path": f"raw_mentions[{len(raw_mentions)}]", "role": "source_mention"}
-        ]
+        paper_wording = _paper_wording(staged_fields, payload, entry=entry)
+        metadata_refs = (
+            [{"metadata_path": f"raw_mentions[{len(raw_mentions)}]", "role": "source_mention"}]
+            if paper_wording is not None
+            else []
+        )
         for evidence_id in evidence_ids:
             evidence_position = next(
                 (
@@ -329,13 +354,14 @@ def materialize_generic_builder_state(
                         "role": "verified_evidence",
                     }
                 )
-        raw_mentions.append(
-            {
-                "mention": label,
-                "entity_type": entry.display_name,
-                "evidence_record_ids": list(evidence_ids),
-            }
-        )
+        if paper_wording is not None:
+            raw_mentions.append(
+                {
+                    "mention": paper_wording,
+                    "entity_type": entry.display_name,
+                    "evidence_record_ids": list(evidence_ids),
+                }
+            )
         retained_evidence_ids.extend(evidence_ids)
         curatable_objects.append(
             CuratableObjectEnvelope(
@@ -456,14 +482,13 @@ def _payload_for_entry(
     attributes = staged_fields.get("attributes")
     if isinstance(attributes, Mapping) and attributes and "attributes" in payload_fields:
         payload.setdefault("attributes", dict(attributes))
-    _hydrate_common_class_payload_fields(
+    _copy_evidence_source_fields(
         payload,
-        staged_fields=staged_fields,
-        entry=entry,
-        label=label,
+        payload_fields=payload_fields,
         first_evidence_record=first_evidence_record,
     )
-    return payload
+    # Staged paper wording enters validation as unresolved, not yet validated.
+    return unresolved_payload(payload, resolvable_fields=entry.resolvable_fields)
 
 
 def _set_declared_payload_value(
@@ -477,49 +502,34 @@ def _set_declared_payload_value(
         payload[key] = value
 
 
-def _hydrate_common_class_payload_fields(
+def _copy_evidence_source_fields(
     payload: dict[str, Any],
     *,
-    staged_fields: Mapping[str, Any],
-    entry: GenericClassCatalogEntry,
-    label: str,
+    payload_fields: set[str],
     first_evidence_record: Mapping[str, Any] | None,
 ) -> None:
-    payload_fields = set(entry.payload_fields)
-    source_label = _clean_text(staged_fields.get("source_label")) or label
-    if "mention" in payload_fields and _missing_payload_value(payload.get("mention")):
-        payload["mention"] = source_label
-    if "claim_text" in payload_fields and _missing_payload_value(payload.get("claim_text")):
-        description = _clean_text(staged_fields.get("description"))
-        if description:
-            payload["claim_text"] = description
-    if (
-        "identity_resolution_notes" in payload_fields
-        and _missing_payload_value(payload.get("identity_resolution_notes"))
-    ):
-        notes = staged_fields.get("classification_notes")
-        if isinstance(notes, Sequence) and not isinstance(notes, (str, bytes, bytearray)):
-            cleaned_notes = [str(item).strip() for item in notes if str(item).strip()]
-            if cleaned_notes:
-                payload["identity_resolution_notes"] = cleaned_notes
-    if first_evidence_record:
-        evidence_field_map = {
-            "evidence_record_id": "evidence_record_id",
-            "verified_quote": "verified_quote",
-            "page": "page",
-            "section": "section",
-            "subsection": "subsection",
-            "chunk_id": "chunk_id",
-            "figure_reference": "figure_reference",
-        }
-        for payload_field, evidence_field in evidence_field_map.items():
-            if payload_field not in payload_fields:
-                continue
-            if not _missing_payload_value(payload.get(payload_field)):
-                continue
-            value = first_evidence_record.get(evidence_field)
-            if value not in (None, "", []):
-                payload[payload_field] = value
+    """Evidence location fields a class declares come only from its verified evidence record."""
+
+    if not first_evidence_record:
+        return
+    for payload_field, evidence_field in EVIDENCE_SOURCE_FIELDS.items():
+        if payload_field not in payload_fields:
+            continue
+        value = first_evidence_record.get(evidence_field)
+        if value not in (None, "", []):
+            payload[payload_field] = value
+
+
+def _paper_wording(
+    staged_fields: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    *,
+    entry: GenericClassCatalogEntry,
+) -> str | None:
+    """The object's own paper wording: the class's mention field when it declares one, else source_label."""
+
+    value = payload.get("mention") if "mention" in entry.payload_fields else staged_fields.get("source_label")
+    return _clean_text(value)
 
 
 def _raw_payload_keys(staged_fields: Mapping[str, Any]) -> set[str]:

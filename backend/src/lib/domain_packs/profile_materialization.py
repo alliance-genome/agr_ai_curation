@@ -18,11 +18,15 @@ from src.lib.domain_packs.materialization import (
     _finding_for_materialization_problem, _finding_for_validator_result,
 )
 from src.lib.domain_packs.profile_validation import ProfileValidationContext
+from src.lib.domain_packs.resolvable_values import (
+    OUTCOME_MISSING_EXPECTED_RESULT_FIELD, lookup_outcome_for_failure, mark_resolved, mark_unresolved,
+)
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_result_policies import allowed_term_policy_violations
 from src.lib.domain_packs.validator_result_classification import validator_failure_classification
+from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.schemas.agent_execution_revision import GenericProfilePin
-from src.schemas.domain_envelope import DomainEnvelope, ValidationFinding, ValidationFindingSeverity
+from src.schemas.domain_envelope import DomainEnvelope, ValidationFinding, ValidationFindingSeverity, parse_field_path
 from src.schemas.generic_extraction_profile import GenericProfileContract, ProfileField
 
 
@@ -51,7 +55,7 @@ def materialize_profile_validator_results(
         updates, paths, problems = [], [], []
         for item in record_items:
             canonical = canonical_matches.get(_match_key(item.match))
-            problem, proposed = _approved_updates(item, canonical, context)
+            problem, proposed = _approved_updates(item, canonical, context, target)
             if problem:
                 problems.append(problem)
             for update in proposed:
@@ -116,7 +120,7 @@ def _overlap(left: str, right: str) -> bool:
                                 for suffix in (".", "["))
 
 
-def _approved_updates(item, canonical, context):
+def _approved_updates(item, canonical, context, target):
     if canonical is None or item.match.binding != canonical.binding:
         return "Result does not belong to an approved profile binding/target", []
     expected = build_domain_validation_request(canonical).request
@@ -158,12 +162,56 @@ def _approved_updates(item, canonical, context):
             return "Validator result violates the mapped capability slot type: " + "; ".join(i["message"] for i in issues), []
     if result.status != "resolved":
         try:
-            validator_failure_classification(result, error_type=ValueError)
+            classification = validator_failure_classification(result, error_type=ValueError)
         except ValueError as exc:
             return str(exc), []
-        return None, []
-    return None, [{"field_path": expected.expected_result_fields[slot], "value": deepcopy(value)}
-                  for slot, value in result.resolved_values.items()]
+        return None, _resolution_updates(expected, result, context, target,
+                                         unresolved=lookup_outcome_for_failure(classification))
+    return None, _resolution_updates(expected, result, context, target, unresolved=None)
+
+
+def _resolution_updates(expected, result, context, target, *, unresolved):
+    """The record updates for one validator result (ALL-1283).
+
+    A destination inside a resolvable value is written as one update of that
+    value: resolved with the validator's identity when every slot it writes
+    came back, otherwise unresolved with the lookup outcome and the
+    validator's own words, never touching its identity or paper wording.
+    Plain destinations take resolved slots as before.
+    """
+    plain, containers = [], {}
+    for slot, destination in expected.expected_result_fields.items():
+        container = context.profile.resolvable_container(destination)
+        value = result.resolved_values.get(slot)
+        if container is not None:
+            path, key = container
+            containers.setdefault(path, {})[key] = value
+        elif unresolved is None and slot in result.resolved_values:
+            plain.append({"field_path": destination, "value": deepcopy(value)})
+    updates = []
+    for path, identity in containers.items():
+        current = _attribute_value(target.payload.get("attributes") if target is not None else None, path)
+        if not isinstance(current, dict):
+            continue
+        value = deepcopy(current)
+        if unresolved is None and not any(missing_resolved_value(item) for item in identity.values()):
+            mark_resolved(value, identity, explanation=result.explanation, curator_message=result.curator_message)
+        else:
+            mark_unresolved(value, unresolved or OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+                            explanation=result.explanation, curator_message=result.curator_message)
+        updates.append({"field_path": path, "value": value})
+    return [*plain, *updates]
+
+
+def _attribute_value(attributes, path):
+    """The value at a concrete ``attributes...`` path, or None."""
+    value = attributes
+    for token in parse_field_path(path)[1:]:
+        if isinstance(token, int):
+            value = value[token] if isinstance(value, list) and token < len(value) else None
+        else:
+            value = value.get(token) if isinstance(value, dict) else None
+    return value
 
 
 def profile_result_finding(

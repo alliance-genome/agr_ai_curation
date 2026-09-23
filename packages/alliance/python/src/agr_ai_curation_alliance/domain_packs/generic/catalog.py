@@ -8,6 +8,14 @@ from typing import Any, Mapping
 
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.capabilities import object_capabilities
+from src.lib.domain_packs.resolvable_values import (
+    LOOKUP_OUTCOME_KEY,
+    LOOKUP_OUTCOMES,
+    RESOLUTION_STATE_KEY,
+    RESOLUTION_STATES,
+    ResolvableSpec,
+    resolvable_spec_from_display,
+)
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
@@ -15,6 +23,8 @@ from src.lib.domain_packs.validation_registry import (
 )
 from src.schemas.domain_pack_metadata import (
     DomainPackActiveValidatorBinding,
+    DomainPackEnumDefinition,
+    DomainPackEnumValue,
     DomainPackValidatorGroupScope,
     DomainPackFieldType,
     DomainPackFieldDefinition,
@@ -32,6 +42,15 @@ from agr_ai_curation_alliance.domain_packs.loader import get_alliance_domain_pac
 from agr_ai_curation_alliance.domain_packs.loader import load_alliance_domain_packs
 
 from .constants import GENERIC_DOMAIN_PACK_ID, GENERIC_PROXY_PREFIX
+from .values import EVIDENCE_SOURCE_FIELDS, builder_owned_keys
+
+
+# Generated-view enums for the vocabulary leaves of proxied resolvable values;
+# their values are the shared controlled vocabularies.
+_VOCABULARY_ENUMS = {
+    RESOLUTION_STATE_KEY: ("GenericResolutionState", "Resolution state", RESOLUTION_STATES),
+    LOOKUP_OUTCOME_KEY: ("GenericLookupOutcome", "Lookup outcome", LOOKUP_OUTCOMES),
+}
 
 
 @dataclass(frozen=True)
@@ -64,6 +83,33 @@ class GenericClassCatalogEntry:
     task_hints: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
     capabilities: dict[str, Any] = field(default_factory=dict)
+    # Declared resolvable values by payload path ("" for the object root).
+    resolvable_fields: Mapping[str, ResolvableSpec] = field(default_factory=dict)
+    # Payload paths a validator binding writes back; the extractor never writes them.
+    validator_owned_fields: tuple[str, ...] = ()
+
+    @property
+    def paper_wording_fields(self) -> tuple[str, ...]:
+        """Where the extractor writes each resolvable value's paper wording."""
+
+        return tuple(
+            f"{field_path}.{spec.mention_key}" if field_path else spec.mention_key
+            for field_path, spec in sorted(self.resolvable_fields.items())
+        )
+
+    @property
+    def system_written_payload_fields(self) -> tuple[str, ...]:
+        """Payload fields validation, the builder or the evidence record fill in; never the extractor."""
+
+        builder_owned = [
+            f"{field_path}.{key}" if field_path else key
+            for field_path, spec in sorted(self.resolvable_fields.items())
+            for key in builder_owned_keys(spec)
+        ]
+        evidence_owned = [
+            field_path for field_path in EVIDENCE_SOURCE_FIELDS if field_path in self.payload_fields
+        ]
+        return tuple(dict.fromkeys([*self.validator_owned_fields, *builder_owned, *evidence_owned]))
 
     @property
     def validator_state(self) -> str:
@@ -99,6 +145,8 @@ class GenericClassCatalogEntry:
             ],
             "payload_fields": list(self.payload_fields),
             "required_payload_fields": list(self.required_payload_fields),
+            "paper_wording_fields": list(self.paper_wording_fields),
+            "system_written_payload_fields": list(self.system_written_payload_fields),
             "field_summaries": list(self.field_summaries),
             "validator_input_fields": sorted(
                 {
@@ -228,6 +276,10 @@ def load_generic_class_catalog() -> GenericClassCatalog:
     generated_metadata = generic_pack.metadata.model_copy(
         update={
             "object_definitions": generated_objects,
+            "enum_definitions": [
+                *generic_pack.metadata.enum_definitions,
+                *_vocabulary_enum_definitions(generated_objects),
+            ],
             "metadata": {
                 **generic_pack.metadata.metadata,
                 "generic_extraction": {
@@ -334,7 +386,48 @@ def _entry_from_object_definition(
             source_pack.metadata, object_definition,
             active_validators=len(active), development_validators=len(under_dev),
         ),
+        resolvable_fields=_resolvable_fields(source_pack, object_definition),
+        validator_owned_fields=tuple(
+            dict.fromkeys(
+                str(field_path)
+                for binding in registry.bindings
+                if _binding_applies_to_object(
+                    binding,
+                    source_pack_id=source_pack.pack_id,
+                    object_definition=object_definition,
+                )
+                for field_path in binding.expected_result_fields.values()
+            )
+        ),
     )
+
+
+def _resolvable_fields(
+    source_pack: LoadedDomainPack,
+    object_definition: DomainPackObjectDefinition,
+) -> dict[str, ResolvableSpec]:
+    """The object's declared resolvable values: a display spec with a mention role.
+
+    The object's own model declares the root value; a field declares its value
+    on the field or on the model its value uses.
+    """
+
+    models = {model.model_id: model for model in source_pack.metadata.model_definitions}
+
+    def model_display(model_ref: str | None) -> Any:
+        model = models.get(model_ref) if model_ref else None
+        return model.metadata.get("display") if model is not None else None
+
+    specs: dict[str, ResolvableSpec] = {}
+    root = resolvable_spec_from_display(model_display(object_definition.model_ref))
+    if root is not None:
+        specs[""] = root
+    for field_definition in object_definition.fields:
+        display = field_definition.metadata.get("display") or model_display(field_definition.model_ref)
+        spec = resolvable_spec_from_display(display)
+        if spec is not None:
+            specs[field_definition.field_path] = spec
+    return specs
 
 
 def _binding_summary(binding: ValidatorBinding) -> GenericValidatorBindingSummary:
@@ -414,7 +507,9 @@ def _proxy_object_definition(
             "object_type": entry.generic_object_type,
             "model_ref": None,
             "fields": [
-                _proxy_field_definition(field_definition)
+                _proxy_field_definition(
+                    field_definition, resolvable_fields=entry.resolvable_fields
+                )
                 for field_definition in object_definition.fields
             ],
             "metadata": metadata,
@@ -425,6 +520,8 @@ def _proxy_object_definition(
 
 def _proxy_field_definition(
     field_definition: DomainPackFieldDefinition,
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec],
 ) -> DomainPackFieldDefinition:
     source_refs: dict[str, str] = {}
     updates: dict[str, Any] = {}
@@ -436,12 +533,45 @@ def _proxy_field_definition(
             continue
         source_refs[ref_field] = value
         updates[ref_field] = None
-    if field_definition.field_type is DomainPackFieldType.ENUM:
+    vocabulary_enum = _vocabulary_enum_id(field_definition.field_path, resolvable_fields)
+    if vocabulary_enum is not None:
+        # A resolvable value's state and lookup outcome stay controlled vocabularies.
+        updates["enum_ref"] = vocabulary_enum
+    elif field_definition.field_type is DomainPackFieldType.ENUM:
         updates["field_type"] = DomainPackFieldType.STRING
     if source_refs:
         metadata["generic_extraction_proxy_source_refs"] = source_refs
     updates["metadata"] = metadata
     return field_definition.model_copy(update=updates, deep=True)
+
+
+def _vocabulary_enum_id(
+    field_path: str,
+    resolvable_fields: Mapping[str, ResolvableSpec],
+) -> str | None:
+    parent_path, _, key = field_path.rpartition(".")
+    if key not in _VOCABULARY_ENUMS or parent_path not in resolvable_fields:
+        return None
+    return _VOCABULARY_ENUMS[key][0]
+
+
+def _vocabulary_enum_definitions(
+    object_definitions: list[DomainPackObjectDefinition],
+) -> list[DomainPackEnumDefinition]:
+    used = {
+        field_definition.enum_ref
+        for object_definition in object_definitions
+        for field_definition in object_definition.fields
+    }
+    return [
+        DomainPackEnumDefinition(
+            enum_id=enum_id,
+            display_name=display_name,
+            values=[DomainPackEnumValue(value=value) for value in values],
+        )
+        for enum_id, display_name, values in _VOCABULARY_ENUMS.values()
+        if enum_id in used
+    ]
 
 
 def _proxy_active_binding(

@@ -39,6 +39,7 @@ from agr_ai_curation_alliance.domain_packs.generic.attributes import (
     normalize_generic_attributes,
     normalized_attribute_keys,
 )
+from agr_ai_curation_alliance.domain_packs.generic.values import extractor_payload_issues
 
 from .agr_curation import (
     AgrQueryResult,
@@ -441,6 +442,19 @@ def _validate_payload_keys_for_entry(
         )
 
 
+def _extractor_payload_issues(payload: Any, *, entry: Any) -> list[dict[str, str]]:
+    """Fields the extractor may not write, and resolvable values missing their paper wording."""
+
+    if not isinstance(payload, Mapping):
+        return []
+    return extractor_payload_issues(
+        payload,
+        resolvable_fields=entry.resolvable_fields,
+        validator_owned_fields=entry.validator_owned_fields,
+        payload_fields=entry.payload_fields,
+    )
+
+
 def _list_generic_object_classes_impl(
     include_non_stageable: bool = False,
 ) -> AgrQueryResult:
@@ -488,6 +502,13 @@ def _stage_generic_object_impl(
     """Stage one retained, evidence-backed generic object through the builder.
 
     Args:
+        source_label: The paper's own wording for this object. It is kept as the
+            paper wording; the label is never used in its place.
+        payload: Class-specific fields the paper supports. Write each value's paper
+            wording in the class's paper_wording_fields. Never write its
+            system_written_payload_fields: validation, the builder or the verified
+            evidence record fill those in, and a value validation cannot confirm stays
+            unresolved.
         validation_guidance: Optional short sentence forwarding relevant rules from your
             configured prompt and case-specific paper context to this finding's validators.
             Distinguish domain rules from paper facts. Do not copy whole prompts, quote
@@ -528,7 +549,7 @@ def _stage_generic_object_impl(
                 "class_key": stage_input.class_key, "object_type": "generic_object",
                 "semantic_class": stage_input.semantic_class, "attributes": normalized_attributes,
                 "payload": stage_input.payload,
-            })
+            }, extractor_input=True)
         else:
             normalized_attributes, attribute_issues = normalize_generic_attributes(stage_input.attributes)
         if attribute_issues:
@@ -561,6 +582,14 @@ def _stage_generic_object_impl(
                 attempted_query=attempted_query,
             )
         staged_payload = _stage_payload_from_generic_input(stage_input, entry=entry)
+        payload_issues = _extractor_payload_issues(stage_input.payload, entry=entry)
+        if payload_issues:
+            return _generic_validation_result(
+                message="stage_generic_object rejected payload values the extractor does not write.",
+                issues=payload_issues,
+                method="stage_generic_object",
+                attempted_query=attempted_query,
+            )
     except (ValidationError, KeyError, ValueError) as exc:
         issues = (
             _model_validation_issues(exc)
@@ -774,7 +803,9 @@ def _patch_generic_object_impl(
         )
     if profile is not None:
         normalized_attributes = deepcopy(raw_attributes)
-        attribute_issues = profile.validate_candidate(staged_payload, candidate_id=patch_input.candidate_id)
+        attribute_issues = profile.validate_candidate(
+            staged_payload, candidate_id=patch_input.candidate_id, extractor_input=True,
+        )
     else:
         normalized_attributes, attribute_issues = normalize_generic_attributes(
             raw_attributes if isinstance(raw_attributes, Mapping) else {}
@@ -842,6 +873,14 @@ def _patch_generic_object_impl(
                         "message": str(exc),
                     }
                 ],
+                method="patch_generic_object",
+                attempted_query=attempted_query,
+            )
+        payload_issues = _extractor_payload_issues(raw_payload, entry=entry)
+        if payload_issues:
+            return _generic_validation_result(
+                message="patch_generic_object rejected payload values the extractor does not write.",
+                issues=payload_issues,
                 method="patch_generic_object",
                 attempted_query=attempted_query,
             )
