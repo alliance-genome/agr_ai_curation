@@ -377,7 +377,7 @@ def _patch_allele_observation_impl(
 
     Args:
         updates: Field updates, each naming one allowed `field_path` with its new value.
-            A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
+            A `rationale` update must be non-empty; it cannot be cleared.
     """
 
     attempted_query = _attempt_query(

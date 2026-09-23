@@ -517,7 +517,7 @@ def _patch_disease_observation_impl(
 
     Args:
         updates: Field updates, each a ``field_path`` plus its new value. A `rationale`
-            update must be non-empty and at most 300 characters; it cannot be cleared.
+            update must be non-empty; it cannot be cleared.
     """
 
     attempted_query = _attempt_query(

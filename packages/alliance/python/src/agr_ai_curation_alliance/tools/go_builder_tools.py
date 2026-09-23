@@ -549,7 +549,7 @@ def _stage_go_recommendation_impl(
     """Stage one evidence-backed GO recommendation for canonical finalization.
 
     For IMP annotations, the rationale must name the perturbation and the phenotype in
-    the paper's exact wording; that is required, not a restated quote.
+    the paper's exact wording.
 
     Args:
         validation_guidance: Optional short sentence forwarding relevant rules from your
@@ -659,8 +659,7 @@ def _patch_go_recommendation_impl(
     Args:
         candidate_id: The staged candidate to correct.
         updates: Field corrections, each with field_path and value (or evidence_record_ids).
-            A `rationale` update must be non-empty and at most 300 characters; it cannot
-            be cleared.
+            A `rationale` update must be non-empty; it cannot be cleared.
     """
 
     attempted_query = _attempt_query(

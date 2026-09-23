@@ -6097,7 +6097,7 @@ def _patch_gene_expression_observation_impl(
 
     Args:
         updates: Field updates, each a field_path with its string_value or evidence_record_ids.
-            A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
+            A `rationale` update must be non-empty; it cannot be cleared.
     """
 
     attempted_query = _attempt_query(

@@ -506,7 +506,7 @@ def test_profile_bound_tools_require_and_protect_rationale(profile, record, monk
         tools.stage_generic_object.params_json_schema["properties"]["rationale"]["description"]
     )
     patch = profile_bound_tool(tools._patch_generic_object_impl, tools.patch_generic_object, profile)
-    assert "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared." in patch.params_json_schema["properties"]["updates"]["description"]
+    assert "A `rationale` update must be non-empty; it cannot be cleared." in patch.params_json_schema["properties"]["updates"]["description"]
     rationale_patch = [
         variant for variant in profile.patch_schema()["items"]["anyOf"]
         if variant["properties"]["field_path"].get("const") == "rationale"

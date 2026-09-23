@@ -100,7 +100,7 @@ content: |
   Every evidence record carries an `evidence_record_id` plus backend-owned source quote/provenance fields from `record_evidence`; never type or copy those source fields yourself. Use the specific gene label as `entity`, not a generic "gene" and not a chemical, phenotype, or treatment term.
 
   For each retained gene/evidence pairing (the `<workflow>` tool sequence produces these), the staged payload is: a stable `pending_ref_id`, the returned `evidence_record_ids`, `mention`, `confidence`, and paper-backed identity/context hints (`species`, `taxon_hint`, `data_provider_hint`, `proposed_gene_symbol`, `proposed_taxon`, `identity_resolution_notes`).
-  - `rationale` (max 300 characters) is the curator-facing reason this gene is curatable from this paper (the finding that makes it focal), not how its identity was resolved; identity reasoning stays in `identity_resolution_notes`.
+  - `rationale` is why you selected this gene, in your own words; it is separate from `identity_resolution_notes`, which records how its identity was resolved.
   - Include `proposed_primary_external_id` only when the paper itself supplies a specific identifier. Do not guess or look up IDs in the extractor.
   - When one gene needs two retained quotes, make two stage calls that share the same `mention` and identity hints but use a different `pending_ref_id` and different evidence IDs.
 

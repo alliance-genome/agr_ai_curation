@@ -1231,6 +1231,23 @@ def _capabilities_payload(
         "allowed_filter_operators": list(get_args(FlowOutputFilterSpec.model_fields["op"].annotation)),
         "allowed_sort_directions": list(get_args(FlowOutputSortSpec.model_fields["direction"].annotation)),
         "allowed_transform_types": list(get_args(FlowOutputTransformSpec.model_fields["type"].annotation)),
+        "column_sources": (
+            "Map each requested column to one source field and let empty values render "
+            "as missing_value. Combine different fields in one column (first_non_empty, "
+            "concat, conditional, pair_join) only when the curator explicitly asks for a "
+            "fallback or combination: they name both fields or say 'if X is missing use Y'. "
+            "Requests to preserve, show or distinguish unresolved values are met by the "
+            "application's \"(unresolved)\" marker on the requested field; they never ask "
+            "to fill a term, ID or label column from a free-text statement or another field."
+        ),
+        "rationale": (
+            "For 'why' or 'explain' requests, find the source's rationale field with "
+            "catalog_query 'rationale' (packaged sources: object.pack.<ObjectType>.rationale; "
+            "custom profiles: object.payload.rationale) and add it as a column even when "
+            "some or all values are empty; empty cells render as missing_value. Never write "
+            "explanations yourself. Call formatter_cannot_complete only when a requested "
+            "source declares no rationale field."
+        ),
         "transform_rules": {
             "pair_join": (
                 "Use exactly two field_refs. Values are joined with pair_separator; "
@@ -1299,9 +1316,7 @@ def _capabilities_payload(
                 "Chat table or list rendered by the application from every requested row "
                 "and delivered to the curator once. Call finalize_chat_output exactly once; "
                 "optional notes carry a brief curator-requested caveat, never table rows "
-                "or explanations. For 'why' or 'explain' requests add a column for the stored "
-                "per-item rationale field (object.payload.rationale); if a source has no "
-                "rationale field, call formatter_cannot_complete naming it. chat_layout: "
+                "or explanations (see rationale). chat_layout: "
                 "table (default), bullets (one line per row) or sections (one heading per "
                 "row). group_by splits rows into headed groups that share the same columns; "
                 "use it for 'separate sections' split by a value. Sections needing "

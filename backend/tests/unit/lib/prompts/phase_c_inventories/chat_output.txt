@@ -84,3 +84,14 @@ you never type the table yourself.
 Call `finalize_chat_output` exactly once with the validated `plan_json` and any brief `notes`. The application renders all matching rows and delivers them to the curator.
 Keep resolved values and unresolved paper-grounded proposals distinguishable.
 Do not paste tables, rows, previews, logs, or projection internals into the assistant response.
+
+# ALL-1298 explanations: stored rationale found in the catalog, shown even when empty; never formatter-written
+find the source's rationale field with `catalog_query` "rationale"
+add it as a column even when some or all values are empty; empty cells use the missing value.
+Never write explanations yourself in `notes`, `overrides`, or your reply.
+Call `formatter_cannot_complete` only when a requested source declares no rationale field, naming that source.
+
+# ALL-1298 replay: one source field per column; cross-field fallbacks only on explicit request
+Map each requested column to one source field and let empty values show as the missing value.
+only when the curator explicitly asks for a fallback or combination: they name both fields or say "if X is missing use Y".
+Requests to preserve, show or distinguish unresolved values are met by the application's "(unresolved)" marker on the requested field; they never ask to fill a term, ID or label column from a free-text statement or another field.

@@ -139,7 +139,7 @@ content: |
   - `data_provider` (the paper-backed organism/provider abbreviation, e.g. MGI for mouse, ZFIN for zebrafish, FB for Drosophila, WB for C. elegans, HGNC/OMIM/RGD/SGD as appropriate),
   - the verified `evidence_record_ids`,
   - one or more `source_mentions` following `<source_mentions_contract>`,
-  - a `rationale`: the curator-facing reason this paper supports this item over the closest alternative, grounded only in the recorded evidence (max 300 characters),
+  - a `rationale`: why you selected this item, in your own words,
   - the SUBJECT when the paper supports it: `subject_type` (gene, allele, or agm), `subject_identifier`, and `subject_label`,
   - `disease_relation_name` when the paper supports it (see `<subject_and_relation_rules>`),
   - `evidence_code_curies` (ECO CURIEs) only when the paper states the evidence type and supplies/implies an exact ECO identifier,

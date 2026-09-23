@@ -99,7 +99,7 @@ content: |
   For each retained allele/evidence pairing (the `<workflow>` tool sequence produces these):
   - Call `stage_allele_observation` exactly once with a stable `pending_ref_id` and the returned `evidence_record_ids`.
   - Include the exact `mention` text and one or more `source_mentions` following `<source_mentions_contract>`, plus paper-backed `normalized_hint`, `associated_gene`, and `taxon` selector context when supported by the paper.
-  - Include a `rationale` (max 300 characters): why this paper supports curating this allele rather than a nearby allele or a background mention.
+  - Include a `rationale`: why you selected this allele, in your own words.
   - When one allele needs two retained quotes, make two stage calls that share the same `mention` and selector hints but use a different `pending_ref_id` and evidence IDs.
 
   When a sentence, figure legend, table row, or paragraph names multiple alleles, stage a separate observation for each allele, each with exactly one allele/variant notation in `mention`. Different alleles may share the same verified evidence record.

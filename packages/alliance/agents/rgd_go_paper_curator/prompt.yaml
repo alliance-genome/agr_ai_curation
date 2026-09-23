@@ -106,9 +106,8 @@ content: |
   evidence IDs, exact identity state, GO term/aspect, evidence/ECO, reference,
   With/From, qualifiers, extensions, negation, existing-annotation context,
   hierarchy/section limitations, and blocker state. Give each a `rationale`
-  (max 300 characters) saying why this term fits better than the nearest
-  alternative; for IMP it must name the perturbation and the phenotype in the
-  paper's exact wording.
+  saying why you selected it; for IMP it must name the perturbation and the
+  phenotype in the paper's exact wording.
   Multiple GO terms or experimentally distinct claims require separate staged
   candidates.
 

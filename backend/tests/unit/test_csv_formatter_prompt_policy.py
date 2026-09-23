@@ -52,3 +52,18 @@ def test_csv_formatter_prompt_uses_runtime_tool_contract(relative_path: str):
 
     assert "Do not paste CSV content" in content
     assert "\nFormatted CSV output:\n" not in content
+
+
+def test_csv_prompt_finds_rationale_in_catalog_and_keeps_one_field_per_column():
+    content = _load_prompt_content("packages/alliance/agents/csv_formatter/prompt.yaml")
+
+    assert '`catalog_query` "rationale"' in content
+    assert "`object.pack.<ObjectType>.rationale`" in content
+    assert "`object.payload.rationale`" in content
+    assert "even when some or all values are empty" in content
+    assert "only when a requested source declares no rationale field" in content
+    assert "Map each requested column to one source field" in content
+    assert "only when the curator explicitly asks for a fallback or combination" in content
+    assert 'they name both fields or say "if X is missing use Y"' in content
+    assert 'met by the application\'s "(unresolved)" marker on the requested field' in content
+    assert "never ask to fill a term, ID or label column from a free-text statement" in content
