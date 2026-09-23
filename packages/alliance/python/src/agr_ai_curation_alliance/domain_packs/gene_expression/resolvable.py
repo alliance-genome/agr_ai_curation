@@ -84,11 +84,12 @@ GENE_EXPRESSION_RESOLVABLE_VALUES: tuple[GeneExpressionResolvableValue, ...] = (
     GeneExpressionResolvableValue(
         "expression_experiment.expression_assay_used", "Expression assay", _TERM, TERM_IDENTITY_KEYS,
     ),
+    # The annotation reference's copy: the reference id and title only.
     GeneExpressionResolvableValue(
         "expression_experiment.single_reference",
         "Experiment evidence reference",
         _REFERENCE,
-        REFERENCE_IDENTITY_KEYS,
+        ("reference_id", "title"),
     ),
     GeneExpressionResolvableValue(
         "expression_experiment.entity_assayed", "Entity assayed", _SUBJECT, SUBJECT_IDENTITY_KEYS,

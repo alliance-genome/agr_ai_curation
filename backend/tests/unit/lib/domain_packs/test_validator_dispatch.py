@@ -1874,11 +1874,16 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
         "mention": "Tmem67",
     }
     assert (subject["resolution_state"], subject["lookup_outcome"]) == ("resolved", "matched")
+    # A reference stored before the contract is verified by this re-validation (ALL-1283).
     assert annotation.payload["single_reference"] == {
         "pmid": "PMID:203506",
         "title": "Resolved literature title",
         "reference_id": 203506,
         "curie": "PMID:203506",
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": "Fixture validator resolved this field.",
+        "validator_curator_message": "source_reference_validation resolved.",
     }
     patch_events = {
         event["validator_binding_id"]: event

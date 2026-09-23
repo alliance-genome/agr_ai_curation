@@ -24,6 +24,7 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (
 )
 from agr_ai_curation_alliance.domain_packs.gene_expression.legacy import (
     GeneExpressionReviewRowMaterializer,
+    legacy_display_payload as gene_expression_legacy_display_payload,
 )
 from agr_ai_curation_alliance.domain_packs.phenotype import (
     PhenotypeAnnotationExportAdapter,
@@ -72,6 +73,9 @@ _DOMAIN_ENVELOPE_VALIDATORS = {
 _REVIEW_ROW_MATERIALIZERS = {
     "gene_expression": GeneExpressionReviewRowMaterializer,
 }
+_LEGACY_DISPLAY_MAPPERS = {
+    "gene_expression": gene_expression_legacy_display_payload,
+}
 _EXTRACTION_PAYLOAD_NORMALIZERS = {
     "gene": normalize_gene_extraction_payload,
     "phenotype": normalize_phenotype_extraction_payload,
@@ -97,6 +101,7 @@ def register_curation_adapters(registry) -> None:
             review_row_materializer=_REVIEW_ROW_MATERIALIZERS.get(
                 adapter_key, DomainPackMetadataReviewRowMaterializer
             )(metadata=domain_pack.metadata),
+            legacy_display_mapper=_LEGACY_DISPLAY_MAPPERS.get(adapter_key),
         )
 
     registry.register_adapter(

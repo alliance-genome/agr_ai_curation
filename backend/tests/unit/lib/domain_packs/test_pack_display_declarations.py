@@ -52,7 +52,8 @@ SHAPES_PATH = REPO_ROOT / "backend" / "tests" / "fixtures" / "flows" / "display_
 
 # ``mention`` declares a resolvable value (ALL-1283): the paper wording leaf beside label/id.
 ROLE_KEYS = {"label", "id", "state", "mention"}
-SPEC_KEYS = ROLE_KEYS | {"resolved_states", "compose", "separator"}
+# ``validated`` names further identity keys only a validator fills (not a display role).
+SPEC_KEYS = ROLE_KEYS | {"resolved_states", "compose", "separator", "validated"}
 
 # Models no display can be declared for yet, each with the reason. Keep this list short:
 # a new structured model must declare display instead of being added here.

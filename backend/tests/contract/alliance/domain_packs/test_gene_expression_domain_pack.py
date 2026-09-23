@@ -68,6 +68,7 @@ from agr_ai_curation_alliance.domain_packs.gene_expression.export import (  # no
     gene_expression_export_blockers,
 )
 from agr_ai_curation_alliance.domain_packs.gene_expression.resolvable import (  # noqa: E402
+    GENE_EXPRESSION_RESOLVABLE_VALUES,
     data_provider_value,
     resolver_selected_value,
     staged_value,
@@ -1644,7 +1645,27 @@ def test_gene_expression_context_ontology_unresolved_outcomes_stay_field_address
     )
 
     assert result.materialized_objects == ()
-    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
+    # The validator overrules the builder's resolved anatomy term: the identity is kept only
+    # as overruled_* hints, the paper wording is untouched and nothing else changes.
+    before = envelope.extracted_objects[0].payload
+    after = result.envelope.extracted_objects[0].payload
+    site_before = before["expression_pattern"]["where_expressed"]["anatomical_structure"]
+    site_after = after["expression_pattern"]["where_expressed"]["anatomical_structure"]
+    assert site_before["resolution_state"] == "resolved"
+    assert site_after == {
+        **site_before,
+        "curie": None,
+        "name": None,
+        "overruled_curie": site_before["curie"],
+        "overruled_name": site_before["name"],
+        "resolution_state": "unresolved",
+        "lookup_outcome": lookup_outcome,
+        "validator_explanation": "Fixture-backed validator result for gene-expression contract tests.",
+        "validator_curator_message": "Paper-facing anatomy label requires curator review.",
+    }
+    unchanged = copy.deepcopy(after)
+    unchanged["expression_pattern"]["where_expressed"]["anatomical_structure"] = site_before
+    assert unchanged == before
     finding = result.appended_findings[0]
     assert finding.code == "domain_pack.validator_unresolved"
     assert finding.field_ref is not None
@@ -3282,9 +3303,15 @@ def test_pack_display_declarations_name_every_resolvable_value():
     # The builder's value table agrees with the pack's declarations (the pack adds
     # the mirror sources that also cover a copy).
     assert {
-        path: (spec.id_key, spec.label_key, spec.mention_key) for path, spec in declared.items()
+        path: (spec.id_key, spec.label_key, spec.mention_key, set(spec.identity_keys))
+        for path, spec in declared.items()
     } == {
-        value.field_path: (value.spec.id_key, value.spec.label_key, value.spec.mention_key)
+        value.field_path: (
+            value.spec.id_key,
+            value.spec.label_key,
+            value.spec.mention_key,
+            set(value.identity_keys),
+        )
         for value in GENE_EXPRESSION_RESOLVABLE_VALUES
     }
     assert declared["expression_experiment.entity_assayed"].covered_by == (
@@ -3303,6 +3330,223 @@ def test_pack_display_declarations_name_every_resolvable_value():
             "validator_curator_message",
         ):
             assert f"{field_path}.{key}" in fields
+
+
+def _contract_value_paths(value: Any, tokens: tuple[str | int, ...] = ()):
+    """Every stored value in contract shape (it carries a resolution state), with its path."""
+
+    if isinstance(value, Mapping):
+        if "resolution_state" in value:
+            yield tokens
+        for key, child in value.items():
+            yield from _contract_value_paths(child, (*tokens, key))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _contract_value_paths(child, (*tokens, index))
+
+
+def test_every_contract_value_the_builder_stages_is_declared():
+    """A validator write into an undeclared contract value raises (core F2), so each is declared."""
+
+    from src.lib.domain_packs.resolvable_values import declared_spec_for
+
+    from agr_ai_curation_alliance.domain_packs.gene_expression.resolvable import (
+        declared_gene_expression_values,
+    )
+
+    staged = _gene_expression_builder_staged_fields(
+        condition_relations=[
+            {
+                "condition_relation_type": "has_condition",
+                "conditions": [
+                    {
+                        "condition_class_curie": "ZECO:0000111",
+                        "condition_id_curie": "XCO:0000108",
+                        "condition_chemical_curie": "CHEBI:9168",
+                        "condition_taxon_curie": "NCBITaxon:562",
+                        "condition_summary": "treated with 3 pM rapamycin",
+                    }
+                ],
+            }
+        ],
+    )
+    when = staged["expression_pattern"]["when_expressed"]
+    where = staged["expression_pattern"]["where_expressed"]
+    when["stage_uberon_slim_terms"] = [
+        staged_value("expression_pattern.when_expressed.stage_uberon_slim_terms", "embryo stage")
+    ]
+    where["anatomical_structure_uberon_terms"] = [
+        staged_value(
+            "expression_pattern.where_expressed.anatomical_structure_uberon_terms", "nervous system"
+        )
+    ]
+    where["cellular_component"] = staged_value(
+        "expression_pattern.where_expressed.cellular_component", "cilium"
+    )
+    where["cellular_component_qualifiers"] = [
+        staged_value(
+            "expression_pattern.where_expressed.cellular_component_qualifiers", "base of cilium"
+        )
+    ]
+    result = _materialize_gene_expression_candidate(staged)
+    assert result.ok, result.summary()
+    payload = next(
+        obj["payload"]
+        for obj in result.payload["curatable_objects"]
+        if obj["object_type"] == GENE_EXPRESSION_OBJECT_TYPE
+    )
+
+    declared = declared_gene_expression_values()
+    staged_paths = list(_contract_value_paths(payload))
+    # Roots, mirrors, list elements and each condition component are all present.
+    assert len(staged_paths) == len(
+        {value.field_path for value in GENE_EXPRESSION_RESOLVABLE_VALUES}
+    )
+    undeclared = [tokens for tokens in staged_paths if declared_spec_for(declared, tokens) is None]
+    assert undeclared == []
+
+    # Every value the pack gives a resolution state is a declared resolvable value.
+    state_fields = {
+        field.field_path.removesuffix(".resolution_state")
+        for field in _gene_expression_pack().metadata.object_definitions[0].fields
+        if field.field_path.endswith(".resolution_state")
+    }
+    assert state_fields == set(declared)
+
+
+_MIRROR_VALUES = {"expression_experiment.entity_assayed", "expression_experiment.single_reference"}
+
+
+def test_curators_may_override_every_identity_but_not_the_wording_or_validation_state():
+    """Identity leaves are editable (a curator override); the contract leaves stay read-only.
+
+    Mirror copies follow their source's override, and the data provider stays protected
+    because it routes the annotation to its member database.
+    """
+
+    from agr_ai_curation_alliance.domain_packs.gene_expression.resolvable import (
+        declared_gene_expression_values,
+    )
+
+    fields = {
+        field.field_path: field.metadata
+        for field in _gene_expression_pack().metadata.object_definitions[0].fields
+    }
+    for value_path, spec in declared_gene_expression_values().items():
+        for key in spec.identity_keys:
+            if f"{value_path}.{key}" not in fields:
+                # The experiment reference's copy holds only the reference id.
+                assert (value_path, key) == ("expression_experiment.single_reference", "title")
+                continue
+            metadata = fields[f"{value_path}.{key}"]
+            if value_path in _MIRROR_VALUES or value_path == "data_provider":
+                assert metadata.get("editable") is not True, (value_path, key)
+            else:
+                assert metadata.get("editable") is True, (value_path, key)
+                assert metadata["curator_action_note"].startswith("Curator override:")
+        for key in (
+            "mention",
+            "resolution_state",
+            "lookup_outcome",
+            "validator_explanation",
+            "validator_curator_message",
+        ):
+            metadata = fields[f"{value_path}.{key}"]
+            assert metadata.get("protected") is True and metadata.get("editable") is not True
+    assert fields["data_provider.abbreviation"]["protected"] is True
+
+
+def _curator_patch(envelope: Any, field_path: str, value: Any, *, before: Any):
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+
+    return apply_curator_field_patch(
+        envelope,
+        _gene_expression_pack(),
+        EnvelopeFieldPatch(
+            envelope_id=envelope.envelope_id,
+            expected_revision=1,
+            object_id=envelope.extracted_objects[0].pending_ref_id,
+            field_path=field_path,
+            before=before,
+            value=value,
+        ),
+        current_revision=1,
+        actor_id="curator-7",
+    )
+
+
+def test_a_curator_override_resolves_daniela_anatomy_with_an_audit_event():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+    from src.lib.domain_packs.resolvable_values import CURATOR_OVERRIDE_METADATA_KEY
+
+    envelope = _daniela_envelope()
+    result = _curator_patch(envelope, f"{_ANATOMY}.curie", "EMAPA:17373", before=None)
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    result = _curator_patch(result.envelope, f"{_ANATOMY}.name", "metanephros", before=None)
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+
+    annotation = result.envelope.extracted_objects[0]
+    site = annotation.payload["expression_pattern"]["where_expressed"]["anatomical_structure"]
+    assert (site["curie"], site["name"], site["mention"]) == ("EMAPA:17373", "metanephros", _RESIDUAL_BODY)
+    assert (site["resolution_state"], site["lookup_outcome"]) == ("resolved", "curator_override")
+    assert site["curator_override"]["actor_id"] == "curator-7"
+    events = annotation.metadata[CURATOR_OVERRIDE_METADATA_KEY]
+    assert [(event["field_path"], event["value_path"]) for event in events] == [
+        (f"{_ANATOMY}.curie", _ANATOMY),
+        (f"{_ANATOMY}.name", _ANATOMY),
+    ]
+    assert events[0]["previous"]["lookup_outcome"] == "not_validated"
+    assert _ANATOMY not in {
+        blocker.field_path for blocker in gene_expression_export_blockers(_export_candidate(annotation))
+    }
+
+
+def test_a_curator_override_of_the_subject_gene_carries_to_the_entity_assayed():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    payload["expression_annotation_subject"] = staged_value("expression_annotation_subject", "Tmem67")
+    payload["expression_experiment"]["entity_assayed"] = staged_value(
+        "expression_experiment.entity_assayed", "Tmem67"
+    )
+    result = _curator_patch(
+        _with_payload(envelope, payload),
+        "expression_annotation_subject.primary_external_id",
+        "MGI:1923928",
+        before=None,
+    )
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+
+    overridden = result.envelope.extracted_objects[0].payload
+    for value in (
+        overridden["expression_annotation_subject"],
+        overridden["expression_experiment"]["entity_assayed"],
+    ):
+        assert value["primary_external_id"] == "MGI:1923928"
+        assert (value["resolution_state"], value["lookup_outcome"]) == ("resolved", "curator_override")
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value", "before"),
+    [
+        (f"{_ANATOMY}.mention", "residual body", _RESIDUAL_BODY),
+        (f"{_ANATOMY}.lookup_outcome", "matched", "not_validated"),
+        (f"{_ANATOMY}.resolution_state", "resolved", "unresolved"),
+        ("data_provider.abbreviation", "ZFIN", "MGI"),
+    ],
+)
+def test_curators_cannot_edit_the_paper_wording_the_validation_state_or_the_data_provider(
+    field_path, value, before
+):
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _daniela_envelope()
+    result = _curator_patch(envelope, field_path, value, before=before)
+
+    assert result.status is EnvelopeFieldPatchStatus.REJECTED
+    assert result.errors == (f"field_path '{field_path}' is protected",)
+    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
 
 
 def test_non_pinned_bindings_read_the_paper_wording_and_pinned_bindings_are_unchanged():
@@ -3568,9 +3812,13 @@ def test_previous_format_stage_slims_display_as_legacy_vocabulary_terms_and_are_
         PREVIOUS_FORMAT_FINDING_CODE,
         PREVIOUS_FORMAT_MESSAGE,
         GeneExpressionReviewRowMaterializer,
-        previous_format_display_payload,
+        legacy_display_payload,
+    )
+    from src.lib.curation_workspace.adapter_registry import (
+        resolve_curation_legacy_display_mapper_by_id,
     )
     from src.lib.domain_packs.not_validatable import not_validatable_object_keys
+    from src.lib.flows.export_fields import PackagedExportSource
 
     envelope = _legacy_tmem67_envelope()
     annotation = envelope.extracted_objects[0]
@@ -3582,14 +3830,31 @@ def test_previous_format_stage_slims_display_as_legacy_vocabulary_terms_and_are_
     annotation = annotation.model_copy(update={"payload": payload})
     envelope = envelope.model_copy(update={"extracted_objects": [annotation]})
 
-    [slim] = previous_format_display_payload(payload)["expression_pattern"]["when_expressed"][
-        "stage_uberon_slim_terms"
-    ]
-    assert slim["vocabulary"] == "Stage Uberon Slim Terms"
+    # The mapper only reshapes: the vocabulary term the slim names, with no state.
+    [mapped] = legacy_display_payload(GENE_EXPRESSION_OBJECT_TYPE, payload)["expression_pattern"][
+        "when_expressed"
+    ]["stage_uberon_slim_terms"]
+    assert mapped == {"name": "UBERON:0000068", "vocabulary": "Stage Uberon Slim Terms"}
+    assert legacy_display_payload("Other", payload) is payload
+    assert payload == stored  # the record itself is never rewritten
+
+    # Exports read it through the registered mapper, then the shared legacy rule.
+    assert (
+        resolve_curation_legacy_display_mapper_by_id(GENE_EXPRESSION_DOMAIN_PACK_ID)
+        is legacy_display_payload
+    )
+    item = PackagedExportSource(_gene_expression_pack()).effective_item(
+        {
+            "object_type": GENE_EXPRESSION_OBJECT_TYPE,
+            "payload": payload,
+            "metadata": dict(annotation.metadata),
+        }
+    )
+    [slim] = item["payload"]["expression_pattern"]["when_expressed"]["stage_uberon_slim_terms"]
     assert slim["name"] is None
     assert slim["mention"] == "UBERON:0000068 (legacy, unverified)"
     assert (slim["resolution_state"], slim["lookup_outcome"]) == ("unresolved", "legacy_unverified")
-    assert payload == stored  # the record itself is never rewritten
+    assert payload == stored
 
     findings = validate_pending_gene_expression_envelope(envelope)
     assert [(finding.code, finding.message) for finding in findings] == [
