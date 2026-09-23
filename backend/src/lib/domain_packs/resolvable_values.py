@@ -668,11 +668,22 @@ def _resolution_snapshot(value: Mapping[str, Any], identity_keys: Sequence[str])
     return snapshot
 
 
+# The curator-facing message for an override that leaves the id or label empty,
+# by which of the two the value declares.
+_OVERRIDE_INCOMPLETE_MESSAGE = {
+    (True, True): "Enter both the identifier and the name for a curator override.",
+    (True, False): "Enter the identifier for a curator override.",
+    (False, True): "Enter the name for a curator override.",
+}
+
+
 def apply_curator_identity(
     value: MutableMapping[str, Any],
     edits: Mapping[str, Any],
     *,
     identity_keys: Sequence[str],
+    id_key: str | None,
+    label_key: str | None,
     actor_id: str,
     at: str,
 ) -> dict[str, Any]:
@@ -681,16 +692,22 @@ def apply_curator_identity(
     ``edits`` maps edited identity keys to their new values. The value becomes
     resolved with ``lookup_outcome`` ``curator_override`` and a
     ``curator_override`` record (who, when, and the state before the first
-    override); a validator identity it replaces moves to ``overruled_*``.
-    ``mention`` and the validator's explanation are kept. Clearing the whole
-    identity reverts to unresolved (the validator's last unresolved outcome,
-    else ``not_validated``); entering the identity the value had before the
-    override restores that state. Returns the audit record.
+    override); a validator identity it replaces moves to ``overruled_*``, so
+    a first override names every identity key it keeps. ``mention`` and the
+    validator's explanation are kept. An override fills the declared
+    ``id_key`` and ``label_key`` (other identity keys stay optional), or it
+    is rejected. Clearing the whole identity reverts to unresolved (the
+    validator's last unresolved outcome, else ``not_validated``); entering
+    the identity the value had before the override restores that state.
+    Returns the audit record.
     """
 
     unknown = sorted(set(edits) - set(identity_keys))
     if unknown:
         raise ResolvableValueError(f"Only identity keys take a curator override, not {', '.join(unknown)}")
+    required = tuple(key for key in (id_key, label_key) if key)
+    if not required or not set(required) <= set(identity_keys):
+        raise ResolvableValueError("A curator override needs the value's declared id or label key")
     if not actor_id or not at:
         raise ResolvableValueError("A curator override records who (actor_id) and when (at)")
     overridden = is_curator_override(value)
@@ -724,6 +741,8 @@ def apply_curator_identity(
         value.pop(CURATOR_OVERRIDE_KEY, None)
         action = "restored"
     else:
+        if any(_is_empty(identity[key]) for key in required):
+            raise ResolvableValueError(_OVERRIDE_INCOMPLETE_MESSAGE[(bool(id_key), bool(label_key))])
         if not overridden:
             _overrule_identity(value, identity_keys)
         value.update(identity)
