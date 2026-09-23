@@ -159,6 +159,7 @@ fixtures:
         - evidence-cilia-1
         source_mentions:
         - sensory cilia were truncated in mutant animals
+        rationale: Amphid cilia were severely truncated in che-2 mutants, a structural defect that fits cilium morphology rather than a sensory behaviour term.
         data_provider:
           abbreviation: WB
         negated: false

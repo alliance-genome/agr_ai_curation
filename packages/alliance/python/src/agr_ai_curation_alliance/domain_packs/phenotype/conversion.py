@@ -832,6 +832,18 @@ def materialize_phenotype_builder_state(
             )
             continue
 
+        rationale = _clean_text(staged_fields.get("rationale"))
+        if rationale is None:
+            issues.append(
+                _materialization_issue(
+                    field_path="rationale",
+                    reason="missing_rationale",
+                    message="Finalized phenotype candidates require a curator-facing rationale.",
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
+
         evidence_ids = _unique_strings(
             getattr(candidate, "evidence_record_ids", None)
             or staged_fields.get("evidence_record_ids")
@@ -1012,6 +1024,7 @@ def materialize_phenotype_builder_state(
             "evidence_quote": evidence_payload_refs[0],
             "evidence_record_ids": annotation_evidence_ids,
             "source_mentions": list(source_mentions),
+            "rationale": rationale,
             "negated": negated,
         }
         data_provider_abbreviation = ontology_lookup_hint.get("data_provider")

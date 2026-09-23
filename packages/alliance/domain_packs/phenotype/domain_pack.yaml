@@ -234,6 +234,10 @@ object_definitions:
             label: Experimental conditions
             fields:
               - condition_relations
+          - id: evidence
+            label: Evidence and rationale
+            fields:
+              - rationale
       export_behavior:
         status: blocked
         exportable: false
@@ -502,6 +506,11 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Source mentions are paper evidence anchors, not normalized edit targets.
+      - field_path: rationale
+        field_type: string
+        display_name: Rationale
+        required: false
+        description: Curator-facing reason the extractor selected this item, written at extraction time.
       # EXPERIMENTAL CONDITIONS: condition_relations[] is the OUTER multivalued list (one
       # ConditionRelation per entry: relation_type + its conditions[]). Declared multivalued so
       # the nested fan-out engine indexes condition_relations[i] when fanning the inner

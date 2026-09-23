@@ -3854,7 +3854,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. The rationale can be rewritten but not cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -4055,7 +4055,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. The rationale can be rewritten but not cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5388,6 +5388,12 @@
           "type": "array"
         },
         {
+          "description": "The agent's short reason (up to 300 characters) for selecting this finding, grounded in the supporting quotes and written when the draft is created. Curators see it in review, CSV/TSV exports, and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
           "default": null,
           "description": "The Disease Ontology ID (DOID, a standard disease term ID) the agent proposes, if it found one; the disease specialist confirms it.",
           "name": "disease_curie",
@@ -5946,6 +5952,12 @@
           "name": "source_mentions",
           "required": true,
           "type": "array"
+        },
+        {
+          "description": "The agent's short reason (up to 300 characters) for selecting this finding, grounded in the supporting quotes and written when the draft is created. Curators see it in review, CSV/TSV exports, and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
         },
         {
           "default": null,
