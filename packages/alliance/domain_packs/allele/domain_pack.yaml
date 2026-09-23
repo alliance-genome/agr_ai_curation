@@ -82,6 +82,8 @@ model_definitions:
         label: allele_label
         id: allele_identifier
         mention: mention
+        validated:
+          - allele_taxon
   - model_id: AlleleReferencePayload
     display_name: Allele validated-reference payload
     schema_ref:
@@ -180,6 +182,7 @@ object_definitions:
             fields:
               - allele_label
               - allele_identifier
+              - allele_taxon
               - mention
               - resolution_state
               - lookup_outcome
@@ -305,7 +308,7 @@ object_definitions:
           validation_result_binding_id: allele_mention_reference_validation
           validation_result_field: symbol
           editable: true
-          curator_action_note: 'Validated allele symbol and the review-row label. Curator override: typing an ID marks this value as a curator override.'
+          curator_action_note: 'Validated allele symbol and the review-row label. Follows the allele on the paper mention. Curator override: enter the identifier, name and taxon together; the override is applied to the mention''s allele.'
       - field_path: allele_identifier
         field_type: string
         display_name: Allele identifier
@@ -313,7 +316,7 @@ object_definitions:
         metadata:
           render_as: chip
           editable: true
-          curator_action_note: 'Curator override: typing an ID marks this value as a curator override.'
+          curator_action_note: 'Follows the allele on the paper mention. Curator override: enter the identifier, name and taxon together; the override is applied to the mention''s allele.'
           validation_result_binding_id: allele_mention_reference_validation
           validation_result_field: curie
           provider_refs:
@@ -324,6 +327,16 @@ object_definitions:
               class: AlleleGenomicEntityAssociationDTO
               slot: allele_identifier
               range: string
+      - field_path: allele_taxon
+        field_type: string
+        display_name: Allele taxon
+        required: false
+        description: NCBI Taxon CURIE of the validated allele, written by the allele validator; empty while the allele is unresolved.
+        metadata:
+          editable: true
+          curator_action_note: 'Follows the allele on the paper mention. Curator override: enter the identifier, name and taxon together; the override is applied to the mention''s allele.'
+          validation_result_binding_id: allele_mention_reference_validation
+          validation_result_field: taxon
       - field_path: rationale
         field_type: string
         display_name: Rationale

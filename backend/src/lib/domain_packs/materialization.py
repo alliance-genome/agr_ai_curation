@@ -79,6 +79,7 @@ from src.lib.domain_packs.resolvable_values import (
     OUTCOME_INVALID_SCHEMA,
     OUTCOME_MATCHED,
     OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+    OUTCOME_NOT_VALIDATED,
     RESOLUTION_STATE_KEY,
     RESOLVED,
     ResolvableSpec,
@@ -1311,9 +1312,10 @@ def _write_back_to_referencing_objects(
     matching validated reference is linked, and a write-back event is recorded.
     Otherwise only the outcome is recorded on such a value (a resolved one is
     overruled into hints by a decisive outcome), and a value left unresolved
-    drops its now-stale links. A curator override on the referencing value
-    itself is never changed. ``validated_references`` is None when the result
-    could not be materialized.
+    drops its now-stale links. The referencing value only ever follows its
+    source (``follow_referenced_value`` carries a curator's edit of the source
+    right away). ``validated_references`` is None when the result could not be
+    materialized.
     """
 
     matched_target = item.match.object_envelope
@@ -1325,8 +1327,107 @@ def _write_back_to_referencing_objects(
     )
     if target is None or target_definition is None:
         return envelope
-    binding_id = item.request.validator_binding_id
+    result = item.result
+    event = {
+        "source": "domain_validator_referenced_target",
+        "request_id": result.request_id,
+        "validator_binding_id": result.validator_binding_id,
+        "validator_agent": result.validator_agent.model_dump(mode="json"),
+        "validated_target": matched_target.to_object_ref().model_dump(mode="json", exclude_none=True),
+        **(
+            {"source_envelope_revision": source_envelope_revision}
+            if source_envelope_revision is not None
+            else {}
+        ),
+    }
+    return _with_referencing_objects_following(
+        envelope,
+        target,
+        item.request.validator_binding_id,
+        item.request.expected_result_fields,
+        object_definitions=object_definitions,
+        target_definition=target_definition,
+        resolvable_fields_by_type=resolvable_fields_by_type,
+        decide=lambda declared, target_fields, target_resolvable_fields: _referenced_decision(
+            item,
+            declared,
+            target=target,
+            target_fields=target_fields,
+            target_resolvable_fields=target_resolvable_fields,
+            validated_references=validated_references,
+        ),
+        validated_references=validated_references or (),
+        fallback_text=(result.explanation, result.curator_message),
+        event=event,
+    )
+
+
+def follow_referenced_value(
+    envelope: DomainEnvelope,
+    source_object: CuratableObjectEnvelope,
+    *,
+    metadata: DomainPackMetadata,
+    expected_result_fields_by_binding: Mapping[str, Mapping[str, str]],
+) -> DomainEnvelope:
+    """Carry a curator's edit of a validated value to the objects that mirror it.
+
+    The same declarations as the validator write-back
+    (``_write_back_to_referencing_objects``): objects holding an object_ref to
+    ``source_object`` whose fields name one of the bindings take the source
+    value's identity and state straight away, exactly as the next validator
+    run would. Links to validated references carrying another identity drop.
+    """
+
+    object_definitions = {definition.object_type: definition for definition in metadata.object_definitions}
+    source_definition = object_definitions.get(source_object.object_type)
+    if source_definition is None:
+        return envelope
+    resolvable_fields_by_type = {
+        definition.object_type: declared_resolvable_fields(metadata, definition.object_type)
+        for definition in metadata.object_definitions
+    }
+    for binding_id, expected_result_fields in expected_result_fields_by_binding.items():
+        envelope = _with_referencing_objects_following(
+            envelope,
+            source_object,
+            binding_id,
+            expected_result_fields,
+            object_definitions=object_definitions,
+            target_definition=source_definition,
+            resolvable_fields_by_type=resolvable_fields_by_type,
+            decide=lambda declared, target_fields, target_resolvable_fields, binding=expected_result_fields: (
+                _source_decision(
+                    binding,
+                    declared,
+                    target=source_object,
+                    target_fields=target_fields,
+                    target_resolvable_fields=target_resolvable_fields,
+                )
+            ),
+            validated_references=(),
+            fallback_text=(None, None),
+            event=None,
+        )
+    return envelope
+
+
+def _with_referencing_objects_following(
+    envelope: DomainEnvelope,
+    target: CuratableObjectEnvelope,
+    binding_id: str,
+    expected_result_fields: Mapping[str, Any],
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    target_definition: DomainPackObjectDefinition,
+    resolvable_fields_by_type: Mapping[str, Mapping[str, ResolvableSpec]],
+    decide: Any,
+    validated_references: Sequence[CuratableObjectEnvelope],
+    fallback_text: tuple[str | None, str | None],
+    event: Mapping[str, Any] | None,
+) -> DomainEnvelope:
     target_keys = set(target.ref_keys())
+    target_fields = {field.field_path: field for field in target_definition.fields}
+    target_resolvable_fields = resolvable_fields_by_type.get(target.object_type, {})
     objects = list(envelope.extracted_objects)
     objects_by_ref = {key: obj for obj in objects for key in obj.ref_keys()}
     changed = False
@@ -1343,23 +1444,18 @@ def _write_back_to_referencing_objects(
         ]
         if not declared:
             continue
-        decision = _referenced_decision(
-            item,
-            declared,
-            target=target,
-            target_fields={field.field_path: field for field in target_definition.fields},
-            target_resolvable_fields=resolvable_fields_by_type.get(target.object_type, {}),
-            validated_references=validated_references,
-        )
+        decision = decide(declared, target_fields, target_resolvable_fields)
+        if decision is None:
+            continue
         updated = _referencing_object_with_result(
             domain_object,
-            item,
             declared,
             decision,
             resolvable_fields=resolvable_fields_by_type.get(domain_object.object_type, {}),
-            validated_references=validated_references or (),
+            validated_references=validated_references,
             objects_by_ref=objects_by_ref,
-            source_envelope_revision=source_envelope_revision,
+            fallback_text=fallback_text,
+            event=event,
         )
         if updated is not domain_object:
             objects[index] = updated
@@ -1386,6 +1482,66 @@ class _ReferencedDecision:
     source: Mapping[str, Any] | None
 
 
+def _source_paths(
+    expected_result_fields: Mapping[str, Any],
+    declared: Sequence[DomainPackFieldDefinition],
+    target_fields: Mapping[str, DomainPackFieldDefinition],
+) -> dict[str, str | None]:
+    """Each referencing scalar path -> the target path its result field is written to."""
+
+    source_paths: dict[str, str | None] = {}
+    for field in declared:
+        result_field = field.metadata.get("validation_result_field")
+        if not result_field:
+            continue
+        raw_path = expected_result_fields.get(str(result_field))
+        source_paths[field.field_path] = (
+            _materialized_field_path(raw_path, declared_fields=target_fields)
+            if isinstance(raw_path, str) and raw_path.strip()
+            else None
+        )
+    return source_paths
+
+
+def _source_decision(
+    expected_result_fields: Mapping[str, Any],
+    declared: Sequence[DomainPackFieldDefinition],
+    *,
+    target: CuratableObjectEnvelope,
+    target_fields: Mapping[str, DomainPackFieldDefinition],
+    target_resolvable_fields: Mapping[str, ResolvableSpec],
+) -> _ReferencedDecision | None:
+    """The decision the target's resolvable value (validated or curator-set) makes, if it has one."""
+
+    source_paths = _source_paths(expected_result_fields, declared, target_fields)
+    containers = {
+        _resolvable_container_path(target.payload, source, resolvable_fields=target_resolvable_fields)
+        for source in source_paths.values()
+        if source is not None
+    }
+    if len(containers) != 1 or None in containers:
+        return None
+    source = _payload_container(target.payload, next(iter(containers)))
+    if not has_resolution_state(source):
+        return None
+    values = {
+        path: _payload_value(target.payload, source_path)
+        for path, source_path in source_paths.items()
+        if source_path is not None
+    }
+    resolved = source[RESOLUTION_STATE_KEY] == RESOLVED
+    return _ReferencedDecision(
+        resolved=resolved,
+        outcome=None if resolved else str(source[LOOKUP_OUTCOME_KEY]),
+        values={path: None if value is _MISSING else value for path, value in values.items()},
+        target_keys={
+            path: str(parse_field_path(source_path)[-1]) if source_path else ""
+            for path, source_path in source_paths.items()
+        },
+        source=source,
+    )
+
+
 def _referenced_decision(
     item: ValidatorResultMaterializationInput,
     declared: Sequence[DomainPackFieldDefinition],
@@ -1395,44 +1551,22 @@ def _referenced_decision(
     target_resolvable_fields: Mapping[str, ResolvableSpec],
     validated_references: Sequence[CuratableObjectEnvelope] | None,
 ) -> _ReferencedDecision:
+    # The target's value, as the materializer (or a curator override) left it.
+    decision = _source_decision(
+        item.request.expected_result_fields,
+        declared,
+        target=target,
+        target_fields=target_fields,
+        target_resolvable_fields=target_resolvable_fields,
+    )
+    if decision is not None:
+        return decision
     result = item.result
-    source_paths: dict[str, str | None] = {}
-    for field in declared:
-        result_field = field.metadata.get("validation_result_field")
-        if not result_field:
-            continue
-        raw_path = item.request.expected_result_fields.get(str(result_field))
-        source_paths[field.field_path] = (
-            _materialized_field_path(raw_path, declared_fields=target_fields)
-            if isinstance(raw_path, str) and raw_path.strip()
-            else None
-        )
+    source_paths = _source_paths(item.request.expected_result_fields, declared, target_fields)
     target_keys = {
         path: str(parse_field_path(source)[-1]) if source else ""
         for path, source in source_paths.items()
     }
-    containers = {
-        _resolvable_container_path(target.payload, source, resolvable_fields=target_resolvable_fields)
-        for source in source_paths.values()
-        if source is not None
-    }
-    if len(containers) == 1 and None not in containers:
-        # The target's value, as the materializer (or a curator override) left it.
-        source = _payload_container(target.payload, next(iter(containers)))
-        if has_resolution_state(source):
-            values = {
-                path: _payload_value(target.payload, source_path)
-                for path, source_path in source_paths.items()
-                if source_path is not None
-            }
-            resolved = source[RESOLUTION_STATE_KEY] == RESOLVED
-            return _ReferencedDecision(
-                resolved=resolved,
-                outcome=None if resolved else str(source[LOOKUP_OUTCOME_KEY]),
-                values={path: None if value is _MISSING else value for path, value in values.items()},
-                target_keys=target_keys,
-                source=source,
-            )
     values = {
         field.field_path: result.resolved_values.get(str(field.metadata["validation_result_field"]))
         for field in declared
@@ -1465,16 +1599,15 @@ def _reference_matches(reference: CuratableObjectEnvelope, decision: _Referenced
 
 def _referencing_object_with_result(
     domain_object: CuratableObjectEnvelope,
-    item: ValidatorResultMaterializationInput,
     declared: Sequence[DomainPackFieldDefinition],
     decision: _ReferencedDecision,
     *,
     resolvable_fields: Mapping[str, ResolvableSpec],
     validated_references: Sequence[CuratableObjectEnvelope],
     objects_by_ref: Mapping[tuple[str, str], CuratableObjectEnvelope],
-    source_envelope_revision: int | None,
+    fallback_text: tuple[str | None, str | None],
+    event: Mapping[str, Any] | None,
 ) -> CuratableObjectEnvelope:
-    result = item.result
     ref_types = {
         field.object_type_ref
         for field in declared
@@ -1488,23 +1621,13 @@ def _referencing_object_with_result(
         )
         if container_path is not None:
             containers.setdefault(container_path, []).append(field_path)
-    explanation = (
-        decision.source.get(VALIDATOR_EXPLANATION_KEY) if decision.source is not None else result.explanation
-    )
-    curator_message = (
-        decision.source.get(VALIDATOR_CURATOR_MESSAGE_KEY)
+    explanation, curator_message = (
+        (decision.source.get(VALIDATOR_EXPLANATION_KEY), decision.source.get(VALIDATOR_CURATOR_MESSAGE_KEY))
         if decision.source is not None
-        else result.curator_message
+        else fallback_text
     )
 
     source_overridden = decision.source is not None and is_curator_override(decision.source)
-    if any(
-        is_curator_override(_payload_container(payload, container_path))
-        for container_path in containers
-    ) and not source_overridden:
-        # A curator override on the referencing value wins over the validator: nothing
-        # about the object (values, state or links) changes.
-        return domain_object
     for container_path, field_paths in containers.items():
         container = _payload_container(payload, container_path)
         spec = declared_spec_for(
@@ -1514,6 +1637,14 @@ def _referencing_object_with_result(
             *(spec.identity_keys if spec is not None else ()),
             *(str(parse_field_path(path)[-1]) for path in field_paths),
         ]))
+        if is_curator_override(container) and not source_overridden:
+            # The value only follows its source: a curator override copied from the
+            # source is withdrawn with it, and the value takes the source's state.
+            container.pop(CURATOR_OVERRIDE_KEY, None)
+            for key in identity_keys:
+                container[key] = None
+            container[RESOLUTION_STATE_KEY] = UNRESOLVED
+            container[LOOKUP_OUTCOME_KEY] = OUTCOME_NOT_VALIDATED
         if decision.resolved:
             identity = {str(parse_field_path(path)[-1]): decision.values[path] for path in field_paths}
             if decision.source is not None:
@@ -1567,28 +1698,16 @@ def _referencing_object_with_result(
         object_refs = [ref for ref in object_refs if ref.object_type not in ref_types]
     if payload == domain_object.payload and object_refs == list(domain_object.object_refs):
         return domain_object
-    if not decision.resolved:
+    if not decision.resolved or event is None or source_overridden:
+        # Only a validator's resolution is a write-back event; a curator's identity is
+        # recorded by the copied curator_override.
         return domain_object.model_copy(update={"payload": payload, "object_refs": object_refs})
 
     metadata = dict(domain_object.metadata)
     events = metadata.get(VALIDATOR_MATERIALIZATION_METADATA_KEY)
     metadata[VALIDATOR_MATERIALIZATION_METADATA_KEY] = [
         *(events if isinstance(events, list) else []),
-        {
-            "source": "domain_validator_referenced_target",
-            "request_id": result.request_id,
-            "validator_binding_id": result.validator_binding_id,
-            "validator_agent": result.validator_agent.model_dump(mode="json"),
-            "validated_target": item.match.object_envelope.to_object_ref().model_dump(
-                mode="json", exclude_none=True
-            ),
-            "materialized_field_paths": list(decision.values),
-            **(
-                {"source_envelope_revision": source_envelope_revision}
-                if source_envelope_revision is not None
-                else {}
-            ),
-        },
+        {**event, "materialized_field_paths": list(decision.values)},
     ]
     return domain_object.model_copy(
         update={"payload": payload, "object_refs": object_refs, "metadata": metadata}

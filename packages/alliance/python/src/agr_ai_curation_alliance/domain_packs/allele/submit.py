@@ -24,6 +24,7 @@ from src.schemas.domain_envelope import (
 )
 
 from src.lib.domain_packs.resolvable_values import (
+    OUTCOME_CURATOR_OVERRIDE,
     RESOLVED,
     effective_resolution,
     value_covered_by_validator,
@@ -317,7 +318,25 @@ def _association_submission_operations(
         object_type="EvidenceQuote",
         objects_by_ref=objects_by_ref,
     )
-    if allele is None:
+    if allele is None and outcome == OUTCOME_CURATOR_OVERRIDE:
+        # A curator-entered allele the validator did not find has no Alliance allele record.
+        blockers.append(
+            _blocker(
+                object_id=object_id,
+                code="alliance.allele.association_refs_missing",
+                message=(
+                    "This allele was entered by a curator and the allele validator did not find it "
+                    "in the Alliance database, so there is no Alliance allele record to link. "
+                    "Submission needs an allele the validator can find."
+                ),
+                details={
+                    "missing_object_type": "Allele",
+                    "lookup_outcome": outcome,
+                    "allele_identifier": association.payload.get("allele_identifier"),
+                },
+            )
+        )
+    elif allele is None:
         blockers.append(
             _missing_reference_blocker(object_id=object_id, object_type="Allele")
         )
