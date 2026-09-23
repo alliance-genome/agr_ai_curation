@@ -303,7 +303,9 @@ def _profile_fields(profile_fields: list[ProfileField], fanout_paths: set[str]):
               DomainPackFieldDefinition(field_path="attributes", field_type=DomainPackFieldType.OBJECT, required=True),
               # Optional so records staged before the builder required a rationale still load.
               DomainPackFieldDefinition(field_path="rationale", field_type=DomainPackFieldType.STRING,
-                                        display_name="Rationale", required=False)]
+                                        display_name="Rationale", required=False,
+                                        metadata={"protected": True,
+                                                  "curator_action_note": "Written by the extraction agent; not editable."})]
     enums = []
 
     def visit(field: ProfileField, prefix: str):
