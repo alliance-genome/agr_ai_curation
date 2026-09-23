@@ -749,6 +749,42 @@ def test_composite_marker_lands_on_the_unresolved_part():
     assert result.rows[0]["pattern"] == "hyp (WBbt:1, unresolved); L4 (WBls:1)"
 
 
+def test_composite_list_marker_lands_on_the_indexed_child():
+    """A compose spec over a list places an indexed finding on the named child only."""
+
+    relations = "object.pack.PhenotypeAnnotation.condition_relations"
+    spec = {"compose": [
+        {"path": "condition_relation_type.name", "display": None},
+        {"path": "conditions", "display": {"label": "condition_summary", "id": "condition_class.curie"}},
+    ], "separator": ": "}
+    value = [
+        {"condition_relation_type": {"name": "induced_by"}, "conditions": [
+            {"condition_class": {"curie": "ZECO:1"}, "condition_summary": "heat"},
+            {"condition_class": {"curie": "ZECO:2"}, "condition_summary": "diet"},
+        ]},
+        {"condition_relation_type": {"name": "has_condition"}, "conditions": [
+            {"condition_class": {"curie": "ZECO:3"}, "condition_summary": "cold"},
+        ]},
+    ]
+    catalog = [FlowOutputField(ref=relations, label="Relations", value_type="list",
+                               row_source="object", display=spec)]
+
+    def cell(field_path):
+        finding = {"object.object_id": "p1", "validation.status": "open", "validation.field_path": field_path}
+        bundle = _bundle([{"object.object_id": "p1", relations: deepcopy(value)}], catalog, [finding])
+        return apply_projection_plan(bundle, _object_plan("csv", [("relations", relations)])).rows[0]["relations"]
+
+    assert cell("condition_relations[0].conditions[1]") == (
+        "induced_by: heat (ZECO:1) | diet (ZECO:2, unresolved) | has_condition: cold (ZECO:3)"
+    )
+    assert cell("condition_relations[1].conditions[0].condition_class") == (
+        "induced_by: heat (ZECO:1) | diet (ZECO:2) | has_condition: cold (ZECO:3, unresolved)"
+    )
+    assert cell("condition_relations[0].condition_relation_type") == (
+        "induced_by (unresolved): heat (ZECO:1) | diet (ZECO:2) | has_condition: cold (ZECO:3)"
+    )
+
+
 def test_indexed_findings_mark_the_matching_fanned_out_position():
     relations = "object.pack.DiseaseAnnotation.condition_relations"
     summaries = f"{relations}.conditions.condition_summary"
