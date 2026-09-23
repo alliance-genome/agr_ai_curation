@@ -231,8 +231,17 @@ def test_compilation_is_deterministic():
 def test_namespace_above_the_function_cap_fails(monkeypatch):
     monkeypatch.setenv("TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS", "1")
 
-    with pytest.raises(ToolSurfaceError, match="document_reading"):
+    with pytest.raises(tool_surface.ToolGroupCapError) as excinfo:
         _compile([_tool("search_document"), _tool("read_chunk")])
+
+    # Curator-facing: only a saved custom agent can reach the run-time cap.
+    assert str(excinfo.value) == (
+        "This agent has 2 tools from the 'document reading' group, and custom agents "
+        "can use at most 1 tools from one group. Please contact the AI Curation "
+        "developers for help setting up this agent."
+    )
+    assert excinfo.value.oversized == {"document_reading": ["search_document", "read_chunk"]}
+    assert excinfo.value.agent_key == "gene_extractor"
 
 
 def test_namespace_with_two_descriptions_fails():
@@ -538,10 +547,15 @@ def test_eager_surface_keeps_its_run_config_and_formatter_conflicts_fail():
 def test_replay_without_tool_search_keeps_every_call_and_result():
     history = [
         {"role": "user", "content": "extract"},
+        # Reasoning tied to the search (the next non-reasoning item): removed.
+        {"type": "reasoning", "id": "rs_search_a", "summary": []},
+        {"type": "reasoning", "id": "rs_search_b", "summary": []},
         {"type": "tool_search_call", "id": "ts_1", "call_id": None, "execution": "server",
          "arguments": {"paths": ["evidence_maintenance"]}, "status": "completed"},
         {"type": "tool_search_output", "id": "tso_1", "call_id": None, "execution": "server",
          "status": "completed", "tools": [{"type": "namespace", "name": "evidence_maintenance"}]},
+        # Reasoning tied to a kept function call: kept.
+        {"type": "reasoning", "id": "rs_call", "summary": []},
         {"type": "function_call", "call_id": "c1", "name": "record_evidence",
          "namespace": "evidence_maintenance", "arguments": "{}"},
         {"type": "function_call_output", "call_id": "c1", "output": "evidence e1"},
@@ -551,15 +565,38 @@ def test_replay_without_tool_search_keeps_every_call_and_result():
 
     replay, changes = tool_surface.replay_input_without_tool_search(history)
 
-    assert changes == {"tool_search_items_removed": 2, "function_call_namespaces_removed": 1}
+    assert changes == {
+        "tool_search_items_removed": 2,
+        "reasoning_items_removed": 2,
+        "function_call_namespaces_removed": 1,
+    }
     assert replay == [
         history[0],
-        {"type": "function_call", "call_id": "c1", "name": "record_evidence", "arguments": "{}"},
-        history[4],
         history[5],
-        history[6],
+        {"type": "function_call", "call_id": "c1", "name": "record_evidence", "arguments": "{}"},
+        history[7],
+        history[8],
+        history[9],
     ]
-    assert history[3]["namespace"] == "evidence_maintenance"
+    assert history[6]["namespace"] == "evidence_maintenance"
+
+
+def test_replay_of_an_eager_run_is_unchanged():
+    history = [
+        {"role": "user", "content": "extract"},
+        {"type": "reasoning", "id": "rs_1", "summary": []},
+        {"type": "function_call", "call_id": "c1", "name": "read_chunk", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "chunk text"},
+    ]
+
+    replay, changes = tool_surface.replay_input_without_tool_search(history)
+
+    assert replay == history
+    assert changes == {
+        "tool_search_items_removed": 0,
+        "reasoning_items_removed": 0,
+        "function_call_namespaces_removed": 0,
+    }
 
 
 def test_recorded_prompt_matches_the_instructions_the_deferred_run_sends():

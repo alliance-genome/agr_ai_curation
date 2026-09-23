@@ -44,6 +44,7 @@ from .audit_labels import build_specialist_internal_friendly_name
 from .langfuse_client import is_openai_agents_tracing_enabled
 from .tool_surface import (
     MODE_DEFERRED,
+    ToolGroupCapError,
     apply_tool_surface,
     canonical_tool_name,
     record_tool_surface_prompt,
@@ -5119,7 +5120,21 @@ async def run_specialist_with_events(
         # The specialist run gets tool-not-found recovery for its deferred
         # tools; the tool-less structured-output retry keeps effective_config.
         specialist_run_config = run_config_for_tool_surface(effective_config, tool_surface)
-    except BaseException:
+    except BaseException as exc:
+        if isinstance(exc, ToolGroupCapError):
+            # Curator-facing: the audit trail and a flow's failure message show
+            # this text (a chat run error is replaced by a generic message).
+            add_specialist_event({
+                "type": "SPECIALIST_ERROR",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "specialist": specialist_name,
+                    "error": str(exc),
+                    "message": str(exc),
+                    "reason": "tool_group_too_large",
+                    "severity": "error",
+                },
+            })
         reset_active_evidence_records(evidence_workspace_token)
         reset_active_resolver_call_ledger(resolver_call_ledger_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
@@ -6149,10 +6164,12 @@ async def run_specialist_with_events(
 
                     logger.info(
                         "%s retry: including %s previous items plus nudge prompt "
-                        "(tool search items removed=%s, function call namespaces removed=%s)",
+                        "(tool search items removed=%s, reasoning items removed=%s, "
+                        "function call namespaces removed=%s)",
                         specialist_name,
                         len(previous_items),
                         replay_changes["tool_search_items_removed"],
+                        replay_changes["reasoning_items_removed"],
                         replay_changes["function_call_namespaces_removed"],
                     )
 

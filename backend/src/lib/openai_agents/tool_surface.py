@@ -60,6 +60,38 @@ class ToolSurfaceError(ValueError):
     """The tool surface cannot be compiled without breaking an invariant."""
 
 
+class ToolGroupCapError(ToolSurfaceError):
+    """A saved custom agent has more tools in one group than the cap allows.
+
+    The message is curator-facing (see :func:`tool_group_cap_message`); the
+    runtime, agent and per-group tool lists are kept for logs and events.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        runtime: str,
+        agent_key: str,
+        oversized: Mapping[str, list[str]],
+    ) -> None:
+        super().__init__(message)
+        self.runtime = runtime
+        self.agent_key = agent_key
+        self.oversized = dict(oversized)
+
+
+def tool_group_cap_message(namespace: str, tool_count: int, namespace_max: int) -> str:
+    """Curator-facing explanation of a tool group over the per-agent cap."""
+
+    group = namespace.replace("_", " ")
+    return (
+        f"This agent has {tool_count} tools from the '{group}' group, and custom agents "
+        f"can use at most {namespace_max} tools from one group. Please contact the AI "
+        "Curation developers for help setting up this agent."
+    )
+
+
 class ToolSurfaceConfigurationError(RuntimeError):
     """Namespace or loading-policy configuration is invalid (startup hard-fail)."""
 
@@ -335,11 +367,31 @@ def compile_tool_surface(
         deferred_tool.defer_loading = True
         grouped.setdefault(namespace_name, []).append(deferred_tool)
 
-    oversized = sorted(name for name, members in grouped.items() if len(members) > namespace_max)
+    oversized = {
+        name: [tool.name for tool in members]
+        for name, members in sorted(grouped.items())
+        if len(members) > namespace_max
+    }
     if oversized:
-        raise ToolSurfaceError(
-            f"{runtime} agent {agent_key} places more than {namespace_max} tools in "
-            f"namespace(s) {', '.join(oversized)} (TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS)"
+        # Startup validation keeps packaged agents under the cap, so only a
+        # saved custom agent can reach this; its curator needs developer help.
+        logger.error(
+            "%s agent %s places more than %s tools in namespace(s) %s "
+            "(TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS)",
+            runtime,
+            agent_key,
+            namespace_max,
+            oversized,
+            extra={"runtime": runtime, "agent_key": agent_key, "operation": "tool_group_cap"},
+        )
+        raise ToolGroupCapError(
+            " ".join(
+                tool_group_cap_message(name, len(members), namespace_max)
+                for name, members in oversized.items()
+            ),
+            runtime=runtime,
+            agent_key=agent_key,
+            oversized=oversized,
         )
 
     deferred: list[FunctionTool] = []
@@ -466,21 +518,48 @@ def replay_input_without_tool_search(
 
     ``tool_search_call`` / ``tool_search_output`` items only carry the search
     and the loaded tool *definitions*; a request without ``ToolSearchTool``
-    has no surface for them, so they are removed. Function calls made through
-    a namespace keep their name, arguments and call id but lose the
-    ``namespace`` field (the request declares none). Every function call and
-    function call output -- the evidence the model gathered -- is kept.
-    Returns the rewritten items and what was changed.
+    has no surface for them, so they are removed. A reasoning item is tied to
+    the next non-reasoning item, and the Responses API rejects one whose
+    following item is missing, so reasoning directly preceding a removed
+    search item is removed too (the SDK's own convention for dropped calls).
+    Function calls made through a namespace keep their name, arguments and
+    call id but lose the ``namespace`` field (the request declares none).
+    Every function call and function call output -- the evidence the model
+    gathered -- and the reasoning before them is kept. Returns the rewritten
+    items and what was changed.
     """
 
-    replay: list[Any] = []
-    changes = {"tool_search_items_removed": 0, "function_call_namespaces_removed": 0}
-    for item in items:
-        item_type = item.get("type") if isinstance(item, Mapping) else None
-        if item_type in _TOOL_SEARCH_ITEM_TYPES:
-            changes["tool_search_items_removed"] += 1
+    def item_type(item: Any) -> Any:
+        return item.get("type") if isinstance(item, Mapping) else None
+
+    removed = {
+        index for index, item in enumerate(items) if item_type(item) in _TOOL_SEARCH_ITEM_TYPES
+    }
+    removed_reasoning: set[int] = set()
+    for index, item in enumerate(items):
+        if item_type(item) != "reasoning":
             continue
-        if item_type == "function_call" and item.get("namespace"):
+        following = next(
+            (
+                next_index
+                for next_index in range(index + 1, len(items))
+                if item_type(items[next_index]) != "reasoning"
+            ),
+            None,
+        )
+        if following in removed:
+            removed_reasoning.add(index)
+
+    replay: list[Any] = []
+    changes = {
+        "tool_search_items_removed": len(removed),
+        "reasoning_items_removed": len(removed_reasoning),
+        "function_call_namespaces_removed": 0,
+    }
+    for index, item in enumerate(items):
+        if index in removed or index in removed_reasoning:
+            continue
+        if item_type(item) == "function_call" and item.get("namespace"):
             item = {key: value for key, value in item.items() if key != "namespace"}
             changes["function_call_namespaces_removed"] += 1
         replay.append(item)

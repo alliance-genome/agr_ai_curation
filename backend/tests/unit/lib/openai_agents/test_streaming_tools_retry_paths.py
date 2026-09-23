@@ -473,6 +473,52 @@ async def test_run_specialist_resets_run_state_when_the_tool_surface_fails(monke
 
 
 @pytest.mark.asyncio
+async def test_custom_agent_over_the_tool_group_cap_reports_a_curator_message(monkeypatch):
+    from src.lib.openai_agents.tool_surface import ToolGroupCapError
+
+    cap_message = (
+        "This agent has 11 tools from the 'staged object corrections' group, and custom "
+        "agents can use at most 10 tools from one group. Please contact the AI Curation "
+        "developers for help setting up this agent."
+    )
+
+    def _over_cap(*_args, **_kwargs):
+        raise ToolGroupCapError(
+            cap_message,
+            runtime="extractor",
+            agent_key="ca_custom",
+            oversized={"staged_object_corrections": ["patch_a"] * 11},
+        )
+
+    captured_events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "apply_tool_surface", _over_cap)
+
+    with pytest.raises(ToolGroupCapError):
+        await streaming_tools.run_specialist_with_events(
+            agent=SimpleNamespace(
+                name="Custom Extractor", tools=[], output_type=_Envelope,
+                instructions="", model="gpt-4o",
+            ),
+            input_text="extract structured output",
+            specialist_name="Custom Extractor",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    [error_event] = [e for e in captured_events if e["type"] == "SPECIALIST_ERROR"]
+    # The audit line and a flow's failure message read details.message/error.
+    assert error_event["details"] == {
+        "specialist": "Custom Extractor",
+        "error": cap_message,
+        "message": cap_message,
+        "reason": "tool_group_too_large",
+        "severity": "error",
+    }
+
+
+@pytest.mark.asyncio
 async def test_run_specialist_retry_succeeds_when_initial_output_missing(monkeypatch):
     first = _FakeRunResult(events=[], final_output=None, new_items=[])
     second = _FakeRunResult(events=[], final_output=_Envelope(value="ok"), new_items=[])
@@ -552,11 +598,13 @@ async def test_run_specialist_retry_raises_when_retry_also_missing_output(monkey
 
 _DEFERRED_RUN_HISTORY = [
     {"role": "user", "content": "extract structured output"},
+    {"type": "reasoning", "id": "rs_search", "summary": []},
     {"type": "tool_search_call", "id": "ts_1", "call_id": None, "execution": "server",
      "arguments": {"paths": ["evidence_maintenance"]}, "status": "completed"},
     {"type": "tool_search_output", "id": "tso_1", "call_id": None, "execution": "server",
      "status": "completed", "tools": [{"type": "namespace", "name": "evidence_maintenance",
                                       "description": "Record and maintain evidence.", "tools": []}]},
+    {"type": "reasoning", "id": "rs_call", "summary": []},
     {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "record_evidence",
      "namespace": "evidence_maintenance", "arguments": "{\"span_id\": \"s1\"}", "status": "completed"},
     {"type": "function_call_output", "call_id": "call_1", "output": "evidence e1 recorded"},
@@ -614,6 +662,13 @@ async def test_structured_retry_request_replays_deferred_history_without_tool_se
     item_types = [item.get("type") for item in request["input"]]
     assert "tool_search_call" not in item_types
     assert "tool_search_output" not in item_types
+    # Reasoning tied to the removed search is removed (the API rejects a
+    # reasoning item without its following item); reasoning before the kept
+    # function call stays in front of it.
+    assert [item.get("id") for item in request["input"] if item.get("type") == "reasoning"] == [
+        "rs_call"
+    ]
+    assert item_types[item_types.index("reasoning") + 1] == "function_call"
     assert request["tools"] == []
     [call] = [item for item in request["input"] if item.get("type") == "function_call"]
     assert "namespace" not in call

@@ -771,11 +771,12 @@ def validate_custom_agent_authoring_draft(
     from src.lib.openai_agents.config import get_tool_surface_namespace_max_functions
     from src.lib.openai_agents.tool_surface import (
         oversized_tool_namespaces,
+        tool_group_cap_message,
         tool_namespace_memberships,
     )
 
-    # Hosted tool search loads at most this many tools of one group (ALL-1280);
-    # a custom extractor over the cap would fail when its run starts.
+    # A run loads at most this many tools of one group (ALL-1280). Blocking,
+    # and the curator is sent to the developers rather than asked to trim.
     namespace_max = get_tool_surface_namespace_max_functions()
     for namespace, members in oversized_tool_namespaces(
         normalized_tool_ids,
@@ -787,13 +788,10 @@ def validate_custom_agent_authoring_draft(
                 code="tool_group_too_large",
                 severity="error",
                 path="custom_agent.tool_ids",
-                message=(
-                    f"This agent has {len(members)} tools from the '{namespace}' tool "
-                    f"group; at most {namespace_max} tools from one group can be loaded "
-                    "on demand together."
-                ),
+                message=tool_group_cap_message(namespace, len(members), namespace_max),
                 fix_hint=(
-                    f"Keep at most {namespace_max} of these tools: {', '.join(members)}."
+                    "Contact the AI Curation developers and include this message. "
+                    f"Tools from this group on the agent: {', '.join(members)}."
                 ),
             )
         )
