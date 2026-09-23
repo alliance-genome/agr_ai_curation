@@ -1457,6 +1457,7 @@ def test_a_curator_can_override_each_phenotype_term_and_condition_part():
 
     from src.lib.domain_envelopes.patches import (
         EnvelopeFieldPatch,
+        EnvelopeFieldPatchOperation,
         EnvelopeFieldPatchStatus,
         apply_curator_field_patch,
     )
@@ -1483,21 +1484,33 @@ def test_a_curator_can_override_each_phenotype_term_and_condition_part():
         )],
     )
 
-    def patch(field_path, value, before=None):
+    def patch(field_path, value, before=None, operation=EnvelopeFieldPatchOperation.REPLACE):
         return apply_curator_field_patch(
             envelope, pack,
             EnvelopeFieldPatch(envelope_id=envelope.envelope_id, expected_revision=1, object_id="pa-1",
-                               field_path=field_path, before=before, value=value),
+                               field_path=field_path, before=before, value=value, operation=operation),
             current_revision=1, actor_id="curator-7",
         )
 
-    second_term = patch("phenotype_terms[1].curie", "WBPhenotype:0000059")
+    def identity(field_path, value):
+        return patch(field_path, value, before=dict.fromkeys(value),
+                     operation=EnvelopeFieldPatchOperation.REPLACE_IDENTITY)
+
+    second_term = identity("phenotype_terms[1].curie", {"curie": "WBPhenotype:0000059", "label": "slow growth"})
     assert second_term.status is EnvelopeFieldPatchStatus.ACCEPTED, second_term.errors
     edited = second_term.envelope.extracted_objects[0].payload["phenotype_terms"][1]
-    assert (edited["curie"], edited["lookup_outcome"]) == ("WBPhenotype:0000059", "curator_override")
+    assert (edited["curie"], edited["label"], edited["lookup_outcome"]) == (
+        "WBPhenotype:0000059", "slow growth", "curator_override")
 
-    condition = patch("condition_relations[0].conditions[0].condition_class.curie", "ZECO:0000160")
+    condition = identity("condition_relations[0].conditions[0].condition_class.curie",
+                         {"curie": "ZECO:0000160", "name": "temperature exposure"})
     assert condition.status is EnvelopeFieldPatchStatus.ACCEPTED, condition.errors
+
+    relation_type = identity("condition_relations[0].condition_relation_type.name", {"name": "has_condition"})
+    assert relation_type.status is EnvelopeFieldPatchStatus.ACCEPTED, relation_type.errors
+
+    single = patch("phenotype_terms[0].curie", "WBPhenotype:0000059")
+    assert single.errors == ("Enter both the identifier and the name for a curator override.",)
 
     wording = patch("phenotype_terms[0].mention", "other words", before="fewer progeny")
     assert wording.status is EnvelopeFieldPatchStatus.REJECTED

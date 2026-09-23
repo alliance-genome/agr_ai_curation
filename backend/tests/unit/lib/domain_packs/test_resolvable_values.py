@@ -1534,3 +1534,27 @@ def test_a_resolved_cell_never_shows_proposals_or_overruled_identities():
     value = {"abbreviation": "XP", "proposed_abbreviation": "Example Provider", "overruled_abbreviation": "YP",
              "mention": "Example Provider", "resolution_state": RESOLVED, "lookup_outcome": OUTCOME_MATCHED}
     assert display_text(value) == "abbreviation: XP"
+
+
+def test_a_header_keeps_the_label_of_a_value_already_read_through_effective_payload():
+    """A pre-applied legacy or invalid-record reading is not labelled "(paper wording)" again."""
+
+    from src.lib.domain_packs.resolvable_values import unresolved_header_text
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    declared = {"site": spec}
+    legacy = effective_payload({"site": {"curie": "ONT:9", "name": "old protein"}}, declared, object_metadata=None)
+    assert legacy["site"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+    assert unresolved_header_text(legacy, "site.name", resolvable_fields=declared) == (
+        f"old protein (ONT:9) {LEGACY_UNVERIFIED_SUFFIX}")
+
+    broken = {"site": {"mention": "skin", "curie": "ONT:9", "name": "x", "resolution_state": UNRESOLVED,
+                       "lookup_outcome": OUTCOME_NOT_FOUND, "validator_explanation": None}}
+    invalid = effective_payload(broken, declared, object_metadata=None)
+    header = unresolved_header_text(invalid, "site.name", resolvable_fields=declared)
+    assert header == invalid["site"]["mention"]
+    assert header.endswith("(invalid record, unverified)")
+
+    # A stored unresolved value's paper wording is still labelled as such.
+    stored = {"site": unresolved_value("skin", identity_keys=TERM_KEYS, outcome=OUTCOME_NOT_FOUND)}
+    assert unresolved_header_text(stored, "site.name", resolvable_fields=declared) == "skin (paper wording)"
