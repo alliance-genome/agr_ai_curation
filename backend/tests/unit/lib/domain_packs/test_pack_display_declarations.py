@@ -91,6 +91,9 @@ SHAPES_WITHOUT_DISPLAY_LEAF = {
     ("disease_unresolved_object_blocked_subject", "disease_annotation_subject"): (
         "blocked subject carries only resolution_state and resolution_note"
     ),
+    ("phenotype_pending_subject_and_term", "evidence_quote"): (
+        "embedded evidence quote carries only evidence_record_id; the quote is a separate object"
+    ),
     ("ge_empty_where_expressed", "expression_pattern"): (
         "where_expressed is an empty object and no when_expressed is present"
     ),
