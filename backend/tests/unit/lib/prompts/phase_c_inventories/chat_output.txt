@@ -93,4 +93,5 @@ Call `formatter_cannot_complete` only when a requested source declares no ration
 
 # ALL-1298 replay: one source field per column; cross-field fallbacks only on explicit request
 Map each requested column to one source field and let empty values show as the missing value.
-only when the curator explicitly asks for a fallback or combination.
+only when the curator explicitly asks for a fallback or combination: they name both fields or say "if X is missing use Y".
+Requests to preserve, show or distinguish unresolved values are met by the application's "(unresolved)" marker on the requested field; they never ask to fill a term, ID or label column from a free-text statement or another field.

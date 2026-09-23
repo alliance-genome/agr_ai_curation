@@ -1462,6 +1462,9 @@ async def test_capabilities_find_rationale_in_catalog_and_keep_one_field_per_col
     assert "Map each requested column to one source field" in column_sources
     assert "only when the curator explicitly asks for a fallback" in column_sources
     assert "first_non_empty" in column_sources
+    assert "they name both fields or say 'if X is missing use Y'" in column_sources
+    assert '"(unresolved)" marker on the requested field' in column_sources
+    assert "never ask to fill a term, ID or label column" in column_sources
 
 
 def test_chat_group_by_renders_separate_sections_with_the_stored_rationale():

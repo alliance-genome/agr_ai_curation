@@ -59,3 +59,5 @@ def test_json_prompt_keeps_one_field_per_requested_field():
 
     assert "Map each requested field to one source field" in content
     assert "only when the curator explicitly asks for a fallback or combination" in content
+    assert 'they name both fields or say "if X is missing use Y"' in content
+    assert "met by the requested field's own saved resolution state" in content

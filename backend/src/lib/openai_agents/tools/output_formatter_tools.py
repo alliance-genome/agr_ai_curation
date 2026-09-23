@@ -1235,7 +1235,10 @@ def _capabilities_payload(
             "Map each requested column to one source field and let empty values render "
             "as missing_value. Combine different fields in one column (first_non_empty, "
             "concat, conditional, pair_join) only when the curator explicitly asks for a "
-            "fallback or combination."
+            "fallback or combination: they name both fields or say 'if X is missing use Y'. "
+            "Requests to preserve, show or distinguish unresolved values are met by the "
+            "application's \"(unresolved)\" marker on the requested field; they never ask "
+            "to fill a term, ID or label column from a free-text statement or another field."
         ),
         "rationale": (
             "For 'why' or 'explain' requests, find the source's rationale field with "

@@ -78,3 +78,6 @@ def test_tsv_prompt_finds_rationale_in_catalog_and_keeps_one_field_per_column():
     assert "only when a requested source declares no rationale field" in content
     assert "Map each requested column to one source field" in content
     assert "only when the curator explicitly asks for a fallback or combination" in content
+    assert 'they name both fields or say "if X is missing use Y"' in content
+    assert 'met by the application\'s "(unresolved)" marker on the requested field' in content
+    assert "never ask to fill a term, ID or label column from a free-text statement" in content
