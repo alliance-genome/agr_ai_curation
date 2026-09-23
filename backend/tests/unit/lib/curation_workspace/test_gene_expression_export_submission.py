@@ -166,6 +166,30 @@ def _candidate_from_curator_guidance_fixture(object_index: int = 0) -> dict:
     }
 
 
+def _grounded(mention: str, **identity) -> dict:
+    """A value grounded to a curation DB row: resolved under the ALL-1283 contract."""
+
+    return {
+        **identity,
+        "mention": mention,
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": None,
+    }
+
+
+def _staged(mention: str, *identity_keys: str) -> dict:
+    """A value staged for validation: paper wording, no identity."""
+
+    return {
+        **{key: None for key in identity_keys},
+        "mention": mention,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+
+
 def _lta_candidate() -> dict:
     payload = {
         "unique_id": (
@@ -175,33 +199,31 @@ def _lta_candidate() -> dict:
         "date_created": "2014-03-24T17:36:40Z",
         "internal": False,
         "obsolete": False,
-        "data_provider": {"abbreviation": "RGD"},
-        "expression_annotation_subject": {
-            "primary_external_id": "RGD:3020",
-            "gene_symbol": "Lta",
-        },
-        "relation": {"name": "is_expressed_in"},
-        "single_reference": {"reference_id": 419039},
+        "data_provider": _grounded("RGD", abbreviation="RGD"),
+        "expression_annotation_subject": _grounded(
+            "Lta", primary_external_id="RGD:3020", gene_symbol="Lta"
+        ),
+        "relation": _grounded("is_expressed_in", name="is_expressed_in"),
+        "single_reference": _grounded("PMID:419039", reference_id=419039),
         "expression_experiment": {
             "unique_id": "RGD:3020|AGRKB:101000000400377|MMO:0000640",
-            "single_reference": {"reference_id": 419039},
-            "entity_assayed": {
-                "primary_external_id": "RGD:3020",
-                "gene_symbol": "Lta",
-            },
-            "expression_assay_used": {
-                "curie": "MMO:0000640",
-                "name": "expression assay",
-            },
+            "single_reference": _grounded("PMID:419039", reference_id=419039),
+            "entity_assayed": _grounded(
+                "Lta", primary_external_id="RGD:3020", gene_symbol="Lta"
+            ),
+            "expression_assay_used": _grounded(
+                "expression assay", curie="MMO:0000640", name="expression assay"
+            ),
         },
         "when_expressed_stage_name": "N/A",
         "where_expressed_statement": "extracellular space",
         "expression_pattern": {
             "where_expressed": {
-                "cellular_component": {
-                    "curie": "GO:0005615",
-                    "name": "obsolete extracellular space",
-                }
+                "cellular_component": _grounded(
+                    "extracellular space",
+                    curie="GO:0005615",
+                    name="obsolete extracellular space",
+                )
             }
         },
     }
@@ -576,7 +598,7 @@ def test_gene_expression_adapter_readiness_blocks_missing_anatomical_site_terms(
     candidate = copy.deepcopy(_candidate_from_fixture())
     candidate["payload"]["expression_pattern"]["where_expressed"] = {
         "cellular_component_qualifiers": [
-            {"curie": "RO:0002170", "name": "present in"}
+            _grounded("present in", curie="RO:0002170", name="present in")
         ],
     }
 
@@ -600,29 +622,32 @@ def test_gene_expression_adapter_readiness_blocks_missing_anatomical_site_terms(
     assert blockers[0].projection_ref == candidate["projection_ref"]
 
 
-def test_gene_expression_adapter_readiness_blocks_blank_nested_site_term():
+def test_gene_expression_adapter_readiness_blocks_an_unresolved_site_on_its_own_field():
     candidate = copy.deepcopy(_candidate_from_fixture())
     candidate["payload"]["where_expressed_statement"] = "nucleus"
     candidate["payload"]["expression_pattern"]["where_expressed"] = {
-        "cellular_component": {
-            "name": "   ",
-        },
+        "cellular_component": _staged("nuclear", "curie", "name"),
     }
 
     blockers = GeneExpressionExportAdapter().domain_envelope_readiness_blockers(
         candidate=candidate,
     )
 
+    # The site is present, so no "site required" blocker: the value blocks on its own field.
     assert {
         (blocker.object_id, blocker.field_path, blocker.code)
         for blocker in blockers
     } == {
         (
             "gene-expression-annotation-206552169",
-            "expression_pattern.where_expressed",
-            "alliance.gene_expression.anatomical_site_required",
+            "expression_pattern.where_expressed.cellular_component",
+            "alliance.gene_expression.value_unresolved",
         )
     }
+    assert blockers[0].message == (
+        "Cellular component is UNRESOLVED (lookup result: Not validated yet). "
+        "Paper wording: 'nuclear'."
+    )
 
 
 def test_gene_expression_submission_adapter_records_target_state():

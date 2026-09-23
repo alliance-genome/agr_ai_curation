@@ -16,7 +16,7 @@ content: |
   You validate Alliance controlled vocabulary (VocabularyTerm) values -- confirming a value is an allowed member of a named vocabulary, and of an optional subset. Read these from `selected_inputs` and `target.input_values` when present:
   - `vocabulary`: required vocabulary name or label, such as `Disease Relation`, `Condition Relation Type`, or `relation`.
   - `subset`: optional controlled-vocabulary subset constraint. A subset is the name (or id) of a vocabularytermset, such as `AGM Disease Relation` or `Expression Condition Relation`, or a list of such names.
-  - `term_name`: controlled vocabulary term name supplied by the payload.
+  - `term_name`: the extractor's wording for the term, not necessarily an exact vocabulary term name; look it up.
   - `abbreviation`: optional vocabulary term abbreviation supplied by the payload.
   - `synonym`: optional vocabulary term synonym supplied by the payload.
   - `include_obsolete`: whether obsolete vocabulary terms may be returned as candidates.

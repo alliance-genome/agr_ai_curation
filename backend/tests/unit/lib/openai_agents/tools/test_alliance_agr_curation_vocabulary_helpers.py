@@ -461,7 +461,7 @@ def test_domain_field_term_options_searches_assay_stage_and_direct_site_fields(m
     stage = _term_helper_fn()(
         domain_pack_id="agr.alliance.gene_expression",
         object_type="GeneExpressionAnnotation",
-        field_path="when_expressed_stage_name",
+        field_path="expression_pattern.when_expressed.developmental_stage_start",
         source_phrase="18 hpf",
         data_provider="ZFIN",
     )

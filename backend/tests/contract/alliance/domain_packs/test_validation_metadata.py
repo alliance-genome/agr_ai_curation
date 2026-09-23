@@ -755,8 +755,11 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "ontology_family": "assay",
         "ontology_term_type": "MMOTerm",
     }
+    # The stage term is looked up on developmental_stage_start; when_expressed_stage_name
+    # is the paper's stage wording and has no term helper (ALL-1283).
+    assert "term_helper" not in expression_fields["when_expressed_stage_name"].metadata
     assert expression_fields[
-        "when_expressed_stage_name"
+        "expression_pattern.when_expressed.developmental_stage_start"
     ].metadata["term_helper"]["lookup"] == {
         "package_tool": "search_domain_field_terms",
         "method": "search_life_stage_terms",
@@ -1152,7 +1155,6 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "ontology_family": "life_stage",
                 "optional_inputs": ["data_provider"],
                 "expected_result_fields": {
-                    "label": "when_expressed_stage_name",
                     "curie": (
                         "expression_pattern.when_expressed."
                         "developmental_stage_start.curie"

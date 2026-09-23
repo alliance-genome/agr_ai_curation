@@ -40,23 +40,51 @@ fixtures:
             obsolete: false
             data_provider:
               abbreviation: MGI
+              mention: MGI
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             expression_annotation_subject:
               primary_external_id: MGI:1923928
               gene_symbol: Tmem67
+              mention: Tmem67
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             relation:
               name: is_expressed_in
+              mention: is_expressed_in
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             single_reference:
               reference_id: 203506
+              mention: "203506"
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             expression_experiment:
               unique_id: MGI:1923928|AGRKB:101000000232912|MMO:0000655
               single_reference:
                 reference_id: 203506
+                mention: "203506"
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
               entity_assayed:
                 primary_external_id: MGI:1923928
                 gene_symbol: Tmem67
+                mention: Tmem67
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
               expression_assay_used:
                 curie: MMO:0000655
                 name: reverse transcription polymerase chain reaction assay
+                mention: reverse transcription polymerase chain reaction assay
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
             when_expressed_stage_name: TS26
             where_expressed_statement: metanephros
             expression_pattern:
@@ -64,9 +92,17 @@ fixtures:
                 anatomical_structure:
                   curie: EMAPA:17373
                   name: metanephros
+                  mention: metanephros
+                  resolution_state: resolved
+                  lookup_outcome: matched
+                  validator_explanation: null
                 anatomical_structure_uberon_terms:
                   - curie: UBERON:0001008
                     name: renal system
+                    mention: renal system
+                    resolution_state: resolved
+                    lookup_outcome: matched
+                    validator_explanation: null
           evidence_record_ids:
             - evidence-tmem67-metanephros-1
           metadata_refs:

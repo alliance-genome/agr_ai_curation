@@ -72,7 +72,6 @@ CHEMICAL_RELATIONS = [{
 
 @pytest.mark.parametrize("agent_id,pack_id,object_type", [
     ("disease", "agr.alliance.disease", "DiseaseAnnotation"),
-    ("gene_expression", "agr.alliance.gene_expression", "GeneExpressionAnnotation"),
     ("phenotype", "agr.alliance.phenotype", "PhenotypeAnnotation"),
 ])
 @pytest.mark.parametrize("output_format", ["csv", "chat"])
@@ -103,6 +102,41 @@ def test_experimental_condition_cell_includes_its_chemical(agent_id, pack_id, ob
     # JSON keeps the stored value unchanged.
     [json_row] = apply_projection_plan(bundle, _plan("json", [{"key": "c", "field_ref": ref}])).rows
     assert json_row["c"] == CHEMICAL_RELATIONS
+
+
+def _resolvable(mention, curie=None, **identity):
+    """A gene-expression condition part under the ALL-1283 contract."""
+
+    state = ("resolved", "matched") if curie or identity else ("unresolved", "not_validated")
+    return {"curie": curie, **identity, "mention": mention, "resolution_state": state[0],
+            "lookup_outcome": state[1], "validator_explanation": None}
+
+
+@pytest.mark.parametrize("output_format", ["csv", "chat"])
+def test_gene_expression_condition_cell_reads_each_part_resolved_or_unresolved(output_format):
+    """Each condition part is its own resolvable value: resolved "label (ID)" or UNRESOLVED."""
+
+    relations = [{
+        "condition_relation_type": {"name": "has_condition", "vocabulary": None, "id": None,
+                                    "mention": "has_condition", "resolution_state": "resolved",
+                                    "lookup_outcome": "matched", "validator_explanation": None},
+        "conditions": [
+            {"condition_class": _resolvable("ZECO:0000111", "ZECO:0000111"),
+             "condition_chemical": _resolvable("CHEBI:6909", "CHEBI:6909"),
+             "condition_summary": "chemical treatment"},
+            {"condition_chemical": _resolvable("ethanol")},
+        ],
+    }]
+    ref = "object.pack.GeneExpressionAnnotation.condition_relations"
+    item = {"object_type": "GeneExpressionAnnotation", "object_id": "a1",
+            "payload": {"condition_relations": relations}}
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("gene_expression", "agr.alliance.gene_expression", [item])],
+        flow_name="C", output_format=output_format,
+    )
+    [row] = apply_projection_plan(bundle, _plan(output_format, [{"key": "c", "field_ref": ref}])).rows
+    # The unmatched chemical never shows its paper wording in the cell.
+    assert row["c"] == "has_condition: chemical treatment; ZECO:0000111; CHEBI:6909, UNRESOLVED"
 
 
 # --- Generic reading keeps a second identifier ---------------------------------------------
@@ -217,7 +251,10 @@ def test_map_value_keys_structured_values_by_display_text(output_format):
 
 def _gene_expression_item(object_id):
     return {"object_type": "GeneExpressionAnnotation", "object_id": object_id,
-            "payload": {"expression_annotation_subject": {"gene_symbol": "Y71", "primary_external_id": "WB:1"},
+            "payload": {"expression_annotation_subject": {
+                            "gene_symbol": "Y71", "primary_external_id": "WB:1", "mention": "Y71",
+                            "resolution_state": "resolved", "lookup_outcome": "matched",
+                            "validator_explanation": None},
                         "where_expressed_statement": "hyp"}}
 
 
@@ -237,7 +274,7 @@ def test_pack_display_specs_resolve_once_per_bundle(monkeypatch):
     assert len(calls) == 1
     subject = "object.pack.GeneExpressionAnnotation.expression_annotation_subject"
     assert {field.ref: field.display for field in bundle.field_catalog}[subject] == {
-        "label": "gene_symbol", "id": "primary_external_id",
+        "label": "gene_symbol", "id": "primary_external_id", "mention": "mention",
     }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -215,12 +216,43 @@ def _tmem67_gene_expression_envelope(*, envelope_id: str):
         "tmem67_gene_expression_output.yaml",
     )
     context = raw_fixture["envelope_context"]
-    return gene_expression_extraction_output_to_pending_envelope(
+    envelope = gene_expression_extraction_output_to_pending_envelope(
         raw_fixture["output"],
         envelope_id=envelope_id,
         document_id=context["document_id"],
         produced_by=context["produced_by"],
         produced_at=context["produced_at"],
+    )
+    return _with_tmem67_validator_results(envelope)
+
+
+def _with_tmem67_validator_results(envelope):
+    """The extracted values as their validators resolve them (ALL-1283).
+
+    The extractor stages the subject gene, the reference and the UBERON slim
+    term as paper wording; export needs each one resolved, as the gene,
+    reference and ontology validators do in a real run.
+    """
+
+    from src.lib.domain_packs.resolvable_values import mark_resolved
+
+    annotation = envelope.extracted_objects[0]
+    payload = copy.deepcopy(annotation.payload)
+    experiment = payload["expression_experiment"]
+    resolved = [
+        (payload["expression_annotation_subject"], {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"}),
+        (experiment["entity_assayed"], {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"}),
+        (payload["single_reference"], {"reference_id": 203506}),
+        (experiment["single_reference"], {"reference_id": 203506}),
+        (
+            payload["expression_pattern"]["where_expressed"]["anatomical_structure_uberon_terms"][0],
+            {"curie": "UBERON:0001008", "name": "renal system"},
+        ),
+    ]
+    for value, identity in resolved:
+        mark_resolved(value, identity, explanation="Fixture validator result.")
+    return envelope.model_copy(
+        update={"extracted_objects": [annotation.model_copy(update={"payload": payload})]}
     )
 
 

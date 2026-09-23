@@ -50,7 +50,8 @@ PACK_PATHS = {
 }
 SHAPES_PATH = REPO_ROOT / "backend" / "tests" / "fixtures" / "flows" / "display_value_shapes.json"
 
-ROLE_KEYS = {"label", "id", "state"}
+# ``mention`` declares a resolvable value (ALL-1283): the paper wording leaf beside label/id.
+ROLE_KEYS = {"label", "id", "state", "mention"}
 SPEC_KEYS = ROLE_KEYS | {"resolved_states", "compose", "separator"}
 
 # Models no display can be declared for yet, each with the reason. Keep this list short:

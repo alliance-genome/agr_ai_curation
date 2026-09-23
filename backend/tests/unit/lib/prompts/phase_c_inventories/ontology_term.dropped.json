@@ -18,5 +18,12 @@
     "reason": "OTV-OUT / OTV-02 output-mandate de-dup. The pre-rewrite '# Goal' carried the 'return structured OntologyTermValidationResult data / structured-output' mandate that the locked core already injects ('Output contract from agent.yaml: produce JSON matching OntologyTermValidationResult; the structured-output layer below is authoritative for final response shape' plus the CRITICAL structured-output block 'Your final response MUST be valid JSON matching the OntologyTermValidationResult schema EXACTLY'). The lean rewrite no longer restates the JSON-only output mandate; the core half of the render owns it. The home check is satisfied by the synonym (the core's injected output-contract line); the ontology root-field detail is KEPT in <result_contract> because the core does not enumerate it. The exact phrase still appears in <goal> (the curator-facing one-line restatement), and the `OntologyTermValidationResult` token plus the 'do not wrap them under another object' rule remain in the base prompt.",
     "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:# Goal",
     "new_home": "render"
+  },
+  {
+    "phrase": "`label` or `name`: free-text term label supplied by the payload.",
+    "category": "deleted",
+    "reason": "ALL-1283: bindings pass the paper's wording (the value's mention) as label, not necessarily an ontology term name; the replacement phrase says so.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<scope>",
+    "new_home": ""
   }
 ]

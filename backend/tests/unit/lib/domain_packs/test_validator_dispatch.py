@@ -411,6 +411,18 @@ def _multi_object_envelope(
     )
 
 
+def _staged_value(mention: str, *identity_keys: str) -> dict[str, Any]:
+    """A gene-expression value staged for validation (ALL-1283): paper wording, no identity."""
+
+    return {
+        **{key: None for key in identity_keys},
+        "mention": mention,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+
+
 def _gene_expression_envelope() -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="gene-expression-env",
@@ -422,21 +434,28 @@ def _gene_expression_envelope() -> DomainEnvelope:
                 pending_ref_id="gene-expression-1",
                 object_role="curatable_unit",
                 payload={
-                    "data_provider": {"abbreviation": "MGI"},
+                    # The builder's exact provider-list lookup resolved the data provider.
+                    "data_provider": {
+                        "abbreviation": "MGI",
+                        "mention": "MGI",
+                        "resolution_state": "resolved",
+                        "lookup_outcome": "matched",
+                        "validator_explanation": None,
+                    },
                     "expression_annotation_subject": {
                         "primary_external_id": "Tmem67",
                         "gene_symbol": "Tmem67",
                     },
                     "when_expressed_stage_name": "TS26",
                     "expression_pattern": {
+                        "when_expressed": {
+                            "developmental_stage_start": _staged_value("TS26", "curie", "name"),
+                        },
                         "where_expressed": {
-                            "anatomical_structure": {
-                                "curie": "EMAPA:17373",
-                                "name": "metanephros",
-                            }
-                        }
+                            "anatomical_structure": _staged_value("metanephros", "curie", "name"),
+                        },
                     },
-                    "relation": {"name": "is_expressed_in"},
+                    "relation": _staged_value("is_expressed_in", "name", "vocabulary", "id"),
                     "single_reference": {
                         "pmid": "PMID:203506",
                         "title": "Paper supplied title",
