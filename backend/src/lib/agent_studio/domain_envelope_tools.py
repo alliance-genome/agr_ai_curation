@@ -676,6 +676,18 @@ def get_domain_envelope_review_rows(
         db.close()
 
 
+def _resolvable_value_summary(metadata: Any, object_type: str) -> dict[str, Any]:
+    """The extracted-vs-validated values an object type declares, compactly (ALL-1283)."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    paths = declared_resolvable_fields(metadata, object_type)
+    return {
+        "resolvable_root": "" in paths,
+        "resolvable_value_paths": sorted(path for path in paths if path),
+    }
+
+
 def get_domain_pack_validation_plan(
     *,
     agent_id: str | None = None,
@@ -792,10 +804,10 @@ def get_domain_pack_validation_plan(
                         "definition_state": object_definition.definition_state.value,
                         "capabilities": registry_object_capabilities(registry, object_definition, attachment_options),
                         "provider_refs": _provider_refs(object_definition.metadata),
-                        "field_paths": [
-                            field_definition.field_path
-                            for field_definition in object_definition.fields
-                        ],
+                        # Field paths page through section="fields" (object_type filter);
+                        # inlining them overflows a page for large object types.
+                        "field_count": len(object_definition.fields),
+                        **_resolvable_value_summary(metadata, object_definition.object_type),
                     }
                     for object_definition in metadata.object_definitions
                 ),
