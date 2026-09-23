@@ -41,7 +41,13 @@ response. The model sees one view of it that shows each returned row once, addin
 `validator_record_refs` and `validator_lookup_refs`; `lookup_model_view` drops the
 envelope's restatements of those rows (`candidate_matches`, `result_projections`,
 an attempt's matched-row projection) and text repeated as explanation or attempt
-coverage. Row lists are never reindexed, so source pointers resolve in the view and
+coverage. The field names a record offers for slot copies are listed once per tool
+response (each page, when paged) as `validator_record_available_fields`, the set most
+of that response's refs share; a ref carries its own `available_fields` only where
+its names differ (ALL-1291). The model reads a ref's fields from the same response,
+never from another page. `validator_record_refs`, `validator_record_available_fields`
+and `validator_lookup_refs` are runtime-owned: a provider response using any of them
+is rejected. Row lists are never reindexed, so source pointers resolve in the view and
 still distinguish duplicate identifiers with different records. These references
 never resolve in another invocation.
 
