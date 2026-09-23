@@ -544,7 +544,7 @@ def test_allele_builder_rejects_missing_rationale():
     )
 
 
-def test_allele_pack_declares_optional_rationale_in_evidence_group():
+def test_allele_pack_declares_optional_rationale_in_rationale_group():
     pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
     definition = next(
         obj
@@ -555,9 +555,9 @@ def test_allele_pack_declares_optional_rationale_in_evidence_group():
     assert field.required is False
     assert field.display_name == "Rationale"
     groups = definition.metadata["workspace_display"]["groups"]
-    evidence_group = next(group for group in groups if group["id"] == "evidence")
-    assert evidence_group["label"] == "Evidence and rationale"
-    assert evidence_group["fields"] == ["rationale"]
+    rationale_group = next(group for group in groups if group["id"] == "rationale")
+    assert rationale_group["label"] == "Rationale"
+    assert rationale_group["fields"] == ["rationale"]
 
 
 def test_stored_allele_association_without_rationale_gets_no_new_findings():

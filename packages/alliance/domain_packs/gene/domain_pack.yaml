@@ -117,8 +117,8 @@ object_definitions:
             fields:
               - proposed_gene_symbol
               - proposed_taxon
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
           - id: evidence_location

@@ -142,8 +142,8 @@ object_definitions:
             fields:
               - allele_label
               - allele_identifier
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
       export_behavior:

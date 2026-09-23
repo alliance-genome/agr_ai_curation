@@ -533,8 +533,8 @@ def test_gene_pack_rationale_group_is_separate_from_identity_notes():
     assert field.required is False
     assert field.display_name == "Rationale"
     groups = {group["id"]: group for group in definition.metadata["workspace_display"]["groups"]}
-    assert groups["evidence"]["label"] == "Evidence and rationale"
-    assert groups["evidence"]["fields"] == ["rationale"]
+    assert groups["rationale"]["label"] == "Rationale"
+    assert groups["rationale"]["fields"] == ["rationale"]
     assert "identity_resolution_notes" in groups["provenance"]["fields"]
     assert "rationale" not in groups["provenance"]["fields"]
 
