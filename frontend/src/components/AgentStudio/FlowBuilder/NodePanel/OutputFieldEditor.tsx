@@ -91,7 +91,7 @@ export default function OutputFieldEditor({ format, definition, binding, value, 
         <Typography>Choose what to include from the connected steps. Each item keeps its own row; records from different steps are never joined.</Typography>
         <Typography variant="body2">{format === 'json'
           ? 'Answers with parts stay as objects, and lists stay as arrays. Missing answers are null.'
-          : 'Answers with parts and lists stay together as JSON inside a cell. Choose individual parts for separate columns. Missing answers are blank.'} Selecting a column does not make the extractor require an answer.</Typography>
+          : 'Cells show terms and entities as "label (ID)", marked unresolved when validation did not resolve the value. For the text as found in the paper, also choose its paper-wording field. Lists share one cell; choose individual parts for separate columns. Missing answers are blank.'} Selecting a column does not make the extractor require an answer.</Typography>
         {loading && <Box role="status"><CircularProgress size={20} /> Loading saved source fields…</Box>}
         {error && <Alert severity="error">{error}</Alert>}
         {stale && <Alert severity="warning">The flow changed while this window was open. Cancel and reopen to review its current sources.</Alert>}

@@ -41,7 +41,7 @@ The system uses a multi-agent architecture:
 **Extraction Agents (work with uploaded papers):**
 - **General PDF Extraction Agent**: Answers broad questions about PDF documents.
 - **Domain-envelope extractors**: `gene_extractor`, `allele_extractor`, `disease_extractor`, `chemical_extractor`, `phenotype_extractor`, and `gene_expression` read papers and produce evidence-backed domain-envelope proposals. `gene_expression` is the flow/prompt alias for the packaged `gene_expression_extraction` agent.
-- **Formatter/display agents**: `chat_output`, `csv_formatter`, `tsv_formatter`, and `json_formatter` project curated state into chat or files.
+- **Formatter/display agents**: `chat_output`, `csv_formatter`, `tsv_formatter`, and `json_formatter` project curated state into chat or files. Each column maps to one field; there are no conditional or fallback columns.
 
 **Validator/Resolver Agents (validate proposed fields):**
 - **Gene, Allele, Disease, and Chemical validators**: `gene_validation`, `allele_validation`, `disease_validation`, and `chemical_validation` resolve proposed identities with package lookup tools. These canonical IDs are required for Agent Studio prompts, saved flows, and runtime dispatch; the shorter values remain domain-pack and entity vocabulary only.
@@ -95,6 +95,7 @@ Extractor and validator responsibilities are deliberately separate:
 - Materialized/resolved fields belong to validator results and domain-pack materialization. Extractor fields are proposals or hints unless a domain-pack validator result or materialized object/finding proves otherwise.
 - Runtime extraction may run active validators internally before the supervisor or AI Chat sees the final envelope. Do not infer that an extractor called a validator directly.
 - Every extractor stores a `rationale` on each item when it stages it: its own explanation, in its own words, of why it selected the item. It appears in review, default CSV/TSV layouts and chat. Items saved before rationale existed show "Not recorded". To explain why items were selected, ask for the Rationale column; formatters only show the stored rationale and never write reasons, and for "separate sections" they group rows by the splitting field (sections with different columns are not supported).
+- Every validated field has a paper-wording value (the text found in the paper) and a resolved value. Outputs show the resolved value as "label (ID)", or mark it unresolved when validation did not resolve it; the two are never merged into one column. CSV/TSV, chat and JSON outputs cannot do conditional or fallback columns ("if X is missing use Y") for now, so offer the resolved column and the paper-wording column side by side.
 
 PDF evidence is span-backed:
 
