@@ -568,3 +568,33 @@ def test_a_curator_override_stands_and_a_disagreeing_validator_adds_a_warning(ex
 
     agreeing = materialize_profile_validator_results(source, context, results(source, context, [{"identifier": "EX:7"}]))
     assert [finding.code for finding in agreeing.appended_findings] == ["domain_pack.curator_override"]
+
+
+def test_one_disagreement_per_value_ignoring_empty_slots_with_the_validator_words():
+    """ALL-1302 core review 2-4: grouped per value, empty slots skipped, curator message and revision kept."""
+
+    from types import SimpleNamespace
+
+    from src.lib.domain_packs.profile_materialization import _override_disagreements
+    from src.schemas.domain_envelope import CuratableObjectEnvelope
+
+    override = {"mention": "daf-16", "gene_id": "EX:7", "symbol": "daf-16x", "resolution_state": "resolved",
+                "lookup_outcome": "curator_override"}
+    item = SimpleNamespace(
+        request=SimpleNamespace(expected_result_fields={
+            "curie": "attributes.gene.gene_id", "symbol": "attributes.gene.symbol", "taxon": "attributes.gene.taxon"}),
+        result=SimpleNamespace(status="resolved", resolved_values={"curie": "EX:1", "symbol": "daf-16", "taxon": ""},
+                               validator_binding_id="lookup", request_id="request-1",
+                               explanation="Exact symbol match.", curator_message="Check the symbol."),
+    )
+    overrides = {"attributes.gene.gene_id": override, "attributes.gene.symbol": override,
+                 "attributes.gene.taxon": override}
+    target = CuratableObjectEnvelope(object_type="generic_object", object_id="one", payload={})
+
+    finding, = _override_disagreements(item, overrides, target, source_envelope_revision=4)
+
+    assert finding.message == ("Validator disagrees with the curator override: "
+                               "it resolved gene_id 'EX:1', symbol 'daf-16'.")
+    assert finding.field_ref.field_path == "attributes.gene"
+    assert finding.details["validator_curator_message"] == "Check the symbol."
+    assert finding.details["source_envelope_revision"] == 4

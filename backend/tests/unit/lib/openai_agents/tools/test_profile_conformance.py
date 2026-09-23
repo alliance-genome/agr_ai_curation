@@ -853,3 +853,21 @@ def test_a_curator_identity_edit_on_a_profile_value_is_a_curator_override(resolv
                         ("attributes.genes[0].lookup_outcome", "matched")]:
         with pytest.raises(ProfileConformanceError):
             resolvable_profile.apply_curator_edit(edited, path, value, actor_id="curator-1", at="2026-09-23T20:02:00+00:00")
+
+
+def test_a_curator_can_never_write_an_overruled_identity(resolvable_profile):
+    """ALL-1302 core review 1: overruled_* is set by validation, like the state keys."""
+
+    staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16"}]})
+    whole = {**staged["genes"][0], "gene_id": "EX:9", "overruled_gene_id": "EX:0"}
+    with pytest.raises(ProfileConformanceError):
+        resolvable_profile.apply_curator_edit(
+            staged, "attributes.genes[0]", whole, actor_id="curator-1", at="2026-09-23T20:00:00+00:00")
+    with pytest.raises(ProfileConformanceError):
+        resolvable_profile.apply_curator_edit(
+            staged, "attributes.genes[0].overruled_gene_id", "EX:0", actor_id="curator-1",
+            at="2026-09-23T20:00:00+00:00")
+    edited, audit = resolvable_profile.apply_curator_edit(
+        staged, "attributes.genes[0]", {**staged["genes"][0], "gene_id": "EX:9"}, actor_id="curator-1",
+        at="2026-09-23T20:00:00+00:00")
+    assert audit is not None and "overruled_gene_id" not in edited["genes"][0]

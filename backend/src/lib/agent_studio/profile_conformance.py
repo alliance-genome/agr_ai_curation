@@ -15,8 +15,8 @@ from typing import Any
 from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS, LOOKUP_OUTCOME_KEY, LOOKUP_OUTCOMES, MENTION_KEY, RESOLUTION_STATE_KEY,
     RESOLUTION_STATES, VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY,
-    ResolvableSpec, ResolvableValueError, apply_curator_identity, check_resolvable_value,
-    has_resolution_state, overruled_key, unresolved_value,
+    OVERRULED_KEY_PREFIX, ResolvableSpec, ResolvableValueError, apply_curator_identity,
+    check_resolvable_value, has_resolution_state, overruled_key, unresolved_value,
 )
 from src.lib.openai_agents.config import (
     get_generic_profile_max_issues,
@@ -528,7 +528,7 @@ class ResolvedGenericProfile:
         resolvable = self.resolvable_objects()
         whole = resolvable.get(declared_value_path(field_path))
         identity = whole if whole is not None else resolvable.get(declared_value_path(parent))
-        if whole is None and identity is not None and key in (MENTION_KEY, *RESOLUTION_KEYS):
+        if whole is None and identity is not None and _not_curator_editable(key):
             raise ProfileConformanceError([_patch_issue(
                 None, field_path, "The paper wording and validation state are not editable; edit the identity.")])
         if identity is None or (whole is None and key not in identity):
@@ -540,13 +540,13 @@ class ResolvedGenericProfile:
             raise ProfileConformanceError([_patch_issue(None, field_path, "Edit an existing value.")])
         if whole is not None:
             if not isinstance(value, dict) or any(
-                item_key in (MENTION_KEY, *RESOLUTION_KEYS) and item != container.get(item_key)
+                _not_curator_editable(item_key) and item != container.get(item_key)
                 for item_key, item in value.items()
             ):
                 raise ProfileConformanceError([_patch_issue(
                     None, field_path, "The paper wording and validation state are not editable; edit the identity.")])
             for item_key, item in value.items():
-                if item_key not in identity and item_key not in (MENTION_KEY, *RESOLUTION_KEYS):
+                if item_key not in identity and not _not_curator_editable(item_key):
                     container[item_key] = deepcopy(item)
             edits = {item_key: value[item_key] for item_key in identity
                      if item_key in value and value[item_key] != container.get(item_key)}
@@ -610,6 +610,11 @@ class ResolvedGenericProfile:
                         raise ProfileConformanceError([_patch_issue(candidate_id, path, "Replace the absent containing subtree first.")]) from exc
         self.require_attributes(result, candidate_id=candidate_id)
         return result
+
+
+def _not_curator_editable(key: str) -> bool:
+    """The paper wording, validation state and overruled identities are never curator edits."""
+    return key == MENTION_KEY or key in RESOLUTION_KEYS or key.startswith(OVERRULED_KEY_PREFIX)
 
 
 def _attribute_container(attributes: dict[str, Any], path: str) -> Any:

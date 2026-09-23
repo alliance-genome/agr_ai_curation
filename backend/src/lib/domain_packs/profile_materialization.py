@@ -110,7 +110,8 @@ def materialize_profile_validator_results(
                 # Every value this result writes is a curator override, which stands.
                 finding = _as_curator_override_finding(finding)
             findings.append(finding)
-            findings.extend(_override_disagreements(item, overrides, target))
+            findings.extend(_override_disagreements(
+                item, overrides, target, source_envelope_revision=source_envelope_revision))
     updated = envelope.model_copy(update={"extracted_objects": [
         replacements.get(_object_key(obj), obj) for obj in envelope.extracted_objects
     ]})
@@ -230,34 +231,49 @@ def _curator_overrides(item, context, target):
     return overrides
 
 
-def _override_disagreements(item, overrides, target):
-    """Open warnings where the validator disagrees with a curator override (the override stands)."""
+def _override_disagreements(item, overrides, target, *, source_envelope_revision):
+    """Open warnings, one per value, where the validator disagrees with a curator override (it stands).
+
+    A validator disagrees when it resolves a different identity (empty slots
+    are ignored) or decides against the value (a decisive outcome).
+    """
     if not overrides:
         return []
     result = item.result
+    by_value = defaultdict(dict)
+    for destination, value in overrides.items():
+        container_path, _, key = destination.rpartition(".")
+        by_value[container_path][destination] = (key, value)
     if result.status == "resolved":
-        slot_by_destination = {path: slot for slot, path in item.request.expected_result_fields.items()}
-        differing = {
-            destination: result.resolved_values[slot_by_destination[destination]]
-            for destination, value in overrides.items()
-            if slot_by_destination[destination] in result.resolved_values
-            and result.resolved_values[slot_by_destination[destination]] != value.get(destination.rpartition(".")[2])
-        }
-        details = {destination: f"it resolved {resolved!r}" for destination, resolved in differing.items()}
         outcome = "matched"
+        slot_by_destination = {path: slot for slot, path in item.request.expected_result_fields.items()}
+        details = {}
+        for container_path, entries in by_value.items():
+            differing = {
+                key: result.resolved_values[slot_by_destination[destination]]
+                for destination, (key, value) in entries.items()
+                if not missing_resolved_value(result.resolved_values.get(slot_by_destination[destination]))
+                and result.resolved_values[slot_by_destination[destination]] != value.get(key)
+            }
+            if differing:
+                details[container_path] = "it resolved " + ", ".join(
+                    f"{key} {resolved!r}" for key, resolved in differing.items())
     else:
         outcome = lookup_outcome_for_failure(validator_failure_classification(result, error_type=ValueError))
-        details = ({destination: f"its lookup result is {LOOKUP_OUTCOME_LABELS[outcome]}" for destination in overrides}
+        details = ({container_path: f"its lookup result is {LOOKUP_OUTCOME_LABELS[outcome]}" for container_path in by_value}
                    if outcome in DECISIVE_OUTCOMES else {})
     object_ref = target.to_object_ref()
     return [ValidationFinding(
         severity=ValidationFindingSeverity.WARNING, status=ValidationFindingStatus.OPEN,
         code="domain_pack.validator_disagrees_with_curator_override",
         message=f"Validator disagrees with the curator override: {detail}.",
-        field_ref=FieldRef(object_ref=object_ref, field_path=destination.rpartition(".")[0]),
+        field_ref=FieldRef(object_ref=object_ref, field_path=container_path),
         details={"validator_binding_id": result.validator_binding_id, "request_id": result.request_id,
-                 "lookup_outcome": outcome, "validator_explanation": result.explanation},
-    ) for destination, detail in details.items()]
+                 "lookup_outcome": outcome, "validator_explanation": result.explanation,
+                 **({"validator_curator_message": result.curator_message} if result.curator_message else {}),
+                 **({"source_envelope_revision": source_envelope_revision}
+                    if source_envelope_revision is not None else {})},
+    ) for container_path, detail in details.items()]
 
 
 def _attribute_value(attributes, path):
