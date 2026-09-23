@@ -3436,10 +3436,6 @@ def test_curators_may_override_every_identity_but_not_the_wording_or_validation_
         # A protected value field would block a whole-value override (core).
         assert (fields[value_path].get("protected") is True) == (value_path == "data_provider"), value_path
         for key in spec.identity_keys:
-            if f"{value_path}.{key}" not in fields:
-                # The experiment reference's copy holds only the reference id.
-                assert (value_path, key) == ("expression_experiment.single_reference", "title")
-                continue
             metadata = fields[f"{value_path}.{key}"]
             if value_path in _MIRROR_VALUES or value_path == "data_provider":
                 assert metadata.get("editable") is not True, (value_path, key)
@@ -3577,6 +3573,101 @@ def test_a_curator_override_of_the_subject_gene_carries_to_the_entity_assayed():
     ):
         assert (value["primary_external_id"], value["gene_symbol"]) == ("MGI:1923928", "Tmem67")
         assert (value["resolution_state"], value["lookup_outcome"]) == ("resolved", "curator_override")
+
+
+_REFERENCE_IDENTITY = {
+    "reference_id": 203506,
+    "title": "Tmem67 expression in the developing kidney",
+    "curie": "AGRKB:101000000232912",
+}
+
+
+def _experiment_reference_identity(payload: Mapping[str, Any]) -> dict[str, Any]:
+    reference = payload["expression_experiment"]["single_reference"]
+    return {key: reference.get(key) for key in _REFERENCE_IDENTITY}
+
+
+def test_the_experiment_reference_copies_the_full_reference_identity():
+    """N6: the experiment's copy holds the reference id, title and curie, never a stale title."""
+
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    payload["single_reference"] = staged_value(
+        "single_reference", "PMID 203506", pmid="PMID:203506"
+    )
+    payload["expression_experiment"]["single_reference"] = staged_value(
+        "expression_experiment.single_reference", "PMID 203506"
+    )
+    validated = _revalidate(
+        _with_payload(envelope, payload), {"source_reference_validation": _REFERENCE_IDENTITY}
+    ).envelope
+    payload = validated.extracted_objects[0].payload
+    assert _experiment_reference_identity(payload) == _REFERENCE_IDENTITY
+
+    # A curator override (every identity key, the validated curie included) replaces the copy too.
+    override = {
+        "reference_id": 999001,
+        "title": "Curator-chosen reference",
+        "curie": "AGRKB:101000000999001",
+    }
+    result = _curator_patch(
+        validated,
+        "single_reference.reference_id",
+        override,
+        before={key: payload["single_reference"][key] for key in override},
+        identity=True,
+    )
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    overridden = result.envelope.extracted_objects[0].payload
+    assert _experiment_reference_identity(overridden) == override
+    for reference in (overridden["single_reference"], overridden["expression_experiment"]["single_reference"]):
+        assert (reference["resolution_state"], reference["lookup_outcome"]) == (
+            "resolved",
+            "curator_override",
+        )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "FOR TEAM-LEAD: waits for r1283-core's S2 fix (overrides copy into plain "
+        "materializes_to_field_paths mirrors such as when_expressed_stage_name). Remove this "
+        "marker when that core SHA is merged; strict, so it fails loudly once core lands."
+    ),
+)
+def test_a_stage_override_is_the_exported_stage_name():
+    """S2: overriding the stage term also sets when_expressed_stage_name, which is exported."""
+
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    payload["expression_pattern"]["when_expressed"]["developmental_stage_start"] = staged_value(
+        "expression_pattern.when_expressed.developmental_stage_start", "late embryos"
+    )
+    payload.pop("when_expressed_stage_name")
+    result = _curator_patch(
+        _with_payload(envelope, payload),
+        "expression_pattern.when_expressed.developmental_stage_start.curie",
+        {"curie": "FIXTURE_STAGE:00026", "name": "Theiler stage 26"},
+        before={"curie": None, "name": None},
+        identity=True,
+    )
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+
+    overridden = result.envelope.extracted_objects[0].payload
+    assert overridden["when_expressed_stage_name"] == "Theiler stage 26"
+    candidate = _exportable_candidate(
+        overridden["expression_pattern"]["when_expressed"]["developmental_stage_start"],
+        overridden["when_expressed_stage_name"],
+    )
+    assert "alliance.gene_expression.required_field_missing" not in {
+        blocker.code for blocker in gene_expression_export_blockers(candidate)
+    }
+    assert gene_expression_export_blockers(candidate) == ()
+    assert _stage_name_column(candidate) == "Theiler stage 26"
 
 
 @pytest.mark.parametrize(

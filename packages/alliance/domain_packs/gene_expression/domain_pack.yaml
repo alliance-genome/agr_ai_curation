@@ -135,6 +135,8 @@ model_definitions:
         label: title
         id: reference_id
         mention: mention
+        validated:
+          - curie
   - model_id: OrganizationSnapshotPayload
     display_name: Organization snapshot payload
     description: Embedded data provider identity for the annotation.
@@ -800,14 +802,6 @@ object_definitions:
         required: true
         model_ref: ReferenceSnapshotPayload
         metadata:
-          # The experiment's copy holds only the reference id; the annotation's reference also
-          # keeps the curie its validator returns.
-          display:
-            label: title
-            id: reference_id
-            mention: mention
-            validated:
-              - curie
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
@@ -879,6 +873,8 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          materializes_to_field_paths:
+            - expression_experiment.single_reference.curie
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
@@ -897,6 +893,8 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          materializes_to_field_paths:
+            - expression_experiment.single_reference.title
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
@@ -1186,6 +1184,26 @@ object_definitions:
               range: integer
               db_table: reference
               db_column: id
+      - field_path: expression_experiment.single_reference.curie
+        field_type: string
+        display_name: Experiment reference CURIE
+        metadata:
+          derived_from_field_path: single_reference.curie
+          projection_role: derived_read_only
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
+          source_of_truth: single_reference.curie
+      - field_path: expression_experiment.single_reference.title
+        field_type: string
+        display_name: Experiment reference title
+        metadata:
+          derived_from_field_path: single_reference.title
+          projection_role: derived_read_only
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
+          source_of_truth: single_reference.title
       - field_path: expression_experiment.entity_assayed
         field_type: object
         display_name: Entity assayed
