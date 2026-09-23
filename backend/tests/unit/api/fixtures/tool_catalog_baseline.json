@@ -4008,11 +4008,13 @@
     "documentation": {
       "parameters": [
         {
+          "description": "The staged candidate to correct.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA `rationale` update must be non-empty and at most 300 characters; it cannot\nbe cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5835,6 +5837,7 @@
           "type": "string"
         },
         {
+          "description": "Curator-facing reason this item was selected, max 300 characters. Name the experiment, comparison, or statement that decides it, and why this term/entity/relation fits better than the nearest alternative (a broader/narrower term, a different allele or gene, another stage or tissue, a negated result). Ground it only in the recorded evidence. Do not repeat the quote or list the field values, do not open with \"The paper states/shows\", and do not describe your process. Shown in review, CSV/TSV and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"

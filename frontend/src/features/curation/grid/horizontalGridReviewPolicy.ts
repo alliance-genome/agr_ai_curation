@@ -51,6 +51,11 @@ export const HORIZONTAL_GRID_REVIEW_POLICIES: Readonly<Record<string, ReviewPoli
   },
 }
 
+// The per-item extraction rationale explains why a record was selected; it is
+// shown with the record's identity in the row context, never as a decision
+// column, whatever the object type's policy.
+export const HORIZONTAL_GRID_RATIONALE_FIELD_PATH = 'rationale'
+
 function metadataString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
@@ -59,6 +64,9 @@ export function isHorizontalGridDecisionField(
   candidate: CurationCandidate,
   field: CurationDraftField,
 ): boolean {
+  if (resolveEnvelopeFieldPath(field) === HORIZONTAL_GRID_RATIONALE_FIELD_PATH) {
+    return false
+  }
   const domainPackId = metadataString(candidate.metadata.domain_pack_id) ?? candidate.adapter_key
   const objectType = metadataString(candidate.metadata.object_type)
   if (!objectType) {
@@ -70,7 +78,7 @@ export function isHorizontalGridDecisionField(
     return true
   }
   if (policy.mode === 'groups') {
-    return field.group_key !== null && policy.decisionGroups.includes(field.group_key)
+    return field.group_key != null && policy.decisionGroups.includes(field.group_key)
   }
   return policy.decisionFields.includes(resolveEnvelopeFieldPath(field))
 }

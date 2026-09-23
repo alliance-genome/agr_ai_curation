@@ -77,8 +77,8 @@ object_definitions:
               - qualifiers
               - annotation_extensions
               - negated
-          - id: evidence
-            label: Evidence and rationale
+          - id: rationale
+            label: Rationale
             fields:
               - rationale
           - id: provider

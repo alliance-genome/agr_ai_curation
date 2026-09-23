@@ -446,6 +446,13 @@ def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
             "through the schema when evidence supports the candidate but normalized "
             "identity is pending."
         )
+        lines.append(
+            "- Rationale rule: stage every retained item with `rationale`: one or two "
+            "sentences (max 300 characters) on why this paper supports this "
+            "entity/term/association rather than the closest alternative. Do not restate "
+            "the quote, the field values, or \"the paper states\"; never invent facts "
+            "beyond the recorded evidence."
+        )
 
     if not lines:
         return ""

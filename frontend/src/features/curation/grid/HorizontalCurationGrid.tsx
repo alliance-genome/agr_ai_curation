@@ -33,6 +33,7 @@ import {
   type HorizontalGridRow,
 } from './horizontalGridModel'
 import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import { HorizontalGridRationaleLine } from './HorizontalGridCells'
 import { horizontalGridValidationPreviewCounts } from './horizontalGridValidationPreview'
 
 const CONTEXT_COLUMN_WIDTH = 220
@@ -76,6 +77,7 @@ function DefaultContextCell({ cell }: HorizontalGridContextRenderArgs) {
           {cell.value.secondaryLabel}
         </Typography>
       ) : null}
+      <HorizontalGridRationaleLine rationale={cell.value.rationale} />
     </Stack>
   )
 }

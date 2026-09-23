@@ -7,6 +7,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -397,6 +398,17 @@ def test_go_builder_rejects_evidence_less_finalization():
     }
 
 
+def test_go_builder_rejects_finalization_without_rationale():
+    candidate = _candidate()
+    del candidate.staged_fields["payload"]["rationale"]
+    result = _materialize(candidate)
+
+    assert not result.ok
+    assert {
+        (issue["field_path"], issue["reason"]) for issue in result.issues
+    } == {("payload.rationale", "missing_rationale")}
+
+
 def test_go_builder_rejects_excluded_section_only_evidence():
     candidate = _candidate()
     evidence = {**_evidence(), "section": "Discussion"}
@@ -559,6 +571,106 @@ def test_go_stage_rejects_well_formed_unobserved_gene_identity(
     assert "unobserved_tool_value" in {
         issue["reason"] for issue in result.data["validation_issues"]
     }
+
+
+def _stage_with_rationale(rationale):
+    return go_builder_tools._stage_go_recommendation_impl(
+        pending_ref_id="go-recommendation-1",
+        gene_product_mention="Cttn",
+        gene_product_label="Cttn",
+        gene_product_entity_type="protein_coding_gene",
+        gene_product_taxon_curie="NCBITaxon:10116",
+        gene_product_curie="RGD:619839",
+        resolution_state="resolved",
+        go_term_curie="GO:0005515",
+        go_term_label="protein binding",
+        go_term_aspect="molecular_function",
+        evidence_code="IPI",
+        evidence_eco_curie="ECO:0000353",
+        reference_curie="AGRKB:101000000400377",
+        rationale=rationale,
+        evidence_record_ids=["go-evidence-1"],
+        with_from=["RGD:621255"],
+        existing_annotation_status="available",
+        existing_annotation_provenance={
+            "source": "GO Consortium API",
+            "request_gene_id": "RGD:619839",
+        },
+        identity_resolution={"status": "resolved"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("rationale", "message"),
+    [
+        ("   ", "rationale must be non-empty"),
+        ("x" * 301, "shorten it to at most 300 characters"),
+    ],
+)
+def test_go_stage_rejects_blank_or_overlong_rationale(
+    active_go_builder_context, rationale, message
+):
+    result = _stage_with_rationale(rationale)
+
+    assert result.status == "error"
+    assert any(
+        issue["field_path"] == "rationale" and message in issue["message"]
+        for issue in result.data["validation_issues"]
+    )
+
+
+def test_go_stage_stores_stripped_rationale_at_the_cap(active_go_builder_context):
+    workspace, _events = active_go_builder_context
+    rationale = "y" * 300
+
+    staged = _stage_with_rationale(f"  {rationale}  ")
+
+    assert staged.status == "ok"
+    candidate = workspace.get_candidate(staged.data["candidate_id"])
+    assert candidate.staged_fields["payload"]["rationale"] == rationale
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (None, "rationale must be a non-empty string"),
+        ("", "rationale must be non-empty"),
+        ("  ", "rationale must be non-empty"),
+        ("z" * 301, "shorten it to at most 300 characters"),
+    ],
+)
+def test_go_patch_cannot_clear_or_overfill_rationale(
+    active_go_builder_context, value, message
+):
+    workspace, _events = active_go_builder_context
+    staged = _stage_with_rationale("The IPI assay binds Cttn directly, not a complex partner.")
+    candidate_id = staged.data["candidate_id"]
+
+    result = go_builder_tools._patch_go_recommendation_impl(
+        candidate_id, [{"field_path": "rationale", "value": value}]
+    )
+
+    assert result.status == "error"
+    assert result.data["validation_issues"] == [
+        {"field_path": "rationale", "reason": "invalid_rationale", "message": mock.ANY}
+    ]
+    assert message in result.data["validation_issues"][0]["message"]
+    payload = workspace.get_candidate(candidate_id).staged_fields["payload"]
+    assert payload["rationale"] == "The IPI assay binds Cttn directly, not a complex partner."
+
+
+def test_go_stage_tool_schema_carries_the_shared_rationale_description():
+    from agr_ai_curation_alliance.tools.builder_rationale import RATIONALE_ARG_DESCRIPTION
+
+    properties = go_builder_tools.stage_go_recommendation.params_json_schema["properties"]
+    assert properties["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+    patch_updates = go_builder_tools.patch_go_recommendation.params_json_schema[
+        "properties"
+    ]["updates"]
+    assert (
+        "A `rationale` update must be non-empty and at most 300 characters; it cannot "
+        "be cleared." in " ".join(patch_updates["description"].split())
+    )
 
 
 def test_go_builder_requires_explicit_blocker_for_unresolved_identity():
