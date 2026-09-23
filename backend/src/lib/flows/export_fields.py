@@ -278,6 +278,15 @@ def packaged_field_value(item: dict, field: dict) -> Any:
     return _walk_payload(item.get("payload", {}), list(parse_field_path(field["payload_path"])))
 
 
+# The builder stores a curator-facing rationale beside every profile-bound
+# record's attributes; it is selectable like any declared profile field.
+PROFILE_RATIONALE_EXPORT_FIELD = {
+    "ref": "object.payload.rationale", "label": "Rationale", "group": "",
+    "value_type": "string", "schema_kind": "string", "array_depth": 0,
+    "required": False, "nullable": True, "enum_values": [],
+}
+
+
 def profile_export_fields(fields: list) -> list[dict]:
     labels = {field.row_ref: field.label for field in fields}
     return [{
@@ -286,4 +295,4 @@ def profile_export_fields(fields: list) -> list[dict]:
         "value_type": field.value_type, "schema_kind": field.schema_kind,
         "array_depth": field.array_depth, "required": field.required,
         "nullable": field.nullable, "enum_values": list(field.enum_values),
-    } for field in fields]
+    } for field in fields] + [deepcopy(PROFILE_RATIONALE_EXPORT_FIELD)]
