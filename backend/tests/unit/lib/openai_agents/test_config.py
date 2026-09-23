@@ -56,10 +56,7 @@ from src.lib.openai_agents.config import (
     get_flow_definition_max_nodes,
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
-    get_inspect_results_json_depth_limit,
-    get_inspect_results_json_object_item_limit,
     get_inspect_results_list_page_size,
-    get_inspect_results_validation_detail_list_limit,
     get_inspect_results_validation_page_size,
     get_openai_responses_websocket_ping_timeout_seconds,
     get_openai_compatible_http_max_retries,
@@ -1253,29 +1250,17 @@ def test_pdf_upload_max_page_count_defends_positive_invariant(
 def test_inspect_results_display_limits_are_env_configured(monkeypatch):
     monkeypatch.setenv("INSPECT_RESULTS_LIST_PAGE_SIZE", "7")
     monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_PAGE_SIZE", "9")
-    monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_DETAIL_LIST_LIMIT", "11")
-    monkeypatch.setenv("INSPECT_RESULTS_JSON_DEPTH_LIMIT", "13")
-    monkeypatch.setenv("INSPECT_RESULTS_JSON_OBJECT_ITEM_LIMIT", "15")
 
     assert get_inspect_results_list_page_size() == 7
     assert get_inspect_results_validation_page_size() == 9
-    assert get_inspect_results_validation_detail_list_limit() == 11
-    assert get_inspect_results_json_depth_limit() == 13
-    assert get_inspect_results_json_object_item_limit() == 15
 
 
 def test_inspect_results_display_limits_clamp_to_positive(monkeypatch):
     monkeypatch.setenv("INSPECT_RESULTS_LIST_PAGE_SIZE", "0")
     monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_PAGE_SIZE", "-3")
-    monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_DETAIL_LIST_LIMIT", "0")
-    monkeypatch.setenv("INSPECT_RESULTS_JSON_DEPTH_LIMIT", "-1")
-    monkeypatch.setenv("INSPECT_RESULTS_JSON_OBJECT_ITEM_LIMIT", "0")
 
     assert get_inspect_results_list_page_size() == 1
     assert get_inspect_results_validation_page_size() == 1
-    assert get_inspect_results_validation_detail_list_limit() == 1
-    assert get_inspect_results_json_depth_limit() == 1
-    assert get_inspect_results_json_object_item_limit() == 1
 
 
 def test_domain_runtime_inspection_page_limits_are_env_configured(monkeypatch):
@@ -1653,3 +1638,17 @@ def test_provider_import_deadline_default_and_override(monkeypatch):
     assert get_document_source_import_timeout_seconds() == 600.0
     monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "900")
     assert get_document_source_import_timeout_seconds() == 900.0
+
+
+def test_inspect_results_object_pages_are_env_configured(monkeypatch):
+    from src.lib.openai_agents.config import (
+        get_inspect_results_object_max_page_size,
+        get_inspect_results_object_page_size,
+    )
+
+    assert get_inspect_results_object_page_size() == 20
+    assert get_inspect_results_object_max_page_size() == 100
+    monkeypatch.setenv("INSPECT_RESULTS_OBJECT_PAGE_SIZE", "7")
+    monkeypatch.setenv("INSPECT_RESULTS_OBJECT_MAX_PAGE_SIZE", "0")
+    assert get_inspect_results_object_page_size() == 7
+    assert get_inspect_results_object_max_page_size() == 1

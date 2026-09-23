@@ -47,15 +47,7 @@ def build_extraction_manifest_page(
 
     envelope = _canonical_envelope(payload)
     metadata = _domain_pack_metadata(envelope.domain_pack_id)
-    object_definitions = {
-        definition.object_type: definition
-        for definition in metadata.object_definitions
-    }
-    manifest_objects = [
-        domain_object
-        for domain_object in envelope.extracted_objects
-        if _include_object_in_manifest(domain_object, object_definitions)
-    ]
+    manifest_objects = supervisor_manifest_objects(envelope, metadata)
 
     page_limit = _normalize_limit(limit)
     offset = _cursor_offset(cursor)
@@ -136,6 +128,23 @@ def build_extraction_manifest_object(
     raise ExtractionManifestError(
         f"No supervisor-visible object matched object_ref {normalized_ref!r}"
     )
+
+
+def supervisor_manifest_objects(
+    envelope: DomainEnvelope,
+    metadata: DomainPackMetadata,
+) -> list[CuratableObjectEnvelope]:
+    """Objects a supervisor manifest lists, in envelope order."""
+
+    object_definitions = {
+        definition.object_type: definition
+        for definition in metadata.object_definitions
+    }
+    return [
+        domain_object
+        for domain_object in envelope.extracted_objects
+        if _include_object_in_manifest(domain_object, object_definitions)
+    ]
 
 
 def render_extraction_manifest_page(page: Mapping[str, Any]) -> str:
@@ -449,8 +458,14 @@ def _parse_path(field_path: str) -> tuple[str | int, ...]:
     return tuple(parts)
 
 
-def _validator_results_summary(findings: list[ValidationFinding]) -> dict[str, Any]:
-    """Expose canonical validator decisions, including targets hidden by object policy."""
+def validator_result_entries(
+    findings: list[ValidationFinding],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Complete canonical validator decisions keyed by request (or finding index).
+
+    Includes targets hidden by object policy. Entries are never shortened;
+    callers decide how to present large ones.
+    """
     decisions: dict[str, dict[str, Any]] = {}
     for index, finding in enumerate(findings):
         details = finding.details or {}
@@ -479,6 +494,12 @@ def _validator_results_summary(findings: list[ValidationFinding]) -> dict[str, A
                 or details.get("failure_classification") == "invalid_materialization_input"
                 or finding.code == "domain_pack.validator_materialization_invalid"):
             entry["writeback_rejected"] = True
+    return list(decisions.items())
+
+
+def _validator_results_summary(findings: list[ValidationFinding]) -> dict[str, Any]:
+    """Expose canonical validator decisions, including targets hidden by object policy."""
+    decisions = dict(validator_result_entries(findings))
     counts: dict[str, int] = {}
     entries: list[dict[str, Any]] = []
     for entry in decisions.values():
@@ -637,4 +658,6 @@ __all__ = [
     "build_extraction_manifest_object",
     "build_extraction_manifest_page",
     "render_extraction_manifest_page",
+    "supervisor_manifest_objects",
+    "validator_result_entries",
 ]

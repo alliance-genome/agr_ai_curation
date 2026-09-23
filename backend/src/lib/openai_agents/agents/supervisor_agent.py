@@ -1670,20 +1670,22 @@ def create_supervisor_agent(
     @function_tool(
         name_override=_INSPECT_RESULTS_TOOL_NAME,
         description_override=(
-            "Inspect persisted canonical extraction results for this chat. Use "
-            "action=\"help\" for the contract; action=\"list\" for available "
-            "results; action=\"search\" with query/target to find prior evidence "
-            "or manifest-field previews and select a stable result_ref; "
-            "action=\"summary\" for one result; action=\"objects\" or \"object\" for "
-            "YAML-declared manifest fields; action=\"field\" for one "
-            "YAML-declared scalar field; action=\"details\" with object_ref for saved "
-            "generic/custom attributes (field_path selects a nested part; cursor continues a page). "
-            "Read these saved details instead of calling extraction again. action=\"evidence\" for bounded "
-            "evidence text; and action=\"validation\" for validation findings. "
-            "Requires result_ref values in extraction-result:<uuid> form when "
-            "addressing a specific result. This tool browses existing results "
-            "and does not export, prepare for curation, inspect files, inspect "
-            "review sessions, or debug trace behavior."
+            "Explore persisted canonical extraction results for this chat without "
+            "rerunning extraction. Every response is size-bounded: pass next_call "
+            "exactly to continue a page or an exact chunk. Start with "
+            "action=\"summary\" (counts by object type, status and validation state), "
+            "then action=\"objects\" filtered by object_type, status, validation_state "
+            "(open|resolved|none|any), severity, query (field text) or field_path, with "
+            "fields to select YAML manifest fields; action=\"object\" or \"field\" "
+            "for one object or one exact field value; action=\"validation\" (filters "
+            "plus finding_ref for one finding) and action=\"validator_results\" "
+            "(validator_result_key for one) for validation; action=\"evidence\" with "
+            "object_ref for evidence text; action=\"details\" with object_ref for saved "
+            "generic/custom attributes; action=\"list\" and action=\"search\" with "
+            "query/target to choose among results. Values shown withheld are read "
+            "exactly with their read call (detail_path/cursor). Address a specific "
+            "result with result_ref in extraction-result:<uuid> form. This tool does not "
+            "export, prepare for curation, inspect files or review sessions, or debug traces."
         ),
     )
     async def inspect_results_tool(
@@ -1697,6 +1699,15 @@ def create_supervisor_agent(
         flow_run_id: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        object_type: str | None = None,
+        status: str | None = None,
+        validation_state: str | None = None,
+        severity: str | None = None,
+        fields: List[str] | None = None,
+        finding_ref: str | None = None,
+        validator_result_key: str | None = None,
+        detail_path: str | None = None,
+        result_sha256: str | None = None,
     ) -> str:
         """Inspect bounded persisted extraction results for the active chat."""
 
@@ -1711,6 +1722,15 @@ def create_supervisor_agent(
             flow_run_id=flow_run_id,
             limit=limit,
             cursor=cursor,
+            object_type=object_type,
+            status=status,
+            validation_state=validation_state,
+            severity=severity,
+            fields=fields,
+            finding_ref=finding_ref,
+            validator_result_key=validator_result_key,
+            detail_path=detail_path,
+            result_sha256=result_sha256,
         )
 
     specialist_tools.append(inspect_results_tool)
