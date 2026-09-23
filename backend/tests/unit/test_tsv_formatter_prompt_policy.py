@@ -57,3 +57,12 @@ def test_tsv_formatter_prompt_uses_runtime_tool_contract(relative_path: str):
 
     assert "Do not paste TSV content" in content
     assert "\nFormatted TSV output:\n" not in content
+
+
+def test_tsv_pair_join_guidance_does_not_contradict_structured_display():
+    """ALL-1282: pair_join pairs different fields, never one value's label and ID."""
+
+    content = _load_prompt_content("packages/alliance/agents/tsv_formatter/prompt.yaml")
+    pair_join_rule = next(line for line in content.splitlines() if "use the `pair_join` transform" in line)
+    assert "not the label and ID of one structured value" in pair_join_rule
+    assert "Do not hand-compose labels and identifiers with `pair_join`" in content

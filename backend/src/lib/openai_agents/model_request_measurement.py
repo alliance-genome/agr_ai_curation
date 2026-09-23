@@ -27,7 +27,9 @@ value as zero:
   prompt templates, definitions loaded by hosted tool search in this response);
 - ``provider_usage``: tokens the provider reported for the request, or
   ``status="not_reported"``. It is correlation only, never a second cost record:
-  cost stays on the SDK response/generation span keyed by the provider response id;
+  cost stays on the SDK response/generation span keyed by the provider response id.
+  That span's ``cost_context.model_request_id`` is this record's ``measurement_id``
+  (also for cancelled and failed attempts, which have no provider response id);
 - ``prompt_cache``: the ``prompt_cache_key`` the request carries and who set it
   (``application`` for the stable per-agent key, ``agents_sdk_generated`` for a
   key the SDK derived, ``unrecognized``, ``not_set``), the digest of the tool
@@ -60,6 +62,7 @@ import uuid
 
 from agents.models.interface import Model
 
+from src.lib.observability.cost_context import model_request_scope
 from src.lib.observability.payload_contracts import (
     PayloadContractViolation,
     report_payload_contract_violation,
@@ -76,6 +79,7 @@ _MEASURED_FLAG = "_ai_curation_model_request_measured"
 _SDK_GET_MODEL: Any = None
 _MEASURED_GET_MODEL: Any = None
 _REPORTED_BLOCKS_MAX = 1024
+_STREAM_END = object()
 _reported_blocks: "OrderedDict[tuple[Any, ...], None]" = OrderedDict()
 _reported_blocks_lock = threading.Lock()
 
@@ -177,6 +181,28 @@ def _add(target: dict[str, int], size: Mapping[str, int]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def flatten_loaded_tool_definitions(tools: Any) -> list[Any]:
+    """Function/custom definitions a ``tool_search_output`` loaded.
+
+    Hosted tool search returns namespaces (``{"type": "namespace", "tools":
+    [...]}``) and may also return top-level definitions; the loaded count is the
+    number of member definitions, not the number of namespaces.
+    """
+
+    if not isinstance(tools, list):
+        return []
+    definitions: list[Any] = []
+    for raw_tool in tools:
+        tool = _as_mapping(raw_tool)
+        if tool.get("type") == "namespace":
+            members = tool.get("tools")
+            if isinstance(members, list):
+                definitions.extend(members)
+        else:
+            definitions.append(raw_tool)
+    return definitions
+
+
 def _measure_input(input_value: Any) -> dict[str, Any]:
     items: list[Any]
     if input_value is None:
@@ -191,7 +217,13 @@ def _measure_input(input_value: Any) -> dict[str, Any]:
     tool_calls = {"count": 0, **_empty_size()}
     tool_results = {"count": 0, **_empty_size()}
     reasoning = {"count": 0, **_empty_size()}
-    loaded_tool_definitions = {"count": 0, "items": 0, **_empty_size()}
+    loaded_tool_definitions = {
+        "count": 0,
+        "namespaces": 0,
+        "items": 0,
+        "definition_chars": 0,
+        **_empty_size(),
+    }
     other = {"count": 0, **_empty_size()}
     largest_result: dict[str, Any] | None = None
     call_names: dict[str, str] = {}
@@ -206,7 +238,16 @@ def _measure_input(input_value: Any) -> dict[str, Any]:
         if item_type == "tool_search_output":
             loaded_tool_definitions["items"] += 1
             tools = item.get("tools")
-            loaded_tool_definitions["count"] += len(tools) if isinstance(tools, list) else 0
+            definitions = flatten_loaded_tool_definitions(tools)
+            loaded_tool_definitions["count"] += len(definitions)
+            loaded_tool_definitions["namespaces"] += sum(
+                1
+                for tool in (tools if isinstance(tools, list) else [])
+                if _as_mapping(tool).get("type") == "namespace"
+            )
+            loaded_tool_definitions["definition_chars"] += sum(
+                _size(definition)["chars"] for definition in definitions
+            )
             _add(loaded_tool_definitions, size)
         elif item_type.endswith("_call_output"):
             tool_results["count"] += 1
@@ -1034,18 +1075,19 @@ class MeasuredModel(Model):
             prompt_cache_tool_surface,
         )
         try:
-            response = await self._inner.get_response(
-                system_instructions,
-                input,
-                model_settings,
-                tools,
-                output_schema,
-                handoffs,
-                tracing,
-                previous_response_id=previous_response_id,
-                conversation_id=conversation_id,
-                prompt=prompt,
-            )
+            with model_request_scope(_span_identity(measurement)):
+                response = await self._inner.get_response(
+                    system_instructions,
+                    input,
+                    model_settings,
+                    tools,
+                    output_schema,
+                    handoffs,
+                    tracing,
+                    previous_response_id=previous_response_id,
+                    conversation_id=conversation_id,
+                    prompt=prompt,
+                )
         except BaseException as exc:
             record_outcome(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
             raise
@@ -1102,12 +1144,16 @@ class MeasuredModel(Model):
         terminal_response: Any = None
         terminal_type: str | None = None
         try:
-            async for event in stream:
+            # The adapter opens this attempt's tracing span on its first step.
+            with model_request_scope(_span_identity(measurement)):
+                event = await anext(stream, _STREAM_END)
+            while event is not _STREAM_END:
                 event_type = getattr(event, "type", None)
                 if event_type in {"response.completed", "response.incomplete", "response.failed"}:
                     terminal_response = getattr(event, "response", None)
                     terminal_type = event_type
                 yield event
+                event = await anext(stream, _STREAM_END)
         except BaseException as exc:
             if terminal_response is None:
                 record_outcome(
@@ -1130,6 +1176,17 @@ class MeasuredModel(Model):
                 )
             else:
                 record_outcome(measurement, outcome="stream_closed_without_terminal_event")
+
+
+def _span_identity(measurement: Mapping[str, Any]) -> dict[str, Any]:
+    """Measurement identity recorded on the SDK span of the same provider attempt."""
+
+    return {
+        "model_request_id": measurement["measurement_id"],
+        "requested_model": measurement.get("model"),
+        "provider": measurement["provider"],
+        "attempt": measurement.get("attempt"),
+    }
 
 
 def _failure_outcome(exc: BaseException) -> str:

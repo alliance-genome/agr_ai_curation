@@ -84,9 +84,6 @@ model_definitions:
       display:
         label: subject_label
         id: subject_identifier
-        state: resolution_state
-        resolved_states:
-          - resolved
   - model_id: PhenotypeTermPayload
     display_name: Phenotype term payload
     description: Pending ontology term reference for a phenotype assertion.
@@ -107,9 +104,6 @@ model_definitions:
       display:
         label: label
         id: curie
-        state: resolution_state
-        resolved_states:
-          - resolved
   - model_id: ReferencePayload
     display_name: Reference payload
     description: Pending literature reference object for phenotype evidence.
@@ -139,7 +133,6 @@ model_definitions:
     metadata:
       display:
         label: verified_quote
-        id: evidence_record_id
   - model_id: ConditionRelationPayload
     display_name: Condition relation payload
     description: Optional embedded condition relation context (relation type + its experimental conditions) for a phenotype assertion.

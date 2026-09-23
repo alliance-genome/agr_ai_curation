@@ -41,6 +41,7 @@ from agents import (
 from pydantic import ValidationError
 
 from .audit_labels import build_specialist_internal_friendly_name
+from .langfuse_client import is_openai_agents_tracing_enabled
 from .config import (
     PROMPT_CACHE_KEY_FIELD,
     PromptCacheIdentity,
@@ -650,8 +651,14 @@ def _reasoning_summary_text(value: Any) -> str:
 
 
 def _run_config_with_full_trace_payloads(run_config: Any) -> Any:
-    """Return a run config that preserves tracing state but includes payload data."""
-    effective_config = run_config or RunConfig(tracing_disabled=True)
+    """Return a run config that preserves tracing state but includes payload data.
+
+    Without a parent config the specialist follows the process tracing state, so
+    its model turns are traced and cost-attributed like any other run.
+    """
+    effective_config = run_config or RunConfig(
+        tracing_disabled=not is_openai_agents_tracing_enabled()
+    )
     try:
         return replace(effective_config, trace_include_sensitive_data=True)
     except TypeError:

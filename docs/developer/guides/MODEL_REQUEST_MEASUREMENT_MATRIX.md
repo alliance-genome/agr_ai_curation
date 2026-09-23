@@ -89,7 +89,7 @@ trace event, which is mirrored to Langfuse as an EVENT observation.
 | `measurement_scope` | `model_request` (this record) versus `application_payload` (the older `provider_context_preflight`, which sizes application-assembled data before the SDK adds instructions, tool schemas and history) |
 | `measurement_basis`, `transport_payload_observed` | `agents_sdk_model_call` measures the adapter arguments; the final wire frame (HTTP body or WebSocket frame) is built inside the SDK and is not separately observed. `direct_client_kwargs` measures the exact client request |
 | `outbound.instructions` | characters and UTF-8 bytes of the `instructions` field (exact) |
-| `outbound.input` | input/history size, items by role, `tool_calls`, `tool_results` (count, total, largest with tool name), reasoning items, `loaded_deferred_tool_definitions` (from `tool_search_output` items) |
+| `outbound.input` | input/history size, items by role, `tool_calls`, `tool_results` (count, total, largest with tool name), reasoning items, `loaded_deferred_tool_definitions` (from `tool_search_output` items: `count` is loaded function/custom definitions with namespace members flattened, `namespaces` the namespaces returned, `definition_chars` their definition sizes, `chars` the full items) |
 | `outbound.tools` | `initially_visible` and `deferred` function tool definitions (name, description, parameters schema), hosted tool types, handoffs. Hosted tools other than hosted MCP are sized by type and name only; their provider-side definitions are not observable |
 | `outbound.output_schema` | structured output schema size, or null for plain text |
 | `model_visible` | instructions + input + initially visible tools + handoffs + output schema, with `estimated_tokens` (characters / 4, labelled `estimate_basis`) |
@@ -114,7 +114,10 @@ per-session or per-run key for them. The key is
 - the prompt digest covers the agent key, the model id and the static prompt
   layers (`PromptLayerBundle.static_prefix()`: every layer before the per-run
   runtime context), so runs, sessions and documents of one agent share it and a
-  prompt or model change moves it;
+  prompt or model change moves it. The flow supervisor's instructions are
+  generated in code from the saved flow, so its static basis is the saved
+  flow's id, name and definition: editing the flow moves the key, a code-only
+  change to the generated wording does not (that costs one cache miss);
 - `MeasuredModel` binds the tool surface digest per request from the tool and
   handoff definitions actually sent (name, description, parameter schema,
   strictness, deferred loading, namespace and its description, hosted tool
@@ -127,7 +130,35 @@ OpenAI-compatible providers get no application key.
 Cost is not recorded here. It stays on the SDK response/generation span
 (`observability/cost_tracing.py`), which TraceReview counts once per provider
 response id. The measurement event is an EVENT observation, never a GENERATION,
-so it cannot add a second cost; `provider_response_id` joins the two.
+so it cannot add a second cost; `provider_response_id` joins the two, and the
+span's `cost_context.model_request_id` equals this record's `measurement_id`
+for every attempt, including cancelled and failed ones.
+
+## Usage on the generation observation (ALL-1288)
+
+Every SDK model attempt's generation observation carries the model and usage,
+or a `cost_context.usage_status` saying why it has none. Missing usage is never
+written as zero tokens.
+
+| `usage_status` | Meaning |
+| --- | --- |
+| `recorded` | provider usage attached (`langfuse.observation.usage_details`, `gen_ai.usage.*`) with `llm.model_name` |
+| `inconsistent` | provider usage has impossible token buckets; not attached |
+| `provider_omitted` | the provider returned a terminal response without usage (including the SDK's zero `Usage()` substitute) |
+| `failed` | the attempt errored before usage was returned (`attempt_outcome=error`) |
+| `cancelled` | the stream ended before the provider's terminal event: cancelled or closed by its consumer (`attempt_outcome=cancelled`) |
+
+The span also records `requested_model`, `provider` and `attempt` from the
+measured request. OpenInference exports the request input once as `input.value`
+(`hide_input_messages`); its per-message copies previously overflowed the
+128-attribute span limit on long tool loops and evicted model, usage and cost
+context (695 of 712 usage-less production generations, Sep 16-22 2026). Cost
+attributes and span-start identity are also written last before the span ends,
+so a large payload can no longer evict them.
+
+Both flattened copies are hidden (`hide_input_messages` and `hide_output_messages`): `input.value` and `output.value` already carry the full request and response, and Langfuse stores those as the observation input and output.
+
+A streamed turn that fails or is left incomplete after the provider returned usage raises inside the SDK before the span's usage is set, so the generation reports `failed` while the ALL-1279 measurement record holds the provider usage. Join them on `model_request_id` (= `measurement_id`) to recover it.
 
 ## Limits and warnings
 

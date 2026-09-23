@@ -99,7 +99,6 @@ model_definitions:
     metadata:
       display:
         label: verified_quote
-        id: evidence_record_id
 object_definitions:
   - object_type: AllelePaperEvidenceAssociation
     display_name: Allele paper/evidence association

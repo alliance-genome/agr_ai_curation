@@ -655,6 +655,101 @@ def lookup_response_payload(
     }
 
 
+_DERIVED_ROW_VIEW_KEYS = ("candidate_matches", "result_projections")
+_MATCHED_ROW_ATTEMPT_KEYS = ("target_projection", "resolved_id", "resolved_label")
+
+
+def _lean_lookup_level(level: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop one response level's restatements of its own rows and text.
+
+    ``candidate_matches`` and ``result_projections`` are derived from the
+    level's returned rows, so they name exactly the row identities an
+    attempt's matched-row projection repeats. An attempt about a record that
+    is not among the returned rows (for example a failed detail fetch) keeps
+    its projection, because that record appears nowhere else.
+    """
+    returned_ids = {
+        projection.get("resolved_id")
+        for projection in level.get("result_projections") or []
+        if isinstance(projection, Mapping)
+    } | {
+        candidate.get("candidate_id")
+        for candidate in level.get("candidate_matches") or []
+        if isinstance(candidate, Mapping)
+    }
+    returned_ids.discard(None)
+    lean = {key: value for key, value in level.items() if key not in _DERIVED_ROW_VIEW_KEYS}
+    level_texts = [text for text in (level.get("message"), level.get("explanation")) if text is not None]
+    if lean.get("explanation") is not None and lean.get("explanation") == lean.get("message"):
+        del lean["explanation"]
+    attempts = lean.get("lookup_attempts")
+    if isinstance(attempts, list):
+        lean_attempts = []
+        for attempt in attempts:
+            if not isinstance(attempt, Mapping):
+                lean_attempts.append(attempt)
+                continue
+            attempt = dict(attempt)
+            projection = attempt.get("target_projection")
+            # lookup_attempt derives resolved_id from target_projection, so the
+            # projection alone names the matched record.
+            matched_id = projection.get("resolved_id") if isinstance(projection, Mapping) else None
+            if matched_id is not None and matched_id in returned_ids:
+                for key in _MATCHED_ROW_ATTEMPT_KEYS:
+                    attempt.pop(key, None)
+            if attempt.get("explanation") in level_texts:
+                del attempt["explanation"]
+            if "coverage" in attempt and attempt["coverage"] == level.get("coverage"):
+                del attempt["coverage"]
+            lean_attempts.append(attempt)
+        lean["lookup_attempts"] = lean_attempts
+    return lean
+
+
+def lookup_model_view(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the model-facing reading of a lookup response: each match once.
+
+    ``lookup_response_payload`` responses restate every returned row as a
+    candidate match, a result projection and, for single matches, an
+    attempt's target projection, and repeat the message as the explanation.
+    The model needs each row once, so those restatements are dropped here,
+    at the top level and in each bulk input group (``data.items[]``). Rows,
+    counts, statuses, coverage, queries and errors are kept, and no row list
+    is reindexed, so JSON pointers into the complete response still resolve
+    in this view. Top-level attempts that repeat a bulk group's attempt are
+    dropped because the group already carries them. The caller keeps the
+    complete response; this view is never a substitute for it.
+    """
+    lean = _lean_lookup_level(payload)
+    data = payload.get("data")
+    if isinstance(data, Mapping) and isinstance(data.get("items"), list):
+        group_attempts = [
+            attempt
+            for item in data["items"]
+            if isinstance(item, Mapping)
+            for attempt in item.get("lookup_attempts") or []
+        ]
+        lean["data"] = {
+            **data,
+            "items": [
+                _lean_lookup_level(item) if isinstance(item, Mapping) else item
+                for item in data["items"]
+            ],
+        }
+        top_attempts = payload.get("lookup_attempts")
+        if isinstance(top_attempts, list) and group_attempts:
+            kept = [
+                lean_attempt
+                for attempt, lean_attempt in zip(top_attempts, lean["lookup_attempts"])
+                if attempt not in group_attempts
+            ]
+            if kept:
+                lean["lookup_attempts"] = kept
+            else:
+                del lean["lookup_attempts"]
+    return lean
+
+
 def chunk_values(values: list[str], chunk_size: int = 200) -> list[list[str]]:
     """Return fixed-size chunks to keep SQL IN clauses bounded."""
     return [values[i:i + chunk_size] for i in range(0, len(values), chunk_size)]
@@ -695,6 +790,7 @@ __all__ = [
     "cap_bulk_total_matches",
     "lookup_explanation",
     "lookup_response_payload",
+    "lookup_model_view",
     "chunk_values",
     "create_db_session",
 ]

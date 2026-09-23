@@ -50,6 +50,7 @@ from src.lib.openai_agents.runner import (
     build_owned_openai_responses_resources,
     close_owned_openai_resources,
 )
+from src.lib.openai_agents.model_request_measurement import flatten_loaded_tool_definitions
 
 logger = logging.getLogger(__name__)
 
@@ -530,8 +531,7 @@ async def stream_agent_studio_run(
                     elif event_name == "tool_search_output_created":
                         state.tool_search_outputs += 1
                         raw = _mapping(getattr(item, "raw_item", None))
-                        loaded_tools = raw.get("tools")
-                        loaded_count = len(loaded_tools) if isinstance(loaded_tools, list) else 0
+                        loaded_count = len(flatten_loaded_tool_definitions(raw.get("tools")))
                         state.tool_search_loaded_tools += loaded_count
                         yield {
                             "type": "TOOL_SEARCH_RESULT",

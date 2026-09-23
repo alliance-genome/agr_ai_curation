@@ -1,4 +1,4 @@
-"""Read-only, scoped and bounded contract details for generated system agents.
+"""Read-only, scoped and bounded contract details for system and custom agents.
 
 Every topic resolves the requested agent, domain pack, object type and field
 scope before any item is built, so an unknown selector fails explicitly instead
@@ -8,6 +8,11 @@ budget, whichever comes first, and carries an explicit continuation cursor. An
 item larger than the per-item budget is returned as an outline whose omitted
 values are read exactly through ``item_ref`` and ``detail_pointer`` drilldown,
 so contract JSON is never sliced.
+
+A custom agent (``ca_*``) resolves from its saved executable revision: the
+running agent reads its own pinned revision, and any other custom agent is read
+from its saved head only when the authenticated curator can see it under the
+custom-agent visibility rules.
 """
 
 from __future__ import annotations
@@ -64,6 +69,11 @@ TOPIC_SELECTORS: Mapping[str, frozenset[str]] = {
 }
 
 _TOOL_NAME = "get_agent_contract"
+_CUSTOM_AGENT_PREFIX = "ca_"
+_CUSTOM_AGENT_NOT_VISIBLE_HINT = (
+    "Custom agents are visible to their owner, or to members of the project "
+    "they are shared with, within the agent's group restrictions."
+)
 _CURSOR_PATTERN = re.compile(r"^(0|[1-9][0-9]*):([0-9a-f]{12})$")
 _LIST_INDEX_PATTERN = re.compile(r"0|[1-9][0-9]*")
 # Room kept for the page envelope, continuation cursor and drilldown hint.
@@ -108,6 +118,23 @@ class _ContractRequestError(ValueError):
 
 
 @dataclass(frozen=True)
+class _CustomAgentContract:
+    """A custom agent's saved revision in the shape the topic builders read."""
+
+    entry: Mapping[str, Any]
+    identity: Mapping[str, Any]
+    revision_fingerprint: str
+    registries: Mapping[str, DomainPackValidationRegistry]
+    # Packaged validator whose bindings this agent serves, if any.
+    binding_agent_id: str | None
+    binding_package_id: str | None
+    # Packaged agent whose tool-method context applies to the saved tools.
+    method_agent_id: str
+    output_schema_note: str | None
+    unavailable_profile_mappings: tuple[Mapping[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
 class _Request:
     agent_id: str
     topic: str
@@ -122,6 +149,9 @@ class _Request:
     field_path: str | None
     tool_details_resolver: Callable[[str, str], Mapping[str, Any] | None] | None
     output_schema_resolver: Callable[[str], type[BaseModel] | None] | None
+    binding_agent_id: str | None
+    method_agent_id: str
+    custom_agent: _CustomAgentContract | None = None
 
     @property
     def detail(self) -> bool:
@@ -160,6 +190,7 @@ def get_agent_contract(
     registries: Mapping[str, DomainPackValidationRegistry] | None = None,
     tool_details_resolver: Callable[[str, str], Mapping[str, Any] | None] | None = None,
     output_schema_resolver: Callable[[str], type[BaseModel] | None] | None = None,
+    caller: Any = None,
 ) -> dict[str, Any]:
     """Return one scoped, bounded page of read-only contract metadata.
 
@@ -171,6 +202,11 @@ def get_agent_contract(
     each page; pass ``page.next_cursor`` back as ``cursor`` to continue. Pass an
     item's ``ref`` as ``item_ref`` (with ``detail_pointer``) to read one item or
     one of its omitted values exactly.
+
+    ``caller`` is the runtime agent invoking the tool. A custom agent asking for
+    its own ``ca_*`` id reads the revision it is running; any other custom agent
+    is resolved for the authenticated curator and the caller's groups, and one
+    they cannot see is reported exactly like an unknown agent.
     """
 
     try:
@@ -225,25 +261,54 @@ def get_agent_contract(
         return _error("field_path is required when topic is 'field'.", **echo)
 
     resolved_agent_registry = agent_registry or _default_agent_registry()
-    entry = resolved_agent_registry.get(normalized_agent_id)
-    if entry is None:
-        return _error(f"Agent {normalized_agent_id} was not found.", **echo)
+    custom: _CustomAgentContract | None = None
+    if normalized_agent_id.startswith(_CUSTOM_AGENT_PREFIX):
+        try:
+            custom = _load_custom_agent(
+                normalized_agent_id,
+                caller=caller,
+                agent_registry=resolved_agent_registry,
+                registries=(
+                    registries if registries is not None else domain_pack_validation_registries()
+                ),
+                output_schema_resolver=output_schema_resolver or _resolve_output_schema,
+            )
+        except _ContractRequestError as exc:
+            return _error(exc.message, **echo, **exc.details)
+        if custom is None:
+            return _error(
+                f"Agent {normalized_agent_id} was not found.",
+                **echo,
+                hint=_CUSTOM_AGENT_NOT_VISIBLE_HINT,
+            )
+        entry = custom.entry
+        resolved_registries = custom.registries
+        binding_agent_id = custom.binding_agent_id
+        binding_package_id = custom.binding_package_id
+        method_agent_id = custom.method_agent_id
+    else:
+        found = resolved_agent_registry.get(normalized_agent_id)
+        if found is None:
+            return _error(f"Agent {normalized_agent_id} was not found.", **echo)
+        entry = found
+        resolved_registries = (
+            registries if registries is not None else domain_pack_validation_registries()
+        )
+        binding_agent_id = normalized_agent_id
+        binding_package_id = _optional_text(entry.get("package_id"))
+        method_agent_id = normalized_agent_id
 
-    resolved_registries = (
-        registries if registries is not None else domain_pack_validation_registries()
-    )
-    package_id = _optional_text(entry.get("package_id"))
     request = _Request(
         agent_id=normalized_agent_id,
         topic=normalized_topic,
         detail_level=normalized_detail_level,
         entry=entry,
-        package_id=package_id,
+        package_id=binding_package_id,
         owned_pack_ids=tuple(_owned_domain_pack_ids(entry)),
         validator_pack_ids=tuple(
             _validator_domain_pack_ids(
-                normalized_agent_id,
-                package_id=package_id,
+                binding_agent_id,
+                package_id=binding_package_id,
                 registries=resolved_registries,
             )
         ),
@@ -253,6 +318,9 @@ def get_agent_contract(
         field_path=selectors["field_path"],
         tool_details_resolver=tool_details_resolver,
         output_schema_resolver=output_schema_resolver,
+        binding_agent_id=binding_agent_id,
+        method_agent_id=method_agent_id,
+        custom_agent=custom,
     )
 
     base: dict[str, Any] = {
@@ -265,6 +333,8 @@ def get_agent_contract(
     }
     if scope:
         base["scope"] = scope
+    if custom is not None:
+        base["custom_agent"] = dict(custom.identity)
 
     try:
         header, items = _TOPIC_BUILDERS[normalized_topic](request)
@@ -383,7 +453,7 @@ def _tools_topic(request: _Request) -> tuple[dict[str, Any], list[dict[str, Any]
     items: list[dict[str, Any]] = []
     for tool_id in _string_list(request.entry.get("tools")):
         identity = {"ref": f"tool|{tool_id}", "kind": "tool", "tool_id": tool_id}
-        details = resolver(request.agent_id, tool_id)
+        details = resolver(request.method_agent_id, tool_id)
         if details is None:
             items.append(
                 {**identity, "resolved": False, "error": "Tool details were not found."}
@@ -418,10 +488,17 @@ def _tools_topic(request: _Request) -> tuple[dict[str, Any], list[dict[str, Any]
 
 
 def _output_schema_topic(request: _Request) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    schema_name = _output_schema_name(request.agent_id, request.entry)
+    if request.custom_agent is not None:
+        # A saved revision's output contract is authoritative; its parent's
+        # packaged schema is never substituted for it.
+        schema_name = _entry_output_schema(request.entry)
+        note = request.custom_agent.output_schema_note
+    else:
+        schema_name = _output_schema_name(request.agent_id, request.entry)
+        note = None
     if schema_name is None:
-        _reject_schema_field(request, "has no output schema")
-        return {"output_schema": None}, []
+        _reject_schema_field(request, "has no output schema", hint=note)
+        return {"output_schema": None, **({"note": note} if note else {})}, []
 
     resolver = request.output_schema_resolver or _resolve_output_schema
     schema_type = resolver(schema_name)
@@ -566,6 +643,11 @@ def _validator_bindings_topic(
             selected = [binding for binding in selected if binding.binding_id in covering]
 
         contributing.append(pack_id)
+        pack_object_types = (
+            {target.object_type for target in object_targets if target.pack_id == pack_id}
+            if object_targets is not None
+            else None
+        )
         if request.detail and pack_field_targets is not None:
             for target in pack_field_targets:
                 policy = registry.policy_for(target.object_type, target.field_path)
@@ -609,11 +691,19 @@ def _validator_bindings_topic(
                     entry.validator_agent is not None
                     and _validator_agent_matches(
                         entry.validator_agent.to_dict(),
-                        agent_id=request.agent_id,
+                        agent_id=request.binding_agent_id,
                         package_id=request.package_id,
                     )
                 )
             )
+        items.extend(
+            _unavailable_profile_mapping_items(
+                request,
+                pack_id,
+                field_targets=pack_field_targets,
+                object_types=pack_object_types,
+            )
+        )
     return {"domain_packs": [_pack_header(request, pack_id) for pack_id in contributing]}, items
 
 
@@ -712,6 +802,273 @@ _TOPIC_BUILDERS: Mapping[str, Callable[[_Request], tuple[dict[str, Any], list[di
 
 
 # ---------------------------------------------------------------------------
+# Custom agents
+# ---------------------------------------------------------------------------
+
+
+def custom_agent_contract_runtime_note(agent_key: str) -> str:
+    """Per-run prompt line telling a custom agent the id of its own contract."""
+
+    return (
+        f"Your own agent_id is {agent_key}. Call get_agent_contract with "
+        f"agent_id={agent_key} to read your saved tools, output structure, "
+        "validator bindings and field rules."
+    )
+
+
+def _custom_agent_session():
+    from src.models.sql.database import SessionLocal
+
+    return SessionLocal()
+
+
+def _load_custom_agent(
+    agent_id: str,
+    *,
+    caller: Any,
+    agent_registry: Mapping[str, Mapping[str, Any]],
+    registries: Mapping[str, DomainPackValidationRegistry],
+    output_schema_resolver: Callable[[str], type[BaseModel] | None],
+) -> _CustomAgentContract | None:
+    """Resolve one custom agent's saved revision, or None when it is not visible.
+
+    The running agent reads the exact revision it was authorized and built
+    from (its execution receipt), so its own contract is always retrievable.
+    Any other custom agent requires an authenticated curator and is read from
+    its saved head through the same visibility and group checks as execution.
+    """
+
+    from src.lib.agent_studio.custom_agent_service import parse_custom_agent_id
+    from src.lib.agent_studio.custom_profile_validators import runtime_validator_user_id
+    from src.lib.agent_studio import execution_revision_service as revisions
+    from src.lib.agent_studio.profile_conformance import ProfileIdentityError
+    from src.lib.group_tool_policy import resolve_group_tool_policy
+    from src.models.sql.agent import Agent as AgentRow
+
+    if parse_custom_agent_id(agent_id) is None:
+        return None
+    running_receipt = _running_receipt(caller, agent_id)
+    active_group_ids = [
+        str(group) for group in (getattr(caller, "authenticated_groups", None) or ())
+    ]
+    user_id = runtime_validator_user_id()
+    with _custom_agent_session() as db:
+        if running_receipt is not None:
+            receipt = running_receipt
+            row, saved = _running_revision(db, receipt)
+            revision_source = "running_agent"
+        else:
+            if user_id is None:
+                return None
+            try:
+                receipt = revisions.current_execution_receipt(
+                    db, agent_id, user_id, active_group_ids=active_group_ids
+                )
+                row, saved = revisions.get_execution_revision(
+                    db,
+                    receipt.agent_id,
+                    receipt.agent_revision_id,
+                    user_id,
+                    active_group_ids=active_group_ids,
+                )
+            except revisions.ExecutionRevisionNotFoundError:
+                return None
+            except ValueError as exc:
+                raise _ContractRequestError(
+                    f"The saved revision of agent {agent_id} could not be read: {exc}"
+                ) from exc
+            revision_source = "saved_head"
+        head = db.get(AgentRow, receipt.agent_id)
+        name = _optional_text(getattr(head, "name", None))
+
+        output = saved.output_contract
+        curation = dict(saved.curation) if saved.curation else None
+        pack_id = _optional_text((curation or {}).get("domain_pack_id"))
+        scoped_registries = registries
+        unavailable: tuple[Mapping[str, Any], ...] = ()
+        profile_ref = None
+        if output.output_mode == "profile_bound_generic":
+            from src.lib.domain_packs.profile_validation import resolve_profile_validation
+
+            base = registries.get(pack_id) if pack_id else None
+            if base is None:
+                raise _ContractRequestError(
+                    f"Domain pack '{pack_id}' of agent {agent_id}'s saved profile is not "
+                    "available in this deployment."
+                )
+            try:
+                context = resolve_profile_validation(
+                    receipt,
+                    base.domain_pack,
+                    db=db,
+                    user_id=user_id,
+                    active_group_ids=active_group_ids,
+                )
+            except ProfileIdentityError as exc:
+                raise _ContractRequestError(
+                    f"The saved profile of agent {agent_id} could not be read: {exc}"
+                ) from exc
+            assert context is not None  # profile_bound_generic always resolves a context.
+            scoped_registries = {pack_id: context.registry}
+            unavailable = _unavailable_profile_mappings(pack_id, context)
+            profile_ref = context.profile.receipt
+
+    parent = _optional_text(saved.template_source)
+    parent_entry = agent_registry.get(parent) if parent else None
+    validates_for = (
+        parent
+        if parent_entry is not None
+        and _serves_parent_validator(output, parent_entry, output_schema_resolver)
+        else None
+    )
+    tool_ids = resolve_group_tool_policy(
+        saved.tool_ids, saved.group_tool_policy, active_group_ids
+    ).tool_ids
+    identity: dict[str, Any] = {
+        "agent_id": agent_id,
+        "name": name,
+        "parent_agent_id": parent,
+        "execution_revision": row.revision,
+        "revision_source": revision_source,
+        "output_state": output.output_state,
+        "output_mode": output.output_mode,
+        "generic_profile_ref": profile_ref,
+        "validates_for_agent_id": validates_for,
+    }
+    if profile_ref is not None:
+        identity["unavailable_profile_mapping_count"] = len(unavailable)
+    return _CustomAgentContract(
+        entry={
+            "name": name,
+            "tools": list(tool_ids),
+            "output_schema": output.output_schema_key,
+            "curation": curation,
+        },
+        identity=identity,
+        revision_fingerprint=row.fingerprint,
+        registries=scoped_registries,
+        binding_agent_id=validates_for,
+        binding_package_id=(
+            _optional_text(parent_entry.get("package_id")) if validates_for and parent_entry else None
+        ),
+        method_agent_id=parent if parent_entry is not None else agent_id,
+        output_schema_note=_custom_output_note(output, pack_id),
+        unavailable_profile_mappings=unavailable,
+    )
+
+
+def _running_receipt(caller: Any, agent_id: str) -> Any:
+    """Return the caller's execution receipt when it is the requested agent."""
+
+    if caller is None or getattr(caller, "agent_key", None) != agent_id:
+        return None
+    raw_receipt = getattr(caller, "execution_receipt", None)
+    if raw_receipt is None:
+        return None
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
+
+    receipt = AgentExecutionReceipt.model_validate(raw_receipt)
+    if receipt.agent_key != agent_id:
+        raise _ContractRequestError(
+            f"The running agent's execution receipt does not match agent {agent_id}."
+        )
+    return receipt
+
+
+def _running_revision(db: Any, receipt: Any) -> tuple[Any, Any]:
+    """Read the exact revision the running agent was built from."""
+
+    from src.models.sql.agent_execution_revision import AgentExecutionRevision
+    from src.schemas.agent_execution_revision import AgentExecutionSnapshot
+
+    row = db.get(AgentExecutionRevision, receipt.agent_revision_id)
+    if (
+        row is None
+        or row.agent_id != receipt.agent_id
+        or row.fingerprint != receipt.fingerprint
+    ):
+        raise _ContractRequestError(
+            f"The saved revision of agent {receipt.agent_key} does not match the "
+            "running agent's execution receipt."
+        )
+    saved = AgentExecutionSnapshot.model_validate(row.snapshot)
+    if saved.fingerprint() != row.fingerprint:
+        raise _ContractRequestError(
+            f"The saved revision of agent {receipt.agent_key} does not match its "
+            "recorded fingerprint."
+        )
+    return row, saved
+
+
+def _serves_parent_validator(
+    output: Any,
+    parent_entry: Mapping[str, Any],
+    output_schema_resolver: Callable[[str], type[BaseModel] | None],
+) -> bool:
+    """Whether a saved agent keeps its packaged validator parent's result contract.
+
+    Mirrors the custom validator capability rule: only a domain-output revision
+    that retains the parent's validator result schema can serve its bindings.
+    """
+
+    from src.schemas.domain_validator import is_domain_validator_result_schema
+
+    schema_key = output.output_schema_key
+    if output.output_mode != "domain" or not schema_key:
+        return False
+    if schema_key != _entry_output_schema(parent_entry):
+        return False
+    return is_domain_validator_result_schema(output_schema_resolver(schema_key))
+
+
+def _unavailable_profile_mappings(pack_id: str, context: Any) -> tuple[dict[str, Any], ...]:
+    from src.lib.domain_packs.profile_validation import profile_mapping_binding_id
+
+    items: list[dict[str, Any]] = []
+    for unavailable in context.unavailable:
+        mapping = unavailable.mapping
+        binding_id = profile_mapping_binding_id(context.profile, mapping)
+        declared = [item.field_path for item in mapping.inputs.values() if item.source == "field"]
+        declared.extend(mapping.outputs.values())
+        items.append(
+            {
+                "ref": f"profile_mapping|{pack_id}|{binding_id}",
+                "kind": "profile_validator_mapping",
+                "domain_pack_id": pack_id,
+                "object_type": "generic_object",
+                "validator_binding_id": binding_id,
+                "mapping_id": mapping.mapping_id,
+                "available": False,
+                "unavailable_reasons": list(unavailable.reasons),
+                "field_paths": sorted({path.replace("[]", "") for path in declared if path}),
+                "profile_validator_mapping": mapping.model_dump(mode="json"),
+            }
+        )
+    return tuple(items)
+
+
+def _custom_output_note(output: Any, pack_id: str | None) -> str | None:
+    if output.output_state == "none":
+        return "This agent's saved configuration has no structured output."
+    if output.output_mode == "profile_bound_generic":
+        return (
+            "Output follows the agent's saved profile. Read its fields with "
+            f"topic=domain_envelope or topic=field in domain pack '{pack_id}'."
+        )
+    if output.output_mode == "unprofiled_generic":
+        return (
+            "Output is an open generic extraction. Read its structure with "
+            f"topic=domain_envelope in domain pack '{pack_id}'."
+        )
+    if output.output_schema_key is None:
+        return (
+            "Output is built with builder tools. Read its fields with "
+            f"topic=domain_envelope or topic=field in domain pack '{pack_id}'."
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Scope resolution
 # ---------------------------------------------------------------------------
 
@@ -793,17 +1150,55 @@ def _scoped_fields(request: _Request, pack_ids: Sequence[str]) -> list[_Target]:
 def _binding_targets_agent(request: _Request, binding: ValidatorBinding) -> bool:
     return binding.validator_agent is not None and _validator_agent_matches(
         binding.validator_agent.to_dict(),
-        agent_id=request.agent_id,
+        agent_id=request.binding_agent_id,
         package_id=request.package_id,
     )
 
 
+def _unavailable_profile_mapping_items(
+    request: _Request,
+    pack_id: str,
+    *,
+    field_targets: Sequence[_Target] | None,
+    object_types: set[str] | None,
+) -> list[dict[str, Any]]:
+    """Saved profile mappings whose validator cannot run stay explicit entries."""
+
+    if request.custom_agent is None:
+        return []
+    items: list[dict[str, Any]] = []
+    for mapping in request.custom_agent.unavailable_profile_mappings:
+        if mapping["domain_pack_id"] != pack_id:
+            continue
+        if object_types is not None and mapping["object_type"] not in object_types:
+            continue
+        if field_targets is not None and not any(
+            _declared_path_covers(path, target.field_path)
+            for target in field_targets
+            for path in mapping["field_paths"]
+        ):
+            continue
+        if request.detail:
+            items.append(dict(mapping))
+        else:
+            items.append(
+                {key: value for key, value in mapping.items() if key != "profile_validator_mapping"}
+            )
+    return items
+
+
+def _declared_path_covers(declared: str, field_path: str) -> bool:
+    return declared == field_path or declared.startswith(f"{field_path}.")
+
+
 def _validator_domain_pack_ids(
-    agent_id: str,
+    agent_id: str | None,
     *,
     package_id: str | None,
     registries: Mapping[str, DomainPackValidationRegistry],
 ) -> list[str]:
+    if agent_id is None:
+        return []
     pack_ids: list[str] = []
     for pack_id, registry in sorted(registries.items()):
         for binding in registry.bindings:
@@ -829,10 +1224,10 @@ def _owned_domain_pack_ids(entry: Mapping[str, Any]) -> list[str]:
 def _validator_agent_matches(
     value: Any,
     *,
-    agent_id: str,
+    agent_id: str | None,
     package_id: str | None,
 ) -> bool:
-    if not isinstance(value, Mapping):
+    if agent_id is None or not isinstance(value, Mapping):
         return False
     if value.get("agent_id") != agent_id:
         return False
@@ -1116,20 +1511,21 @@ def _request_fingerprint(
         for pack_id in {*request.owned_pack_ids, *request.validator_pack_ids}
         if pack_id in request.registries
     )
-    material = json.dumps(
-        [
-            request.agent_id,
-            request.topic,
-            request.detail_level,
-            request.domain_pack_id,
-            request.object_type,
-            request.field_path,
-            item_ref,
-            detail_pointer or "",
-            pack_versions,
-            list(item_refs),
-        ]
-    )
+    parts: list[Any] = [
+        request.agent_id,
+        request.topic,
+        request.detail_level,
+        request.domain_pack_id,
+        request.object_type,
+        request.field_path,
+        item_ref,
+        detail_pointer or "",
+        pack_versions,
+        list(item_refs),
+    ]
+    if request.custom_agent is not None:
+        parts.append(request.custom_agent.revision_fingerprint)
+    material = json.dumps(parts)
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
 
@@ -1239,6 +1635,9 @@ def _binding_item(
     if not detail:
         return {**identity, **{key: details[key] for key in _BINDING_SUMMARY_KEYS if key in details}}
     item = {**identity, **details}
+    profile_validation = binding.raw.get("profile_validation")
+    if profile_validation is not None:
+        item["profile_validation"] = profile_validation
     if include_attachments:
         item["validation_attachments"] = [
             option.to_dict()
@@ -1354,12 +1753,13 @@ def _compact_constraints(constraints: Mapping[str, Any]) -> dict[str, Any]:
     return compact
 
 
-def _reject_schema_field(request: _Request, reason: str) -> None:
+def _reject_schema_field(request: _Request, reason: str, *, hint: str | None = None) -> None:
     if request.field_path is not None:
         raise _ContractRequestError(
             f"Agent {request.agent_id} {reason}, so field_path "
             f"'{request.field_path}' cannot be resolved.",
             field_path=request.field_path,
+            **({"hint": hint} if hint else {}),
         )
 
 
@@ -1375,8 +1775,12 @@ def _tool_details(agent_id: str, tool_id: str) -> Mapping[str, Any] | None:
     return get_tool_for_agent(tool_id, agent_id)
 
 
+def _entry_output_schema(entry: Mapping[str, Any]) -> str | None:
+    return _optional_text(entry.get("output_schema") or entry.get("output_schema_key"))
+
+
 def _output_schema_name(agent_id: str, entry: Mapping[str, Any]) -> str | None:
-    direct = _optional_text(entry.get("output_schema") or entry.get("output_schema_key"))
+    direct = _entry_output_schema(entry)
     if direct:
         return direct
 

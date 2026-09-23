@@ -2208,6 +2208,10 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         runtime_context = _build_runtime_context(
             runtime_kwargs=runtime_kwargs, canonical_tool_ids=canonical_tool_ids
         )
+        if "get_agent_contract" in canonical_tool_id_set:
+            from src.lib.agent_contracts import custom_agent_contract_runtime_note
+
+            runtime_context += "\n\n" + custom_agent_contract_runtime_note(str(db_agent.agent_key))
         if execution_snapshot.output_contract.output_mode == "profile_bound_generic":
             from src.lib.agent_studio.profile_tools import configure_profile_tools, profile_runtime_instruction
 

@@ -36,10 +36,20 @@ without this declaration retain their own existing output contracts.
 The factory receives complete trusted requests, the canonical result schema and
 profile-mapped request IDs. It returns per-request decision contracts and a lookup
 adapter. A record has canonical facts, domain rows, an optional resolved object,
-and a JSON-pointer source location. Tool responses retain their original data and
-add `validator_record_refs` and `validator_lookup_refs`; source pointers distinguish
-duplicate identifiers with different records. These references never resolve in
-another invocation.
+and a JSON-pointer source location. The workspace keeps each complete lookup
+response. The model sees one view of it that shows each returned row once, adding
+`validator_record_refs` and `validator_lookup_refs`; `lookup_model_view` drops the
+envelope's restatements of those rows (`candidate_matches`, `result_projections`,
+an attempt's matched-row projection) and text repeated as explanation or attempt
+coverage. The field names a record offers for slot copies are listed once per tool
+response (each page, when paged) as `validator_record_available_fields`, the set most
+of that response's refs share; a ref carries its own `available_fields` only where
+its names differ (ALL-1291). The model reads a ref's fields from the same response,
+never from another page. `validator_record_refs`, `validator_record_available_fields`
+and `validator_lookup_refs` are runtime-owned: a provider response using any of them
+is rejected. Row lists are never reindexed, so source pointers resolve in the view and
+still distinguish duplicate identifiers with different records. These references
+never resolve in another invocation.
 
 Batch calls require explicit `validator_request_ids`; bulk response input groups
 are partitioned before references are assigned. The original call's total count

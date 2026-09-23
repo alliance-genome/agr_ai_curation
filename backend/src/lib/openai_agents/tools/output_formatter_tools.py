@@ -1260,7 +1260,8 @@ def _capabilities_payload(
         ),
         "split_list": (
             "To put list items in separate columns (never extra rows), add split_list to a "
-            "column whose field_ref is a list: {\"header_template\": \"Anatomy Term {n}\"} "
+            "field_ref column (a single value counts as a one-item list, giving one numbered "
+            "column; do not invent more): {\"header_template\": \"Anatomy Term {n}\"} "
             "or {\"headers\": [\"First\", \"Second\"]} (not both), optional max_columns. "
             "The application sizes it to the longest list, renders each item as display "
             "text and uses missing_value for shorter rows. Too few headers or more items "
@@ -1270,9 +1271,11 @@ def _capabilities_payload(
         "value_display": (
             "CSV, TSV and chat cells render structured values as display text: "
             "\"label (ID)\" from the pack's declared roles (generic curie/id plus "
-            "name/label otherwise), lists joined with \"; \", and unresolved values "
+            "name/label otherwise), lists joined with \"; \" (lists of structured records "
+            "with \" | \"), and unresolved values "
             "marked \"(unresolved)\" from declared resolution state, open validation "
-            "findings on that field, or a declared ID that is missing. Select the parent "
+            "findings on that field or on the object it references, or a declared ID "
+            "that is missing. Select the parent "
             "structured field instead of composing leaves. JSON keeps raw values."
         ),
         "detail_access": (

@@ -4160,7 +4160,10 @@ def create_flow_supervisor(
                 "Inspect one server-authorized persisted result from the immediately "
                 "available same-flow context. Supply only a result_ref listed in the "
                 "supervisor instructions. This tool cannot browse or authorize any "
-                "other result."
+                "other result. Start with action=\"summary\" (counts), then filter "
+                "action=\"objects\", \"validation\" or \"validator_results\"; "
+                "responses are size-bounded, so pass next_call exactly to continue "
+                "and use each withheld value's read call for its exact content."
             ),
         )
         async def inspect_bound_preferred_flow_result(
@@ -4171,6 +4174,15 @@ def create_flow_supervisor(
             field_path: str | None = None,
             limit: int | None = None,
             cursor: str | None = None,
+            object_type: str | None = None,
+            status: str | None = None,
+            validation_state: str | None = None,
+            severity: str | None = None,
+            fields: list[str] | None = None,
+            finding_ref: str | None = None,
+            validator_result_key: str | None = None,
+            detail_path: str | None = None,
+            result_sha256: str | None = None,
         ) -> str:
             normalized_ref = str(result_ref or "").strip()
             if normalized_ref not in bound_refs:
@@ -4193,6 +4205,15 @@ def create_flow_supervisor(
                 field_path=field_path,
                 limit=limit,
                 cursor=cursor,
+                object_type=object_type,
+                status=status,
+                validation_state=validation_state,
+                severity=severity,
+                fields=fields,
+                finding_ref=finding_ref,
+                validator_result_key=validator_result_key,
+                detail_path=detail_path,
+                result_sha256=result_sha256,
             )
             try:
                 payload = json.loads(output)

@@ -661,7 +661,24 @@ def test_output_schema_visible_and_deferred_tool_definitions_are_separate(publis
         "call_id": "ts_1",
         "status": "completed",
         "execution": "server",
-        "tools": [{"type": "function", "name": "get_trace", "parameters": {}}],
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "trace_tools",
+                "description": "Trace inspection",
+                "tools": [
+                    {"type": "function", "name": "get_trace", "parameters": {}},
+                    {"type": "function", "name": "get_trace_summary", "parameters": {}},
+                ],
+            },
+            {
+                "type": "namespace",
+                "name": "flow_tools",
+                "description": "Flow inspection",
+                "tools": [{"type": "function", "name": "list_flows", "parameters": {}}],
+            },
+            {"type": "function", "name": "top_level_loaded", "parameters": {}},
+        ],
     }
 
     _run(agent, prompt=[{"role": "user", "content": "trace?"}, loaded])
@@ -676,7 +693,11 @@ def test_output_schema_visible_and_deferred_tool_definitions_are_separate(publis
     visible_chars = record["model_visible"]["json_chars"]
     assert record["outbound"]["json_chars"] == visible_chars + tools["deferred"]["chars"]
     assert record["deferred_tools"]["loaded_status"] == "provider_managed"
-    assert record["deferred_tools"]["loaded_definitions_in_input"] == 1
+    # Three namespace members plus one top-level definition, from two namespaces.
+    assert record["deferred_tools"]["loaded_definitions_in_input"] == 4
+    loaded_measure = record["outbound"]["input"]["loaded_deferred_tool_definitions"]
+    assert (loaded_measure["count"], loaded_measure["namespaces"], loaded_measure["items"]) == (4, 2, 1)
+    assert 0 < loaded_measure["definition_chars"] < loaded_measure["chars"]
     assert {"component": "hosted_tool_search_loaded_definitions_this_response", "status": "provider_managed"} in record["provider_managed"]
 
 
@@ -993,6 +1014,18 @@ def test_measurement_event_and_log_carry_sizes_not_content(monkeypatch, caplog):
     assert "UNIQUE-INSTRUCTION-TEXT" not in serialized
     assert "UNIQUE-EVIDENCE-QUOTE" not in serialized
     assert event["input_summary"]["outbound"]["instructions"]["chars"] == len(secret_instructions)
+
+
+def test_flatten_loaded_tool_definitions_counts_namespace_members():
+    flatten = measurement_module.flatten_loaded_tool_definitions
+    assert flatten(None) == []
+    assert [tool["name"] for tool in flatten([
+        {"type": "namespace", "name": "a", "description": "A", "tools": [
+            {"type": "function", "name": "one"}, {"type": "custom", "name": "two"},
+        ]},
+        {"type": "namespace", "name": "empty", "description": "E", "tools": []},
+        {"type": "function", "name": "three"},
+    ])] == ["one", "two", "three"]
 
 
 # ---------------------------------------------------------------------------

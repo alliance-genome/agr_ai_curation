@@ -1,10 +1,22 @@
-"""Read-only supervisor inspection for persisted extraction results."""
+"""Read-only supervisor inspection for persisted extraction results.
+
+Every response fits the shared tool result budget (TOOL_RESULT_MAX_BYTES,
+ALL-1287). The supervisor starts from a counts-only ``summary``, then filters
+object, finding and validator-result pages, and reads any value too large for
+a page exactly in chunks. Pages and chunks carry ``next_call`` arguments and a
+``result_sha256``, so a result that changes between calls is reported instead
+of mixed. Values are never shortened: a value too long to show inline is
+replaced by a descriptor (size, hash, a short prefix preview) whose ``read``
+call returns it exactly. Every read first resolves the result through the
+curator's authorized records (session, document or flow run).
+"""
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -14,39 +26,56 @@ from src.lib.chat_state import document_state
 from src.lib.context import get_current_session_id, get_current_user_id
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.domain_packs.supervisor_manifest import (
+    SupervisorManifestPolicy,
     supervisor_manifest_policy_for_object,
 )
-from src.lib.openai_agents.bounded_list import normalize_page_limit, offset_page
 from src.lib.openai_agents.config import (
-    get_inspect_results_json_depth_limit,
-    get_inspect_results_json_object_item_limit,
     get_inspect_results_evidence_page_size,
     get_inspect_results_evidence_text_limit,
     get_inspect_results_list_page_size,
-    get_inspect_results_validation_detail_list_limit,
+    get_inspect_results_object_max_page_size,
+    get_inspect_results_object_page_size,
     get_inspect_results_validation_page_size,
     get_supervisor_field_text_limit,
-    get_supervisor_manifest_page_size,
     get_supervisor_max_list_limit,
     get_supervisor_text_preview_limit,
 )
 from src.lib.openai_agents.extraction_manifest import (
-    ExtractionManifestError,
-    build_extraction_manifest_object,
-    build_extraction_manifest_page,
+    supervisor_manifest_objects,
+    validator_result_entries,
+)
+from src.lib.openai_agents.tool_result_bounds import (
+    INVALID_RESULT_CURSOR,
+    STALE_RESULT_CURSOR,
+    ToolResultBudgetError,
+    budget_failure,
+    canonical_json,
+    clamp_page_limit,
+    content_sha256,
+    fit_page,
+    fit_text_window,
+    report_budget_failure_result,
+    resolve_path,
+    serialized_size,
+    tool_result_budget,
 )
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
+    CuratableObjectStatus,
     DomainEnvelope,
     ValidationFinding,
     ValidationFindingSeverity,
+    ValidationFindingStatus,
     parse_field_path,
 )
 from src.schemas.domain_pack_metadata import DomainPackMetadata
 
 
+_TOOL_NAME = "inspect_results"
+_COMPONENT = "supervisor_inspect_results"
 _RESULT_REF_PREFIX = "extraction-result:"
+_FINDING_INDEX_PREFIX = "finding-index:"
 _ACTIONS = frozenset(
     {
         "help",
@@ -59,23 +88,28 @@ _ACTIONS = frozenset(
         "details",
         "evidence",
         "validation",
+        "validator_results",
     }
 )
 _TARGETS = frozenset(
     {"latest", "this_chat", "current_document", "flow_run", "all_authorized"}
 )
+_OBJECT_STATUSES = tuple(status.value for status in CuratableObjectStatus)
+_SEVERITIES = tuple(severity.value for severity in ValidationFindingSeverity)
+# Object filter: any open finding / findings but none open / no findings / any.
+_OBJECT_VALIDATION_STATES = ("open", "resolved", "none", "any")
+# Finding filter: open, or closed (resolved or waived).
+_FINDING_VALIDATION_STATES = ("open", "resolved")
+# Env-configurable; see config.py getters and .env.example. Page sizes are row
+# ceilings: every page also ends at TOOL_RESULT_MAX_BYTES.
 _MAX_LIST_LIMIT = get_supervisor_max_list_limit()
-_MANIFEST_PAGE_SIZE = get_supervisor_manifest_page_size()
 _EVIDENCE_PAGE_SIZE = get_inspect_results_evidence_page_size()
-_EVIDENCE_TEXT_LIMIT = get_inspect_results_evidence_text_limit()
+_SNIPPET_LIMIT = get_inspect_results_evidence_text_limit()
 _RESULT_LIST_PAGE_SIZE = get_inspect_results_list_page_size()
 _VALIDATION_PAGE_SIZE = get_inspect_results_validation_page_size()
-_VALIDATION_DETAIL_LIST_LIMIT = get_inspect_results_validation_detail_list_limit()
-_JSON_DEPTH_LIMIT = get_inspect_results_json_depth_limit()
-_JSON_OBJECT_ITEM_LIMIT = get_inspect_results_json_object_item_limit()
+# Values longer than this are shown as descriptors with an exact read call.
 _FIELD_TEXT_LIMIT = get_supervisor_field_text_limit()
 _TEXT_PREVIEW_LIMIT = get_supervisor_text_preview_limit()
-_JSON_LIST_LIMIT = max(_MAX_LIST_LIMIT, _MANIFEST_PAGE_SIZE, _EVIDENCE_PAGE_SIZE)
 _EVIDENCE_PATH_PARTS = frozenset(
     {
         "evidence",
@@ -112,6 +146,75 @@ _EVIDENCE_CONTEXT_KEYS = (
     "status",
     "confidence",
 )
+# View arguments each action honors; any other one is rejected, never ignored.
+# result_ref, target, adapter_keys and flow_run_id are accepted by every action;
+# cursor, limit and result_sha256 only by views that continue (see
+# _continuation_arguments).
+_ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
+    "list": frozenset(),
+    "search": frozenset({"query"}),
+    "summary": frozenset(),
+    "objects": frozenset(
+        {"object_type", "status", "validation_state", "severity", "query", "field_path", "fields"}
+    ),
+    "object": frozenset({"object_ref"}),
+    "field": frozenset({"object_ref", "field_path"}),
+    "details": frozenset({"object_ref", "field_path"}),
+    "evidence": frozenset({"object_ref", "detail_path"}),
+    "validation": frozenset(
+        {"object_ref", "field_path", "object_type", "validation_state", "severity",
+         "query", "finding_ref", "detail_path"}
+    ),
+    "validator_results": frozenset(
+        {"object_ref", "field_path", "object_type", "status", "validation_state",
+         "validator_result_key", "detail_path"}
+    ),
+}
+_PAGE_ARGUMENTS = frozenset({"cursor", "limit", "result_sha256"})
+_CHUNK_ARGUMENTS = frozenset({"cursor", "result_sha256"})
+_FINDING_IDENTITY_KEYS = frozenset(
+    {"finding_ref", "finding_id", "severity", "status", "code", "object_ref",
+     "object_type", "field_path"}
+)
+
+
+class _RequestError(Exception):
+    """An explicit caller-facing error; never a budget escape."""
+
+    def __init__(self, error_code: str, message: str, **extra: Any) -> None:
+        super().__init__(message)
+        self.response = _error(error_code, message, **extra)
+
+
+@dataclass(frozen=True)
+class _Result:
+    """One authorized result plus the arguments that reach it again."""
+
+    record: Any
+    envelope: DomainEnvelope
+    result_ref: str
+    extraction_result_id: str
+    content_sha256: str
+    carry: Mapping[str, Any]
+
+    def head(self, action: str) -> dict[str, Any]:
+        return {
+            "action": action,
+            "result_ref": self.result_ref,
+            "extraction_result_id": self.extraction_result_id,
+        }
+
+    def call(self, action: str, **args: Any) -> dict[str, Any]:
+        return {
+            "action": action,
+            **self.carry,
+            **{key: value for key, value in args.items() if value is not None},
+        }
+
+    def sha(self, **view: Any) -> str:
+        """Fingerprint of this result's content plus the view being paged."""
+
+        return content_sha256({"result": self.content_sha256, "view": view})
 
 
 async def inspect_results(
@@ -126,45 +229,198 @@ async def inspect_results(
     flow_run_id: str | None = None,
     cursor: str | None = None,
     limit: int | None = None,
+    object_type: str | None = None,
+    status: str | None = None,
+    validation_state: str | None = None,
+    severity: str | None = None,
+    fields: list[str] | None = None,
+    finding_ref: str | None = None,
+    validator_result_key: str | None = None,
+    detail_path: str | None = None,
+    result_sha256: str | None = None,
 ) -> str:
-    """Inspect persisted canonical extraction results through bounded actions."""
+    """Inspect persisted canonical extraction results through bounded actions.
+
+    Every response fits TOOL_RESULT_MAX_BYTES; an unmeetable budget returns a
+    compact ``tool_result_budget_unmet`` failure that is reported once.
+    """
 
     normalized_action = _normalize_action(action)
-    if normalized_action == "help":
-        return _help_response()
-    if normalized_action not in _ACTIONS:
-        return _error_response(
-            "invalid_action",
-            "Unsupported inspect_results action. Use action=\"help\" for supported actions.",
+    try:
+        response = _inspect(
+            action=normalized_action,
+            query=query,
+            result_ref=result_ref,
+            target=target,
+            object_ref=object_ref,
+            field_path=field_path,
+            adapter_keys=adapter_keys,
+            flow_run_id=flow_run_id,
+            cursor=cursor,
+            limit=limit,
+            object_type=object_type,
+            status=status,
+            validation_state=validation_state,
+            severity=severity,
+            fields=fields,
+            finding_ref=finding_ref,
+            validator_result_key=validator_result_key,
+            detail_path=detail_path,
+            result_sha256=result_sha256,
+        )
+    except _RequestError as exc:
+        response = exc.response
+    except ToolResultBudgetError as exc:
+        return _budget_failure(exc, action=normalized_action)
+    budget = tool_result_budget()
+    measured = serialized_size(response)
+    if measured > budget:
+        return _budget_failure(
+            ToolResultBudgetError(measured=measured, limit=budget),
             action=normalized_action,
         )
+    return json.dumps(response, ensure_ascii=True, default=str)
+
+
+def _inspect(
+    *,
+    action: str,
+    query: str | None,
+    result_ref: str | None,
+    target: str,
+    object_ref: str | None,
+    field_path: str | None,
+    adapter_keys: list[str] | None,
+    flow_run_id: str | None,
+    cursor: str | None,
+    limit: int | None,
+    object_type: str | None,
+    status: str | None,
+    validation_state: str | None,
+    severity: str | None,
+    fields: list[str] | None,
+    finding_ref: str | None,
+    validator_result_key: str | None,
+    detail_path: str | None,
+    result_sha256: str | None,
+) -> dict[str, Any]:
+    if action == "help":
+        return _help_response()
+    if action not in _ACTIONS:
+        raise _RequestError(
+            "invalid_action",
+            "Unsupported inspect_results action. Use action=\"help\" for supported actions.",
+            action=_echo(action),
+        )
+
+    supplied = {
+        name
+        for name, value in {
+            "query": query,
+            "object_ref": object_ref,
+            "field_path": field_path,
+            "object_type": object_type,
+            "status": status,
+            "validation_state": validation_state,
+            "severity": severity,
+            "fields": fields,
+            "finding_ref": finding_ref,
+            "validator_result_key": validator_result_key,
+            "detail_path": detail_path,
+        }.items()
+        if value not in (None, "", [])
+    }
+    unsupported = sorted(supplied - _ACTION_ARGUMENTS[action])
+    if unsupported:
+        raise _RequestError(
+            "invalid_request",
+            f"action=\"{action}\" does not use: {', '.join(unsupported)}. Use "
+            "action=\"help\" to see which filters each action supports.",
+            action=action,
+            supported_arguments=sorted(_ACTION_ARGUMENTS[action]),
+        )
+    continuation = _continuation_arguments(
+        action,
+        object_ref=_optional_text(object_ref),
+        finding_ref=_optional_text(finding_ref),
+        validator_result_key=_optional_text(validator_result_key),
+        detail_path=_optional_text(detail_path),
+    )
+    unused = sorted(
+        name
+        for name, value in {
+            "cursor": cursor,
+            "limit": limit,
+            "result_sha256": result_sha256,
+        }.items()
+        if value not in (None, "") and name not in continuation
+    )
+    if unused:
+        raise _RequestError(
+            "invalid_request",
+            f"This action=\"{action}\" view does not use: {', '.join(unused)}. "
+            "Single records (summary, object, finding_ref, validator_result_key) take "
+            "no continuation arguments and exact chunk reads take no limit; pass "
+            "cursor, limit and result_sha256 only from a next_call.",
+            action=action,
+            supported_continuation_arguments=sorted(continuation),
+        )
+    if action in {"validation", "validator_results"} and _optional_text(detail_path):
+        single = "finding_ref" if action == "validation" else "validator_result_key"
+        if not _optional_text(finding_ref if action == "validation" else validator_result_key):
+            raise _RequestError(
+                "invalid_request",
+                f"detail_path requires {single} for action=\"{action}\"; it reads one "
+                "value inside that single record.",
+                action=action,
+            )
 
     session_id = get_current_session_id()
     user_id = get_current_user_id()
     if not session_id or not user_id:
-        return _error_response(
+        raise _RequestError(
             "unavailable",
             "inspect_results is only available inside an active chat session.",
-            action=normalized_action,
+            action=action,
         )
 
     parsed_ref, ref_error = _parse_result_ref(result_ref)
     if ref_error:
-        return _error_response(
+        raise _RequestError(
             ref_error,
             "result_ref must use the canonical extraction-result:<uuid> form.",
-            action=normalized_action,
-            result_ref=result_ref,
+            action=action,
+            result_ref=_echo(result_ref),
         )
 
     normalized_target = _normalize_target(target)
     if normalized_target not in _TARGETS:
-        return _error_response(
+        raise _RequestError(
             "invalid_target",
             "Unsupported target. Use latest, this_chat, current_document, flow_run, or all_authorized.",
-            action=normalized_action,
-            target=normalized_target,
+            action=action,
+            target=_echo(normalized_target),
         )
+    # Model-supplied text is echoed into filters, next_call or head: an over-long
+    # value is a caller error, never a tool result budget escape.
+    _check_argument_lengths(
+        action,
+        {
+            "query": query,
+            "object_ref": object_ref,
+            "field_path": field_path,
+            "object_type": object_type,
+            "status": status,
+            "validation_state": validation_state,
+            "severity": severity,
+            "finding_ref": finding_ref,
+            "validator_result_key": validator_result_key,
+            "detail_path": detail_path,
+            "flow_run_id": flow_run_id,
+        },
+        lists={"fields": fields, "adapter_keys": adapter_keys},
+    )
+    normalized_query = _optional_text(query)
 
     records, resolve_error = _authorized_records(
         result_id=parsed_ref,
@@ -175,22 +431,32 @@ async def inspect_results(
         adapter_keys=adapter_keys,
     )
     if resolve_error:
-        return _error_response(
+        raise _RequestError(
             resolve_error,
             _resolve_error_message(resolve_error),
-            action=normalized_action,
+            action=action,
             target=normalized_target,
         )
 
-    if normalized_action == "list":
+    listing_carry = {
+        key: value
+        for key, value in {
+            "target": normalized_target if normalized_target != "latest" else None,
+            "flow_run_id": _optional_text(flow_run_id),
+            "adapter_keys": list(adapter_keys) if adapter_keys else None,
+            "result_ref": _record_result_ref(records[0]) if parsed_ref and records else None,
+        }.items()
+        if value is not None
+    }
+    if action == "list":
         return _list_response(
             records,
-            action=normalized_action,
-            target=normalized_target,
+            carry=listing_carry,
             cursor=cursor,
             limit=limit,
+            expected_sha=result_sha256,
         )
-    if normalized_action == "search":
+    if action == "search":
         search_records = (
             records[:1]
             if normalized_target == "latest" and parsed_ref is None
@@ -199,16 +465,18 @@ async def inspect_results(
         return _search_response(
             search_records,
             target=normalized_target,
-            query=query,
+            carry=listing_carry,
+            query=normalized_query,
             cursor=cursor,
             limit=limit,
+            expected_sha=result_sha256,
         )
 
     if not records:
-        return _error_response(
+        raise _RequestError(
             "no_context",
             "No authorized persisted extraction results matched this request.",
-            action=normalized_action,
+            action=action,
             target=normalized_target,
         )
 
@@ -216,112 +484,569 @@ async def inspect_results(
     try:
         envelope = _canonical_envelope_for_record(record)
     except (TypeError, ValueError, ValidationError) as exc:
-        return _error_response(
+        raise _RequestError(
             "unsupported_payload",
             "inspect_results only reads canonical domain-envelope extraction results.",
-            action=normalized_action,
+            action=action,
             result_ref=_record_result_ref(record),
             extraction_result_id=_record_id(record),
-            detail=str(exc),
-        )
+            detail=_echo(exc),
+        ) from exc
+    result = _Result(
+        record=record,
+        envelope=envelope,
+        result_ref=_record_result_ref(record),
+        extraction_result_id=_record_id(record),
+        content_sha256=content_sha256(dict(_record_payload_mapping(record))),
+        carry=_result_carry(record, target=normalized_target, flow_run_id=flow_run_id),
+    )
+    normalized_ref = _optional_text(object_ref)
+    normalized_path = _optional_text(field_path)
+    normalized_detail = _optional_text(detail_path)
 
-    if normalized_action == "summary":
-        return _summary_response(record, cursor=cursor, limit=limit)
-    if normalized_action == "objects":
-        return _objects_response(record, cursor=cursor, limit=limit)
-    if normalized_action == "object":
-        return _object_response(record, envelope=envelope, object_ref=object_ref)
-    if normalized_action == "details":
-        return _details_response(record, envelope=envelope, object_ref=object_ref,
-                                 field_path=field_path, cursor=cursor, limit=limit)
-    if normalized_action == "field":
+    if action == "summary":
+        return _summary_response(result)
+    if action == "objects":
+        return _objects_response(
+            result,
+            filters=_ObjectFilters.build(
+                object_type=object_type,
+                status=status,
+                validation_state=validation_state,
+                severity=severity,
+                query=normalized_query,
+                field_path=normalized_path,
+                fields=fields,
+            ),
+            cursor=cursor,
+            limit=limit,
+            expected_sha=result_sha256,
+        )
+    if action == "object":
+        return _object_response(result, object_ref=normalized_ref)
+    if action == "field":
         return _field_response(
-            record,
-            envelope=envelope,
-            object_ref=object_ref,
-            field_path=field_path,
+            result,
+            object_ref=normalized_ref,
+            field_path=normalized_path,
+            cursor=cursor,
+            expected_sha=result_sha256,
         )
-    if normalized_action == "evidence":
+    if action == "details":
+        return _details_response(
+            result,
+            object_ref=normalized_ref,
+            field_path=normalized_path,
+            cursor=cursor,
+            limit=limit,
+            expected_sha=result_sha256,
+        )
+    if action == "evidence":
         return _evidence_response(
-            record,
-            envelope=envelope,
-            object_ref=object_ref,
+            result,
+            object_ref=normalized_ref,
+            detail_path=normalized_detail,
             cursor=cursor,
             limit=limit,
+            expected_sha=result_sha256,
         )
-    if normalized_action == "validation":
+    if action == "validation":
         return _validation_response(
-            record,
-            envelope=envelope,
-            object_ref=object_ref,
-            field_path=field_path,
+            result,
+            object_ref=normalized_ref,
+            field_path=normalized_path,
+            object_type=_optional_text(object_type),
+            validation_state=_choice(
+                validation_state, _FINDING_VALIDATION_STATES, "validation_state"
+            ),
+            severity=_choice(severity, _SEVERITIES, "severity"),
+            query=normalized_query,
+            finding_ref=_optional_text(finding_ref),
+            detail_path=normalized_detail,
             cursor=cursor,
             limit=limit,
+            expected_sha=result_sha256,
         )
-
-    return _error_response(
-        "invalid_action",
-        "Unsupported inspect_results action. Use action=\"help\" for supported actions.",
-        action=normalized_action,
+    return _validator_results_response(
+        result,
+        object_ref=normalized_ref,
+        field_path=normalized_path,
+        object_type=_optional_text(object_type),
+        decision_status=_optional_text(status),
+        validation_state=_choice(
+            validation_state, _FINDING_VALIDATION_STATES, "validation_state"
+        ),
+        key=_optional_text(validator_result_key),
+        detail_path=normalized_detail,
+        cursor=cursor,
+        limit=limit,
+        expected_sha=result_sha256,
     )
 
 
-def _help_response() -> str:
-    return _tool_response(
-        "ok",
-        "inspect_results browses persisted canonical extraction results without rerunning specialists.",
-        action="help",
-        actions=sorted(_ACTIONS),
-        targets=sorted(_TARGETS),
-        result_ref_format="extraction-result:<uuid>",
-        boundaries=[
-            "Default summary/object manifests use only domain-pack YAML supervisor_manifest fields.",
-            "Use details with object_ref to browse saved generic/custom attributes, including nested parts; follow child paths and cursors instead of rerunning extraction.",
-            "Evidence text is excluded from summary and objects; use action=\"evidence\" with object_ref.",
-            "Search returns bounded evidence snippets and YAML manifest-field previews only.",
+def _continuation_arguments(
+    action: str,
+    *,
+    object_ref: str | None,
+    finding_ref: str | None,
+    validator_result_key: str | None,
+    detail_path: str | None,
+) -> frozenset[str]:
+    """Continuation arguments the requested view uses; others are rejected.
+
+    Pages take cursor, limit and result_sha256; exact chunk reads take cursor
+    and result_sha256; single-record views take none.
+    """
+
+    if action in {"summary", "object"}:
+        return frozenset()
+    if action == "field":
+        return _CHUNK_ARGUMENTS
+    if (action == "validation" and finding_ref) or (
+        action == "validator_results" and validator_result_key
+    ):
+        return _CHUNK_ARGUMENTS if detail_path else frozenset()
+    if action == "evidence" and object_ref and detail_path:
+        return _CHUNK_ARGUMENTS
+    return _PAGE_ARGUMENTS
+
+
+def _check_argument_lengths(
+    action: str,
+    texts: Mapping[str, Any],
+    *,
+    lists: Mapping[str, Sequence[Any] | None],
+) -> None:
+    """Reject over-long model-supplied text as a caller error, without echoing it."""
+
+    too_long = [
+        name
+        for name, value in texts.items()
+        if value is not None and len(str(value).strip()) > _FIELD_TEXT_LIMIT
+    ]
+    too_long.extend(
+        name
+        for name, values in lists.items()
+        if values and any(len(str(item).strip()) > _FIELD_TEXT_LIMIT for item in values)
+    )
+    if too_long:
+        raise _RequestError(
+            "invalid_request",
+            f"{', '.join(too_long)} longer than {_FIELD_TEXT_LIMIT} characters. Pass "
+            "exact refs, field paths and filter values from earlier responses, or search "
+            "for a shorter distinctive phrase.",
+            action=action,
+            arguments_too_long=too_long,
+        )
+
+
+def _echo_list(values: Sequence[Any], name: str) -> dict[str, Any]:
+    """Echo a caller-supplied list: first entries within the preview limit plus counts."""
+
+    shown: list[str] = []
+    used = 0
+    for value in values:
+        text = _echo(value)
+        if shown and used + len(text) > _TEXT_PREVIEW_LIMIT:
+            break
+        shown.append(text)
+        used += len(text)
+    return {
+        name: shown,
+        f"{name}_count": len(values),
+        f"{name}_omitted_count": len(values) - len(shown),
+    }
+
+
+def _help_response() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "message": (
+            "inspect_results browses persisted canonical extraction results without "
+            "rerunning specialists. Start with summary (counts), then filter pages."
+        ),
+        "action": "help",
+        "actions": sorted(_ACTIONS),
+        "targets": sorted(_TARGETS),
+        "result_ref_format": "extraction-result:<uuid>",
+        "filters": {
+            "objects": "object_type, status, validation_state (open|resolved|none|any), "
+            "severity, query (all terms), field_path (scope query or require a value), "
+            "fields (select summary fields)",
+            "validation": "object_ref, object_type, field_path, validation_state "
+            "(open|resolved), severity, query; finding_ref reads one finding and "
+            "detail_path (with finding_ref) one exact value inside it",
+            "validator_results": "status (validator decision), validation_state, "
+            "object_ref, object_type, field_path; validator_result_key reads one "
+            "result and detail_path (with validator_result_key) one exact value inside it",
+            "evidence": "object_ref for its evidence records; detail_path "
+            "(<index>.<key>, with object_ref) reads one exact evidence value",
+        },
+        "boundaries": [
+            "Every response fits the tool result budget. Continue pages and chunks by "
+            "passing next_call exactly; a changed result returns stale_result_cursor.",
+            "cursor, limit and result_sha256 come from next_call: pages take all three, "
+            "exact detail_path/field chunks take cursor and result_sha256, and single "
+            "records (summary, object, finding_ref, validator_result_key) take none.",
+            "Values too long to show are withheld with total_chars, value_sha256 and a "
+            "read call that returns them exactly; nothing is shortened silently.",
+            "Object views use only domain-pack YAML supervisor_manifest fields.",
+            "Evidence text is read with action=\"evidence\" and object_ref.",
+            "Use details with object_ref to browse saved generic/custom attributes.",
             "Raw UUIDs and transient lookup refs are rejected as result_ref values.",
             "Export and curation prep are separate explicit supervisor actions.",
-            "Trace tools are for debugging behavior, not browsing extraction payloads.",
         ],
-        examples=[
-            'inspect_results(action="list", target="latest")',
-            'inspect_results(action="search", target="current_document", query="endogenous tumor")',
-            'inspect_results(action="objects", result_ref="extraction-result:<uuid>")',
+        "examples": [
+            'inspect_results(action="summary")',
+            'inspect_results(action="objects", result_ref="extraction-result:<uuid>", validation_state="open")',
+            'inspect_results(action="objects", result_ref="extraction-result:<uuid>", query="<terms>", fields=["<field>"])',
+            'inspect_results(action="object", result_ref="extraction-result:<uuid>", object_ref="<object_ref>")',
+            'inspect_results(action="validation", result_ref="extraction-result:<uuid>", validation_state="open", severity="error")',
+            'inspect_results(action="validation", result_ref="extraction-result:<uuid>", finding_ref="<finding_ref>")',
+            'inspect_results(action="validation", result_ref="extraction-result:<uuid>", finding_ref="<finding_ref>", detail_path="details")',
+            'inspect_results(action="validator_results", result_ref="extraction-result:<uuid>")',
+            'inspect_results(action="validator_results", result_ref="extraction-result:<uuid>", validator_result_key="<validator_result_key>", detail_path="resolved_values")',
             'inspect_results(action="evidence", result_ref="extraction-result:<uuid>", object_ref="<object_ref>")',
-            'inspect_results(action="field", result_ref="extraction-result:<uuid>", object_ref="<object_ref>", field_path="<yaml_field>")',
+            'inspect_results(action="search", target="current_document", query="<terms>")',
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Paging, exact reads and descriptors
+# ---------------------------------------------------------------------------
+
+
+def _budget_failure(exc: ToolResultBudgetError, *, action: str) -> str:
+    failure = budget_failure(
+        tool_name=_TOOL_NAME,
+        measured=exc.measured,
+        limit=exc.limit,
+        field=action,
     )
+    report_budget_failure_result(failure, tool_name=_TOOL_NAME, component=_COMPONENT)
+    return json.dumps(failure, ensure_ascii=True, default=str)
+
+
+def _check_sha(expected: str | None, actual: str) -> None:
+    if expected and expected != actual:
+        raise _RequestError(
+            STALE_RESULT_CURSOR,
+            "This result or view changed since the earlier page was read. Repeat the "
+            "call without cursor and result_sha256 to start again.",
+            result_sha256=actual,
+        )
+
+
+def _parse_cursor(cursor: Any, *, total: int, unit: str = "items") -> int:
+    if cursor is None or (isinstance(cursor, str) and not cursor.strip()):
+        return 0
+    text = str(cursor).strip()
+    # ASCII digits only: isdigit() admits superscripts that int() rejects, and
+    # int() rejects digit strings longer than Python's conversion limit.
+    try:
+        if isinstance(cursor, bool) or not (text.isascii() and text.isdecimal()):
+            raise ValueError(text)
+        value = int(text)
+    except ValueError:
+        raise _RequestError(
+            INVALID_RESULT_CURSOR,
+            "cursor must be the next_cursor (or next_call cursor) from a previous response.",
+            cursor=_echo(cursor),
+        ) from None
+    if value > total:
+        raise _RequestError(
+            INVALID_RESULT_CURSOR,
+            f"cursor {value} is past the end of the {total} available {unit}; the "
+            "result may have changed. Restart without a cursor.",
+        )
+    return value
+
+
+def _page(
+    items: Sequence[Any],
+    *,
+    view: Callable[[Any, int], Any],
+    rows_key: str,
+    head: Mapping[str, Any],
+    call: Mapping[str, Any],
+    sha: str,
+    expected_sha: str | None,
+    cursor: Any,
+    limit: Any,
+    default_limit: int,
+    max_limit: int,
+    message: str,
+    oversized: Callable[[Any, int], Any] | None = None,
+    overrides: Callable[[list[Any]], Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """One forward page of ``items`` fitted to the byte budget.
+
+    Only the requested window is rendered. The page ends at the row limit or
+    where the next row would overflow; a first row too large alone is replaced
+    by ``oversized(row_view, index)`` (identity plus a read call).
+    """
+
+    _check_sha(expected_sha, sha)
+    try:
+        effective, limit_info = clamp_page_limit(
+            limit, default=default_limit, maximum=max_limit
+        )
+    except ValueError as exc:
+        raise _RequestError("invalid_request", str(exc)) from exc
+    total = len(items)
+    start = _parse_cursor(cursor, total=total)
+    window = [view(item, start + offset) for offset, item in enumerate(items[start:start + effective])]
+    next_call_base = dict(call)
+    if limit not in (None, 0):
+        next_call_base["limit"] = effective
+
+    def render(page: list[Any], returned: int) -> dict[str, Any]:
+        next_offset = start + returned
+        more = next_offset < total
+        ended_by = "end" if not more else ("limit" if returned >= effective else "size_budget")
+        withheld = sum(1 for row in page if isinstance(row, Mapping) and row.get("withheld"))
+        note = ""
+        if ended_by == "size_budget":
+            note += " The page ended at the tool result size budget; continue with next_call."
+        if withheld:
+            note += f" {withheld} row(s) were too large to show and are withheld; read each with its read call."
+        body = {
+            "status": "ok",
+            "message": message + note,
+            **head,
+            rows_key: page,
+            "total_count": total,
+            "offset": start,
+            "returned_count": returned,
+            "truncated": more,
+            "next_cursor": str(next_offset) if more else None,
+            "page_ended_by": ended_by,
+            "limit": limit_info,
+            "result_sha256": sha,
+            "next_call": (
+                {**next_call_base, "cursor": str(next_offset), "result_sha256": sha}
+                if more
+                else None
+            ),
+        }
+        if overrides is not None:
+            extra = dict(overrides(page))
+            if "message" in extra:
+                # An override replaces the lead message, never the continuation
+                # and withheld-row notes.
+                extra["message"] += note
+            body.update(extra)
+        return body
+
+    response, _ = fit_page(
+        window,
+        start=0,
+        limit=len(window),
+        render=render,
+        budget=tool_result_budget(),
+        oversized=(
+            (lambda row, offset: oversized(row, start + offset)) if oversized else None
+        ),
+    )
+    return response
+
+
+def _exact_value(
+    value: Any,
+    *,
+    head: Mapping[str, Any],
+    call: Mapping[str, Any],
+    sha: str,
+    expected_sha: str | None,
+    cursor: Any,
+    message: str,
+) -> dict[str, Any]:
+    """Return a value whole when it fits, otherwise exact contiguous chunks.
+
+    Strings are chunked as text and anything else as canonical JSON; joining
+    every chunk's content reproduces the value whose ``value_sha256`` is shown.
+    """
+
+    _check_sha(expected_sha, sha)
+    is_text = isinstance(value, str)
+    text = value if is_text else canonical_json(value)
+    start = _parse_cursor(cursor, total=len(text), unit="characters")
+    digest = content_sha256(value)
+    budget = tool_result_budget()
+    if start == 0:
+        whole = {
+            "status": "ok",
+            "message": message,
+            **head,
+            "value": value,
+            "complete": True,
+            "total_chars": len(text),
+            "value_sha256": digest,
+            "result_sha256": sha,
+        }
+        if serialized_size(whole) <= budget:
+            return whole
+
+    def render(content: str, end: int) -> dict[str, Any]:
+        complete = end >= len(text)
+        return {
+            "status": "ok",
+            "message": message + (
+                "" if complete else " This is an exact chunk; continue with next_call."
+            ),
+            **head,
+            "detail": {
+                "encoding": "text" if is_text else "canonical_json",
+                "content": content,
+                "returned_range": {"start": start, "end": end},
+                "total_chars": len(text),
+                "value_sha256": digest,
+                "complete": complete,
+            },
+            "complete": complete,
+            "result_sha256": sha,
+            "next_call": (
+                None if complete else {**call, "cursor": str(end), "result_sha256": sha}
+            ),
+        }
+
+    return fit_text_window(text, cursor=start, render=render, budget=budget)
+
+
+def _fit_record(
+    record: Mapping[str, Any],
+    *,
+    render: Callable[[dict[str, Any]], dict[str, Any]],
+    read_for: Callable[[str], dict[str, Any]],
+    protected: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Render ``record`` whole, withholding its largest values only as needed."""
+
+    budget = tool_result_budget()
+    shown = dict(record)
+    candidates = sorted(
+        (key for key in record if key not in protected),
+        key=lambda key: serialized_size(record[key]),
+        reverse=True,
+    )
+    for key in candidates:
+        if serialized_size(render(shown)) <= budget:
+            break
+        if _is_descriptor(record[key]):
+            continue
+        shown[key] = _descriptor(record[key], read=read_for(key))
+    response = render(shown)
+    measured = serialized_size(response)
+    if measured > budget:
+        raise ToolResultBudgetError(measured=measured, limit=budget)
+    return response
+
+
+def _is_descriptor(value: Any) -> bool:
+    return isinstance(value, Mapping) and value.get("withheld") is True
+
+
+def _descriptor(value: Any, *, read: Mapping[str, Any]) -> dict[str, Any]:
+    """Describe a withheld value and name the call that reads it exactly."""
+
+    text = value if isinstance(value, str) else canonical_json(value)
+    descriptor: dict[str, Any] = {
+        "withheld": True,
+        "type": "text" if isinstance(value, str) else type(value).__name__,
+        "total_chars": len(text),
+        "value_sha256": content_sha256(value),
+    }
+    if isinstance(value, str):
+        # An exact prefix, marked partial by withheld/total_chars.
+        descriptor["preview"] = value[:_TEXT_PREVIEW_LIMIT]
+    elif isinstance(value, Mapping):
+        descriptor["key_count"] = len(value)
+        keys = sorted(str(key) for key in value)
+        if len(canonical_json(keys)) <= _FIELD_TEXT_LIMIT:
+            descriptor["keys"] = keys
+    elif isinstance(value, list):
+        descriptor["item_count"] = len(value)
+    descriptor["read"] = dict(read)
+    return descriptor
+
+
+def _value_view(value: Any, *, read: Mapping[str, Any]) -> Any:
+    """Inline a value up to the per-field allowance; otherwise describe it."""
+
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= _FIELD_TEXT_LIMIT else _descriptor(value, read=read)
+    if len(canonical_json(value)) <= _FIELD_TEXT_LIMIT:
+        return value
+    return _descriptor(value, read=read)
+
+
+def _resolve_detail(root: Any, detail_path: str) -> Any:
+    try:
+        return resolve_path(root, detail_path)
+    except ValueError as exc:
+        raise _RequestError(
+            "invalid_detail_path",
+            f"{exc}. Use a detail_path from a read call.",
+            detail_path=_echo(detail_path),
+        ) from exc
+
+
+def _choice(value: Any, allowed: Sequence[str], name: str) -> str | None:
+    text = _optional_text(value)
+    if text is None:
+        return None
+    normalized = text.lower()
+    if normalized not in allowed:
+        raise _RequestError(
+            "invalid_request",
+            f"{name} must be one of: {', '.join(allowed)}.",
+            **{name: _echo(text)},
+        )
+    return normalized
+
+
+def _snippet(text: str) -> tuple[str, bool]:
+    if len(text) <= _SNIPPET_LIMIT:
+        return text, True
+    return text[:_SNIPPET_LIMIT], False
+
+
+def _value_text(value: Any) -> str:
+    return value if isinstance(value, str) else canonical_json(value)
+
+
+# ---------------------------------------------------------------------------
+# Result listings
+# ---------------------------------------------------------------------------
 
 
 def _list_response(
     records: Sequence[Any],
     *,
-    action: str,
-    target: str,
-    cursor: str | None,
-    limit: int | None,
-) -> str:
-    bounded_limit = normalize_page_limit(
-        limit,
-        default=_RESULT_LIST_PAGE_SIZE,
-        maximum=_MAX_LIST_LIMIT,
-    )
-    page, truncated, next_cursor = offset_page(records, limit=bounded_limit, cursor=cursor)
-    return _tool_response(
-        "ok",
-        f"{len(page)} authorized persisted extraction result(s) matched.",
-        action=action,
-        target=target,
-        results=[_record_summary(record) for record in page],
-        total_count=len(records),
+    carry: Mapping[str, Any],
+    cursor: Any,
+    limit: Any,
+    expected_sha: str | None,
+) -> dict[str, Any]:
+    return _page(
+        records,
+        view=lambda record, _index: _record_summary(record),
+        rows_key="results",
+        head={"action": "list", "target": carry.get("target", "latest")},
+        call={**carry, "action": "list"},
+        sha=content_sha256({"list": [_record_id(record) for record in records], "view": dict(carry)}),
+        expected_sha=expected_sha,
         cursor=cursor,
-        next_cursor=next_cursor,
-        limit=bounded_limit,
-        truncated=truncated,
-        next_actions=[
-            'Use inspect_results(action="summary", result_ref="<result_ref>") for one result.',
-            'Use inspect_results(action="objects", result_ref="<result_ref>") to browse manifest rows.',
-        ],
+        limit=limit,
+        default_limit=_RESULT_LIST_PAGE_SIZE,
+        max_limit=_MAX_LIST_LIMIT,
+        message=(
+            f"{len(records)} authorized persisted extraction result(s) matched. Use "
+            "action=\"summary\" with a result_ref for its counts, then filter objects."
+        ),
     )
 
 
@@ -329,16 +1054,12 @@ def _search_response(
     records: Sequence[Any],
     *,
     target: str,
+    carry: Mapping[str, Any],
     query: str | None,
-    cursor: str | None,
-    limit: int | None,
-) -> str:
-    normalized_query = _optional_text(query)
-    bounded_limit = normalize_page_limit(
-        limit,
-        default=_RESULT_LIST_PAGE_SIZE,
-        maximum=_MAX_LIST_LIMIT,
-    )
+    cursor: Any,
+    limit: Any,
+    expected_sha: str | None,
+) -> dict[str, Any]:
     matches: list[dict[str, Any]] = []
     unsupported_count = 0
     for record in records:
@@ -351,168 +1072,638 @@ def _search_response(
             _search_matches_for_record(
                 record,
                 envelope=envelope,
-                query=normalized_query,
+                query=query,
+                read_carry=_result_carry(record, target=target, flow_run_id=carry.get("flow_run_id")),
             )
         )
-    page, truncated, next_cursor = offset_page(
+    identities = [
+        [match["result_ref"], match["object_ref"], match["match_type"],
+         match.get("field_path"), match.get("evidence_record_id")]
+        for match in matches
+    ]
+    return _page(
         matches,
-        limit=bounded_limit,
+        view=lambda match, _index: match,
+        rows_key="matches",
+        head={
+            "action": "search",
+            "target": target,
+            "query": query,
+            "unsupported_result_count": unsupported_count,
+        },
+        call={**carry, "action": "search", **({"query": query} if query else {})},
+        sha=content_sha256({"search": identities, "view": {**carry, "query": query}}),
+        expected_sha=expected_sha,
         cursor=cursor,
-    )
-    return _tool_response(
-        "ok",
-        f"{len(page)} bounded extraction result search match(es) returned.",
-        action="search",
-        target=target,
-        query=normalized_query,
-        matches=page,
-        total_count=len(matches),
-        unsupported_result_count=unsupported_count,
-        cursor=cursor,
-        next_cursor=next_cursor,
-        limit=bounded_limit,
-        truncated=truncated,
-        next_actions=[
-            'Use inspect_results(action="objects", result_ref="<result_ref>") to browse the selected result.',
-            'Use inspect_results(action="evidence", result_ref="<result_ref>", object_ref="<object_ref>") for more evidence text.',
-            'When exporting a selected result, pass source_ref="<result_ref>" to the formatter projection plan.',
-        ],
+        limit=limit,
+        default_limit=_RESULT_LIST_PAGE_SIZE,
+        max_limit=_MAX_LIST_LIMIT,
+        message=(
+            f"{len(matches)} search match(es). Snippets marked snippet_complete=false "
+            "are partial; use each match's read call for the complete value. To export a "
+            "selected result, pass its source_ref=\"<result_ref>\" to the formatter."
+        ),
     )
 
 
-def _summary_response(
-    record: Any,
-    *,
-    cursor: str | None,
-    limit: int | None,
-) -> str:
+# ---------------------------------------------------------------------------
+# One result: summary and objects
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _ObjectFilters:
+    object_type: str | None
+    status: str | None
+    validation_state: str | None
+    severity: str | None
+    query: str | None
+    field_path: str | None
+    fields: tuple[str, ...] | None
+
+    @classmethod
+    def build(cls, *, object_type: Any, status: Any, validation_state: Any,
+              severity: Any, query: str | None, field_path: str | None,
+              fields: Sequence[Any] | None) -> "_ObjectFilters":
+        state = _choice(validation_state, _OBJECT_VALIDATION_STATES, "validation_state")
+        chosen_severity = _choice(severity, _SEVERITIES, "severity")
+        if chosen_severity and state == "none":
+            raise _RequestError(
+                "invalid_request",
+                "severity cannot be combined with validation_state=\"none\".",
+            )
+        selected = None
+        if fields:
+            selected = tuple(dict.fromkeys(str(item).strip() for item in fields if str(item).strip()))
+        return cls(
+            object_type=_optional_text(object_type),
+            status=_choice(status, _OBJECT_STATUSES, "status"),
+            validation_state=state,
+            severity=chosen_severity,
+            query=query,
+            field_path=field_path,
+            fields=selected or None,
+        )
+
+    def as_args(self) -> dict[str, Any]:
+        args = {
+            "object_type": self.object_type,
+            "status": self.status,
+            "validation_state": self.validation_state,
+            "severity": self.severity,
+            "query": self.query,
+            "field_path": self.field_path,
+            "fields": list(self.fields) if self.fields else None,
+        }
+        return {key: value for key, value in args.items() if value is not None}
+
+
+def _visible_objects(result: _Result) -> tuple[DomainPackMetadata, list[CuratableObjectEnvelope]]:
     try:
-        manifest = _manifest_page_for_record(record, cursor=cursor, limit=limit)
-    except ExtractionManifestError as exc:
-        return _error_response(
+        metadata = _domain_pack_metadata(result.envelope.domain_pack_id)
+    except ValueError as exc:
+        raise _RequestError(
             "manifest_unavailable",
             str(exc),
-            action="summary",
-            result_ref=_record_result_ref(record),
-            extraction_result_id=_record_id(record),
+            result_ref=result.result_ref,
+            extraction_result_id=result.extraction_result_id,
+        ) from exc
+    return metadata, supervisor_manifest_objects(result.envelope, metadata)
+
+
+def _policies(
+    metadata: DomainPackMetadata,
+    object_types: Sequence[str],
+) -> dict[str, SupervisorManifestPolicy]:
+    try:
+        return {
+            object_type: supervisor_manifest_policy_for_object(metadata, object_type)
+            for object_type in dict.fromkeys(object_types)
+        }
+    except ValueError as exc:
+        raise _RequestError("manifest_unavailable", str(exc)) from exc
+
+
+def _findings_by_object(envelope: DomainEnvelope) -> dict[tuple[str, str], list[ValidationFinding]]:
+    grouped: dict[tuple[str, str], list[ValidationFinding]] = {}
+    for finding in envelope.validation_findings:
+        key = _finding_object_key(finding)
+        if key is not None:
+            grouped.setdefault(key, []).append(finding)
+    return grouped
+
+
+def _object_findings(
+    obj: CuratableObjectEnvelope,
+    grouped: Mapping[tuple[str, str], list[ValidationFinding]],
+) -> list[ValidationFinding]:
+    findings: list[ValidationFinding] = []
+    for key in obj.ref_keys():
+        findings.extend(grouped.get(key, []))
+    return findings
+
+
+def _object_validation_state(findings: Sequence[ValidationFinding]) -> str:
+    if not findings:
+        return "none"
+    if any(finding.status is ValidationFindingStatus.OPEN for finding in findings):
+        return "open"
+    return "resolved"
+
+
+def _object_validation_counts(findings: Sequence[ValidationFinding]) -> dict[str, int]:
+    warning_count, error_count = _validation_severity_counts(findings)
+    return {
+        "total": len(findings),
+        "open": sum(1 for f in findings if f.status is ValidationFindingStatus.OPEN),
+        "error_count": error_count,
+        "warning_count": warning_count,
+    }
+
+
+def _summary_response(result: _Result) -> dict[str, Any]:
+    metadata, visible = _visible_objects(result)
+    policies = _policies(metadata, [obj.object_type for obj in visible])
+    grouped = _findings_by_object(result.envelope)
+    by_type: dict[str, dict[str, Any]] = {}
+    by_status: dict[str, int] = {}
+    by_state = {"open": 0, "resolved": 0, "none": 0}
+    evidence_objects = 0
+    evidence_refs = 0
+    for obj in visible:
+        findings = _object_findings(obj, grouped)
+        state = _object_validation_state(findings)
+        entry = by_type.setdefault(
+            obj.object_type, {"count": 0, "by_status": {}, "with_open_findings": 0}
         )
-    page_info = _page_info(manifest)
-    return _tool_response(
-        "ok",
-        "Canonical extraction result summary is ready.",
-        action="summary",
-        result_ref=_record_result_ref(record),
-        extraction_result_id=_record_id(record),
-        summary=_record_summary(record),
-        manifest=manifest,
-        cursor=page_info.get("cursor"),
-        next_cursor=page_info.get("next_cursor"),
-        limit=page_info.get("limit"),
-        truncated=page_info.get("next_cursor") is not None,
-        next_actions=manifest.get("next_actions", []),
+        entry["count"] += 1
+        entry["by_status"][obj.status.value] = entry["by_status"].get(obj.status.value, 0) + 1
+        entry["with_open_findings"] += state == "open"
+        by_status[obj.status.value] = by_status.get(obj.status.value, 0) + 1
+        by_state[state] += 1
+        evidence_objects += bool(obj.evidence_record_ids)
+        evidence_refs += len(obj.evidence_record_ids)
+    findings = result.envelope.validation_findings
+    finding_status: dict[str, int] = {}
+    finding_severity: dict[str, int] = {}
+    open_severity: dict[str, int] = {}
+    for finding in findings:
+        finding_status[finding.status.value] = finding_status.get(finding.status.value, 0) + 1
+        finding_severity[finding.severity.value] = finding_severity.get(finding.severity.value, 0) + 1
+        if finding.status is ValidationFindingStatus.OPEN:
+            open_severity[finding.severity.value] = open_severity.get(finding.severity.value, 0) + 1
+    decisions = validator_result_entries(findings)
+    decision_status: dict[str, int] = {}
+    for _key, entry in decisions:
+        decision_status[str(entry["status"])] = decision_status.get(str(entry["status"]), 0) + 1
+    inventory = {
+        "result_status": "non_empty_extraction_ready" if visible else "empty_extraction",
+        "object_count": len(visible),
+        "other_object_count": len(result.envelope.extracted_objects) - len(visible),
+        "objects_by_type": dict(sorted(by_type.items())),
+        "objects_by_status": dict(sorted(by_status.items())),
+        "objects_by_validation_state": by_state,
+        "findings": {
+            "total": len(findings),
+            "open": finding_status.get(ValidationFindingStatus.OPEN.value, 0),
+            "by_status": dict(sorted(finding_status.items())),
+            "by_severity": dict(sorted(finding_severity.items())),
+            "open_by_severity": dict(sorted(open_severity.items())),
+        },
+        "validator_results": {
+            "total": len(decisions),
+            "by_status": dict(sorted(decision_status.items())),
+            "with_open_finding": sum(1 for _key, entry in decisions if entry.get("open_finding")),
+            "writeback_rejected": sum(1 for _key, entry in decisions if entry.get("writeback_rejected")),
+        },
+        "evidence": {
+            "objects_with_evidence": evidence_objects,
+            "evidence_reference_count": evidence_refs,
+        },
+    }
+    return {
+        "status": "ok",
+        "message": (
+            "Counts for this result. Page objects, findings or validator results with "
+            "filters, and read one object, field or finding exactly."
+        ),
+        **result.head("summary"),
+        "summary": _record_summary(result.record),
+        "domain_pack_id": result.envelope.domain_pack_id,
+        "inventory": inventory,
+        "filterable_fields": {
+            object_type: list(policy.field_paths)
+            for object_type, policy in sorted(policies.items())
+        },
+        "result_sha256": result.sha(action="summary"),
+        "next_calls": [
+            result.call("objects"),
+            result.call("objects", validation_state="open"),
+            result.call("validation", validation_state="open"),
+            result.call("validator_results"),
+        ],
+    }
+
+
+def _object_matches(
+    obj: CuratableObjectEnvelope,
+    *,
+    policy: SupervisorManifestPolicy,
+    findings: Sequence[ValidationFinding],
+    filters: _ObjectFilters,
+    query_terms: Sequence[str],
+) -> bool:
+    if filters.object_type and obj.object_type != filters.object_type:
+        return False
+    if filters.status and obj.status.value != filters.status:
+        return False
+    state = filters.validation_state or ("any" if filters.severity else None)
+    if state == "none" and findings:
+        return False
+    if state == "resolved" and _object_validation_state(findings) != "resolved":
+        return False
+    if state in {"open", "resolved", "any"}:
+        # At least one finding in the requested state (and severity, if given).
+        relevant = [
+            finding
+            for finding in findings
+            if (state != "open" or finding.status is ValidationFindingStatus.OPEN)
+            and (not filters.severity or finding.severity.value == filters.severity)
+        ]
+        if not relevant:
+            return False
+    if filters.field_path is not None:
+        if filters.field_path not in policy.field_paths:
+            return False
+        value = _payload_path_value(obj.payload, filters.field_path)
+        if value is None or value == "":
+            return False
+        if query_terms and not _query_matches(_value_text(value), query_terms):
+            return False
+        return True
+    if query_terms:
+        haystack = " ".join(
+            [_canonical_object_ref(obj)]
+            + [
+                _value_text(value)
+                for path in policy.field_paths
+                if (value := _payload_path_value(obj.payload, path)) is not None
+            ]
+        )
+        return _query_matches(haystack, query_terms)
+    return True
+
+
+def _validate_field_selection(
+    policies: Mapping[str, SupervisorManifestPolicy],
+    filters: _ObjectFilters,
+) -> None:
+    scoped = (
+        {filters.object_type: policies[filters.object_type]}
+        if filters.object_type in policies
+        else dict(policies)
     )
+    visible = {path for policy in scoped.values() for path in policy.field_paths}
+    requested = list(filters.fields or ())
+    if filters.field_path is not None:
+        requested.append(filters.field_path)
+    if not scoped:
+        if requested:
+            raise _RequestError(
+                "field_not_supervisor_visible",
+                "This result has no supervisor-visible objects, so it has no fields to "
+                "select or filter.",
+                **_echo_list(requested, "requested"),
+            )
+        return
+    hidden = [path for path in requested if path not in visible]
+    if hidden:
+        raise _RequestError(
+            "field_not_supervisor_visible",
+            "fields and field_path must be domain-pack YAML supervisor_manifest fields "
+            "of the objects being listed.",
+            **_echo_list(hidden, "requested"),
+            visible_field_paths={
+                object_type: list(policy.field_paths)
+                for object_type, policy in sorted(scoped.items())
+            },
+        )
+
+
+def _object_row(
+    result: _Result,
+    obj: CuratableObjectEnvelope,
+    *,
+    policy: SupervisorManifestPolicy,
+    findings: Sequence[ValidationFinding],
+    selected: Sequence[str],
+) -> dict[str, Any]:
+    object_ref = _canonical_object_ref(obj)
+
+    def read(path: str) -> dict[str, Any]:
+        return result.call("field", object_ref=object_ref, field_path=path)
+
+    row: dict[str, Any] = {
+        "object_ref": object_ref,
+        "object_type": obj.object_type,
+        "status": obj.status.value,
+    }
+    for field in policy.primary_label_fields:
+        value = _payload_path_value(obj.payload, field.path)
+        if value not in (None, ""):
+            row["display_label"] = _value_view(value, read=read(field.path))
+            break
+    if policy.secondary_label_field is not None:
+        path = policy.secondary_label_field.path
+        value = _payload_path_value(obj.payload, path)
+        if value not in (None, ""):
+            row["secondary_label"] = _value_view(value, read=read(path))
+    row["fields"] = {
+        path: _value_view(value, read=read(path))
+        for path in selected
+        if path in policy.field_paths
+        and (value := _payload_path_value(obj.payload, path)) is not None
+    }
+    row["validation"] = _object_validation_counts(findings)
+    row["evidence_count"] = len(obj.evidence_record_ids)
+    return row
 
 
 def _objects_response(
-    record: Any,
+    result: _Result,
     *,
-    cursor: str | None,
-    limit: int | None,
-) -> str:
-    try:
-        manifest = _manifest_page_for_record(record, cursor=cursor, limit=limit)
-    except ExtractionManifestError as exc:
-        return _error_response(
-            "manifest_unavailable",
-            str(exc),
-            action="objects",
-            result_ref=_record_result_ref(record),
-            extraction_result_id=_record_id(record),
+    filters: _ObjectFilters,
+    cursor: Any,
+    limit: Any,
+    expected_sha: str | None,
+) -> dict[str, Any]:
+    metadata, visible = _visible_objects(result)
+    known_types = {definition.object_type for definition in metadata.object_definitions}
+    if filters.object_type and filters.object_type not in known_types:
+        raise _RequestError(
+            "invalid_request",
+            "object_type is not defined by this result's domain pack.",
+            object_type=_echo(filters.object_type),
+            object_types=sorted({obj.object_type for obj in visible}),
         )
-    page_info = _page_info(manifest)
-    return _tool_response(
-        "ok",
-        "Supervisor-visible extraction objects are ready.",
-        action="objects",
-        result_ref=_record_result_ref(record),
-        extraction_result_id=_record_id(record),
-        domain_pack_id=manifest.get("domain_pack_id"),
-        objects=manifest.get("objects", []),
-        object_count=manifest.get("object_count"),
-        page=page_info,
-        cursor=page_info.get("cursor"),
-        next_cursor=page_info.get("next_cursor"),
-        limit=page_info.get("limit"),
-        truncated=page_info.get("next_cursor") is not None,
-        next_actions=manifest.get("next_actions", []),
+    policies = _policies(metadata, [obj.object_type for obj in visible])
+    _validate_field_selection(policies, filters)
+    grouped = _findings_by_object(result.envelope)
+    query_terms = _query_terms(filters.query)
+    matched: list[tuple[CuratableObjectEnvelope, list[ValidationFinding]]] = []
+    for obj in visible:
+        findings = _object_findings(obj, grouped)
+        if _object_matches(
+            obj,
+            policy=policies[obj.object_type],
+            findings=findings,
+            filters=filters,
+            query_terms=query_terms,
+        ):
+            matched.append((obj, findings))
+
+    def selected_paths(policy: SupervisorManifestPolicy) -> Sequence[str]:
+        if filters.fields:
+            return filters.fields
+        return [field.path for field in policy.summary_fields]
+
+    field_labels: dict[str, str] = {}
+    for object_type in dict.fromkeys(obj.object_type for obj, _findings in matched):
+        policy = policies[object_type]
+        labels = {
+            field.path: field.label
+            for field in (
+                *policy.primary_label_fields,
+                *((policy.secondary_label_field,) if policy.secondary_label_field else ()),
+                *policy.summary_fields,
+            )
+        }
+        for path in selected_paths(policy):
+            if path in labels:
+                field_labels.setdefault(path, labels[path])
+
+    def view(item: tuple[CuratableObjectEnvelope, list[ValidationFinding]], _index: int) -> dict[str, Any]:
+        obj, findings = item
+        policy = policies[obj.object_type]
+        return _object_row(
+            result, obj, policy=policy, findings=findings, selected=selected_paths(policy)
+        )
+
+    def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
+        return {
+            "object_ref": row["object_ref"],
+            "object_type": row["object_type"],
+            "status": row["status"],
+            "withheld": True,
+            "total_chars": len(canonical_json(row)),
+            "read": result.call("object", object_ref=row["object_ref"]),
+        }
+
+    args = filters.as_args()
+    return _page(
+        matched,
+        view=view,
+        rows_key="objects",
+        head={
+            **result.head("objects"),
+            "domain_pack_id": result.envelope.domain_pack_id,
+            "object_count": len(visible),
+            "filters": args,
+            "field_labels": field_labels,
+        },
+        call=result.call("objects", **args),
+        sha=result.sha(action="objects", **args),
+        expected_sha=expected_sha,
+        cursor=cursor,
+        limit=limit,
+        default_limit=get_inspect_results_object_page_size(),
+        max_limit=get_inspect_results_object_max_page_size(),
+        message=(
+            f"{len(matched)} of {len(visible)} supervisor-visible object(s) matched. "
+            "Values shown withheld are read exactly with their read call."
+        ),
+        oversized=oversized,
     )
 
 
-def _object_response(
-    record: Any,
-    *,
-    envelope: DomainEnvelope,
-    object_ref: str | None,
-) -> str:
-    normalized_ref = _optional_text(object_ref)
-    if not normalized_ref:
-        return _error_response(
+def _object_response(result: _Result, *, object_ref: str | None) -> dict[str, Any]:
+    if not object_ref:
+        raise _RequestError(
             "invalid_request",
             "object_ref is required for action=\"object\".",
             action="object",
-            result_ref=_record_result_ref(record),
+            result_ref=result.result_ref,
+        )
+    metadata, visible = _visible_objects(result)
+    obj = next((item for item in visible if _canonical_object_ref(item) == object_ref), None)
+    if obj is None:
+        raise _RequestError(
+            "object_not_found",
+            "No supervisor-visible object matched object_ref.",
+            action="object",
+            result_ref=result.result_ref,
+            object_ref=_echo(object_ref),
+        )
+    policy = _policies(metadata, [obj.object_type])[obj.object_type]
+    findings = _object_findings(obj, _findings_by_object(result.envelope))
+    labels = {field.path: field.label for field in (
+        *policy.primary_label_fields,
+        *((policy.secondary_label_field,) if policy.secondary_label_field else ()),
+        *policy.summary_fields,
+    )}
+
+    def read(path: str) -> dict[str, Any]:
+        return result.call("field", object_ref=object_ref, field_path=path)
+
+    values = {
+        path: _value_view(value, read=read(path))
+        for path in policy.field_paths
+        if (value := _payload_path_value(obj.payload, path)) is not None
+    }
+
+    def render(shown: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "message": (
+                "Supervisor-visible extraction object is ready. Values shown withheld "
+                "are read exactly with their read call."
+            ),
+            **result.head("object"),
+            "object_ref": object_ref,
+            "object": {
+                "object_ref": object_ref,
+                "object_type": obj.object_type,
+                "object_role": obj.object_role,
+                "status": obj.status.value,
+                "fields": shown,
+                "field_labels": {path: labels[path] for path in shown if path in labels},
+                "validation": _object_validation_counts(findings),
+                "evidence_count": len(obj.evidence_record_ids),
+            },
+            "result_sha256": result.sha(action="object", object_ref=object_ref),
+            "next_calls": [
+                result.call("validation", object_ref=object_ref),
+                result.call("evidence", object_ref=object_ref),
+            ],
+        }
+
+    return _fit_record(values, render=render, read_for=read)
+
+
+def _field_response(
+    result: _Result,
+    *,
+    object_ref: str | None,
+    field_path: str | None,
+    cursor: Any,
+    expected_sha: str | None,
+) -> dict[str, Any]:
+    if not object_ref:
+        raise _RequestError(
+            "invalid_request",
+            "object_ref is required for action=\"field\".",
+            action="field",
+            result_ref=result.result_ref,
+        )
+    if not field_path:
+        raise _RequestError(
+            "invalid_request",
+            "field_path is required for action=\"field\".",
+            action="field",
+            result_ref=result.result_ref,
+            object_ref=_echo(object_ref),
+        )
+    if _is_evidence_path(field_path):
+        raise _RequestError(
+            "evidence_path_requires_evidence_action",
+            "Evidence text paths are only available through action=\"evidence\".",
+            action="field",
+            result_ref=result.result_ref,
+            object_ref=_echo(object_ref),
+            field_path=_echo(field_path),
         )
     try:
-        obj = _resolve_object(envelope, normalized_ref)
-        manifest_object = build_extraction_manifest_object(
-            _record_payload_mapping(record),
-            object_ref=normalized_ref,
+        obj = _resolve_object(result.envelope, object_ref)
+        visible_paths = _supervisor_visible_field_paths(
+            result.envelope.domain_pack_id, obj.object_type
         )
-    except (ExtractionManifestError, ValueError) as exc:
-        return _error_response(
+    except ValueError as exc:
+        raise _RequestError(
             "object_not_found",
-            str(exc),
-            action="object",
-            result_ref=_record_result_ref(record),
-            extraction_result_id=_record_id(record),
-            object_ref=normalized_ref,
+            "No object matched object_ref.",
+            action="field",
+            result_ref=result.result_ref,
+            object_ref=_echo(object_ref),
+        ) from exc
+    if field_path not in visible_paths:
+        raise _RequestError(
+            "field_not_supervisor_visible",
+            "field_path must be one of this object's domain-pack YAML supervisor_manifest fields.",
+            action="field",
+            result_ref=result.result_ref,
+            object_ref=_echo(object_ref),
+            field_path=_echo(field_path),
+            visible_field_paths=sorted(visible_paths),
         )
-    return _tool_response(
-        "ok",
-        "Supervisor-visible extraction object is ready.",
-        action="object",
-        result_ref=_record_result_ref(record),
-        extraction_result_id=_record_id(record),
-        object_ref=normalized_ref,
-        object=manifest_object,
-        evidence_count=len(obj.evidence_record_ids),
-        next_actions=[
-            f'Use inspect_results(action="field", result_ref="{_record_result_ref(record)}", object_ref="{normalized_ref}", field_path="<yaml_field>") for one field.',
-            f'Use inspect_results(action="evidence", result_ref="{_record_result_ref(record)}", object_ref="{normalized_ref}") for evidence text.',
-        ],
+    try:
+        value = _payload_path_value(obj.payload, field_path)
+    except ValueError as exc:
+        raise _RequestError(
+            "invalid_field_path",
+            str(exc),
+            action="field",
+            result_ref=result.result_ref,
+            field_path=_echo(field_path),
+        ) from exc
+    if value is None:
+        raise _RequestError(
+            "field_not_found",
+            "field_path did not resolve on this object payload.",
+            action="field",
+            result_ref=result.result_ref,
+            object_ref=_echo(object_ref),
+            field_path=_echo(field_path),
+        )
+    return _exact_value(
+        value,
+        head={**result.head("field"), "object_ref": object_ref, "field_path": field_path},
+        call=result.call("field", object_ref=object_ref, field_path=field_path),
+        sha=result.sha(action="field", object_ref=object_ref, field_path=field_path),
+        expected_sha=expected_sha,
+        cursor=cursor,
+        message="Supervisor-visible field value is ready.",
     )
 
 
-def _detail_tool_response(status: str, message: str, **extra: Any) -> str:
-    # Details is already paged one level at a time. Preserve exact whitespace,
-    # null/false/zero values and continuation paths instead of preview-compacting.
-    return json.dumps({"status": status, "message": message, **extra}, ensure_ascii=True)
-
-
-def _details_response(record: Any, *, envelope: DomainEnvelope, object_ref: str | None,
-                      field_path: str | None, cursor: str | None, limit: int | None) -> str:
+def _details_response(
+    result: _Result,
+    *,
+    object_ref: str | None,
+    field_path: str | None,
+    cursor: Any,
+    limit: Any,
+    expected_sha: str | None,
+) -> dict[str, Any]:
     """Browse one level of saved custom attributes with explicit continuation."""
-    normalized_ref = _optional_text(object_ref)
-    path = _optional_text(field_path) or "attributes"
+
+    path = field_path or "attributes"
     try:
-        obj = _resolve_object(envelope, normalized_ref or "")
+        obj = _resolve_object(result.envelope, object_ref or "")
         parts = parse_field_path(path)
-    except ValueError:
-        return _error_response("invalid_request", "Choose a saved object and a valid detail path.", action="details")
+    except ValueError as exc:
+        raise _RequestError(
+            "invalid_request",
+            "Choose a saved object and a valid detail path.",
+            action="details",
+        ) from exc
     # Custom attributes are an explicit data surface, not an escape from other
     # domain packs' field visibility policies or a route to internal metadata.
-    if envelope.domain_pack_id != "generic" or not parts or parts[0] != "attributes":
-        return _error_response("field_not_supervisor_visible", "Details browses generic/custom attributes only.", action="details")
+    if result.envelope.domain_pack_id != "generic" or not parts or parts[0] != "attributes":
+        raise _RequestError(
+            "field_not_supervisor_visible",
+            "Details browses generic/custom attributes only.",
+            action="details",
+        )
     value: Any = obj.payload
     for part in parts:
         if isinstance(part, str) and isinstance(value, Mapping) and part in value:
@@ -520,313 +1711,528 @@ def _details_response(record: Any, *, envelope: DomainEnvelope, object_ref: str 
         elif isinstance(part, int) and isinstance(value, list) and 0 <= part < len(value):
             value = value[part]
         else:
-            return _error_response("field_not_found", "This saved detail path does not exist.",
-                                   action="details", field_path=path)
-    bounded_limit = normalize_page_limit(limit, default=_RESULT_LIST_PAGE_SIZE, maximum=_MAX_LIST_LIMIT)
-    common = dict(action="details", result_ref=_record_result_ref(record), object_ref=normalized_ref, field_path=path)
-    if isinstance(value, (Mapping, list)):
-        children = list(value.items()) if isinstance(value, Mapping) else list(enumerate(value))
-        page, truncated, next_cursor = offset_page(children, limit=bounded_limit, cursor=cursor)
-        entries = []
-        for key, child in page:
-            child_path = f"{path}[{key}]" if isinstance(key, int) else f"{path}.{key}"
-            container = isinstance(child, (Mapping, list))
-            entries.append({"name": str(key), "field_path": child_path,
-                            "kind": "object" if isinstance(child, Mapping) else "list" if isinstance(child, list) else "value",
-                            "preview": None if container else child[:_FIELD_TEXT_LIMIT] if isinstance(child, str) else child,
-                            "next_call": {"action": "details", "result_ref": _record_result_ref(record),
-                                          "object_ref": normalized_ref, "field_path": child_path}})
-        return _detail_tool_response("ok", "Saved details are ready. Open a child path for its complete value or parts.",
-                              **common, entries=entries, cursor=cursor, next_cursor=next_cursor,
-                              truncated=truncated, limit=bounded_limit)
-    # Text values can exceed the preview budget. Cursor advances characters so
-    # the complete saved value remains retrievable without another extraction.
-    if isinstance(value, str):
-        page, truncated, next_cursor = offset_page(value, limit=_FIELD_TEXT_LIMIT, cursor=cursor)
-        return _detail_tool_response("ok", "Saved detail text is ready.", **common,
-                              value="".join(page), cursor=cursor, next_cursor=next_cursor, truncated=truncated)
-    return _detail_tool_response("ok", "Saved detail value is ready.", **common, value=value, truncated=False)
+            raise _RequestError(
+                "field_not_found",
+                "This saved detail path does not exist.",
+                action="details",
+                field_path=_echo(path),
+            )
+    head = {**result.head("details"), "object_ref": object_ref, "field_path": path}
+    call = result.call("details", object_ref=object_ref, field_path=path)
+    sha = result.sha(action="details", object_ref=object_ref, field_path=path)
+    if not isinstance(value, (Mapping, list)):
+        # Text can be long: exact chunks keep the saved value retrievable.
+        return _exact_value(
+            value,
+            head=head,
+            call=call,
+            sha=sha,
+            expected_sha=expected_sha,
+            cursor=cursor,
+            message="Saved detail value is ready.",
+        )
+    children = list(value.items()) if isinstance(value, Mapping) else list(enumerate(value))
 
+    def view(child: tuple[Any, Any], _index: int) -> dict[str, Any]:
+        key, child_value = child
+        child_path = f"{path}[{key}]" if isinstance(key, int) else f"{path}.{key}"
+        read = result.call("details", object_ref=object_ref, field_path=child_path)
+        entry: dict[str, Any] = {"name": str(key), "field_path": child_path}
+        if isinstance(child_value, Mapping):
+            entry.update(kind="object", key_count=len(child_value), read=read)
+        elif isinstance(child_value, list):
+            entry.update(kind="list", item_count=len(child_value), read=read)
+        else:
+            entry.update(kind="value", value=_value_view(child_value, read=read))
+        return entry
 
-def _field_response(
-    record: Any,
-    *,
-    envelope: DomainEnvelope,
-    object_ref: str | None,
-    field_path: str | None,
-) -> str:
-    normalized_ref = _optional_text(object_ref)
-    normalized_path = _optional_text(field_path)
-    if not normalized_ref:
-        return _error_response(
-            "invalid_request",
-            "object_ref is required for action=\"field\".",
-            action="field",
-            result_ref=_record_result_ref(record),
-        )
-    if not normalized_path:
-        return _error_response(
-            "invalid_request",
-            "field_path is required for action=\"field\".",
-            action="field",
-            result_ref=_record_result_ref(record),
-            object_ref=normalized_ref,
-        )
-    if _is_evidence_path(normalized_path):
-        return _error_response(
-            "evidence_path_requires_evidence_action",
-            "Evidence text paths are only available through action=\"evidence\".",
-            action="field",
-            result_ref=_record_result_ref(record),
-            object_ref=normalized_ref,
-            field_path=normalized_path,
-        )
-
-    try:
-        obj = _resolve_object(envelope, normalized_ref)
-        visible_paths = _supervisor_visible_field_paths(envelope.domain_pack_id, obj.object_type)
-    except ValueError as exc:
-        return _error_response(
-            "object_not_found",
-            str(exc),
-            action="field",
-            result_ref=_record_result_ref(record),
-            extraction_result_id=_record_id(record),
-            object_ref=normalized_ref,
-        )
-    if normalized_path not in visible_paths:
-        return _error_response(
-            "field_not_supervisor_visible",
-            "field_path must be one of this object's domain-pack YAML supervisor_manifest fields.",
-            action="field",
-            result_ref=_record_result_ref(record),
-            extraction_result_id=_record_id(record),
-            object_ref=normalized_ref,
-            field_path=normalized_path,
-            visible_field_paths=sorted(visible_paths),
-        )
-
-    try:
-        value = _payload_path_value(obj.payload, normalized_path)
-    except ValueError as exc:
-        return _error_response(
-            "invalid_field_path",
-            str(exc),
-            action="field",
-            result_ref=_record_result_ref(record),
-            object_ref=normalized_ref,
-            field_path=normalized_path,
-        )
-    if value is None:
-        return _error_response(
-            "field_not_found",
-            "field_path did not resolve on this object payload.",
-            action="field",
-            result_ref=_record_result_ref(record),
-            extraction_result_id=_record_id(record),
-            object_ref=normalized_ref,
-            field_path=normalized_path,
-        )
-    if not _is_scalar(value):
-        return _error_response(
-            "field_not_scalar",
-            "inspect_results field views only return scalar YAML manifest fields.",
-            action="field",
-            result_ref=_record_result_ref(record),
-            extraction_result_id=_record_id(record),
-            object_ref=normalized_ref,
-            field_path=normalized_path,
-        )
-
-    return _tool_response(
-        "ok",
-        "Supervisor-visible field value is ready.",
-        action="field",
-        result_ref=_record_result_ref(record),
-        extraction_result_id=_record_id(record),
-        object_ref=normalized_ref,
-        field_path=normalized_path,
-        value=_preview_text(value, limit=_FIELD_TEXT_LIMIT),
+    return _page(
+        children,
+        view=view,
+        rows_key="entries",
+        head=head,
+        call=call,
+        sha=sha,
+        expected_sha=expected_sha,
+        cursor=cursor,
+        limit=limit,
+        default_limit=_RESULT_LIST_PAGE_SIZE,
+        max_limit=_MAX_LIST_LIMIT,
+        message="Saved details are ready. Open a child path for its complete value or parts.",
     )
+
+
+# ---------------------------------------------------------------------------
+# One result: evidence, findings and validator results
+# ---------------------------------------------------------------------------
 
 
 def _evidence_response(
-    record: Any,
+    result: _Result,
     *,
-    envelope: DomainEnvelope,
     object_ref: str | None,
-    cursor: str | None,
-    limit: int | None,
-) -> str:
-    normalized_ref = _optional_text(object_ref)
-    if not normalized_ref:
-        return _evidence_inventory_response(record, cursor=cursor, limit=limit)
-
+    detail_path: str | None,
+    cursor: Any,
+    limit: Any,
+    expected_sha: str | None,
+) -> dict[str, Any]:
+    if not object_ref:
+        if detail_path:
+            raise _RequestError(
+                "invalid_request",
+                "detail_path requires object_ref for action=\"evidence\".",
+                action="evidence",
+            )
+        return _evidence_inventory_response(
+            result, cursor=cursor, limit=limit, expected_sha=expected_sha
+        )
     try:
-        obj = _resolve_object(envelope, normalized_ref)
+        obj = _resolve_object(result.envelope, object_ref)
     except ValueError as exc:
-        return _error_response(
+        raise _RequestError(
             "object_not_found",
-            str(exc),
+            "No object matched object_ref.",
             action="evidence",
-            result_ref=_record_result_ref(record),
-            extraction_result_id=_record_id(record),
-            object_ref=normalized_ref,
+            result_ref=result.result_ref,
+            object_ref=_echo(object_ref),
+        ) from exc
+    evidence = [
+        _compact_evidence_record(item)
+        for item in _object_evidence_records(result.envelope, obj)
+    ]
+    head = {**result.head("evidence"), "object_ref": object_ref}
+    if detail_path:
+        return _exact_value(
+            _resolve_detail(evidence, detail_path),
+            head={**head, "detail_path": detail_path},
+            call=result.call("evidence", object_ref=object_ref, detail_path=detail_path),
+            sha=result.sha(action="evidence", object_ref=object_ref, detail_path=detail_path),
+            expected_sha=expected_sha,
+            cursor=cursor,
+            message="Exact evidence value is ready.",
         )
 
-    bounded_limit = normalize_page_limit(
-        limit,
-        default=_EVIDENCE_PAGE_SIZE,
-        maximum=_MAX_LIST_LIMIT,
-    )
-    evidence = _object_evidence_records(envelope, obj)
-    page, truncated, next_cursor = offset_page(
+    def view(record: dict[str, Any], index: int) -> dict[str, Any]:
+        return {"index": index, **record}
+
+    def oversized(row: dict[str, Any], index: int) -> dict[str, Any]:
+        record = evidence[index]
+        identity = ("evidence_record_id", "id")
+        # Every withheld key gets an exact read, largest first.
+        withheld_keys = sorted(
+            (key for key in record if key not in identity),
+            key=lambda key: len(_value_text(record[key])),
+            reverse=True,
+        )
+        return {
+            "index": index,
+            **{key: record[key] for key in identity if key in record},
+            "withheld": True,
+            "total_chars": len(canonical_json(record)),
+            "reads": [
+                result.call("evidence", object_ref=object_ref, detail_path=f"{index}.{key}")
+                for key in withheld_keys
+            ] or [result.call("evidence", object_ref=object_ref, detail_path=str(index))],
+        }
+
+    def overrides(page: list[Any]) -> dict[str, Any]:
+        missing = [
+            row for row in page
+            if isinstance(row, Mapping) and not row.get("withheld")
+            and not _record_has_evidence_text(row)
+        ]
+        if not missing:
+            return {}
+        return {
+            "status": "error",
+            "error_code": "evidence_unavailable",
+            "missing_evidence_count": len(missing),
+            "message": (
+                "Some saved evidence could not be loaded. Available evidence is included; "
+                "do not rerun extraction to recover it or treat reference IDs as quotes."
+            ),
+        }
+
+    response = _page(
         evidence,
-        limit=bounded_limit,
+        view=view,
+        rows_key="evidence",
+        head={**head, "evidence_count": len(evidence)},
+        call=result.call("evidence", object_ref=object_ref),
+        sha=result.sha(action="evidence", object_ref=object_ref),
+        expected_sha=expected_sha,
         cursor=cursor,
+        limit=limit,
+        default_limit=_EVIDENCE_PAGE_SIZE,
+        max_limit=_MAX_LIST_LIMIT,
+        message="Evidence text is ready.",
+        oversized=oversized,
+        overrides=overrides,
     )
-    missing = [item for item in page if not _record_has_evidence_text(item)]
-    if missing:
+    if response.get("error_code") == "evidence_unavailable":
         report_runtime_exception(
             RuntimeError("Saved extraction evidence references could not be resolved to text"),
             component="extraction_result_inspection",
             operation="evidence_resolution_failed",
-            tags={"tool_name": "inspect_results"},
-            context={"extraction_result_id": _record_id(record),
-                     "requested_evidence_count": len(page), "missing_evidence_count": len(missing)},
+            tags={"tool_name": _TOOL_NAME},
+            context={
+                "extraction_result_id": result.extraction_result_id,
+                "requested_evidence_count": response["returned_count"],
+                "missing_evidence_count": response["missing_evidence_count"],
+            },
         )
-    return _tool_response(
-        "error" if missing else "ok",
-        ("Some saved evidence could not be loaded. Available evidence is included; "
-         "do not rerun extraction to recover it or treat reference IDs as quotes.")
-        if missing else "Bounded evidence text is ready.",
-        **({"error_code": "evidence_unavailable", "missing_evidence_count": len(missing)} if missing else {}),
-        action="evidence",
-        result_ref=_record_result_ref(record),
-        extraction_result_id=_record_id(record),
-        object_ref=normalized_ref,
-        evidence=[_compact_evidence_record(item) for item in page],
-        evidence_count=len(evidence),
-        cursor=cursor,
-        next_cursor=next_cursor,
-        limit=bounded_limit,
-        truncated=truncated,
-    )
+    return response
 
 
 def _evidence_inventory_response(
-    record: Any,
+    result: _Result,
     *,
-    cursor: str | None,
-    limit: int | None,
-) -> str:
-    try:
-        manifest = _manifest_page_for_record(record, cursor=cursor, limit=limit)
-    except ExtractionManifestError as exc:
-        return _error_response(
-            "manifest_unavailable",
-            str(exc),
-            action="evidence",
-            result_ref=_record_result_ref(record),
-            extraction_result_id=_record_id(record),
-        )
-    raw_objects = manifest.get("objects")
-    objects: list[Any] = raw_objects if isinstance(raw_objects, list) else []
-    inventory = [
-        {
-            "object_ref": item.get("object_ref"),
-            "object_type": item.get("object_type"),
-            "status": item.get("status"),
-            "evidence_count": item.get("evidence_count", 0),
-        }
-        for item in objects
-        if isinstance(item, Mapping)
-    ]
-    page_info = _page_info(manifest)
-    return _tool_response(
-        "ok",
-        "Evidence inventory is ready. Pass object_ref to fetch bounded evidence text.",
-        action="evidence",
-        result_ref=_record_result_ref(record),
-        extraction_result_id=_record_id(record),
-        evidence_inventory=inventory,
-        object_count=manifest.get("object_count"),
-        page=page_info,
-        cursor=page_info.get("cursor"),
-        next_cursor=page_info.get("next_cursor"),
-        limit=page_info.get("limit"),
-        truncated=page_info.get("next_cursor") is not None,
-        next_actions=[
-            f'Use inspect_results(action="evidence", result_ref="{_record_result_ref(record)}", object_ref="<object_ref>") for evidence text.'
-        ],
+    cursor: Any,
+    limit: Any,
+    expected_sha: str | None,
+) -> dict[str, Any]:
+    _metadata, visible = _visible_objects(result)
+    return _page(
+        visible,
+        view=lambda obj, _index: {
+            "object_ref": _canonical_object_ref(obj),
+            "object_type": obj.object_type,
+            "status": obj.status.value,
+            "evidence_count": len(obj.evidence_record_ids),
+        },
+        rows_key="evidence_inventory",
+        head={**result.head("evidence"), "object_count": len(visible)},
+        call=result.call("evidence"),
+        sha=result.sha(action="evidence"),
+        expected_sha=expected_sha,
+        cursor=cursor,
+        limit=limit,
+        default_limit=get_inspect_results_object_page_size(),
+        max_limit=get_inspect_results_object_max_page_size(),
+        message="Evidence inventory is ready. Pass object_ref to read evidence text.",
     )
+
+
+def _finding_ref(index: int, finding: ValidationFinding) -> str:
+    return finding.finding_id or f"{_FINDING_INDEX_PREFIX}{index}"
+
+
+def _finding_view(index: int, finding: ValidationFinding) -> dict[str, Any]:
+    object_ref = None
+    object_type = None
+    field_path = None
+    target = finding.field_ref.object_ref if finding.field_ref is not None else finding.object_ref
+    if target is not None:
+        object_ref = _object_ref_text(target)
+        object_type = getattr(target, "object_type", None)
+    if finding.field_ref is not None:
+        field_path = finding.field_ref.field_path
+    return {
+        "finding_ref": _finding_ref(index, finding),
+        "finding_id": finding.finding_id,
+        "severity": finding.severity.value,
+        "status": finding.status.value,
+        "code": finding.code,
+        "message": finding.message,
+        "object_ref": object_ref,
+        "object_type": object_type,
+        "field_path": field_path,
+        "details": finding.details,
+    }
 
 
 def _validation_response(
-    record: Any,
+    result: _Result,
     *,
-    envelope: DomainEnvelope,
     object_ref: str | None,
     field_path: str | None,
-    cursor: str | None,
-    limit: int | None,
-) -> str:
-    normalized_ref = _optional_text(object_ref)
-    normalized_path = _optional_text(field_path)
-    if normalized_path and not normalized_ref:
-        return _error_response(
-            "invalid_request",
-            "object_ref is required when field_path is supplied for action=\"validation\".",
-            action="validation",
-            result_ref=_record_result_ref(record),
-            field_path=normalized_path,
+    object_type: str | None,
+    validation_state: str | None,
+    severity: str | None,
+    query: str | None,
+    finding_ref: str | None,
+    detail_path: str | None,
+    cursor: Any,
+    limit: Any,
+    expected_sha: str | None,
+) -> dict[str, Any]:
+    findings = list(enumerate(result.envelope.validation_findings))
+    if finding_ref:
+        match = next(
+            ((index, finding) for index, finding in findings
+             if _finding_ref(index, finding) == finding_ref),
+            None,
+        )
+        if match is None:
+            raise _RequestError(
+                "finding_not_found",
+                "No validation finding matched finding_ref in this result.",
+                action="validation",
+                result_ref=result.result_ref,
+                finding_ref=_echo(finding_ref),
+            )
+        full = _finding_view(*match)
+        head = {**result.head("validation"), "finding_ref": finding_ref}
+        sha = result.sha(action="validation", finding_ref=finding_ref, detail_path=detail_path)
+        if detail_path:
+            return _exact_value(
+                _resolve_detail(full, detail_path),
+                head={**head, "detail_path": detail_path},
+                call=result.call("validation", finding_ref=finding_ref, detail_path=detail_path),
+                sha=sha,
+                expected_sha=expected_sha,
+                cursor=cursor,
+                message="Exact validation finding value is ready.",
+            )
+        return _fit_record(
+            full,
+            render=lambda shown: {
+                "status": "ok",
+                "message": "Validation finding is ready. Withheld values are read with their read call.",
+                **head,
+                "finding": shown,
+                "result_sha256": sha,
+            },
+            read_for=lambda key: result.call(
+                "validation", finding_ref=finding_ref, detail_path=key
+            ),
+            protected=_FINDING_IDENTITY_KEYS,
         )
 
     object_keys: set[tuple[str, str]] | None = None
-    if normalized_ref:
+    if object_ref:
         try:
-            obj = _resolve_object(envelope, normalized_ref)
+            object_keys = set(_resolve_object(result.envelope, object_ref).ref_keys())
         except ValueError as exc:
-            return _error_response(
+            raise _RequestError(
                 "object_not_found",
-                str(exc),
+                "No object matched object_ref.",
                 action="validation",
-                result_ref=_record_result_ref(record),
-                extraction_result_id=_record_id(record),
-                object_ref=normalized_ref,
-            )
-        object_keys = set(obj.ref_keys())
-
-    findings = [
-        finding
-        for finding in envelope.validation_findings
-        if _finding_matches(finding, object_keys=object_keys, field_path=normalized_path)
+                result_ref=result.result_ref,
+                object_ref=_echo(object_ref),
+            ) from exc
+    query_terms = _query_terms(query)
+    matched = [
+        (index, finding)
+        for index, finding in findings
+        if _finding_matches(finding, object_keys=object_keys, field_path=field_path)
+        and (not object_type or _finding_object_type(finding) == object_type)
+        and (
+            validation_state is None
+            or (validation_state == "open") == (finding.status is ValidationFindingStatus.OPEN)
+        )
+        and (not severity or finding.severity.value == severity)
+        and (
+            not query_terms
+            or _query_matches(f"{finding.code or ''} {finding.message}", query_terms)
+        )
     ]
-    bounded_limit = normalize_page_limit(
-        limit,
-        default=_VALIDATION_PAGE_SIZE,
-        maximum=_MAX_LIST_LIMIT,
-    )
-    page, truncated, next_cursor = offset_page(
-        findings,
-        limit=bounded_limit,
+
+    def view(item: tuple[int, ValidationFinding], _index: int) -> dict[str, Any]:
+        index, finding = item
+        full = _finding_view(index, finding)
+        ref = full["finding_ref"]
+        for key in ("message", "details"):
+            full[key] = _value_view(
+                full[key],
+                read=result.call("validation", finding_ref=ref, detail_path=key),
+            )
+        return full
+
+    def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
+        return {
+            **{key: row[key] for key in _FINDING_IDENTITY_KEYS if key in row},
+            "withheld": True,
+            "total_chars": len(canonical_json(row)),
+            "read": result.call("validation", finding_ref=row["finding_ref"]),
+        }
+
+    args = {
+        key: value
+        for key, value in {
+            "object_ref": object_ref,
+            "field_path": field_path,
+            "object_type": object_type,
+            "validation_state": validation_state,
+            "severity": severity,
+            "query": query,
+        }.items()
+        if value is not None
+    }
+    return _page(
+        matched,
+        view=view,
+        rows_key="validation_findings",
+        head={**result.head("validation"), "filters": args, "finding_count": len(matched)},
+        call=result.call("validation", **args),
+        sha=result.sha(action="validation", **args),
+        expected_sha=expected_sha,
         cursor=cursor,
+        limit=limit,
+        default_limit=_VALIDATION_PAGE_SIZE,
+        max_limit=_MAX_LIST_LIMIT,
+        message="Validation findings are ready. Read one finding with its finding_ref.",
+        oversized=oversized,
     )
-    return _tool_response(
-        "ok",
-        "Validation findings are ready.",
-        action="validation",
-        result_ref=_record_result_ref(record),
-        extraction_result_id=_record_id(record),
-        object_ref=normalized_ref,
-        field_path=normalized_path,
-        validation_findings=[_validation_finding_view(finding) for finding in page],
-        finding_count=len(findings),
+
+
+def _validator_results_response(
+    result: _Result,
+    *,
+    object_ref: str | None,
+    field_path: str | None,
+    object_type: str | None,
+    decision_status: str | None,
+    validation_state: str | None,
+    key: str | None,
+    detail_path: str | None,
+    cursor: Any,
+    limit: Any,
+    expected_sha: str | None,
+) -> dict[str, Any]:
+    entries = validator_result_entries(result.envelope.validation_findings)
+    if key:
+        entry = next((value for entry_key, value in entries if entry_key == key), None)
+        if entry is None:
+            raise _RequestError(
+                "validator_result_not_found",
+                "No validator result matched validator_result_key in this result.",
+                action="validator_results",
+                result_ref=result.result_ref,
+                validator_result_key=_echo(key),
+            )
+        full = {"validator_result_key": key, **entry}
+        head = {**result.head("validator_results"), "validator_result_key": key}
+        sha = result.sha(action="validator_results", key=key, detail_path=detail_path)
+        if detail_path:
+            return _exact_value(
+                _resolve_detail(full, detail_path),
+                head={**head, "detail_path": detail_path},
+                call=result.call(
+                    "validator_results", validator_result_key=key, detail_path=detail_path
+                ),
+                sha=sha,
+                expected_sha=expected_sha,
+                cursor=cursor,
+                message="Exact validator result value is ready.",
+            )
+        return _fit_record(
+            full,
+            render=lambda shown: {
+                "status": "ok",
+                "message": "Validator result is ready. Withheld values are read with their read call.",
+                **head,
+                "validator_result": shown,
+                "result_sha256": sha,
+            },
+            read_for=lambda name: result.call(
+                "validator_results", validator_result_key=key, detail_path=name
+            ),
+            protected=frozenset({"validator_result_key", "status", "open_finding", "writeback_rejected"}),
+        )
+
+    def target_value(entry: Mapping[str, Any], name: str) -> Any:
+        target = entry.get("target")
+        return target.get(name) if isinstance(target, Mapping) else None
+
+    object_ids: set[str] | None = None
+    if object_ref:
+        try:
+            # Targets name an object by object_id or, before one exists, by its
+            # pending ref; match either identity of the requested object.
+            object_ids = {
+                value for _kind, value in _resolve_object(result.envelope, object_ref).ref_keys()
+            }
+        except ValueError as exc:
+            raise _RequestError(
+                "object_not_found",
+                "No object matched object_ref.",
+                action="validator_results",
+                result_ref=result.result_ref,
+                object_ref=_echo(object_ref),
+            ) from exc
+
+    matched = [
+        (entry_key, entry)
+        for entry_key, entry in entries
+        if (not decision_status or entry.get("status") == decision_status)
+        and (
+            validation_state is None
+            or (validation_state == "open") == bool(entry.get("open_finding"))
+        )
+        and (
+            object_ids is None
+            or target_value(entry, "object_id") in object_ids
+            or target_value(entry, "pending_ref_id") in object_ids
+        )
+        and (not object_type or target_value(entry, "object_type") == object_type)
+        and (not field_path or target_value(entry, "field_path") == field_path)
+    ]
+
+    def view(item: tuple[str, dict[str, Any]], _index: int) -> dict[str, Any]:
+        entry_key, entry = item
+        return {
+            "validator_result_key": entry_key,
+            **{
+                name: _value_view(
+                    value,
+                    read=result.call(
+                        "validator_results", validator_result_key=entry_key, detail_path=name
+                    ),
+                )
+                for name, value in entry.items()
+            },
+        }
+
+    def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
+        return {
+            **{
+                name: row[name]
+                for name in ("validator_result_key", "status", "open_finding", "writeback_rejected")
+                if name in row
+            },
+            "withheld": True,
+            "total_chars": len(canonical_json(row)),
+            "read": result.call(
+                "validator_results", validator_result_key=row["validator_result_key"]
+            ),
+        }
+
+    args = {
+        name: value
+        for name, value in {
+            "status": decision_status,
+            "validation_state": validation_state,
+            "object_ref": object_ref,
+            "object_type": object_type,
+            "field_path": field_path,
+        }.items()
+        if value is not None
+    }
+    return _page(
+        matched,
+        view=view,
+        rows_key="validator_results",
+        head={**result.head("validator_results"), "filters": args},
+        call=result.call("validator_results", **args),
+        sha=result.sha(action="validator_results", **args),
+        expected_sha=expected_sha,
         cursor=cursor,
-        next_cursor=next_cursor,
-        limit=bounded_limit,
-        truncated=truncated,
+        limit=limit,
+        default_limit=get_inspect_results_object_page_size(),
+        max_limit=get_inspect_results_object_max_page_size(),
+        message=(
+            f"{len(matched)} automatic validator result(s). These are validator decisions, "
+            "not proof of accepted writeback or export readiness; writeback_rejected "
+            "results are not accepted identities and open findings stay open."
+        ),
+        oversized=oversized,
     )
+
+
+# ---------------------------------------------------------------------------
+# Record resolution and authorization
+# ---------------------------------------------------------------------------
 
 
 def _authorized_records(
@@ -871,6 +2277,17 @@ def _authorized_records(
 
     records = _filter_by_adapter(records, adapter_keys)
     return _sort_records_newest(records), None
+
+
+def _result_carry(record: Any, *, target: str, flow_run_id: str | None) -> dict[str, Any]:
+    """Arguments that authorize the same result again on a follow-up call."""
+
+    carry: dict[str, Any] = {"result_ref": _record_result_ref(record)}
+    if target not in {"latest", "this_chat"}:
+        carry["target"] = target
+    if target == "flow_run" and _optional_text(flow_run_id):
+        carry["flow_run_id"] = _optional_text(flow_run_id)
+    return carry
 
 
 def _session_records(*, session_id: str, user_id: str) -> list[Any]:
@@ -965,11 +2382,17 @@ def _record_summary(record: Any) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Cross-result search
+# ---------------------------------------------------------------------------
+
+
 def _search_matches_for_record(
     record: Any,
     *,
     envelope: DomainEnvelope,
     query: str | None,
+    read_carry: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     query_terms = _query_terms(query)
@@ -982,7 +2405,8 @@ def _search_matches_for_record(
                     obj,
                     object_ref=object_ref,
                     match_type="object_preview",
-                    snippet=_object_preview_snippet(envelope, obj),
+                    text=_object_preview_text(envelope, obj),
+                    read={"action": "object", **read_carry, "object_ref": object_ref},
                 )
             )
             continue
@@ -993,6 +2417,7 @@ def _search_matches_for_record(
                 obj=obj,
                 object_ref=object_ref,
                 query_terms=query_terms,
+                read_carry=read_carry,
             )
         )
         matches.extend(
@@ -1002,6 +2427,7 @@ def _search_matches_for_record(
                 obj=obj,
                 object_ref=object_ref,
                 query_terms=query_terms,
+                read_carry=read_carry,
             )
         )
     return matches
@@ -1014,6 +2440,7 @@ def _field_search_matches(
     obj: CuratableObjectEnvelope,
     object_ref: str,
     query_terms: Sequence[str],
+    read_carry: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     try:
         visible_paths = _supervisor_visible_field_paths(
@@ -1029,16 +2456,18 @@ def _field_search_matches(
         value = _payload_path_value(obj.payload, field_path)
         if not _is_scalar(value):
             continue
-        snippet = _manifest_field_snippet(field_path, value)
-        if _query_matches(snippet, query_terms):
+        text = f"{field_path}: {value}"
+        if _query_matches(text, query_terms):
             matches.append(
                 _search_match_base(
                     record,
                     obj,
                     object_ref=object_ref,
                     match_type="manifest_field",
-                    snippet=snippet,
+                    text=text,
                     field_path=field_path,
+                    read={"action": "field", **read_carry, "object_ref": object_ref,
+                          "field_path": field_path},
                 )
             )
     return matches
@@ -1051,9 +2480,10 @@ def _evidence_search_matches(
     obj: CuratableObjectEnvelope,
     object_ref: str,
     query_terms: Sequence[str],
+    read_carry: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
-    for evidence_record in _object_evidence_records(envelope, obj):
+    for index, evidence_record in enumerate(_object_evidence_records(envelope, obj)):
         haystack = " ".join(
             str(value)
             for value in evidence_record.values()
@@ -1061,19 +2491,25 @@ def _evidence_search_matches(
         )
         if not _query_matches(haystack, query_terms):
             continue
+        text_key = next((key for key in _EVIDENCE_TEXT_KEYS if evidence_record.get(key) is not None), None)
+        read = {"action": "evidence", **read_carry, "object_ref": object_ref}
+        if text_key is not None:
+            read["detail_path"] = f"{index}.{text_key}"
         match = _search_match_base(
             record,
             obj,
             object_ref=object_ref,
             match_type="evidence_text",
-            snippet=_evidence_snippet(evidence_record),
+            text=(
+                str(evidence_record[text_key])
+                if text_key is not None
+                else canonical_json(_compact_evidence_record(evidence_record))
+            ),
+            read=read,
         )
         evidence_id = evidence_record.get("evidence_record_id") or evidence_record.get("id")
         if evidence_id is not None:
-            match["evidence_record_id"] = _preview_text(
-                evidence_id,
-                limit=_TEXT_PREVIEW_LIMIT,
-            )
+            match["evidence_record_id"] = str(evidence_id)
         matches.append(match)
     return matches
 
@@ -1084,9 +2520,11 @@ def _search_match_base(
     *,
     object_ref: str,
     match_type: str,
-    snippet: str,
+    text: str,
+    read: Mapping[str, Any],
     field_path: str | None = None,
 ) -> dict[str, Any]:
+    snippet, complete = _snippet(text)
     match = {
         "result_ref": _record_result_ref(record),
         "extraction_result_id": _record_id(record),
@@ -1099,15 +2537,17 @@ def _search_match_base(
         "origin_session_id": _record_attr(record, "origin_session_id"),
         "flow_run_id": _record_attr(record, "flow_run_id"),
         "created_at": _record_created_at_text(record),
-        "snippet": _preview_text(snippet, limit=_EVIDENCE_TEXT_LIMIT),
+        "snippet": snippet,
+        "snippet_complete": complete,
         "match_type": match_type,
+        "read": dict(read),
     }
     if field_path:
         match["field_path"] = field_path
     return match
 
 
-def _object_preview_snippet(
+def _object_preview_text(
     envelope: DomainEnvelope,
     obj: CuratableObjectEnvelope,
 ) -> str:
@@ -1118,32 +2558,15 @@ def _object_preview_snippet(
         )
     except ValueError:
         visible_paths = set()
-    snippets = [
-        _manifest_field_snippet(field_path, _payload_path_value(obj.payload, field_path))
+    parts = [
+        f"{field_path}: {value}"
         for field_path in sorted(visible_paths)
         if not _is_evidence_path(field_path)
-        and _is_scalar(_payload_path_value(obj.payload, field_path))
+        and _is_scalar(value := _payload_path_value(obj.payload, field_path))
     ]
-    if snippets:
-        return "; ".join(snippets)
+    if parts:
+        return "; ".join(parts)
     return obj.object_type
-
-
-def _manifest_field_snippet(field_path: str, value: Any) -> str:
-    return f"{field_path}: {_preview_text(value, limit=_TEXT_PREVIEW_LIMIT)}"
-
-
-def _evidence_snippet(record: Mapping[str, Any]) -> str:
-    for key in _EVIDENCE_TEXT_KEYS:
-        value = record.get(key)
-        if value is not None:
-            return _preview_text(value, limit=_EVIDENCE_TEXT_LIMIT)
-    compact = _compact_evidence_record(record)
-    return "; ".join(
-        f"{key}: {value}"
-        for key, value in compact.items()
-        if value is not None
-    )
 
 
 def _query_terms(query: str | None) -> list[str]:
@@ -1155,6 +2578,11 @@ def _query_matches(value: Any, query_terms: Sequence[str]) -> bool:
         return True
     haystack = " ".join(str(value or "").lower().split())
     return all(term in haystack for term in query_terms)
+
+
+# ---------------------------------------------------------------------------
+# Envelope helpers
+# ---------------------------------------------------------------------------
 
 
 def _validation_severity_counts(
@@ -1177,23 +2605,6 @@ def _validation_severity_counts(
         elif finding.severity is ValidationFindingSeverity.WARNING:
             warning_count += 1
     return warning_count, error_count
-
-
-def _manifest_page_for_record(
-    record: Any,
-    *,
-    cursor: str | None,
-    limit: int | None,
-) -> dict[str, Any]:
-    return build_extraction_manifest_page(
-        _record_payload_mapping(record),
-        extraction_result_id=_record_id(record),
-        result_ref=_record_result_ref(record),
-        adapter_key=_optional_text(_record_attr(record, "adapter_key")),
-        agent_key=_optional_text(_record_attr(record, "agent_key")),
-        cursor=cursor,
-        limit=_manifest_limit(limit),
-    )
 
 
 def _canonical_envelope_for_record(record: Any) -> DomainEnvelope:
@@ -1229,11 +2640,7 @@ def _canonical_object_ref(obj: CuratableObjectEnvelope) -> str:
 def _supervisor_visible_field_paths(domain_pack_id: str, object_type: str) -> set[str]:
     metadata = _domain_pack_metadata(domain_pack_id)
     policy = supervisor_manifest_policy_for_object(metadata, object_type)
-    paths = {field.path for field in policy.primary_label_fields}
-    if policy.secondary_label_field is not None:
-        paths.add(policy.secondary_label_field.path)
-    paths.update(field.path for field in policy.summary_fields)
-    return paths
+    return set(policy.field_paths)
 
 
 def _domain_pack_metadata(domain_pack_id: str) -> DomainPackMetadata:
@@ -1359,16 +2766,27 @@ def _dedupe_evidence_records(records: Sequence[Mapping[str, Any]]) -> list[Mappi
 
 
 def _compact_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
-    compact: dict[str, Any] = {}
-    for key in ("evidence_record_id", "id", "field_path", *_EVIDENCE_CONTEXT_KEYS):
-        value = record.get(key)
-        if value is not None:
-            compact[key] = _preview_text(value, limit=_TEXT_PREVIEW_LIMIT)
-    for key in _EVIDENCE_TEXT_KEYS:
-        value = record.get(key)
-        if value is not None:
-            compact[key] = _preview_text(value, limit=_EVIDENCE_TEXT_LIMIT)
-    return compact
+    """Identity, location and quote keys of one evidence record, values exact."""
+
+    return {
+        key: record[key]
+        for key in ("evidence_record_id", "id", "field_path", *_EVIDENCE_CONTEXT_KEYS,
+                    *_EVIDENCE_TEXT_KEYS)
+        if record.get(key) is not None
+    }
+
+
+def _finding_object_key(finding: ValidationFinding) -> tuple[str, str] | None:
+    if finding.field_ref is not None:
+        return finding.field_ref.object_ref.ref_key()
+    if finding.object_ref is not None:
+        return finding.object_ref.ref_key()
+    return None
+
+
+def _finding_object_type(finding: ValidationFinding) -> str | None:
+    target = finding.field_ref.object_ref if finding.field_ref is not None else finding.object_ref
+    return getattr(target, "object_type", None) if target is not None else None
 
 
 def _finding_matches(
@@ -1377,43 +2795,13 @@ def _finding_matches(
     object_keys: set[tuple[str, str]] | None,
     field_path: str | None,
 ) -> bool:
-    if object_keys is not None:
-        finding_key = None
-        if finding.field_ref is not None:
-            finding_key = finding.field_ref.object_ref.ref_key()
-        elif finding.object_ref is not None:
-            finding_key = finding.object_ref.ref_key()
-        if finding_key not in object_keys:
-            return False
+    if object_keys is not None and _finding_object_key(finding) not in object_keys:
+        return False
     if field_path is not None:
         if finding.field_ref is None:
             return False
         return finding.field_ref.field_path == field_path
     return True
-
-
-def _validation_finding_view(finding: ValidationFinding) -> dict[str, Any]:
-    object_ref = None
-    field_path = None
-    if finding.field_ref is not None:
-        object_ref = _object_ref_text(finding.field_ref.object_ref)
-        field_path = finding.field_ref.field_path
-    elif finding.object_ref is not None:
-        object_ref = _object_ref_text(finding.object_ref)
-    return {
-        "finding_id": finding.finding_id,
-        "severity": finding.severity.value,
-        "status": finding.status.value,
-        "code": finding.code,
-        "message": _preview_text(finding.message, limit=_FIELD_TEXT_LIMIT),
-        "object_ref": object_ref,
-        "field_path": field_path,
-        "details": _bounded_json(
-            finding.details,
-            text_limit=_FIELD_TEXT_LIMIT,
-            list_limit=_VALIDATION_DETAIL_LIST_LIMIT,
-        ),
-    }
 
 
 def _object_ref_text(object_ref: Any) -> str:
@@ -1518,19 +2906,6 @@ def _record_created_at_text(record: Any) -> str | None:
     return str(created_at)
 
 
-def _page_info(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
-    page = manifest.get("page")
-    return page if isinstance(page, Mapping) else {}
-
-
-def _manifest_limit(limit: int | None) -> int:
-    return normalize_page_limit(
-        limit,
-        default=_MANIFEST_PAGE_SIZE,
-        maximum=_MANIFEST_PAGE_SIZE,
-    )
-
-
 def _is_scalar(value: Any) -> bool:
     return isinstance(value, (str, int, float, bool)) or value is None
 
@@ -1540,73 +2915,22 @@ def _optional_text(value: Any) -> str | None:
     return text or None
 
 
-def _preview_text(value: Any, *, limit: int) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
+def _echo(value: Any) -> str:
+    """Short preview of model-supplied input echoed back in a response."""
+
+    text = " ".join(str(value if value is not None else "").split())
+    if len(text) <= _TEXT_PREVIEW_LIMIT:
         return text
-    return f"{text[: max(1, limit - 3)].rstrip()}..."
+    return f"{text[: max(1, _TEXT_PREVIEW_LIMIT - 3)].rstrip()}..."
 
 
-def _bounded_json(
-    value: Any,
-    *,
-    text_limit: int,
-    list_limit: int,
-    depth: int = 0,
-) -> Any:
-    if isinstance(value, str):
-        return _preview_text(value, limit=text_limit)
-    if isinstance(value, (int, float, bool)) or value is None:
-        return value
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, UUID):
-        return str(value)
-    if depth >= _JSON_DEPTH_LIMIT:
-        return "<truncated>"
-    if isinstance(value, Mapping):
-        return {
-            str(key): _bounded_json(
-                item,
-                text_limit=text_limit,
-                list_limit=list_limit,
-                depth=depth + 1,
-            )
-            for key, item in list(value.items())[:_JSON_OBJECT_ITEM_LIMIT]
-        }
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        items = [
-            _bounded_json(
-                item,
-                text_limit=text_limit,
-                list_limit=list_limit,
-                depth=depth + 1,
-            )
-            for item in list(value)[:list_limit]
-        ]
-        if len(value) > list_limit:
-            items.append({"truncated_count": len(value) - list_limit})
-        return items
-    return _preview_text(value, limit=text_limit)
-
-
-def _tool_response(status: str, message: str, **extra: Any) -> str:
-    payload = {"status": status, "message": message}
-    payload.update(extra)
-    return json.dumps(
-        _bounded_json(payload, text_limit=_FIELD_TEXT_LIMIT, list_limit=_JSON_LIST_LIMIT),
-        ensure_ascii=True,
-        default=str,
-    )
-
-
-def _error_response(error_code: str, message: str, **extra: Any) -> str:
-    return _tool_response(
-        "error" if error_code not in {"unavailable", "no_context"} else error_code,
-        message,
-        error_code=error_code,
+def _error(error_code: str, message: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "status": "error" if error_code not in {"unavailable", "no_context"} else error_code,
+        "message": message,
+        "error_code": error_code,
         **extra,
-    )
+    }
 
 
 __all__ = ["inspect_results"]

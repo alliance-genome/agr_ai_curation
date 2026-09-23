@@ -232,19 +232,29 @@ async def test_inspect_results_help_uses_canonical_result_refs_only():
 async def test_inspect_results_summary_uses_manifest_without_evidence_text(monkeypatch):
     _patch_records(monkeypatch, [_InspectRecord()])
 
-    response = await inspect_results_module.inspect_results(action="summary")
+    summary = json.loads(await inspect_results_module.inspect_results(action="summary"))
+    objects = json.loads(
+        await inspect_results_module.inspect_results(
+            action="objects", result_ref=f"extraction-result:{RESULT_ID}"
+        )
+    )
 
-    payload = json.loads(response)
-    serialized_manifest = json.dumps(payload["manifest"])
-    assert payload["status"] == "ok"
-    assert payload["result_ref"] == f"extraction-result:{RESULT_ID}"
-    assert payload["manifest"]["objects"][0]["display_label"] == "APOE association"
-    assert payload["manifest"]["objects"][0]["fields"] == [
-        {"path": "curie", "label": "Validated CURIE", "value": "TEST:0001"},
-        {"path": "taxon", "label": "Taxon", "value": "NCBITaxon:9606"},
-    ]
-    assert "This evidence quote must not appear" not in serialized_manifest
-    assert "paper states APOE" not in serialized_manifest
+    assert summary["status"] == "ok"
+    assert summary["result_ref"] == f"extraction-result:{RESULT_ID}"
+    assert summary["inventory"]["object_count"] == 1
+    assert summary["inventory"]["objects_by_validation_state"] == {
+        "open": 1, "resolved": 0, "none": 0,
+    }
+    assert objects["objects"][0]["display_label"] == "APOE association"
+    assert objects["objects"][0]["fields"] == {
+        "curie": "TEST:0001",
+        "taxon": "NCBITaxon:9606",
+    }
+    assert objects["field_labels"] == {"curie": "Validated CURIE", "taxon": "Taxon"}
+    for payload in (summary, objects):
+        serialized = json.dumps(payload)
+        assert "This evidence quote must not appear" not in serialized
+        assert "paper states APOE" not in serialized
 
 
 @pytest.mark.asyncio
@@ -404,8 +414,9 @@ async def test_inspect_results_evidence_inventory_hides_text_until_object_ref(mo
     assert evidence["status"] == "ok"
     assert evidence["evidence"] == [
         {
+            "index": 0,
             "evidence_record_id": "evidence-1",
-            "page": "4",
+            "page": 4,
             "section": "Results",
             "verified_quote": "The paper states APOE is associated with disease.",
         }
@@ -671,7 +682,9 @@ async def test_custom_detail_navigation_preserves_parts_and_complete_text(monkey
     text = 'first line\n second line\tend'
     payload['extracted_objects'][0]['payload']['attributes'] = {'source': {'name': text, 'number': 0, 'known': False, 'unknown': None}, 'names': ['A', 'B']}
     _patch_records(monkeypatch, [_InspectRecord(payload_json=payload)])
-    monkeypatch.setattr(inspect_results_module, '_FIELD_TEXT_LIMIT', 8)
+    # Below the 27-char text (withheld) but above the refs and paths passed in,
+    # which share this limit as caller input.
+    monkeypatch.setattr(inspect_results_module, '_FIELD_TEXT_LIMIT', 24)
     async def read(**kw):
         return json.loads(await inspect_results_module.inspect_results(action='details', object_ref='assertion-1', **kw))
     root = await read(limit=1)
@@ -679,16 +692,12 @@ async def test_custom_detail_navigation_preserves_parts_and_complete_text(monkey
     assert root['next_cursor'] == '1'
     assert (await read(limit=1, cursor='1'))['entries'][0]['kind'] == 'list'
     parts = await read(field_path='attributes.source')
-    assert [e['preview'] for e in parts['entries'][1:]] == [0, False, None]
-    reconstructed = ''
-    cursor = None
-    while True:
-        part = await read(field_path='attributes.source.name', cursor=cursor)
-        reconstructed += part['value']
-        cursor = part['next_cursor']
-        if cursor is None:
-            break
-    assert reconstructed == text
+    assert [e['value'] for e in parts['entries'][1:]] == [0, False, None]
+    # Longer than the inline allowance: withheld with an exact read call.
+    assert parts['entries'][0]['value']['withheld'] is True
+    whole = await read(field_path='attributes.source.name')
+    assert whole['value'] == text
+    assert whole['complete'] is True
     assert (await read(field_path='attributes.names[1]'))['value'] == 'B'
     monkeypatch.setattr(inspect_results_module, '_FIELD_TEXT_LIMIT', 1000)
     assert (await read(field_path='metadata'))['status'] == 'error'
