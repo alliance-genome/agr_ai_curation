@@ -180,6 +180,11 @@ def test_supervisor_prompt_explains_result_inspection_boundaries():
 
     assert "inspect_results(action=\"help\")" in prompt_text
     assert "inspect_results(action=\"search\"" in prompt_text
+    # ALL-1287: counts first, filtered pages, bounded continuation.
+    assert "inspect_results(action=\"summary\")" in prompt_text
+    assert "`validation_state`" in prompt_text
+    assert "`next_call` arguments exactly" in normalized_prompt
+    assert "marked `withheld` is not missing or shortened" in normalized_prompt
     assert "extraction-result:<uuid>" in prompt_text
     assert (
         "Do not silently export a different result than the curator requested."
@@ -1715,6 +1720,11 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert "object_ref" in inspect_params
     assert "review_session_id" not in inspect_params
     assert "file_id" not in inspect_params
+    for exploration_param in (
+        "object_type", "status", "validation_state", "severity", "fields",
+        "finding_ref", "validator_result_key", "detail_path", "result_sha256",
+    ):
+        assert exploration_param in inspect_params
     tools_by_name = {getattr(tool, "name", ""): tool for tool in created.tools}
     trace_inspect_params = inspect.signature(
         tools_by_name["inspect_chat_traces"]
@@ -1733,6 +1743,8 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert "assistant_response independently" in tools_by_name["inspect_chat_traces"].description
     assert "its offset as cursor" in tools_by_name["inspect_chat_traces"].description
     assert "action=\"search\"" in tools_by_name["inspect_results"].description
+    assert "action=\"summary\"" in tools_by_name["inspect_results"].description
+    assert "next_call" in tools_by_name["inspect_results"].description
     assert "export_to_file" not in tools_by_name
     assert captured_langfuse["metadata"]["specialist_count"] == 4
 

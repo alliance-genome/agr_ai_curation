@@ -5751,6 +5751,15 @@ class TestCreateFlowSupervisorNoTools:
                 "field_path": None,
                 "limit": None,
                 "cursor": None,
+                "object_type": None,
+                "status": None,
+                "validation_state": None,
+                "severity": None,
+                "fields": None,
+                "finding_ref": None,
+                "validator_result_key": None,
+                "detail_path": None,
+                "result_sha256": None,
             }
         ]
         assert supervisor._flow_execution_state["inspected_result_refs"] == {
