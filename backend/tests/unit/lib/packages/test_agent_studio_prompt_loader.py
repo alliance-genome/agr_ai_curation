@@ -40,7 +40,8 @@ def test_core_only_profile_resolves_neutral_package_prompt():
     ).resolve()
     assert "currently\ninstalled AI curation packages" in loaded.content
     assert "Alliance of Genome Resources" not in loaded.content
-    assert "{{USER_GREETING}}" in loaded.content
+    # ALL-1292: the application appends the current user after static content.
+    assert "{{USER_GREETING}}" not in loaded.content
     assert "{{PACKAGE_DIAGNOSTIC_TOOLS}}" in loaded.content
 
 

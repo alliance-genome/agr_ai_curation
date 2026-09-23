@@ -156,7 +156,7 @@ def test_tools_use_one_hosted_search_surface_and_keep_forced_tool_eager():
     }
 
 
-def test_capability_search_can_be_eager_without_eager_detail_catalog():
+def test_capability_search_and_studio_guide_stay_eager_without_eager_detail_catalog():
     state = runtime.AgentStudioRunState(trace_id="trace-catalog")
 
     async def execute(_name, _arguments, _call_id):
@@ -165,6 +165,7 @@ def test_capability_search_can_be_eager_without_eager_detail_catalog():
     tools, metrics = runtime.build_agent_studio_tools(
         [
             _tool_definition("search_studio_capabilities"),
+            _tool_definition("read_studio_guide"),
             _tool_definition("get_studio_capability_detail"),
         ],
         executor=execute,
@@ -182,8 +183,11 @@ def test_capability_search_can_be_eager_without_eager_detail_catalog():
     detail = next(
         tool for tool in function_tools if "get_studio_capability_detail" in tool.name
     )
+    assert next(
+        tool for tool in function_tools if tool.name == "read_studio_guide"
+    ).defer_loading is False
     assert detail.defer_loading is True
-    assert metrics["eager_count"] == 1
+    assert metrics["eager_count"] == 2
     assert metrics["deferred_count"] == 1
 
 

@@ -86,6 +86,10 @@ from src.lib.agent_studio.tool_search_authorization import (
 import src.lib.agent_studio.chat_session as agent_studio_chat_session
 import src.lib.agent_studio.domain_envelope_tools as agent_studio_domain_envelope_tools
 import src.lib.agent_studio.prompt_builder as prompt_builder
+from src.lib.agent_studio.studio_guide import (
+    READ_STUDIO_GUIDE_TOOL_NAME,
+    read_studio_guide,
+)
 from src.lib.agent_studio.flow_tools import (
     set_workflow_user_context,
     clear_workflow_user_context,
@@ -2900,6 +2904,16 @@ async def _execute_tool_call(
         caller_sub=user_auth_sub,
         caller_email=user_email,
     )
+
+    if tool_name == READ_STUDIO_GUIDE_TOOL_NAME:
+        return read_studio_guide(
+            template=_load_agent_studio_system_prompt_template(),
+            render_diagnostic_tools=prompt_builder.build_package_diagnostic_tools_prompt,
+            topic=tool_input.get("topic"),
+            query=tool_input.get("query"),
+            start=tool_input.get("start"),
+            content_hash=tool_input.get("content_hash"),
+        )
 
     if tool_name in _CAPABILITY_CATALOG_TOOLS:
         if user_db_id is None:

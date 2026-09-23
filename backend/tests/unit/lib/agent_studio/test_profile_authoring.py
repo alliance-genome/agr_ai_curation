@@ -165,12 +165,25 @@ def test_workshop_policy_explains_record_boundaries_and_forbids_inferred_validat
         load_template=lambda: "Base guidance", list_model_definitions=lambda: [],
         get_prompt_catalog=lambda: None, prepare_trace_context=lambda _: None,
     )
+    # ALL-1292: detailed profile/validator references are served by read_studio_guide;
+    # the always-sent Workshop policy names the topics and keeps the core guardrails.
+    from src.lib.agent_studio.studio_guide import read_studio_guide
+    guide = "".join(
+        read_studio_guide(template="Base guidance", render_diagnostic_tools=str, topic=topic)["content"]
+        for topic in ("workshop_profile_design", "workshop_output_and_validators")
+    )
+    for topic in ("workshop_profile_design", "workshop_output_and_validators"):
+        assert f"read studio guide topic `{topic}`" in " ".join(prompt.split())
+    for required in ["one-record boundary", "never invoke persistence or open its confirmation",
+                     "Extraction-time agents cannot edit", "support ONE item type per custom agent",
+                     "infer one solely from a field name"]:
+        assert required in " ".join(prompt.split())
     for required in ["one-record boundary", "required (must exist)", "nullable", "catalog number paired", "Always include", "update_field", "update_basics",
                      "IN ADDITION TO", "Do not create arrays or repeating groups", "never put groups inside parts",
                      "Synonyms / source labels (not output fields)", "Never infer a validator solely from a field name",
-                     "never invoke persistence or open its confirmation", "A null schema never implies open extraction",
-                     "not LinkML-aligned or submission-ready", "Extraction-time agents cannot edit"]:
-        assert required in prompt
+                     "A null schema never implies open extraction",
+                     "not LinkML-aligned or submission-ready"]:
+        assert required in guide
 
 
 @pytest.mark.asyncio

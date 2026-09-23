@@ -24,7 +24,6 @@ from src.lib.openai_agents.tool_surface import (
     MODE_DEFERRED,
     MODE_EAGER_POLICY,
     MODE_EAGER_PROVIDER_UNSUPPORTED,
-    ToolSurface,
     ToolSurfaceConfigurationError,
     ToolSurfaceError,
     apply_tool_surface,
@@ -140,7 +139,10 @@ def test_repository_policies_defer_only_agent_studio_and_extractors():
 
     assert set(policies) == set(TOOL_LOADING_RUNTIMES)
     assert policies["agent_studio"].mode == "deferred"
-    assert policies["agent_studio"].eager_tools == ("search_studio_capabilities",)
+    assert policies["agent_studio"].eager_tools == (
+        "search_studio_capabilities",
+        "read_studio_guide",
+    )
     assert policies["extractor"].mode == "deferred"
     assert set(policies["extractor"].deferred_namespaces) == {
         "staged_object_corrections",
@@ -404,6 +406,42 @@ def test_request_measurement_counts_namespace_headers_and_loaded_names():
     assert input_measure["loaded_deferred_tool_definitions"]["names"] == ["read_chunk"]
     assert input_measure["tool_calls"]["tool_search_calls"] == 1
     assert input_measure["tool_results"]["largest"]["tool_name"] == "read_chunk"
+
+
+def test_prompt_cache_key_binds_to_the_compiled_visible_and_deferred_surface():
+    """ALL-1284: the key's tool-surface digest reflects deferral, not just names."""
+
+    from agents import ModelSettings
+
+    from src.lib.openai_agents.config import (
+        PROMPT_CACHE_KEY_FIELD,
+        PromptCacheIdentity,
+        build_prompt_cache_key,
+    )
+    from src.lib.openai_agents.model_request_measurement import (
+        bind_prompt_cache_tool_surface,
+    )
+
+    key = build_prompt_cache_key(
+        PromptCacheIdentity(agent_key="gene_extractor", static_prompt="Extract."),
+        model="gpt-5.6-sol",
+    )
+    settings = ModelSettings(extra_args={PROMPT_CACHE_KEY_FIELD: key})
+    tools = [_tool("search_document"), _tool("read_chunk"), _tool("record_evidence")]
+    all_deferred = _compile(tools)
+    reading_eager = _compile(
+        tools,
+        policy=ToolLoadingPolicy(mode="deferred", deferred_namespaces=("evidence_maintenance",)),
+    )
+    eager = _compile(tools, policy=EAGER)
+
+    digests = [
+        bind_prompt_cache_tool_surface(settings, surface.tools, [])[1]
+        for surface in (all_deferred, reading_eager, eager)
+    ]
+
+    assert len(set(digests)) == 3
+    assert bind_prompt_cache_tool_surface(settings, _compile(tools).tools, [])[1] == digests[0]
 
 
 # ---------------------------------------------------------------------------

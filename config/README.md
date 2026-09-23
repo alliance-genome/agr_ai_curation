@@ -270,7 +270,7 @@ tool_loading_api_version: 1.0.0
 runtimes:
   agent_studio:
     mode: deferred
-    eager_tools: [search_studio_capabilities]
+    eager_tools: [search_studio_capabilities, read_studio_guide]
   validator:
     mode: eager
 ```

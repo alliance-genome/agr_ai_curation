@@ -625,8 +625,19 @@ class TestAgentWorkshopSystemPrompt:
         assert '"draft_tool_ids":["search_document","read_section","read_subsection","agr_curation_query"]' in system_prompt
         assert "proactively identify concrete prompt improvements during normal conversation" in system_prompt
         assert "requires no preliminary permission" in system_prompt
-        assert "distilled OpenAI-style prompt playbook" in system_prompt
-        assert "put core instructions first, then separate context/examples with clear delimiters" in system_prompt
+        # ALL-1292: the playbook is served by read_studio_guide on demand.
+        assert "read studio guide topic `prompt_playbook`" in system_prompt
+        assert "distilled OpenAI-style prompt playbook" not in system_prompt
+        from src.lib.agent_studio.studio_guide import read_studio_guide
+
+        playbook = read_studio_guide(
+            template=api_module._load_agent_studio_system_prompt_template(),
+            render_diagnostic_tools=str,
+            topic="prompt_playbook",
+        )
+        assert playbook["complete"] is True
+        assert "distilled OpenAI-style prompt playbook" in playbook["content"]
+        assert "put core instructions first, then separate context/examples with clear delimiters" in playbook["content"]
         assert "gpt-5.6-sol" in system_prompt
         assert "gpt-5.6-terra" in system_prompt
         assert "authoritative recommendation source" in system_prompt
@@ -666,7 +677,7 @@ class TestAgentWorkshopSystemPrompt:
         monkeypatch.setattr(
             api_module,
             "_load_agent_studio_system_prompt_template",
-            lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}\n{{USER_GREETING}}",
+            lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
         )
         description = "D" * 500
         context = ChatContext(
@@ -706,7 +717,7 @@ class TestAgentWorkshopSystemPrompt:
 
         system_prompt = prompt_builder.build_opus_system_prompt(
             context=None,
-            load_template=lambda: "Tools:\n{{PACKAGE_DIAGNOSTIC_TOOLS}}\n{{USER_GREETING}}",
+            load_template=lambda: "Tools:\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
             list_model_definitions=lambda: [],
             get_prompt_catalog=lambda: None,
             prepare_trace_context=lambda _trace_id: None,
@@ -826,7 +837,7 @@ class TestAgentWorkshopSystemPrompt:
                     draft_tool_ids=["search_document", "read_chunk", "record_evidence"],
                 ),
             ),
-            load_template=lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}\n{{USER_GREETING}}",
+            load_template=lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
             list_model_definitions=lambda: [],
             get_prompt_catalog=lambda: None,
             prepare_trace_context=lambda _trace_id: None,

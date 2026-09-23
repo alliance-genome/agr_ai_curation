@@ -22,6 +22,7 @@ runtimes:
     mode: deferred
     eager_tools:
       - search_studio_capabilities
+      - read_studio_guide
   chat_supervisor:
     mode: eager
   flow_supervisor:
