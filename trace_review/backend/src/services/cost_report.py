@@ -21,12 +21,17 @@ from .langfuse_run_reconstruction import (
 DIMENSIONS = frozenset({
     "environment", "activity", "agent_id", "agent_name", "agent_role",
     "agent_revision", "model", "effort", "provider", "status", "paper",
-    "paper_category", "document_id", "run_id", "service_tier",
+    "paper_category", "document_id", "run_id", "service_tier", "usage_status",
 })
 TOKEN_FIELDS = (
     "input_tokens", "uncached_input_tokens", "cache_read_tokens",
     "cache_write_tokens", "output_tokens", "reasoning_tokens", "total_tokens",
 )
+# ALL-1288 spans declare why a model turn has no usable usage.
+DECLARED_USAGE_STATUSES = ("recorded", "inconsistent", "provider_omitted", "failed", "cancelled")
+# Older spans only show that usage is absent, not why.
+LEGACY_MISSING_USAGE = "missing_status_unknown"
+USAGE_STATUSES = (*DECLARED_USAGE_STATUSES, LEGACY_MISSING_USAGE)
 
 
 def utc_time(value: Any) -> datetime:
@@ -40,6 +45,17 @@ def _context(observation: Mapping[str, Any]) -> dict[str, Any]:
     metadata = _metadata(observation)
     context = metadata.get("cost_context")
     return dict(context) if isinstance(context, Mapping) else dict(metadata)
+
+
+def _usage_status(declared: Any, usage: Mapping[str, Any]) -> str:
+    """Report the span's declared usage status against the retained usage."""
+    observed = usage["usage_status"]
+    if declared not in DECLARED_USAGE_STATUSES:
+        return LEGACY_MISSING_USAGE if observed == "missing" else observed
+    if declared == "recorded" and observed != "recorded":
+        # Usage the span recorded but the observation does not hold is not zero.
+        return "inconsistent"
+    return declared
 
 
 def _ancestry(observation: Mapping[str, Any], index: Mapping[str, Any]):
@@ -133,12 +149,15 @@ def cost_events(trace_data: Mapping[str, Any]) -> list[dict[str, Any]]:
             "job_id": inherited("job_id"),
             "attempt_id": direct.get("attempt_id"),
             "provider_response_id": direct.get("provider_response_id"),
+            "model_request_id": direct.get("model_request_id"),
             "provider": direct.get("provider") or inherited("provider") or "unknown",
             "model": _model_name(observation) or "unknown",
             "effort": direct.get("effort") or parameters.get("reasoning_effort") or (reasoning.get("effort") if isinstance(reasoning, Mapping) else reasoning) or "unknown",
             "service_tier": direct.get("service_tier") or parameters.get("service_tier") or "unknown",
             "status": direct.get("attempt_outcome") or ("error" if observation.get("level") == "ERROR" else "unknown"),
             "usage": usage,
+            "usage_status": _usage_status(direct.get("usage_status"), usage),
+            "usage_status_declared": direct.get("usage_status"),
             "cost": usage["total_cost_decimal"],
             "pricing_status": usage["pricing_status"],
             "pricing_source": usage["cost_source"],
@@ -157,6 +176,8 @@ def _deduplicate(events: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]]
         scope = (event["environment"], event.get("project_id"), event["provider"])
         if event.get("provider_response_id"):
             key = (*scope, "response", event["provider_response_id"])
+        elif event.get("model_request_id"):
+            key = (*scope, "request", event["model_request_id"])
         elif event.get("attempt_id"):
             key = (*scope, "attempt", event["attempt_id"])
         elif event.get("span_id") and event.get("trace_id"):
@@ -199,7 +220,8 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         "missing_run_calls": sum(not e["run_id"] for e in events),
         "unpriced_calls": unpriced,
         "missing_usage_calls": sum(e["usage"]["usage_status"] == "missing" for e in events),
-        "inconsistent_usage_calls": sum(e["usage"]["usage_status"] == "inconsistent" for e in events),
+        **{status + "_usage_calls": sum(e["usage_status"] == status for e in events) for status in USAGE_STATUSES},
+        "usage_complete": all(e["usage_status"] == "recorded" for e in events),
         "unknown_agent_calls": sum(not e["agent_id"] for e in events),
         "unknown_paper_calls": sum(e["paper_category"] == "unknown" for e in events),
         "measured_cost": str(measured),

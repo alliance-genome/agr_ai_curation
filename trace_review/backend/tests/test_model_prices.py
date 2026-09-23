@@ -23,7 +23,7 @@ def event(tier="default", writes=True):
     details = {"input": 100, "input_cached_tokens": 600, "output": 50, "output_reasoning_tokens": 150}
     if writes:
         details["input_cache_creation"] = 300
-    return {"usage": usage_cost_summary({"usageDetails": details}), "model": "fixture",
+    return {"usage": usage_cost_summary({"usageDetails": details}), "usage_status": "recorded", "model": "fixture",
             "timestamp": "2026-09-07T00:00:00Z", "service_tier": tier}
 
 
