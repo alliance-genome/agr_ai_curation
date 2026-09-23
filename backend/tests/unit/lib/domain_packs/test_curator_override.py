@@ -61,7 +61,8 @@ AT = "2026-09-23T20:00:00+00:00"
 
 
 def _override(value, **edits):
-    return apply_curator_identity(value, edits, identity_keys=KEYS, actor_id="curator-7", at=AT)
+    return apply_curator_identity(value, edits, identity_keys=KEYS, id_key="curie", label_key="name",
+                                  actor_id="curator-7", at=AT)
 
 
 # --- The vocabulary ----------------------------------------------------------------
@@ -105,9 +106,9 @@ def test_an_unresolved_value_is_overridden():
 def test_a_resolved_value_is_overridden_and_its_validator_identity_set_aside():
     value = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"}, explanation="Matched.",
                            proposed_curie="ONT:9")
-    _override(value, curie="ONT:2")
+    _override(value, curie="ONT:2", name="dermis")
 
-    assert (value["curie"], value["name"]) == ("ONT:2", None)
+    assert (value["curie"], value["name"]) == ("ONT:2", "dermis")
     assert (value["overruled_curie"], value["overruled_name"]) == ("ONT:1", "epidermis")
     assert value["proposed_curie"] == "ONT:9"
     assert value["validator_explanation"] == "Matched."
@@ -126,9 +127,42 @@ def test_clearing_the_identity_withdraws_the_override():
     assert "curator_override" not in value
     assert audit["action"] == "cleared"
     fresh = unresolved_value("skin", identity_keys=KEYS)
-    _override(fresh, curie="ONT:1")
-    _override(fresh, curie=None)
+    _override(fresh, curie="ONT:1", name="epidermis")
+    _override(fresh, curie=None, name=None)
     assert fresh["lookup_outcome"] == OUTCOME_NOT_VALIDATED
+
+
+def test_an_override_fills_both_the_identifier_and_the_name():
+    """L1: a partial override would leave a resolved value without its label or id."""
+
+    validated = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"}, explanation="Matched.")
+    staged = unresolved_value("skin", identity_keys=KEYS)
+    for value, edits in ((validated, {"curie": "ONT:2"}), (staged, {"name": "epidermis"}),
+                         (staged, {"curie": "ONT:2", "name": " "})):
+        snapshot = dict(value)
+        with pytest.raises(ResolvableValueError, match="^Enter both the identifier and the name for a curator override.$"):
+            _override(value, **edits)
+        assert value == snapshot
+    # Once overridden, one key can be refined, but not emptied.
+    _override(staged, curie="ONT:2", name="epidermis")
+    with pytest.raises(ResolvableValueError, match="Enter both"):
+        _override(staged, name=None)
+    assert staged["name"] == "epidermis"
+
+
+def test_validated_keys_stay_optional_in_an_override():
+    value = unresolved_value("skin", identity_keys=(*KEYS, "taxon"))
+    apply_curator_identity(value, {"curie": "ONT:1", "name": "epidermis"}, identity_keys=(*KEYS, "taxon"),
+                           id_key="curie", label_key="name", actor_id="curator-7", at=AT)
+    assert (value["resolution_state"], value["taxon"]) == (RESOLVED, None)
+    # A validated key alone is no override: the declared label stays required.
+    only_label = unresolved_value("skin", identity_keys=("name", "taxon"))
+    with pytest.raises(ResolvableValueError, match="^Enter the name for a curator override.$"):
+        apply_curator_identity(only_label, {"taxon": "T:1"}, identity_keys=("name", "taxon"), id_key=None,
+                               label_key="name", actor_id="curator-7", at=AT)
+    with pytest.raises(ResolvableValueError, match="declared id or label key"):
+        apply_curator_identity(value, {"curie": "ONT:2"}, identity_keys=KEYS, id_key=None, label_key=None,
+                               actor_id="curator-7", at=AT)
 
 
 def test_entering_the_previous_identity_restores_the_previous_state():
@@ -180,7 +214,7 @@ def _metadata() -> DomainPackMetadata:
             object_type="Observation", display_name="Observation", metadata={"object_role": "curatable_unit"},
             fields=[
                 DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT,
-                                          metadata={"display": DISPLAY}),
+                                          metadata={"display": DISPLAY, "editable": True}),
                 DomainPackFieldDefinition(field_path="site.curie", field_type=DomainPackFieldType.STRING,
                                           metadata={"editable": True}),
                 DomainPackFieldDefinition(field_path="site.name", field_type=DomainPackFieldType.STRING,
@@ -292,20 +326,62 @@ def _staged_envelope():
 
 
 def test_a_curator_edit_of_an_identity_key_is_an_override_with_an_audit_event():
-    result = _patch(_staged_envelope(), "site.curie", "ONT:1", before=None)
+    staged = _staged_envelope()
+    before = staged.extracted_objects[0].payload["site"]
+    result = _patch(staged, "site", {**before, "curie": "ONT:1", "name": "epidermis"}, before=before)
 
     assert result.status is EnvelopeFieldPatchStatus.ACCEPTED
     obj = result.envelope.extracted_objects[0]
     site = obj.payload["site"]
-    assert (site["curie"], site["lookup_outcome"], site["curator_override"]["actor_id"]) == (
-        "ONT:1", OUTCOME_CURATOR_OVERRIDE, "curator-7")
+    assert (site["curie"], site["name"], site["lookup_outcome"], site["curator_override"]["actor_id"]) == (
+        "ONT:1", "epidermis", OUTCOME_CURATOR_OVERRIDE, "curator-7")
     [event] = obj.metadata[CURATOR_OVERRIDE_METADATA_KEY]
-    assert (event["action"], event["value_path"], event["field_path"]) == ("override", "site", "site.curie")
+    assert (event["action"], event["value_path"], event["field_path"]) == ("override", "site", "site")
     assert event["previous"]["lookup_outcome"] == OUTCOME_NOT_VALIDATED
 
-    cleared = _patch(result.envelope, "site.curie", None, before="ONT:1")
+    # One key of an override can be refined on its own.
+    refined = _patch(result.envelope, "site.name", "skin epidermis", before="epidermis")
+    assert refined.status is EnvelopeFieldPatchStatus.ACCEPTED
+    site = refined.envelope.extracted_objects[0].payload["site"]
+    assert (site["curie"], site["name"]) == ("ONT:1", "skin epidermis")
+
+    cleared = _patch(refined.envelope, "site", {**site, "curie": None, "name": None}, before=site)
     site = cleared.envelope.extracted_objects[0].payload["site"]
     assert (site["resolution_state"], site["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_VALIDATED)
+
+
+def test_a_curator_override_of_only_one_leaf_is_rejected_with_a_clear_message():
+    """L1: an override never leaves a resolved value without its identifier or name."""
+
+    staged = _staged_envelope()
+    result = _patch(staged, "site.curie", "ONT:1", before=None)
+    assert result.status is EnvelopeFieldPatchStatus.REJECTED
+    assert result.errors == ("Enter both the identifier and the name for a curator override.",)
+    assert result.envelope.extracted_objects[0].payload == staged.extracted_objects[0].payload
+
+    overridden = _overridden_envelope()
+    site = overridden.extracted_objects[0].payload["site"]
+    for patch_args in (("site.name", None, "epidermis"), ("site", {**site, "curie": ""}, site)):
+        rejected = _patch(overridden, patch_args[0], patch_args[1], before=patch_args[2])
+        assert rejected.errors == ("Enter both the identifier and the name for a curator override.",)
+        assert rejected.envelope.extracted_objects[0].payload["site"] == site
+
+
+def test_a_whole_value_edit_cannot_change_the_extractor_proposal():
+    """L2: proposed_* is the extractor's, even through a whole-value edit."""
+
+    staged = _staged_envelope()
+    staged.extracted_objects[0].payload["site"]["proposed_curie"] = "ONT:5"
+    before = staged.extracted_objects[0].payload["site"]
+
+    rejected = _patch(staged, "site", {**before, "curie": "ONT:1", "name": "epidermis", "proposed_curie": "ONT:1"},
+                      before=before)
+    assert rejected.status is EnvelopeFieldPatchStatus.REJECTED
+    assert "cannot change proposed_curie" in rejected.errors[0]
+
+    accepted = _patch(staged, "site", {**before, "curie": "ONT:1", "name": "epidermis"}, before=before)
+    assert accepted.status is EnvelopeFieldPatchStatus.ACCEPTED
+    assert accepted.envelope.extracted_objects[0].payload["site"]["proposed_curie"] == "ONT:5"
 
 
 @pytest.mark.parametrize(("field_path", "value", "before"), [
@@ -316,4 +392,4 @@ def test_curators_cannot_edit_the_paper_wording_or_the_validation_state(field_pa
     result = _patch(_staged_envelope(), field_path, value, before=before)
 
     assert result.status is EnvelopeFieldPatchStatus.REJECTED
-    assert "set by validation" in result.errors[0]
+    assert "set by extraction or validation" in result.errors[0]
