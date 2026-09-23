@@ -114,7 +114,11 @@ def test_agent_studio_surface_is_byte_identical_to_pre_compiler_golden(case):
 
 @pytest.mark.parametrize(
     "runtime",
-    [runtime for runtime in TOOL_LOADING_RUNTIMES if runtime != "agent_studio"],
+    [
+        runtime
+        for runtime in TOOL_LOADING_RUNTIMES
+        if runtime not in {"agent_studio", "extractor"}
+    ],
 )
 def test_every_non_studio_runtime_policy_sends_an_unchanged_tool_payload(runtime):
     tools = [_tool("search_document"), _tool("record_evidence"), WebSearchTool(), _tool("finalize_x")]
@@ -131,14 +135,21 @@ def test_every_non_studio_runtime_policy_sends_an_unchanged_tool_payload(runtime
     assert agent.tool_surface is surface
 
 
-def test_repository_policies_defer_only_agent_studio():
+def test_repository_policies_defer_only_agent_studio_and_extractors():
     policies = load_tool_loading_policies()
 
     assert set(policies) == set(TOOL_LOADING_RUNTIMES)
     assert policies["agent_studio"].mode == "deferred"
     assert policies["agent_studio"].eager_tools == ("search_studio_capabilities",)
+    assert policies["extractor"].mode == "deferred"
+    assert set(policies["extractor"].deferred_namespaces) == {
+        "staged_object_corrections",
+        "evidence_maintenance",
+        "ontology_term_lookup",
+        "reference_data_lookup",
+    }
     assert {runtime for runtime, policy in policies.items() if policy.mode == "eager"} == (
-        set(TOOL_LOADING_RUNTIMES) - {"agent_studio"}
+        set(TOOL_LOADING_RUNTIMES) - {"agent_studio", "extractor"}
     )
 
 
@@ -613,3 +624,187 @@ def test_surface_summary_is_attached_to_measured_requests():
 
     assert measurement["tool_surface"]["mode"] == MODE_EAGER_POLICY
     assert measurement["tool_surface"]["called_names"] == ["read_chunk"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: extractor deferral
+# ---------------------------------------------------------------------------
+
+
+def _packaged_extractors():
+    from src.lib.config.agent_loader import load_agent_definitions
+
+    return sorted(
+        (
+            (agent_id, definition)
+            for agent_id, definition in load_agent_definitions().items()
+            if definition.category == "Extraction"
+        ),
+        key=lambda item: item[0],
+    )
+
+
+def _extractor_agent(definition, *, model="gpt-5.6-sol"):
+    agent = Agent(
+        name=definition.name,
+        instructions="Extract curatable objects.",
+        model=model,
+        tools=[_tool(name) for name in definition.tools],
+    )
+    agent.agent_key = definition.agent_id
+    agent.cost_identity = {"agent_id": definition.agent_id, "agent_role": "extraction"}
+    return agent
+
+
+def test_packaged_extractors_are_covered():
+    assert {agent_id for agent_id, _ in _packaged_extractors()} >= {
+        "gene_extractor",
+        "allele_extractor",
+        "disease_extractor",
+        "phenotype_extractor",
+        "pdf_extraction",
+        "gene_expression_extraction",
+        "rgd_go_paper_curator",
+    }
+
+
+@pytest.mark.parametrize(
+    "agent_id",
+    [agent_id for agent_id, _ in _packaged_extractors()],
+)
+def test_packaged_extractor_surface_keeps_everyday_tools_visible(agent_id):
+    from src.lib.config.agent_loader import load_agent_definitions
+
+    definition = load_agent_definitions()[agent_id]
+    agent = _extractor_agent(definition)
+
+    surface = apply_tool_surface(agent)
+
+    visible_functions = [
+        tool for tool in agent.tools if isinstance(tool, FunctionTool) and not tool.defer_loading
+    ]
+    assert surface.runtime == "extractor"
+    assert surface.mode == MODE_DEFERRED
+    assert isinstance(agent.tools[0], ToolSearchTool)
+    assert len(visible_functions) < 20
+    assert sorted(surface.declared_names) == sorted(definition.tools)
+    visible = {tool.name for tool in visible_functions}
+    for name in definition.tools:
+        if (
+            name.startswith(("stage_", "list_staged_", "finalize_"))
+            or name in {
+                "search_document", "read_chunk", "read_section", "read_subsection",
+                "record_evidence", "list_recorded_evidence", "get_agent_contract",
+                "search_domain_field_terms", "resolve_domain_field_term", "quickgo_api_call",
+            }
+        ):
+            assert name in visible, name
+    deferred = set(surface.deferred_names)
+    for name in definition.tools:
+        if name.startswith(("patch_", "find_staged_")) or name in {
+            "get_recorded_evidence", "attach_evidence_to_object", "detach_evidence_from_object",
+            "discard_recorded_evidence", "update_recorded_evidence_metadata",
+            "inspect_ontology_term", "agr_species_context_lookup", "agr_literature_reference_lookup",
+        }:
+            assert name in deferred, name
+    assert set(surface.namespace_names) <= {
+        "staged_object_corrections", "evidence_maintenance",
+        "ontology_term_lookup", "reference_data_lookup",
+    }
+    note = agent.instructions.split("## Tools loaded on demand", 1)[1]
+    for namespace in surface.namespace_names:
+        assert f"- {namespace}:" in note
+
+
+def test_gene_expression_extractor_visible_surface_golden():
+    from src.lib.config.agent_loader import load_agent_definitions
+
+    agent = _extractor_agent(load_agent_definitions()["gene_expression_extraction"])
+
+    surface = apply_tool_surface(agent)
+
+    assert surface.eager_names == (
+        "search_document", "read_chunk", "read_section", "read_subsection",
+        "record_evidence", "list_recorded_evidence", "get_agent_contract",
+        "search_domain_field_terms", "resolve_domain_field_term",
+        "stage_gene_expression_observation", "list_staged_gene_expression_observations",
+        "finalize_gene_expression_extraction",
+    )
+    assert surface.namespace_names == (
+        "evidence_maintenance", "reference_data_lookup",
+        "ontology_term_lookup", "staged_object_corrections",
+    )
+    assert surface.deferred_names == (
+        "get_recorded_evidence", "attach_evidence_to_object", "detach_evidence_from_object",
+        "discard_recorded_evidence", "update_recorded_evidence_metadata",
+        "agr_species_context_lookup", "inspect_ontology_term",
+        "patch_gene_expression_observation", "discard_gene_expression_observation",
+        "find_staged_gene_expression_observations",
+    )
+
+
+def test_extractor_on_provider_without_tool_search_runs_eagerly_and_unchanged():
+    from src.lib.config.agent_loader import load_agent_definitions
+
+    tool_surface._unsupported_logged.clear()
+    agent = _extractor_agent(
+        load_agent_definitions()["gene_extractor"],
+        model="deepseek/deepseek-v4-pro-0813",
+    )
+    tools = list(agent.tools)
+    before = _payload(tools)
+
+    surface = apply_tool_surface(agent)
+
+    assert surface.mode == MODE_EAGER_PROVIDER_UNSUPPORTED
+    assert _payload(agent.tools) == before
+    assert agent.instructions == "Extract curatable objects."
+
+
+def test_reapplying_an_extractor_surface_does_not_repeat_the_note():
+    from src.lib.config.agent_loader import load_agent_definitions
+
+    agent = _extractor_agent(load_agent_definitions()["gene_extractor"])
+
+    first = apply_tool_surface(agent)
+    instructions = agent.instructions
+    second = apply_tool_surface(agent)
+
+    assert agent.instructions == instructions
+    assert instructions.count("## Tools loaded on demand") == 1
+    assert first.fingerprint == second.fingerprint
+
+
+def test_custom_extractor_uses_the_extractor_policy():
+    agent = Agent(
+        name="Custom extractor",
+        instructions="Extract.",
+        model="gpt-5.6-sol",
+        tools=[_tool("read_chunk"), _tool("patch_gene_mention_evidence"), _tool("finalize_gene_extraction")],
+    )
+    agent.agent_key = "ca_custom_extractor"
+    agent.cost_identity = {"agent_id": "ca_custom_extractor", "agent_role": "extraction"}
+
+    surface = apply_tool_surface(agent)
+
+    assert surface.runtime == "extractor"
+    assert surface.deferred_names == ("patch_gene_mention_evidence",)
+    assert surface.eager_names == ("read_chunk", "finalize_gene_extraction")
+
+
+def test_named_tool_choice_stays_eager():
+    from agents import ModelSettings
+
+    agent = Agent(
+        name="Custom extractor",
+        instructions="Extract.",
+        model="gpt-5.6-sol",
+        model_settings=ModelSettings(tool_choice="patch_gene_mention_evidence"),
+        tools=[_tool("read_chunk"), _tool("patch_gene_mention_evidence"), _tool("find_staged_gene_mention_evidence")],
+    )
+    agent.cost_identity = {"agent_id": "ca_named", "agent_role": "extraction"}
+
+    surface = apply_tool_surface(agent)
+
+    assert "patch_gene_mention_evidence" in surface.eager_names
+    assert surface.deferred_names == ("find_staged_gene_mention_evidence",)

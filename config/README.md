@@ -277,6 +277,8 @@ runtimes:
 
 Notes:
 - Runtimes: `agent_studio`, `chat_supervisor`, `flow_supervisor`, `extractor`, `validator`, `formatter`, `specialist`; every one needs a policy.
+- Shipped defaults: `agent_studio` and `extractor` are deferred; every other runtime is eager. Extractors keep reading, staging, listing, evidence-recording, term-resolution and finalize tools visible and load `staged_object_corrections`, `evidence_maintenance`, `ontology_term_lookup` and `reference_data_lookup` on demand. A deferred agent's instructions gain a short "Tools loaded on demand" note naming each hidden group and its tools.
+- Runtime classification: supervisors declare their runtime; other agents use their category (`Extraction` -> `extractor`, `Validation` -> `validator`, `Output` -> `formatter`, otherwise `specialist`). Custom agents follow their category.
 - `mode: eager` sends every definition up front. `mode: deferred` defers namespaced function tools behind hosted tool search (only `deferred_namespaces` when listed); `eager_tools`, forced, required and `finalize_*` tools always stay eager.
 - `on_unsupported_provider: eager` (default) runs a deferred policy eagerly on a provider/model without `supports_tool_search` and records mode `eager_provider_unsupported`; `fail` refuses the run.
 - Namespaces come from package `tool_namespaces` exports (`id`, one description of at most 160 characters, `owner`); tools join one with `metadata.namespace` in their package `tools/bindings.yaml`. Startup fails on an unknown namespace, a `finalize_*`/builder-finalization tool in a namespace, or an agent with more than `TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS` tools in one namespace.

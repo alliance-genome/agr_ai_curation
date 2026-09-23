@@ -632,7 +632,6 @@ tools:
     description: Search for candidate standard terms (from an ontology or controlled list) that could fill one specific field, based on a phrase the agent read in the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
-      namespace: ontology_term_lookup
       name: Search Domain Field Terms
       category: Database
       audit:
@@ -742,7 +741,6 @@ tools:
     description: Settle the official standard term for one field and return a confirmed value with its supporting trail, ready to use.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
-      namespace: ontology_term_lookup
       name: Resolve Domain Field Term
       category: Database
       # Run-state builder/resolver tool: platform closure-binds the active resolver ledger +
@@ -2576,7 +2574,6 @@ tools:
     description: Look up a chemical compound in ChEBI (Chemical Entities of Biological Interest, a standard chemical database).
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
-      namespace: ontology_term_lookup
       name: ChEBI API
       category: API
       documentation:
@@ -2740,7 +2737,6 @@ tools:
     description: Look up a Gene Ontology term in QuickGO.
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
-      namespace: ontology_term_lookup
       name: QuickGO API
       category: API
       documentation:
@@ -2810,7 +2806,6 @@ tools:
     description: Fetch typed existing GO annotations for one validated gene CURIE.
     source_file: python/src/agr_ai_curation_alliance/tools/go_annotations.py
     metadata:
-      namespace: ontology_term_lookup
       name: GO Consortium Existing Annotations
       category: API
       documentation:

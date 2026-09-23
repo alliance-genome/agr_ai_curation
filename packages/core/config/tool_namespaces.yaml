@@ -10,7 +10,9 @@
 # - descriptions name the capability (never tool names), <=160 characters;
 # - one agent may place at most TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS tools in
 #   one namespace;
-# - finalization/terminal tools never belong to a namespace.
+# - finalization/terminal tools never belong to a namespace;
+# - a tool with no namespace is never deferred (everyday tools such as term
+#   search/resolution stay out of namespaces on purpose).
 # =============================================================================
 
 namespaces:
@@ -24,7 +26,7 @@ namespaces:
     description: Correct, find, or discard objects already staged in this run's extraction workspace.
     owner: agr.core
   - id: ontology_term_lookup
-    description: Search, inspect, and resolve controlled-vocabulary and ontology terms.
+    description: Inspect the full details of one controlled-vocabulary or ontology term.
     owner: agr.core
   - id: reference_data_lookup
     description: Look up species, literature, and curation database reference records.

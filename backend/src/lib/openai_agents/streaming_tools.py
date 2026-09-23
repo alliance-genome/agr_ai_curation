@@ -5038,6 +5038,11 @@ async def run_specialist_with_events(
     # contextvars set above do not reliably appear; a closure does (it rides in the
     # function object), so each tool resolves its run state regardless of the thread
     # boundary. Tool bodies and the package contract are unchanged.
+    # The caller's agent is shared by every invocation of this specialist tool
+    # (including concurrent ones); run-state binding and the compiled tool
+    # surface below are per run, so they go on a per-run copy (ALL-1280).
+    if runtime_agent is agent:
+        runtime_agent = copy.copy(agent)
     runtime_agent = _bind_run_state_into_tools(
         runtime_agent,
         evidence_records=live_evidence_records,

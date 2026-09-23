@@ -119,6 +119,7 @@ class ToolSurface:
     deferred_chars: int
     namespace_header_chars: int
     source_tools: list[Any] = field(default_factory=list, repr=False)
+    namespace_descriptions: dict[str, str] = field(default_factory=dict)
     loaded_names: set[str] = field(default_factory=set)
     called_names: list[str] = field(default_factory=list)
     searches: int = 0
@@ -373,7 +374,31 @@ def compile_tool_surface(
             _chars({"name": name, "description": descriptions[name]}) for name in grouped
         ),
         source_tools=input_tools,
+        namespace_descriptions=dict(descriptions),
     )
+
+
+def deferred_tools_note(surface: ToolSurface) -> str:
+    """Runtime note naming the tool groups a deferred surface loads on demand."""
+
+    members: dict[str, list[str]] = {}
+    for tool in surface.tools:
+        namespace = getattr(tool, "_tool_namespace", None)
+        if namespace:
+            members.setdefault(namespace, []).append(tool.name)
+    lines = [
+        "## Tools loaded on demand",
+        "To keep your tool list short, the tool groups below are hidden until you "
+        "load them with tool search. Tools you can already see are always available. "
+        "When a step needs a tool you cannot see, search for its group, then call "
+        "the tool.",
+    ]
+    for namespace in surface.namespace_names:
+        lines.append(
+            f"- {namespace}: {surface.namespace_descriptions[namespace]} "
+            f"(tools: {', '.join(members[namespace])})"
+        )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +517,10 @@ def apply_tool_surface(
     """Compile ``agent.tools`` in place; call LAST, right before the SDK run."""
 
     tools = list(getattr(agent, "tools", None) or [])
+    # Instructions before any on-demand tool note this function added.
+    base_instructions = getattr(
+        agent, "tool_surface_base_instructions", getattr(agent, "instructions", None)
+    )
     previous = getattr(agent, "tool_surface", None)
     if isinstance(previous, ToolSurface) and getattr(agent, "tools", None) is previous.tools:
         # Re-running an unchanged, already compiled agent: compile from the
@@ -499,6 +528,14 @@ def apply_tool_surface(
         tools = list(previous.source_tools)
     effective_runtime = runtime or runtime_for_agent(agent)
     agent_key = _agent_key(agent)
+    # A named tool_choice must target a visible tool (the SDK rejects a named
+    # choice that only a deferred tool could satisfy).
+    tool_choice = getattr(getattr(agent, "model_settings", None), "tool_choice", None)
+    named_choice = (
+        (tool_choice,)
+        if isinstance(tool_choice, str) and tool_choice not in {"auto", "required", "none"}
+        else ()
+    )
     policy = resolve_tool_loading_policy(effective_runtime, agent_key)
     model_id, provider_id = (None, None)
     supported = False
@@ -514,11 +551,21 @@ def apply_tool_surface(
         namespace_resolver=(
             declarative_namespace_resolver() if policy.mode == "deferred" else _no_namespace
         ),
-        forced_tool_names=forced_tool_names,
+        forced_tool_names=(*forced_tool_names, *named_choice),
         required_tool_names=required_tool_names,
         model=model_id,
         provider=provider_id,
     )
+    if surface.mode == MODE_DEFERRED:
+        if not isinstance(base_instructions, str):
+            raise ToolSurfaceError(
+                f"{effective_runtime} agent {agent_key} defers tools but its instructions "
+                "are not static text, so the on-demand tool note cannot be added"
+            )
+        agent.tool_surface_base_instructions = base_instructions
+        agent.instructions = f"{base_instructions}\n\n{deferred_tools_note(surface)}"
+    elif hasattr(agent, "tool_surface_base_instructions"):
+        agent.instructions = base_instructions
     agent.tools = surface.tools
     agent.tool_surface = surface
     return surface

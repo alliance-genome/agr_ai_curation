@@ -26,8 +26,21 @@ runtimes:
     mode: eager
   flow_supervisor:
     mode: eager
+  # Document extractors (packaged builders and custom extractors): keep the
+  # everyday reading, staging, listing, evidence-recording, term-resolution and
+  # finalize tools visible; load corrections, evidence maintenance, ontology
+  # inspection and reference lookups on demand (OpenAI guidance: fewer than
+  # 20 functions visible at turn start).
   extractor:
-    mode: eager
+    mode: deferred
+    deferred_namespaces:
+      - staged_object_corrections
+      - evidence_maintenance
+      - ontology_term_lookup
+      - reference_data_lookup
+    eager_tools:
+      - record_evidence
+      - list_recorded_evidence
   validator:
     mode: eager
   formatter:
