@@ -104,6 +104,9 @@ def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
             result.extend(summary_fields(obj.object_type, summary))
         by_path = {field.field_path: field for field in obj.fields}
         for field in obj.fields:
+            if field.metadata.get("exported") is False:
+                # Declared for validators only (e.g. an extractor's proposal); never a column.
+                continue
             label = _field_label(field)
             # A resolvable value's paper wording, status, lookup result and
             # validator explanation are their own columns (ALL-1283).
@@ -127,6 +130,14 @@ def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
                 entry["enum_values"] = list(enums[field.enum_ref])
             result.append(entry)
     return result
+
+
+def _legacy_display_mapper(domain_pack_id: str) -> Any | None:
+    from src.lib.curation_workspace.adapter_registry import (
+        resolve_curation_legacy_display_mapper_by_id,
+    )
+
+    return resolve_curation_legacy_display_mapper_by_id(domain_pack_id)
 
 
 def source_catalog(fields: list[dict], receipt: Any = None) -> dict:
@@ -176,6 +187,7 @@ class PackagedExportSource:
             })
         }
         self.object_label_paths = self._object_label_paths()
+        self.legacy_display_mapper = _legacy_display_mapper(metadata.pack_id)
 
     def _field_display(self, field: Any) -> dict[str, Any] | None:
         return _declared_display(field, self._models, self._object_models)
@@ -195,14 +207,17 @@ class PackagedExportSource:
     def effective_item(self, item: dict) -> dict:
         """An object row's item with the read-time resolution state of its declared values.
 
-        Values stored before ALL-1283 read through the legacy rule
+        A record stored in a previous pack format is first read in the current
+        value shape by the pack's registered legacy display mapper; values
+        stored before ALL-1283 then read through the legacy rule
         (``resolvable_values.effective_payload``); overruled identities are
         left out; nothing is written back.
         """
 
         from src.lib.domain_packs.resolvable_values import effective_payload, without_overruled
 
-        specs = self.resolvable_fields.get(str(item.get("object_type") or ""))
+        object_type = str(item.get("object_type") or "")
+        specs = self.resolvable_fields.get(object_type)
         payload = item.get("payload")
         if not isinstance(payload, dict):
             return item
@@ -210,6 +225,8 @@ class PackagedExportSource:
         payload = without_overruled(payload)
         if not specs:
             return {**item, "payload": payload}
+        if self.legacy_display_mapper is not None:
+            payload = self.legacy_display_mapper(object_type, payload)
         metadata = item.get("metadata")
         return {
             **item,

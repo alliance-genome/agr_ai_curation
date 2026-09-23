@@ -3,6 +3,7 @@
 from copy import deepcopy
 from collections import Counter
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from pydantic import Field, StrictStr
@@ -10,6 +11,11 @@ from pydantic import Field, StrictStr
 from src.lib.domain_packs.compact_decisions import (
     CandidateAssessment, CompactValidatorDecision, DecisionContract, RecordValue,
 )
+from src.lib.domain_packs.resolvable_values import (
+    OUTCOME_MATCHED, OUTCOME_MISSING_EXPECTED_RESULT_FIELD, OUTCOME_NOT_VALIDATED,
+    has_resolution_state, lookup_outcome_for_failure,
+)
+from src.lib.domain_packs.validator_result_classification import validator_failure_classification
 from src.schemas.domain_validator import DomainValidatorBaseModel
 
 
@@ -65,6 +71,52 @@ _METHODS = {
 _COMPONENT_FIELD_ALIASES = {"chebi_id": ("chebi_id", "curie"), "term_name": ("name", "term_name", "label")}
 
 
+_TERM_COMPONENTS = ("condition_class", "condition_id", "condition_chemical", "condition_taxon")
+# The key an ontology lookup record (every term component's owner) carries the term name under.
+_ONTOLOGY_RECORD_NAME_KEY = "name"
+
+
+def _present(value: Any) -> bool:
+    return value is not None and value != ""
+
+
+def _component_resolution(request, component, judgment, attempts, values, selected):
+    """One stored component's own decision for ``field_resolutions``, or None.
+
+    Keyed by the component's ``<component>_curie`` result field. A resolved component
+    takes its CURIE from its own selection and its name from the selected ontology
+    record's ``name``; when either is empty that component alone stays unresolved
+    (``missing_expected_result_field``). An unresolved one records the outcome of its
+    own lookups; a component nobody looked up (supplemental ``not_checked``) stays not
+    validated. Returns (key, decision, fields).
+    """
+
+    key = f"{component.component_type}_curie"
+    if key not in request.expected_result_fields:
+        return None
+    fields = [field for field in (key, f"{component.component_type}_name")
+              if field in request.expected_result_fields]
+    base = {"explanation": judgment.explanation, "curator_message": judgment.curator_message}
+    if judgment.status == "resolved":
+        [record] = selected.values()
+        name_field = f"{component.component_type}_name"
+        resolved_values = {key: values.get("curie", values.get("chebi_id"))}
+        if name_field in fields:
+            resolved_values[name_field] = record.values.get(_ONTOLOGY_RECORD_NAME_KEY)
+        if not all(_present(resolved_values[field]) for field in fields):
+            return key, {**base, "status": "unresolved", "resolved_values": {},
+                         "lookup_outcome": OUTCOME_MISSING_EXPECTED_RESULT_FIELD}, fields
+        return key, {**base, "status": "resolved", "lookup_outcome": OUTCOME_MATCHED,
+                     "resolved_values": resolved_values}, fields
+    if judgment.status == "unresolved":
+        return key, {**base, "status": "unresolved", "resolved_values": {},
+                     "lookup_outcome": _component_outcome(request, attempts)}, fields
+    if judgment.status == "not_checked":
+        return key, {**base, "status": "unresolved", "resolved_values": {},
+                     "lookup_outcome": OUTCOME_NOT_VALIDATED}, fields
+    return None
+
+
 def condition_components(request) -> dict[str, ConditionComponent]:
     inputs = {**request.target.input_values, **request.selected_inputs}
     bundle = inputs.get("condition_components", {})
@@ -75,9 +127,10 @@ def condition_components(request) -> dict[str, ConditionComponent]:
         if not source and isinstance(bundle, dict):
             source = {key: deepcopy(bundle[key]) for key in (name, *keys)
                       if bundle.get(key) is not None and bundle[key] != "" and bundle[key] != []}
+        # Only a component the paper states and a lookup owns is required; naming its
+        # result fields in the binding never makes an absent component required.
         required = bool(source) and name in _OWNERS
-        required = required or any(key in request.expected_result_fields for key in keys)
-        if not source and not required:
+        if not source:
             continue
         paths = [request.input_selectors[key].get("path") for key in keys
                  if key in request.input_selectors and request.input_selectors[key].get("path")]
@@ -86,8 +139,30 @@ def condition_components(request) -> dict[str, ConditionComponent]:
     return components
 
 
+def _component_outcome(request, attempts) -> str:
+    """The lookup outcome of an unresolved lookup component, derived from its own lookups."""
+
+    if not attempts:
+        # The component was judged without a lookup of its own: nothing validated it.
+        return OUTCOME_NOT_VALIDATED
+    return lookup_outcome_for_failure(validator_failure_classification(
+        SimpleNamespace(lookup_attempts=attempts, missing_expected_fields=[], request_id=request.request_id)
+    ))
+
+
+def _stored_component_values(request) -> dict[str, Any]:
+    """Components that the payload stores with the contract state (each decided on its own)."""
+
+    inputs = {**request.target.input_values, **request.selected_inputs}
+    bundle = inputs.get("condition_components")
+    if not isinstance(bundle, dict):
+        return {}
+    return {name: value for name, value in bundle.items() if has_resolution_state(value)}
+
+
 def condition_decision_contract(request, result_schema, *, profile_mapped=False):
     components = condition_components(request)
+    stored_components = _stored_component_values(request)
 
     def assemble_domain(payload, decision, workspace):
         names = [component.component_type for component in decision.components]
@@ -100,6 +175,7 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                 "Use the exact component names and statuses in this request's domain_contract."
             )
         validations, normalized, unresolved = [], [], []
+        field_resolutions: dict[str, Any] = {}
         for judgment in decision.components:
             component = components[judgment.component_type]
             attempts = workspace.lookup_attempts_for(request.request_id, judgment.lookup_refs)
@@ -155,6 +231,11 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                 "curator_message": judgment.curator_message, "explanation": judgment.explanation,
             }
             validations.append(validation)
+            if component.component_type in stored_components:
+                resolution = _component_resolution(request, component, judgment, attempts, values, selected)
+                if resolution is not None:
+                    key, decided, _fields = resolution
+                    field_resolutions[key] = decided
             if values:
                 normalized.append({
                     "component_type": component.component_type, "field_path": component.field_path,
@@ -178,14 +259,23 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                 values[root_slot] = curie
         if "normalized_components" in request.expected_result_fields and normalized:
             values["normalized_components"] = deepcopy(normalized)
-        return {"resolved_values": values, "normalized_components": normalized,
-                "component_validations": validations, "unresolved_components": unresolved,
-                "condition_id": values.get("condition_id")}
+        assembled = {"resolved_values": values, "normalized_components": normalized,
+                     "component_validations": validations, "unresolved_components": unresolved,
+                     "condition_id": values.get("condition_id")}
+        if field_resolutions:
+            # Each stored component carries its own complete decision (ALL-1283; an incomplete
+            # resolved one is recorded as unresolved); values without one are not written, so
+            # no decided field is missing.
+            assembled["field_resolutions"] = field_resolutions
+            assembled["missing_expected_fields"] = []
+        return assembled
 
     return DecisionContract(request=request, result_schema=result_schema,
                             profile_mapped=profile_mapped, decision_schema=ConditionDecision,
-                            record_slot_fields={name + "_curie": ("curie",) for name in (
-                                "condition_class", "condition_id", "condition_chemical", "condition_taxon")},
+                            record_slot_fields={
+                                **{name + "_curie": ("curie",) for name in _TERM_COMPONENTS},
+                                **{name + "_name": ("name",) for name in _TERM_COMPONENTS},
+                            },
                             domain_contract={
                                 "components": [{
                                     "component_type": component.component_type,

@@ -493,3 +493,145 @@ def test_subject_label_reads_the_subject_type_label_only(schemas):
     # No symbol: the label is absent, never another field.
     allele = canonical_record({"curie": "MGI:1", "name": "an allele"}, schema, request=request("allele"))
     assert allele.values["subject_label"] is None
+
+
+_CONDITION_EXPECTED = {
+    f"{component}_{key}": f"conditions[0].{component}.{key}"
+    for component in ("condition_class", "condition_id", "condition_chemical", "condition_taxon")
+    for key in ("curie", "name")
+}
+
+
+def _stored_component(mention, proposed_curie):
+    from src.lib.domain_packs.resolvable_values import unresolved_value
+
+    return unresolved_value(mention, identity_keys=("curie", "name"), proposed_curie=proposed_curie)
+
+
+def _stored_condition_workspace(schemas, *, with_chemical=True):
+    from agr_ai_curation_alliance.compact_conditions import condition_decision_contract
+    from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord, ValidatorDecisionWorkspace
+    from src.schemas.domain_validator import DomainValidationRequest, ValidatorCandidate, ValidatorLookupAttempt
+
+    bundle = {"condition_class": _stored_component("chemical treatment", "ZECO:0000111"),
+              "condition_free_text": "3 pM"}
+    inputs = {"condition_class_curie": "ZECO:0000111", "condition_class_name": "chemical treatment",
+              "condition_free_text": "3 pM"}
+    if with_chemical:
+        bundle["condition_chemical"] = _stored_component("rapamycin", "CHEBI:9168")
+        inputs.update(condition_chemical_curie="CHEBI:9168", condition_chemical_name="rapamycin")
+    request = DomainValidationRequest(
+        request_id="stored-condition", validator_binding_id="experimental_condition_validation",
+        validator_agent={"package_id": "agr.alliance", "agent_id": "experimental_condition_validation"},
+        target={"domain_pack_id": "fixture"}, expected_result_fields=_CONDITION_EXPECTED,
+        selected_inputs={"condition_components": bundle, **inputs},
+    )
+    contract = condition_decision_contract(request, schemas["ExperimentalConditionValidationResult"])
+    workspace = ValidatorDecisionWorkspace([contract])
+    class_ref = workspace.record_lookup("stored-condition", call_id="class-lookup", attempt=ValidatorLookupAttempt(
+        provider="agr_curation_query", method="get_ontology_terms", query={"terms": ["ZECO:0000111"]},
+        result_count=1, outcome="success",
+    ), records=[CanonicalValidatorRecord(candidate=ValidatorCandidate(value="ZECO:0000111", label="chemical treatment"),
+                                          values={"curie": "ZECO:0000111", "name": "chemical treatment"},
+                                          resolved_object={"curie": "ZECO:0000111", "name": "chemical treatment"})])[0]
+    selection = {"kind": "record", "record_ref": class_ref, "field": "curie"}
+    components = [
+        {"component_type": "condition_class", "status": "resolved", "candidates": [_assessment(class_ref)],
+         "slots": {"curie": selection}, "lookup_refs": ["class-lookup"], "explanation": "Class matches."},
+        {"component_type": "free_text", "status": "not_checked", "explanation": "Dose context."},
+    ]
+    if with_chemical:
+        workspace.record_lookup("stored-condition", call_id="chemical-lookup", attempt=ValidatorLookupAttempt(
+            provider="agr_curation_query", method="get_ontology_terms", query={"terms": ["CHEBI:9168"]},
+            result_count=0, outcome="not_found",
+        ), records=[])
+        components.insert(1, {
+            "component_type": "condition_chemical", "status": "unresolved", "lookup_refs": ["chemical-lookup"],
+            "explanation": "No ChEBI term for this CURIE.", "curator_message": "Check the chemical.",
+        })
+    decision = {
+        "request_id": "stored-condition", "status": "unresolved" if with_chemical else "resolved",
+        "explanation": "Condition decision.", "candidates": [_assessment(class_ref)],
+        "slots": {"condition_class_curie": selection}, "components": components,
+    }
+    return contract, workspace, decision
+
+
+def test_stored_condition_components_each_carry_their_own_decision(schemas):
+    """ALL-1283 Q3: every stored component is decided on its own; absent ones are not required."""
+
+    contract, workspace, decision = _stored_condition_workspace(schemas)
+
+    result = workspace.assemble(contract.decision_schema.model_validate(decision))
+
+    resolutions = {key: value.model_dump() for key, value in result.field_resolutions.items()}
+    assert resolutions == {
+        "condition_class_curie": {
+            "status": "resolved", "lookup_outcome": "matched",
+            "resolved_values": {"condition_class_curie": "ZECO:0000111", "condition_class_name": "chemical treatment"},
+            "explanation": "Class matches.", "curator_message": None,
+        },
+        "condition_chemical_curie": {
+            "status": "unresolved", "lookup_outcome": "not_found", "resolved_values": {},
+            "explanation": "No ChEBI term for this CURIE.", "curator_message": "Check the chemical.",
+        },
+    }
+    # condition_id and condition_taxon are absent: never required, never decided.
+    assert result.missing_expected_fields == []
+    assert result.unresolved_components == ["condition_chemical"]
+
+
+def test_stored_condition_resolves_without_its_absent_components(schemas):
+    contract, workspace, decision = _stored_condition_workspace(schemas, with_chemical=False)
+
+    result = workspace.assemble(contract.decision_schema.model_validate(decision))
+
+    assert result.status == "resolved"
+    assert set(result.field_resolutions) == {"condition_class_curie"}
+    assert result.missing_expected_fields == []
+
+
+def test_stored_component_judged_without_its_own_lookup_is_not_validated(schemas):
+    contract, workspace, decision = _stored_condition_workspace(schemas)
+    decision["components"][1] = {
+        "component_type": "condition_chemical", "status": "unresolved",
+        "explanation": "Judged without its own lookup.",
+    }
+
+    result = workspace.assemble(contract.decision_schema.model_validate(decision))
+
+    assert result.field_resolutions["condition_chemical_curie"].lookup_outcome == "not_validated"
+
+
+@pytest.mark.parametrize("record_values", [
+    {"curie": "ZECO:0000111", "name": None},
+    {"curie": "ZECO:0000111", "name": ""},
+    {"curie": "ZECO:0000111", "term_name": "chemical treatment"},
+    {"curie": "ZECO:0000111", "label": "chemical treatment"},
+])
+def test_resolved_component_without_a_record_name_stays_unresolved_alone(schemas, record_values):
+    """Review #3: an empty or differently keyed record name never raises for the whole call;
+    that component alone is recorded as missing_expected_result_field."""
+
+    from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord
+    from src.schemas.domain_validator import ValidatorCandidate, ValidatorLookupAttempt
+
+    contract, workspace, decision = _stored_condition_workspace(schemas, with_chemical=False)
+    ref = workspace.record_lookup("stored-condition", call_id="bare-lookup", attempt=ValidatorLookupAttempt(
+        provider="agr_curation_query", method="get_ontology_terms", query={"terms": ["ZECO:0000111"]},
+        result_count=1, outcome="success",
+    ), records=[CanonicalValidatorRecord(candidate=ValidatorCandidate(value="ZECO:0000111"),
+                                          values=record_values)])[0]
+    selection = {"kind": "record", "record_ref": ref, "field": "curie"}
+    decision["candidates"] = [_assessment(ref)]
+    decision["slots"] = {"condition_class_curie": selection}
+    decision["components"][0].update(candidates=[_assessment(ref)], slots={"curie": selection},
+                                     lookup_refs=["bare-lookup"])
+
+    result = workspace.assemble(contract.decision_schema.model_validate(decision))
+
+    decided = result.field_resolutions["condition_class_curie"]
+    assert (decided.status, decided.lookup_outcome, decided.resolved_values) == (
+        "unresolved", "missing_expected_result_field", {},
+    )
+    assert result.missing_expected_fields == []

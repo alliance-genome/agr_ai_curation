@@ -81,6 +81,19 @@ def _schema_ref(schema_id: str, name: str, source_file: str) -> dict[str, str]:
     }
 
 
+def _staged(mention: str, *identity_keys: str, **extra: object) -> dict[str, object]:
+    """A staged, not yet validated value in the shared extracted-vs-validated shape."""
+
+    return {
+        **extra,
+        **{key: None for key in identity_keys},
+        "mention": mention,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+
+
 def _valid_phenotype_payload() -> dict[str, object]:
     evidence_record = {
         "evidence_record_id": "reduced-brood-size-evidence-1",
@@ -94,13 +107,32 @@ def _valid_phenotype_payload() -> dict[str, object]:
         "chunk_id": "chunk-phenotype-count",
         "figure_reference": "Figure 5A",
     }
-    subject_payload = {
-        "resolution_state": "pending_entity_resolution",
-        "subject_identifier": "WB:WBGene00000912",
-        "subject_label": "daf-2(e1370)",
-        "subject_type": "gene",
-        "taxon": "NCBITaxon:6239",
-    }
+    subject_payload = _staged(
+        "daf-2(e1370)",
+        "subject_identifier",
+        "subject_label",
+        subject_type="gene",
+        taxon="NCBITaxon:6239",
+        proposed_subject_identifier="WB:WBGene00000912",
+    )
+    term_payload = _staged(
+        "reduced brood size",
+        "curie",
+        "label",
+        source_mentions=["reduced brood size"],
+        ontology_lookup_hint={
+            "data_provider": "WB",
+            "taxon_id": "NCBITaxon:6239",
+            "evidence_record_id": "reduced-brood-size-evidence-1",
+        },
+        proposed_curie="WBPhenotype:0000886",
+    )
+    reference_payload = _staged(
+        "Brood size phenotype evidence fixture paper",
+        "reference_id",
+        "title",
+        filename="test_tool_verified_phenotype_paper.pdf",
+    )
     return {
         "summary": "Retained one verified pending phenotype assertion.",
         "curatable_objects": [
@@ -115,10 +147,7 @@ def _valid_phenotype_payload() -> dict[str, object]:
                     "model/schema/reference.yaml",
                 ),
                 "definition_state": "in_development",
-                "payload": {
-                    "title": "Brood size phenotype evidence fixture paper",
-                    "filename": "test_tool_verified_phenotype_paper.pdf",
-                },
+                "payload": copy.deepcopy(reference_payload),
             },
             {
                 "object_type": "PhenotypeSubject",
@@ -148,23 +177,10 @@ def _valid_phenotype_payload() -> dict[str, object]:
                     "model/schema/ontologyTerm.yaml",
                 ),
                 "definition_state": "in_development",
-                "payload": {
-                    "resolution_state": "pending_ontology_resolution",
-                    "curie": "WBPhenotype:0000886",
-                    "label": "reduced brood size",
-                    "source_mentions": ["reduced brood size"],
-                    "ontology_lookup_hint": {
-                        "data_provider": "WB",
-                        "taxon_id": "NCBITaxon:6239",
-                        "evidence_record_id": "reduced-brood-size-evidence-1",
-                    },
-                    "export_state": "blocked_pending_ontology_resolution",
-                    "write_blocked_reason": "phenotype term CURIE unresolved",
-                },
+                "payload": copy.deepcopy(term_payload),
                 "evidence_record_ids": ["reduced-brood-size-evidence-1"],
                 "metadata": {
                     "validation_state": "pending_ontology_resolution",
-                    "validator_binding_id": "phenotype_term_ontology_validator",
                     "export_state": "blocked_pending_ontology_resolution",
                     "write_blocked_reason": "phenotype term CURIE unresolved",
                 },
@@ -194,26 +210,9 @@ def _valid_phenotype_payload() -> dict[str, object]:
                 "payload": {
                     "annotation_kind": "phenotype_assertion",
                     "phenotype_annotation_object": "reduced brood size",
-                    "phenotype_annotation_subject": subject_payload,
-                    "phenotype_terms": [
-                        {
-                            "resolution_state": "pending_ontology_resolution",
-                            "curie": "WBPhenotype:0000886",
-                            "label": "reduced brood size",
-                            "source_mentions": ["reduced brood size"],
-                            "ontology_lookup_hint": {
-                                "data_provider": "WB",
-                                "taxon_id": "NCBITaxon:6239",
-                                "evidence_record_id": "reduced-brood-size-evidence-1",
-                            },
-                            "export_state": "blocked_pending_ontology_resolution",
-                            "write_blocked_reason": "phenotype term CURIE unresolved",
-                        }
-                    ],
-                    "single_reference": {
-                        "title": "Brood size phenotype evidence fixture paper",
-                        "filename": "test_tool_verified_phenotype_paper.pdf",
-                    },
+                    "phenotype_annotation_subject": copy.deepcopy(subject_payload),
+                    "phenotype_terms": [copy.deepcopy(term_payload)],
+                    "single_reference": copy.deepcopy(reference_payload),
                     "evidence_quote": {
                         "evidence_record_id": "reduced-brood-size-evidence-1"
                     },
@@ -293,27 +292,30 @@ def test_phenotype_extractor_schema_accepts_domain_pack_objects_and_metadata():
     annotation = envelope.curatable_objects[-1]
     assert annotation.object_type == PHENOTYPE_OBJECT_TYPE
     assert annotation.model_ref == "PhenotypeAnnotationPayload"
-    assert annotation.payload.phenotype_terms[0].curie == "WBPhenotype:0000886"
+    # The extractor's CURIE is a proposal; the validated CURIE stays empty until a validator runs.
+    assert annotation.payload.phenotype_terms[0].proposed_curie == "WBPhenotype:0000886"
+    assert annotation.payload.phenotype_terms[0].curie is None
+    assert annotation.payload.phenotype_terms[0].resolution_state == "unresolved"
     assert annotation.evidence_record_ids == ["reduced-brood-size-evidence-1"]
     assert envelope.metadata.exclusions[0].reason_code == "previously_reported"
 
 
-def test_phenotype_extractor_schema_accepts_pending_term_without_curie():
+def test_phenotype_extractor_schema_accepts_term_without_a_proposed_curie():
     payload = _valid_phenotype_payload()
     term = payload["curatable_objects"][2]
-    term["payload"]["curie"] = None
+    del term["payload"]["proposed_curie"]
     annotation_term = payload["curatable_objects"][-1]["payload"]["phenotype_terms"][0]
-    annotation_term["curie"] = None
+    del annotation_term["proposed_curie"]
 
     envelope = _validate_phenotype_extractor_payload(payload)
 
     phenotype_term = envelope.curatable_objects[2]
     assert phenotype_term.payload.curie is None
-    assert phenotype_term.payload.label == "reduced brood size"
-    assert phenotype_term.payload.resolution_state == "pending_ontology_resolution"
-    assert phenotype_term.payload.export_state == (
-        "blocked_pending_ontology_resolution"
-    )
+    assert phenotype_term.payload.proposed_curie is None
+    assert phenotype_term.payload.mention == "reduced brood size"
+    assert phenotype_term.payload.resolution_state == "unresolved"
+    assert phenotype_term.payload.lookup_outcome == "not_validated"
+    assert phenotype_term.metadata["export_state"] == "blocked_pending_ontology_resolution"
 
 
 def test_phenotype_extractor_schema_canonicalizes_runtime_scaffold_objects():
@@ -328,16 +330,7 @@ def test_phenotype_extractor_schema_canonicalizes_runtime_scaffold_objects():
         "name": "PhenotypeAnnotation",
         "version": "1b11d0888f19",
     }
-    annotation_subject = annotation["payload"]["phenotype_annotation_subject"]
-    annotation_subject["resolution_state"] = "resolved"
-    annotation_subject["subject_identifier"] = None
-    annotation_term = annotation["payload"]["phenotype_terms"][0]
-    annotation_term["curie"] = None
-    annotation["payload"]["single_reference"] = {
-        "reference_id": None,
-        "title": None,
-        "filename": None,
-    }
+    del annotation["payload"]["single_reference"]
     payload["curatable_objects"] = [annotation]
     payload["metadata"]["raw_mentions"] = []
 
@@ -355,28 +348,70 @@ def test_phenotype_extractor_schema_canonicalizes_runtime_scaffold_objects():
     }
     assert annotation_object.schema_ref.schema_id == "alliance.linkml.PhenotypeAnnotation"
     assert annotation_object.schema_ref.version == LINKML_COMMIT
-    assert (
-        annotation_object.payload.phenotype_annotation_subject.resolution_state
-        == "pending_entity_resolution"
-    )
+    assert annotation_object.payload.phenotype_annotation_subject.resolution_state == "unresolved"
+    assert annotation_object.metadata["validation_state"] == "pending_entity_resolution"
     assert envelope.metadata.raw_mentions[0].entity_type == "phenotype"
+    assert envelope.metadata.raw_mentions[0].mention == "reduced brood size"
     assert annotation_object.metadata["export_behavior"]["status"] == "blocked"
     assert annotation_object.metadata["write_behavior"]["status"] == "blocked"
 
 
-def test_phenotype_extractor_schema_requires_taxon_for_resolved_subjects():
+def test_phenotype_extractor_schema_rejects_resolved_values_without_a_validated_identity():
     payload = copy.deepcopy(_valid_phenotype_payload())
-    subject_payload = payload["curatable_objects"][1]["payload"]
-    subject_payload["resolution_state"] = "resolved"
-    subject_payload.pop("taxon", None)
-    annotation_subject = payload["curatable_objects"][-1]["payload"][
-        "phenotype_annotation_subject"
-    ]
-    annotation_subject["resolution_state"] = "resolved"
-    annotation_subject.pop("taxon", None)
+    annotation_term = payload["curatable_objects"][-1]["payload"]["phenotype_terms"][0]
+    # A proposed CURIE never makes a term resolved.
+    annotation_term["resolution_state"] = "resolved"
+    annotation_term["lookup_outcome"] = "matched"
 
-    with pytest.raises(ValidationError, match="taxon"):
+    with pytest.raises(ValidationError, match="identity a validator supplied"):
         _phenotype_extractor_schema().model_validate(payload)
+
+    payload = copy.deepcopy(_valid_phenotype_payload())
+    annotation_subject = payload["curatable_objects"][-1]["payload"]["phenotype_annotation_subject"]
+    annotation_subject["resolution_state"] = "pending_entity_resolution"
+
+    with pytest.raises(ValidationError, match="resolution_state"):
+        _phenotype_extractor_schema().model_validate(payload)
+
+
+def test_phenotype_extractor_schema_accepts_a_validator_resolved_term():
+    payload = copy.deepcopy(_valid_phenotype_payload())
+    annotation_term = payload["curatable_objects"][-1]["payload"]["phenotype_terms"][0]
+    annotation_term.update(
+        {
+            "curie": "WBPhenotype:0000886",
+            "label": "reduced brood size",
+            "resolution_state": "resolved",
+            "lookup_outcome": "matched",
+            "validator_explanation": "Exact label match.",
+        }
+    )
+
+    envelope = _validate_phenotype_extractor_payload(payload)
+
+    term = envelope.curatable_objects[-1].payload.phenotype_terms[0]
+    assert term.curie == "WBPhenotype:0000886"
+    assert term.mention == "reduced brood size"
+
+
+def test_phenotype_extractor_schema_never_infers_raw_mentions_from_the_statement():
+    # Regression (schema.py :693-706): raw_mentions came from the phenotype statement when no
+    # source mention existed. Only paper source_mentions are harvested now.
+    schema_cls = _phenotype_extractor_schema()
+    payload = copy.deepcopy(_valid_phenotype_payload())
+    payload["metadata"]["raw_mentions"] = []
+    payload["curatable_objects"][-1]["payload"]["source_mentions"] = []
+
+    canonical = schema_cls._canonicalize_phenotype_scaffold(payload)
+
+    assert canonical["metadata"]["raw_mentions"] == []
+
+    payload["curatable_objects"][-1]["payload"]["source_mentions"] = ["fewer progeny"]
+    canonical = schema_cls._canonicalize_phenotype_scaffold(payload)
+
+    assert [item["mention"] for item in canonical["metadata"]["raw_mentions"]] == [
+        "fewer progeny"
+    ]
 
 
 @pytest.mark.parametrize("legacy_field", sorted(LEGACY_SEMANTIC_LIST_FIELDS))
@@ -557,7 +592,8 @@ def test_phenotype_package_normalizer_materializes_nested_term_object_for_valida
     assert phenotype_term["pending_ref_id"] == "phenotype-term-1-1"
     assert phenotype_term["object_role"] == "validated_reference"
     assert phenotype_term["model_ref"] == "PhenotypeTermPayload"
-    assert phenotype_term["payload"]["label"] == "reduced brood size"
+    assert phenotype_term["payload"]["mention"] == "reduced brood size"
+    assert phenotype_term["payload"]["label"] is None
     assert phenotype_term["payload"]["ontology_lookup_hint"] == {
         "data_provider": "WB",
         "taxon_id": "NCBITaxon:6239",
@@ -567,7 +603,6 @@ def test_phenotype_package_normalizer_materializes_nested_term_object_for_valida
     assert phenotype_term["metadata"] == {
         "object_role": "validated_reference",
         "validation_state": "pending_ontology_resolution",
-        "validator_binding_id": "phenotype_term_ontology_validator",
         "export_state": "blocked_pending_ontology_resolution",
         "write_blocked_reason": "phenotype term CURIE unresolved",
     }
@@ -597,7 +632,8 @@ def test_phenotype_domain_pack_loads_tool_verified_pending_fixture():
     assert envelope.metadata["ambiguities"][0]["mention"] == "daf-2(e1370)"
     annotation = next(obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE)
     assert annotation.object_role == "curatable_unit"
-    assert annotation.payload["phenotype_terms"][0]["curie"] == "WBPhenotype:0000886"
+    assert annotation.payload["phenotype_terms"][0]["proposed_curie"] == "WBPhenotype:0000886"
+    assert annotation.payload["phenotype_terms"][0]["curie"] is None
     assert annotation.metadata["write_behavior"]["status"] == "blocked"
 
 

@@ -50,7 +50,8 @@ PACK_PATHS = {
 }
 SHAPES_PATH = REPO_ROOT / "backend" / "tests" / "fixtures" / "flows" / "display_value_shapes.json"
 
-ROLE_KEYS = {"label", "id", "state"}
+# ``mention`` declares a resolvable value (ALL-1283); like the other roles it names a leaf.
+ROLE_KEYS = {"label", "id", "state", "mention"}
 SPEC_KEYS = ROLE_KEYS | {"resolved_states", "compose", "separator"}
 
 # Models no display can be declared for yet, each with the reason. Keep this list short:
@@ -76,9 +77,6 @@ EXEMPT_MODELS = {
     ("agr.alliance.phenotype", "PhenotypeAnnotationPayload"): (
         "curatable-unit row whose only own label leaf is the free-text statement; the "
         "phenotype terms render through the phenotype_terms list field"
-    ),
-    ("agr.alliance.disease", "VocabularyTermSnapshotPayload"): (
-        "declared but referenced by no field (condition_relation_type leaves are declared directly)"
     ),
 }
 EXEMPT_FIELDS = {

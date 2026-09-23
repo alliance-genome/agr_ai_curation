@@ -30,6 +30,13 @@ Per the approach-doc Decisions (D1-D6):
   * D5 RELATIONS: the staged ``disease_relation_name`` is validated against the subject-type CV
     subset by ``disease_relation_cv_lookup``.
   * D6: condition_relations are out of scope (deferred with host-annotation work).
+
+EXTRACTED VS VALIDATED (ALL-1283): the disease term, subject, relation, evidence codes, data
+provider, annotation type, genetic sex, qualifiers, with/from genes and every condition component
+are staged as resolvable values (``_resolvable_payloads.staged_value``): the paper wording (or the
+extractor's chosen text for a fixed-choice value) in ``mention``, anything the extractor proposed
+under ``proposed_<key>``, and the shared unresolved / ``not_validated`` state. Only a validator
+fills a value's id/label keys; nothing is filled from another field.
 """
 
 from __future__ import annotations
@@ -52,6 +59,13 @@ from src.schemas.domain_envelope import (
 from src.schemas.models.base import EvidenceRecord
 from src.schemas.evidence_workspace import normalize_workspace_records
 
+from .._resolvable_payloads import (
+    ONTOLOGY_TERM_IDENTITY_KEYS,
+    VOCABULARY_TERM_IDENTITY_KEYS,
+    condition_relations_payload,
+    staged_list,
+    staged_value,
+)
 from ..schema_refs import (
     ALLIANCE_LINKML_COMMIT,
     ALLIANCE_LINKML_PROVIDER_KEY,
@@ -85,11 +99,22 @@ from .constants import (
     DISEASE_TERM_OBJECT_TYPE,
 )
 
-# Pending-resolution sentinels.
+# Object-level workflow states (object metadata only). The values themselves carry the
+# shared extracted-vs-validated state (``resolution_state`` / ``lookup_outcome``).
 _SUBJECT_PENDING_STATE = "pending_entity_resolution"
 _SUBJECT_BLOCKED_STATE = "blocked_missing_subject"
+_SUBJECT_BLOCKED_NOTE = (
+    "Disease extraction did not stage the subject the paper names; the abstract "
+    "DiseaseAnnotation is materialized and disease_annotation_subject is absent."
+)
 _TERM_PENDING_STATE = "pending_ontology_resolution"
 _REFERENCE_PENDING_STATE = "pending_reference_resolution"
+
+# Validated identity keys per value; everything the extractor proposed stays under proposed_<key>.
+DISEASE_SUBJECT_IDENTITY_KEYS = ("subject_identifier", "subject_label")
+DATA_PROVIDER_IDENTITY_KEYS = ("abbreviation",)
+EVIDENCE_CODE_IDENTITY_KEYS = ("curie",)
+WITH_GENE_IDENTITY_KEYS = ("primary_external_id",)
 _REFERENCE_BLOCKED_REASON = (
     "No durable Alliance reference identity (AGRKB/PMID/DOI) is available at chat-extraction time; "
     "single_reference resolution is deferred (see disease-approach.md open questions)."
@@ -248,29 +273,28 @@ def _candidate_pending_ref_id(candidate: Any, staged_fields: Mapping[str, Any], 
     return f"disease-annotation-{index + 1}"
 
 
-def _subject_payload(staged_fields: Mapping[str, Any]) -> dict[str, Any]:
-    subject_identifier = _clean_text(staged_fields.get("subject_identifier"))
-    subject_label = _clean_text(staged_fields.get("subject_label"))
+def _subject_payload(staged_fields: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The staged subject value, or None when the extractor staged no subject.
+
+    ``subject_label`` is the subject as the paper names it (the value's paper
+    wording); a staged ``subject_identifier`` is the extractor's proposal and
+    stays under ``proposed_subject_identifier`` until the subject validator
+    resolves it. ``subject_type`` is the extractor's routing choice.
+    """
+
+    mention = _clean_text(staged_fields.get("subject_label"))
+    if mention is None:
+        return None
+    extra: dict[str, Any] = {}
     subject_type = _clean_text(staged_fields.get("subject_type"))
-
-    if subject_identifier and subject_type:
-        resolution_state = _SUBJECT_PENDING_STATE
-    else:
-        resolution_state = _SUBJECT_BLOCKED_STATE
-
-    payload: dict[str, Any] = {"resolution_state": resolution_state}
-    if subject_identifier:
-        payload["subject_identifier"] = subject_identifier
-    if subject_label:
-        payload["subject_label"] = subject_label
-    if subject_type:
-        payload["subject_type"] = subject_type
-    if resolution_state == _SUBJECT_BLOCKED_STATE:
-        payload["resolution_note"] = (
-            "Disease extraction did not provide a durable disease_annotation_subject "
-            "identifier and subtype; the abstract DiseaseAnnotation is materialized."
-        )
-    return payload
+    if subject_type is not None:
+        extra["subject_type"] = subject_type
+    return staged_value(
+        mention,
+        identity_keys=DISEASE_SUBJECT_IDENTITY_KEYS,
+        proposals={"subject_identifier": staged_fields.get("subject_identifier")},
+        **extra,
+    )
 
 
 def _disease_term_payload(
@@ -278,69 +302,21 @@ def _disease_term_payload(
     mention: str,
     curie: str | None,
     name: str | None,
-    source_mentions: Sequence[str],
 ) -> dict[str, Any]:
-    return {
-        "resolution_state": _TERM_PENDING_STATE,
-        "curie": curie,
-        "name": name or mention,
-        "source_mentions": list(source_mentions),
-    }
+    """The staged disease term: paper wording, the extractor's proposed DOID/name, no identity."""
+
+    return staged_value(
+        mention,
+        identity_keys=ONTOLOGY_TERM_IDENTITY_KEYS,
+        proposals={"curie": curie, "name": name},
+    )
 
 
-def _condition_relations_payload(raw_relations: Any) -> list[dict[str, Any]]:
-    """Materialize staged condition_relations into the concrete nested annotation shape.
-
-    Maps each staged ``{condition_relation_type, conditions: [{condition_*_curie, ...}]}`` into
-    ``{condition_relation_type: {name}, conditions: [{condition_class: {curie}, ...}]}`` — the
-    exact target paths the active bindings read (``condition_relations.condition_relation_type.name``
-    and ``condition_relations.conditions.condition_<x>.curie``). Empty leaves are dropped; a
-    relation with no resolvable conditions is dropped entirely. Only invoked when conditions were
-    staged, so absent conditions leave the payload untouched (mirrors the optional-field pattern).
-    """
-
-    if not isinstance(raw_relations, Sequence) or isinstance(raw_relations, (str, bytes)):
-        return []
-    # The condition CURIE leaf is nested one object deep (e.g. condition_class.curie).
-    _curie_leaf = {
-        "condition_class_curie": "condition_class",
-        "condition_id_curie": "condition_id",
-        "condition_chemical_curie": "condition_chemical",
-        "condition_taxon_curie": "condition_taxon",
-    }
-    relations: list[dict[str, Any]] = []
-    for raw_relation in raw_relations:
-        if not isinstance(raw_relation, Mapping):
-            continue
-        relation_type = _clean_text(raw_relation.get("condition_relation_type"))
-        if not relation_type:
-            continue
-        conditions: list[dict[str, Any]] = []
-        raw_conditions = raw_relation.get("conditions")
-        if not isinstance(raw_conditions, Sequence) or isinstance(raw_conditions, (str, bytes)):
-            raw_conditions = []
-        for raw_condition in raw_conditions:
-            if not isinstance(raw_condition, Mapping):
-                continue
-            condition: dict[str, Any] = {}
-            for staged_key, leaf_key in _curie_leaf.items():
-                curie = _clean_text(raw_condition.get(staged_key))
-                if curie:
-                    condition[leaf_key] = {"curie": curie}
-            for text_key in ("condition_free_text", "condition_summary"):
-                value = _clean_text(raw_condition.get(text_key))
-                if value:
-                    condition[text_key] = value
-            if condition:
-                conditions.append(condition)
-        if conditions:
-            relations.append(
-                {
-                    "condition_relation_type": {"name": relation_type},
-                    "conditions": conditions,
-                }
-            )
-    return relations
+def _optional_vocabulary_value(staged_fields: Mapping[str, Any], key: str) -> dict[str, Any] | None:
+    text = _clean_text(staged_fields.get(key))
+    if text is None:
+        return None
+    return staged_value(text, identity_keys=VOCABULARY_TERM_IDENTITY_KEYS)
 
 
 def _evidence_quote_payload(evidence_record: Mapping[str, Any]) -> dict[str, Any]:
@@ -408,10 +384,11 @@ def validate_disease_builder_objects(
         if not _clean_text(payload.get("mention")):
             errors.append(f"{location}.payload.mention is required")
         term = payload.get("disease_annotation_object")
-        if not isinstance(term, Mapping) or not _clean_text(term.get("name")):
-            errors.append(f"{location}.payload.disease_annotation_object.name is required")
-        if not isinstance(payload.get("disease_annotation_subject"), Mapping):
-            errors.append(f"{location}.payload.disease_annotation_subject is required")
+        if not isinstance(term, Mapping) or not _clean_text(term.get("mention")):
+            errors.append(f"{location}.payload.disease_annotation_object.mention is required")
+        subject = payload.get("disease_annotation_subject")
+        if subject is not None and not isinstance(subject, Mapping):
+            errors.append(f"{location}.payload.disease_annotation_subject must be an object")
         role = _clean_text(payload.get("role"))
         if role not in _DISEASE_ASSERTION_ROLES:
             errors.append(f"{location}.payload.role must be a valid DiseaseAssertionRole")
@@ -419,10 +396,8 @@ def validate_disease_builder_objects(
         if confidence not in _DISEASE_ASSERTION_CONFIDENCES:
             errors.append(f"{location}.payload.confidence must be a valid DiseaseAssertionConfidence")
         data_provider = payload.get("data_provider")
-        if not isinstance(data_provider, Mapping) or not _clean_text(
-            data_provider.get("abbreviation")
-        ):
-            errors.append(f"{location}.payload.data_provider.abbreviation is required")
+        if not isinstance(data_provider, Mapping) or not _clean_text(data_provider.get("mention")):
+            errors.append(f"{location}.payload.data_provider.mention is required")
 
         ref_types = {ref.object_type for ref in obj.object_refs}
         missing_ref_types = {
@@ -591,8 +566,6 @@ def materialize_disease_builder_state(
             )
             continue
 
-        disease_name = _clean_text(staged_fields.get("disease_name")) or mention
-        disease_curie = _clean_text(staged_fields.get("disease_curie"))
         role = _clean_text(staged_fields.get("role"))
         if role not in _DISEASE_ASSERTION_ROLES:
             issues.append(
@@ -642,10 +615,8 @@ def materialize_disease_builder_state(
             )
             continue
 
-        evidence_ids = _unique_strings(
-            getattr(candidate, "evidence_record_ids", None)
-            or staged_fields.get("evidence_record_ids")
-        )
+        # The builder workspace owns a candidate's evidence ids; no staged field stands in.
+        evidence_ids = _unique_strings(getattr(candidate, "evidence_record_ids", None))
         if not evidence_ids:
             issues.append(
                 _materialization_issue(
@@ -692,35 +663,49 @@ def materialize_disease_builder_state(
         if candidate_evidence_blocked or not resolved_evidence:
             continue
 
-        source_mentions = _unique_strings(staged_fields.get("source_mentions")) or [mention]
+        source_mentions = _unique_strings(staged_fields.get("source_mentions"))
+        if not source_mentions:
+            issues.append(
+                _materialization_issue(
+                    field_path="source_mentions",
+                    reason="missing_source_mentions",
+                    message="Finalized disease candidates require source_mentions from the paper.",
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
         negated = bool(staged_fields.get("negated"))
-        relation_name = _clean_text(staged_fields.get("disease_relation_name"))
-        evidence_code_curies = _unique_strings(staged_fields.get("evidence_code_curies"))
-        # R4 optional slots. genetic_sex is a single CV term; disease_qualifiers and with_or_from
-        # are multivalued (validated/snapshotted at [0], full list carried in the payload).
-        genetic_sex_name = _clean_text(staged_fields.get("genetic_sex_name"))
-        disease_qualifier_names = _unique_strings(staged_fields.get("disease_qualifier_names"))
-        with_gene_identifiers = _unique_strings(staged_fields.get("with_gene_identifiers"))
-        condition_relations = _condition_relations_payload(staged_fields.get("condition_relations"))
+        # Every optional value is staged only when the extractor supplied it; lists stage each
+        # proposed entry as its own value, validated per element.
+        disease_relation = _optional_vocabulary_value(staged_fields, "disease_relation_name")
+        evidence_code_curies = staged_list(
+            staged_fields.get("evidence_code_curies"), identity_keys=EVIDENCE_CODE_IDENTITY_KEYS
+        )
+        genetic_sex = _optional_vocabulary_value(staged_fields, "genetic_sex_name")
+        disease_qualifier_names = staged_list(
+            staged_fields.get("disease_qualifier_names"),
+            identity_keys=VOCABULARY_TERM_IDENTITY_KEYS,
+        )
+        with_gene_identifiers = staged_list(
+            staged_fields.get("with_gene_identifiers"), identity_keys=WITH_GENE_IDENTITY_KEYS
+        )
+        condition_relations = condition_relations_payload(staged_fields.get("condition_relations"))
         subject_payload = _subject_payload(staged_fields)
-        subject_resolution_state = subject_payload["resolution_state"]
-        subject_type = subject_payload.get("subject_type")
-        object_type, schema_id, class_name = _subtype_for_subject(subject_type)
+        subject_resolution_state = (
+            _SUBJECT_BLOCKED_STATE if subject_payload is None else _SUBJECT_PENDING_STATE
+        )
+        object_type, schema_id, class_name = _subtype_for_subject(
+            _clean_text(staged_fields.get("subject_type"))
+        )
 
         term_payload = _disease_term_payload(
             mention=mention,
-            curie=disease_curie,
-            name=disease_name,
-            source_mentions=source_mentions,
+            curie=_clean_text(staged_fields.get("disease_curie")),
+            name=_clean_text(staged_fields.get("disease_name")),
         )
-        reference_payload: dict[str, Any] = {
-            "resolution_state": _REFERENCE_PENDING_STATE,
-            "resolution_note": _REFERENCE_BLOCKED_REASON,
-        }
-        for field_name in ("reference_id", "title", "filename", "pmid", "doi", "curie"):
-            value = _clean_text(staged_fields.get(field_name))
-            if value is not None:
-                reference_payload[field_name] = value
+        # D4: the source reference is not staged from the paper, so single_reference is absent
+        # from the annotation; the pending Reference object records why.
+        reference_payload: dict[str, Any] = {"resolution_note": _REFERENCE_BLOCKED_REASON}
 
         subject_ref_id = f"disease-subject-{annotation_index + 1}"
         term_ref_id = f"disease-term-{annotation_index + 1}"
@@ -740,7 +725,11 @@ def materialize_disease_builder_state(
                     "Disease annotation subject; concrete Gene, Allele, or AGM identity is resolved "
                     "by the active subject_entity_validation binding."
                 ],
-                payload=copy.deepcopy(subject_payload),
+                payload=(
+                    copy.deepcopy(subject_payload)
+                    if subject_payload is not None
+                    else {"resolution_note": _SUBJECT_BLOCKED_NOTE}
+                ),
                 metadata={
                     OBJECT_ROLE_METADATA_KEY: "validated_reference",
                     "validation_state": subject_resolution_state,
@@ -757,7 +746,7 @@ def materialize_disease_builder_state(
                 validation_guidance=staged_fields.get("validation_guidance"),
                 schema_ref=_term_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
-                payload=copy.deepcopy(term_payload),
+                payload={**copy.deepcopy(term_payload), "source_mentions": list(source_mentions)},
                 evidence_record_ids=[primary_evidence_id] if primary_evidence_id else [],
                 metadata={
                     OBJECT_ROLE_METADATA_KEY: "validated_reference",
@@ -819,34 +808,36 @@ def materialize_disease_builder_state(
         annotation_payload: dict[str, Any] = {
             "annotation_kind": DISEASE_ANNOTATION_KIND,
             # R4: annotation_type is the curation method, fixed to manually_curated. It is NOT an
-            # extractor edit target; the backend always materializes this constant.
-            "annotation_type_name": DISEASE_ANNOTATION_TYPE_CONSTANT,
+            # extractor edit target; the backend always stages this constant for validation.
+            "annotation_type": staged_value(
+                DISEASE_ANNOTATION_TYPE_CONSTANT, identity_keys=VOCABULARY_TERM_IDENTITY_KEYS
+            ),
             "mention": mention,
-            "disease_annotation_object": {"curie": disease_curie, "name": disease_name}
-            if disease_curie
-            else {"name": disease_name},
-            "disease_annotation_subject": copy.deepcopy(subject_payload),
+            "disease_annotation_object": copy.deepcopy(term_payload),
             "role": role,
             "confidence": confidence,
-            "data_provider": {"abbreviation": data_provider_abbreviation},
-            "single_reference": copy.deepcopy(reference_payload),
+            "data_provider": staged_value(
+                data_provider_abbreviation, identity_keys=DATA_PROVIDER_IDENTITY_KEYS
+            ),
             "evidence_record_ids": annotation_evidence_ids,
             "evidence_records": evidence_snapshot_records,
             "source_mentions": list(source_mentions),
             "rationale": rationale,
             "negated": negated,
         }
-        if relation_name is not None:
-            annotation_payload["disease_relation_name"] = relation_name
+        if subject_payload is not None:
+            annotation_payload["disease_annotation_subject"] = copy.deepcopy(subject_payload)
+        if disease_relation is not None:
+            annotation_payload["disease_relation"] = disease_relation
         if evidence_code_curies:
-            annotation_payload["evidence_code_curies"] = list(evidence_code_curies)
+            annotation_payload["evidence_code_curies"] = evidence_code_curies
         # R4 optional slots — only carried when the extractor staged them.
-        if genetic_sex_name is not None:
-            annotation_payload["genetic_sex_name"] = genetic_sex_name
+        if genetic_sex is not None:
+            annotation_payload["genetic_sex"] = genetic_sex
         if disease_qualifier_names:
-            annotation_payload["disease_qualifier_names"] = list(disease_qualifier_names)
+            annotation_payload["disease_qualifier_names"] = disease_qualifier_names
         if with_gene_identifiers:
-            annotation_payload["with_gene_identifiers"] = list(with_gene_identifiers)
+            annotation_payload["with_gene_identifiers"] = with_gene_identifiers
         # EXPERIMENTAL CONDITIONS: nested condition_relations[].conditions[]. Only carried when
         # the extractor staged them. Each condition references the annotation's evidence
         # (evidence_record_ids on the annotation) per the evidence contract — no condition-level

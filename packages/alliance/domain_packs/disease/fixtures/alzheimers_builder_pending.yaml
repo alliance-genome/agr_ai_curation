@@ -34,10 +34,14 @@ fixtures:
       status: pending
       definition_state: in_development
       payload:
-        resolution_state: pending_entity_resolution
-        subject_identifier: FB:FBgn0000108
-        subject_label: Appl
         subject_type: gene
+        proposed_subject_identifier: FB:FBgn0000108
+        subject_identifier: null
+        subject_label: null
+        mention: Appl
+        resolution_state: unresolved
+        lookup_outcome: not_validated
+        validator_explanation: Not validated yet.
       schema_ref:
         schema_id: alliance.linkml.BiologicalEntity
         provider: alliance_linkml
@@ -60,9 +64,14 @@ fixtures:
       status: pending
       definition_state: in_development
       payload:
-        resolution_state: pending_ontology_resolution
-        curie: DOID:10652
-        name: Alzheimer's disease
+        proposed_curie: DOID:10652
+        proposed_name: Alzheimer's disease
+        curie: null
+        name: null
+        mention: Alzheimer's disease
+        resolution_state: unresolved
+        lookup_outcome: not_validated
+        validator_explanation: Not validated yet.
         source_mentions:
         - a transgenic Drosophila model of Alzheimer's disease
       schema_ref:
@@ -86,7 +95,6 @@ fixtures:
       status: pending
       definition_state: in_development
       payload:
-        resolution_state: pending_reference_resolution
         resolution_note: No durable Alliance reference identity (AGRKB/PMID/DOI) is available at chat-extraction time; single_reference resolution is deferred (see disease-approach.md open questions).
       schema_ref:
         schema_id: alliance.linkml.Reference
@@ -127,31 +135,69 @@ fixtures:
       definition_state: in_development
       payload:
         annotation_kind: disease_assertion
-        annotation_type_name: manually_curated
+        annotation_type:
+          name: null
+          mention: manually_curated
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
         mention: Alzheimer's disease
         disease_annotation_object:
-          curie: DOID:10652
-          name: Alzheimer's disease
+          proposed_curie: DOID:10652
+          proposed_name: Alzheimer's disease
+          curie: null
+          name: null
+          mention: Alzheimer's disease
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
         disease_annotation_subject:
-          resolution_state: pending_entity_resolution
-          subject_identifier: FB:FBgn0000108
-          subject_label: Appl
           subject_type: gene
+          proposed_subject_identifier: FB:FBgn0000108
+          subject_identifier: null
+          subject_label: null
+          mention: Appl
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
         role: model_context
         confidence: high
         data_provider:
-          abbreviation: FB
-        single_reference:
-          resolution_state: pending_reference_resolution
-          resolution_note: No durable Alliance reference identity (AGRKB/PMID/DOI) is available at chat-extraction time; single_reference resolution is deferred (see disease-approach.md open questions).
-        disease_relation_name: is_implicated_in
+          abbreviation: null
+          mention: FB
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
+        disease_relation:
+          name: null
+          mention: is_implicated_in
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
         evidence_code_curies:
-        - ECO:0000315
-        genetic_sex_name: male
+        - curie: null
+          mention: ECO:0000315
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
+        genetic_sex:
+          name: null
+          mention: male
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
         disease_qualifier_names:
-        - severity_of
+        - name: null
+          mention: severity_of
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
         with_gene_identifiers:
-        - FB:FBgn0000108
+        - primary_external_id: null
+          mention: FB:FBgn0000108
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
         evidence_record_ids:
         - evidence-ad-1
         evidence_records:

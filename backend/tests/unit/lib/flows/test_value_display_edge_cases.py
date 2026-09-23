@@ -71,9 +71,7 @@ CHEMICAL_RELATIONS = [{
 
 
 @pytest.mark.parametrize("agent_id,pack_id,object_type", [
-    ("disease", "agr.alliance.disease", "DiseaseAnnotation"),
     ("gene_expression", "agr.alliance.gene_expression", "GeneExpressionAnnotation"),
-    ("phenotype", "agr.alliance.phenotype", "PhenotypeAnnotation"),
 ])
 @pytest.mark.parametrize("output_format", ["csv", "chat"])
 def test_experimental_condition_cell_includes_its_chemical(agent_id, pack_id, object_type, output_format):
@@ -103,6 +101,45 @@ def test_experimental_condition_cell_includes_its_chemical(agent_id, pack_id, ob
     # JSON keeps the stored value unchanged.
     [json_row] = apply_projection_plan(bundle, _plan("json", [{"key": "c", "field_ref": ref}])).rows
     assert json_row["c"] == CHEMICAL_RELATIONS
+
+
+def _condition_value(mention, curie=None, **extra):
+    resolved = curie is not None
+    return {**extra, "curie": curie, "mention": mention,
+            "resolution_state": "resolved" if resolved else "unresolved",
+            "lookup_outcome": "matched" if resolved else "not_validated"}
+
+
+@pytest.mark.parametrize("agent_id,pack_id,object_type", [
+    ("phenotype", "agr.alliance.phenotype", "PhenotypeAnnotation"),
+    ("disease", "agr.alliance.disease", "DiseaseAnnotation"),
+])
+@pytest.mark.parametrize("output_format", ["csv", "chat"])
+def test_condition_cell_shows_each_part_by_its_own_state(agent_id, pack_id, object_type, output_format):
+    """ALL-1283: every condition part is a resolvable value; paper wording stays out."""
+
+    ref = f"object.pack.{object_type}.condition_relations"
+    relations = [{
+        "condition_relation_type": {"name": "has_condition", "mention": "has_condition",
+                                    "resolution_state": "resolved", "lookup_outcome": "matched"},
+        "conditions": [
+            {"condition_class": _condition_value("chemical treatment", "ZECO:0000111"),
+             "condition_chemical": _condition_value("rapamycin", proposed_curie="CHEBI:9168"),
+             "condition_free_text": "3 pM",
+             "condition_summary": "treated with 3 pM rapamycin"},
+        ],
+    }]
+    item = {"object_type": object_type, "object_id": "a1",
+            "payload": {"condition_relations": deepcopy(relations)}}
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step(agent_id, pack_id, [item])],
+        flow_name="C", output_format=output_format,
+    )
+    [row] = apply_projection_plan(bundle, _plan(output_format, [{"key": "c", "field_ref": ref}])).rows
+    assert row["c"] == "has_condition: ZECO:0000111; UNRESOLVED; 3 pM"
+    assert "rapamycin" not in row["c"]
+    [json_row] = apply_projection_plan(bundle, _plan("json", [{"key": "c", "field_ref": ref}])).rows
+    assert json_row["c"] == relations
 
 
 # --- Generic reading keeps a second identifier ---------------------------------------------
@@ -395,3 +432,69 @@ def test_nested_lists_inside_a_record_use_commas_between_items():
     assert display_text({"synonyms": ["a", "b"], "curie": "X:1"}) == "synonyms: a, b; curie: X:1"
     assert display_text([["heat", "cold"], ["dark"]]) == "heat, cold | dark"
     assert display_text(["heat", "diet"]) == "heat; diet"
+
+
+def test_a_field_declared_not_exported_is_never_an_export_column():
+    """Validator-only inputs (e.g. an extractor's proposal) stay out of the export catalog."""
+
+    from types import SimpleNamespace
+
+    from src.lib.flows.export_fields import _pack_export_fields
+    from src.schemas.domain_pack_metadata import (
+        DomainPackFieldDefinition, DomainPackFieldType, DomainPackMetadata, DomainPackObjectDefinition,
+    )
+
+    metadata = DomainPackMetadata(
+        pack_id="fixture.exported", display_name="Fixture", version="0.1.0", metadata_api_version="1.0.0",
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Observation", display_name="Observation", metadata={"object_role": "curatable_unit"},
+            fields=[
+                DomainPackFieldDefinition(field_path="term", field_type=DomainPackFieldType.OBJECT),
+                DomainPackFieldDefinition(field_path="term.proposed_curie", field_type=DomainPackFieldType.STRING,
+                                          metadata={"exported": False}),
+            ],
+        )],
+    )
+
+    paths = [entry["payload_path"] for entry in _pack_export_fields(SimpleNamespace(metadata=metadata))]
+
+    assert paths == ["term"]
+
+
+@pytest.mark.parametrize("output_format", ["csv", "chat"])
+def test_previous_format_disease_record_exports_unresolved_with_legacy_wording(output_format):
+    """ALL-1283: the disease pack's legacy display mapper reads a previous-format record in the
+    current shape, so its old strings export as UNRESOLVED with "(legacy, unverified)" wording,
+    never as bare unverified identifiers, and its flat relation text is not lost."""
+
+    stored = {
+        "annotation_type_name": "manually_curated",
+        "mention": "Alzheimer's disease",
+        "disease_annotation_object": {"curie": "DOID:10652", "name": "Alzheimer's disease"},
+        "data_provider": {"abbreviation": "FB"},
+        "disease_relation_name": "is_implicated_in",
+        "evidence_code_curies": ["ECO:0000315"],
+        "with_gene_identifiers": ["FB:FBgn0003089"],
+    }
+    item = {"object_type": "GeneDiseaseAnnotation", "object_id": "d-old", "payload": deepcopy(stored)}
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("disease", "agr.alliance.disease", [item])],
+        flow_name="D", output_format=output_format,
+    )
+    ref = "object.pack.GeneDiseaseAnnotation."
+    columns = [{"key": key, "field_ref": ref + path} for key, path in (
+        ("relation", "disease_relation"), ("relation_wording", "disease_relation.mention"),
+        ("codes", "evidence_code_curies"), ("codes_wording", "evidence_code_curies.mention"),
+        ("genes", "with_gene_identifiers"), ("term", "disease_annotation_object"),
+    )]
+
+    [row] = apply_projection_plan(bundle, _plan(output_format, columns)).rows
+
+    assert row["relation"] == "UNRESOLVED"
+    assert row["relation_wording"] == "is_implicated_in (legacy, unverified)"
+    assert row["codes"] == "UNRESOLVED"
+    assert row["codes_wording"] == "ECO:0000315 (legacy, unverified)"
+    assert row["genes"] == "UNRESOLVED"
+    assert row["term"] == "UNRESOLVED"
+    assert "ECO:0000315" not in row["codes"]
+    assert item["payload"] == stored  # The stored record is never rewritten.

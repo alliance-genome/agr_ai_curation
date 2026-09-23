@@ -17,6 +17,7 @@ from src.lib.curation_workspace.submission_adapters import (
     build_default_submission_adapter_registry,
 )
 from src.lib.domain_packs.loader import load_domain_fixture_pack
+from src.lib.domain_packs.resolvable_values import unresolved_value
 from src.schemas.curation_workspace import (
     CurationSubmissionStatus,
     SubmissionMode,
@@ -317,7 +318,14 @@ def test_disease_export_adapter_projects_complete_envelope_to_target_payload():
     assert annotation["linkml_payload"]["disease_annotation_object"]["curie"] == (
         "DOID:0050730"
     )
+    # Only validated identities are exported; no paper wording or contract keys.
     assert annotation["linkml_payload"]["relation"] == {"name": "is_implicated_in"}
+    assert annotation["linkml_payload"]["evidence_codes"] == [{"curie": "ECO:0000314"}]
+    assert annotation["linkml_payload"]["disease_annotation_subject"] == {
+        "subject_type": "gene",
+        "primary_external_id": "SGD:S000004578",
+        "label": "RAD52",
+    }
     assert annotation["db_projection"]["lookup_columns"]["dataprovider_id"] == {
         "lookup_by": "abbreviation",
         "table": "public.organization",
@@ -356,7 +364,7 @@ def test_phenotype_export_adapter_projects_complete_envelope_to_target_payload()
 
 def test_disease_export_blocks_incomplete_subject_context_with_field_details():
     candidate = deepcopy(_fixtures()["disease"]["candidate"])
-    del candidate["payload"]["disease_annotation_subject"]["subject_identifier"]
+    del candidate["payload"]["disease_annotation_subject"]
 
     payload = build_disease_annotation_export_payload(
         domain_envelope_candidates=[candidate],
@@ -364,9 +372,93 @@ def test_disease_export_blocks_incomplete_subject_context_with_field_details():
 
     assert payload["payload_status"] == "blocked"
     assert payload["disease_annotations"] == []
-    assert payload["adapter_blockers"][0]["field_path"] == (
-        "disease_annotation_subject.subject_identifier"
+    assert payload["adapter_blockers"][0]["field_path"] == "disease_annotation_subject"
+
+
+def test_disease_export_blocks_every_unresolved_value_and_never_exports_paper_wording():
+    """ALL-1283: an unresolved value blocks the export; its paper wording never becomes
+    the exported identity."""
+
+    candidate = deepcopy(_fixtures()["disease"]["candidate"])
+    candidate["payload"]["disease_annotation_object"] = unresolved_value(
+        "breast carcinoma",
+        identity_keys=("curie", "name"),
+        outcome="not_found",
+        explanation="No Disease Ontology term matched.",
+        proposed_curie="DOID:0050730",
     )
+    candidate["payload"]["evidence_code_curies"].append(
+        unresolved_value("IMP", identity_keys=("curie",))
+    )
+
+    payload = build_disease_annotation_export_payload(
+        domain_envelope_candidates=[candidate],
+    )
+
+    assert payload["payload_status"] == "blocked"
+    assert payload["disease_annotations"] == []
+    unresolved = {
+        blocker["field_path"]: blocker
+        for blocker in payload["adapter_blockers"]
+        if blocker["code"] == "alliance.disease.export.unresolved_value"
+    }
+    assert set(unresolved) == {"disease_annotation_object", "evidence_code_curies[1]"}
+    assert unresolved["disease_annotation_object"]["details"] == {
+        "lookup_outcome": "not_found",
+        "paper_wording": "breast carcinoma",
+    }
+    assert "DOID:0050730" not in str(payload["disease_annotations"])
+
+
+def test_disease_export_reads_the_relation_from_its_value_only():
+    """Regression (ALL-1283, export.py :210-213): the relation is never read from another
+    field such as a legacy flat ``disease_relation_name`` or ``relation.name``."""
+
+    candidate = deepcopy(_fixtures()["disease"]["candidate"])
+    del candidate["payload"]["disease_relation"]
+    candidate["payload"]["disease_relation_name"] = "is_implicated_in"
+    candidate["payload"]["relation"] = {"name": "is_implicated_in"}
+
+    payload = build_disease_annotation_export_payload(
+        domain_envelope_candidates=[candidate],
+    )
+
+    assert payload["payload_status"] == "blocked"
+    assert payload["disease_annotations"] == []
+    assert [blocker["field_path"] for blocker in payload["adapter_blockers"]] == [
+        "disease_relation"
+    ]
+
+
+def test_disease_export_applies_the_legacy_rule_to_values_stored_before_the_contract():
+    """A value without contract state exports only when a validator write-back event
+    covers it; otherwise it blocks as legacy, unverified."""
+
+    candidate = deepcopy(_fixtures()["disease"]["candidate"])
+    candidate["payload"]["disease_annotation_object"] = {
+        "curie": "DOID:0050730",
+        "name": "breast cancer",
+    }
+
+    blocked = build_disease_annotation_export_payload(domain_envelope_candidates=[candidate])
+    assert blocked["payload_status"] == "blocked"
+    [legacy_blocker] = blocked["adapter_blockers"]
+    assert legacy_blocker["field_path"] == "disease_annotation_object"
+    assert legacy_blocker["details"]["lookup_outcome"] == "legacy_unverified"
+
+    candidate["object"] = {
+        "metadata": {
+            "validator_resolved_value_materialization": [
+                {"materialized_field_paths": ["disease_annotation_object.curie"]}
+            ]
+        }
+    }
+    covered = build_disease_annotation_export_payload(domain_envelope_candidates=[candidate])
+    assert covered["payload_status"] == "ready"
+    assert covered["disease_annotations"][0]["linkml_payload"]["disease_annotation_object"] == {
+        "curie": "DOID:0050730",
+        "name": "breast cancer",
+    }
 
 
 @pytest.mark.parametrize(

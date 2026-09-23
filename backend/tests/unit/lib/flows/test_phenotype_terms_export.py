@@ -1,4 +1,9 @@
-"""ALL-1289: CSV, TSV and chat exports reach every phenotype term, not only the first."""
+"""ALL-1289: CSV, TSV and chat exports reach every phenotype term, not only the first.
+
+ALL-1283: each term is a resolvable value. Its cell is "label (ID)" once a validator
+resolved it and the literal UNRESOLVED otherwise; the paper wording is its own column.
+Terms stored before that contract follow the shared legacy rule.
+"""
 
 from __future__ import annotations
 
@@ -22,16 +27,23 @@ from src.lib.openai_agents.tools.file_output_tools import _projection_content_fo
 TERMS = "object.pack.PhenotypeAnnotation.phenotype_terms"
 FIRST_TERM = "object.pack.PhenotypeAnnotation.phenotype_terms[0]"
 FIRST_CURIE = "object.pack.PhenotypeAnnotation.phenotype_terms[0].curie"
+FIRST_MENTION = "object.pack.PhenotypeAnnotation.phenotype_terms[0].mention"
+FIRST_OUTCOME = "object.pack.PhenotypeAnnotation.phenotype_terms[0].lookup_outcome"
 
 
-def _term(label, curie, state):
-    # ``state`` records the pre-ALL-1283 phenotype word; it is not stored, so the
-    # terms read as plain values whose markers come from findings and empty ids.
+def _term(mention, label=None, curie=None, *, outcome="matched"):
+    """A term value: resolved (label and CURIE from a validator) or unresolved with its outcome."""
+
+    resolved = curie is not None
     return {
-        "curie": curie, "label": label,
-        "source_mentions": [label], "ontology_lookup_hint": {"data_provider": "WB"},
-        "export_state": "blocked_pending_ontology_resolution",
-        "write_blocked_reason": "phenotype term CURIE unresolved",
+        "source_mentions": [mention],
+        "ontology_lookup_hint": {"data_provider": "WB"},
+        "curie": curie,
+        "label": label,
+        "mention": mention,
+        "resolution_state": "resolved" if resolved else "unresolved",
+        "lookup_outcome": "matched" if resolved else outcome,
+        "validator_explanation": "Fixture decision.",
     }
 
 
@@ -41,14 +53,12 @@ def _phenotype_step():
         "payload": {
             "annotation_kind": "phenotype_annotation",
             "phenotype_annotation_object": "reduced brood size and slow growth",
-            "phenotype_annotation_subject": {"subject_label": "mus-81", "subject_identifier": "WB:WBGene00003498",
-                                             "resolution_state": "pending_entity_resolution"},
             "phenotype_terms": [
-                _term("reduced brood size", "WBPhenotype:0000154", "resolved"),
-                # Label-only proposal: no CURIE, so this term alone is unresolved.
-                _term("slow growth", None, "pending_ontology_resolution"),
-                # Carries a CURIE but an open finding names this element.
-                _term("embryonic lethal", "WBPhenotype:0000050", "pending_ontology_resolution"),
+                _term("fewer progeny", "reduced brood size", "WBPhenotype:0000154"),
+                # Staged, never validated.
+                _term("slow growth", outcome="not_validated"),
+                # The validator looked it up and found nothing.
+                _term("embryos died", outcome="not_found"),
             ],
             "negated": False,
             "evidence_record_ids": ["ev-1"],
@@ -59,7 +69,7 @@ def _phenotype_step():
         "payload": {
             "annotation_kind": "phenotype_annotation",
             "phenotype_annotation_object": "dumpy",
-            "phenotype_terms": [_term("dumpy", "WBPhenotype:0000583", "resolved")],
+            "phenotype_terms": [_term("short and fat", "dumpy", "WBPhenotype:0000583")],
             "negated": False,
         },
     }
@@ -71,19 +81,15 @@ def _phenotype_step():
             payload_json={
                 "domain_pack_id": "agr.alliance.phenotype", "envelope_id": "env-ph",
                 "extracted_objects": [annotation, single],
-                "validation_findings": [{
-                    "finding_id": "f1", "status": "open",
-                    "field_path": "phenotype_terms[2].curie",
-                    "field_ref": {"object_ref": {"object_id": "p1"}, "field_path": "phenotype_terms[2].curie"},
-                }],
+                "validation_findings": [],
             },
         ),
     }
 
 
-def _bundle(output_format):
+def _bundle(output_format, step=None):
     return build_flow_output_artifact_bundle(
-        completed_steps=[_phenotype_step()], flow_name="Phenotype", output_format=output_format,
+        completed_steps=[step or _phenotype_step()], flow_name="Phenotype", output_format=output_format,
     )
 
 
@@ -95,8 +101,8 @@ def _plan(output_format, columns):
 
 EXPECTED_TERMS = [
     "reduced brood size (WBPhenotype:0000154)",
-    "slow growth (unresolved)",
-    "embryonic lethal (WBPhenotype:0000050, unresolved)",
+    "UNRESOLVED",
+    "UNRESOLVED",
 ]
 
 
@@ -104,11 +110,13 @@ def test_phenotype_terms_is_a_declared_list_field_with_term_display():
     bundle = _bundle("csv")
     fields = {field.ref: field for field in bundle.field_catalog if field.row_source == "object"}
     assert fields[TERMS].value_type == "list"
-    assert fields[TERMS].display == {"label": "label", "id": "curie"}
+    assert fields[TERMS].display == {"label": "label", "id": "curie", "mention": "mention"}
+    assert fields[FIRST_MENTION].label.endswith("(paper wording)")
+    assert fields[FIRST_OUTCOME].label.endswith("(lookup result)")
 
 
 @pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
-def test_joined_cell_carries_every_term_marked_per_term(output_format):
+def test_joined_cell_carries_every_term_by_its_own_state(output_format):
     bundle = _bundle(output_format)
     result = apply_projection_plan(bundle, _plan(output_format, [
         {"key": "statement", "field_ref": "object.pack.PhenotypeAnnotation.phenotype_annotation_object"},
@@ -157,112 +165,83 @@ def test_saved_first_term_layout_still_validates_and_renders():
     result = apply_projection_plan(bundle, _plan("csv", [
         {"key": "first", "field_ref": FIRST_TERM},
         {"key": "first_curie", "field_ref": FIRST_CURIE},
+        {"key": "first_wording", "field_ref": FIRST_MENTION},
     ]))
     assert result.rows[0] == {"first": "reduced brood size (WBPhenotype:0000154)",
-                              "first_curie": "WBPhenotype:0000154"}
+                              "first_curie": "WBPhenotype:0000154",
+                              "first_wording": "fewer progeny"}
     assert result.rows[1] == {"first": "dumpy (WBPhenotype:0000583)",
-                              "first_curie": "WBPhenotype:0000583"}
+                              "first_curie": "WBPhenotype:0000583",
+                              "first_wording": "short and fat"}
+
+
+def test_paper_wording_and_lookup_result_are_separate_columns():
+    step = _phenotype_step()
+    step["candidate"].payload_json["extracted_objects"][0]["payload"]["phenotype_terms"] = [
+        _term("embryos died", outcome="not_found"),
+    ]
+    bundle = _bundle("csv", step)
+    result = apply_projection_plan(bundle, _plan("csv", [
+        {"key": "first", "field_ref": FIRST_TERM},
+        {"key": "wording", "field_ref": FIRST_MENTION},
+        {"key": "outcome", "field_ref": FIRST_OUTCOME},
+    ]))
+    assert result.rows[0] == {"first": "UNRESOLVED", "wording": "embryos died", "outcome": "Not found"}
 
 
 def test_json_keeps_every_phenotype_term_lossless():
     bundle = _bundle("json")
     result = apply_projection_plan(bundle, _plan("json", [{"key": "terms", "field_ref": TERMS}]))
     terms = json.loads(json.dumps(result.json_data))[0]["terms"]
-    assert [term["label"] for term in terms] == ["reduced brood size", "slow growth", "embryonic lethal"]
+    assert [term["mention"] for term in terms] == ["fewer progeny", "slow growth", "embryos died"]
+    assert [term["lookup_outcome"] for term in terms] == ["matched", "not_validated", "not_found"]
     assert terms[1]["curie"] is None
 
 
-@pytest.mark.parametrize("finding_path", ["phenotype_terms[1]", "phenotype_terms[1].curie"])
-@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
-def test_finding_on_embedded_term_marks_only_that_term(finding_path, output_format):
-    """An open finding addressed to the annotation's own embedded term (no PhenotypeTerm
-    support object) marks that term alone, in the joined cell and in split columns."""
+def _legacy_step(*, covered: bool):
+    """A term stored before the contract: an id and label, no resolution state."""
 
+    metadata = {}
+    if covered:
+        metadata["validator_resolved_value_materialization"] = [
+            {"materialized_field_paths": ["phenotype_terms[0].curie", "phenotype_terms[0].label"]}
+        ]
     step = _phenotype_step()
-    annotation = {
-        "object_type": "PhenotypeAnnotation", "object_id": "p3",
+    step["candidate"].payload_json["extracted_objects"] = [{
+        "object_type": "PhenotypeAnnotation", "object_id": "p-legacy",
+        "metadata": metadata,
         "payload": {
             "annotation_kind": "phenotype_annotation",
-            "phenotype_annotation_object": "uncoordinated and dumpy",
-            "phenotype_terms": [
-                _term("uncoordinated", "WBPhenotype:0000643", "resolved"),
-                _term("dumpy", "WBPhenotype:0000583", "resolved"),
-            ],
+            "phenotype_annotation_object": "reduced brood size",
+            "phenotype_terms": [{
+                "curie": "WBPhenotype:0000154", "label": "reduced brood size",
+                "source_mentions": ["reduced brood size"],
+                "resolution_state": "pending_ontology_resolution",
+            }],
             "negated": False,
         },
-    }
-    step["candidate"].payload_json = {
-        **step["candidate"].payload_json,
-        "extracted_objects": [annotation],
-        "validation_findings": [{
-            "finding_id": "f-embedded", "status": "open", "field_path": finding_path,
-            "field_ref": {"object_ref": {"object_id": "p3"}, "field_path": finding_path},
-        }],
-    }
-    bundle = build_flow_output_artifact_bundle(
-        completed_steps=[step], flow_name="Phenotype", output_format=output_format,
-    )
-    expected = ["uncoordinated (WBPhenotype:0000643)", "dumpy (WBPhenotype:0000583, unresolved)"]
-    joined = apply_projection_plan(bundle, _plan(output_format, [{"key": "terms", "field_ref": TERMS}]))
-    assert joined.rows[0]["terms"] == RECORD_SEPARATOR.join(expected)
-    split = apply_projection_plan(bundle, _plan(output_format, [
-        {"key": "terms", "field_ref": TERMS, "split_list": {"header_template": "Phenotype Term {n}"}},
-    ]))
-    assert list(split.rows[0].values()) == expected
+    }]
+    return step
 
 
-@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
-def test_finding_on_second_term_support_object_marks_only_that_term(output_format):
-    """Production shape: the ontology validator records findings on the standalone
-    PhenotypeTerm support objects the annotation references, not on the annotation."""
-
-    terms = [
-        _term("uncoordinated", "WBPhenotype:0000643", "resolved"),
-        _term("dumpy", "WBPhenotype:0000583", "resolved"),
-        _term("long", "WBPhenotype:0000022", "resolved"),
+@pytest.mark.parametrize("output_format", ["csv", "chat"])
+def test_legacy_term_reads_unresolved_unless_a_validator_event_covers_it(output_format):
+    columns = [
+        {"key": "first", "field_ref": FIRST_TERM},
+        {"key": "wording", "field_ref": FIRST_MENTION},
+        {"key": "outcome", "field_ref": FIRST_OUTCOME},
     ]
-    support = [
-        {"object_type": "PhenotypeTerm", "pending_ref_id": f"phenotype-term-1-{index}",
-         "payload": dict(term), "metadata": {"object_role": "validated_reference"}}
-        for index, term in enumerate(terms, start=1)
-    ]
-    annotation = {
-        "object_type": "PhenotypeAnnotation", "pending_ref_id": "phenotype-annotation-1",
-        "payload": {
-            "annotation_kind": "phenotype_annotation",
-            "phenotype_annotation_object": "uncoordinated, dumpy and long",
-            "phenotype_terms": terms,
-            "negated": False,
-        },
-        "object_refs": [{"pending_ref_id": obj["pending_ref_id"], "object_type": "PhenotypeTerm"}
-                        for obj in support],
-    }
-    step = _phenotype_step()
-    step["candidate"].payload_json = {
-        **step["candidate"].payload_json,
-        "extracted_objects": [annotation, *support],
-        "validation_findings": [{
-            "finding_id": "f-term-2", "status": "open", "field_path": "curie",
-            "field_ref": {"object_ref": {"pending_ref_id": "phenotype-term-1-2",
-                                         "object_type": "PhenotypeTerm"},
-                          "field_path": "curie"},
-        }],
-    }
-    bundle = build_flow_output_artifact_bundle(
-        completed_steps=[step], flow_name="Phenotype", output_format=output_format,
+    unverified = apply_projection_plan(
+        _bundle(output_format, _legacy_step(covered=False)), _plan(output_format, columns)
     )
-    expected = ["uncoordinated (WBPhenotype:0000643)", "dumpy (WBPhenotype:0000583, unresolved)",
-                "long (WBPhenotype:0000022)"]
-    statement = "object.pack.PhenotypeAnnotation.phenotype_annotation_object"
-    joined = apply_projection_plan(bundle, _plan(output_format, [
-        {"key": "statement", "field_ref": statement},
-        {"key": "terms", "field_ref": TERMS},
-    ]))
-    row = next(row for row in joined.rows if row["statement"] == "uncoordinated, dumpy and long")
-    assert row["terms"] == RECORD_SEPARATOR.join(expected)
-    split = apply_projection_plan(bundle, _plan(output_format, [
-        {"key": "statement", "field_ref": statement},
-        {"key": "terms", "field_ref": TERMS, "split_list": {"header_template": "Phenotype Term {n}"}},
-    ]))
-    row = next(row for row in split.rows if row["statement"] == "uncoordinated, dumpy and long")
-    assert [row["terms_1"], row["terms_2"], row["terms_3"]] == expected
+    assert unverified.rows[0] == {
+        "first": "UNRESOLVED",
+        "wording": "reduced brood size (WBPhenotype:0000154) (legacy, unverified)",
+        "outcome": "Legacy, unverified",
+    }
+
+    verified = apply_projection_plan(
+        _bundle(output_format, _legacy_step(covered=True)), _plan(output_format, columns)
+    )
+    assert verified.rows[0]["first"] == "reduced brood size (WBPhenotype:0000154)"
+    assert verified.rows[0]["outcome"] == "Matched"

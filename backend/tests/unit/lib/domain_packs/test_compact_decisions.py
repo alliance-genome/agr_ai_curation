@@ -117,3 +117,43 @@ def test_no_candidates_remains_unresolved_without_invented_records():
     assert result.resolved_values == {}
     assert result.missing_expected_fields == ["identifier", "design_matches"]
     assert result.lookup_attempts[0].result_count == 26
+
+
+def _composite_store(assemble_domain):
+    store = ValidatorDecisionWorkspace([DecisionContract(request(), assemble_domain=assemble_domain)])
+    reference = store.record_lookup("first", call_id="call-1", attempt=ValidatorLookupAttempt(
+        provider="fixture", method="search", query={"mention": "conditional allele"},
+        result_count=1, outcome="success",
+    ), records=[CanonicalValidatorRecord(
+        candidate=ValidatorCandidate(value="EX:101", label="Conditional allele"),
+        values={"identifier": "EX:101"},
+    )])[0]
+    payload = decision(reference)
+    payload["slots"].pop("design_matches")
+    return store, payload
+
+
+def test_a_composite_result_reports_the_missing_fields_of_the_values_it_decided():
+    """ALL-1283: with field_resolutions the domain assembly's missing fields stand; an expected
+    field of a value it did not decide (not written) is not missing."""
+
+    def decide_identifier_only(payload, decision, workspace):
+        return {
+            "field_resolutions": {"identifier": {
+                "status": "resolved", "lookup_outcome": "matched",
+                "resolved_values": {"identifier": "EX:101"},
+            }},
+            "missing_expected_fields": [],
+        }
+
+    store, payload = _composite_store(decide_identifier_only)
+    result = store.assemble(CompactValidatorDecision.model_validate(payload))
+
+    assert result.status == "resolved"
+    assert result.missing_expected_fields == []
+    assert set(result.field_resolutions) == {"identifier"}
+
+    # Without per-value decisions every expected field must still come back.
+    plain_store, plain_payload = _composite_store(lambda payload, decision, workspace: {})
+    with pytest.raises(ValueError, match="missing fields"):
+        plain_store.assemble(CompactValidatorDecision.model_validate(plain_payload))

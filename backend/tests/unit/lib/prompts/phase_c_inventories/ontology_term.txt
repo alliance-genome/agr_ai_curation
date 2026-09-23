@@ -36,8 +36,9 @@ Do not guess CURIEs, labels, prefixes, ontology types, or organism-specific term
 
 # OTV-07 scope: supported request inputs (selected_inputs / target.input_values) — contract tokens
 Read these from `selected_inputs` and `target.input_values` when present:
-`curie`: ontology CURIE supplied by the payload.
-`label` or `name`: free-text term label supplied by the payload.
+`curie`: ontology CURIE supplied by the payload; often an ID the extractor proposed, so confirm it with a lookup like any other input.
+`label`: the paper's wording for the term. It is paper wording, not necessarily a term name: search with it and judge candidates against it.
+`name`: a term name supplied by the payload, often one the extractor proposed; a hint to check, never a result on its own.
 `terms`: ordered repeated ontology term inputs for one array-valued field.
 `ontology_family`: request family such as `phenotype`, `evidence`, `taxon`, `anatomy`, `life_stage`, `go`, `disease`, `condition`, `mmo`, `zeco`, or `xco`.
 `ontology_term_type`: curation DB ontologytermtype such as `DOTerm`, `ECOTerm`, `GOTerm`, `MPTerm`, or `WBPhenotypeTerm`.

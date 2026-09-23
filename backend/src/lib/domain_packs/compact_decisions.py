@@ -274,11 +274,15 @@ class ValidatorDecisionWorkspace:
             payload.update(additions)
         # Domain assembly may deterministically supply composite fields. Check
         # completeness only after those fields exist, never from model echoes.
-        payload["missing_expected_fields"] = [
-            name for name in request.expected_result_fields
-            if name not in payload["resolved_values"]
-            or payload["resolved_values"][name] is None or payload["resolved_values"][name] == ""
-        ]
+        # A composite result that decides each value itself (field_resolutions)
+        # reports the missing fields of the values it decided; values it did
+        # not decide are not written, so their expected fields are not missing.
+        if not payload.get("field_resolutions"):
+            payload["missing_expected_fields"] = [
+                name for name in request.expected_result_fields
+                if name not in payload["resolved_values"]
+                or payload["resolved_values"][name] is None or payload["resolved_values"][name] == ""
+            ]
         if payload["status"] == "resolved" and (payload["missing_expected_fields"] or decision.unresolved_questions):
             raise ValueError("Resolved decision still has missing fields or unresolved questions")
         return contract.result_schema.model_validate(payload, context={"domain_validation_request": request})

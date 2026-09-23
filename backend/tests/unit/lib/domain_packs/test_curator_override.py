@@ -575,3 +575,49 @@ def test_a_protected_value_field_blocks_a_whole_value_override(operation):
     harmless = _patch(staged, field_path, value, before=patch_before, operation=operation,
                       pack=_pack(site_metadata={"editable": True}))
     assert harmless.status is EnvelopeFieldPatchStatus.ACCEPTED
+
+
+def _list_pack() -> LoadedDomainPack:
+    metadata = _metadata()
+    fields = [
+        *metadata.object_definitions[0].fields,
+        DomainPackFieldDefinition(field_path="sites", field_type=DomainPackFieldType.ARRAY,
+                                  metadata={"display": DISPLAY, "multivalued": True}),
+        DomainPackFieldDefinition(field_path="sites.curie", field_type=DomainPackFieldType.STRING,
+                                  metadata={"editable": True}),
+        DomainPackFieldDefinition(field_path="sites.name", field_type=DomainPackFieldType.STRING,
+                                  metadata={"editable": True}),
+    ]
+    definition = metadata.object_definitions[0].model_copy(update={"fields": fields})
+    metadata = metadata.model_copy(update={"object_definitions": [definition]})
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    )
+
+
+def test_a_list_element_identity_takes_its_bare_declaration():
+    """ALL-1283: ``sites[1].curie`` is edited under the declaration of ``sites.curie``; an index
+    through a field that is not multivalued is not a declared path."""
+
+    envelope = DomainEnvelope(
+        envelope_id="override-env", domain_pack_id="fixture.override",
+        extracted_objects=[CuratableObjectEnvelope(object_type="Observation", object_id="obs-1", payload={
+            "site": unresolved_value("skin", identity_keys=KEYS),
+            "sites": [unresolved_value("skin", identity_keys=KEYS), unresolved_value("gut", identity_keys=KEYS)],
+        })],
+    )
+
+    def patch(field_path):
+        return _patch(envelope, field_path, {"curie": "ONT:2", "name": "gut"},
+                      before={"curie": None, "name": None}, operation=IDENTITY, pack=_list_pack())
+
+    element = patch("sites[1].curie")
+    assert element.status is EnvelopeFieldPatchStatus.ACCEPTED, element.errors
+    edited = element.envelope.extracted_objects[0].payload["sites"][1]
+    assert (edited["curie"], edited["name"], edited["lookup_outcome"]) == ("ONT:2", "gut", OUTCOME_CURATOR_OVERRIDE)
+
+    not_a_list = patch("site[0].curie")
+    assert not_a_list.status is EnvelopeFieldPatchStatus.REJECTED
+    assert not_a_list.errors == (
+        "field_path 'site[0].curie' takes no curator override: site[0].curie, site[0].name not declared editable",)

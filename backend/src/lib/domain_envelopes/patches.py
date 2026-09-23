@@ -635,10 +635,20 @@ def _field_definition_for(
     object_definition = registry.object_definitions_by_type.get(object_type)
     if object_definition is None:
         return None
-    for field_definition in object_definition.fields:
-        if field_definition.field_path == field_path:
-            return field_definition
-    return None
+    by_path = {field.field_path: field for field in object_definition.fields}
+    if field_path in by_path:
+        return by_path[field_path]
+    # One element of a multivalued list (e.g. ``codes[1].curie``) takes the declaration of
+    # its bare path, but only when every indexed segment is a declared multivalued field.
+    bare: list[str] = []
+    for part in parse_field_path(field_path):
+        if isinstance(part, int):
+            prefix = by_path.get(".".join(bare))
+            if prefix is None or not prefix.multivalued:
+                return None
+            continue
+        bare.append(part)
+    return by_path.get(".".join(bare))
 
 
 def _field_editability(
