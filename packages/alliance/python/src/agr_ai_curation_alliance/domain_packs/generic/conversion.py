@@ -167,8 +167,8 @@ def materialize_generic_builder_state(
                     field_path="rationale",
                     reason="missing_rationale",
                     message=(
-                        "Finalized generic candidates require a rationale; patch the "
-                        "candidate with the curator-facing reason it was selected."
+                        "Finalized generic candidates require a rationale; "
+                        "patch the candidate with a rationale saying why you selected it."
                     ),
                     candidate_id=candidate_id,
                     class_key=class_key,

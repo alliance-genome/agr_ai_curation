@@ -838,7 +838,10 @@ def materialize_phenotype_builder_state(
                 _materialization_issue(
                     field_path="rationale",
                     reason="missing_rationale",
-                    message="Finalized phenotype candidates require a curator-facing rationale.",
+                    message=(
+                        "Finalized phenotype candidates require a rationale; "
+                        "patch the candidate with a rationale saying why you selected it."
+                    ),
                     candidate_id=getattr(candidate, "candidate_id", None),
                 )
             )

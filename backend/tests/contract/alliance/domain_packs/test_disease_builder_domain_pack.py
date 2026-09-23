@@ -771,7 +771,10 @@ def test_disease_builder_rejects_new_candidate_without_rationale():
         resolver_entry_lookup=None,
     )
     assert not result.ok
-    assert any(issue["reason"] == "missing_rationale" for issue in result.issues)
+    assert any(
+        issue["reason"] == "missing_rationale" and issue["message"].endswith("patch the candidate with a rationale saying why you selected it.")
+        for issue in result.issues
+    )
 
 
 def test_disease_annotations_declare_optional_rationale_in_rationale_group():

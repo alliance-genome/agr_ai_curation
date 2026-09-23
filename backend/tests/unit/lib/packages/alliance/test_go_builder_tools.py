@@ -407,6 +407,10 @@ def test_go_builder_rejects_finalization_without_rationale():
     assert {
         (issue["field_path"], issue["reason"]) for issue in result.issues
     } == {("payload.rationale", "missing_rationale")}
+    assert result.issues[0]["message"] == (
+        "GO candidate is missing a rationale; patch the candidate with a rationale "
+        "saying why you selected it."
+    )
 
 
 def test_go_builder_rejects_excluded_section_only_evidence():

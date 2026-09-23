@@ -439,7 +439,9 @@ def test_gene_builder_rejects_missing_rationale():
     )
     assert not result.ok
     assert any(
-        issue["reason"] == "missing_rationale" and issue["field_path"] == "rationale"
+        issue["reason"] == "missing_rationale"
+        and issue["field_path"] == "rationale"
+        and issue["message"].endswith("patch the candidate with a rationale saying why you selected it.")
         for issue in result.issues
     )
 

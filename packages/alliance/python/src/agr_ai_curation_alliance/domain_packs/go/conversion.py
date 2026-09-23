@@ -376,7 +376,12 @@ def _validate_payload(
                     "missing_rationale"
                     if field_path == "rationale"
                     else "missing_required_payload_field",
-                    "GO candidate is missing a required contract field.",
+                    (
+                        "GO candidate is missing a rationale; patch the candidate "
+                        "with a rationale saying why you selected it."
+                    )
+                    if field_path == "rationale"
+                    else "GO candidate is missing a required contract field.",
                     candidate_id,
                 )
             )

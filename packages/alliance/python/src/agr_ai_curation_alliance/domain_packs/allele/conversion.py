@@ -612,7 +612,10 @@ def materialize_allele_builder_state(
                 _materialization_issue(
                     field_path="rationale",
                     reason="missing_rationale",
-                    message="Finalized allele candidates require a non-empty rationale.",
+                    message=(
+                        "Finalized allele candidates require a rationale; "
+                        "patch the candidate with a rationale saying why you selected it."
+                    ),
                     candidate_id=getattr(candidate, "candidate_id", None),
                 )
             )
