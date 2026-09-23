@@ -1430,10 +1430,38 @@ async def test_chat_capabilities_route_explanations_to_stored_rationale_and_sect
     capabilities = await _invoke(_tool_by_name(tools, "explain_formatter_capabilities"))
     chat_rules = capabilities["format_rules"]
     assert "never table rows or explanations" in chat_rules
-    assert "object.payload.rationale" in chat_rules
-    assert "formatter_cannot_complete naming it" in chat_rules
     assert "group_by splits rows into headed groups" in chat_rules
     assert "different columns are not supported" in chat_rules
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_format", ["chat", "csv", "tsv", "json"])
+async def test_capabilities_find_rationale_in_catalog_and_keep_one_field_per_column(output_format):
+    async def _deliver(*_args, **_kwargs):
+        return {}
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format=output_format,
+        formatter_agent_id=f"{output_format}_formatter",
+        save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
+        deliver_chat_output=_deliver,
+    )
+
+    capabilities = await _invoke(_tool_by_name(tools, "explain_formatter_capabilities"))
+    rationale = capabilities["rationale"]
+    # Packaged and custom-profile sources expose rationale under different refs,
+    # and older results may carry the declared field with every value empty.
+    assert "catalog_query 'rationale'" in rationale
+    assert "object.pack.<ObjectType>.rationale" in rationale
+    assert "object.payload.rationale" in rationale
+    assert "even when some or all values are empty" in rationale
+    assert "only when a requested source declares no rationale field" in rationale
+    assert "Never write explanations yourself" in rationale
+    column_sources = capabilities["column_sources"]
+    assert "Map each requested column to one source field" in column_sources
+    assert "only when the curator explicitly asks for a fallback" in column_sources
+    assert "first_non_empty" in column_sources
 
 
 def test_chat_group_by_renders_separate_sections_with_the_stored_rationale():

@@ -66,3 +66,15 @@ def test_tsv_pair_join_guidance_does_not_contradict_structured_display():
     pair_join_rule = next(line for line in content.splitlines() if "use the `pair_join` transform" in line)
     assert "not the label and ID of one structured value" in pair_join_rule
     assert "Do not hand-compose labels and identifiers with `pair_join`" in content
+
+
+def test_tsv_prompt_finds_rationale_in_catalog_and_keeps_one_field_per_column():
+    content = _load_prompt_content("packages/alliance/agents/tsv_formatter/prompt.yaml")
+
+    assert '`catalog_query` "rationale"' in content
+    assert "`object.pack.<ObjectType>.rationale`" in content
+    assert "`object.payload.rationale`" in content
+    assert "even when some or all values are empty" in content
+    assert "only when a requested source declares no rationale field" in content
+    assert "Map each requested column to one source field" in content
+    assert "only when the curator explicitly asks for a fallback or combination" in content
