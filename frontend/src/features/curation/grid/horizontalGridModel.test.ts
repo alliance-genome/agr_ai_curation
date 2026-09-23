@@ -257,6 +257,7 @@ function resolvedValue(
     validated_keys: [],
     stored_identity: {},
     container_protected: false,
+    overridable: true,
     ...overrides,
   }
 }
@@ -1202,6 +1203,8 @@ describe('buildHorizontalGridModel', () => {
       validated_keys: [],
       stored_identity: {},
       container_protected: false,
+      // The backend marks it not overridable: its identifier is not editable.
+      overridable: false,
     })
     const fields = [
       draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-2' }),
@@ -1232,8 +1235,8 @@ describe('buildHorizontalGridModel', () => {
       curatorOverride: true,
       overrideDisagreements: [message],
       extractorComparison: { outcome: 'overridden', value: 'abc-1' },
-      // An identity field of the value is read-only, so no override is offered,
-      // and a cell with validated values but nothing to override is read-only.
+      // A value that takes no override offers none, and a cell with validated
+      // values but nothing to override is read-only.
       overrideTargets: [],
       readOnly: true,
     })
@@ -1302,8 +1305,8 @@ describe('buildHorizontalGridModel', () => {
     expect(conditionsCell).toMatchObject({ readOnly: true, overrideTargets: [] })
   })
 
-  it('closes a cell whose value field is protected', () => {
-    const protectedValue = resolvedValue({ container_protected: true })
+  it('closes a cell whose value takes no override (e.g. a protected value field)', () => {
+    const protectedValue = resolvedValue({ container_protected: true, overridable: false })
     const fields = [draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: null })]
     const row = reviewRowWithFields('object-protected', [
       { path: 'site.curie', resolution: { display_text: 'UNRESOLVED', values: [protectedValue] } },
@@ -1314,7 +1317,7 @@ describe('buildHorizontalGridModel', () => {
       row,
     })])
 
-    // A protected value field closes the cell: no override and no plain edit.
+    // A value the backend marks not overridable closes the cell: no override, no plain edit.
     expect(model.rows[0]!.cells[0]).toMatchObject({ readOnly: true, overrideTargets: [] })
   })
 

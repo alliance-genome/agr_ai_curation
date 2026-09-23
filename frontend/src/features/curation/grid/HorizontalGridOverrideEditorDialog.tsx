@@ -19,9 +19,11 @@ import { alpha } from '@mui/material/styles'
 import type { DomainEnvelopeReviewResolvedValue } from '@/features/curation/types'
 import {
   horizontalGridIdentityKeyLabel,
+  horizontalGridIdentityKeyRequired,
   horizontalGridIdentityKeys,
   horizontalGridOverrideIdentity,
   horizontalGridOverrideProblem,
+  horizontalGridRemovableElement,
   type HorizontalGridOverrideIdentity,
 } from './horizontalGridOverride'
 
@@ -32,6 +34,8 @@ export interface HorizontalGridOverrideEditorDialogProps {
   isSaving: boolean
   onClose: () => void
   onRemove: (value: DomainEnvelopeReviewResolvedValue) => void
+  // Removes one element from a list of validated values.
+  onRemoveElement: (value: DomainEnvelopeReviewResolvedValue) => void
   onSave: (value: DomainEnvelopeReviewResolvedValue, identity: HorizontalGridOverrideIdentity) => void
   onSelectValue: () => void
   open: boolean
@@ -57,6 +61,7 @@ export default function HorizontalGridOverrideEditorDialog({
   isSaving,
   onClose,
   onRemove,
+  onRemoveElement,
   onSave,
   onSelectValue,
   open,
@@ -67,6 +72,8 @@ export default function HorizontalGridOverrideEditorDialog({
   // The curator's entries per value, kept across element switches and refreshes.
   const [entries, setEntries] = useState<Record<string, HorizontalGridOverrideIdentity>>({})
   const [problem, setProblem] = useState<string | null>(null)
+  // Removing a list element cannot be undone here, so it asks once more.
+  const [confirmingRemoval, setConfirmingRemoval] = useState(false)
 
   const value = targets.find((target) => target.value_path === selectedPath) ?? null
   const identity = value ? entries[value.value_path] ?? horizontalGridOverrideIdentity(value) : {}
@@ -117,6 +124,7 @@ export default function HorizontalGridOverrideEditorDialog({
                 onChange={(event) => {
                   setSelectedPath(event.target.value)
                   setProblem(null)
+                  setConfirmingRemoval(false)
                   onSelectValue()
                 }}
                 select
@@ -155,6 +163,7 @@ export default function HorizontalGridOverrideEditorDialog({
             ) : null}
             {horizontalGridIdentityKeys(value).map((key) => (
               <TextField
+                helperText={horizontalGridIdentityKeyRequired(value, key) ? undefined : 'Optional'}
                 key={key}
                 label={horizontalGridIdentityKeyLabel(value, key)}
                 onChange={(event) => {
@@ -164,20 +173,36 @@ export default function HorizontalGridOverrideEditorDialog({
                   }))
                   setProblem(null)
                 }}
-                required
+                required={horizontalGridIdentityKeyRequired(value, key)}
                 size="small"
                 value={identity[key] ?? ''}
               />
             ))}
             <Typography color="text.secondary" sx={{ fontSize: 10, lineHeight: 1.4 }}>
               Saving sets this value by curator override: it counts as validated, and a validator
-              that disagrees later adds a warning instead of changing it. Every field above is needed.
+              that disagrees later adds a warning instead of changing it.
               {value.curator_override ? ' Removing the override returns the value to unresolved.' : ''}
             </Typography>
           </Stack>
         ) : null}
       </DialogContent>
       <DialogActions sx={{ gap: '8px', p: '16px 20px 20px' }}>
+        {value && horizontalGridRemovableElement(value) ? (
+          <Button
+            color="error"
+            disabled={isSaving}
+            onClick={() => {
+              if (confirmingRemoval) {
+                onRemoveElement(value)
+                return
+              }
+              setConfirmingRemoval(true)
+            }}
+            variant="text"
+          >
+            {confirmingRemoval ? 'Confirm removal from the list' : 'Remove from the list'}
+          </Button>
+        ) : null}
         {value?.curator_override ? (
           <Button
             color="warning"

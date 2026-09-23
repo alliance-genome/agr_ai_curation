@@ -1672,6 +1672,8 @@ describe('useAutosave', () => {
         }),
         candidate: null,
       })
+    // The reload after each accepted edit still shows candidate 2 at revision 7.
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
 
     const { result } = renderHook(
       () => useAutosave({ debounceMs: 60_000 }),
@@ -1696,6 +1698,8 @@ describe('useAutosave', () => {
       // Candidate 2 still carries revision 7; the envelope is at 8 after the first edit.
       expect.objectContaining({ object_id: 'object-2', expected_revision: 8, field_path: 'subject.curie' }),
     ])
+    // Each accepted edit reloads the workspace, so rows and their warnings update.
+    expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(2)
   })
 
   it('refreshes after a refused direct envelope edit and passes the backend\'s words on', async () => {

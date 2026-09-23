@@ -7,6 +7,8 @@ import {
   horizontalGridOverrideIdentity,
   horizontalGridOverridePatch,
   horizontalGridOverrideProblem,
+  horizontalGridRemovableElement,
+  horizontalGridRemoveElementPatch,
   horizontalGridRemoveOverridePatch,
   isHorizontalGridProfileAttributePath,
 } from './horizontalGridOverride'
@@ -28,6 +30,7 @@ function value(overrides: Partial<DomainEnvelopeReviewResolvedValue> = {}): Doma
     validated_keys: ['taxon'],
     stored_identity: { curie: null, name: null, taxon: 'NCBITaxon:6239' },
     container_protected: false,
+    overridable: true,
     ...overrides,
   }
 }
@@ -126,15 +129,33 @@ describe('curator override patches', () => {
       .toEqual([false, false, false])
   })
 
-  it('requires every identity key, with the backend\'s wording for the identifier and name', () => {
+  it('requires the identifier and the name with the backend\'s wording; a validated key may be empty', () => {
     expect(horizontalGridOverrideProblem(value(), { ...IDENTITY, name: ' ' }))
       .toBe('Enter both the identifier and the name for a curator override.')
     expect(horizontalGridOverrideProblem(value({ label_key: null }), { curie: '', taxon: 'T:1' }))
       .toBe('Enter the identifier for a curator override.')
     expect(horizontalGridOverrideProblem(value({ id_key: null }), { name: '', taxon: 'T:1' }))
       .toBe('Enter the name for a curator override.')
-    expect(horizontalGridOverrideProblem(value(), { ...IDENTITY, taxon: '' }))
-      .toBe('Enter the taxon for a curator override.')
-    expect(horizontalGridOverrideProblem(value(), IDENTITY)).toBeNull()
+    expect(horizontalGridOverrideProblem(value(), { ...IDENTITY, taxon: '' })).toBeNull()
+    // An empty validated key is still sent, as null.
+    expect(horizontalGridOverridePatch(value(), { ...IDENTITY, taxon: ' ' }).value)
+      .toEqual({ curie: 'GENE:2', name: 'abc-2', taxon: null })
+  })
+
+  it('removes a stored list element with the element itself as before', () => {
+    const element = value({
+      value_path: 'evidence_codes[1]',
+      stored_value: { mention: 'IGI', curie: null, resolution_state: 'unresolved', lookup_outcome: 'not_found' },
+    })
+    expect(horizontalGridRemovableElement(element)).toBe(true)
+    expect(horizontalGridRemoveElementPatch(element)).toEqual({
+      operation: 'remove',
+      field_path: 'evidence_codes[1]',
+      value: null,
+      before: element.stored_value,
+    })
+    // Only a list element with its stored value can be removed.
+    expect(horizontalGridRemovableElement(value())).toBe(false)
+    expect(horizontalGridRemovableElement({ ...element, stored_value: null })).toBe(false)
   })
 })

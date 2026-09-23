@@ -40,6 +40,7 @@ import { HORIZONTAL_GRID_UNRESOLVED_TEXT } from './horizontalGridFormatting'
 import type { HorizontalGridModel } from './horizontalGridModel'
 import {
   horizontalGridOverridePatch,
+  horizontalGridRemoveElementPatch,
   horizontalGridRemoveOverridePatch,
   type HorizontalGridOverridePatch,
 } from './horizontalGridOverride'
@@ -488,6 +489,9 @@ export default function InteractiveHorizontalCurationGrid({
           }}
           onRemove={(value) => {
             void submitOverride(overrideTarget, horizontalGridRemoveOverridePatch(value))
+          }}
+          onRemoveElement={(value) => {
+            void submitOverride(overrideTarget, horizontalGridRemoveElementPatch(value))
           }}
           onSave={(value, identity) => {
             void submitOverride(overrideTarget, horizontalGridOverridePatch(value, identity))

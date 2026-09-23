@@ -104,8 +104,9 @@ export interface UseAutosaveReturn {
   queueFieldChanges: (fieldChanges: CurationDraftFieldChange[]) => void
   flush: () => Promise<boolean>
   // Saves pending edits, then sends one envelope field edit at the envelope's
-  // latest known revision. A rejection (its message) or a revision conflict
-  // refreshes the workspace and throws, so a retry starts from the stored state.
+  // latest known revision, and reloads the workspace. A rejection (its
+  // message) or a revision conflict also reloads it and throws, so a retry
+  // starts from the stored state.
   submitEnvelopeEdit: (candidateId: string, edit: EnvelopeFieldEdit) => Promise<void>
   clearWarning: () => void
 }
@@ -1210,6 +1211,10 @@ export function useAutosave(
               mergeEnvelopeFieldPatchIntoWorkspace(currentWorkspace, response))
             setWarning(null)
           }
+          // An accepted edit also resolves findings on the value and can reach
+          // other objects (a value followed from a linked object): reload the
+          // workspace so every row and its warnings read the new revision.
+          await refreshWorkspace(session.session_id)
         } catch (error) {
           if (isRejectedEdit(error) || isVersionConflict(error)) {
             // A rejected edit also moves the envelope to a new revision.

@@ -556,29 +556,26 @@ function escapeRegExp(text: string): string {
 
 // A curator overrides one value, the object itself included, from a cell that
 // is that value, one of its identity keys, or the list holding it (each
-// element is its own value). The identity fields decide: every identity field
-// the candidate carries as a draft field must be editable (the backend checks
-// the rest), and a protected value field or an unreadable value blocks it.
+// element is its own value). The backend says which values take an override
+// (overridable: an open value field and editable identity fields).
 function overrideTargets(
   fieldPath: string,
   resolution: DomainEnvelopeReviewFieldResolution | null,
   readOnly: boolean,
-  fieldsByPath: ReadonlyMap<string, CurationDraftField>,
 ): DomainEnvelopeReviewResolvedValue[] {
   if (readOnly || !resolution || resolution.leaf_key) {
     return []
   }
   const listElement = new RegExp(`^${escapeRegExp(fieldPath)}\\[\\d+\\]$`)
   return resolution.values.filter((value) => (
-    !value.issue
-    && !value.container_protected
+    value.overridable
+    && !value.issue
     && Boolean(value.id_key || value.label_key)
     && (
       fieldPath === value.value_path
       || value.identity_field_paths.includes(fieldPath)
       || listElement.test(value.value_path)
     )
-    && !value.identity_field_paths.some((path) => fieldsByPath.get(path)?.read_only)
   ))
 }
 
@@ -664,16 +661,13 @@ function projectRow(
       && hasUnresolvedValue(resolution)
     const overridden = field ? overriddenValues(resolution) : []
     // A value's own leaves (paper wording, status, lookup result, validator
-    // text) are set by extraction and validation, and a protected value field
-    // is closed to curators; they edit a value's identity through an override.
-    const baseReadOnly = Boolean(
-      field?.read_only
-      || resolution?.leaf_key
-      || resolution?.values.some((value) => value.container_protected),
-    )
-    const targets = field ? overrideTargets(fieldPath, resolution, baseReadOnly, fieldsByPath) : []
+    // text) are set by extraction and validation; curators edit a value's
+    // identity through an override.
+    const baseReadOnly = Boolean(field?.read_only || resolution?.leaf_key)
+    const targets = field ? overrideTargets(fieldPath, resolution, baseReadOnly) : []
     // A cell showing validated values edits them only through an override;
-    // with none to override it is read-only, never a plain field edit.
+    // with none it can override (e.g. none overridable) it is read-only, never
+    // a plain field edit.
     const cellReadOnly = baseReadOnly || Boolean(resolution?.values.length && targets.length === 0)
     const overrideDisagreements = overridden.flatMap((value) => value.override_disagreements)
     const projectedComparison = field

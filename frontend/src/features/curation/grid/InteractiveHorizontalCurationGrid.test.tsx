@@ -1028,6 +1028,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
         validated_keys: [],
         stored_identity: {},
         container_protected: false,
+        overridable: true,
       }],
     }
     symbolCell.resolutionDetails = symbolCell.resolution.values
@@ -1102,6 +1103,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     validated_keys: ['taxon'],
     stored_identity: { curie: null, name: null, taxon: 'NCBITaxon:6239' },
     container_protected: false,
+    overridable: true,
   }
 
   const OVERRIDDEN_SUBJECT: DomainEnvelopeReviewResolvedValue = {
@@ -1137,14 +1139,9 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(within(editor).getByTestId('horizontal-grid-override-error')).toHaveTextContent(
       'Enter both the identifier and the name for a curator override.',
     )
+    expect(autosave.submitEnvelopeEdit).not.toHaveBeenCalled()
     await user.type(within(editor).getByRole('textbox', { name: /^Name/ }), 'abc-2')
     await user.clear(within(editor).getByRole('textbox', { name: /^Taxon/ }))
-    await user.click(within(editor).getByRole('button', { name: 'Save override' }))
-    expect(within(editor).getByTestId('horizontal-grid-override-error')).toHaveTextContent(
-      'Enter the taxon for a curator override.',
-    )
-    expect(autosave.submitEnvelopeEdit).not.toHaveBeenCalled()
-
     await user.type(within(editor).getByRole('textbox', { name: /^Taxon/ }), 'NCBITaxon:7227')
     await user.click(within(editor).getByRole('button', { name: 'Save override' }))
 
@@ -1210,6 +1207,38 @@ describe('InteractiveHorizontalCurationGrid', () => {
       operation: 'replace_identity',
       before: { curie: null },
       value: { curie: 'ECO:0000316' },
+    })
+  })
+
+  it('removes one element of a list after the curator confirms it', async () => {
+    const user = userEvent.setup()
+    const autosave = createAutosave()
+    const candidate = buildCandidate()
+    const stored = { mention: 'IGI', curie: null, resolution_state: 'unresolved', lookup_outcome: 'not_found' }
+    const element: DomainEnvelopeReviewResolvedValue = {
+      ...UNRESOLVED_SUBJECT,
+      value_path: 'evidence_codes[0]',
+      mention: 'IGI',
+      identity_field_paths: ['evidence_codes[0].curie'],
+      label_key: null,
+      validated_keys: [],
+      stored_identity: { curie: null },
+      stored_value: stored,
+    }
+    const model = overrideModel(candidate, [element], 'UNRESOLVED', 'evidence_codes')
+
+    renderGrid({ autosave, model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', { name: /^Edit Subject ID: UNRESOLVED/ }))
+    const editor = screen.getByRole('dialog', { name: 'Set Subject ID by curator override' })
+    await user.click(within(editor).getByRole('button', { name: 'Remove from the list' }))
+    expect(autosave.submitEnvelopeEdit).not.toHaveBeenCalled()
+    await user.click(within(editor).getByRole('button', { name: 'Confirm removal from the list' }))
+
+    expect(autosave.submitEnvelopeEdit).toHaveBeenCalledWith(candidate.candidate_id, {
+      fieldPath: 'evidence_codes[0]',
+      operation: 'remove',
+      before: stored,
+      value: null,
     })
   })
 

@@ -54,9 +54,9 @@ export function horizontalGridOverrideIdentity(
 }
 
 /**
- * Why an override cannot be sent as entered, or null. Every identity key is
- * required: the identifier and name with the backend's own wording, then each
- * validated key (e.g. a taxon) by name.
+ * Why an override cannot be sent as entered, or null: the identifier and the
+ * name are required (the backend's own wording). A validated key (e.g. a
+ * taxon) is always sent, as null when left empty.
  */
 export function horizontalGridOverrideProblem(
   value: DomainEnvelopeReviewResolvedValue,
@@ -66,18 +66,21 @@ export function horizontalGridOverrideProblem(
   if (empty(value.id_key) || empty(value.label_key)) {
     return OVERRIDE_INCOMPLETE_MESSAGES[`${Boolean(value.id_key)}:${Boolean(value.label_key)}`]
   }
-  const missing = value.validated_keys.filter((key) => empty(key))
-  if (missing.length === 0) {
-    return null
-  }
-  const labels = missing.map((key) => horizontalGridIdentityKeyLabel(value, key).toLowerCase())
-  return `Enter the ${labels.join(' and the ')} for a curator override.`
+  return null
+}
+
+/** Whether an identity key must be filled in: the identifier and the name. */
+export function horizontalGridIdentityKeyRequired(
+  value: DomainEnvelopeReviewResolvedValue,
+  key: string,
+): boolean {
+  return key === value.id_key || key === value.label_key
 }
 
 export interface HorizontalGridOverridePatch {
   operation: CurationEnvelopeFieldPatchOperation
   field_path: string
-  value: Record<string, unknown>
+  value: Record<string, unknown> | null
   before: Record<string, unknown>
 }
 
@@ -135,9 +138,11 @@ export function horizontalGridOverridePatch(
 ): HorizontalGridOverridePatch {
   return overrideEdit(
     value,
-    Object.fromEntries(
-      horizontalGridIdentityKeys(value).map((key) => [key, (identity[key] ?? '').trim()]),
-    ),
+    Object.fromEntries(horizontalGridIdentityKeys(value).map((key) => {
+      const entered = (identity[key] ?? '').trim()
+      // Every identity key is sent; an empty validated key is sent as null.
+      return [key, entered === '' && !horizontalGridIdentityKeyRequired(value, key) ? null : entered]
+    })),
   )
 }
 
@@ -149,4 +154,27 @@ export function horizontalGridRemoveOverridePatch(
     value,
     Object.fromEntries(horizontalGridIdentityKeys(value).map((key) => [key, null])),
   )
+}
+
+// A list element's own path: "<list>[i]".
+const LIST_ELEMENT_PATH = /\[\d+\]$/
+
+/** Whether a value is one element of a list of resolvable values, so it can be removed. */
+export function horizontalGridRemovableElement(value: DomainEnvelopeReviewResolvedValue): boolean {
+  return LIST_ELEMENT_PATH.test(value.value_path) && Boolean(value.stored_value)
+}
+
+/** Remove one element of a list of resolvable values; later elements move up. */
+export function horizontalGridRemoveElementPatch(
+  value: DomainEnvelopeReviewResolvedValue,
+): HorizontalGridOverridePatch {
+  if (!horizontalGridRemovableElement(value) || !value.stored_value) {
+    throw new Error(`Value '${value.value_path}' is not a stored list element to remove`)
+  }
+  return {
+    operation: 'remove',
+    field_path: value.value_path,
+    value: null,
+    before: value.stored_value,
+  }
 }

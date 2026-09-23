@@ -36,6 +36,7 @@ function resolvedValue(
     validated_keys: [],
     stored_identity: {},
     container_protected: false,
+    overridable: true,
     ...overrides,
   }
 }
