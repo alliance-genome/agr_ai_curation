@@ -44,11 +44,9 @@ FlowOutputJsonShape = Literal["rows", "grouped", "bundle"]
 FlowOutputChatLayout = Literal["table", "sections", "bullets"]
 FlowOutputTransformType = Literal[
     "literal",
-    "first_non_empty",
     "concat",
     "join_list",
     "pair_join",
-    "conditional",
     "count",
     "map_value",
     "boolean_label",
@@ -251,27 +249,6 @@ class FlowOutputTransformSpec(BaseModel):
     true_label: str = "Yes"
     false_label: str = "No"
     unknown_label: str = ""
-    condition_op: FlowOutputFilterOperator = "eq"
-    when_true: FlowOutputTransformSpec | None = None
-    when_false: FlowOutputTransformSpec | None = None
-
-    @model_validator(mode="after")
-    def validate_conditional_shape(self) -> FlowOutputTransformSpec:
-        if self.type != "conditional":
-            if self.when_true is not None or self.when_false is not None:
-                raise ValueError("when_true and when_false are supported only by conditional.")
-            return self
-        if not self.field_ref:
-            raise ValueError("conditional requires a condition field_ref.")
-        if self.field_refs:
-            raise ValueError("conditional uses field_ref, not field_refs.")
-        if self.when_true is None or self.when_false is None:
-            raise ValueError("conditional requires both when_true and when_false transforms.")
-        if self.when_true.type == "conditional" or self.when_false.type == "conditional":
-            raise ValueError("conditional branches cannot contain another conditional.")
-        if self.condition_op == "in" and not self.values:
-            raise ValueError("conditional operator 'in' requires values.")
-        return self
 
 
 class FlowOutputOverrideSpec(BaseModel):
@@ -2241,12 +2218,8 @@ def projection_plan_field_refs(plan: FlowOutputProjectionPlan) -> list[str]:
 
 
 def projection_plan_predicates(plan: FlowOutputProjectionPlan) -> list[FlowOutputFilterSpec]:
-    """Expose row filters and conditional predicates using runtime semantics."""
-    predicates = list(plan.filters)
-    for column in plan.columns:
-        if column.transform is not None and column.transform.type == "conditional":
-            predicates.append(_conditional_filter(column.transform))
-    return predicates
+    """Expose the plan's row predicates using runtime semantics."""
+    return list(plan.filters)
 
 
 def _transform_refs(transform: FlowOutputTransformSpec) -> list[str]:
@@ -2254,62 +2227,12 @@ def _transform_refs(transform: FlowOutputTransformSpec) -> list[str]:
     if transform.field_ref:
         refs.append(transform.field_ref)
     refs.extend(transform.field_refs)
-    if transform.type != "conditional":
-        for value in transform.values:
-            if isinstance(value, str) and "." in value:
-                refs.append(value)
-            elif isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
-                refs.append(str(value["field_ref"]))
-    if transform.type == "conditional":
-        if transform.when_true is not None:
-            refs.extend(_transform_refs(transform.when_true))
-        if transform.when_false is not None:
-            refs.extend(_transform_refs(transform.when_false))
+    for value in transform.values:
+        if isinstance(value, str) and "." in value:
+            refs.append(value)
+        elif isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
+            refs.append(str(value["field_ref"]))
     return refs
-
-
-def _transform_specs(transform: FlowOutputTransformSpec) -> list[FlowOutputTransformSpec]:
-    """Return a conditional and its bounded, non-conditional branch transforms."""
-
-    specs = [transform]
-    if transform.type == "conditional":
-        if transform.when_true is not None:
-            specs.append(transform.when_true)
-        if transform.when_false is not None:
-            specs.append(transform.when_false)
-    return specs
-
-
-def _conditional_filter(transform: FlowOutputTransformSpec) -> FlowOutputFilterSpec:
-    if transform.type != "conditional" or not transform.field_ref:
-        raise ValueError("conditional requires a condition field_ref.")
-    return FlowOutputFilterSpec(
-        field_ref=transform.field_ref,
-        op=transform.condition_op,
-        value=transform.value,
-        values=transform.values,
-    )
-
-
-def _transform_specs_with_rows(
-    transform: FlowOutputTransformSpec,
-    rows: Sequence[Mapping[str, Any]],
-) -> list[tuple[FlowOutputTransformSpec, Sequence[Mapping[str, Any]]]]:
-    """Pair each bounded branch transform with only the rows that select it."""
-
-    specs: list[tuple[FlowOutputTransformSpec, Sequence[Mapping[str, Any]]]] = [
-        (transform, rows)
-    ]
-    if transform.type != "conditional":
-        return specs
-    condition = _conditional_filter(transform)
-    true_rows = [row for row in rows if _row_matches_filter(row, condition)]
-    false_rows = [row for row in rows if not _row_matches_filter(row, condition)]
-    if transform.when_true is not None:
-        specs.append((transform.when_true, true_rows))
-    if transform.when_false is not None:
-        specs.append((transform.when_false, false_rows))
-    return specs
 
 
 def _pair_join_value_groups(left: Any, right: Any) -> list[tuple[Any, Any]]:
@@ -2960,14 +2883,13 @@ def validate_projection_plan(
                 context=f"Column '{column.key}'",
             )
         else:
-            for transform in _transform_specs(column.transform):
-                if transform.type == "format_elements":
-                    errors.extend(
-                        f"Column '{column.key}' {error}"
-                        for error in _element_template_errors(transform)
-                    )
-                if transform.type != "pair_join":
-                    continue
+            transform = column.transform
+            if transform.type == "format_elements":
+                errors.extend(
+                    f"Column '{column.key}' {error}"
+                    for error in _element_template_errors(transform)
+                )
+            if transform.type == "pair_join":
                 if transform.field_ref is not None or transform.values:
                     errors.append(
                         f"Column '{column.key}' pair_join uses field_refs only; "
@@ -2977,36 +2899,29 @@ def validate_projection_plan(
                     errors.append(
                         f"Column '{column.key}' pair_join requires exactly two field_refs."
                     )
-            for ref in _transform_refs(column.transform):
+            for ref in _transform_refs(transform):
                 _validate_ref(
                     field_ref=ref,
                     available_refs=available_refs,
                     errors=errors,
                     context=f"Column '{column.key}' transform",
                 )
-            try:
-                transforms_with_rows = _transform_specs_with_rows(column.transform, rows)
-            except ValueError as exc:
-                errors.append(f"Column '{column.key}' conditional condition is invalid: {exc}")
-                transforms_with_rows = []
-            for transform, transform_rows in transforms_with_rows:
-                if transform.type == "pair_join" and len(transform.field_refs) == 2:
-                    for row in transform_rows:
-                        try:
-                            _pair_join_value(row, transform, missing_value=plan.missing_value)
-                        except ValueError as exc:
-                            errors.append(f"Column '{column.key}' {exc}")
-                            break
-                if transform.type == "format_elements" and not _element_template_errors(transform):
-                    for row in transform_rows:
-                        try:
-                            _format_elements_value(row, transform, missing_value=plan.missing_value)
-                        except ValueError as exc:
-                            errors.append(f"Column '{column.key}' {exc}")
-                            break
-            for transform in _transform_specs(column.transform):
-                if transform.type == "literal" and transform.value is None:
-                    warnings.append(f"Column '{column.key}' literal transform has a null value.")
+            if transform.type == "pair_join" and len(transform.field_refs) == 2:
+                for row in rows:
+                    try:
+                        _pair_join_value(row, transform, missing_value=plan.missing_value)
+                    except ValueError as exc:
+                        errors.append(f"Column '{column.key}' {exc}")
+                        break
+            if transform.type == "format_elements" and not _element_template_errors(transform):
+                for row in rows:
+                    try:
+                        _format_elements_value(row, transform, missing_value=plan.missing_value)
+                    except ValueError as exc:
+                        errors.append(f"Column '{column.key}' {exc}")
+                        break
+            if transform.type == "literal" and transform.value is None:
+                warnings.append(f"Column '{column.key}' literal transform has a null value.")
 
     for filter_spec in plan.filters:
         _validate_ref(
@@ -3135,12 +3050,6 @@ def _transform_value(
     text = render or _plain_text
     if transform.type == "literal":
         return transform.value
-    if transform.type == "first_non_empty":
-        for field_ref in transform.field_refs:
-            value = row.get(field_ref)
-            if not _is_empty(value):
-                return render(field_ref, value, None) if render else value
-        return missing_value
     if transform.type == "concat":
         parts: list[str] = []
         for value in transform.values:
@@ -3171,14 +3080,6 @@ def _transform_value(
         return missing_value if _is_empty(value) else text(ref, value, None)
     if transform.type == "pair_join":
         return _pair_join_value(row, transform, missing_value=missing_value, render=text)
-    if transform.type == "conditional":
-        condition = _conditional_filter(transform)
-        branch = transform.when_true if _row_matches_filter(row, condition) else transform.when_false
-        if branch is None:
-            raise ValueError("conditional selected an undefined branch.")
-        return _transform_value(
-            row, branch, missing_value=missing_value, render=render, value_key=value_key,
-        )
     if transform.type == "count":
         value = row.get(transform.field_ref or "")
         if isinstance(value, (list, tuple, set, dict)):

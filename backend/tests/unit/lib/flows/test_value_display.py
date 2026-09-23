@@ -156,8 +156,6 @@ def test_every_non_json_rendering_path_uses_display_text(output_format):
                 "type": "join_list", "field_ref": STAGES, "separator": " / "}},
             {"key": "elements", "header": "Elements", "transform": {
                 "type": "format_elements", "field_refs": [STAGES], "default": "[{1}]", "separator": ", "}},
-            {"key": "first", "header": "First", "transform": {
-                "type": "first_non_empty", "field_refs": [ANATOMY]}},
         ],
     })
     result = finalize_output_projection(bundle, plan)
@@ -168,7 +166,6 @@ def test_every_non_json_rendering_path_uses_display_text(output_format):
     assert first["concat"] == "Y71G12B.17 (WB:WBGene00022155) in hypodermis (WBbt:0005733)"
     assert first["stages"] == "adult (UBERON:1) / L4 (UBERON:2, unresolved)"
     assert first["elements"] == "[adult (UBERON:1)], [L4 (UBERON:2, unresolved)]"
-    assert first["first"] == "hypodermis (WBbt:0005733)"
     # Declared id role missing while a label is present marks the proposal.
     assert second["anatomy"] == "residual body (unresolved)"
     # An open finding referenced by pending_ref_id marks that object's field.

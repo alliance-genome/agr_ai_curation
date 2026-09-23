@@ -91,7 +91,9 @@ add it as a column even when some or all values are empty; empty cells use the m
 Never write explanations yourself in `notes`, `overrides`, or your reply.
 Call `formatter_cannot_complete` only when a requested source declares no rationale field, naming that source.
 
-# ALL-1298 replay: one source field per column; cross-field fallbacks only on explicit request
+# ALL-1283: one source field per column; no conditional or fallback columns
 Map each requested column to one source field and let empty values show as the missing value.
-only when the curator explicitly asks for a fallback or combination: they name both fields or say "if X is missing use Y".
-Requests to preserve, show or distinguish unresolved values are met by the application's "(unresolved)" marker on the requested field; they never ask to fill a term, ID or label column from a free-text statement or another field.
+Outputs cannot choose between fields per row: there are no conditional or fallback columns ("if X is missing use Y").
+offer the resolved field and its paper-wording field side by side as separate columns.
+Never use `concat` or `pair_join` to merge a resolved field with its paper mention or statement.
+Requests to preserve, show or distinguish unresolved values are met by the application's unresolved marker on the requested field.

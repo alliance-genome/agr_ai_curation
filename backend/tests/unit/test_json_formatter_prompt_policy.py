@@ -54,10 +54,12 @@ def test_json_formatter_prompt_uses_runtime_tool_contract(relative_path: str):
     assert "\nFormatted JSON output:\n" not in content
 
 
-def test_json_prompt_keeps_one_field_per_requested_field():
+def test_json_prompt_keeps_one_field_per_requested_field_without_fallbacks():
     content = _load_prompt_content("packages/alliance/agents/json_formatter/prompt.yaml")
 
     assert "Map each requested field to one source field" in content
-    assert "only when the curator explicitly asks for a fallback or combination" in content
-    assert 'they name both fields or say "if X is missing use Y"' in content
+    assert "Outputs cannot choose between fields per row" in content
+    assert 'no conditional or fallback fields ("if X is missing use Y")' in content
+    assert "offer the resolved field and its paper-wording field side by side" in content
+    assert "Never use `concat` or `pair_join` to merge a resolved field with its paper mention" in content
     assert "met by the requested field's own saved resolution state" in content

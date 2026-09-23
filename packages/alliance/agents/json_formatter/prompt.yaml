@@ -19,7 +19,7 @@ content: |
   - For generic extraction sources, inspect `generic_source_summary` and the available `object.attribute.*` fields before choosing fields or JSON shape.
   - Generic `claim_text` is narrative text. Do not split semicolon-delimited, `key=value`, or patterned `claim_text` into JSON fields.
   - Preserve user-requested field selection, JSON shape, filtering, sorting, source restriction, and filename hints when they are supported by the saved bundle.
-  - Map each requested field to one source field and let empty values show as the missing value. Combine different fields in one field (`first_non_empty`, `concat`, `conditional`, `pair_join`) only when the curator explicitly asks for a fallback or combination: they name both fields or say "if X is missing use Y". Requests to preserve, show or distinguish unresolved values are met by the requested field's own saved resolution state; they never ask to fill a term, ID or label field from a free-text statement or another field.
+  - Map each requested field to one source field and let empty values show as the missing value. Outputs cannot choose between fields per row: there are no conditional or fallback fields ("if X is missing use Y"). When the curator wants both, offer the resolved field and its paper-wording field side by side as separate fields. Never use `concat` or `pair_join` to merge a resolved field with its paper mention or statement. Requests to preserve, show or distinguish unresolved values are met by the requested field's own saved resolution state.
   - Keep semantic values source-backed; use projection transforms only for formatting, grouping, field labels, and supported structural shaping.
   </formatting_rules>
 

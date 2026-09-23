@@ -35,6 +35,16 @@ describe('Output field editor', () => {
       columns: [expect.objectContaining({ field_ref: 'object.attribute.source', source_node_id: 'stocks' }), expect.objectContaining({ field_ref: 'object.attribute.name' })],
     }))
   })
+  it('explains CSV cells as label (ID) or unresolved, with the paper wording as its own field', async () => {
+    const user = userEvent.setup()
+    render(<OutputFieldEditor format="csv" definition={definition} binding={binding} value={null} onChange={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: 'Choose output fields' }))
+    await screen.findByRole('table', { name: 'Available output fields' })
+    const guidance = screen.getByText(/Cells show terms and entities as "label \(ID\)"/)
+    expect(guidance).toHaveTextContent('marked unresolved when validation did not resolve the value')
+    expect(guidance).toHaveTextContent('also choose its paper-wording field')
+    expect(screen.queryByText(/JSON inside a cell/)).not.toBeInTheDocument()
+  })
   it('does not apply on Escape or Cancel, and prevents edits after the flow changes', async () => {
     const user = userEvent.setup(); const change = vi.fn()
     const props = { format: 'csv' as const, definition, binding, value: null, onChange: change }

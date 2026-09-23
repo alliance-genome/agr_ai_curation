@@ -29,14 +29,13 @@
   "projection": {
     "format": "tsv", "row_source": "object", "columns": [
       {"key": "paper_labels", "transform": {"type": "join_list", "field_ref": "object.attribute.paper_labels", "separator": "|"}},
-      {"key": "source", "transform": {"type": "conditional", "field_ref": "object.attribute.source_status", "condition_op": "eq", "value": "new_in_paper",
-        "when_true": {"type": "literal", "value": "New in paper"},
-        "when_false": {"type": "pair_join", "field_refs": ["object.attribute.sources[].name", "object.attribute.sources[].identifier"], "separator": "|", "pair_separator": ":"}}}
+      {"key": "source_status", "field_ref": "object.attribute.source_status"},
+      {"key": "sources", "transform": {"type": "pair_join", "field_refs": ["object.attribute.sources[].name", "object.attribute.sources[].identifier"], "separator": "|", "pair_separator": ":"}}
     ]
   },
   "cases": [
-    {"attributes": {"paper_labels": ["Example A", "Alias A", "Example A"], "source_status": "new_in_paper"}, "expected": {"paper_labels": "Example A|Alias A|Example A", "source": "New in paper"}},
-    {"attributes": {"paper_labels": ["Example B"], "source_status": "external", "sources": [{"name": "Collection", "identifier": "42"}, {"name": "Supplier"}, {"identifier": "ID-7"}]}, "expected": {"paper_labels": "Example B", "source": "Collection:42|Supplier|ID-7"}},
-    {"attributes": {"paper_labels": ["Example C"], "source_status": "not_stated", "sources": null}, "expected": {"paper_labels": "Example C", "source": ""}}
+    {"attributes": {"paper_labels": ["Example A", "Alias A", "Example A"], "source_status": "new_in_paper"}, "expected": {"paper_labels": "Example A|Alias A|Example A", "source_status": "new_in_paper", "sources": ""}},
+    {"attributes": {"paper_labels": ["Example B"], "source_status": "external", "sources": [{"name": "Collection", "identifier": "42"}, {"name": "Supplier"}, {"identifier": "ID-7"}]}, "expected": {"paper_labels": "Example B", "source_status": "external", "sources": "Collection:42|Supplier|ID-7"}},
+    {"attributes": {"paper_labels": ["Example C"], "source_status": "not_stated", "sources": null}, "expected": {"paper_labels": "Example C", "source_status": "not_stated", "sources": ""}}
   ]
 }

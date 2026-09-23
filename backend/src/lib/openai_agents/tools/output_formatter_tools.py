@@ -449,17 +449,11 @@ def _source_refs_for_transform(transform: FlowOutputTransformSpec) -> list[str]:
     if transform.field_ref:
         refs.append(transform.field_ref)
     refs.extend(transform.field_refs)
-    if transform.type != "conditional":
-        for value in transform.values:
-            if isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
-                refs.append(str(value["field_ref"]))
-            elif isinstance(value, str) and "." in value:
-                refs.append(value)
-    if transform.type == "conditional":
-        if transform.when_true is not None:
-            refs.extend(_source_refs_for_transform(transform.when_true))
-        if transform.when_false is not None:
-            refs.extend(_source_refs_for_transform(transform.when_false))
+    for value in transform.values:
+        if isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
+            refs.append(str(value["field_ref"]))
+        elif isinstance(value, str) and "." in value:
+            refs.append(value)
     return refs
 
 
@@ -502,14 +496,7 @@ def _transform_literal_payload_errors(
     errors: list[str] = []
     if transform.type == "literal":
         errors.extend(_literal_value_errors(transform.value, context=f"{context} literal value"))
-    elif transform.type == "conditional":
-        errors.extend(
-            _literal_value_errors(transform.value, context=f"{context} condition value")
-        )
     for index, value in enumerate(transform.values, start=1):
-        if transform.type == "conditional":
-            errors.extend(_literal_value_errors(value, context=f"{context} values[{index}]"))
-            continue
         if isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
             extra_keys = [key for key in value if key != "field_ref"]
             if extra_keys:
@@ -538,18 +525,6 @@ def _transform_literal_payload_errors(
         ("unknown_label", transform.unknown_label),
     ):
         errors.extend(_literal_value_errors(label_value, context=f"{context} {label_name}"))
-    if transform.type == "conditional":
-        for branch_name, branch in (
-            ("when_true", transform.when_true),
-            ("when_false", transform.when_false),
-        ):
-            if branch is not None:
-                errors.extend(
-                    _transform_literal_payload_errors(
-                        branch,
-                        context=f"{context} {branch_name}",
-                    )
-                )
     return errors
 
 
@@ -611,21 +586,11 @@ def _raw_transform_extra_key_errors(
     *,
     context: str,
 ) -> list[str]:
-    errors = _reject_extra_keys(
+    return _reject_extra_keys(
         raw_transform,
         model=FlowOutputTransformSpec,
         context=context,
     )
-    for branch_name in ("when_true", "when_false"):
-        branch = raw_transform.get(branch_name)
-        if isinstance(branch, Mapping):
-            errors.extend(
-                _raw_transform_extra_key_errors(
-                    branch,
-                    context=f"{context} {branch_name}",
-                )
-            )
-    return errors
 
 
 def _projection_plan_extra_key_errors(raw_plan: Mapping[str, Any]) -> list[str]:
@@ -1233,12 +1198,13 @@ def _capabilities_payload(
         "allowed_transform_types": list(get_args(FlowOutputTransformSpec.model_fields["type"].annotation)),
         "column_sources": (
             "Map each requested column to one source field and let empty values render "
-            "as missing_value. Combine different fields in one column (first_non_empty, "
-            "concat, conditional, pair_join) only when the curator explicitly asks for a "
-            "fallback or combination: they name both fields or say 'if X is missing use Y'. "
-            "Requests to preserve, show or distinguish unresolved values are met by the "
-            "application's \"(unresolved)\" marker on the requested field; they never ask "
-            "to fill a term, ID or label column from a free-text statement or another field."
+            "as missing_value. Outputs cannot choose between fields per row: there are no "
+            "conditional or fallback columns ('if X is missing use Y'). When a curator wants "
+            "both, offer the resolved field and its paper-wording field as side-by-side "
+            "columns. Never use concat or pair_join to merge a resolved field with its "
+            "paper mention or statement. Requests to preserve, show or distinguish "
+            "unresolved values are met by the application's unresolved marker on the "
+            "requested field."
         ),
         "rationale": (
             "For 'why' or 'explain' requests, find the source's rationale field with "
@@ -1253,14 +1219,6 @@ def _capabilities_payload(
                 "Use exactly two field_refs. Values are joined with pair_separator; "
                 "pairs are joined with separator. A scalar broadcasts across a list, "
                 "equal-length lists zip, and incompatible list lengths are rejected."
-            ),
-            "conditional": (
-                "Use field_ref plus condition_op/value (or values for 'in') and both "
-                "when_true/when_false branch transforms. Branches may use existing "
-                "non-conditional transforms such as literal, first_non_empty, or pair_join; "
-                "nested conditionals are rejected. The condition is evaluated once per row "
-                "against the whole field value, so a list-valued condition selects one branch "
-                "for the entire row."
             ),
             "format_elements": (
                 "Render aligned list elements with a template. field_refs are the element "

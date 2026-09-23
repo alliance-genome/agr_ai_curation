@@ -42,9 +42,6 @@ def test_tsv_formatter_prompt_uses_runtime_tool_contract(relative_path: str):
         "Do not build replacement row arrays",
         "`pair_join` transform",
         "do not use `concat` for list-valued fields",
-        "`conditional` transform",
-        "both `when_true` and `when_false`",
-        "nested conditionals and arbitrary expressions are not supported",
     ):
         assert required in content
 
@@ -77,7 +74,8 @@ def test_tsv_prompt_finds_rationale_in_catalog_and_keeps_one_field_per_column():
     assert "even when some or all values are empty" in content
     assert "only when a requested source declares no rationale field" in content
     assert "Map each requested column to one source field" in content
-    assert "only when the curator explicitly asks for a fallback or combination" in content
-    assert 'they name both fields or say "if X is missing use Y"' in content
-    assert 'met by the application\'s "(unresolved)" marker on the requested field' in content
-    assert "never ask to fill a term, ID or label column from a free-text statement" in content
+    assert "Outputs cannot choose between fields per row" in content
+    assert 'no conditional or fallback columns ("if X is missing use Y")' in content
+    assert "offer the resolved field and its paper-wording field side by side" in content
+    assert "Never use `concat` or `pair_join` to merge a resolved field with its paper mention" in content
+    assert "met by the application's unresolved marker on the requested field" in content

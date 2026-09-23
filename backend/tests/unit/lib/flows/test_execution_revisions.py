@@ -158,15 +158,13 @@ def test_saved_projection_numeric_filter_checks_declared_type(monkeypatch, kind,
     ("integer", "object.attribute.sources[].name", "lt", False),
     ("string", "object.attribute.count", "eq", True),
 ])
-def test_saved_profile_checks_conditional_numeric_predicate(monkeypatch, kind, ref, op, valid):
+def test_saved_profile_checks_numeric_filter_predicate(monkeypatch, kind, ref, op, valid):
     pin, db = profile_receipt_and_db(kind)
     install_resolver(monkeypatch, [pin])
     definition = projection_flow(pin)
-    definition.nodes[-1].data.projection_plan["columns"] = [{"key": "value", "transform": {
-        "type": "conditional", "field_ref": ref, "condition_op": op, "value": 1,
-        "when_true": {"type": "literal", "value": "Yes"},
-        "when_false": {"type": "literal", "value": "No"},
-    }}]
+    definition.nodes[-1].data.projection_plan["filters"] = [
+        {"field_ref": ref, "op": op, "value": 1},
+    ]
     original = definition.model_dump(mode="json")
     result = module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[])
     assert (not result.findings) is valid
@@ -271,9 +269,7 @@ def test_nested_transform_references_are_checked_with_runtime_reference_rules(mo
     install_resolver(monkeypatch, [pin])
     definition = projection_flow(pin)
     definition.nodes[-1].data.projection_plan["columns"] = [{"key": "value", "transform": {
-        "type": "conditional", "field_ref": "object.attribute.count", "condition_op": "is_empty",
-        "when_true": {"type": "literal", "value": "None"},
-        "when_false": {"type": "concat", "values": ["object.attribute.renamed", {"field_ref": "object.attribute.sources[].name"}]},
+        "type": "concat", "values": ["object.attribute.renamed", {"field_ref": "object.attribute.sources[].name"}],
     }}]
     result = module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[])
     assert len(result.findings) == 1
