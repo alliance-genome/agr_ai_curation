@@ -235,7 +235,11 @@ class DomainPackMetadataReviewRowMaterializer:
                 display_config = object_definition.metadata.get("workspace_display", {}) if object_definition else {}
             resolvable_fields = declared_resolvable_fields(self.metadata, domain_object.object_type)
             value_reader = _review_value_reader(
-                domain_object, resolvable_fields, value_display_source,
+                domain_object,
+                resolvable_fields,
+                value_display_source,
+                envelope_id=envelope.envelope_id,
+                envelope_revision=envelope_revision,
             )
             summary_fields = _summary_fields(
                 domain_object,
@@ -2581,6 +2585,11 @@ def _is_empty_projection_value(value: Any) -> bool:
 # --- Extracted vs validated values on review fields (ALL-1283) -----------------
 
 _UNREADABLE_LOOKUP_RESULT = "Stored value unreadable"
+# Curator-facing; the technical detail goes to the log only.
+_UNREADABLE_ISSUE = (
+    "This stored value could not be read; please re-run validation or contact the "
+    "AI Curation developers."
+)
 # A value's own leaves; the paper-wording key is the spec's mention key.
 _VALUE_LEAF_KEYS = (
     RESOLUTION_STATE_KEY,
@@ -2708,6 +2717,9 @@ def _review_value_reader(
     domain_object: CuratableObjectEnvelope,
     specs: Mapping[str, ResolvableSpec],
     display_source: Any,
+    *,
+    envelope_id: str,
+    envelope_revision: int,
 ) -> _ReviewValueReader | None:
     if not specs:
         return None
@@ -2722,7 +2734,13 @@ def _review_value_reader(
             continue
         for value_path in _concrete_value_paths(payload, tokens, ()):
             readings.append(
-                _read_review_value(domain_object, value_path, spec)
+                _read_review_value(
+                    domain_object,
+                    value_path,
+                    spec,
+                    envelope_id=envelope_id,
+                    envelope_revision=envelope_revision,
+                )
             )
     for reading in readings:
         if reading.value is None:
@@ -2752,6 +2770,9 @@ def _read_review_value(
     domain_object: CuratableObjectEnvelope,
     value_path: tuple[str | int, ...],
     spec: ResolvableSpec,
+    *,
+    envelope_id: str,
+    envelope_revision: int,
 ) -> _ValueReading:
     """Read one stored value; a value outside the contract reads as unresolved with its issue."""
 
@@ -2774,8 +2795,9 @@ def _read_review_value(
     except ResolvableValueError as exc:
         logger.warning(
             "Review row reads an unreadable resolvable value as unresolved: "
-            "object_id=%s object_type=%s value_path=%r: %s",
-            stable_object_id(domain_object), domain_object.object_type, path_text, exc,
+            "envelope_id=%s envelope_revision=%s object_id=%s object_type=%s value_path=%r: %s",
+            envelope_id, envelope_revision, stable_object_id(domain_object),
+            domain_object.object_type, path_text, exc,
         )
         mention = stored.get(spec.mention_key)
         return _ValueReading(
@@ -2788,7 +2810,7 @@ def _read_review_value(
                 resolution_state=UNRESOLVED,
                 lookup_outcome=None,
                 lookup_result=_UNREADABLE_LOOKUP_RESULT,
-                issue=str(exc),
+                issue=_UNREADABLE_ISSUE,
             ),
             value=None,
         )

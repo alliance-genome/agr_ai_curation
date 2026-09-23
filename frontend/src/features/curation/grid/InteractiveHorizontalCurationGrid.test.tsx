@@ -345,6 +345,8 @@ function buildModel({
             displayText: 'Ada Lovelace, Grace Hopper',
             resolution: null,
             resolutionDetails: [],
+            resolutionLinesId: null,
+            resolutionDescribedBy: [],
             required: true,
             readOnly: false,
             dirty: false,
@@ -367,6 +369,8 @@ function buildModel({
             displayText: 'PMID:1',
             resolution: null,
             resolutionDetails: [],
+            resolutionLinesId: null,
+            resolutionDescribedBy: [],
             required: false,
             readOnly: true,
             dirty: false,
@@ -386,6 +390,8 @@ function buildModel({
             displayText: null,
             resolution: null,
             resolutionDetails: [],
+            resolutionLinesId: null,
+            resolutionDescribedBy: [],
             required: null,
             readOnly: null,
             dirty: null,
@@ -1008,6 +1014,8 @@ describe('InteractiveHorizontalCurationGrid', () => {
       }],
     }
     symbolCell.resolutionDetails = symbolCell.resolution.values
+    symbolCell.resolutionLinesId = 'lines-symbol'
+    symbolCell.resolutionDescribedBy = ['lines-symbol']
 
     renderGrid({ model, workspace: buildWorkspace(candidate) })
     const button = screen.getByTestId(`horizontal-grid-field-${symbolField.field_key}`)

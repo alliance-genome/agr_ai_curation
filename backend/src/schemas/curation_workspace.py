@@ -1016,7 +1016,10 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
     )
     issue: str | None = Field(
         default=None,
-        description="Why the stored value could not be read; the value then reads as unresolved",
+        description=(
+            "A curator-facing sentence when the stored value could not be read; the value "
+            "then reads as unresolved (the technical detail is logged)"
+        ),
     )
 
     @model_validator(mode="after")

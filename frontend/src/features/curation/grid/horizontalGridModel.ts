@@ -93,8 +93,13 @@ export interface HorizontalGridFieldCell {
   // regenerated for this revision (ALL-1283); null for fields without any.
   resolution: DomainEnvelopeReviewFieldResolution | null
   // The values whose paper wording and lookup result this cell shows: each
-  // value's details appear once per row, on the first cell that shows it.
+  // value's details appear once per row, on the first cell that shows it
+  // unedited (else the first cell that shows it).
   resolutionDetails: DomainEnvelopeReviewResolvedValue[]
+  // The id of this cell's resolution lines, when it shows any.
+  resolutionLinesId: string | null
+  // The resolution lines describing this cell's values, wherever they are shown.
+  resolutionDescribedBy: string[]
   required: boolean | null
   readOnly: boolean | null
   // Whether the curator changed the field from its AI seed value.
@@ -242,10 +247,59 @@ function isCoveredResolvableLeaf(row: HorizontalGridSourceRow, field: CurationDr
   })
 }
 
-function isGridField(row: HorizontalGridSourceRow, field: CurationDraftField): boolean {
+function isGridCellField(row: HorizontalGridSourceRow, field: CurationDraftField): boolean {
   return !isProjectedAsCanonicalComparison(row.candidate, field)
     && isHorizontalGridDecisionField(row.candidate, field)
-    && !isCoveredResolvableLeaf(row, field)
+}
+
+// A column exists when some row needs it; a covered leaf alone adds none. A
+// row whose leaf is covered still shows that leaf in a column other rows need.
+function isGridColumnField(row: HorizontalGridSourceRow, field: CurationDraftField): boolean {
+  return isGridCellField(row, field) && !isCoveredResolvableLeaf(row, field)
+}
+
+function resolutionLinesId(candidateId: string, columnKey: string): string {
+  return `horizontal-grid-resolution-${encodeURIComponent(candidateId)}-${encodeURIComponent(columnKey)}`
+}
+
+// Each value's details go on the first cell that shows it unedited (an edited
+// cell drops the lookup line), else on the first cell that shows it; every
+// cell showing the value is described by those lines.
+function withResolutionDetails(
+  candidateId: string,
+  cells: HorizontalGridFieldCell[],
+): HorizontalGridFieldCell[] {
+  const ownerByValuePath = new Map<string, number>()
+  cells.forEach((cell, index) => {
+    if (!cell.resolution || cell.resolution.leaf_key) {
+      return
+    }
+    for (const value of cell.resolution.values) {
+      const owner = ownerByValuePath.get(value.value_path)
+      if (owner === undefined || (cells[owner]!.dirty && !cell.dirty)) {
+        ownerByValuePath.set(value.value_path, index)
+      }
+    }
+  })
+
+  return cells.map((cell, index) => {
+    const values = cell.resolution && !cell.resolution.leaf_key ? cell.resolution.values : []
+    const resolutionDetails = values.filter(
+      (value) => ownerByValuePath.get(value.value_path) === index,
+    )
+    const describedBy = [...new Set(values.map((value) => {
+      const owner = ownerByValuePath.get(value.value_path)!
+      return resolutionLinesId(candidateId, cells[owner]!.columnKey)
+    }))]
+    return {
+      ...cell,
+      resolutionDetails,
+      resolutionLinesId: resolutionDetails.length > 0
+        ? resolutionLinesId(candidateId, cell.columnKey)
+        : null,
+      resolutionDescribedBy: describedBy,
+    }
+  })
 }
 
 function fieldColumnKey(fieldPath: string): string {
@@ -316,7 +370,7 @@ function buildFieldColumns(
       // When the candidate also has the canonical target, the proposal belongs in
       // that target's Details comparison—not in a peer grid column that could be
       // mistaken for a second authoritative or curator-editable value.
-      if (!isGridField(row, field)) {
+      if (!isGridColumnField(row, field)) {
         continue
       }
       const occurrence = fieldOccurrence(row.candidate, field)
@@ -525,7 +579,7 @@ function projectRow(
 ): HorizontalGridRow {
   const fieldsByPath = fieldsByCanonicalPath(row.candidate)
   const projectedFieldsByPath = new Map(
-    [...fieldsByPath.entries()].filter(([, field]) => isGridField(row, field)),
+    [...fieldsByPath.entries()].filter(([, field]) => isGridCellField(row, field)),
   )
   const evidence = [...row.evidenceAnchors].sort(compareEvidence)
   const validationSummaries = [...row.validationSummaries].sort(compareValidationSummaries)
@@ -533,7 +587,6 @@ function projectRow(
     fieldColumns.flatMap((column) => column.fieldPath === null ? [] : [column.fieldPath]),
   )
   const context = contextForRow(row)
-  const detailedValuePaths = new Set<string>()
   const objectValidation = validationSummaries.filter((projection) =>
     isObjectLevelProjection(projection.field_path),
   )
@@ -567,12 +620,6 @@ function projectRow(
     const resolution = field ? row.resolutions.get(fieldPath) ?? null : null
     const canonicalUnresolved = Boolean(field && !field.dirty && !resolution?.leaf_key)
       && hasUnresolvedValue(resolution)
-    const resolutionDetails = resolution && !resolution.leaf_key
-      ? resolution.values.filter((value) => !detailedValuePaths.has(value.value_path))
-      : []
-    for (const value of resolutionDetails) {
-      detailedValuePaths.add(value.value_path)
-    }
     const projectedComparison = field
       ? extractorComparison(row.candidate, field, fieldPath, canonicalUnresolved)
       : null
@@ -613,7 +660,9 @@ function projectRow(
       value: field?.value ?? null,
       displayText: cellDisplayText(field, resolution, comparison),
       resolution,
-      resolutionDetails,
+      resolutionDetails: [],
+      resolutionLinesId: null,
+      resolutionDescribedBy: [],
       required: field?.required ?? null,
       readOnly: field?.read_only ?? null,
       dirty: field?.dirty ?? null,
@@ -634,7 +683,7 @@ function projectRow(
       evidence: contextEvidence,
       validation: validationProjection(objectValidation),
     },
-    cells,
+    cells: withResolutionDetails(row.candidate.candidate_id, cells),
     evidence,
     validation: validationProjection(validationSummaries),
     unmappedEvidence: evidence.filter((projection) => {

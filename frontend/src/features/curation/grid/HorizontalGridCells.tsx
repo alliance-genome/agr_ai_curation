@@ -1,5 +1,3 @@
-import { useId } from 'react'
-
 import FindInPageOutlinedIcon from '@mui/icons-material/FindInPageOutlined'
 import { Box, ButtonBase, IconButton, Stack, Tooltip, Typography } from '@mui/material'
 
@@ -102,13 +100,7 @@ const VISUALLY_HIDDEN_SX = {
  * screen readers and in the line's title. A curator edit keeps the paper
  * wording but drops the lookup result, which described the seeded value.
  */
-export function HorizontalGridResolutionLines({
-  cell,
-  id,
-}: {
-  cell: HorizontalGridFieldCell
-  id?: string
-}) {
+export function HorizontalGridResolutionLines({ cell }: { cell: HorizontalGridFieldCell }) {
   const values = cell.resolutionDetails
   if (values.length === 0) {
     return null
@@ -118,7 +110,7 @@ export function HorizontalGridResolutionLines({
   const validatorWords = horizontalGridValidatorWords(values)
 
   return (
-    <Box data-slot="field-resolution" id={id} sx={{ minWidth: 0 }}>
+    <Box data-slot="field-resolution" id={cell.resolutionLinesId ?? undefined} sx={{ minWidth: 0 }}>
       {paperWording ? (
         <Typography
           color="text.secondary"
@@ -276,7 +268,6 @@ export function HorizontalGridFieldCellContent({
   onSelect: () => void
   state: FieldStateKind | null
 }) {
-  const resolutionId = useId()
   if (!field || !cell.hasField) {
     return (
       <Typography color="text.disabled" fontStyle="italic" variant="body2">
@@ -309,7 +300,9 @@ export function HorizontalGridFieldCellContent({
       width="100%"
     >
       <ButtonBase
-        aria-describedby={cell.resolutionDetails.length > 0 ? resolutionId : undefined}
+        aria-describedby={cell.resolutionDescribedBy.length > 0
+          ? cell.resolutionDescribedBy.join(' ')
+          : undefined}
         aria-label={`Select ${field.label} for ${cell.fieldPath}: ${value ?? 'Empty value'}. ${stateLabel}.`}
         aria-pressed={active}
         data-field-key={field.field_key}
@@ -347,7 +340,7 @@ export function HorizontalGridFieldCellContent({
           </Typography>
         </Stack>
       </ButtonBase>
-      <HorizontalGridResolutionLines cell={cell} id={resolutionId} />
+      <HorizontalGridResolutionLines cell={cell} />
       {state === 'needs-review' || state === 'ai-unconfirmed' ? (
         <Tooltip
           arrow

@@ -65,6 +65,8 @@ function cell(
     displayText,
     resolution,
     resolutionDetails: resolution?.values ?? [],
+    resolutionLinesId: resolution ? 'lines-site' : null,
+    resolutionDescribedBy: resolution ? ['lines-site'] : [],
     required: false,
     readOnly: false,
     dirty,
@@ -157,14 +159,15 @@ describe('HorizontalGridFieldCellContent', () => {
       lookup_outcome: null,
       lookup_result: 'Stored value unreadable',
       validator_explanation: null,
-      issue: "Stored resolution 'resolved'/'pending' is outside the controlled vocabulary",
+      issue: 'This stored value could not be read; please re-run validation or contact the '
+        + 'AI Curation developers.',
     })
     const { container } = renderCell(cell('UNRESOLVED', { display_text: 'UNRESOLVED', values: [unreadable] }))
 
     expect(slot(container, 'field-value')).toHaveTextContent(/^UNRESOLVED$/)
     expect(slot(container, 'field-lookup-result')).toHaveTextContent(
-      "Lookup result: Stored value unreadable. Stored value issue: Stored resolution 'resolved'/'pending' "
-      + 'is outside the controlled vocabulary',
+      'Lookup result: Stored value unreadable. This stored value could not be read; '
+      + 'please re-run validation or contact the AI Curation developers.',
     )
   })
 
@@ -214,14 +217,29 @@ describe('HorizontalGridFieldCellContent', () => {
     ].join('\n\n'))
   })
 
-  it('shows each value\'s lines only on the cell that carries its details', () => {
+  it('describes a secondary cell by the lines on the cell that carries its details', () => {
     const gridCell = cell('ONT:0000101', { display_text: 'ONT:0000101', values: [resolvedValue()] })
     gridCell.resolutionDetails = []
-    const { container } = renderCell(gridCell)
+    gridCell.resolutionLinesId = null
+    gridCell.resolutionDescribedBy = ['lines-owner']
+    const { container } = render(
+      <>
+        <div id="lines-owner">Paper wording: structures near the gut Lookup result: Matched</div>
+        <HorizontalGridFieldCellContent
+          active={false}
+          cell={gridCell}
+          field={draftField()}
+          onSelect={vi.fn()}
+          state={gridCell.state}
+        />
+      </>,
+    )
 
     expect(slot(container, 'field-value')).toHaveTextContent(/^ONT:0000101$/)
     expect(slot(container, 'field-resolution')).toBeNull()
-    expect(screen.getByRole('button')).not.toHaveAttribute('aria-describedby')
+    expect(screen.getByRole('button')).toHaveAccessibleDescription(
+      'Paper wording: structures near the gut Lookup result: Matched',
+    )
   })
 
   it("shows a curator's edit with the paper wording but not the seeded lookup result", () => {

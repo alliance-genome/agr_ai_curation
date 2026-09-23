@@ -389,7 +389,13 @@ def test_unreadable_stored_value_reads_unresolved_without_breaking_the_row(site,
         assert value.lookup_outcome is None
         assert value.lookup_result == "Stored value unreadable"
         assert value.mention == "gut"
-        assert issue in value.issue
+        assert value.issue == (
+            "This stored value could not be read; please re-run validation or contact the "
+            "AI Curation developers."
+        )
     assert _workspace_field(row, "site.lookup_outcome").resolution.display_text == "Stored value unreadable"
     assert _summary_field(row, "note").value == "plain"
+    # The technical detail goes to the log, with where the value lives.
     assert "unreadable resolvable value" in caplog.text
+    assert "envelope_id=env-resolution envelope_revision=1 object_id=object-1" in caplog.text
+    assert issue in caplog.text

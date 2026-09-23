@@ -1180,7 +1180,83 @@ describe('buildHorizontalGridModel', () => {
     const model = modelForRows([workspaceRow({ candidate: covered, row })])
 
     expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'symbol', 'identifier'])
+    const [symbolCell, identifierCell] = model.rows[0]!.cells
     expect(model.rows[0]!.cells.map((cell) => cell.resolutionDetails.length)).toEqual([1, 0])
+    expect(symbolCell!.resolutionLinesId).not.toBeNull()
+    expect(identifierCell!.resolutionLinesId).toBeNull()
+    // The second identity cell is described by the first cell's lines.
+    expect(symbolCell!.resolutionDescribedBy).toEqual([symbolCell!.resolutionLinesId])
+    expect(identifierCell!.resolutionDescribedBy).toEqual([symbolCell!.resolutionLinesId])
+  })
+
+  it('puts a value\'s details on its first unedited cell, so the lookup line stays', () => {
+    const geneValue = resolvedValue({ value_path: '', display_text: 'abc-1 (GENE:1)', mention: 'abc-1' })
+    const covered = candidate({
+      id: 'candidate-edited-owner',
+      objectId: 'object-edited-owner',
+      order: 0,
+      fields: [
+        { ...draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-2' }), dirty: true },
+        draftField({ fieldKey: 'identifier', label: 'Gene ID', order: 1, value: 'GENE:1' }),
+      ],
+    })
+    const row = reviewRowWithFields('object-edited-owner', [
+      { path: 'symbol', resolution: { display_text: 'abc-1', values: [geneValue] } },
+      { path: 'identifier', resolution: { display_text: 'GENE:1', values: [geneValue] } },
+    ])
+
+    const model = modelForRows([workspaceRow({ candidate: covered, row })])
+
+    const [symbolCell, identifierCell] = model.rows[0]!.cells
+    expect(symbolCell!.resolutionDetails).toEqual([])
+    expect(identifierCell!.resolutionDetails).toEqual([geneValue])
+    expect(symbolCell!.resolutionDescribedBy).toEqual([identifierCell!.resolutionLinesId])
+  })
+
+  it('shows a covered leaf in its row when another row needs the leaf column', () => {
+    const geneValue = resolvedValue({
+      value_path: '',
+      display_text: 'UNRESOLVED',
+      mention: 'abc-1',
+      resolution_state: 'unresolved',
+      lookup_outcome: 'not_found',
+      lookup_result: 'Not found',
+    })
+    const projected = candidate({
+      id: 'candidate-projected',
+      objectId: 'object-projected',
+      order: 0,
+      fields: [
+        draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: null }),
+        draftField({ fieldKey: 'lookup_outcome', label: 'Lookup result', order: 1, value: 'not_found' }),
+      ],
+    })
+    const manual = candidate({
+      id: 'candidate-manual',
+      objectId: 'object-manual',
+      order: 1,
+      fields: [
+        draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-3' }),
+        draftField({ fieldKey: 'lookup_outcome', label: 'Lookup result', order: 1, value: 'matched' }),
+      ],
+    })
+    manual.projection_ref = null
+    const row = reviewRowWithFields('object-projected', [
+      { path: 'symbol', resolution: { display_text: 'UNRESOLVED', values: [geneValue] } },
+      {
+        path: 'lookup_outcome',
+        resolution: { display_text: 'Not found', values: [geneValue], leaf_key: 'lookup_outcome' },
+      },
+    ])
+
+    const model = buildHorizontalGridModel({
+      candidates: [projected, manual],
+      envelopeReviewRows: [workspaceRow({ candidate: projected, row })],
+    })
+
+    expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'symbol', 'lookup_outcome'])
+    expect(model.rows[0]!.cells[1]).toMatchObject({ hasField: true, displayText: 'Not found' })
+    expect(model.rows[1]!.cells[1]).toMatchObject({ hasField: true, displayText: 'matched' })
   })
 
   it('shows a value\'s own leaf in plain words when no cell of its value is in the grid', () => {

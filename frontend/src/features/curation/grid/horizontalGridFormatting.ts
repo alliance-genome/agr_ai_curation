@@ -160,7 +160,7 @@ export function horizontalGridValidatorWords(
   return values.flatMap((value) => [
     ...(value.validator_explanation ? [`Validator explanation: ${value.validator_explanation}`] : []),
     ...(value.validator_curator_message ? [`Validator message: ${value.validator_curator_message}`] : []),
-    ...(value.issue ? [`Stored value issue: ${value.issue}`] : []),
+    ...(value.issue ? [value.issue] : []),
   ])
 }
 
