@@ -305,9 +305,20 @@ profile with no such export performs no saved-flow repairs.
 ### Agent Studio system prompt
 
 Each healthy package profile must resolve exactly one `agent_studio_prompt`
-export. The export is a UTF-8 Markdown template and must retain the
-`{{USER_GREETING}}` and `{{PACKAGE_DIAGNOSTIC_TOOLS}}` placeholders when that
-dynamic context is desired:
+export. The export is a UTF-8 Markdown template. It may include the
+`{{PACKAGE_DIAGNOSTIC_TOOLS}}` placeholder where the installed diagnostic tool
+list belongs. It must not include `{{USER_GREETING}}`: the application appends
+the current user after all static instructions so the shared prefix stays
+cacheable, and a template that still contains the placeholder fails explicitly.
+
+Keep the always-sent template to behavioural rules. Reference material the
+assistant only sometimes needs (tool catalogs, long workflows, playbooks) goes
+in `<studio_guide_topic id="..." title="..." read_when="...">` blocks, each
+closed by `</studio_guide_topic>` on its own line. Those blocks are removed
+from the system prompt, listed in a short topic index, and served exactly
+through the bounded `read_studio_guide` tool (`AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS`
+per chunk). Topic ids must be unique across the package template and the
+backend core guide.
 
 ```yaml
 exports:

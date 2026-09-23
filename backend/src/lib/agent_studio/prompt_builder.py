@@ -7,12 +7,20 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from src.lib.agent_studio.models import ChatContext
 from src.lib.config.models_loader import is_model_selectable
 from src.lib.agent_studio.authoring_context import workshop_authoring_metadata_json
+from src.lib.agent_studio.studio_guide import (
+    PACKAGE_DIAGNOSTIC_TOOLS_PLACEHOLDER,
+    prepare_studio_prompt_template,
+    render_studio_guide_index,
+)
 from src.lib.openai_agents.config import (
     get_agent_studio_workshop_context_group_prompt_max_chars,
     get_agent_studio_workshop_context_metadata_max_chars,
     get_agent_studio_workshop_context_prompt_max_chars,
 )
 from src.lib.prompts.assembly import PromptLayerBundle
+
+
+USER_GREETING_PLACEHOLDER = "{{USER_GREETING}}"
 
 
 def format_prompt_layers_for_opus(bundle: PromptLayerBundle, *, group_id: Optional[str]) -> str:
@@ -325,26 +333,32 @@ def build_opus_system_prompt(
     developer_emails = [e.strip() for e in developer_emails if e.strip()]
     is_developer = user_email and user_email.lower() in developer_emails
 
-    # User greeting - inject for everyone
+    # User greeting - per-user content, so it follows every static section to
+    # keep the shared instruction prefix stable for prompt caching.
     user_greeting = ""
     if user_name:
-        user_greeting = f"\n\n**You are speaking with: {user_name}**\n"
+        user_greeting = f"**You are speaking with: {user_name}**"
         if is_developer:
             # Developer-specific prompt (content from .env for security)
             dev_prompt = os.getenv(
                 "PROMPT_EXPLORER_DEVELOPER_PROMPT",
                 "This user is a developer on the AI curation project. They may ask you to help with testing, debugging, or technical tasks beyond standard curator support. You can assist with these requests while maintaining your helpful assistant demeanor.",
             )
-            user_greeting += f"\n{dev_prompt}\n"
+            user_greeting += f"\n\n{dev_prompt}"
 
-    base_prompt = load_template().replace(
-        "{{USER_GREETING}}",
-        user_greeting,
-    ).replace(
-        "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
-        build_package_diagnostic_tools_prompt(),
-    )
-    base_prompt += """
+    template = load_template()
+    if USER_GREETING_PLACEHOLDER in template:
+        raise ValueError(
+            "The Agent Studio prompt template must not contain {{USER_GREETING}}; "
+            "the application appends the current user after all static instructions."
+        )
+    base_prompt, guide_topics = prepare_studio_prompt_template(template)
+    if PACKAGE_DIAGNOSTIC_TOOLS_PLACEHOLDER in base_prompt:
+        base_prompt = base_prompt.replace(
+            PACKAGE_DIAGNOSTIC_TOOLS_PLACEHOLDER,
+            build_package_diagnostic_tools_prompt(),
+        )
+    base_prompt = base_prompt.rstrip() + """
 
 ## Live authoring capabilities
 
@@ -446,9 +460,12 @@ may select a fitting stageable class or exploratory generic object; it must not
 escape a saved custom profile's closed contract. Never call a generic profile
 LinkML-aligned or submission-ready.
 """
+    base_prompt += "\n" + render_studio_guide_index(guide_topics) + "\n"
 
+    # Static tab guidance precedes all per-user and per-run context.
+    static_additions: List[str] = []
+    runtime_additions: List[str] = []
     if context:
-        additions = []
         workshop_draft_tools: Optional[List[str]] = None
 
         if context.active_tab == "agent_workshop" and context.agent_workshop:
@@ -533,7 +550,7 @@ LinkML-aligned or submission-ready.
 
             model_catalog_text = "\n".join(model_catalog_lines) if model_catalog_lines else "- Model catalog unavailable."
 
-            additions.append(f"""
+            static_additions.append("""
 <agent_workshop_context>
 ## Current Context: Agent Workshop
 
@@ -561,16 +578,6 @@ When ready, tell the curator they can edit the form or ask you to help, then Sav
 Every chat turn captures current editor values. Save continuation reviews refreshed
 saved settings; never suggest that each keystroke starts a chat turn.
 
-<workshop_authoring_metadata_preview>
-{metadata_preview}
-</workshop_authoring_metadata_preview>{metadata_truncated}
-
-Configured model options (authoritative recommendation source):
-{model_catalog_text}
-
-Recommend only from the configured options above. Use each entry's configured guidance,
-recommended uses, and default reasoning rather than relying on historical model names.
-
 Use this workshop context to give concrete prompt-engineering feedback, especially:
 1. how to improve the editable main/base prompt structure and specificity,
 2. what to test next in flow execution (and when to compare with the template-source prompt),
@@ -592,132 +599,47 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    explicitly means no structured output. Use typed edit_profile operations for profile
    basics, canonical fields, source labels and validator mappings; never put authoritative
    profile JSON in prompt text.
-   For custom extraction, establish the extracted thing and one-record boundary first.
-   Support ONE item type per custom agent for now. Build only the details the curator asks
-   for; reagents, paper labels, source status and suppliers are examples, not default fields.
-   Use the curator's language: Type of item, Additional guidance for this item type,
-   details, parts, Always include, and Allow an empty answer if the paper doesn’t say.
-   Walk through the item type, its details, and review. Do not ask curators to supply
-   technical keys, semantic classes, source aliases or validator mappings to get started.
-   Generate stable canonical identifiers yourself: new field keys use detail_ plus a
-   lowercase snake_case name, unique among sibling keys AND source labels. Preserve existing
-   keys, aliases and the semantic_class when renaming display names. Source labels are
-   optional matching metadata, not collected answers; leave them empty unless needed.
-   Ask only questions that materially affect the extraction, then propose a useful draft.
-   Use one answer per detail: text, whole number, decimal number, yes/no, choices, or
-   one object (an answer with several parts). Do not create arrays or repeating groups.
-   A part uses only a scalar or enum answer; never put groups inside parts. Keep a supplier
-   name and catalog number paired as sibling parts of one object. Add another part to
-   that SAME parent field_path; never create a second item type or an extra wrapper group.
-   The group itself pairs its parts. Always include maps to required (must exist), and
-   applies to a part only when its parent answer is included. Checking Stock number and
-   leaving Name unchecked requires the number but allows the name to be absent.
-   Allow an empty answer maps to nullable (may explicitly be unknown). These controls
-   are independent: required=true, nullable=true includes the detail but permits null;
-   required=true, nullable=false requires an actual value. Never invent a missing value
-   or turn on nullable just to make validation pass. Explain this only when relevant.
-   Additional guidance is the profile description: a short description of what qualifies
-   as an item, what to include/exclude, and what belongs in a separate record. The saved
-   description is passed to the extraction LLM IN ADDITION TO the saved agent prompt and
-   individual detail instructions. Encourage a brief complementary description; do not
-   demand a duplicate full prompt or replace the earlier prompt when changing this field.
-   Use update_basics with basics_update for targeted item name/description edits.
-   Use update_field with field_update for detail/part display_name, description, required,
-   nullable or value_schema changes. Omitted settings remain unchanged; use false or empty
-   text to clear a setting, not null. Use add_field to append a detail or sibling part;
-   use remove_field and reorder_fields for removal and order. Duplicate via add_field with
-   a fresh unique key and cleared aliases. Only replace_field for a full deliberate replacement.
-   Changing an answer format can discard choices or parts: retain compatible content and
-   explicitly describe any removal in the proposal. Existing saved lists/deeper groups
-   remain intact during unrelated edits; do not silently flatten them. If they need format
-   changes, explain the one-answer design and propose the explicit conversion for review.
-   After a proposal, describe what changed using display names and the parent group name.
-   Adding a part keeps the curator at the parent parts table; Edit opens that part's settings.
-   Always include is available in that table; the question-mark popup explains it. Done
-   returns from a part to its parent and keeps local edits; it does not save the agent.
-   inspect_workshop_profile reads current output, accessible saved profiles/exact revisions,
-   compatible validator_options and neutral preview values. Inspect current data before
-   proposing changes; discovery never selects or saves a resource. The current draft includes
-   manual edits sent with this chat turn, every display_name and description, keys and parent
-   groups. Resolve the curator's names to canonical field_path keys within the named group;
-   if identical names occur in different groups and the target is unclear, ask which group.
-   After Apply or manual edits, inspect current again and use the fresh fingerprint. A stale
-   proposal must be regenerated, never overwrite the curator's intervening changes. Do not
-   claim a proposal has changed the live draft until Apply reports success. Choose output through
-   the existing select_output operation: profile_bound_generic for a closed custom structure,
-   unprofiled_generic only for explicitly exploratory attributes, or an available packaged
-   format (development maturity is advisory). A null schema never implies open extraction.
-   Generic Objects retain system-owned identity, label, evidence and provenance. Profile
-   attributes are closed: every permitted key is declared; optional fields may be absent.
-   "Synonyms / source labels (not output fields)" recognize one canonical key, not extra keys.
-   Structural conformance is always enforced. Semantic validators require explicit compatible
-   opted-in capabilities, exact capability references/fingerprints and typed mappings.
-   Never infer a validator solely from a field name, invent a capability or attach an arbitrary
-   validator agent. Use "Validation", "Attach validator" and "Validator attached" with
-   curators. An attachment configures validation; it does not mean an answer passed validation.
-   To attach, change or remove a validator on a detail OR part, inspect current, then call
-   inspect_workshop_profile(action="validator_options"). Follow next_cursor with after when
-   needed. This authorized catalog includes built-in/installed-package validators and eligible
-   saved Workshop custom validators. metadata.origin identifies package versus custom_agent;
-   metadata.custom_validator records the exact saved custom revision. Use returned display
-   names when guiding the curator, not binding IDs, fingerprints or internal field paths.
-   Only offer selectable capabilities whose input_paths include the intended canonical field.
-   Compatibility of the answer format is necessary but does not establish semantic fit.
-   Explain what information the validator validates and which input the detail supplies,
-   for example "Use Gene identifier as Gene id". Ask a focused question if the meaning or
-   input association is ambiguous; a clear requested attachment needs no extra permission.
-   Propose edit_profile with action=set_mapping, using the returned capability_ref and
-   fingerprint, an explicit inputs slot/field_path association, and the supported policy.
-   A part's input path identifies that part within its parent, not the whole parent answer.
-   Other parts are not automatically validated. Use the same mapping_id to edit an existing
-   attachment; remove_mapping requires that exact mapping_id. Preserve unrelated mappings,
-   field definitions, parts and the earlier agent prompt. Never construct a custom pin from
-   a name or select the mutable current head in place of a returned saved revision.
-   Explain unresolved outcomes and any supported readiness/export blocking in plain language.
-   Use the catalog policy defaults; do not invent optional blocking or weaken a fixed blocking
-   requirement. Explain a fixed review requirement before proposing the attachment. Distinguish
-   minimum lookup inputs from optional species, sibling-field and evidence context. Do not ask
-   curators to add a paper-quote field when the capability does not require evidence. Where an
-   optional package context selector supplies useful evidence, map it as context rather than
-   copying evidence into a custom field. Missing optional context is not a reason to refuse lookup.
-   Do not add output fields merely to attach a validator. When no validated
-   values need writing back, outputs may be empty. If the curator wants resolved values saved,
-   explicitly associate returned output slots with compatible existing or requested details.
-   Apply updates the live draft and its Validator attached indicators; Workshop Save remains
-   separate. A parent can show No and "1 part has a validator" because only the part is mapped.
-   If no capability fits, explain that no compatible semantic validator is available and
-   structural validation still applies. Do not suggest creating an arbitrary custom agent
-   as a workaround: a Workshop validator must appear as eligible in validator_options.
-   Verify custom fields against their pinned profile, not generic_reagent_candidate or an
-   unrelated packaged envelope. A custom profile is not LinkML-aligned or submission-ready.
+   Before proposing a custom item type, its details or parts, or any edit_profile field
+   operation, read studio guide topic `workshop_profile_design`. Before choosing the draft
+   output format or attaching, changing or removing a validator, read studio guide topic
+   `workshop_output_and_validators`. Throughout: support ONE item type per custom agent;
+   never invent a missing value or turn on nullable just to make validation pass; after
+   Apply or manual edits, inspect current again and regenerate a stale proposal rather than
+   overwrite the curator's intervening changes; never attach a validator that
+   validator_options did not return or infer one solely from a field name.
    Extraction-time agents cannot edit their saved contract. If asked to save, explain that
    the curator must activate Workshop Save; never invoke persistence or open its confirmation.
 9. When in Workshop, use Workshop capabilities; flow editing resumes on the Flows tab.
 11. before reviewing or commenting on current prompt text, use `refresh_workshop_prompt`; read the summary and follow every deterministic `next_call` until `complete=true`. Reconstruct the exact text from ordered chunk ranges, treat conversation history and older versions as historical, and never report text as present unless it appears in those refreshed chunks.
    - every ID listed in `group_prompt_override_ids` is callable with `target_prompt="group"` and `target_group_id`; inspect each relevant override rather than assuming only the selected group exists.
    - if the metadata preview is incomplete, reconstruct it with `target_prompt="metadata"` before making metadata-dependent claims.
-12. when proposing or applying prompt edits, use this distilled OpenAI-style prompt playbook:
-   - put core instructions first, then separate context/examples with clear delimiters (`###` sections or triple quotes),
-   - make directions specific and measurable (length, format, required fields, decision rules),
-   - prefer explicit output schemas and short examples over vague prose,
-   - replace vague wording ("brief", "not too much") with concrete bounds,
-   - avoid "don't do X" alone; add the preferred behavior ("do Y instead"),
-   - start with minimal/targeted edits first; escalate to larger rewrites only when needed,
-   - for extraction/factual behavior, prioritize deterministic wording over creative language.
-13. in reviews, explicitly check whether the updated prompt follows the playbook above and call out any misses.
+12. before proposing, applying or reviewing prompt edits, read studio guide topic `prompt_playbook`.
+13. in reviews, explicitly check whether the updated prompt follows the `prompt_playbook` topic and call out any misses.
 14. choose the right target for edits:
    - use main prompt updates for overlay guidance that should apply across all groups,
    - use group prompt updates only for organism/group-specific exceptions or conventions.
-
-<workshop_prompt_draft>
-{draft_prompt}
-</workshop_prompt_draft>{truncated}
-{selected_group_prompt_block}
 
 Prompt injection note:
 - Structured output instructions are inserted near the first `## ` heading.
 - If the draft lacks `## ` headings, insertion happens at the top.
 </agent_workshop_context>""")
+            runtime_additions.append(f"""
+<agent_workshop_current_draft>
+<workshop_authoring_metadata_preview>
+{metadata_preview}
+</workshop_authoring_metadata_preview>{metadata_truncated}
+
+Configured model options (authoritative recommendation source):
+{model_catalog_text}
+
+Recommend only from the configured options above. Use each entry's configured guidance,
+recommended uses, and default reasoning rather than relying on historical model names.
+
+<workshop_prompt_draft>
+{draft_prompt}
+</workshop_prompt_draft>{truncated}
+{selected_group_prompt_block}
+</agent_workshop_current_draft>""")
 
         if context.selected_agent_id:
             # Get the agent info to provide context
@@ -733,7 +655,7 @@ Prompt injection note:
                         "See workshop_authoring_metadata_preview (or its exact metadata continuation)"
                     ]
 
-                additions.append(f"""
+                runtime_additions.append(f"""
 ## Current Context
 
 The curator is viewing the **{agent.agent_name}** agent.
@@ -754,20 +676,20 @@ The curator is viewing the **{agent.agent_name}** agent.
                     group_id=selected_group_id,
                 )
                 if bundle is not None:
-                    additions.append(
+                    runtime_additions.append(
                         format_prompt_layers_for_opus(bundle, group_id=selected_group_id)
                     )
 
                 if agent.has_group_rules:
                     available_groups = list(agent.group_rules.keys())
-                    additions.append(f"""
+                    runtime_additions.append(f"""
 This agent has group-specific rules available for: {', '.join(available_groups)}. The selected group is {selected_group_id or 'None'}.""")
 
         if context.trace_id:
             # Provide lightweight trace context with tool usage instructions
             trace_context = prepare_trace_context(context.trace_id)
             if trace_context:
-                additions.append(trace_context)
+                runtime_additions.append(trace_context)
 
         # Add flow context when user is on the Flows tab
         if context.active_tab == "flows":
@@ -831,7 +753,7 @@ For Flow Builder authoring, guide a conversation one decision at a time:
   a summary, table or both. Use supported source fields, never invent data.
   Save agreed presentation guidance on that output step's custom_instructions
   through update_step. If a saved column layout is requested or already exists,
-  inspect and update its projection_plan as needed using the projection tools below;
+  inspect and update its projection_plan as needed using the projection tools (studio guide topic `flow_design`);
   a contradictory instruction does not replace a saved layout. Keep extraction
   guidance on the extraction step and presentation guidance on the output step.
 - Each proposal should cover only the current agreed decision. Use a short,
@@ -852,17 +774,7 @@ For Flow Builder authoring, guide a conversation one decision at a time:
   biological approval. End each stage with a clear next action, not a technical
   audit report.
 
-When a file output layout is stale after changing its extractor, explain the exact UI action: open the CSV, TSV or JSON output step, click "Choose output fields", review and confirm the fields, then save the flow. Preserve intended columns and sources. Do not suggest prompt edits or Reset Chat to fix a stale layout. Do not promise that this resolves every HTTP 422: inspect the actual validation findings. If asked to fix it through chat, propose only the necessary projection-plan update for review; Apply changes the draft and Save persists it.
-
-For verification, follow this targeted evidence protocol:
-Budget-aware inspection: use get_current_flow_topology(section="all") for all topology sections together and get_current_flow_projection_plan(node_id, view="complete_plan") for the complete saved plan. Follow returned next_call only when incomplete; do not reread the same facts field by field. Empty instruction fields need no fetch. Inspect only agents used by this flow, not unrelated catalog entries. For a direct structured export node, its agent/group/custom output prompts do not execute: explain that scoped behavior instead of auditing those inactive prompts. Extraction prompts still execute and require review. If the available evidence or remaining turn budget is insufficient, report verification INCOMPLETE with the specific outstanding checks; never infer PASS.
-1. Treat the first manifest as authoritative. FAIL if `has_critical_issues=true` or any `findings` entry has severity `CRITICAL`.
-2. Reconstruct exact `task_instructions`, every nonempty active `custom_instructions`, and each judgment-relevant `step_goal` with `get_current_flow_instructions(node_id, field, cursor, limit)`. Execute the returned `next_call` until `complete=true` for every required field.
-3. Inspect `get_current_flow_topology(section="all")`, covering `issues`, `control_path`, `control_edges`, `output_bindings`, and `validation_sidecars`. Fetch relevant `get_current_flow_node` scalar details, `get_current_flow_projection_plan` field or JSON-Pointer sections, `get_current_flow_validation_warnings` pages, and `get_current_flow_validation_schedule` sections (`selections`, `scheduled_validators`, `opt_outs`, `replacement_validators`, `supplemental_validators`, `inactive_metadata`) only when the verification criteria require them. For every paged current-flow detail response, execute its returned `next_call` until `complete=true` and no `next_call` remains.
-4. Only if output capability or placement remains uncertain from current-flow metadata, call `get_available_agents(category="Output")` and execute each returned `next_call` through ordinary pages and exact record chunks until `complete=true` and no `next_call` remains; an unfiltered page cannot prove the Output boundary. Output agents are attachment branches with ordered `source_steps`, not terminal control nodes, so do not require the control path to end with an Output agent.
-5. For a custom agent, first read its exact agent_revision_id from the flow node and use inspect_saved_studio_resource(action="agent_revision", agent_id, revision_id, section="prompt_manifest"). Review all frozen core_static, core_generated and base prompt layers before judging the prompt; instructions alone are only its editable portion. Read sections "tools", "settings", "output_profile" and the applicable "group_prompts" (group_id) only as needed. Follow next_call through every required section; concatenate JSON content pages before interpreting them. Do not call built-in-only get_prompt or get_tool_inventory with a custom ca_ ID, and never substitute the template prompt for its saved revision. For each selected tool_id, inspect get_tool_details(tool_id) without the unsupported custom agent filter. For a built-in agent, before judging its prompt, call `get_prompt(agent_id, group_id, view="summary")`, then reconstruct every required `view="effective_prompt"` or selected `view="layer"` text through `next_cursor` until `complete=true`. A custom-instruction judgment requires both the exact node `custom_instructions` and the complete relevant base/effective prompt.
-6. For document/PDF capability claims about custom agents, use the exact saved revision tools section above. For built-in agents, use `get_tool_inventory(agent_id=<node agent>)` or another focused query and follow `next_cursor` until `truncated=false` and no `next_cursor` remains before judging capability or reporting PASS. Then use method/PDF-level `get_tool_details(tool_id, agent_id)`; never use the unsafe global inventory or oversized parent-tool metadata.
-7. For domain or validator claims, call `get_domain_pack_validation_plan(agent_id=<node agent> or domain_pack_id=<id>)` for its compact summary, then retrieve only evidence-relevant section pages from `object_definitions`, `fields`, `validators`, `validator_bindings`, `field_policies`, or `validation_attachments` until complete.
+Before designing a new flow, configuring an output step, projection plan, fixed columns or export execution mode, or fixing a stale output layout, read studio guide topic `flow_design`. Before verifying a flow, auditing its configuration or reporting PASS or FAIL, read studio guide topic `flow_verification` and follow its protocol and checklist.
 
 **PASS gate:** NEVER report PASS when a required detail is incomplete, selected text or a section has another page, or any required response is `compacted_tool_result`. Duplicate `output_key` is HIGH unless authoritative validation classifies it CRITICAL. Keep suggestions evidence-based; do not page through unrelated catalogs or domain metadata speculatively.
 
@@ -871,34 +783,13 @@ Do not recommend standalone flow steps for validators that are absent from `get_
 
 <responsibilities>
 **Your role:**
-1. **Verify** - Check flow structure against validation checklist
+1. **Verify** - Check flow structure against the `flow_verification` checklist
 2. **Suggest** - Recommend better ordering, missing steps, optimizations
 3. **Explain** - Help curators understand what each agent does
 4. **Debug** - Identify problems in flow structure or configuration
 5. **Author proposals** - Compile requested changes for explicit curator review
 </responsibilities>
 
-<validation_checklist>
-**When asked to verify, check for:**
-1. **Initial Instructions MUST Be First** - Every flow MUST start with the Initial Instructions node (task_input). This is the entry point that defines what the curator wants to accomplish.
-2. **All Nodes Connected** - Disconnected nodes = steps that won't execute
-3. **Logical Step Order** - Each agent appears in the right sequence for the curator's task
-4. **Custom Instructions Redundancy** - For EACH node with custom instructions:
-   - Retrieve its exact `custom_instructions` through completion
-   - Retrieve the prompt summary and complete relevant base/effective text through completion
-   - Compare the exact custom instructions to that exact prompt content
-   - Flag any duplication (phrases, instructions, or concepts already in base)
-5. **Missing Agents** - Any important processing steps absent?
-6. **Redundant Steps** - Any agents called unnecessarily?
-7. **Domain Envelope Production** - Which extraction nodes produce domain-envelope objects, which object types/field paths they create, and which schema/provider refs define them?
-8. **Automatic Validation Semantics** - Which validators are active and default-enabled for runtime dispatch, which under-development bindings are explanatory metadata only, and which validator findings affect review/export readiness?
-9. **Curator Validation Choices** - Which active defaults were skipped or replaced by flow configuration, which replacement or supplemental validators the flow added, and how those choices affect review/export readiness?
-
-**CRITICAL for item 4:** This applies only to prompts that execute; direct-export output-node prompts are inactive. You MUST actually complete the targeted instruction and prompt calls for each agent with custom instructions. Do NOT skip this step or guess based on agent name alone.
-**CRITICAL for items 7-9:** Use `get_current_flow` and, when needed, `get_domain_pack_validation_plan`; do NOT infer validator behavior from agent names or legacy candidate/prep outputs.
-**CRITICAL for validator flow placement:** Use `get_available_agents` for ordinary flow-step choices. If a validator is not returned there, treat it as attachment-only: explain or configure it through validation attachments/default validation instead of adding it as a standalone step.
-**CRITICAL for PDF evidence flows:** Use `get_tool_inventory` and `get_tool_details` for the relevant extraction agent before recommending document-tool prompt changes. Preserve the `search_document` -> `read_chunk` -> `record_evidence(span_ids=[...])` workflow and the active-run evidence workspace tools; do not suggest quote-generation or fuzzy quote repair instructions.
-</validation_checklist>
 
 <flow_design_guidance>
 ## Flow Design Best Practices
@@ -908,40 +799,6 @@ Do not recommend standalone flow steps for validators that are absent from `get_
 2. **Extraction/Verification agents** - Process the document
 3. **Automatic validation** - Domain-pack metadata and curator selections schedule active validators through runtime dispatch after extraction
 4. **Output branches** (required for a finished flow; file or chat) - Attach each CSV, TSV, JSON, or chat formatter to one or more earlier extraction or typed validation nodes through ordered `source_steps`
-
-Each step receives the flow task, loaded document context, selected agent, and
-that node's custom instructions. Do not recommend custom input templates or
-previous-step output prompts; earlier structured artifacts are preserved by the
-runtime for review/export lookup instead of being pasted into later step
-prompts.
-
-**Initial Instructions should specify:**
-- What to extract (e.g., "Extract all alleles mentioned in this paper")
-- What data categories to capture (e.g., "For each allele, capture: parent gene symbol, allele identifier, phenotype description")
-- Any validation steering or curator choices (e.g., "Run default validation and explain any flow opt-outs")
-
-**When exporting to file (CSV/TSV/JSON):**
-- The Initial Instructions should define WHAT data to collect
-- Domain envelopes define the semantic objects; review rows and files are projections from those objects
-- Every formatter is a terminal output branch bound through ordered `source_steps` to one or more earlier extraction or typed validation results; grouped sources are projected together in that declared order
-- Multiple formatters may attach to one extractor, and a flow may attach formatters to different extractors; each branch produces its own independent artifact
-- The ordinary control-flow chain may continue after an output branch. Do not describe an output attachment as passing data into the next extraction step
-- Filename metadata is runtime-owned. Use output_filename_template with built-ins such as {{input_filename_stem}} and {{timestamp}}; do not require document names or timestamps to exist as extraction fields
-- The formatter agent (chat_output, csv_formatter, tsv_formatter, json_formatter) should define HOW to present projected data
-- Formatter custom instructions should specify column headers, row source, filters, sorting, grouping, and omitted fields when needed
-- When the curator requests fixed saved columns or a deterministic saved mapping, search output_contract capabilities for formatter_projection_plan and read its complete json_schema before proposing update_step.projection_plan. Read get_current_flow_projection_plan with the output node_id and view=source_fields, following all next_call pages. Use each returned field's ref verbatim, never its profile_path or an inferred attributes path. Omit source_keys/source_extraction_result_ids when using all attached sources; node output_key is not a runtime artifact selector. Do not guess enum values, column keys or transform properties, and do not substitute instructions alone for a requested saved plan. Repair each precise projection validation finding before presenting Apply.
-- For curator-selected fixed fields, use selection_mode="selected_fields", row_source="object", row_strategy="wide_union", json_shape="rows". Copy selected_sources entries from source_fields: node_id plus exact schema_fingerprint. Each column must have source_node_id, the exact field_ref, and a distinct curator-friendly key/header. Select only connected sources with declared fields. Use missing_value=null for JSON and "" for CSV/TSV. Do not add transforms, filters, limits, grouping, or runtime source selectors in this mode. The server enforces this layout; prompts cannot override it. All selected columns exist, while optional source answers may be missing. Never silently change extractor requiredness.
-- Explain the two execution modes in curator language: direct structured export is faster because it skips the formatter model call and copies selected saved values programmatically; AI output runs the formatter instructions to choose a supported projection. Do not promise a fixed speedup: extraction, validation, file size and shared server load still affect total time. Suggest direct export when the curator wants saved values unchanged, including simple column labels/order. Use AI output for supported instruction-guided arrangements; never promise unsupported field combinations or transformations.
-- Export execution is an explicit choice, separate from field selection. Use update_step.export_execution_mode="direct" only after explaining that agent/group/output prompts will not run and the curator chooses unchanged structured export; it requires a valid selected_fields plan. Existing flows default to "ai". Never infer consent to bypass prompts merely from selected fields. Direct mode copies nested groups/lists intact (native JSON, JSON in CSV/TSV cells), with no transformation or inferred record joins. To use instructions, set export_execution_mode="ai"; use projection_plan=null if the layout should also be guided. Workshop set_export_execution_mode sets only the default for NEW flow steps; existing steps retain their choices. Preserve inactive prompt text and explain it is not used by direct export.
-- Explain the choice: "Use selected fields" fixes the layout; "Let AI arrange the output" uses instructions to choose a projection at runtime. Groups/lists can be exported intact (native JSON or JSON in CSV/TSV cells); selecting separate parts makes separate columns. Records from different sources remain separate rows, never inferred joins. Inspect and propose all field choices, labels, order, source choices, and mode changes through update_step.projection_plan. To return to guided output, explicitly set projection_plan=null.
-- The runtime owns extraction, projection, serialization, file saving, and chat rendering; do not recommend model-authored file contents
-
-**Example flow for allele extraction:**
-1. **Initial Instructions**: "Extract alleles from this paper. For each allele, capture: parent gene symbol, allele identifier, and phenotype. Run the default validation attachments and report any unresolved identifiers."
-2. **PDF Extraction**: Extract relevant sections
-3. **Allele Extraction**: Produce domain-envelope allele objects with field paths and schema/provider refs
-4. **Automatic Validation**: Scheduled validators write findings and lookup attempts back into the envelope
-5. **CSV Formatter branch attached to Allele Extraction**: "Export with columns: parent_gene, allele_id, phenotype"
 </flow_design_guidance>
 
 <output_format>
@@ -953,9 +810,15 @@ prompts.
 </output_format>
 </flow_context>"""
 
-            additions.append(flow_context)
+            static_additions.append(flow_context)
 
-        if additions:
-            base_prompt += "\n" + "\n".join(additions)
+    if user_greeting:
+        runtime_additions.insert(0, f"""
+<current_user>
+{user_greeting}
+</current_user>""")
+    additions = [*static_additions, *runtime_additions]
+    if additions:
+        base_prompt += "\n" + "\n".join(additions)
 
     return base_prompt

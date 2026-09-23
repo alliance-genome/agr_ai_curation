@@ -183,7 +183,6 @@ def test_supervisor_prompt_explains_result_inspection_boundaries():
     normalized_prompt = " ".join(prompt_text.split())
 
     assert "inspect_results(action=\"help\")" in prompt_text
-    assert "inspect_results(action=\"search\"" in prompt_text
     # ALL-1287: counts first, filtered pages, bounded continuation.
     assert "inspect_results(action=\"summary\")" in prompt_text
     assert "`validation_state`" in prompt_text
@@ -194,7 +193,20 @@ def test_supervisor_prompt_explains_result_inspection_boundaries():
         "Do not silently export a different result than the curator requested."
         in normalized_prompt
     )
-    assert "do not call another extractor just to summarize" in normalized_prompt
+    # ALL-1292: completion, search-before-rerun and export selection live once in
+    # the runtime notes; the base prompt defers to them instead of repeating them.
+    assert "EXTRACTION RESULT COMPLETION and EXPORT/DOWNLOAD ROUTING notes" in normalized_prompt
+    assert "inspect_results(action=\"search\"" not in prompt_text
+    note = supervisor_agent._build_runtime_tool_availability_note(
+        tool_specs=[{"tool_name": "ask_csv_formatter_specialist", "agent_key": "csv_formatter"}],
+        available_specialist_tools=[SimpleNamespace(name="ask_csv_formatter_specialist")],
+        document_loaded=True,
+    )
+    assert note.count("EXTRACTION RESULT COMPLETION:") == 1
+    assert "search/list existing results before rerunning" in note
+    assert "Do not call extractors again only to summarize existing results" in note
+    assert note.count("EXPORT/DOWNLOAD ROUTING:") == 1
+    assert "select only a result_ref listed in the runtime formatter bundle" in note
     assert "Export and curation prep are separate explicit actions" in prompt_text
     assert "trace inspection only to debug behavior" in prompt_text
     assert "inspect_curation_context" not in prompt_text

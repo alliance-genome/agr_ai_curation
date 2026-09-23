@@ -86,6 +86,10 @@ from src.lib.agent_studio.tool_search_authorization import (
 import src.lib.agent_studio.chat_session as agent_studio_chat_session
 import src.lib.agent_studio.domain_envelope_tools as agent_studio_domain_envelope_tools
 import src.lib.agent_studio.prompt_builder as prompt_builder
+from src.lib.agent_studio.studio_guide import (
+    READ_STUDIO_GUIDE_TOOL_NAME,
+    read_studio_guide,
+)
 from src.lib.agent_studio.flow_tools import (
     set_workflow_user_context,
     clear_workflow_user_context,
@@ -1415,6 +1419,13 @@ def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
         logger=logger,
         is_allowed=_is_tool_allowed_for_context,
     )
+
+
+# Always visible: capability discovery and the reference guide the system
+# prompt's topic index tells the model to read (ALL-1292).
+_EAGER_STUDIO_TOOL_NAMES = frozenset(
+    {"search_studio_capabilities", READ_STUDIO_GUIDE_TOOL_NAME}
+)
 
 
 def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
@@ -2901,6 +2912,16 @@ async def _execute_tool_call(
         caller_email=user_email,
     )
 
+    if tool_name == READ_STUDIO_GUIDE_TOOL_NAME:
+        return read_studio_guide(
+            template=_load_agent_studio_system_prompt_template(),
+            render_diagnostic_tools=prompt_builder.build_package_diagnostic_tools_prompt,
+            topic=tool_input.get("topic"),
+            query=tool_input.get("query"),
+            start=tool_input.get("start"),
+            content_hash=tool_input.get("content_hash"),
+        )
+
     if tool_name in _CAPABILITY_CATALOG_TOOLS:
         if user_db_id is None:
             return {
@@ -4375,7 +4396,7 @@ async def chat_with_opus(
                 state=run_state,
                 namespace_for_tool=_agent_studio_tool_namespace,
                 forced_tool_name=forced_tool_name,
-                eager_tool_names=frozenset({"search_studio_capabilities"}),
+                eager_tool_names=_EAGER_STUDIO_TOOL_NAMES,
             )
         except Exception as exc:
             _report_agent_studio_exception_once(

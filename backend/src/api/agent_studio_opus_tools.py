@@ -18,6 +18,7 @@ from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.flow_tools import register_flow_tools
 from src.lib.agent_studio.workshop_authoring import WorkshopOperation
 from src.lib.agent_studio.saved_resource_inspection import SavedResourceInspection
+from src.lib.agent_studio.studio_guide import READ_STUDIO_GUIDE_TOOL_NAME
 from src.lib.agent_studio.workshop_actions import WorkshopActionRequest
 from src.lib.chat_history_repository import (
     ALL_CHAT_KINDS_SENTINEL,
@@ -131,6 +132,36 @@ SEARCH_STUDIO_CAPABILITIES_TOOL = {
                 "minimum": 1,
                 "maximum": get_tool_page_max_limit(),
                 "default": min(get_tool_page_default_limit(), get_tool_page_max_limit()),
+            },
+        },
+        "required": [],
+    },
+}
+
+READ_STUDIO_GUIDE_TOOL = {
+    "name": READ_STUDIO_GUIDE_TOOL_NAME,
+    "description": (
+        "Read the application-owned Agent Studio reference guide named in the "
+        "Studio Guide topic index of your instructions. Omit topic to list topics "
+        "(optionally filtered by query); pass topic to read its exact text and "
+        "follow next_call with start and content_hash until complete=true."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "topic": {"type": "string", "description": "Topic id from the Studio Guide index."},
+            "query": {
+                "type": "string",
+                "description": "Optional case-insensitive text filter when listing topics.",
+            },
+            "start": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Character offset from next_call; omit for the first chunk.",
+            },
+            "content_hash": {
+                "type": "string",
+                "description": "content_hash from the previous chunk; required with a nonzero start.",
             },
         },
         "required": [],
@@ -1322,6 +1353,7 @@ COMMON_TOOLS = {
     "search_chat_history",
     "submit_prompt_suggestion",
     "report_tool_failure",
+    READ_STUDIO_GUIDE_TOOL_NAME,
 }
 DOMAIN_ENVELOPE_TOOLS = {
     "list_domain_envelopes",
@@ -1391,6 +1423,7 @@ CAPABILITY_CATALOG_TOOLS = {
 
 _BUILTIN_OPUS_TOOLS = (
     SUGGESTION_TOOL,
+    READ_STUDIO_GUIDE_TOOL,
     INSPECT_SAVED_STUDIO_RESOURCE_TOOL,
     WORKSHOP_ACTION_TOOL,
     SEARCH_STUDIO_CAPABILITIES_TOOL,
