@@ -3811,7 +3811,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3940,7 +3940,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5280,6 +5280,12 @@
           "type": "array"
         },
         {
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
           "default": null,
           "description": "A cleaned-up version of the allele name the agent suggests, offered as a hint for the allele specialist.",
           "name": "normalized_hint",
@@ -5583,6 +5589,12 @@
         {
           "description": "How sure the agent is about this finding (high, medium, or low).",
           "name": "confidence",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
           "required": true,
           "type": "string"
         },

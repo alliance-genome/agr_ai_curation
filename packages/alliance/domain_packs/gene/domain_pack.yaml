@@ -117,6 +117,10 @@ object_definitions:
             fields:
               - proposed_gene_symbol
               - proposed_taxon
+          - id: rationale
+            label: Rationale
+            fields:
+              - rationale
           - id: evidence_location
             label: Evidence location
             fields:
@@ -326,6 +330,11 @@ object_definitions:
         display_name: Confidence
         required: true
         enum_ref: GeneMentionConfidence
+      - field_path: rationale
+        field_type: string
+        display_name: Rationale
+        required: false
+        description: Curator-facing reason the extractor selected this gene as curatable from the paper, written at extraction time; separate from how the gene identity was resolved.
       - field_path: evidence_record_id
         field_type: string
         display_name: Evidence record ID

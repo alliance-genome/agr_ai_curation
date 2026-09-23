@@ -98,6 +98,7 @@ fixtures:
         allele_label: unc-54(e190)
         evidence_record_ids:
         - evidence-unc54-1
+        rationale: The paper's own paralysis assay characterizes e190, so this allele is curatable here rather than only named.
         reference_title: Myosin assembly in C. elegans body-wall muscle
       model_ref: AllelePaperEvidenceAssociationPayload
       schema_ref:

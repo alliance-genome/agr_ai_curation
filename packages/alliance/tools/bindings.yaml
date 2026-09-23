@@ -1028,6 +1028,10 @@ tools:
             type: string
             required: true
             description: How sure the agent is about this finding (high, medium, or low).
+          - name: rationale
+            type: string
+            required: true
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: species
             type: any
             required: false
@@ -1085,7 +1089,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_gene_mention_evidence
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:discard_gene_mention_evidence
@@ -1480,6 +1484,10 @@ tools:
             type: array
             required: true
             description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
+          - name: rationale
+            type: string
+            required: true
+            description: A short reason (at most 300 characters) the agent gives for selecting this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: normalized_hint
             type: any
             required: false
@@ -1532,7 +1540,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
   - tool_id: discard_allele_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:discard_allele_observation

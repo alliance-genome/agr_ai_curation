@@ -68,6 +68,7 @@ def _staged_fields() -> dict[str, Any]:
         "pending_ref_id": "allele-mention-1",
         "mention": "unc-54(e190)",
         "source_mentions": ["unc-54(e190)"],
+        "rationale": "The paper's own paralysis assay characterizes e190, so this allele is curatable here.",
         "associated_gene": "unc-54",
         "taxon": "NCBITaxon:6239",
         "reference_title": "Myosin assembly in C. elegans body-wall muscle",
@@ -129,6 +130,7 @@ def test_h2_ab1_guidance_survives_stage_materialization_request_and_review(monke
     staged = tools._stage_allele_observation_impl(
         pending_ref_id="h2-ab1", mention="H2-Ab1 f/f", evidence_record_ids=["evidence-unc54-1"],
         source_mentions=["H2-Ab1 f/f", "Cyagen"], associated_gene="H2-Ab1",
+        rationale="The paper uses H2-Ab1 f/f mice for its conditional knockout experiments.",
         taxon="Mus musculus", validation_guidance=guidance,
     )
     assert staged.status == "ok"
@@ -191,6 +193,7 @@ def test_allele_builder_materializer_produces_clean_extraction_output():
     assert "allele_identifier" not in association["payload"]
     assert association["evidence_record_ids"] == ["evidence-unc54-1"]
     assert association["payload"]["evidence_record_ids"] == ["evidence-unc54-1"]
+    assert association["payload"]["rationale"] == _staged_fields()["rationale"]
     # Existing-pack posture preserved: write/export remain blocked (the write_blocked BLOCKER is a
     # domain finding surfaced downstream, NOT a structural code).
     assert association["metadata"]["write_behavior"]["status"] == "blocked"
@@ -432,3 +435,147 @@ def test_attached_field_only_evidence_survives_allele_materialization():
     assert result.ok, result.summary()
     assert result.payload is not None
     assert result.payload["metadata"]["evidence_records"][0]["evidence_record_id"] == "evidence-unc54-1"
+
+
+def _rationale_tools(monkeypatch):
+    from agr_ai_curation_alliance.tools import allele_builder_tools as tools
+
+    workspace = ExtractionBuilderWorkspace(
+        run_id="allele-rationale", domain_pack_id=ALLELE_DOMAIN_PACK_ID
+    )
+    monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
+    monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_event: None)
+    return tools, workspace
+
+
+def _stage_unc54(tools, rationale):
+    return tools._stage_allele_observation_impl(
+        pending_ref_id="allele-mention-1",
+        mention="unc-54(e190)",
+        evidence_record_ids=["evidence-unc54-1"],
+        source_mentions=["unc-54(e190)"],
+        rationale=rationale,
+    )
+
+
+def test_stage_allele_tool_requires_rationale_with_shared_description():
+    from agr_ai_curation_alliance.tools import allele_builder_tools as tools
+    from agr_ai_curation_alliance.tools.builder_rationale import RATIONALE_ARG_DESCRIPTION
+
+    schema = tools.stage_allele_observation.params_json_schema
+    assert "rationale" in schema["required"]
+    assert schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+    patch_schema = tools.patch_allele_observation.params_json_schema
+    assert "rationale" not in patch_schema["properties"]
+    assert (
+        "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared."
+        in patch_schema["properties"]["updates"]["description"]
+    )
+
+
+def test_stage_allele_rationale_is_stripped_and_staged(monkeypatch):
+    tools, workspace = _rationale_tools(monkeypatch)
+    staged = _stage_unc54(tools, "  e190 is the allele this paper assays.  ")
+    assert staged.status == "ok"
+    candidate = workspace.get_candidate(staged.data["candidate_id"])
+    assert candidate.staged_fields["rationale"] == "e190 is the allele this paper assays."
+
+
+def test_stage_allele_rejects_blank_or_overlong_rationale(monkeypatch):
+    tools, workspace = _rationale_tools(monkeypatch)
+    for bad_value, expected in (("   ", "non-empty"), ("x" * 301, "at most 300")):
+        result = _stage_unc54(tools, bad_value)
+        assert result.status == "error"
+        issues = result.data["validation_issues"]
+        assert [issue["field_path"] for issue in issues] == ["rationale"]
+        assert expected in issues[0]["message"]
+    assert not workspace.candidates
+
+
+def test_patch_allele_rationale_replaces_and_rejects_clearing(monkeypatch):
+    tools, workspace = _rationale_tools(monkeypatch)
+    candidate_id = _stage_unc54(tools, "Original reason.").data["candidate_id"]
+
+    patched = tools._patch_allele_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="allele-mention-1",
+        updates=[{"field_path": "rationale", "string_value": " Better reason. "}],
+    )
+    assert patched.status == "ok"
+    assert workspace.get_candidate(candidate_id).staged_fields["rationale"] == "Better reason."
+
+    for cleared in ("", "   ", None):
+        rejected = tools._patch_allele_observation_impl(
+            candidate_id=candidate_id,
+            pending_ref_id="allele-mention-1",
+            updates=[{"field_path": "rationale", "string_value": cleared}],
+        )
+        assert rejected.status == "error"
+        assert rejected.data["validation_issues"][0]["reason"] == "invalid_rationale"
+    assert workspace.get_candidate(candidate_id).staged_fields["rationale"] == "Better reason."
+
+
+def test_allele_builder_rejects_missing_rationale():
+    staged = _staged_fields()
+    del staged["rationale"]
+    workspace = ExtractionBuilderWorkspace(
+        run_id="allele-builder-no-rationale",
+        domain_pack_id=ALLELE_DOMAIN_PACK_ID,
+        agent_id="allele_extractor",
+    )
+    workspace.upsert_candidate(
+        candidate_id="allele-candidate-1",
+        staged_fields=staged,
+        pending_ref_ids=["allele-mention-1"],
+        evidence_record_ids=["evidence-unc54-1"],
+        resolver_selection_refs=[],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    result = materialize_allele_builder_state(
+        workspace=workspace,
+        candidate_ids=["allele-candidate-1"],
+        evidence_records=_evidence_records(),
+        resolver_entry_lookup=None,
+    )
+    assert not result.ok
+    assert any(
+        issue["reason"] == "missing_rationale" and issue["field_path"] == "rationale"
+        for issue in result.issues
+    )
+
+
+def test_allele_pack_declares_optional_rationale_in_rationale_group():
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    definition = next(
+        obj
+        for obj in pack.metadata.object_definitions
+        if obj.object_type == ALLELE_ASSOCIATION_OBJECT_TYPE
+    )
+    field = next(item for item in definition.fields if item.field_path == "rationale")
+    assert field.required is False
+    assert field.display_name == "Rationale"
+    groups = definition.metadata["workspace_display"]["groups"]
+    rationale_group = next(group for group in groups if group["id"] == "rationale")
+    assert rationale_group["label"] == "Rationale"
+    assert rationale_group["fields"] == ["rationale"]
+
+
+def test_stored_allele_association_without_rationale_gets_no_new_findings():
+    from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+
+    envelope = load_domain_fixture_pack(BUILDER_FIXTURE_PATH).fixtures[0].envelope
+    association = next(
+        obj for obj in envelope.extracted_objects if obj.object_type == ALLELE_ASSOCIATION_OBJECT_TYPE
+    )
+    assert association.payload["rationale"]
+    stored = envelope.model_copy(deep=True)
+    for obj in stored.extracted_objects:
+        obj.payload.pop("rationale", None)
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+
+    with_rationale = run_domain_envelope_structural_checks(envelope, pack).appended_findings
+    without_rationale = run_domain_envelope_structural_checks(stored, pack).appended_findings
+    assert [finding.code for finding in without_rationale] == [
+        finding.code for finding in with_rationale
+    ]
+    assert not any("rationale" in str(finding.field_ref) for finding in without_rationale)
