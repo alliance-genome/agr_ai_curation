@@ -252,9 +252,9 @@ def test_legacy_values_are_resolved_only_with_an_identity_and_a_covering_event()
     stored = {"curie": None, "mention": "x", "resolution_state": UNRESOLVED, "lookup_outcome": OUTCOME_NOT_FOUND}
     assert effective_resolution(stored, identity_keys=TERM_KEYS, covered_by_validator=True) == (
         UNRESOLVED, OUTCOME_NOT_FOUND)
-    with pytest.raises(ResolvableValueError, match="controlled vocabulary"):
-        effective_resolution({**stored, "lookup_outcome": "whatever"}, identity_keys=TERM_KEYS,
-                             covered_by_validator=True)
+    # A stored word outside the vocabulary reads as unresolved/invalid_schema; nothing raises.
+    assert effective_resolution({**stored, "lookup_outcome": "whatever"}, identity_keys=TERM_KEYS,
+                                covered_by_validator=True) == (UNRESOLVED, "invalid_schema")
 
 
 @pytest.mark.parametrize("covered", [True, False])
@@ -687,3 +687,57 @@ def test_header_text_recognises_explicitly_indexed_declared_values():
     payload = {"terms": [{"curie": None, "label": "slow growth"}]}
     assert unresolved_header_text(payload, "terms[0].label", resolvable_fields=specs) == (
         f"slow growth {LEGACY_UNVERIFIED_SUFFIX}")
+
+
+
+@pytest.mark.parametrize("broken", [
+    {"lookup_outcome": "whatever"},
+    {"lookup_outcome": None},
+    {"resolution_state": "validated"},
+    {"lookup_outcome": "not_found"},  # resolved but not matched
+    {"validator_explanation": ["not", "text"]},
+    {"curie": None, "name": None},  # resolved without an identity
+])
+def test_invalid_stored_values_read_as_unresolved_with_a_marker_and_never_raise(broken, caplog):
+    from src.lib.domain_packs.resolvable_values import (
+        INVALID_RECORD_EXPLANATION,
+        INVALID_RECORD_SUFFIX,
+        stated_value,
+    )
+    from src.lib.flows.value_display import display_text
+
+    stored = {**resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"}), **broken}
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+
+    with caplog.at_level("WARNING"):
+        effective = effective_value(stored, spec, covered_by_validator=True)
+    assert effective["resolution_state"] == UNRESOLVED
+    assert effective["lookup_outcome"] == "invalid_schema"
+    assert effective["validator_explanation"] == INVALID_RECORD_EXPLANATION
+    assert (effective["curie"], effective["name"]) == (None, None)
+    assert effective["mention"] == f"skin {INVALID_RECORD_SUFFIX}"
+    assert "breaks the contract" in caplog.text
+    # The effective copy satisfies the invariant; the stored value is untouched.
+    check_resolvable_value(effective, identity_keys=TERM_KEYS)
+    assert stored != effective
+
+    payload = effective_payload({"site": stored}, {"site": spec}, object_metadata=None)
+    assert payload["site"]["lookup_outcome"] == "invalid_schema"
+    assert display_text(stored, {"label": "name", "id": "curie", "mention": "mention"}) == "UNRESOLVED"
+    assert stated_value(stored)["lookup_outcome"] in ("invalid_schema", "matched")
+
+
+def test_write_paths_enforce_the_vocabulary():
+    value = unresolved_value("skin", identity_keys=TERM_KEYS)
+    with pytest.raises(ResolvableValueError):
+        mark_unresolved(value, "whatever", explanation=None)
+    with pytest.raises(ResolvableValueError, match="validator_explanation"):
+        mark_unresolved(value, OUTCOME_NOT_FOUND, explanation=["not", "text"])
+    with pytest.raises(ResolvableValueError):
+        mark_resolved(value, {"curie": "ONT:1"}, explanation={"not": "text"})
+
+
+def test_a_stored_vocabulary_word_outside_the_vocabulary_is_marked_not_raised():
+    from src.lib.flows.value_display import display_text
+
+    assert display_text("whatever", {"value_labels": LOOKUP_OUTCOME_LABELS}) == "Invalid value (whatever)"

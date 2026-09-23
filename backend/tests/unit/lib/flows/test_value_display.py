@@ -1022,5 +1022,4 @@ def test_vocabulary_leaves_read_in_plain_words():
     assert display_text("not_found", spec) == "Not found"
     assert display_text("ambiguous", spec) == "Several matches"
     assert display_text(None, spec) == ""
-    with pytest.raises(ValueError, match="controlled vocabulary"):
-        display_text("something else", spec)
+    assert display_text("something else", spec) == "Invalid value (something else)"
