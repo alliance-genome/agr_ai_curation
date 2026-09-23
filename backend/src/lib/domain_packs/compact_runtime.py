@@ -2,6 +2,7 @@
 
 This layer knows invocation/request identity, not Alliance response formats.
 Package adapters own lookup interpretation and canonical record projection.
+The model-facing view applies only the package-neutral agr_lookup envelope view.
 """
 
 from __future__ import annotations
@@ -304,8 +305,7 @@ def compact_finalization_instruction(runtime, *, tool_name, batch=False):
         "For batch lookups, validator_request_ids must identify only the requests served by that call. "
         "Each reference is valid only for its named request and this invocation. "
         "source_path is a JSON pointer into the lookup response, distinguishing records with identical IDs or labels. "
-        "Each returned record appears once, as its response row plus its validator_record_refs entry; "
-        "the program keeps the complete response. "
+        "Derived restatements of returned rows are omitted; the program keeps the complete response. "
         "GO not_found_inputs are JSON pointers into that request's selected_inputs, not copied terms. "
         "Slot contracts: " + json.dumps(contracts)
         + " Supplied-context/scientific-option references (not database verification): " + json.dumps(runtime.source_catalog)

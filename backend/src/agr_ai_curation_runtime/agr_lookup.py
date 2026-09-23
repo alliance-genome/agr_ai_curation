@@ -691,9 +691,9 @@ def _lean_lookup_level(level: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             attempt = dict(attempt)
             projection = attempt.get("target_projection")
-            matched_id = (
-                projection.get("resolved_id") if isinstance(projection, Mapping) else None
-            ) or attempt.get("resolved_id")
+            # lookup_attempt derives resolved_id from target_projection, so the
+            # projection alone names the matched record.
+            matched_id = projection.get("resolved_id") if isinstance(projection, Mapping) else None
             if matched_id is not None and matched_id in returned_ids:
                 for key in _MATCHED_ROW_ATTEMPT_KEYS:
                     attempt.pop(key, None)
