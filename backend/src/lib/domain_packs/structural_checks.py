@@ -17,6 +17,7 @@ from src.schemas.domain_envelope import (
     field_path_exists,
 )
 
+from .not_validatable import is_not_validatable, not_validatable_object_keys
 from .registry import LoadedDomainPack
 from .validation_findings import append_validation_findings_to_envelope
 from .validation_registry import (
@@ -80,10 +81,12 @@ def _required_field_findings(
     provider_model_ref: Mapping[str, Any] | None,
 ) -> list[ValidationFinding]:
     object_definitions = registry.object_definitions_by_type
+    not_validatable = not_validatable_object_keys(envelope)
     findings: list[ValidationFinding] = []
     for domain_object in envelope.extracted_objects:
         object_definition = object_definitions.get(domain_object.object_type)
-        if object_definition is None:
+        if object_definition is None or is_not_validatable(domain_object, not_validatable):
+            # A package validator's one "not validatable" finding speaks for the object.
             continue
         for field_definition in object_definition.fields:
             if not field_definition.required:
