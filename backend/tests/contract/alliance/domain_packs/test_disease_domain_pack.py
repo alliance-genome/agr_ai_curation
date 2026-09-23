@@ -1879,3 +1879,39 @@ def test_a_curator_edit_never_makes_a_current_record_the_previous_format():
     assert not is_previous_format(edited)
     assert validate_disease_envelope(envelope) == ()
     assert is_previous_format(_previous_format_payload())
+
+
+def test_a_later_unresolved_result_overrules_a_resolved_disease_term():
+    """The validator is the authority: re-validating a resolved term as unresolved keeps its
+    identity only as proposed_* hints, and the export then blocks on it."""
+
+    def resolve(request):
+        return _validator_result(
+            request, status="resolved",
+            resolved_values={"curie": "DOID:0050434", "label": "Andersen-Tawil syndrome"},
+            outcome="success",
+        )
+
+    resolved_payload = _materialize(_term_envelope(), "disease_ontology_term_lookup", resolve)
+    resolved_envelope = _term_envelope()
+    resolved_envelope.extracted_objects[0].payload.update(resolved_payload)
+
+    def overrule(request):
+        return _validator_result(request, status="unresolved", resolved_values={}, outcome="not_found")
+
+    payload = _materialize(resolved_envelope, "disease_ontology_term_lookup", overrule)
+
+    term = payload["disease_annotation_object"]
+    assert (term["resolution_state"], term["lookup_outcome"]) == ("unresolved", "not_found")
+    assert (term["curie"], term["name"]) == (None, None)
+    assert (term["proposed_curie"], term["proposed_name"]) == ("DOID:0050434", "Andersen-Tawil syndrome")
+    assert term["mention"] == "Andersen syndrome"
+
+    from agr_ai_curation_alliance.domain_packs._resolvable_payloads import export_identity
+
+    identity, blocker = export_identity(
+        candidate={"object": {"metadata": {}}}, payload=payload, field_path="disease_annotation_object",
+        identity_keys=("curie", "name"), code="fixture.unresolved", label="Disease term",
+    )
+    assert identity is None
+    assert blocker["details"]["lookup_outcome"] == "not_found"

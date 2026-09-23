@@ -20,16 +20,16 @@ from typing import Any
 from src.lib.domain_packs.resolvable_values import (
     LOOKUP_OUTCOME_LABELS,
     MENTION_KEY,
+    PROPOSED_KEY_PREFIX,
     RESOLVED,
     effective_resolution,
+    proposed_key,
     unresolved_value,
     validator_event_covers,
 )
 
 from ._export_utils import MISSING, adapter_blocker, list_value, payload_value
 
-
-PROPOSED_KEY_PREFIX = "proposed_"
 
 # Identity keys by value kind. A controlled-vocabulary selection is named by its
 # term name; vocabulary/id are the validator's snapshot written alongside it.
@@ -50,12 +50,6 @@ CONDITION_TEXT_FIELDS = ("condition_free_text", "condition_summary")
 def clean_text(value: Any) -> str | None:
     text = str(value if value is not None else "").strip()
     return text or None
-
-
-def proposed_key(identity_key: str) -> str:
-    """The key holding the extractor's proposal for one identity key."""
-
-    return f"{PROPOSED_KEY_PREFIX}{identity_key}"
 
 
 def staged_value(

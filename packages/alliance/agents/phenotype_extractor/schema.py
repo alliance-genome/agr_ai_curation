@@ -301,6 +301,16 @@ class PhenotypeSubjectPayload(BaseModel):
         default=None,
         description="Subject identifier the extractor proposed for validation",
     )
+    # A validator that overrules a resolved subject keeps its identity only as hints.
+    proposed_subject_label: StrictStr | None = Field(
+        default=None, description="A subject label a validator overruled; a hint only, never the value",
+    )
+    proposed_subject_type: StrictStr | None = Field(
+        default=None, description="A subject type a validator overruled; a hint only, never the value",
+    )
+    proposed_taxon: StrictStr | None = Field(
+        default=None, description="A subject taxon a validator overruled; a hint only, never the value",
+    )
     subject_type: StrictStr | None = Field(
         default=None,
         description="Subject subtype such as gene, allele, or affected_genomic_model",
@@ -414,6 +424,13 @@ class ReferencePayload(BaseModel):
         description="Alliance reference row ID a validator confirmed",
     )
     title: StrictStr | None = Field(default=None, description="Reference title a validator confirmed")
+    # A validator that overrules a resolved reference keeps its identity only as hints.
+    proposed_reference_id: int | None = Field(
+        default=None, description="A reference ID a validator overruled; a hint only, never the value",
+    )
+    proposed_title: StrictStr | None = Field(
+        default=None, description="A reference title a validator overruled; a hint only, never the value",
+    )
     filename: StrictStr | None = Field(default=None, description="Source document filename")
     resolution_state: ResolutionStateValue | None = None
     lookup_outcome: LookupOutcomeValue | None = None
@@ -444,6 +461,10 @@ class DataProviderPayload(_ResolvablePayload):
     abbreviation: StrictStr | None = Field(
         default=None,
         description="Data provider abbreviation a validator confirmed; empty until then",
+    )
+    proposed_abbreviation: StrictStr | None = Field(
+        default=None,
+        description="A data provider abbreviation a validator overruled; a hint only, never the value",
     )
 
     @model_validator(mode="after")
