@@ -790,19 +790,18 @@ def test_old_containers_revalidate_resolved_and_unresolved_without_raising(old, 
     assert effective_value(site, spec, covered_by_validator=False) is site
 
     # A non-decisive outcome (a transient lookup error), twice: nothing raises, the
-    # validator's outcome and words are kept, and the old identity stays in
-    # storage but reads as unverified paper wording.
+    # old record stays exactly as stored and still reads as unverified paper
+    # wording, and the outage is reported as a finding instead.
     transient = _item(metadata, envelope, status="unresolved", outcome="error")
     once = materialize_validator_results_into_envelope(envelope, metadata, [transient])
     twice = materialize_validator_results_into_envelope(once.envelope, metadata, [transient])
     site = twice.envelope.extracted_objects[0].payload["site"]
-    assert (site["resolution_state"], site["lookup_outcome"]) == (UNRESOLVED, "transient")
-    assert site["curie"] == old["curie"]
+    assert site == old
+    assert any(finding.code == "domain_pack.validator_error" for finding in once.appended_findings)
     effective = effective_value(site, spec, covered_by_validator=False)
-    assert (effective["curie"], effective[label_key]) == (None, None)
+    assert (effective["curie"], effective[label_key], effective["lookup_outcome"]) == (
+        None, None, OUTCOME_LEGACY_UNVERIFIED)
     assert effective["mention"] == f"{old[label_key]} ({old['curie']}) {LEGACY_UNVERIFIED_SUFFIX}"
-    assert effective["validator_explanation"] == "Fixture validator decision."
-    check_resolvable_value(effective, identity_keys=spec.identity_keys)
     assert unresolved_header_text({"site": site}, f"site.{label_key}", resolvable_fields={"site": spec}) == (
         f"{old[label_key]} ({old['curie']}) {LEGACY_UNVERIFIED_SUFFIX}")
 
@@ -816,8 +815,8 @@ def test_old_containers_revalidate_resolved_and_unresolved_without_raising(old, 
     check_resolvable_value(site, identity_keys=spec.identity_keys)
 
 
-def test_a_legacy_value_with_paper_wording_keeps_the_validator_outcome():
-    """M1: an old value with a mention and an identity, re-validated unresolved."""
+def test_a_legacy_value_with_paper_wording_is_left_alone_by_an_outage():
+    """M1/F1: an old value with a mention and an identity, re-validated unresolved."""
 
     spec = ResolvableSpec(id_key="curie", label_key="name")
     metadata = _metadata()
@@ -827,10 +826,10 @@ def test_a_legacy_value_with_paper_wording_keeps_the_validator_outcome():
     stale = materialize_validator_results_into_envelope(
         envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="error")],
     ).envelope.extracted_objects[0].payload["site"]
+    assert stale == old
     effective = effective_value(stale, spec, covered_by_validator=False)
-    assert (effective["lookup_outcome"], effective["validator_explanation"]) == (
-        "transient", "Fixture validator decision.")
-    assert (effective["curie"], effective["name"], effective["mention"]) == (None, None, "skin")
+    assert (effective["lookup_outcome"], effective["curie"], effective["name"]) == (
+        OUTCOME_LEGACY_UNVERIFIED, None, None)
     assert "invalid record" not in str(effective)
 
     decided = materialize_validator_results_into_envelope(
@@ -839,6 +838,58 @@ def test_a_legacy_value_with_paper_wording_keeps_the_validator_outcome():
     assert (decided["curie"], decided["overruled_curie"], decided["lookup_outcome"]) == (
         None, "ONT:9", OUTCOME_NOT_FOUND)
     assert effective_value(decided, spec, covered_by_validator=False) is decided
+
+
+def test_an_outage_leaves_a_validated_legacy_value_validated():
+    """F1: an old value the legacy rule reads as validated stays so after an outage."""
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    metadata = _metadata()
+    old = {"mention": "gene-22", "curie": "G:22", "name": "gene-22"}
+    envelope = _envelope({"site": dict(old)})
+    covered = envelope.extracted_objects[0].model_copy(update={"metadata": {
+        "validator_resolved_value_materialization": [{"materialized_field_paths": ["site.curie"]}]}})
+    envelope = envelope.model_copy(update={"extracted_objects": [covered]})
+
+    result = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="error")])
+
+    stored = result.envelope.extracted_objects[0]
+    assert stored.payload["site"] == old
+    effective = effective_payload(stored.payload, {"site": spec}, object_metadata=stored.metadata)["site"]
+    assert (effective["resolution_state"], effective["lookup_outcome"], effective["curie"]) == (
+        RESOLVED, OUTCOME_MATCHED, "G:22")
+    assert any(finding.code == "domain_pack.validator_error" for finding in result.appended_findings)
+
+
+def test_an_undeclared_container_in_contract_shape_is_reported_not_written():
+    """F2: a write into an undeclared container that holds a resolvable value."""
+
+    metadata = _metadata(input_path="site.mention", declared=False)
+    site = unresolved_value("skin", identity_keys=TERM_KEYS)
+    envelope = _envelope({"site": dict(site)})
+    item = _item(metadata, envelope, values={"curie": "ONT:1", "name": "epidermis"})
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    assert result.envelope.extracted_objects[0].payload == {"site": site}
+    problem = [finding for finding in result.appended_findings
+               if finding.code == "domain_pack.validator_materialization_invalid"]
+    assert len(problem) == 1
+    assert "does not declare" in problem[0].details["materialization_error"]
+
+
+def test_an_unresolved_contract_value_holding_an_identity_reads_as_invalid():
+    """LOW: only a pre-contract value (no paper wording) can be a re-validation leftover."""
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    broken = {"mention": "skin", "curie": "ONT:9", "name": "old guess", "resolution_state": UNRESOLVED,
+              "lookup_outcome": OUTCOME_NOT_FOUND, "validator_explanation": None}
+
+    effective = effective_value(broken, spec, covered_by_validator=False)
+
+    assert (effective["lookup_outcome"], effective["curie"], effective["name"]) == ("invalid_schema", None, None)
+    assert "invalid record" in effective["mention"]
 
 
 def test_a_contract_value_still_needs_non_empty_paper_wording():

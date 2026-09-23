@@ -569,7 +569,11 @@ def _dispatch_workspace_envelope_validation(
         package_findings = package_validator(package_envelope)
         package_envelope, package_appended_findings = (
             append_validation_findings_to_envelope(
-                supersede_not_validatable_findings(package_envelope, package_findings),
+                supersede_not_validatable_findings(
+                    package_envelope,
+                    package_findings,
+                    actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
+                ),
                 package_findings,
                 actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
             )

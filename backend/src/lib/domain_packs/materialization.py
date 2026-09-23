@@ -76,8 +76,9 @@ from src.lib.domain_packs.resolvable_values import (
     ResolvableValueError,
     copy_resolution,
     declared_resolvable_fields,
-    is_curator_override,
     declared_spec_for,
+    has_resolution_state,
+    is_curator_override,
     validator_event_covers,
     lookup_outcome_for_failure,
     mark_resolved,
@@ -1312,12 +1313,19 @@ def _resolvable_container_path(
     if not parts or not isinstance(parts[-1], str):
         return None
     container_path = _format_field_path(parts[:-1])
+    container = _payload_container(payload, container_path)
     if (
         resolvable_fields
-        and isinstance(_payload_container(payload, container_path), dict)
+        and isinstance(container, dict)
         and declared_spec_for(resolvable_fields, parts[:-1]) is not None
     ):
         return container_path
+    if has_resolution_state(container):
+        # A value in the contract shape the pack does not declare: a plain
+        # write into it would leave it unresolved forever.
+        raise ResolvableValueError(
+            f"{container_path or 'the object root'} holds a resolvable value the pack does not declare"
+        )
     return None
 
 

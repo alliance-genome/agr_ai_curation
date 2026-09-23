@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from src.lib.domain_packs.validation_findings import _history_event_for_resolved_finding
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
@@ -44,6 +45,8 @@ def not_validatable_object_keys(envelope: DomainEnvelope) -> frozenset[tuple[str
 def supersede_not_validatable_findings(
     envelope: DomainEnvelope,
     new_findings: Sequence[ValidationFinding],
+    *,
+    actor_id: str,
 ) -> DomainEnvelope:
     """Resolve earlier not-validatable flags a package validator no longer raises.
 
@@ -57,7 +60,7 @@ def supersede_not_validatable_findings(
         envelope.model_copy(update={"validation_findings": list(new_findings)})
     )
     findings = []
-    changed = False
+    resolved = []
     for finding in envelope.validation_findings:
         object_ref = finding.object_ref or (finding.field_ref.object_ref if finding.field_ref else None)
         if (
@@ -67,9 +70,20 @@ def supersede_not_validatable_findings(
             and object_ref.ref_key() not in flagged_now
         ):
             finding = finding.model_copy(update={"status": ValidationFindingStatus.RESOLVED})
-            changed = True
+            resolved.append(finding)
         findings.append(finding)
-    return envelope.model_copy(update={"validation_findings": findings}) if changed else envelope
+    if not resolved:
+        return envelope
+    return envelope.model_copy(update={
+        "validation_findings": findings,
+        "history": [
+            *envelope.history,
+            *(
+                _history_event_for_resolved_finding(envelope=envelope, finding=finding, actor_id=actor_id)
+                for finding in resolved
+            ),
+        ],
+    })
 
 
 def is_not_validatable(
