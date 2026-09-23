@@ -207,3 +207,60 @@ def test_finding_on_embedded_term_marks_only_that_term(finding_path, output_form
         {"key": "terms", "field_ref": TERMS, "split_list": {"header_template": "Phenotype Term {n}"}},
     ]))
     assert list(split.rows[0].values()) == expected
+
+
+@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
+def test_finding_on_second_term_support_object_marks_only_that_term(output_format):
+    """Production shape: the ontology validator records findings on the standalone
+    PhenotypeTerm support objects the annotation references, not on the annotation."""
+
+    terms = [
+        _term("uncoordinated", "WBPhenotype:0000643", "resolved"),
+        _term("dumpy", "WBPhenotype:0000583", "resolved"),
+        _term("long", "WBPhenotype:0000022", "resolved"),
+    ]
+    support = [
+        {"object_type": "PhenotypeTerm", "pending_ref_id": f"phenotype-term-1-{index}",
+         "payload": dict(term), "metadata": {"object_role": "validated_reference"}}
+        for index, term in enumerate(terms, start=1)
+    ]
+    annotation = {
+        "object_type": "PhenotypeAnnotation", "pending_ref_id": "phenotype-annotation-1",
+        "payload": {
+            "annotation_kind": "phenotype_annotation",
+            "phenotype_annotation_object": "uncoordinated, dumpy and long",
+            "phenotype_terms": terms,
+            "negated": False,
+        },
+        "object_refs": [{"pending_ref_id": obj["pending_ref_id"], "object_type": "PhenotypeTerm"}
+                        for obj in support],
+    }
+    step = _phenotype_step()
+    step["candidate"].payload_json = {
+        **step["candidate"].payload_json,
+        "extracted_objects": [annotation, *support],
+        "validation_findings": [{
+            "finding_id": "f-term-2", "status": "open", "field_path": "curie",
+            "field_ref": {"object_ref": {"pending_ref_id": "phenotype-term-1-2",
+                                         "object_type": "PhenotypeTerm"},
+                          "field_path": "curie"},
+        }],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step], flow_name="Phenotype", output_format=output_format,
+    )
+    expected = ["uncoordinated (WBPhenotype:0000643)", "dumpy (WBPhenotype:0000583, unresolved)",
+                "long (WBPhenotype:0000022)"]
+    statement = "object.pack.PhenotypeAnnotation.phenotype_annotation_object"
+    joined = apply_projection_plan(bundle, _plan(output_format, [
+        {"key": "statement", "field_ref": statement},
+        {"key": "terms", "field_ref": TERMS},
+    ]))
+    row = next(row for row in joined.rows if row["statement"] == "uncoordinated, dumpy and long")
+    assert row["terms"] == RECORD_SEPARATOR.join(expected)
+    split = apply_projection_plan(bundle, _plan(output_format, [
+        {"key": "statement", "field_ref": statement},
+        {"key": "terms", "field_ref": TERMS, "split_list": {"header_template": "Phenotype Term {n}"}},
+    ]))
+    row = next(row for row in split.rows if row["statement"] == "uncoordinated, dumpy and long")
+    assert [row["terms_1"], row["terms_2"], row["terms_3"]] == expected

@@ -162,6 +162,7 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
     }
     assert object_ref_fields == {
         "phenotype_annotation_subject": PHENOTYPE_SUBJECT_OBJECT_TYPE,
+        "phenotype_terms": PHENOTYPE_TERM_OBJECT_TYPE,
         "phenotype_terms[0]": PHENOTYPE_TERM_OBJECT_TYPE,
         "single_reference": "Reference",
         "evidence_quote": "EvidenceQuote",
