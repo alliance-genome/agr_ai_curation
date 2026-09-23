@@ -93,12 +93,38 @@ const VISUALLY_HIDDEN_SX = {
   width: '1px',
 } as const
 
+/** A visible mark on every cell whose value a curator resolved (a validation override). */
+export function HorizontalGridOverrideBadge({ cell }: { cell: HorizontalGridFieldCell }) {
+  if (!cell.curatorOverride) {
+    return null
+  }
+
+  return (
+    <Box
+      component="span"
+      data-slot="field-override-badge"
+      sx={(theme) => ({
+        alignSelf: 'flex-start',
+        border: `1px solid ${theme.palette.info.main}`,
+        borderRadius: '4px',
+        color: theme.palette.mode === 'light' ? theme.palette.info.dark : theme.palette.info.light,
+        fontSize: 10,
+        fontWeight: 700,
+        lineHeight: 1.3,
+        px: '4px',
+      })}
+    >
+      Curator override
+    </Box>
+  )
+}
+
 /**
  * The paper wording and the lookup result under a validated value (ALL-1283).
  * Each value's lines appear once per row, on the first cell that shows it.
- * The validator's explanation and message follow the lookup result for
- * screen readers and in the line's title. A curator edit keeps the paper
- * wording but drops the lookup result, which described the seeded value.
+ * Who made a curator override, the validator's explanation and message
+ * follow the lookup result for screen readers and in the line's title. An
+ * open validator disagreement with a curator override is shown in full.
  */
 export function HorizontalGridResolutionLines({ cell }: { cell: HorizontalGridFieldCell }) {
   const values = cell.resolutionDetails
@@ -107,7 +133,11 @@ export function HorizontalGridResolutionLines({ cell }: { cell: HorizontalGridFi
   }
 
   const paperWording = horizontalGridPaperWording(values)
-  const validatorWords = horizontalGridValidatorWords(values)
+  const disagreements = values.flatMap((value) => value.override_disagreements)
+  // Disagreements are shown in full below, so they are not repeated here.
+  const validatorWords = horizontalGridValidatorWords(
+    values.map((value) => ({ ...value, override_disagreements: [] })),
+  )
 
   return (
     <Box data-slot="field-resolution" id={cell.resolutionLinesId ?? undefined} sx={{ minWidth: 0 }}>
@@ -122,22 +152,30 @@ export function HorizontalGridResolutionLines({ cell }: { cell: HorizontalGridFi
           {paperWording}
         </Typography>
       ) : null}
-      {cell.dirty ? null : (
+      <Typography
+        color="text.secondary"
+        data-slot="field-lookup-result"
+        title={horizontalGridValidationDetails(values).map((lines) => lines.join('\n')).join('\n\n')}
+        sx={RESOLUTION_LINE_SX}
+      >
+        <Box component="span" sx={{ fontWeight: 700 }}>Lookup result: </Box>
+        {horizontalGridLookupResult(values)}
+        {validatorWords.length > 0 ? (
+          <Box component="span" data-slot="field-validator-words" sx={VISUALLY_HIDDEN_SX}>
+            {`. ${validatorWords.join('. ')}`}
+          </Box>
+        ) : null}
+      </Typography>
+      {disagreements.map((message, index) => (
         <Typography
-          color="text.secondary"
-          data-slot="field-lookup-result"
-          title={horizontalGridValidationDetails(values).map((lines) => lines.join('\n')).join('\n\n')}
-          sx={RESOLUTION_LINE_SX}
+          color="warning.dark"
+          data-slot="field-override-disagreement"
+          key={index}
+          sx={{ fontSize: 11, fontWeight: 700, lineHeight: 1.25, overflowWrap: 'anywhere' }}
         >
-          <Box component="span" sx={{ fontWeight: 700 }}>Lookup result: </Box>
-          {horizontalGridLookupResult(values)}
-          {validatorWords.length > 0 ? (
-            <Box component="span" data-slot="field-validator-words" sx={VISUALLY_HIDDEN_SX}>
-              {`. ${validatorWords.join('. ')}`}
-            </Box>
-          ) : null}
+          {message}
         </Typography>
-      )}
+      ))}
     </Box>
   )
 }
@@ -286,7 +324,10 @@ export function HorizontalGridFieldCellContent({
     : cell.extractorComparison?.outcome === 'unresolved'
       ? `Extractor proposed ${extractorValue}, but the validator did not resolve a canonical value.`
       : null
-  const stateMessages = comparisonMessage ? [comparisonMessage] : validationMessages
+  // An open disagreement with a curator override is what needs review.
+  const stateMessages = cell.overrideDisagreements.length > 0
+    ? cell.overrideDisagreements
+    : comparisonMessage ? [comparisonMessage] : validationMessages
   const stateLabel = state === 'resolved'
     ? 'Curator validated'
     : state === 'needs-review'
@@ -303,7 +344,8 @@ export function HorizontalGridFieldCellContent({
         aria-describedby={cell.resolutionDescribedBy.length > 0
           ? cell.resolutionDescribedBy.join(' ')
           : undefined}
-        aria-label={`Select ${field.label} for ${cell.fieldPath}: ${value ?? 'Empty value'}. ${stateLabel}.`}
+        aria-label={`Select ${field.label} for ${cell.fieldPath}: ${value ?? 'Empty value'}`
+          + `${cell.curatorOverride ? ', curator override' : ''}. ${stateLabel}.`}
         aria-pressed={active}
         data-field-key={field.field_key}
         data-testid={`horizontal-grid-field-${field.field_key}`}
@@ -340,6 +382,7 @@ export function HorizontalGridFieldCellContent({
           </Typography>
         </Stack>
       </ButtonBase>
+      <HorizontalGridOverrideBadge cell={cell} />
       <HorizontalGridResolutionLines cell={cell} />
       {state === 'needs-review' || state === 'ai-unconfirmed' ? (
         <Tooltip

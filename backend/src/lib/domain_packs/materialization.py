@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from src.schemas.curation_workspace import (
     DomainEnvelopeEvidenceAnchorProjection,
+    DomainEnvelopeReviewCuratorOverride,
     DomainEnvelopeReviewFieldResolution,
     DomainEnvelopeReviewResolvedValue,
     DomainEnvelopeReviewRow,
@@ -67,6 +68,7 @@ from src.lib.domain_packs.validator_result_policies import (
     allowed_term_policy_violations,
 )
 from src.lib.domain_packs.resolvable_values import (
+    CURATOR_OVERRIDE_KEY,
     DECISIVE_OUTCOMES,
     INVALID_RECORD_EXPLANATION,
     LEAF_VALUE_LABELS,
@@ -211,6 +213,7 @@ class DomainPackMetadataReviewRowMaterializer:
         }
         validation_state_by_object = _validation_state_by_object(envelope)
         value_display_source = _review_value_display_source(self.metadata)
+        override_disagreements = _open_override_disagreements(envelope)
         unavailable_capabilities = _unavailable_validator_capabilities_by_target(
             envelope,
             metadata=self.metadata,
@@ -243,6 +246,7 @@ class DomainPackMetadataReviewRowMaterializer:
                 value_display_source,
                 envelope_id=envelope.envelope_id,
                 envelope_revision=envelope_revision,
+                override_disagreements=override_disagreements.get(object_id, {}),
             )
             summary_fields = _summary_fields(
                 domain_object,
@@ -655,6 +659,10 @@ def _as_curator_override_finding(finding: ValidationFinding) -> ValidationFindin
     })
 
 
+# An open finding: a validator disagrees with a curator override (the override stands).
+CURATOR_OVERRIDE_DISAGREEMENT_CODE = "domain_pack.validator_disagrees_with_curator_override"
+
+
 def _curator_override_disagreements(
     item: ValidatorResultMaterializationInput,
     overrides: _CuratorOverrides,
@@ -709,7 +717,7 @@ def _curator_override_disagreements(
         findings.append(ValidationFinding(
             severity=ValidationFindingSeverity.WARNING,
             status=ValidationFindingStatus.OPEN,
-            code="domain_pack.validator_disagrees_with_curator_override",
+            code=CURATOR_OVERRIDE_DISAGREEMENT_CODE,
             message=f"Validator disagrees with the curator override: {detail}.",
             object_ref=None if container_path else object_ref,
             field_ref=FieldRef(object_ref=object_ref, field_path=container_path) if container_path else None,
@@ -2868,6 +2876,7 @@ def _summary_fields(
                 )
             )
         )
+        resolution = value_reader.resolution(field_path) if value_reader is not None else None
         summary_fields.append(
             DomainEnvelopeReviewRowSummaryField(
                 field_path=field_path,
@@ -2878,10 +2887,8 @@ def _summary_fields(
                     if field_definition is not None
                     else _value_field_type(value)
                 ),
-                metadata=metadata,
-                resolution=(
-                    value_reader.resolution(field_path) if value_reader is not None else None
-                ),
+                metadata=_with_resolution_edit_policy(metadata, resolution),
+                resolution=resolution,
             )
         )
 
@@ -2927,6 +2934,7 @@ def _workspace_fields(
         if value is _MISSING:
             value = None
 
+        resolution = value_reader.resolution(field_path) if value_reader is not None else None
         workspace_fields.append(
             DomainEnvelopeReviewRowSummaryField(
                 field_path=field_path,
@@ -2937,13 +2945,10 @@ def _workspace_fields(
                     if field_definition is not None
                     else _value_field_type(value)
                 ),
-                metadata={
-                    **metadata,
-                    "workspace_order": order,
-                },
-                resolution=(
-                    value_reader.resolution(field_path) if value_reader is not None else None
+                metadata=_with_resolution_edit_policy(
+                    {**metadata, "workspace_order": order}, resolution,
                 ),
+                resolution=resolution,
             )
         )
 
@@ -3056,6 +3061,22 @@ class _ReviewValueReader:
         )
 
 
+def _with_resolution_edit_policy(
+    metadata: dict[str, Any],
+    resolution: DomainEnvelopeReviewFieldResolution | None,
+) -> dict[str, Any]:
+    """A value's own leaves (paper wording, status, lookup result, validator
+    text) are set by extraction and validation, never edited by a curator.
+
+    A curator edits a value's identity keys instead, which records a
+    validation override (``resolvable_values.apply_curator_identity``).
+    """
+
+    if resolution is None or resolution.leaf_key is None:
+        return metadata
+    return {**metadata, "editable": False, "read_only": True}
+
+
 def _value_leaf_text(reviewed: DomainEnvelopeReviewResolvedValue, leaf_key: str) -> str:
     """A value's own leaf in the plain words exports use (resolvable_values labels)."""
 
@@ -3094,6 +3115,7 @@ def _review_value_reader(
     *,
     envelope_id: str,
     envelope_revision: int,
+    override_disagreements: Mapping[str, Sequence[str]],
 ) -> _ReviewValueReader | None:
     if not specs:
         return None
@@ -3123,6 +3145,9 @@ def _review_value_reader(
                     spec,
                     envelope_id=envelope_id,
                     envelope_revision=envelope_revision,
+                    override_disagreements=override_disagreements.get(
+                        _format_field_path(value_path), (),
+                    ),
                 ),
             )
     ordered = [
@@ -3148,6 +3173,7 @@ def _read_review_value(
     *,
     envelope_id: str,
     envelope_revision: int,
+    override_disagreements: Sequence[str],
 ) -> _ValueReading:
     """Read one value from the read-time payload; a broken stored record says so plainly."""
 
@@ -3191,6 +3217,7 @@ def _read_review_value(
         )
     state, outcome = str(value[RESOLUTION_STATE_KEY]), str(value[LOOKUP_OUTCOME_KEY])
     mention = value.get(spec.mention_key)
+    override = value.get(CURATOR_OVERRIDE_KEY) if not broken and is_curator_override(value) else None
     return _ValueReading(
         path=value_path,
         spec=spec,
@@ -3216,9 +3243,42 @@ def _read_review_value(
             validator_explanation=None if broken else value.get(VALIDATOR_EXPLANATION_KEY),
             validator_curator_message=None if broken else value.get(VALIDATOR_CURATOR_MESSAGE_KEY),
             issue=_UNREADABLE_ISSUE if broken else None,
+            curator_override=(
+                DomainEnvelopeReviewCuratorOverride(
+                    actor_id=str(override["actor_id"]), at=str(override["at"]),
+                )
+                if override is not None
+                else None
+            ),
+            override_disagreements=list(override_disagreements) if override is not None else [],
+            identity_field_paths=[
+                f"{path_text}.{key}" if path_text else key for key in spec.identity_keys
+            ],
         ),
         value=value,
     )
+
+
+def _open_override_disagreements(envelope: DomainEnvelope) -> dict[str, dict[str, list[str]]]:
+    """Open validator-disagrees-with-override warnings: {object id: {value path: [messages]}}.
+
+    The warning names the overridden value's payload path, or the object
+    itself for a resolvable object root (value path "").
+    """
+
+    object_id_by_ref = _object_id_by_ref(envelope)
+    disagreements: dict[str, dict[str, list[str]]] = {}
+    for finding in envelope.validation_findings:
+        if (
+            finding.code != CURATOR_OVERRIDE_DISAGREEMENT_CODE
+            or finding.status is not ValidationFindingStatus.OPEN
+        ):
+            continue
+        object_id, field_path = _finding_target(finding, object_id_by_ref)
+        if object_id is None:
+            continue
+        disagreements.setdefault(object_id, {}).setdefault(field_path or "", []).append(finding.message)
+    return disagreements
 
 def _concrete_value_paths(
     node: Any,

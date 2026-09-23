@@ -349,7 +349,9 @@ function buildModel({
             resolutionDescribedBy: [],
             required: true,
             readOnly: false,
-            dirty: false,
+            curatorOverride: false,
+            overrideDisagreements: [],
+            removeOverrideFieldKeys: null,
             staleValidation: false,
             state: authorsValidation.statuses.length > 0
               && authorsValidation.statuses.every((status) => status === 'resolved' || status === 'waived')
@@ -373,7 +375,9 @@ function buildModel({
             resolutionDescribedBy: [],
             required: false,
             readOnly: true,
-            dirty: false,
+            curatorOverride: false,
+            overrideDisagreements: [],
+            removeOverrideFieldKeys: null,
             staleValidation: false,
             state: 'ai-unconfirmed',
             fieldValidation: null,
@@ -394,7 +398,9 @@ function buildModel({
             resolutionDescribedBy: [],
             required: null,
             readOnly: null,
-            dirty: null,
+            curatorOverride: false,
+            overrideDisagreements: [],
+            removeOverrideFieldKeys: null,
             staleValidation: null,
             state: null,
             fieldValidation: null,
@@ -1011,6 +1017,8 @@ describe('InteractiveHorizontalCurationGrid', () => {
         lookup_result: 'Candidates rejected',
         validator_explanation: 'Every candidate was a different species.',
         validator_curator_message: null,
+        override_disagreements: [],
+        identity_field_paths: ['symbol'],
       }],
     }
     symbolCell.resolutionDetails = symbolCell.resolution.values
@@ -1040,6 +1048,88 @@ describe('InteractiveHorizontalCurationGrid', () => {
       'Lookup result: Candidates rejected',
       'Validator explanation: Every candidate was a different species.',
     ])
+  })
+
+  it('shows a curator override with who and when, and removes it by clearing the identity', async () => {
+    const user = userEvent.setup()
+    const autosave = createAutosave()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = 'abc-2'
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const model = buildModel({ authorsEvidence: [] })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = 'abc-2'
+    symbolCell.displayText = 'abc-2'
+    symbolCell.state = 'resolved'
+    symbolCell.curatorOverride = true
+    symbolCell.removeOverrideFieldKeys = [symbolField.field_key]
+    symbolCell.resolution = {
+      display_text: 'abc-2',
+      values: [{
+        value_path: '',
+        display_text: 'abc-2 (GENE:2)',
+        mention: 'abc-1',
+        resolution_state: 'resolved',
+        lookup_outcome: 'curator_override',
+        lookup_result: 'Curator override',
+        validator_explanation: null,
+        validator_curator_message: null,
+        curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
+        override_disagreements: [],
+        identity_field_paths: ['symbol'],
+      }],
+    }
+    symbolCell.resolutionDetails = symbolCell.resolution.values
+    symbolCell.resolutionLinesId = 'lines-symbol'
+    symbolCell.resolutionDescribedBy = ['lines-symbol']
+
+    renderGrid({ autosave, model, workspace: buildWorkspace(candidate) })
+    const button = screen.getByTestId(`horizontal-grid-field-${symbolField.field_key}`)
+    expect(within(button.parentElement!).getByText('Curator override', { selector: '[data-slot="field-override-badge"]' }))
+      .toBeInTheDocument()
+    expect(button).toHaveAccessibleName(/^Select Symbol for symbol: abc-2, curator override\. Curator validated\.$/)
+    expect(button).toHaveAccessibleDescription(/Curator override by curator-1 on 2026-09-23 20:00 UTC/)
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol: abc-2/,
+    }))
+    const details = screen.getByRole('dialog', { name: /Symbol:/ })
+    expect(within(details).getByTestId('horizontal-grid-resolution-details')).toHaveTextContent(
+      'Curator override by curator-1 on 2026-09-23 20:00 UTC',
+    )
+
+    await user.click(screen.getByRole('button', {
+      name: /^Remove curator override for Symbol: abc-2 .*The value returns to unresolved\.$/,
+    }))
+    expect(autosave.queueFieldChanges).toHaveBeenCalledWith([
+      { field_key: symbolField.field_key, value: null },
+    ])
+    expect(autosave.flush).toHaveBeenCalled()
+  })
+
+  it('keeps a value\'s own leaves read-only in the grid', () => {
+    const candidate = buildCandidate()
+    const leafField = candidate.draft.fields[0]
+    leafField.label = 'Lookup result'
+    leafField.read_only = false
+    leafField.metadata = { source_field_path: 'site.lookup_outcome' }
+
+    const model = buildModel({ authorsEvidence: [] })
+    model.columns[1].fieldPath = 'site.lookup_outcome'
+    model.columns[1].label = 'Lookup result'
+    const leafCell = model.rows[0].cells[0]
+    leafCell.fieldPath = 'site.lookup_outcome'
+    leafCell.readOnly = true
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    expect(screen.getByRole('button', { name: /^Edit unavailable for Lookup result: .*Read-only field\.$/ }))
+      .toBeDisabled()
   })
 
   it('attributes a waived comparison to curator override rather than validator resolution', async () => {

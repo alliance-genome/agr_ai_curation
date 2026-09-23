@@ -250,6 +250,8 @@ function resolvedValue(
     lookup_result: 'Matched',
     validator_explanation: 'Exact synonym match.',
     validator_curator_message: null,
+    override_disagreements: [],
+    identity_field_paths: ['site.curie', 'site.name'],
     ...overrides,
   }
 }
@@ -1133,22 +1135,96 @@ describe('buildHorizontalGridModel', () => {
     expect(model.rows[0]!.cells[0]!.resolution?.values[0]?.mention).toBe('abc-1 (legacy, unverified)')
   })
 
-  it("shows a curator's edit instead of the seeded reading", () => {
-    const edited = {
-      ...draftField({ fieldKey: 'site-name', fieldPath: 'site.name', label: 'Site', order: 0, value: 'midgut' }),
-      dirty: true,
-    }
-    const row = reviewRowWithFields('object-edited', [
-      { path: 'site.name', resolution: { display_text: 'UNRESOLVED', values: [UNRESOLVED_SITE] } },
+  it('reads a saved curator edit from the regenerated review row, as a curator override', () => {
+    const overridden = resolvedValue({
+      display_text: 'midgut (ONT:0000555)',
+      mention: 'gut lining',
+      lookup_outcome: 'curator_override',
+      lookup_result: 'Curator override',
+      curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
+    })
+    const fields = [
+      { ...draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: 'ONT:0000555' }), dirty: true },
+      { ...draftField({ fieldKey: 'site-name', fieldPath: 'site.name', label: 'Site', order: 1, value: 'midgut' }), dirty: true },
+      draftField({
+        fieldKey: 'site-lookup',
+        fieldPath: 'site.lookup_outcome',
+        label: 'Site lookup',
+        order: 2,
+        value: 'curator_override',
+      }),
+    ]
+    const row = reviewRowWithFields('object-override', [
+      { path: 'site.curie', resolution: { display_text: 'ONT:0000555', values: [overridden] } },
+      { path: 'site.name', resolution: { display_text: 'midgut', values: [overridden] } },
+      {
+        path: 'site.lookup_outcome',
+        resolution: { display_text: 'Curator override', values: [overridden], leaf_key: 'lookup_outcome' },
+      },
     ])
 
     const model = modelForRows([workspaceRow({
-      candidate: candidate({ id: 'candidate-edited', objectId: 'object-edited', order: 0, fields: [edited] }),
+      candidate: candidate({ id: 'candidate-override', objectId: 'object-override', order: 0, fields }),
       row,
     })])
 
-    expect(model.rows[0]!.cells[0]).toMatchObject({ displayText: 'midgut', dirty: true })
-    expect(model.rows[0]!.cells[0]!.resolution?.values[0]?.mention).toBe('structures near the residual body')
+    const [idCell, nameCell] = model.rows[0]!.cells
+    expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'site.curie', 'site.name'])
+    expect(idCell).toMatchObject({
+      displayText: 'ONT:0000555',
+      state: 'resolved',
+      curatorOverride: true,
+      overrideDisagreements: [],
+      readOnly: false,
+      removeOverrideFieldKeys: ['site-id', 'site-name'],
+    })
+    expect(idCell!.resolutionDetails).toEqual([overridden])
+    expect(nameCell).toMatchObject({ curatorOverride: true, resolutionDetails: [] })
+  })
+
+  it('shows needs review with an open validator disagreement, and a proposal as overridden', () => {
+    const message = "Validator disagrees with the curator override: it resolved symbol 'abc-9'."
+    const overridden = resolvedValue({
+      value_path: '',
+      display_text: 'abc-2 (GENE:2)',
+      lookup_outcome: 'curator_override',
+      lookup_result: 'Curator override',
+      curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
+      override_disagreements: [message],
+      identity_field_paths: ['symbol', 'identifier'],
+    })
+    const fields = [
+      draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-2' }),
+      draftField({ fieldKey: 'identifier', label: 'Gene ID', order: 1, value: 'GENE:2', readOnly: true }),
+      draftField({
+        fieldKey: 'proposed-symbol',
+        fieldPath: 'proposed_symbol',
+        label: 'Proposed symbol',
+        order: 2,
+        value: 'abc-1',
+        readOnly: true,
+        renderAs: 'divergence',
+      }),
+    ]
+    const row = reviewRowWithFields('object-disagree', [
+      { path: 'symbol', resolution: { display_text: 'abc-2', values: [overridden] } },
+      { path: 'identifier', resolution: { display_text: 'GENE:2', values: [overridden] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: candidate({ id: 'candidate-disagree', objectId: 'object-disagree', order: 0, fields }),
+      row,
+    })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({
+      displayText: 'abc-2',
+      state: 'needs-review',
+      curatorOverride: true,
+      overrideDisagreements: [message],
+      extractorComparison: { outcome: 'overridden', value: 'abc-1' },
+      // The ID field is read-only here, so the override cannot be removed from the grid.
+      removeOverrideFieldKeys: null,
+    })
   })
 
   it('shows each value\'s details once, on its first cell, and hides leaves that cell covers', () => {
@@ -1189,7 +1265,7 @@ describe('buildHorizontalGridModel', () => {
     expect(identifierCell!.resolutionDescribedBy).toEqual([symbolCell!.resolutionLinesId])
   })
 
-  it('puts a value\'s details on its first unedited cell, so the lookup line stays', () => {
+  it('puts a value\'s details on its first cell, edited or not', () => {
     const geneValue = resolvedValue({ value_path: '', display_text: 'abc-1 (GENE:1)', mention: 'abc-1' })
     const covered = candidate({
       id: 'candidate-edited-owner',
@@ -1208,9 +1284,9 @@ describe('buildHorizontalGridModel', () => {
     const model = modelForRows([workspaceRow({ candidate: covered, row })])
 
     const [symbolCell, identifierCell] = model.rows[0]!.cells
-    expect(symbolCell!.resolutionDetails).toEqual([])
-    expect(identifierCell!.resolutionDetails).toEqual([geneValue])
-    expect(symbolCell!.resolutionDescribedBy).toEqual([identifierCell!.resolutionLinesId])
+    expect(symbolCell!.resolutionDetails).toEqual([geneValue])
+    expect(identifierCell!.resolutionDetails).toEqual([])
+    expect(identifierCell!.resolutionDescribedBy).toEqual([symbolCell!.resolutionLinesId])
   })
 
   it('shows a covered leaf in its row when another row needs the leaf column', () => {

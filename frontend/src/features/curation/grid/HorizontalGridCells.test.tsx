@@ -29,11 +29,13 @@ function resolvedValue(
     lookup_result: 'Matched',
     validator_explanation: 'Exact synonym match.',
     validator_curator_message: null,
+    override_disagreements: [],
+    identity_field_paths: ['site.curie', 'site.name'],
     ...overrides,
   }
 }
 
-function draftField(dirty = false): CurationDraftField {
+function draftField(): CurationDraftField {
   return {
     field_key: 'site',
     label: 'Site',
@@ -43,7 +45,7 @@ function draftField(dirty = false): CurationDraftField {
     order: 0,
     required: false,
     read_only: false,
-    dirty,
+    dirty: false,
     stale_validation: false,
     evidence_anchor_ids: [],
     validation_result: null,
@@ -54,8 +56,8 @@ function draftField(dirty = false): CurationDraftField {
 function cell(
   displayText: string | null,
   resolution: DomainEnvelopeReviewFieldResolution | null,
-  dirty = false,
 ): HorizontalGridFieldCell {
+  const overridden = resolution?.values.filter((value) => value.curator_override) ?? []
   return {
     columnKey: 'field:site',
     fieldKey: 'site',
@@ -69,7 +71,9 @@ function cell(
     resolutionDescribedBy: resolution ? ['lines-site'] : [],
     required: false,
     readOnly: false,
-    dirty,
+    curatorOverride: overridden.length > 0,
+    overrideDisagreements: overridden.flatMap((value) => value.override_disagreements),
+    removeOverrideFieldKeys: overridden.length > 0 ? ['site.curie', 'site.name'] : null,
     staleValidation: false,
     state: 'resolved',
     fieldValidation: null,
@@ -84,7 +88,7 @@ function renderCell(gridCell: HorizontalGridFieldCell) {
     <HorizontalGridFieldCellContent
       active={false}
       cell={gridCell}
-      field={draftField(gridCell.dirty === true)}
+      field={draftField()}
       onSelect={vi.fn()}
       state={gridCell.state}
     />,
@@ -242,20 +246,47 @@ describe('HorizontalGridFieldCellContent', () => {
     )
   })
 
-  it("shows a curator's edit with the paper wording but not the seeded lookup result", () => {
-    const { container } = renderCell(cell('midgut', {
-      display_text: 'UNRESOLVED',
-      values: [resolvedValue({
-        display_text: 'UNRESOLVED',
-        resolution_state: 'unresolved',
-        lookup_outcome: 'not_found',
-        lookup_result: 'Not found',
-      })],
-    }, true))
+  it('marks a curator override and says who made it and when', () => {
+    const overridden = resolvedValue({
+      display_text: 'midgut (ONT:0000555)',
+      mention: 'gut lining',
+      lookup_outcome: 'curator_override',
+      lookup_result: 'Curator override',
+      validator_explanation: null,
+      curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
+    })
+    const { container } = renderCell(cell('ONT:0000555', { display_text: 'ONT:0000555', values: [overridden] }))
 
-    expect(slot(container, 'field-value')).toHaveTextContent(/^midgut$/)
-    expect(slot(container, 'field-paper-wording')).toHaveTextContent('Paper wording: structures near the gut')
-    expect(slot(container, 'field-lookup-result')).toBeNull()
+    expect(slot(container, 'field-value')).toHaveTextContent(/^ONT:0000555$/)
+    expect(slot(container, 'field-override-badge')).toHaveTextContent('Curator override')
+    expect(slot(container, 'field-lookup-result')).toHaveTextContent(
+      'Lookup result: Curator override. Curator override by curator-1 on 2026-09-23 20:00 UTC',
+    )
+    expect(slot(container, 'field-override-disagreement')).toBeNull()
+    const button = screen.getByRole('button')
+    expect(button).toHaveAccessibleName(/^Select Site for site: ONT:0000555, curator override\. Curator validated\.$/)
+    expect(button).toHaveAccessibleDescription(/Curator override by curator-1 on 2026-09-23 20:00 UTC/)
+  })
+
+  it('shows an open validator disagreement with the override in full', () => {
+    const message = 'Validator disagrees with the curator override: its lookup result is Not found.'
+    const overridden = resolvedValue({
+      display_text: 'midgut (ONT:0000555)',
+      lookup_outcome: 'curator_override',
+      lookup_result: 'Curator override',
+      curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
+      override_disagreements: [message],
+    })
+    const gridCell = cell('ONT:0000555', { display_text: 'ONT:0000555', values: [overridden] })
+    gridCell.state = 'needs-review'
+    const { container } = renderCell(gridCell)
+
+    expect(slot(container, 'field-override-badge')).toHaveTextContent('Curator override')
+    expect(slot(container, 'field-override-disagreement')).toHaveTextContent(message)
+    // Shown once in full, not repeated in the screen-reader text of the lookup line.
+    expect(slot(container, 'field-validator-words')).not.toHaveTextContent('Validator disagrees')
+    expect(screen.getByRole('img', { name: `Needs review: ${message}` })).toBeInTheDocument()
+    expect(screen.getByRole('button')).toHaveAccessibleDescription(new RegExp(message.replace(/[.:]/g, '\\$&')))
   })
 
   it('adds no resolution lines to a field without validated values', () => {

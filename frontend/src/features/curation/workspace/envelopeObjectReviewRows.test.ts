@@ -177,6 +177,8 @@ describe('workspace envelope object review rows', () => {
               lookup_result: 'Several matches',
               validator_explanation: 'Two terms fit the wording equally well.',
               validator_curator_message: null,
+              override_disagreements: [],
+              identity_field_paths: ['disease_term.curie', 'disease_term.name'],
             },
           ],
         },

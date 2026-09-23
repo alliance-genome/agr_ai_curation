@@ -11,6 +11,7 @@ from src.lib.domain_packs.resolvable_values import (
     NOT_VALIDATED_EXPLANATION,
     UNRESOLVED_DISPLAY,
     VALIDATOR_MATERIALIZATION_METADATA_KEY,
+    apply_curator_identity,
     mark_unresolved,
     resolved_value,
     unresolved_value,
@@ -23,6 +24,11 @@ from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
     DomainEnvelopeStatus,
+    FieldRef,
+    ObjectRef,
+    ValidationFinding,
+    ValidationFindingSeverity,
+    ValidationFindingStatus,
 )
 from src.schemas.domain_pack_metadata import (
     DomainPackFieldDefinition,
@@ -86,8 +92,9 @@ def _metadata() -> DomainPackMetadata:
                 },
                 fields=[
                     _field("site", DomainPackFieldType.OBJECT, metadata={"display": TERM_DISPLAY}),
-                    _field("site.curie"),
-                    _field("site.name"),
+                    # A curator edits a value's identity (a validation override).
+                    _field("site.curie", metadata={"editable": True}),
+                    _field("site.name", metadata={"editable": True}),
                     _field("site.mention"),
                     _field(
                         "codes",
@@ -131,7 +138,13 @@ def _metadata() -> DomainPackMetadata:
     )
 
 
-def _row(payload: dict, *, object_type: str = "Observation", metadata: dict | None = None):
+def _row(
+    payload: dict,
+    *,
+    object_type: str = "Observation",
+    metadata: dict | None = None,
+    findings: list[ValidationFinding] | None = None,
+):
     envelope = DomainEnvelope(
         envelope_id="env-resolution",
         domain_pack_id="fixture.resolution",
@@ -145,6 +158,7 @@ def _row(payload: dict, *, object_type: str = "Observation", metadata: dict | No
                 metadata=metadata or {},
             )
         ],
+        validation_findings=findings or [],
     )
     rows = DomainPackMetadataReviewRowMaterializer(_metadata()).materialize(
         envelope, envelope_revision=1,
@@ -185,6 +199,7 @@ def test_resolved_value_shows_label_and_id_with_paper_wording_apart():
             lookup_result="Matched",
             validator_explanation="Exact synonym match.",
             validator_curator_message=None,
+            identity_field_paths=["site.curie", "site.name"],
         )
     ]
     # An identity key of the value shows that key; the paper wording stays apart.
@@ -453,3 +468,108 @@ def test_an_overruled_value_never_shows_its_old_identity_or_proposal_as_the_valu
     readings = [whole.display_text, *(item.display_text for item in whole.values)]
     assert not any("ONT:0000101" in text or "ONT:0000102" in text for text in readings)
     assert "ONT:0000101" not in row.display_label
+
+
+OVERRIDE_AT = "2026-09-23T20:00:00+00:00"
+DISAGREEMENT = "domain_pack.validator_disagrees_with_curator_override"
+
+
+def _overridden_site() -> dict:
+    site = unresolved_value("gut lining", identity_keys=TERM_KEYS, outcome="not_found")
+    apply_curator_identity(
+        site,
+        {"curie": "ONT:0000555", "name": "midgut"},
+        identity_keys=TERM_KEYS,
+        actor_id="curator-1",
+        at=OVERRIDE_AT,
+    )
+    return site
+
+
+def _disagreement(*, field_path: str | None, message: str, status=ValidationFindingStatus.OPEN):
+    object_ref = ObjectRef(object_id="object-1")
+    return ValidationFinding(
+        severity=ValidationFindingSeverity.WARNING,
+        status=status,
+        code=DISAGREEMENT,
+        message=message,
+        object_ref=None if field_path else object_ref,
+        field_ref=FieldRef(object_ref=object_ref, field_path=field_path) if field_path else None,
+    )
+
+
+def test_a_curator_override_reads_resolved_with_who_and_when():
+    row = _row({"site": _overridden_site()})
+
+    curie = _workspace_field(row, "site.curie").resolution
+    assert curie.display_text == "ONT:0000555"
+    [value] = curie.values
+    assert value.resolution_state == "resolved"
+    assert value.lookup_outcome == "curator_override"
+    assert value.lookup_result == "Curator override"
+    assert value.mention == "gut lining"
+    assert value.curator_override.actor_id == "curator-1"
+    assert value.curator_override.at == OVERRIDE_AT
+    assert value.override_disagreements == []
+    assert value.identity_field_paths == ["site.curie", "site.name"]
+    assert _summary_field(row, "site").resolution.display_text == "midgut (ONT:0000555)"
+    assert _workspace_field(row, "site.lookup_outcome").resolution.display_text == "Curator override"
+
+
+def test_an_open_validator_disagreement_is_carried_on_the_overridden_value():
+    message = "Validator disagrees with the curator override: its lookup result is Not found."
+    row = _row(
+        {"site": _overridden_site()},
+        findings=[
+            _disagreement(field_path="site", message=message),
+            _disagreement(
+                field_path="site", message="An old, resolved disagreement.",
+                status=ValidationFindingStatus.RESOLVED,
+            ),
+        ],
+    )
+
+    [value] = _workspace_field(row, "site.curie").resolution.values
+    assert value.override_disagreements == [message]
+
+
+def test_an_object_root_override_takes_object_level_disagreements():
+    subject = unresolved_value("abc-1", identity_keys=("symbol", "identifier", "taxon"))
+    apply_curator_identity(
+        subject,
+        {"symbol": "abc-1", "identifier": "GENE:7"},
+        identity_keys=("symbol", "identifier", "taxon"),
+        actor_id="curator-2",
+        at=OVERRIDE_AT,
+    )
+    message = "Validator disagrees with the curator override: it resolved identifier 'GENE:8'."
+    row = _row(subject, object_type="SubjectEvidence", findings=[_disagreement(field_path=None, message=message)])
+
+    [value] = _workspace_field(row, "identifier").resolution.values
+    assert value.value_path == ""
+    assert value.curator_override.actor_id == "curator-2"
+    assert value.override_disagreements == [message]
+    assert value.identity_field_paths == ["identifier", "symbol", "taxon"]
+
+
+def test_clearing_an_override_reads_unresolved_again():
+    site = _overridden_site()
+    apply_curator_identity(
+        site, {"curie": None, "name": None}, identity_keys=TERM_KEYS, actor_id="curator-1", at=OVERRIDE_AT,
+    )
+    row = _row({"site": site})
+
+    [value] = _workspace_field(row, "site.curie").resolution.values
+    assert _workspace_field(row, "site.curie").resolution.display_text == UNRESOLVED_DISPLAY
+    assert value.curator_override is None
+    assert value.lookup_outcome == "not_found"
+
+
+def test_a_values_own_leaves_are_read_only_for_curators():
+    row = _row({"site": _overridden_site()})
+
+    for path in ("site.mention", "site.resolution_state", "site.lookup_outcome", "site.validator_explanation"):
+        metadata = _workspace_field(row, path).metadata
+        assert metadata["read_only"] is True
+        assert metadata["editable"] is False
+    assert _workspace_field(row, "site.curie").metadata["read_only"] is False

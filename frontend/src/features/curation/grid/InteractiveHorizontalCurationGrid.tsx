@@ -241,6 +241,12 @@ export default function InteractiveHorizontalCurationGrid({
             navigateEvidence(projection)
           }
         }}
+        onRemoveOverride={(fieldKeys) => {
+          // Clearing every identity key of the value withdraws the override;
+          // the backend returns the value to unresolved.
+          autosave.queueFieldChanges(fieldKeys.map((fieldKey) => ({ field_key: fieldKey, value: null })))
+          void autosave.flush()
+        }}
         onSelect={() => selectCandidate(candidate.candidate_id)}
         onToggleValidationPreview={(previewField) => {
           const currentState = args.cell.state
@@ -271,7 +277,7 @@ export default function InteractiveHorizontalCurationGrid({
         previewState={args.cell.state}
       />
     )
-  }, [autosave.isSaving, candidates, model, selectCandidate])
+  }, [autosave, candidates, model, selectCandidate])
 
   const renderContextCell = useCallback(({ cell, row }: HorizontalGridContextRenderArgs) => (
     <HorizontalGridContextCellContent

@@ -33,7 +33,11 @@ import {
   type HorizontalGridRow,
 } from './horizontalGridModel'
 import { HORIZONTAL_GRID_UNRESOLVED_TEXT } from './horizontalGridFormatting'
-import { HorizontalGridRationaleLine, HorizontalGridResolutionLines } from './HorizontalGridCells'
+import {
+  HorizontalGridOverrideBadge,
+  HorizontalGridRationaleLine,
+  HorizontalGridResolutionLines,
+} from './HorizontalGridCells'
 import { horizontalGridValidationPreviewCounts } from './horizontalGridValidationPreview'
 
 const CONTEXT_COLUMN_WIDTH = 220
@@ -103,6 +107,7 @@ function DefaultFieldCell({ cell }: HorizontalGridFieldRenderArgs) {
       >
         {value ?? '—'}
       </Typography>
+      <HorizontalGridOverrideBadge cell={cell} />
       <HorizontalGridResolutionLines cell={cell} />
     </Stack>
   )

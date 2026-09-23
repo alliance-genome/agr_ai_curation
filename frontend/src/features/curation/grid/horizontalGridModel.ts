@@ -93,17 +93,21 @@ export interface HorizontalGridFieldCell {
   // regenerated for this revision (ALL-1283); null for fields without any.
   resolution: DomainEnvelopeReviewFieldResolution | null
   // The values whose paper wording and lookup result this cell shows: each
-  // value's details appear once per row, on the first cell that shows it
-  // unedited (else the first cell that shows it).
+  // value's details appear once per row, on the first cell that shows it.
   resolutionDetails: DomainEnvelopeReviewResolvedValue[]
   // The id of this cell's resolution lines, when it shows any.
   resolutionLinesId: string | null
   // The resolution lines describing this cell's values, wherever they are shown.
   resolutionDescribedBy: string[]
+  // A curator set this value's identity (a validation override).
+  curatorOverride: boolean
+  // Open warnings where a validator disagrees with the curator override.
+  overrideDisagreements: string[]
+  // The draft fields to clear to remove the override (every identity key of
+  // each overridden value, all editable), or null when it cannot be removed here.
+  removeOverrideFieldKeys: string[] | null
   required: boolean | null
   readOnly: boolean | null
-  // Whether the curator changed the field from its AI seed value.
-  dirty: boolean | null
   staleValidation: boolean | null
   state: FieldStateKind | null
   fieldValidation: FieldValidationResult | null
@@ -262,9 +266,8 @@ function resolutionLinesId(candidateId: string, columnKey: string): string {
   return `horizontal-grid-resolution-${encodeURIComponent(candidateId)}-${encodeURIComponent(columnKey)}`
 }
 
-// Each value's details go on the first cell that shows it unedited (an edited
-// cell drops the lookup line), else on the first cell that shows it; every
-// cell showing the value is described by those lines.
+// Each value's details go on the first cell that shows it; every cell
+// showing the value is described by those lines.
 function withResolutionDetails(
   candidateId: string,
   cells: HorizontalGridFieldCell[],
@@ -275,8 +278,7 @@ function withResolutionDetails(
       return
     }
     for (const value of cell.resolution.values) {
-      const owner = ownerByValuePath.get(value.value_path)
-      if (owner === undefined || (cells[owner]!.dirty && !cell.dirty)) {
+      if (!ownerByValuePath.has(value.value_path)) {
         ownerByValuePath.set(value.value_path, index)
       }
     }
@@ -527,10 +529,8 @@ function cellDisplayText(
   if (!field) {
     return null
   }
-  if (field.dirty) {
-    // The curator's own edit replaces the seeded reading.
-    return formatHorizontalGridValue(field.value)
-  }
+  // The review row is regenerated for the candidate's current revision, so
+  // its reading already includes saved curator edits (e.g. an override).
   if (resolution) {
     return resolution.display_text || null
   }
@@ -538,6 +538,35 @@ function cellDisplayText(
     return HORIZONTAL_GRID_UNRESOLVED_TEXT
   }
   return formatHorizontalGridValue(field.value)
+}
+
+function overriddenValues(
+  resolution: DomainEnvelopeReviewFieldResolution | null,
+): DomainEnvelopeReviewResolvedValue[] {
+  if (!resolution || resolution.leaf_key) {
+    return []
+  }
+  return resolution.values.filter((value) => value.curator_override)
+}
+
+// Clearing every identity key of an overridden value withdraws the override
+// (the backend reverts it to unresolved); each key must be an editable draft field.
+function removeOverrideFieldKeys(
+  values: readonly DomainEnvelopeReviewResolvedValue[],
+  fieldsByPath: ReadonlyMap<string, CurationDraftField>,
+): string[] | null {
+  if (values.length === 0) {
+    return null
+  }
+  const keys: string[] = []
+  for (const path of new Set(values.flatMap((value) => value.identity_field_paths))) {
+    const field = fieldsByPath.get(path)
+    if (!field || field.read_only) {
+      return null
+    }
+    keys.push(field.field_key)
+  }
+  return keys
 }
 
 function rationaleForCandidate(candidate: CurationCandidate): HorizontalGridRowContext['rationale'] {
@@ -618,8 +647,10 @@ function projectRow(
 
     const baseState = field ? fieldState(field, cellValidation) : null
     const resolution = field ? row.resolutions.get(fieldPath) ?? null : null
-    const canonicalUnresolved = Boolean(field && !field.dirty && !resolution?.leaf_key)
+    const canonicalUnresolved = Boolean(field && !resolution?.leaf_key)
       && hasUnresolvedValue(resolution)
+    const overridden = field ? overriddenValues(resolution) : []
+    const overrideDisagreements = overridden.flatMap((value) => value.override_disagreements)
     const projectedComparison = field
       ? extractorComparison(row.candidate, field, fieldPath, canonicalUnresolved)
       : null
@@ -632,7 +663,9 @@ function projectRow(
     // resolved validation projection may describe the second stage as a validator
     // result; otherwise the extractor value remains explicitly unvalidated.
     const comparison = projectedComparison
-      ? projectedComparison.outcome === 'unresolved'
+      ? overridden.length > 0 && !canonicalUnresolved
+        ? { ...projectedComparison, outcome: 'overridden' as const }
+        : projectedComparison.outcome === 'unresolved'
         ? projectedComparison
         : validatorResolved
           ? projectedComparison
@@ -647,10 +680,13 @@ function projectRow(
           ? baseState === 'needs-review' ? 'needs-review' : 'ai-unconfirmed'
           : baseState
       : null
-    // A value that reads unresolved is never presented as validated.
-    const projectedState = canonicalUnresolved && comparedState === 'resolved'
-      ? 'needs-review'
-      : comparedState
+    // A value that reads unresolved is never presented as validated. A
+    // curator override is curator validated, unless a validator disagrees.
+    const projectedState = field && overridden.length > 0 && !canonicalUnresolved
+      ? overrideDisagreements.length > 0 ? 'needs-review' : 'resolved'
+      : canonicalUnresolved && comparedState === 'resolved'
+        ? 'needs-review'
+        : comparedState
 
     return {
       columnKey: column.key,
@@ -663,9 +699,13 @@ function projectRow(
       resolutionDetails: [],
       resolutionLinesId: null,
       resolutionDescribedBy: [],
+      curatorOverride: overridden.length > 0,
+      overrideDisagreements,
+      removeOverrideFieldKeys: removeOverrideFieldKeys(overridden, fieldsByPath),
       required: field?.required ?? null,
-      readOnly: field?.read_only ?? null,
-      dirty: field?.dirty ?? null,
+      // A value's own leaves (paper wording, status, lookup result, validator
+      // text) are set by extraction and validation; curators edit its identity.
+      readOnly: field ? field.read_only || Boolean(resolution?.leaf_key) : null,
       staleValidation: field?.stale_validation ?? null,
       state: projectedState,
       fieldValidation: field?.validation_result ?? null,

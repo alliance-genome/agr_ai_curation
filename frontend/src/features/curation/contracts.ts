@@ -142,6 +142,18 @@ export interface DomainEnvelopeReviewResolvedValue {
   validator_curator_message?: string | null
   /** A plain sentence when the stored value could not be read; it then reads as unresolved. */
   issue?: string | null
+  /** Set when a curator's identity edit resolved the value (lookup_outcome curator_override). */
+  curator_override?: DomainEnvelopeReviewCuratorOverride | null
+  /** Open warnings where a validator disagrees with the curator override. */
+  override_disagreements: string[]
+  /** Payload paths of the value's identity keys: what a curator edits, or clears to remove an override. */
+  identity_field_paths: string[]
+}
+
+export interface DomainEnvelopeReviewCuratorOverride {
+  actor_id: string
+  /** ISO 8601 time of the override. */
+  at: string
 }
 
 export interface DomainEnvelopeReviewFieldResolution {

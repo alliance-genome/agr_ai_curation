@@ -984,6 +984,13 @@ class DomainEnvelopeValidationSummaryProjection(CurationWorkspaceBaseModel):
     findings: list[DomainEnvelopeValidationFindingProjection] = Field(default_factory=list)
 
 
+class DomainEnvelopeReviewCuratorOverride(CurationWorkspaceBaseModel):
+    """Who set a value's identity by curator validation override, and when."""
+
+    actor_id: str = Field(description="The curator who made the override")
+    at: str = Field(description="When the override was made (ISO 8601)")
+
+
 class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
     """One validated value a review field shows: the paper's wording and the validation result.
 
@@ -1018,12 +1025,25 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
             "then reads as unresolved (the technical detail is logged)"
         ),
     )
+    curator_override: DomainEnvelopeReviewCuratorOverride | None = Field(
+        default=None,
+        description="Set when a curator's identity edit resolved the value (lookup_outcome curator_override)",
+    )
+    override_disagreements: list[str] = Field(
+        default_factory=list,
+        description="Open warnings where a validator disagrees with the curator override",
+    )
+    identity_field_paths: list[str] = Field(
+        default_factory=list,
+        description="Payload paths of the value's identity keys (what a curator edits or clears)",
+    )
 
     @model_validator(mode="after")
     def _check_vocabularies(self) -> "DomainEnvelopeReviewResolvedValue":
         from src.lib.domain_packs.resolvable_values import (
             LOOKUP_OUTCOME_LABELS,
             LOOKUP_OUTCOMES,
+            OUTCOME_CURATOR_OVERRIDE,
             RESOLUTION_STATES,
             UNRESOLVED,
         )
@@ -1032,6 +1052,10 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
             raise ValueError(f"resolution_state must be one of {RESOLUTION_STATES}")
         if self.issue is not None and self.resolution_state != UNRESOLVED:
             raise ValueError("an unreadable stored value reads as unresolved")
+        if (self.curator_override is not None) != (self.lookup_outcome == OUTCOME_CURATOR_OVERRIDE):
+            raise ValueError("a curator_override outcome carries its override record, and only it")
+        if self.override_disagreements and self.curator_override is None:
+            raise ValueError("only a curator override has override disagreements")
         if self.lookup_outcome not in LOOKUP_OUTCOMES:
             raise ValueError(f"lookup_outcome must be one of {LOOKUP_OUTCOMES}")
         if self.lookup_result != LOOKUP_OUTCOME_LABELS[self.lookup_outcome]:
@@ -2717,6 +2741,7 @@ __all__ = [
     "CurationWorkspaceResponse",
     "DomainEnvelopeEvidenceAnchorProjection",
     "DomainEnvelopeProjectionRef",
+    "DomainEnvelopeReviewCuratorOverride",
     "DomainEnvelopeReviewFieldResolution",
     "DomainEnvelopeReviewResolvedValue",
     "DomainEnvelopeReviewRow",

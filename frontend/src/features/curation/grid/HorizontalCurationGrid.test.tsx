@@ -94,7 +94,9 @@ function fieldCell(
     resolutionDescribedBy: [],
     required: hasField ? false : null,
     readOnly: hasField ? false : null,
-    dirty: hasField ? false : null,
+    curatorOverride: false,
+    overrideDisagreements: [],
+    removeOverrideFieldKeys: null,
     staleValidation: hasField ? false : null,
     state: hasField ? state : null,
     fieldValidation: null,
@@ -200,6 +202,8 @@ describe('HorizontalCurationGrid', () => {
           lookup_result: 'Not validated yet',
           validator_explanation: 'Not validated yet.',
           validator_curator_message: null,
+          override_disagreements: [],
+          identity_field_paths: ['alpha'],
         }],
       },
     }
@@ -221,6 +225,39 @@ describe('HorizontalCurationGrid', () => {
       'Lookup result: Not validated yet',
     )
     expect(screen.queryByText(/"curie"/)).not.toBeInTheDocument()
+  })
+
+  it('marks a curator override and shows an open validator disagreement', () => {
+    const message = 'Validator disagrees with the curator override: its lookup result is Not found.'
+    const gridRow = row()
+    const value = {
+      value_path: 'alpha',
+      display_text: 'term one (ONT:1)',
+      mention: 'the wording in the paper',
+      resolution_state: 'resolved' as const,
+      lookup_outcome: 'curator_override',
+      lookup_result: 'Curator override',
+      validator_explanation: null,
+      validator_curator_message: null,
+      curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
+      override_disagreements: [message],
+      identity_field_paths: ['alpha'],
+    }
+    gridRow.cells[0] = {
+      ...fieldCell('field:alpha', 'alpha', 'ONT:1', true, 'needs-review'),
+      displayText: 'ONT:1',
+      resolution: { display_text: 'ONT:1', values: [value] },
+      resolutionDetails: [value],
+      resolutionLinesId: 'lines-alpha',
+      resolutionDescribedBy: ['lines-alpha'],
+      curatorOverride: true,
+      overrideDisagreements: [message],
+    }
+
+    renderGrid(model([gridRow]))
+
+    expect(document.querySelector('[data-slot="field-override-badge"]')).toHaveTextContent('Curator override')
+    expect(document.querySelector('[data-slot="field-override-disagreement"]')).toHaveTextContent(message)
   })
 
   it('ports the prototype compact state surfaces and anchored action layout in light mode', () => {

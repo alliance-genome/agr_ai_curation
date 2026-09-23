@@ -166,15 +166,33 @@ export function horizontalGridLookupResult(
   return values.map((value) => value.lookup_result).join('; ')
 }
 
-/** The validator's own words (and any unreadable-value issue) for the given values. */
+/** "Curator override by <who> on <when>" for a value a curator resolved. */
+export function horizontalGridOverrideText(value: DomainEnvelopeReviewResolvedValue): string | null {
+  if (!value.curator_override) {
+    return null
+  }
+  const at = new Date(value.curator_override.at)
+  // A fixed UTC reading keeps the time the same for every reviewer.
+  const when = Number.isNaN(at.getTime())
+    ? value.curator_override.at
+    : `${at.toISOString().slice(0, 16).replace('T', ' ')} UTC`
+  return `Curator override by ${value.curator_override.actor_id} on ${when}`
+}
+
+/** Who overrode, the validator's own words, disagreements and any unreadable-value issue. */
 export function horizontalGridValidatorWords(
   values: readonly DomainEnvelopeReviewResolvedValue[],
 ): string[] {
-  return values.flatMap((value) => [
-    ...(value.validator_explanation ? [`Validator explanation: ${value.validator_explanation}`] : []),
-    ...(value.validator_curator_message ? [`Validator message: ${value.validator_curator_message}`] : []),
-    ...(value.issue ? [value.issue] : []),
-  ])
+  return values.flatMap((value) => {
+    const override = horizontalGridOverrideText(value)
+    return [
+      ...(override ? [override] : []),
+      ...value.override_disagreements,
+      ...(value.validator_explanation ? [`Validator explanation: ${value.validator_explanation}`] : []),
+      ...(value.validator_curator_message ? [`Validator message: ${value.validator_curator_message}`] : []),
+      ...(value.issue ? [value.issue] : []),
+    ]
+  })
 }
 
 /** Labelled lines describing each value in full: validated value, paper wording, lookup, validator. */
