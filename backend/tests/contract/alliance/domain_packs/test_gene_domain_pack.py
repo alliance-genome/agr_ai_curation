@@ -471,6 +471,12 @@ def test_stage_gene_tool_requires_rationale_with_shared_description():
     schema = tools.stage_gene_mention_evidence.params_json_schema
     assert {"rationale", "identity_resolution_notes"} <= set(schema["required"])
     assert schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+    patch_schema = tools.patch_gene_mention_evidence.params_json_schema
+    assert "rationale" not in patch_schema["properties"]
+    assert (
+        "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared."
+        in patch_schema["properties"]["updates"]["description"]
+    )
 
 
 def test_stage_gene_rationale_is_staged_separately_from_identity_notes(monkeypatch):

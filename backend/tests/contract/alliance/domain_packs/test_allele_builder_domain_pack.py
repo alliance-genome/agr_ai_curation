@@ -465,6 +465,12 @@ def test_stage_allele_tool_requires_rationale_with_shared_description():
     schema = tools.stage_allele_observation.params_json_schema
     assert "rationale" in schema["required"]
     assert schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+    patch_schema = tools.patch_allele_observation.params_json_schema
+    assert "rationale" not in patch_schema["properties"]
+    assert (
+        "A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared."
+        in patch_schema["properties"]["updates"]["description"]
+    )
 
 
 def test_stage_allele_rationale_is_stripped_and_staged(monkeypatch):

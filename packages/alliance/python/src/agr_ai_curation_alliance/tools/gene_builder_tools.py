@@ -385,7 +385,12 @@ def _patch_gene_mention_evidence_impl(
     pending_ref_id: str,
     updates: List[Mapping[str, Any]],
 ) -> AgrQueryResult:
-    """Patch enumerated fields on one staged gene mention candidate."""
+    """Patch enumerated fields on one staged gene mention candidate.
+
+    Args:
+        updates: Field updates, each naming one allowed `field_path` with its new value.
+            A `rationale` update must be non-empty and at most 300 characters; it cannot be cleared.
+    """
 
     attempted_query = _attempt_query(
         "patch_gene_mention_evidence",
