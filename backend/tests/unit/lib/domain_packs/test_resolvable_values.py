@@ -661,3 +661,29 @@ def test_declared_legacy_values_get_the_legacy_rule_in_labels():
     )
     [row] = DomainPackMetadataReviewRowMaterializer(metadata).materialize(envelope, envelope_revision=1)
     assert row.display_label == f"unc-54 myosin {LEGACY_UNVERIFIED_SUFFIX}"
+
+
+def test_effective_payload_annotates_explicitly_indexed_declared_paths():
+    spec = ResolvableSpec(id_key="curie", label_key="label")
+    payload = {"terms": [{"curie": "ONT:1", "label": "short"}, {"curie": "ONT:2", "label": "long"}]}
+    covered = {"validator_resolved_value_materialization": [{"materialized_field_paths": ["terms[1].curie"]}]}
+
+    effective = effective_payload(payload, {"terms[0]": spec, "terms[1]": spec}, object_metadata=covered)
+
+    assert (effective["terms"][0]["resolution_state"], effective["terms"][0]["lookup_outcome"]) == (
+        UNRESOLVED, OUTCOME_LEGACY_UNVERIFIED)
+    assert effective["terms"][0]["mention"] == f"short (ONT:1) {LEGACY_UNVERIFIED_SUFFIX}"
+    assert (effective["terms"][1]["resolution_state"], effective["terms"][1]["lookup_outcome"]) == (
+        RESOLVED, OUTCOME_MATCHED)
+    # Only the named element: an index past the end changes nothing.
+    assert effective_payload(payload, {"terms[5]": spec}, object_metadata=None) == payload
+    assert "resolution_state" not in payload["terms"][0]
+
+
+def test_header_text_recognises_explicitly_indexed_declared_values():
+    from src.lib.domain_packs.resolvable_values import unresolved_header_text
+
+    specs = {"terms[0]": ResolvableSpec(id_key="curie", label_key="label")}
+    payload = {"terms": [{"curie": None, "label": "slow growth"}]}
+    assert unresolved_header_text(payload, "terms[0].label", resolvable_fields=specs) == (
+        f"slow growth {LEGACY_UNVERIFIED_SUFFIX}")

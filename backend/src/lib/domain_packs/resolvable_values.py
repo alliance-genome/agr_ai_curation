@@ -648,7 +648,17 @@ def _annotate_at(
     object_metadata: Mapping[str, Any] | None,
 ) -> Any:
     if isinstance(node, list):
-        # Declared paths name list fields without indexes; each element is its own value.
+        if remaining and isinstance(remaining[0], int):
+            # An explicitly indexed declared path (e.g. ``terms[0]``) names one element.
+            index = remaining[0]
+            if index >= len(node):
+                return node
+            updated_list = list(node)
+            updated_list[index] = _annotate_at(
+                node[index], remaining[1:], (*walked, index), spec, object_metadata
+            )
+            return updated_list
+        # A declared path without an index names every element; each is its own value.
         return [
             _annotate_at(item, remaining, (*walked, index), spec, object_metadata)
             for index, item in enumerate(node)
@@ -723,6 +733,14 @@ def _bare_path(tokens: Sequence[str | int]) -> str:
     return ".".join(str(token) for token in tokens if isinstance(token, str))
 
 
+def _declared_spec(
+    declared: Mapping[str, ResolvableSpec], tokens: Sequence[str | int],
+) -> ResolvableSpec | None:
+    """The spec declared for a concrete path: its indexed form (``terms[0]``) or its list field."""
+
+    return declared.get(_format_path(tokens)) or declared.get(_bare_path(tokens))
+
+
 def unresolved_header_text(
     payload: Mapping[str, Any],
     field_path: str,
@@ -750,11 +768,13 @@ def unresolved_header_text(
     named = _walk(payload, tokens)
     parent_tokens = tokens[:-1] if isinstance(tokens[-1], str) else None
     parent = _walk(payload, parent_tokens) if parent_tokens is not None else None
+    named_spec = _declared_spec(declared, tokens)
+    parent_spec = _declared_spec(declared, parent_tokens) if parent_tokens is not None else None
     spec: ResolvableSpec | None = None
-    if _bare_path(tokens) in declared and isinstance(named, Mapping):
-        target, target_tokens, leaf, spec = named, tokens, None, declared[_bare_path(tokens)]
-    elif parent_tokens is not None and _bare_path(parent_tokens) in declared and isinstance(parent, Mapping):
-        target, target_tokens, leaf, spec = parent, parent_tokens, named, declared[_bare_path(parent_tokens)]
+    if named_spec is not None and isinstance(named, Mapping):
+        target, target_tokens, leaf, spec = named, tokens, None, named_spec
+    elif parent_spec is not None and isinstance(parent, Mapping):
+        target, target_tokens, leaf, spec = parent, parent_tokens, named, parent_spec
     elif holds_resolution(named):
         target, target_tokens, leaf = named, tokens, None
     elif parent_tokens is not None and holds_resolution(parent):
