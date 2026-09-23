@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -215,6 +215,9 @@ class ResolvableSpec:
     mention_key: str = MENTION_KEY
     # Further keys only a validator fills (e.g. a taxon); part of the identity.
     validated_keys: tuple[str, ...] = ()
+    # Payload paths whose validator coverage also covers this value: the
+    # sources of a declared mirror copy (``materializes_to_field_paths``).
+    covered_by: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not (self.id_key or self.label_key):
@@ -611,12 +614,19 @@ def validator_materialized_paths(object_metadata: Mapping[str, Any] | None) -> t
 
 
 def _covers(path: Sequence[str | int], target: Sequence[str | int]) -> bool:
-    if len(path) < len(target):
-        return False
-    return all(
+    """Whether a recorded write path covers the value at ``target``.
+
+    It covers the value when it wrote the value or one of its keys, or when
+    it wrote the whole list the value is an element (or part of an element) of.
+    """
+
+    shared = min(len(path), len(target))
+    if not all(
         recorded == wanted or (recorded == _ANY_INDEX and isinstance(wanted, int))
-        for recorded, wanted in zip(path, target)
-    )
+        for recorded, wanted in zip(path[:shared], target[:shared])
+    ):
+        return False
+    return len(path) >= len(target) or isinstance(target[len(path)], int)
 
 
 def validator_event_covers(
@@ -633,6 +643,20 @@ def validator_event_covers(
     if target is None:
         return False
     return any(_covers(path, target) for path in validator_materialized_paths(object_metadata))
+
+
+def value_covered_by_validator(
+    object_metadata: Mapping[str, Any] | None,
+    value_path: str,
+    spec: ResolvableSpec | None,
+) -> bool:
+    """Validator coverage of one value: its own path, or a declared mirror source (``covered_by``)."""
+
+    if validator_event_covers(object_metadata, value_path):
+        return True
+    return spec is not None and any(
+        validator_event_covers(object_metadata, source) for source in spec.covered_by
+    )
 
 
 def effective_resolution(
@@ -853,7 +877,7 @@ def _annotate_at(
         return effective_value(
             node,
             spec,
-            covered_by_validator=validator_event_covers(object_metadata, _format_path(walked)),
+            covered_by_validator=value_covered_by_validator(object_metadata, _format_path(walked), spec),
         )
     if not isinstance(node, Mapping):
         return node
@@ -912,14 +936,47 @@ def declared_resolvable_fields(metadata: Any, object_type: str) -> dict[str, Res
         spec = resolvable_spec_from_display(display)
         if spec is not None:
             specs[field.field_path] = spec
-    return specs
+    return _with_mirror_sources(specs, object_definition.fields)
+
+
+def _with_mirror_sources(
+    specs: dict[str, ResolvableSpec], fields: Sequence[Any],
+) -> dict[str, ResolvableSpec]:
+    """Give each declared value the source paths of the mirror copies written into it.
+
+    A field declaring ``materializes_to_field_paths`` copies its validated
+    value into those paths, so a validator event covering the source also
+    covers the copy (e.g. a subject gene copied into the entity assayed).
+    """
+
+    declared_paths = {field.field_path for field in fields}
+    sources: dict[str, list[str]] = {}
+    for field in fields:
+        mirrors = field.metadata.get("materializes_to_field_paths")
+        if not isinstance(mirrors, list):
+            continue
+        for mirror in mirrors:
+            if not isinstance(mirror, str) or not mirror.strip():
+                continue
+            mirror_path = mirror.strip()
+            if mirror_path not in declared_paths and "." in mirror_path:
+                # A mirror may name its object type first (``Type.field``).
+                mirror_path = mirror_path.split(".", 1)[1]
+            # The copy is one key of the value it lands in.
+            value_path = mirror_path.rpartition(".")[0]
+            if value_path in specs and field.field_path not in sources.get(value_path, ()):
+                sources.setdefault(value_path, []).append(field.field_path)
+    return {
+        path: replace(spec, covered_by=tuple(sources[path])) if path in sources else spec
+        for path, spec in specs.items()
+    }
 
 
 def _bare_path(tokens: Sequence[str | int]) -> str:
     return ".".join(str(token) for token in tokens if isinstance(token, str))
 
 
-def _declared_spec(
+def declared_spec_for(
     declared: Mapping[str, ResolvableSpec], tokens: Sequence[str | int],
 ) -> ResolvableSpec | None:
     """The spec declared for a concrete path: its indexed form (``terms[0]``) or its list field."""
@@ -954,8 +1011,8 @@ def unresolved_header_text(
     named = _walk(payload, tokens)
     parent_tokens = tokens[:-1] if isinstance(tokens[-1], str) else None
     parent = _walk(payload, parent_tokens) if parent_tokens is not None else None
-    named_spec = _declared_spec(declared, tokens)
-    parent_spec = _declared_spec(declared, parent_tokens) if parent_tokens is not None else None
+    named_spec = declared_spec_for(declared, tokens)
+    parent_spec = declared_spec_for(declared, parent_tokens) if parent_tokens is not None else None
     spec: ResolvableSpec | None = None
     if named_spec is not None and isinstance(named, Mapping):
         target, target_tokens, leaf, spec = named, tokens, None, named_spec
@@ -986,8 +1043,8 @@ def unresolved_header_text(
         identity = [leaf]
     else:
         identity = [item for key, item in target.items() if key not in CONTRACT_KEYS]
-    if any(not _is_empty(item) for item in identity) and validator_event_covers(
-        object_metadata, _format_path(target_tokens)
+    if any(not _is_empty(item) for item in identity) and value_covered_by_validator(
+        object_metadata, _format_path(target_tokens), spec
     ):
         return None
     if spec is not None:
@@ -1046,6 +1103,7 @@ __all__ = [
     "check_resolvable_value",
     "copy_resolution",
     "declared_resolvable_fields",
+    "declared_spec_for",
     "effective_payload",
     "effective_resolution",
     "effective_value",
@@ -1066,4 +1124,5 @@ __all__ = [
     "unresolved_value",
     "validator_event_covers",
     "validator_materialized_paths",
+    "value_covered_by_validator",
 ]
