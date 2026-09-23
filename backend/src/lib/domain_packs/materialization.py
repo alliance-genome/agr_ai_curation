@@ -442,6 +442,7 @@ def materialize_validator_results_into_envelope(
                 working_envelope,
                 item,
                 object_definitions=object_definitions,
+                resolvable_fields_by_type=resolvable_fields_by_type,
                 validated_references=None,
                 source_envelope_revision=source_envelope_revision,
             )
@@ -472,6 +473,7 @@ def materialize_validator_results_into_envelope(
                 working_envelope,
                 item,
                 object_definitions=object_definitions,
+                resolvable_fields_by_type=resolvable_fields_by_type,
                 validated_references=new_objects,
                 source_envelope_revision=source_envelope_revision,
             )
@@ -496,6 +498,7 @@ def materialize_validator_results_into_envelope(
             working_envelope,
             item,
             object_definitions=object_definitions,
+            resolvable_fields_by_type=resolvable_fields_by_type,
             validated_references=None,
             source_envelope_revision=source_envelope_revision,
         )
@@ -994,6 +997,7 @@ def _write_back_to_referencing_objects(
     item: ValidatorResultMaterializationInput,
     *,
     object_definitions: Mapping[str, DomainPackObjectDefinition],
+    resolvable_fields_by_type: Mapping[str, Mapping[str, ResolvableSpec]],
     validated_references: Sequence[CuratableObjectEnvelope] | None,
     source_envelope_revision: int | None,
 ) -> DomainEnvelope:
@@ -1039,6 +1043,7 @@ def _write_back_to_referencing_objects(
             domain_object,
             item,
             declared,
+            resolvable_fields=resolvable_fields_by_type.get(domain_object.object_type, {}),
             validated_references=validated_references,
             source_envelope_revision=source_envelope_revision,
         )
@@ -1055,6 +1060,7 @@ def _referencing_object_with_result(
     item: ValidatorResultMaterializationInput,
     declared: Sequence[DomainPackFieldDefinition],
     *,
+    resolvable_fields: Mapping[str, ResolvableSpec],
     validated_references: Sequence[CuratableObjectEnvelope] | None,
     source_envelope_revision: int | None,
 ) -> CuratableObjectEnvelope:
@@ -1072,7 +1078,9 @@ def _referencing_object_with_result(
     payload = copy.deepcopy(domain_object.payload)
     containers: dict[str, list[str]] = {}
     for field_path in scalar_writes:
-        container_path = _resolvable_container_path(payload, field_path)
+        container_path = _resolvable_container_path(
+            payload, field_path, resolvable_fields=resolvable_fields
+        )
         if container_path is not None:
             containers.setdefault(container_path, []).append(field_path)
 
@@ -1087,12 +1095,24 @@ def _referencing_object_with_result(
     else:
         outcome = None
     if outcome is not None:
-        for container_path in containers:
+        for container_path, field_paths in containers.items():
+            spec = declared_spec_for(
+                resolvable_fields,
+                parse_field_path(container_path) if container_path else (),
+            )
+            # The validator overrules an earlier resolution: every key it supplies is cleared.
+            identity_keys = dict.fromkeys(
+                [
+                    *(spec.identity_keys if spec is not None else ()),
+                    *(str(parse_field_path(path)[-1]) for path in field_paths),
+                ]
+            )
             mark_unresolved(
                 _payload_container(payload, container_path),
                 outcome,
                 explanation=result.explanation,
                 curator_message=result.curator_message,
+                identity_keys=tuple(identity_keys),
             )
         if payload == domain_object.payload:
             return domain_object

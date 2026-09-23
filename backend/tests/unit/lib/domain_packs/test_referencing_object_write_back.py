@@ -316,3 +316,31 @@ def test_resolved_result_missing_a_declared_field_writes_nothing_but_the_outcome
     assert acquisition.payload["maker_id"] is None
     assert acquisition.object_refs == [_MENTION_REF]
     assert _by_ref(result.envelope, "loan-1") == _by_ref(envelope, "loan-1")
+
+
+def test_a_later_unresolved_result_overrules_the_referencing_value():
+    resolved = _materialize(_envelope(), _metadata(), **_RESOLVED).envelope
+    result = _materialize(
+        resolved,
+        _metadata(),
+        status="unresolved",
+        lookup_attempts=[
+            {
+                "provider": "fixture_lookup",
+                "method": "maker_search",
+                "query": {"mention": "the Delft workshop"},
+                "result_count": 0,
+                "outcome": "not_found",
+            }
+        ],
+    )
+    acquisition = _by_ref(result.envelope, "acquisition-1")
+
+    assert acquisition.payload["resolution_state"] == "unresolved"
+    assert acquisition.payload["lookup_outcome"] == "not_found"
+    assert acquisition.payload["maker_id"] is None
+    assert acquisition.payload["maker_name"] is None
+    # The overruled identity is kept only as hints.
+    assert acquisition.payload["proposed_maker_id"] == "GAL:M0042"
+    assert acquisition.payload["proposed_maker_name"] == "De Grieksche A"
+    assert acquisition.payload["mention"] == "the Delft workshop"
