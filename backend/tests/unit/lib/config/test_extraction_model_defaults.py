@@ -6,7 +6,7 @@ import pytest
 
 from src.lib.config.agent_loader import load_agent_definitions, reset_cache
 from src.lib.config.models_loader import get_default_model, get_model, load_models
-from src.lib.openai_agents.config import build_model_settings
+from src.lib.openai_agents.config import PromptCacheIdentity, build_model_settings
 
 ROOT = Path(__file__).resolve().parents[5]
 # ALL-1248: the seven packaged extractors run on Sol/medium; routing and output stay on Astra/low.
@@ -43,7 +43,8 @@ def package_agents(monkeypatch):
 def _assert_effective(config, model, reasoning, label):
     assert (config.model, config.reasoning) == (model, reasoning), label
     settings = build_model_settings(config.model, temperature=config.temperature,
-                                    reasoning_effort=config.reasoning)
+                                    reasoning_effort=config.reasoning,
+                                    prompt_cache=PromptCacheIdentity(label, 'static'))
     assert settings.temperature is None, label
     assert settings.reasoning.effort == reasoning, label
 
@@ -93,5 +94,6 @@ def test_catalog_defaults_new_agents_to_sol_medium_and_keeps_astra_selectable():
     assert get_default_model().model_id == 'gpt-5.6-sol'
     assert sol.default and sol.curator_visible and sol.default_reasoning == 'medium'
     assert not astra.default and astra.curator_visible and astra.default_reasoning == 'low'
-    settings = build_model_settings(sol.model_id, reasoning_effort='medium')
+    settings = build_model_settings(sol.model_id, reasoning_effort='medium',
+                                    prompt_cache=PromptCacheIdentity('new_agent', 'static'))
     assert settings.reasoning.effort == 'medium'

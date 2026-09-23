@@ -28,7 +28,7 @@ import json
 import logging
 import re
 import time
-from typing import Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequence
 
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, function_tool
 
@@ -59,6 +59,9 @@ from src.lib.openai_agents.supervisor_context_tools import (
 from src.lib.prompts.assembly import build_agent_prompt_layers, prompt_templates_for_bundle
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
 from src.schemas.curation_workspace import CurationExtractionSourceKind
+
+if TYPE_CHECKING:
+    from ..config import PromptCacheIdentity
 
 # Note: Answer model not used here - supervisor streams plain text for better UX
 
@@ -1052,6 +1055,8 @@ def _build_model_settings(
     temperature: Optional[float] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     provider_override: Optional[str] = None,
+    *,
+    prompt_cache: "PromptCacheIdentity",
 ) -> Optional[ModelSettings]:
     """
     Build ModelSettings with optional reasoning for models that support it.
@@ -1073,6 +1078,7 @@ def _build_model_settings(
         model: The model name (e.g., "gpt-5.6-sol", "gpt-5.6-terra", "gemini-3-pro-preview")
         temperature: Optional temperature override (0.0-1.0)
         reasoning_effort: Optional reasoning effort for models that support it
+        prompt_cache: The supervisor's static prompt identity (stable cache key)
 
     Returns:
         ModelSettings instance or None if no settings needed
@@ -1086,6 +1092,7 @@ def _build_model_settings(
         temperature=temperature,
         reasoning_effort=reasoning_effort,
         provider_override=provider_override,
+        prompt_cache=prompt_cache,
     )
 
 
@@ -1515,6 +1522,7 @@ def create_supervisor_agent(
         An Agent instance configured as a supervisor with specialist tools
     """
     from ..config import (
+        PromptCacheIdentity,
         get_agent_config,
         log_agent_config,
         get_model_for_agent,
@@ -1538,14 +1546,6 @@ def create_supervisor_agent(
 
     # Resolve a concrete SDK model for compatible providers or a name for native OpenAI.
     model = get_model_for_agent(effective_model, provider_override=model_provider)
-
-    # Build model settings for supervisor
-    supervisor_settings = _build_model_settings(
-        model=effective_model,
-        temperature=effective_temperature,
-        reasoning_effort=effective_reasoning,
-        provider_override=model_provider,
-    )
 
     # Configure guardrails if enabled
     input_guardrails = []
@@ -1663,20 +1663,23 @@ def create_supervisor_agent(
     @function_tool(
         name_override=_INSPECT_RESULTS_TOOL_NAME,
         description_override=(
-            "Inspect persisted canonical extraction results for this chat. Use "
-            "action=\"help\" for the contract; action=\"list\" for available "
-            "results; action=\"search\" with query/target to find prior evidence "
-            "or manifest-field previews and select a stable result_ref; "
-            "action=\"summary\" for one result; action=\"objects\" or \"object\" for "
-            "YAML-declared manifest fields; action=\"field\" for one "
-            "YAML-declared scalar field; action=\"details\" with object_ref for saved "
-            "generic/custom attributes (field_path selects a nested part; cursor continues a page). "
-            "Read these saved details instead of calling extraction again. action=\"evidence\" for bounded "
-            "evidence text; and action=\"validation\" for validation findings. "
-            "Requires result_ref values in extraction-result:<uuid> form when "
-            "addressing a specific result. This tool browses existing results "
-            "and does not export, prepare for curation, inspect files, inspect "
-            "review sessions, or debug trace behavior."
+            "Explore persisted canonical extraction results for this chat without "
+            "rerunning extraction. Every response is size-bounded: pass next_call "
+            "exactly to continue a page or an exact chunk. Start with "
+            "action=\"summary\" (counts by object type, status and validation state), "
+            "then action=\"objects\" filtered by object_type, status, validation_state "
+            "(open|resolved|none|any), severity, query (field text) or field_path, with "
+            "fields to select YAML manifest fields; action=\"object\" or \"field\" "
+            "for one object or one exact field value; action=\"validation\" (filters "
+            "plus finding_ref for one finding) and action=\"validator_results\" "
+            "(validator_result_key for one) for validation; action=\"evidence\" with "
+            "object_ref for evidence text; action=\"details\" with object_ref for saved "
+            "generic/custom attributes; action=\"list\" and action=\"search\" with "
+            "query/target to choose among results. Values shown withheld are read "
+            "exactly with their read call (detail_path/cursor); pass cursor, limit and "
+            "result_sha256 only from a next_call. Address a specific "
+            "result with result_ref in extraction-result:<uuid> form. This tool does not "
+            "export, prepare for curation, inspect files or review sessions, or debug traces."
         ),
     )
     async def inspect_results_tool(
@@ -1690,6 +1693,15 @@ def create_supervisor_agent(
         flow_run_id: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        object_type: str | None = None,
+        status: str | None = None,
+        validation_state: str | None = None,
+        severity: str | None = None,
+        fields: List[str] | None = None,
+        finding_ref: str | None = None,
+        validator_result_key: str | None = None,
+        detail_path: str | None = None,
+        result_sha256: str | None = None,
     ) -> str:
         """Inspect bounded persisted extraction results for the active chat."""
 
@@ -1704,6 +1716,15 @@ def create_supervisor_agent(
             flow_run_id=flow_run_id,
             limit=limit,
             cursor=cursor,
+            object_type=object_type,
+            status=status,
+            validation_state=validation_state,
+            severity=severity,
+            fields=fields,
+            finding_ref=finding_ref,
+            validator_result_key=validator_result_key,
+            detail_path=detail_path,
+            result_sha256=result_sha256,
         )
 
     specialist_tools.append(inspect_results_tool)
@@ -1850,6 +1871,18 @@ def create_supervisor_agent(
         None,
     )
     instructions = prompt_bundle.render()
+
+    # Build model settings for supervisor; its cache key follows the static layers.
+    supervisor_settings = _build_model_settings(
+        model=effective_model,
+        temperature=effective_temperature,
+        reasoning_effort=effective_reasoning,
+        provider_override=model_provider,
+        prompt_cache=PromptCacheIdentity(
+            agent_key="supervisor",
+            static_prompt=prompt_bundle.static_prefix(),
+        ),
+    )
 
     logger.info(
         "Creating Supervisor agent, model=%s prompt_v=%s groups=%s",

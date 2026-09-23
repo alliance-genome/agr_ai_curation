@@ -403,7 +403,7 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
         return locator.FigureLocatorBatchOutput(
             candidates=[
                 locator.FigureLocatorCandidateOutput(
-                    candidate_id=chunk.id,
+                    candidate_id=f"c{position}",
                     mentions=(
                         [
                             locator.FigureLocatorMentionOutput(
@@ -412,14 +412,13 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
                                 kind="figure",
                                 number="1",
                                 panels=["A"],
-                                canonical_reference="Figure 1A",
                             )
                         ]
                         if "Fig. 1A" in candidate_text
                         else []
                     ),
                 )
-                for chunk, candidate_text in candidates
+                for position, (_chunk, candidate_text) in enumerate(candidates)
             ]
         )
 

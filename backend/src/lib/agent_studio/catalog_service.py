@@ -2112,6 +2112,7 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         create_tool_required_output_guardrail,
     )
     from src.lib.openai_agents.config import (
+        PromptCacheIdentity,
         get_model_for_agent,
         build_model_settings,
         normalize_reasoning_effort,
@@ -2207,6 +2208,10 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         runtime_context = _build_runtime_context(
             runtime_kwargs=runtime_kwargs, canonical_tool_ids=canonical_tool_ids
         )
+        if "get_agent_contract" in canonical_tool_id_set:
+            from src.lib.agent_contracts import custom_agent_contract_runtime_note
+
+            runtime_context += "\n\n" + custom_agent_contract_runtime_note(str(db_agent.agent_key))
         if execution_snapshot.output_contract.output_mode == "profile_bound_generic":
             from src.lib.agent_studio.profile_tools import configure_profile_tools, profile_runtime_instruction
 
@@ -2264,6 +2269,10 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         if (output_schema is None and bool(canonical_tool_id_set & DOCUMENT_TOOL_IDS))
         else None,
         provider_override=model_provider,
+        prompt_cache=PromptCacheIdentity(
+            agent_key=str(db_agent.agent_key),
+            static_prompt=prompt_bundle.static_prefix(),
+        ),
     )
 
     runtime_agent = Agent(

@@ -27,7 +27,8 @@ playbook -> guides `workshop_profile_design`, `workshop_output_and_validators`,
 `prompt_playbook`). Behavioural rules, feedback/failure reporting, constraints
 and live authoring guidance stay always-sent.
 
-Chat supervisor (Alliance config base prompt 18,967 -> 16,878 chars: runtime tool
+Chat supervisor (Alliance config base prompt 18,967 -> 16,878 chars before the
+ALL-1287 merge; 19,852 -> 18,276 on the integration branch: runtime tool
 authority 468 -> 256, extraction result completion 3,472 -> 1,876, output
 contract 1,157 -> 624, routing map 1,653 -> 1,905 with the Display as column;
 runtime note -330): duplicated extraction-result, export, curation-prep, runtime-tool
@@ -59,7 +60,9 @@ STUDIO_BUDGETS = {
     "flows": 26_500,
     "agent_workshop": 30_000,
 }
-SUPERVISOR_BASE_PROMPT_BUDGET = 17_500
+# ALL-1287 added 885 chars of inspect_results guidance (18,967 -> 19,852 before
+# this dedup); after ALL-1292 the merged base prompt is 18,276.
+SUPERVISOR_BASE_PROMPT_BUDGET = 18_800
 
 
 def _alliance_template() -> str:

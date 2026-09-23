@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from agents import function_tool
+from agents.tool_context import ToolContext
 
 from src.lib.agent_contracts import get_agent_contract as _get_agent_contract
 
@@ -14,7 +15,10 @@ from src.lib.agent_contracts import get_agent_contract as _get_agent_contract
     description_override=(
         "Read deterministic runtime contract metadata for an agent (topics: "
         "tools, output_schema, domain_envelope, validator_bindings, "
-        "ontology_constraints, field). Results are scoped and paged: start with "
+        "ontology_constraints, field). A custom agent passes its own ca_ "
+        "agent_id from its runtime context to read its saved configuration; "
+        "other custom agents are only visible to the curators who can see them. "
+        "Results are scoped and paged: start with "
         "the default summary, and to look at one field pass field_path (add "
         "domain_pack_id or object_type when the field exists in several packs) "
         "before asking for detail_level=detail. An unknown field or selector "
@@ -26,6 +30,7 @@ from src.lib.agent_contracts import get_agent_contract as _get_agent_contract
     ),
 )
 def get_agent_contract(
+    ctx: ToolContext[Any],
     agent_id: str,
     topic: str,
     field_path: Optional[str] = None,
@@ -50,6 +55,7 @@ def get_agent_contract(
         object_type=object_type,
         item_ref=item_ref,
         detail_pointer=detail_pointer,
+        caller=getattr(ctx, "agent", None),
     )
 
 

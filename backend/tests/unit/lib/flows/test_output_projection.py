@@ -1219,7 +1219,9 @@ def test_object_projection_supports_rename_omit_reorder_filter_sort_and_concat()
     assert result.rows == [
         {
             "gene_symbol": "BRCA1",
-            "gene_label": "BRCA1",
+            # "Gene" declares no label in the gene pack: the label is empty,
+            # never a fallback to the symbol (Chris, Sep 22).
+            "gene_label": "",
             "evidence_record_ids": "ev-1",
             "gene_ref": "TEST:GENE001 BRCA1",
         }

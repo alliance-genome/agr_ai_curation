@@ -58,6 +58,7 @@ def _configure_chat_endpoint(monkeypatch, error: Exception):
         lambda: UUID("12345678-1234-5678-1234-567812345678"),
     )
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
+    monkeypatch.setattr(api_module, "_load_agent_studio_system_prompt_template", lambda: "system prompt template")
     monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
     # Error-stream tests isolate the provider from the database-backed policy catalog.
     def authorized_tools(context, **_kwargs):

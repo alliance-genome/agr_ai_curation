@@ -54,7 +54,7 @@ def _condition(condition: Mapping[str, Any], usage: Mapping[str, int], event: Ma
 
 
 def estimate(event: Mapping[str, Any], definitions) -> dict[str, Any]:
-    if event["usage"]["usage_status"] != "recorded":
+    if event["usage_status"] != "recorded":
         return {"estimate_unavailable_reason": "missing_or_inconsistent_usage"}
     definition = matching_definition(definitions, event["model"], event["timestamp"])
     if definition is None:

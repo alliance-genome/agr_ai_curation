@@ -220,7 +220,7 @@ class DocumentChunk(BaseModel):
     section_title: Optional[str] = None
     section_path: Optional[List[str]] = None
     # New hierarchy fields from LLM-based section resolution
-    parent_section: Optional[str] = Field(None, description="Top-level section (e.g., Methods, Results, TITLE)")
+    parent_section: Optional[str] = Field(None, description="The paper's own top-level section heading (e.g., Materials and Methods, Results)")
     subsection: Optional[str] = Field(None, description="Subsection name if applicable")
     is_top_level: Optional[bool] = Field(None, description="True if major section, False if subsection")
     doc_items: List[ChunkDocItemProvenance] = Field(default_factory=list)

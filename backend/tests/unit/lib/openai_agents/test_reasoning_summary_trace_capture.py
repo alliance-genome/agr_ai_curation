@@ -4,6 +4,7 @@ import pytest
 
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.config import (
+    PromptCacheIdentity,
     build_model_settings,
     reasoning_summary_request_settings,
 )
@@ -68,7 +69,11 @@ def test_reasoning_summary_settings_request_auto_for_openai_reasoning_model(monk
     assert settings["requested_summary"] == "auto"
     assert settings["reasoning_effort"] == "medium"
 
-    model_settings = build_model_settings(model="gpt-5.4-mini", reasoning_effort="medium")
+    model_settings = build_model_settings(
+        model="gpt-5.4-mini",
+        reasoning_effort="medium",
+        prompt_cache=PromptCacheIdentity(agent_key="gene_extractor", static_prompt="Extract."),
+    )
     assert model_settings.reasoning.effort == "medium"
     assert model_settings.reasoning.summary == "auto"
 

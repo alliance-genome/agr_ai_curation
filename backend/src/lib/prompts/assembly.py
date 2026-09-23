@@ -92,6 +92,22 @@ class PromptLayerBundle:
         """Render the layered content without merging layer metadata."""
         return separator.join(layer.content for layer in self.layers if layer.content)
 
+    def static_prefix(self, separator: str = "\n\n") -> str:
+        """Render the layers shared by every run: all layers before runtime context.
+
+        This is the cacheable prompt prefix. Runtime context must come last; a
+        static layer after it would break the prefix, so that fails explicitly.
+        """
+        kinds = self.layer_order
+        first_runtime = kinds.index("runtime_context") if "runtime_context" in kinds else len(kinds)
+        if any(kind != "runtime_context" for kind in kinds[first_runtime:]):
+            raise ValueError(
+                f"Prompt bundle '{self.agent_id}' places static layers after runtime context"
+            )
+        return separator.join(
+            layer.content for layer in self.layers[:first_runtime] if layer.content
+        )
+
     def to_manifest(self) -> dict[str, Any]:
         """Return a JSON-serializable bundle manifest."""
         return {

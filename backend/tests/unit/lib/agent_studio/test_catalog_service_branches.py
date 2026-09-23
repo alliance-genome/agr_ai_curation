@@ -556,6 +556,7 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
         "_build_runtime_instructions",
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "INSTR",
+            static_prefix=lambda: "INSTR",
             hash="hash-1",
             to_manifest=lambda: {
                 "agent_id": "gene_validation",
@@ -602,6 +603,7 @@ def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
         "_build_runtime_instructions",
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "INSTR",
+            static_prefix=lambda: "INSTR",
             hash="hash-1",
             to_manifest=lambda: {"agent_id": "gene_extractor", "layers": [], "hash": "hash-1"},
         ),
@@ -646,6 +648,7 @@ def test_create_db_agent_attaches_structured_finalization_metadata(monkeypatch):
         "_build_runtime_instructions",
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "INSTR",
+            static_prefix=lambda: "INSTR",
             hash="hash-1",
             to_manifest=lambda: {
                 "agent_id": "gene_validation",
@@ -697,6 +700,7 @@ def test_create_db_agent_attaches_inherited_curation_metadata_for_custom_templat
         "_build_runtime_instructions",
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "INSTR",
+            static_prefix=lambda: "INSTR",
             hash="hash-1",
             to_manifest=lambda: {
                 "agent_id": "ca_custom_gene_extractor",
@@ -760,6 +764,7 @@ def test_create_db_agent_inherits_when_custom_definition_is_not_launchable(monke
         "_build_runtime_instructions",
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "INSTR",
+            static_prefix=lambda: "INSTR",
             hash="hash-1",
             to_manifest=lambda: {
                 "agent_id": "ca_custom_gene_extractor",
@@ -821,6 +826,7 @@ def test_create_db_agent_does_not_attach_curation_metadata_without_finalizer_too
         "_build_runtime_instructions",
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "INSTR",
+            static_prefix=lambda: "INSTR",
             hash="hash-1",
             to_manifest=lambda: {
                 "agent_id": "ca_repurposed_gene_extractor",
@@ -878,6 +884,7 @@ def test_create_db_agent_does_not_inherit_curation_without_parent_adapter_key(mo
         "_build_runtime_instructions",
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "INSTR",
+            static_prefix=lambda: "INSTR",
             hash="hash-1",
             to_manifest=lambda: {
                 "agent_id": "ca_gene_extractor_missing_adapter",
@@ -945,6 +952,7 @@ def test_create_db_agent_applies_model_overrides(monkeypatch):
         "_build_runtime_instructions",
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "INSTR",
+            static_prefix=lambda: "INSTR",
             hash="hash-1",
             to_manifest=lambda: {"agent_id": "gene", "layers": [], "hash": "hash-1"},
         ),

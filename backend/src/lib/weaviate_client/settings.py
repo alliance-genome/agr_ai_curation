@@ -223,7 +223,7 @@ def update_schema(schema_config: Dict[str, Any]) -> Dict[str, Any]:
                         {
                             "name": "parentSection",
                             "dataType": ["text"],
-                            "description": "Top-level section name (e.g., Methods, Results, TITLE)",
+                            "description": "The paper's own top-level section heading (e.g., Materials and Methods, Results)",
                         },
                         {
                             "name": "subsection",

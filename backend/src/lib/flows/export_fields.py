@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import json
+import re
 from typing import Any
 
 from src.schemas.domain_envelope import parse_field_path
@@ -43,8 +44,10 @@ def _packaged_domain_pack(agent_id: str, entry: dict | None = None) -> Any:
 
 def packaged_export_fields(agent_id: str, entry: dict | None = None) -> list[dict[str, Any]]:
     domain_pack = _packaged_domain_pack(agent_id, entry)
-    if domain_pack is None:
-        return []
+    return _pack_export_fields(domain_pack) if domain_pack is not None else []
+
+
+def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
     result = []
     for obj in domain_pack.metadata.object_definitions:
         summary = obj.metadata.get("export_validation_summary")
@@ -73,122 +76,184 @@ def source_catalog(fields: list[dict], receipt: Any = None) -> dict:
     return {**identity, "schema_fingerprint": "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()}
 
 
-_DISPLAY_ROLES = ("label", "id", "state")
+_LIST_INDEX = re.compile(r"\[\d+\]")
 
 
-def _checked_display(display: dict[str, Any], where: str) -> dict[str, Any]:
-    """A display role is one leaf path; lists of fallback leaves are not allowed."""
+class PackagedExportSource:
+    """One packaged source's export catalog, resolved once per output bundle.
 
-    for role in _DISPLAY_ROLES:
-        if role in display and not (isinstance(display[role], str) and display[role].strip()):
-            raise ValueError(
-                f"{where} metadata.display.{role} must be a single leaf path string; "
-                "fallback lists are not supported."
-            )
-    return display
-
-
-def _field_display(
-    field: Any,
-    models: dict[str, Any],
-    object_models: dict[str, str | None] | None = None,
-) -> dict[str, Any] | None:
-    """Field-level display wins, then its model's (or referenced object's model's)."""
-
-    display = field.metadata.get("display")
-    if isinstance(display, dict) and display:
-        return _checked_display(dict(display), f"Field '{field.field_path}'")
-    model_ref = field.model_ref
-    if model_ref is None and getattr(field, "object_type_ref", None):
-        model_ref = (object_models or {}).get(field.object_type_ref)
-    model = models.get(model_ref) if model_ref else None
-    display = model.metadata.get("display") if model is not None else None
-    if isinstance(display, dict) and display:
-        return _checked_display(dict(display), f"Model '{model.model_id}'")
-    return None
-
-
-def packaged_display_specs(agent_id: str, entry: dict | None = None) -> dict[str, dict[str, Any]]:
-    """Resolved display specs keyed by packaged export field ref.
-
-    Kept apart from the export field catalog so saved field selections and their
-    schema fingerprints do not change. Composite ``compose`` children carry their
-    own resolved specs.
+    Display declarations were validated when the pack loaded
+    (``src.schemas.domain_pack_metadata``); this only resolves them.
     """
 
-    domain_pack = _packaged_domain_pack(agent_id, entry)
-    if domain_pack is None:
-        return {}
-    models = {model.model_id: model for model in domain_pack.metadata.model_definitions}
-    object_models = {
-        obj.object_type: obj.model_ref for obj in domain_pack.metadata.object_definitions
-    }
-    specs: dict[str, dict[str, Any]] = {}
-    for obj in domain_pack.metadata.object_definitions:
-        by_path = {field.field_path: field for field in obj.fields}
-        for field in obj.fields:
-            display = _field_display(field, models, object_models)
-            if display is None:
+    def __init__(self, domain_pack: Any) -> None:
+        from src.lib.domain_packs.materialization import _definition_object_role, _object_role_key
+
+        metadata = domain_pack.metadata
+        self.domain_pack = domain_pack
+        self.fields = _pack_export_fields(domain_pack)
+        self._models = {model.model_id: model for model in metadata.model_definitions}
+        self._object_models = {obj.object_type: obj.model_ref for obj in metadata.object_definitions}
+        role_key = _object_role_key(metadata)
+        self._roles = {
+            obj.object_type: _definition_object_role(obj, object_role_key=role_key)
+            for obj in metadata.object_definitions
+        }
+        # The curatable units are the rows curators review; their supporting
+        # objects (validated references, evidence quotes) are not laid out.
+        self.curatable_unit_types = [
+            object_type for object_type, role in self._roles.items() if role == "curatable_unit"
+        ]
+        self.display_specs = self._display_specs()
+        self.object_ref_fields = {
+            obj.object_type: fields
+            for obj in metadata.object_definitions
+            if (fields := {
+                field.field_path: field.object_type_ref
+                for field in obj.fields
+                if getattr(field, "object_type_ref", None)
+            })
+        }
+        self.object_label_paths = self._object_label_paths()
+
+    def _field_display(self, field: Any) -> dict[str, Any] | None:
+        """Field-level display wins, then its model's (or referenced object's model's)."""
+
+        display = field.metadata.get("display")
+        if display:
+            return deepcopy(display)
+        model_ref = field.model_ref
+        if model_ref is None and getattr(field, "object_type_ref", None):
+            model_ref = self._object_models.get(field.object_type_ref)
+        model = self._models.get(model_ref) if model_ref else None
+        display = model.metadata.get("display") if model is not None else None
+        return deepcopy(display) if display else None
+
+    def _resolved(self, display: dict[str, Any], field_path: str, by_path: dict[str, Any]) -> dict[str, Any]:
+        """Composite parts carry their own resolved specs, recursively."""
+
+        if not display.get("compose"):
+            return display
+        entries = []
+        for entry in display["compose"]:
+            if isinstance(entry, dict):
+                path, child = entry.get("path"), entry.get("display")
+            else:
+                path, child = str(entry), None
+            if path and child is None and f"{field_path}.{path}" in by_path:
+                child = self._field_display(by_path[f"{field_path}.{path}"])
+            if child is not None:
+                child = self._resolved(child, f"{field_path}.{path}" if path else field_path, by_path)
+            entries.append({"path": path, "display": child} if path else {"display": child})
+        return {**display, "compose": entries}
+
+    def _display_specs(self) -> dict[str, dict[str, Any]]:
+        """Resolved display specs keyed by packaged export field ref.
+
+        Kept apart from the export field catalog so saved field selections and
+        their schema fingerprints do not change.
+        """
+
+        specs: dict[str, dict[str, Any]] = {}
+        for obj in self.domain_pack.metadata.object_definitions:
+            by_path = {field.field_path: field for field in obj.fields}
+            for field in obj.fields:
+                display = self._field_display(field)
+                if display is not None:
+                    specs[f"object.pack.{obj.object_type}.{field.field_path}"] = self._resolved(
+                        display, field.field_path, by_path,
+                    )
+        return specs
+
+    def _object_label_paths(self) -> dict[str, str]:
+        """Declared object label path per object type (Chris, Sep 22).
+
+        The object-root model's display label, else workspace_display
+        primary_label_field; object types without either have no declared label.
+        """
+
+        paths: dict[str, str] = {}
+        for obj in self.domain_pack.metadata.object_definitions:
+            model = self._models.get(obj.model_ref) if obj.model_ref else None
+            display = model.metadata.get("display") if model is not None else None
+            if display and display.get("label"):
+                paths[obj.object_type] = str(display["label"])
                 continue
-            if display.get("compose"):
-                display["compose"] = [
-                    {
-                        "path": str(child),
-                        "display": (
-                            _field_display(by_path[f"{field.field_path}.{child}"], models, object_models)
-                            if f"{field.field_path}.{child}" in by_path
-                            else None
-                        ),
-                    }
-                    for child in display["compose"]
-                ]
-            specs[f"object.pack.{obj.object_type}.{field.field_path}"] = display
-    return specs
+            primary = (obj.metadata.get("workspace_display") or {}).get("primary_label_field")
+            if isinstance(primary, str) and primary.strip():
+                paths[obj.object_type] = primary.strip()
+        return paths
 
+    def default_layout(self, object_types: list[str]) -> list[str]:
+        """Default export refs from each curatable unit's workspace_display, in order.
 
-def packaged_default_layout(agent_id: str, entry: dict | None, object_types: list[str]) -> list[str]:
-    """Default export refs from each object's workspace_display, in order.
+        Leaf paths collapse into their nearest declared parent that has a display
+        spec, so a term reads as one "label (id)" column instead of its leaves. A
+        path that reads one list element (``terms[0].label``) collapses into the
+        declared list field itself, so the default export carries every element.
+        A pack without curatable units lays out the objects it declares.
+        """
 
-    Leaf paths collapse into their nearest declared parent that has a display
-    spec, so a term reads as one "label (id)" column instead of its leaves.
-    """
-
-    domain_pack = _packaged_domain_pack(agent_id, entry)
-    if domain_pack is None:
-        return []
-    specs = packaged_display_specs(agent_id, entry)
-    refs: list[str] = []
-    for obj in domain_pack.metadata.object_definitions:
-        if obj.object_type not in object_types:
-            continue
-        layout = obj.metadata.get("workspace_display") or {}
-        paths = list(layout.get("summary_fields") or [])
-        for group in layout.get("groups") or []:
-            paths.extend(group.get("fields") or [])
-        declared = {field.field_path for field in obj.fields}
-        chosen_paths: list[str] = []
-        for path in paths:
-            chosen = path
-            parts = path.split(".")
-            # The path itself when it has a display, else its nearest parent that does.
-            for size in range(len(parts), 0, -1):
-                candidate = ".".join(parts[:size])
-                if f"object.pack.{obj.object_type}.{candidate}" in specs:
-                    chosen = candidate
-                    break
-            if chosen not in declared:
+        has_units = bool(self.curatable_unit_types)
+        refs: list[str] = []
+        for obj in self.domain_pack.metadata.object_definitions:
+            if obj.object_type not in object_types:
                 continue
-            # Skip a column already covered by a chosen ancestor or descendant.
-            if any(
-                existing == chosen
-                or existing.startswith(chosen + ".")
-                or chosen.startswith(existing + ".")
-                for existing in chosen_paths
-            ):
+            if has_units and self._roles[obj.object_type] != "curatable_unit":
                 continue
-            chosen_paths.append(chosen)
-            refs.append(f"object.pack.{obj.object_type}.{chosen}")
-    return refs
+            layout = obj.metadata.get("workspace_display") or {}
+            paths = list(layout.get("summary_fields") or [])
+            for group in layout.get("groups") or []:
+                paths.extend(group.get("fields") or [])
+            declared = {field.field_path for field in obj.fields}
+            lists = {field.field_path for field in obj.fields if field.multivalued}
+            chosen_paths: list[str] = []
+            for path in paths:
+                chosen = path
+                parts = path.split(".")
+                list_field = next(
+                    (
+                        path[: match.start()]
+                        for match in _LIST_INDEX.finditer(path)
+                        if path[: match.start()] in lists
+                    ),
+                    None,
+                )
+                if list_field is not None:
+                    chosen = list_field
+                else:
+                    # The path itself when it has a display, else its nearest parent that does.
+                    for size in range(len(parts), 0, -1):
+                        candidate = ".".join(parts[:size])
+                        if f"object.pack.{obj.object_type}.{candidate}" in self.display_specs:
+                            chosen = candidate
+                            break
+                if chosen not in declared:
+                    continue
+                # Skip a column already covered by a chosen ancestor or descendant.
+                if any(
+                    existing == chosen
+                    or existing.startswith(chosen + ".")
+                    or chosen.startswith(existing + ".")
+                    for existing in chosen_paths
+                ):
+                    continue
+                chosen_paths.append(chosen)
+                refs.append(f"object.pack.{obj.object_type}.{chosen}")
+        return refs
+
+
+def packaged_export_source(
+    agent_id: str, entry: dict | None, *, cache: dict[tuple[str, str], PackagedExportSource | None],
+) -> PackagedExportSource | None:
+    """The packaged export source for a step, resolved once per ``cache`` (one bundle)."""
+
+    pack_id = (entry.get("curation") or {}).get("domain_pack_id") if entry is not None else None
+    key = ("pack", str(pack_id)) if entry is not None else ("agent", agent_id)
+    if key not in cache:
+        domain_pack = _packaged_domain_pack(agent_id, entry)
+        cache[key] = PackagedExportSource(domain_pack) if domain_pack is not None else None
+    return cache[key]
 
 
 def _walk_payload(value: Any, tokens: list) -> Any:

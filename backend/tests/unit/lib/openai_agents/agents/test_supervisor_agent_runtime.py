@@ -14,6 +14,9 @@ from src.lib.chat_history_repository import ChatMessageRecord
 from src.lib.agent_studio import tools as trace_review_tools
 from src.lib.openai_agents import supervisor_context_tools
 from src.lib.openai_agents.agents import supervisor_agent
+from src.lib.openai_agents.config import PromptCacheIdentity
+
+_SUPERVISOR_CACHE = PromptCacheIdentity(agent_key="supervisor", static_prompt="Base prompt")
 
 
 def _patch_supervisor_prompt_bundle(monkeypatch, *, version: int = 1):
@@ -33,6 +36,7 @@ def _patch_supervisor_prompt_bundle(monkeypatch, *, version: int = 1):
         )
         return SimpleNamespace(
             render=lambda: rendered,
+            static_prefix=lambda: "Base prompt",
             hash=f"hash-{version}",
             to_manifest=lambda: {
                 "agent_id": "supervisor",
@@ -179,6 +183,11 @@ def test_supervisor_prompt_explains_result_inspection_boundaries():
     normalized_prompt = " ".join(prompt_text.split())
 
     assert "inspect_results(action=\"help\")" in prompt_text
+    # ALL-1287: counts first, filtered pages, bounded continuation.
+    assert "inspect_results(action=\"summary\")" in prompt_text
+    assert "`validation_state`" in prompt_text
+    assert "`next_call` arguments exactly" in normalized_prompt
+    assert "marked `withheld` is not missing or shortened" in normalized_prompt
     assert "extraction-result:<uuid>" in prompt_text
     assert (
         "Do not silently export a different result than the curator requested."
@@ -598,6 +607,7 @@ def test_build_model_settings_applies_reasoning_and_provider_parallel_policy(mon
         model="gpt-5.4-mini",
         temperature=0.7,
         reasoning_effort="high",
+        prompt_cache=_SUPERVISOR_CACHE,
     )
 
     assert settings is not None
@@ -616,13 +626,14 @@ def test_build_model_settings_returns_none_when_no_overrides(monkeypatch):
     )
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
-        lambda _provider: SimpleNamespace(supports_parallel_tool_calls=True),
+        lambda _provider: SimpleNamespace(driver="openai_native", supports_parallel_tool_calls=True),
     )
 
     settings = supervisor_agent._build_model_settings(
         model="gpt-4o",
         temperature=None,
         reasoning_effort=None,
+        prompt_cache=_SUPERVISOR_CACHE,
     )
 
     assert settings is not None
@@ -641,7 +652,7 @@ def test_build_model_settings_raises_for_unknown_provider(monkeypatch):
     monkeypatch.setattr("src.lib.config.providers_loader.get_provider", lambda _provider: None)
 
     with pytest.raises(ValueError, match="Unknown provider_id"):
-        supervisor_agent._build_model_settings(model="gpt-4o")
+        supervisor_agent._build_model_settings(model="gpt-4o", prompt_cache=_SUPERVISOR_CACHE)
 
 
 def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failures(monkeypatch):
@@ -1727,6 +1738,11 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert "object_ref" in inspect_params
     assert "review_session_id" not in inspect_params
     assert "file_id" not in inspect_params
+    for exploration_param in (
+        "object_type", "status", "validation_state", "severity", "fields",
+        "finding_ref", "validator_result_key", "detail_path", "result_sha256",
+    ):
+        assert exploration_param in inspect_params
     tools_by_name = {getattr(tool, "name", ""): tool for tool in created.tools}
     trace_inspect_params = inspect.signature(
         tools_by_name["inspect_chat_traces"]
@@ -1745,6 +1761,8 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert "assistant_response independently" in tools_by_name["inspect_chat_traces"].description
     assert "its offset as cursor" in tools_by_name["inspect_chat_traces"].description
     assert "action=\"search\"" in tools_by_name["inspect_results"].description
+    assert "action=\"summary\"" in tools_by_name["inspect_results"].description
+    assert "next_call" in tools_by_name["inspect_results"].description
     assert "export_to_file" not in tools_by_name
     assert captured_langfuse["metadata"]["specialist_count"] == 4
 

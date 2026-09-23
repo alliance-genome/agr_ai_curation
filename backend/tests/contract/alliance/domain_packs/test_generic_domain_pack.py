@@ -267,14 +267,14 @@ def test_proxy_field_definition_strips_unproxied_field_validator_metadata():
                     }
                 ]
             },
-            "display": {"compact": True},
+            "display": {"label": "symbol"},
         },
     )
 
     proxy_field = _proxy_field_definition(field_definition)
 
     assert "validator_bindings" not in proxy_field.metadata
-    assert proxy_field.metadata["display"] == {"compact": True}
+    assert proxy_field.metadata["display"] == {"label": "symbol"}
 
 
 def test_generated_generic_validator_dispatch_builds_source_validator_request():
