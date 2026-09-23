@@ -1703,7 +1703,8 @@ def test_previous_format_disease_values_display_as_legacy_paper_wording_only():
     assert reshaped["disease_relation"] == {
         "name": "is_implicated_in", "vocabulary": "Disease Relation", "id": "4011",
     }
-    assert reshaped["evidence_code_curies"] == [{"curie": "ECO:0000315"}]
+    # List elements stay as stored; the shared legacy rule reads plain strings at declared paths.
+    assert reshaped["evidence_code_curies"] == ["ECO:0000315"]
     display = effective_payload(
         reshaped,
         declared_resolvable_fields(_disease_pack().metadata, "GeneDiseaseAnnotation"),
@@ -1882,8 +1883,9 @@ def test_a_curator_edit_never_makes_a_current_record_the_previous_format():
 
 
 def test_a_later_unresolved_result_overrules_a_resolved_disease_term():
-    """The validator is the authority: re-validating a resolved term as unresolved keeps its
-    identity only as proposed_* hints, and the export then blocks on it."""
+    """The validator is the authority: re-validating a resolved term as unresolved keeps the
+    overruled identity only under overruled_* (informational), leaves the extractor's
+    proposal untouched, and the export then blocks on it."""
 
     def resolve(request):
         return _validator_result(
@@ -1904,7 +1906,9 @@ def test_a_later_unresolved_result_overrules_a_resolved_disease_term():
     term = payload["disease_annotation_object"]
     assert (term["resolution_state"], term["lookup_outcome"]) == ("unresolved", "not_found")
     assert (term["curie"], term["name"]) == (None, None)
-    assert (term["proposed_curie"], term["proposed_name"]) == ("DOID:0050434", "Andersen-Tawil syndrome")
+    assert (term["overruled_curie"], term["overruled_name"]) == ("DOID:0050434", "Andersen-Tawil syndrome")
+    assert term["proposed_curie"] == "DOID:0050434"
+    assert "proposed_name" not in term
     assert term["mention"] == "Andersen syndrome"
 
     from agr_ai_curation_alliance.domain_packs._resolvable_payloads import export_identity

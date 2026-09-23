@@ -1024,3 +1024,39 @@ def test_nested_term_normalizer_never_invents_wording_or_resolution():
     )
     assert support["payload"] == staged
     assert "source_mentions" not in support["payload"]
+
+
+def _staged_contract_value_paths(node: Any, path: str = "") -> list[str]:
+    """Payload paths (indexes dropped) of every value stored with the contract state."""
+
+    from src.lib.domain_packs.resolvable_values import has_resolution_state
+
+    found = [path] if has_resolution_state(node) else []
+    if isinstance(node, Mapping):
+        for key, child in node.items():
+            found += _staged_contract_value_paths(child, f"{path}.{key}" if path else str(key))
+    elif isinstance(node, list):
+        for child in node:
+            found += _staged_contract_value_paths(child, path)
+    return found
+
+
+def test_every_staged_phenotype_value_is_declared_resolvable():
+    """Guard (ALL-1283 H1/F2): a validator write into an undeclared contract value raises, so
+    every value the builder stages with contract state is declared by the pack."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    metadata = load_alliance_domain_pack_registry().get_pack(PHENOTYPE_DOMAIN_PACK_ID).metadata
+    staged = _staged_fields_with_conditions()
+    staged["condition_relations"][0]["conditions"].append({
+        f"{part}_{suffix}": f"{part} {suffix}"
+        for part in ("condition_class", "condition_id", "condition_chemical", "condition_taxon")
+        for suffix in ("mention", "curie")
+    })
+    result = _materialize_one_candidate(staged_fields=staged)
+    assert result.ok, result.summary()
+    for obj in result.payload["curatable_objects"]:
+        declared = set(declared_resolvable_fields(metadata, obj["object_type"]))
+        staged_paths = set(_staged_contract_value_paths(obj["payload"]))
+        assert staged_paths <= declared, (obj["object_type"], sorted(staged_paths - declared))

@@ -94,6 +94,8 @@ enum_definitions:
         label: Not validated yet
       - value: legacy_unverified
         label: Legacy, unverified
+      - value: curator_override
+        label: Curator override
 model_definitions:
   - model_id: PendingDiseaseAssertionPayload
     display_name: Pending disease assertion payload
@@ -5662,12 +5664,16 @@ object_definitions:
     display_name: Disease annotation subject
     description: Subject reference whose concrete Gene, Allele, or AGM identity is resolved by the active subject validator.
     definition_state: stable
+    # Its payload is the staged value itself (ALL-1283), declared through the value's model.
+    model_ref: DiseaseSubjectSnapshotPayload
     metadata:
       object_role: validated_reference
   - object_type: DOTerm
     display_name: Disease ontology term
     description: Disease Ontology term reference resolved by the active ontology validator.
     definition_state: stable
+    # Its payload is the staged value itself (ALL-1283), declared through the value's model.
+    model_ref: DiseaseOntologyTermSnapshotPayload
     metadata:
       object_role: validated_reference
   - object_type: Reference

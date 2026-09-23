@@ -13,7 +13,7 @@ from src.lib.domain_packs.compact_decisions import (
 )
 from src.lib.domain_packs.resolvable_values import (
     OUTCOME_MATCHED, OUTCOME_MISSING_EXPECTED_RESULT_FIELD, OUTCOME_NOT_VALIDATED,
-    holds_resolution, lookup_outcome_for_failure,
+    has_resolution_state, lookup_outcome_for_failure,
 )
 from src.lib.domain_packs.validator_result_classification import validator_failure_classification
 from src.schemas.domain_validator import DomainValidatorBaseModel
@@ -151,13 +151,13 @@ def _component_outcome(request, attempts) -> str:
 
 
 def _stored_component_values(request) -> dict[str, Any]:
-    """Components that the payload stores as resolvable values (each decided on its own)."""
+    """Components that the payload stores with the contract state (each decided on its own)."""
 
     inputs = {**request.target.input_values, **request.selected_inputs}
     bundle = inputs.get("condition_components")
     if not isinstance(bundle, dict):
         return {}
-    return {name: value for name, value in bundle.items() if holds_resolution(value)}
+    return {name: value for name, value in bundle.items() if has_resolution_state(value)}
 
 
 def condition_decision_contract(request, result_schema, *, profile_mapped=False):

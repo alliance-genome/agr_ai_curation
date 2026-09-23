@@ -1054,3 +1054,44 @@ def test_stage_disease_tool_documents_paper_wording_for_every_resolvable_input()
     assert "as the paper words it" in properties["mention"]["description"]
     assert "as the paper names it" in properties["subject_label"]["description"]
     assert "propose" in properties["disease_name"]["description"]
+
+
+def _staged_contract_value_paths(node: Any, path: str = "") -> list[str]:
+    """Payload paths (indexes dropped) of every value stored with the contract state."""
+
+    from src.lib.domain_packs.resolvable_values import has_resolution_state
+
+    found = [path] if has_resolution_state(node) else []
+    if isinstance(node, Mapping):
+        for key, child in node.items():
+            found += _staged_contract_value_paths(child, f"{path}.{key}" if path else str(key))
+    elif isinstance(node, list):
+        for child in node:
+            found += _staged_contract_value_paths(child, path)
+    return found
+
+
+def test_every_staged_disease_value_is_declared_resolvable():
+    """Guard (ALL-1283 H1/F2): a validator write into an undeclared contract value raises, so
+    every value the builder stages with contract state is declared by the pack."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    metadata = load_alliance_domain_pack_registry().get_pack(DISEASE_DOMAIN_PACK_ID).metadata
+    for subject_type, identifier in (("gene", "FB:FBgn0000108"), ("allele", "FB:FBal0000001"),
+                                     ("agm", "FB:FBst0000001"), (None, None)):
+        staged = _staged_fields_with_conditions(subject_type=subject_type, subject_identifier=identifier)
+        if subject_type is None:
+            staged.pop("subject_type")
+            staged.pop("subject_identifier")
+        staged["condition_relations"][0]["conditions"].append({
+            f"{part}_{suffix}": f"{part} {suffix}"
+            for part in ("condition_class", "condition_id", "condition_chemical", "condition_taxon")
+            for suffix in ("mention", "curie")
+        })
+        result = _materialize_staged(staged)
+        assert result.ok, result.summary()
+        for obj in result.payload["curatable_objects"]:
+            declared = set(declared_resolvable_fields(metadata, obj["object_type"]))
+            staged_paths = set(_staged_contract_value_paths(obj["payload"]))
+            assert staged_paths <= declared, (obj["object_type"], sorted(staged_paths - declared))

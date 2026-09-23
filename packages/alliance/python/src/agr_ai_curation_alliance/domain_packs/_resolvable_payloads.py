@@ -20,10 +20,9 @@ from typing import Any
 from src.lib.domain_packs.resolvable_values import (
     LOOKUP_OUTCOME_LABELS,
     MENTION_KEY,
-    PROPOSED_KEY_PREFIX,
+    EXTRACTOR_PROPOSAL_PREFIX,
     RESOLVED,
     effective_resolution,
-    proposed_key,
     unresolved_value,
     validator_event_covers,
 )
@@ -45,6 +44,15 @@ CONDITION_TERM_COMPONENTS = (
     "condition_taxon",
 )
 CONDITION_TEXT_FIELDS = ("condition_free_text", "condition_summary")
+
+
+PROPOSED_KEY_PREFIX = EXTRACTOR_PROPOSAL_PREFIX
+
+
+def proposed_key(identity_key: str) -> str:
+    """The key holding the extractor's proposal for one identity key (never touched by core)."""
+
+    return f"{PROPOSED_KEY_PREFIX}{identity_key}"
 
 
 def clean_text(value: Any) -> str | None:

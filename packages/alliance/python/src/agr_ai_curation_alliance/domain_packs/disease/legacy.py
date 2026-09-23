@@ -49,12 +49,8 @@ _ANNOTATION_OBJECT_TYPES = frozenset(
 # now the value object <slot>.
 _PREVIOUS_VOCABULARY_SLOTS = ("disease_relation", "genetic_sex", "annotation_type")
 _VOCABULARY_KEYS = ("name", "vocabulary", "id")
-# Lists that held plain strings in the previous format, with each element's identity key.
-_PREVIOUS_STRING_LISTS = {
-    "evidence_code_curies": "curie",
-    "disease_qualifier_names": "name",
-    "with_gene_identifiers": "primary_external_id",
-}
+# Lists that held plain strings in the previous format.
+_PREVIOUS_STRING_LISTS = ("evidence_code_curies", "disease_qualifier_names", "with_gene_identifiers")
 # Values that were already objects; the previous format stored them without paper wording.
 _PREVIOUS_OBJECT_VALUES = ("disease_annotation_object", "disease_annotation_subject", "data_provider")
 
@@ -104,11 +100,12 @@ def is_previous_format(payload: Mapping[str, Any]) -> bool:
 def previous_format_display_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """A read-time copy of a previous-format payload in the current value shape.
 
-    The flat relation, genetic sex and annotation type strings and the string
-    list elements become value objects holding their stored text under the
+    The flat relation, genetic sex and annotation type strings become the
+    value objects that replaced them, holding their stored text under the
     value's own keys and no state, so the shared legacy rule reads them like
-    any other value stored before the contract. The stored record is not
-    changed.
+    any other value stored before the contract. The string list elements stay
+    as stored: they sit at declared paths, where the shared legacy rule
+    already reads a plain string. The stored record is not changed.
     """
 
     display = copy.deepcopy(dict(payload))
@@ -116,12 +113,6 @@ def previous_format_display_payload(payload: Mapping[str, Any]) -> dict[str, Any
         stored = {key: display.pop(f"{slot}_{key}", None) for key in _VOCABULARY_KEYS}
         if stored["name"] is not None:
             display[slot] = {key: value for key, value in stored.items() if value is not None}
-    for list_key, identity_key in _PREVIOUS_STRING_LISTS.items():
-        values = display.get(list_key)
-        if isinstance(values, list):
-            display[list_key] = [
-                {identity_key: item} if isinstance(item, str) else item for item in values
-            ]
     return display
 
 

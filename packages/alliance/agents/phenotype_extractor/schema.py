@@ -244,8 +244,10 @@ def _check_value(payload: BaseModel, identity_keys: tuple[str, ...]) -> None:
     """Enforce the shared extracted-vs-validated invariant on one payload value."""
 
     try:
+        # Unset optional keys are absent, not null: core reads a present curator_override key
+        # as a curator override.
         check_resolvable_value(
-            payload.model_dump(mode="python", exclude_none=False),
+            payload.model_dump(mode="python", exclude_none=True),
             identity_keys=identity_keys,
         )
     except ResolvableValueError as exc:
@@ -278,6 +280,9 @@ class _ResolvablePayload(BaseModel):
     validator_curator_message: StrictStr | None = Field(
         default=None, description="The validator's curator message"
     )
+    curator_override: dict[str, Any] | None = Field(
+        default=None, description="Who overrode the validation and when (informational)",
+    )
 
 
 class PhenotypeSubjectPayload(BaseModel):
@@ -301,15 +306,22 @@ class PhenotypeSubjectPayload(BaseModel):
         default=None,
         description="Subject identifier the extractor proposed for validation",
     )
-    # A validator that overrules a resolved subject keeps its identity only as hints.
-    proposed_subject_label: StrictStr | None = Field(
-        default=None, description="A subject label a validator overruled; a hint only, never the value",
+    # Core keeps an identity a validator overruled under overruled_<key>, and a curator
+    # override's audit under curator_override; neither is ever the value.
+    overruled_subject_identifier: StrictStr | None = Field(
+        default=None, description="A subject identifier a validator overruled; informational only, never the value",
     )
-    proposed_subject_type: StrictStr | None = Field(
-        default=None, description="A subject type a validator overruled; a hint only, never the value",
+    overruled_subject_label: StrictStr | None = Field(
+        default=None, description="A subject label a validator overruled; informational only, never the value",
     )
-    proposed_taxon: StrictStr | None = Field(
-        default=None, description="A subject taxon a validator overruled; a hint only, never the value",
+    overruled_subject_type: StrictStr | None = Field(
+        default=None, description="A subject type a validator overruled; informational only, never the value",
+    )
+    overruled_taxon: StrictStr | None = Field(
+        default=None, description="A subject taxon a validator overruled; informational only, never the value",
+    )
+    curator_override: dict[str, Any] | None = Field(
+        default=None, description="Who overrode the validation and when (informational)",
     )
     subject_type: StrictStr | None = Field(
         default=None,
@@ -394,6 +406,12 @@ class PhenotypeTermPayload(_ResolvablePayload):
         default=None,
         description="Ontology label the extractor proposed for validation",
     )
+    overruled_curie: StrictStr | None = Field(
+        default=None, description="An ontology CURIE a validator overruled; informational only, never the value",
+    )
+    overruled_label: StrictStr | None = Field(
+        default=None, description="An ontology label a validator overruled; informational only, never the value",
+    )
     source_mentions: list[StrictStr] = Field(
         min_length=1,
         description="Paper text that supported this phenotype term",
@@ -424,12 +442,16 @@ class ReferencePayload(BaseModel):
         description="Alliance reference row ID a validator confirmed",
     )
     title: StrictStr | None = Field(default=None, description="Reference title a validator confirmed")
-    # A validator that overrules a resolved reference keeps its identity only as hints.
-    proposed_reference_id: int | None = Field(
-        default=None, description="A reference ID a validator overruled; a hint only, never the value",
+    # Core keeps an identity a validator overruled under overruled_<key>, and a curator
+    # override's audit under curator_override; neither is ever the value.
+    overruled_reference_id: int | None = Field(
+        default=None, description="A reference ID a validator overruled; informational only, never the value",
     )
-    proposed_title: StrictStr | None = Field(
-        default=None, description="A reference title a validator overruled; a hint only, never the value",
+    overruled_title: StrictStr | None = Field(
+        default=None, description="A reference title a validator overruled; informational only, never the value",
+    )
+    curator_override: dict[str, Any] | None = Field(
+        default=None, description="Who overrode the validation and when (informational)",
     )
     filename: StrictStr | None = Field(default=None, description="Source document filename")
     resolution_state: ResolutionStateValue | None = None
@@ -462,9 +484,8 @@ class DataProviderPayload(_ResolvablePayload):
         default=None,
         description="Data provider abbreviation a validator confirmed; empty until then",
     )
-    proposed_abbreviation: StrictStr | None = Field(
-        default=None,
-        description="A data provider abbreviation a validator overruled; a hint only, never the value",
+    overruled_abbreviation: StrictStr | None = Field(
+        default=None, description="A data provider abbreviation a validator overruled; informational only, never the value",
     )
 
     @model_validator(mode="after")

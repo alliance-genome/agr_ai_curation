@@ -57,6 +57,8 @@ enum_definitions:
         label: Not validated yet
       - value: legacy_unverified
         label: Legacy, unverified
+      - value: curator_override
+        label: Curator override
 model_definitions:
   - model_id: PhenotypeAnnotationPayload
     display_name: Phenotype annotation payload
