@@ -67,7 +67,9 @@ from src.lib.domain_packs.resolvable_values import (
     OUTCOME_INVALID_SCHEMA,
     OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
     VALIDATOR_MATERIALIZATION_METADATA_KEY,
+    ResolvableSpec,
     copy_resolution,
+    declared_resolvable_fields,
     holds_resolution,
     lookup_outcome_for_failure,
     mark_resolved,
@@ -223,13 +225,16 @@ class DomainPackMetadataReviewRowMaterializer:
                     unavailable_capabilities["by_field"]
                 ),
             )
+            resolvable_fields = declared_resolvable_fields(self.metadata, domain_object.object_type)
             display_label = _display_label(
                 domain_object,
                 display_config=display_config,
+                resolvable_fields=resolvable_fields,
             )
             secondary_label = _secondary_label(
                 domain_object,
                 display_config=display_config,
+                resolvable_fields=resolvable_fields,
             )
 
             metadata = {
@@ -2729,6 +2734,7 @@ def _display_label(
     domain_object: CuratableObjectEnvelope,
     *,
     display_config: Mapping[str, Any],
+    resolvable_fields: Mapping[str, ResolvableSpec],
 ) -> str:
     """The row's label: the pack's single primary_label_field, else the object id.
 
@@ -2743,7 +2749,7 @@ def _display_label(
         )
     configured_field = display_config.get("primary_label_field")
     if isinstance(configured_field, str) and configured_field.strip():
-        label = _declared_label_text(domain_object, configured_field.strip())
+        label = _declared_label_text(domain_object, configured_field.strip(), resolvable_fields)
         if label is not None:
             return label
     return stable_object_id(domain_object)
@@ -2753,21 +2759,24 @@ def _secondary_label(
     domain_object: CuratableObjectEnvelope,
     *,
     display_config: Mapping[str, Any],
+    resolvable_fields: Mapping[str, ResolvableSpec],
 ) -> str | None:
     configured_field = display_config.get("secondary_label_field")
     if isinstance(configured_field, str) and configured_field.strip():
-        return _declared_label_text(domain_object, configured_field.strip())
+        return _declared_label_text(domain_object, configured_field.strip(), resolvable_fields)
     return None
 
 
 def _declared_label_text(
     domain_object: CuratableObjectEnvelope,
     field_path: str,
+    resolvable_fields: Mapping[str, ResolvableSpec],
 ) -> str | None:
     paper_wording = unresolved_header_text(
         domain_object.payload,
         field_path,
         object_metadata=domain_object.metadata,
+        resolvable_fields=resolvable_fields,
     )
     if paper_wording is not None:
         return paper_wording

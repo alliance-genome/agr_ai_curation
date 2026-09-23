@@ -797,10 +797,14 @@ def _declared_payload_label(item: Mapping[str, Any]) -> str | None:
     return _declared_path_label(item, "label")
 
 
-def _declared_path_label(item: Mapping[str, Any], path: str | None) -> str | None:
+def _declared_path_label(
+    item: Mapping[str, Any], path: str | None, resolvable_fields: Mapping[str, Any] | None = None,
+) -> str | None:
     """Packaged objects: the value at the pack-declared label path, nothing else.
 
-    A label naming an unresolved value reads as its paper wording (ALL-1283).
+    A label naming an unresolved value reads as its paper wording (ALL-1283);
+    ``resolvable_fields`` are the pack's declared resolvable values for the
+    object, so values stored before the contract get the legacy rule.
     """
 
     if not path:
@@ -810,7 +814,9 @@ def _declared_path_label(item: Mapping[str, Any], path: str | None) -> str | Non
     from src.schemas.domain_envelope import parse_field_path
 
     payload = _object_payload(item)
-    paper_wording = unresolved_header_text(payload, path, object_metadata=_object_metadata(item))
+    paper_wording = unresolved_header_text(
+        payload, path, object_metadata=_object_metadata(item), resolvable_fields=resolvable_fields,
+    )
     if paper_wording is not None:
         return paper_wording
     text = display_text(_walk_payload(payload, list(parse_field_path(path))))
@@ -1723,8 +1729,13 @@ def _build_artifact_from_step(
                     object_ref_links.update({key: links for key in _object_keys(row)})
         if domain_pack_id and domain_pack_id != "generic":
             label_paths = source.object_label_paths if source is not None else {}
+            resolvable = source.resolvable_fields if source is not None else {}
             declared_labels = [
-                _declared_path_label(item, label_paths.get(str(item.get("object_type") or "")))
+                _declared_path_label(
+                    item,
+                    label_paths.get(str(item.get("object_type") or "")),
+                    resolvable.get(str(item.get("object_type") or "")),
+                )
                 for item in object_items
             ]
         for row, item in zip(rows_by_source["object"], object_items):
