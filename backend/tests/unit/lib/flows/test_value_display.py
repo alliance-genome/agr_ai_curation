@@ -47,11 +47,15 @@ PRODUCTION_SHAPES = [
     ({"allele_symbol": "e1370", "primary_external_id": "WB:WBVar00143949", "taxon": "NCBITaxon:6239"},
      {"label": "allele_symbol", "id": "primary_external_id"}, "e1370 (WB:WBVar00143949)"),
     ({"subject_label": "daf-2", "subject_identifier": "WB:WBGene00000898", "subject_type": "gene",
-      "resolution_state": "resolved"}, SUBJECT, "daf-2 (WB:WBGene00000898)"),
+      "resolution_state": "resolved", "resolution_reason": None}, SUBJECT, "daf-2 (WB:WBGene00000898)"),
+    # A pre-ALL-1283 "resolved" (no resolution_reason) is legacy: unverified unless the
+    # caller applied the read-time legacy rule with a covering validator event.
+    ({"subject_label": "daf-2", "subject_identifier": "WB:WBGene00000898", "subject_type": "gene",
+      "resolution_state": "resolved"}, SUBJECT, "UNRESOLVED"),
     ({"subject_label": "daf-2(e1370)", "resolution_state": "pending_lookup", "resolution_note": "n"},
-     SUBJECT, "daf-2(e1370) (unresolved)"),
+     SUBJECT, "UNRESOLVED"),
     ({"curie": "WBPhenotype:0000154", "label": "reduced brood size", "resolution_state": "resolved",
-      "export_state": "ready", "write_blocked_reason": None}, PHENOTYPE_TERM,
+      "resolution_reason": None, "export_state": "ready", "write_blocked_reason": None}, PHENOTYPE_TERM,
      "reduced brood size (WBPhenotype:0000154)"),
     ({"name": "is_expressed_in", "vocabulary": "Expression Relation", "id": 200000200},
      {"label": "name"}, "is_expressed_in"),
@@ -525,10 +529,11 @@ async def test_split_list_through_formatter_tools_with_lock_and_inventory():
 def test_declared_field_never_substitutes_another_field():
     """A resolved field renders only its own label/id (Chris, Sep 22)."""
 
-    # Label and id empty: the mention is a separate column, not a substitute.
-    assert display_text({"curie": None, "name": None, "mention": "PPIT-2"}, TERM) == ""
+    # Label and id empty: the mention is a separate column, not a substitute (ALL-1283:
+    # a value with paper wording and no validated identity reads UNRESOLVED).
+    assert display_text({"curie": None, "name": None, "mention": "PPIT-2"}, TERM) == "UNRESOLVED"
     assert display_text({"label": "", "mention": "gene X", "curie": ""},
-                        {"label": "label", "id": "curie"}) == ""
+                        {"label": "label", "id": "curie"}) == "UNRESOLVED"
     compose = {"compose": [{"path": "anatomical_structure", "display": TERM}], "separator": "; "}
     assert display_text({"anatomical_structure": {}, "statement": "free text"}, compose) == ""
     assert display_text({"mention": {"text": "unc-54(e190)"}}, {"label": "mention.text"}) == "unc-54(e190)"
@@ -861,9 +866,10 @@ PHENOTYPE_TERM_REF = "object.pack.PhenotypeAnnotation.phenotype_terms[0]"
 
 
 def _phenotype_objects(term_count=1):
-    terms = [{"curie": f"WBPhenotype:{index}", "label": f"term {index}", "resolution_state": "resolved"}
+    # Terms without a stored state: open findings place the marker (ALL-1283 states decide otherwise).
+    terms = [{"curie": f"WBPhenotype:{index}", "label": f"term {index}"}
              for index in range(term_count)]
-    subject = {"resolution_state": "resolved", "subject_label": "daf-2",
+    subject = {"resolution_state": "resolved", "resolution_reason": None, "subject_label": "daf-2",
                "subject_identifier": "WB:WBGene00000898", "subject_type": "gene", "taxon": "NCBITaxon:6239"}
     annotation = {
         "object_type": "PhenotypeAnnotation", "pending_ref_id": "ann-1",
@@ -951,3 +957,51 @@ def test_group_by_a_structured_field_uses_display_text(monkeypatch):
     })).json_data
     assert len(grouped) == 1
     assert grouped[0]["group"][SUBJECT_REF]["gene_symbol"] == "Y71G12B.17"
+
+
+RESOLVABLE_TERM = {"label": "name", "id": "curie", "mention": "mention"}
+
+
+def test_resolvable_values_read_label_id_or_the_literal_unresolved():
+    """ALL-1283: resolved "label (ID)", unresolved UNRESOLVED, absent blank; never the mention."""
+
+    resolved = {"curie": "WBbt:0005733", "name": "hypodermis", "mention": "hypodermal cells",
+                "resolution_state": "resolved", "resolution_reason": None}
+    unresolved = {"curie": None, "name": None, "mention": "structures associated with the residual body",
+                  "resolution_state": "unresolved", "resolution_reason": "not_found"}
+    assert display_text(resolved, RESOLVABLE_TERM) == "hypodermis (WBbt:0005733)"
+    assert display_text(unresolved, RESOLVABLE_TERM) == "UNRESOLVED"
+    assert display_text(None, RESOLVABLE_TERM) == ""
+    # The state decides; findings do not add markers to a resolvable value.
+    assert display_text(resolved, RESOLVABLE_TERM, unresolved=True) == "hypodermis (WBbt:0005733)"
+    assert display_text(unresolved, RESOLVABLE_TERM, marked=False) == "UNRESOLVED"
+    # A legacy value the caller did not verify reads as unresolved.
+    assert display_text({"curie": "WBbt:1", "name": "hyp"}, RESOLVABLE_TERM) == "UNRESOLVED"
+    # List elements are separate values.
+    assert display_text([resolved, unresolved], RESOLVABLE_TERM) == "hypodermis (WBbt:0005733) | UNRESOLVED"
+
+
+def test_generic_reading_never_mixes_paper_wording_into_a_cell():
+    """Custom profiles without a display spec (ALL-1283)."""
+
+    assert display_text({"curie": "X:1", "name": "Y", "mention": "Z", "resolution_state": "resolved",
+                         "resolution_reason": None}) == "Y (X:1)"
+    assert display_text({"curie": None, "name": None, "mention": "Z", "resolution_state": "unresolved",
+                         "resolution_reason": "not_validated"}) == "UNRESOLVED"
+    assert display_text({"curie": "X:1", "name": "Y", "mention": "Z"}) == "UNRESOLVED"
+    assert display_text({"abbreviation": "WB", "mention": "WormBase", "resolution_state": "resolved",
+                         "resolution_reason": None}) == "abbreviation: WB"
+
+
+def test_display_mention_role_is_a_key_of_the_value():
+    from pydantic import ValidationError
+
+    from src.schemas.domain_pack_metadata import DomainPackFieldDefinition
+
+    DomainPackFieldDefinition(field_path="term", metadata={"display": RESOLVABLE_TERM})
+    with pytest.raises(ValidationError, match="keys of the value itself"):
+        DomainPackFieldDefinition(field_path="term",
+                                  metadata={"display": {"label": "term.name", "mention": "mention"}})
+    with pytest.raises(ValidationError, match="takes no state"):
+        DomainPackFieldDefinition(field_path="term", metadata={"display": {
+            **RESOLVABLE_TERM, "state": "resolution_state", "resolved_states": ["resolved"]}})

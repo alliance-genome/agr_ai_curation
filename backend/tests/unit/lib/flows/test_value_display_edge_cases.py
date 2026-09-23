@@ -123,8 +123,8 @@ STATE_REF = "object.pack.PhenotypeAnnotation.phenotype_terms.resolution_state"
 
 def _status_template_bundle(findings=()):
     rows = [{"artifact.is_canonical_curation_data": True, "object.object_id": "p1", TERMS_REF: [
-        {"curie": "WBPhenotype:1", "label": "slow", "resolution_state": "resolved"},
-        {"curie": "WBPhenotype:2", "label": "small", "resolution_state": "pending_lookup"},
+        {"curie": "WBPhenotype:1", "label": "slow"},
+        {"curie": "WBPhenotype:2", "label": "small"},
     ], STATE_REF: ["resolved", "pending_lookup"]}]
     catalog = [FlowOutputField(ref=TERMS_REF, label="Terms", value_type="list", row_source="object",
                                display=PHENOTYPE_TERM),
@@ -167,7 +167,7 @@ def test_multi_value_template_keeps_the_application_marker_per_value():
     [row] = apply_projection_plan(bundle, plan).rows
     # The template's marker cannot say which value it means, so each value keeps its own.
     assert row["terms"] == (
-        "slow (WBPhenotype:1) in head; small (WBPhenotype:2, unresolved) (unresolved) in tail (unresolved)"
+        "slow (WBPhenotype:1) in head; small (WBPhenotype:2) (unresolved) in tail (unresolved)"
     )
 
 

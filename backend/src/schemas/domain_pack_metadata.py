@@ -665,7 +665,7 @@ class DomainPackValidatorBindings(DomainPackMetadataBaseModel):
         return self
 
 
-_DISPLAY_ROLES = ("label", "id", "state")
+_DISPLAY_ROLES = ("label", "id", "state", "mention")
 _DISPLAY_KEYS = frozenset({*_DISPLAY_ROLES, "resolved_states", "compose", "separator"})
 
 
@@ -673,7 +673,11 @@ def _validate_display_spec(display: Any, where: str) -> None:
     """A ``metadata.display`` declaration (see ``src.lib.flows.value_display``).
 
     Roles are single leaf paths, never fallback lists; ``compose`` joins
-    declared parts and cannot be mixed with roles. Checked when a pack loads.
+    declared parts and cannot be mixed with roles. A ``mention`` role declares
+    a resolvable value (``src.lib.domain_packs.resolvable_values``): its
+    mention, label and id are keys of the value itself, and its state is the
+    contract's ``resolution_state``, so it takes no ``state`` role. Checked
+    when a pack loads.
     """
 
     if not isinstance(display, dict) or not display:
@@ -718,6 +722,17 @@ def _validate_display_spec(display: Any, where: str) -> None:
         return
     if not (display.get("label") or display.get("id")):
         raise ValueError(f"{where} needs a label, id or compose declaration")
+    if "mention" in display:
+        if "state" in display or "resolved_states" in display:
+            raise ValueError(
+                f"{where}: a resolvable value (mention role) reads its state from resolution_state; "
+                "it takes no state or resolved_states"
+            )
+        for role in ("label", "id", "mention"):
+            if "." in str(display.get(role) or ""):
+                raise ValueError(
+                    f"{where}.{role}: a resolvable value's mention, label and id are keys of the value itself"
+                )
     if "state" in display:
         states = display.get("resolved_states")
         if not isinstance(states, list) or not states or not all(

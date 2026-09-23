@@ -1707,9 +1707,10 @@ def _build_artifact_from_step(
                 for item in object_items
             ]
         for row, item in zip(rows_by_source["object"], object_items):
+            effective = source.effective_item(item) if source is not None else item
             for field in export_fields:
                 if "summary_key" not in field:
-                    row[field["ref"]] = packaged_field_value(item, field)
+                    row[field["ref"]] = packaged_field_value(effective, field)
         from src.lib.flows.validation_summary_export import populate_summary_fields
         populate_summary_fields(
             rows_by_source["object"], object_items,

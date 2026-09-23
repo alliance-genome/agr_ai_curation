@@ -848,6 +848,9 @@ def test_validator_result_materialization_promotes_builder_after_active_binding_
         "primary_external_id": "FB:FBgn0259685",
         "gene_symbol": "crb",
         "taxon": "NCBITaxon:7227",
+        # The object root carries the paper mention, so it is the resolvable value (ALL-1283).
+        "resolution_state": "resolved",
+        "resolution_reason": None,
     }
     patch_event = patched.metadata["validator_resolved_value_materialization"][0]
     assert patch_event["validator_binding_id"] == "fixture.gene_lookup"
@@ -1172,6 +1175,8 @@ def test_validator_result_materialization_warns_for_unmapped_expected_result_fie
         "mention": "crumbs",
         "primary_external_id": "FB:FBgn0259685",
         "gene_symbol": "crb",
+        "resolution_state": "resolved",
+        "resolution_reason": None,
     }
     warning = next(
         finding
@@ -1335,6 +1340,7 @@ def test_validator_result_materialization_propagates_materializes_to_field_paths
 
 
 def test_validator_result_materialization_merges_multiple_target_payload_patches():
+    # Plain fields (no resolvable value around them) merge partial patches.
     metadata = DomainPackMetadata(
         pack_id="fixture.target_patch",
         display_name="Fixture Target Patch Pack",
@@ -1357,7 +1363,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
                         "input_fields": {
                             "mention": {
                                 "source": "payload",
-                                "path": "mention",
+                                "path": "paper_text",
                             }
                         },
                         "expected_result_fields": {
@@ -1377,7 +1383,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
                 metadata={"object_role": "validated_reference"},
                 fields=[
                     DomainPackFieldDefinition(
-                        field_path="mention",
+                        field_path="paper_text",
                         field_type=DomainPackFieldType.STRING,
                         required=True,
                     ),
@@ -1405,7 +1411,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
                 object_type="GeneMention",
                 pending_ref_id="gene-mention-1",
                 status=CuratableObjectStatus.PENDING,
-                payload={"mention": "crumbs"},
+                payload={"paper_text": "crumbs"},
             )
         ],
     )
@@ -1429,7 +1435,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
     )
 
     assert result.envelope.extracted_objects[0].payload == {
-        "mention": "crumbs",
+        "paper_text": "crumbs",
         "primary_external_id": "FB:FBgn0259685",
         "gene_symbol": "crb",
         "taxon": "NCBITaxon:7227",

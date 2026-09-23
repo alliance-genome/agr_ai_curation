@@ -25,8 +25,10 @@ FIRST_CURIE = "object.pack.PhenotypeAnnotation.phenotype_terms[0].curie"
 
 
 def _term(label, curie, state):
+    # ``state`` records the pre-ALL-1283 phenotype word; it is not stored, so the
+    # terms read as plain values whose markers come from findings and empty ids.
     return {
-        "curie": curie, "label": label, "resolution_state": state,
+        "curie": curie, "label": label,
         "source_mentions": [label], "ontology_lookup_hint": {"data_provider": "WB"},
         "export_state": "blocked_pending_ontology_resolution",
         "write_blocked_reason": "phenotype term CURIE unresolved",

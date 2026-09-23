@@ -7,15 +7,26 @@ model definition or a field (``metadata.display``):
   optional and each is one (possibly dotted) leaf path, never a list of
   fallbacks. ``state`` plus ``resolved_states`` name an explicit resolution
   leaf. A declared value whose own label and id are empty renders empty.
+- ``{label: <key>, id: <key>, mention: <key>}`` declares a resolvable value
+  (``src.lib.domain_packs.resolvable_values``): the extracted paper wording
+  sits at ``mention`` and the validated identity at ``label``/``id``. A
+  resolved value renders "label (id)"; an unresolved one renders the literal
+  ``UNRESOLVED`` with neither label nor paper wording in the cell. The paper
+  wording is its own field (``<field>.mention``), never part of this cell.
 - ``{compose: [<child path>, ...], separator: "; "}`` joins the display text of
   child values (each child carries its own resolved spec). An entry may be a
   mapping ``{path, display}``; one without a path reads the value itself with
   its ``display`` (e.g. "label (id)" followed by other parts).
 
-Without a spec a generic reading applies: a term-like value holding only one
-of ``curie|id|identifier`` and one of ``name|label|display_name`` reads
-"label (id)"; any other value renders all its ``key: value`` pairs so nothing
-is dropped.
+Without a spec a generic reading applies: a stored resolvable value (one
+carrying ``resolution_state`` or a paper ``mention``) reads as above with the
+generic keys; a term-like value holding only one of ``curie|id|identifier`` and
+one of ``name|label|display_name`` reads "label (id)"; any other value renders
+all its ``key: value`` pairs so nothing is dropped.
+
+A resolvable value's state is the one stored with it. A value stored before
+that contract has no state and reads as unresolved unless the caller applied
+the read-time legacy rule (``resolvable_values.effective_payload``) first.
 Lists join with "; ", and lists of structured records (or of lists) with " | "
 so record boundaries stay visible; a list nested inside a record joins its
 items with ", ". CSV, TSV and chat cells therefore never contain JSON or
@@ -31,6 +42,15 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
+from src.lib.domain_packs.resolvable_values import (
+    MENTION_KEY,
+    RESOLUTION_REASON_KEY,
+    RESOLUTION_STATE_KEY,
+    RESOLVED,
+    UNRESOLVED_DISPLAY,
+    has_resolution_state,
+    holds_resolution,
+)
 from src.schemas.domain_envelope import parse_field_path
 
 GENERIC_ID_KEYS = ("curie", "id", "identifier")
@@ -216,6 +236,8 @@ def _mapping_text(
     if spec and spec.get("compose"):
         return _compose_text(value, spec, keyed, whole, marked)
     unresolved = bool(paths)
+    if (spec and spec.get("mention")) or holds_resolution(value):
+        return _resolvable_text(value, spec)
     if spec and (spec.get("label") or spec.get("id")):
         label = _first(value, [spec["label"]]) if spec.get("label") else ""
         identifier = _first(value, [spec["id"]]) if spec.get("id") else ""
@@ -251,6 +273,31 @@ def _mapping_text(
     text = _pairs_text(value, keyed, marked)
     unplaced = whole or any(path[0] not in present for path in keyed)
     return f"{text} ({UNRESOLVED})" if marked and unplaced and text else text
+
+
+_RESOLUTION_KEYS = frozenset({MENTION_KEY, RESOLUTION_STATE_KEY, RESOLUTION_REASON_KEY})
+
+
+def _resolvable_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None) -> str:
+    """A resolvable value: "label (id)" when resolved, else the literal UNRESOLVED.
+
+    Only the stored state decides; the paper wording is never shown here, so
+    an unresolved value never reads as if it were the validated item.
+    """
+
+    if not (has_resolution_state(value) and value[RESOLUTION_STATE_KEY] == RESOLVED):
+        return UNRESOLVED_DISPLAY
+    if spec and (spec.get("label") or spec.get("id")):
+        label = _first(value, [spec["label"]]) if spec.get("label") else ""
+        identifier = _first(value, [spec["id"]]) if spec.get("id") else ""
+        return _labeled(label, identifier, False)
+    label = _first(value, GENERIC_LABEL_KEYS)
+    identifier = _first(value, GENERIC_ID_KEYS)
+    if label or identifier:
+        return _labeled(label, identifier, False)
+    # Undeclared identity keys: show the validated content, never the paper wording.
+    identity = {key: item for key, item in value.items() if key not in _RESOLUTION_KEYS}
+    return _pairs_text(identity, frozenset(), False)
 
 
 def display_text(
@@ -320,4 +367,5 @@ __all__ = [
     "NESTED_SEPARATOR",
     "RECORD_SEPARATOR",
     "UNRESOLVED",
+    "UNRESOLVED_DISPLAY",
 ]
