@@ -9,7 +9,7 @@ import {
 } from '@mui/material'
 
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
-import type { CurationDraftField } from '@/features/curation/types'
+import type { CurationDraftField, DomainEnvelopeReviewResolvedValue } from '@/features/curation/types'
 import type { HorizontalGridFieldCell } from './horizontalGridModel'
 
 export interface HorizontalGridCellActionsProps {
@@ -18,7 +18,7 @@ export interface HorizontalGridCellActionsProps {
   isSaving: boolean
   onEdit: (field: CurationDraftField) => void
   onDetails: (anchorEl: HTMLElement) => void
-  onRemoveOverride: (fieldKeys: string[]) => void
+  onRemoveOverride: (value: DomainEnvelopeReviewResolvedValue) => void
   onSelect: () => void
   onToggleValidationPreview: (field: CurationDraftField) => void
   previewState: FieldStateKind | null
@@ -44,7 +44,8 @@ export default function HorizontalGridCellActions({
   // A value's own leaves are read-only in the grid even where the draft field is not.
   const readOnly = cell.readOnly ?? true
   const mutationDisabled = readOnly || isSaving
-  const removeOverrideFieldKeys = cell.removeOverrideFieldKeys
+  // Only a value this cell can override can have its override removed here.
+  const removableOverride = cell.overrideTarget?.curator_override ? cell.overrideTarget : null
   const fieldValue = cell.displayText ?? 'Not available'
   const actionContext = `${field.label}: ${fieldValue} in ${recordLabel}`
 
@@ -154,7 +155,7 @@ export default function HorizontalGridCellActions({
             </IconButton>
           </span>
         </Tooltip>
-        {removeOverrideFieldKeys ? (
+        {removableOverride ? (
           <Tooltip title="Remove curator override: clears the value, which returns to unresolved">
             <span>
               <IconButton
@@ -163,7 +164,7 @@ export default function HorizontalGridCellActions({
                 disabled={isSaving}
                 onClick={() => {
                   onSelect()
-                  onRemoveOverride(removeOverrideFieldKeys)
+                  onRemoveOverride(removableOverride)
                 }}
                 size="small"
                 sx={{ borderRadius: '4px', height: 23, width: 23 }}

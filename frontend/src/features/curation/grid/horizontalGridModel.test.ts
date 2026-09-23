@@ -252,6 +252,10 @@ function resolvedValue(
     validator_curator_message: null,
     override_disagreements: [],
     identity_field_paths: ['site.curie', 'site.name'],
+    id_key: 'curie',
+    label_key: 'name',
+    validated_keys: [],
+    stored_value: {},
     ...overrides,
   }
 }
@@ -1176,7 +1180,7 @@ describe('buildHorizontalGridModel', () => {
       curatorOverride: true,
       overrideDisagreements: [],
       readOnly: false,
-      removeOverrideFieldKeys: ['site-id', 'site-name'],
+      overrideTarget: overridden,
     })
     expect(idCell!.resolutionDetails).toEqual([overridden])
     expect(nameCell).toMatchObject({ curatorOverride: true, resolutionDetails: [] })
@@ -1192,6 +1196,10 @@ describe('buildHorizontalGridModel', () => {
       curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
       override_disagreements: [message],
       identity_field_paths: ['symbol', 'identifier'],
+      id_key: 'curie',
+      label_key: 'name',
+      validated_keys: [],
+      stored_value: {},
     })
     const fields = [
       draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-2' }),
@@ -1222,9 +1230,11 @@ describe('buildHorizontalGridModel', () => {
       curatorOverride: true,
       overrideDisagreements: [message],
       extractorComparison: { outcome: 'overridden', value: 'abc-1' },
-      // The ID field is read-only here, so the override cannot be removed from the grid.
-      removeOverrideFieldKeys: null,
+      // The value is the object itself (an empty path): no whole-value edit here.
+      overrideTarget: null,
     })
+    // A read-only identity cell never offers an override.
+    expect(model.rows[0]!.cells[1]).toMatchObject({ readOnly: true, overrideTarget: null })
   })
 
   it('shows each value\'s details once, on its first cell, and hides leaves that cell covers', () => {

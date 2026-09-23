@@ -6,16 +6,19 @@ import {
   dispatchEvidenceNavigationCommand,
 } from '@/features/curation/evidence'
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
+import { patchCurationEnvelopeField } from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationCandidate,
   CurationDraftField,
   DomainEnvelopeEvidenceAnchorProjection,
+  DomainEnvelopeReviewResolvedValue,
 } from '@/features/curation/types'
 import {
   useCurationWorkspaceAutosave,
   useCurationWorkspaceContext,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import {
+  mergeEnvelopeFieldPatchIntoWorkspace,
   resolveEnvelopeFieldPath,
 } from '@/features/curation/workspace/workspaceState'
 import HorizontalCurationGrid, {
@@ -34,9 +37,14 @@ import HorizontalGridEvidencePopover, {
   type HorizontalGridEvidencePopoverTarget,
 } from './HorizontalGridEvidencePopover'
 import HorizontalGridFieldEditorDialog from './HorizontalGridFieldEditorDialog'
+import HorizontalGridOverrideEditorDialog from './HorizontalGridOverrideEditorDialog'
 import HorizontalGridValidationPreviewRowActions from './HorizontalGridValidationPreviewRowActions'
 import { HORIZONTAL_GRID_UNRESOLVED_TEXT } from './horizontalGridFormatting'
 import type { HorizontalGridModel } from './horizontalGridModel'
+import {
+  horizontalGridOverridePatchValue,
+  horizontalGridRemoveOverridePatchValue,
+} from './horizontalGridOverride'
 import {
   applyHorizontalGridValidationPreview,
   horizontalGridValidationPreviewKey,
@@ -47,6 +55,12 @@ interface EditingTarget {
   candidateId: string
   fieldKey: string
   fieldPath: string
+}
+
+interface OverrideTarget {
+  candidateId: string
+  fieldLabel: string
+  value: DomainEnvelopeReviewResolvedValue
 }
 
 interface ValidationPreviewState {
@@ -111,9 +125,14 @@ export default function InteractiveHorizontalCurationGrid({
     activeCandidateId,
     candidates,
     setActiveCandidate,
+    setWorkspace,
+    workspace,
   } = useCurationWorkspaceContext()
   const autosave = useCurationWorkspaceAutosave()
   const [editingTarget, setEditingTarget] = useState<EditingTarget | null>(null)
+  const [overrideTarget, setOverrideTarget] = useState<OverrideTarget | null>(null)
+  const [overrideError, setOverrideError] = useState<string | null>(null)
+  const [overrideSaving, setOverrideSaving] = useState(false)
   const [evidenceTarget, setEvidenceTarget] = useState<HorizontalGridEvidencePopoverTarget | null>(null)
   const [validationPreview, setValidationPreview] = useState<ValidationPreviewState>(() => ({
     model,
@@ -136,6 +155,45 @@ export default function InteractiveHorizontalCurationGrid({
       setActiveCandidate(candidateId)
     }
   }, [activeCandidateId, setActiveCandidate])
+
+  // A curator override is one whole-value edit at the value's own path: its
+  // identifier and name together, or every identity key cleared to remove it.
+  // A rejection (e.g. a missing name) is shown in the editor, which stays open.
+  const submitOverride = useCallback(async (
+    target: OverrideTarget,
+    nextValue: Record<string, unknown>,
+  ) => {
+    const candidate = candidateForRow(candidates, target.candidateId)
+    const projectionRef = candidate.projection_ref
+    if (!projectionRef) {
+      throw new Error(`Curator override needs an envelope-backed candidate '${candidate.candidate_id}'`)
+    }
+    setOverrideTarget(target)
+    setOverrideSaving(true)
+    setOverrideError(null)
+    try {
+      if (!(await autosave.flush())) {
+        setOverrideError('Save or discard the pending edits of this record first, then try again.')
+        return
+      }
+      const response = await patchCurationEnvelopeField({
+        session_id: workspace.session.session_id,
+        envelope_id: projectionRef.envelope_id,
+        expected_revision: projectionRef.envelope_revision,
+        object_id: projectionRef.object_id,
+        field_path: target.value.value_path,
+        operation: 'replace',
+        before: target.value.stored_value,
+        value: nextValue,
+      })
+      setWorkspace((current) => mergeEnvelopeFieldPatchIntoWorkspace(current, response))
+      setOverrideTarget(null)
+    } catch (error) {
+      setOverrideError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOverrideSaving(false)
+    }
+  }, [autosave, candidates, setWorkspace, workspace.session.session_id])
 
   const selectedEditor = useMemo(() => {
     if (!editingTarget) {
@@ -187,6 +245,15 @@ export default function InteractiveHorizontalCurationGrid({
         recordLabel={args.row.contextCell.value.identityLabel}
         onEdit={(editableField) => {
           setEvidenceTarget(null)
+          if (args.cell.overrideTarget) {
+            setOverrideError(null)
+            setOverrideTarget({
+              candidateId: candidate.candidate_id,
+              fieldLabel: editableField.label,
+              value: args.cell.overrideTarget,
+            })
+            return
+          }
           setEditingTarget({
             candidateId: candidate.candidate_id,
             fieldKey: editableField.field_key,
@@ -241,11 +308,13 @@ export default function InteractiveHorizontalCurationGrid({
             navigateEvidence(projection)
           }
         }}
-        onRemoveOverride={(fieldKeys) => {
-          // Clearing every identity key of the value withdraws the override;
-          // the backend returns the value to unresolved.
-          autosave.queueFieldChanges(fieldKeys.map((fieldKey) => ({ field_key: fieldKey, value: null })))
-          void autosave.flush()
+        onRemoveOverride={(value) => {
+          // Clearing every identity key withdraws the override; the backend
+          // returns the value to unresolved.
+          void submitOverride(
+            { candidateId: candidate.candidate_id, fieldLabel: field?.label ?? args.column.label, value },
+            horizontalGridRemoveOverridePatchValue(value),
+          )
         }}
         onSelect={() => selectCandidate(candidate.candidate_id)}
         onToggleValidationPreview={(previewField) => {
@@ -277,7 +346,7 @@ export default function InteractiveHorizontalCurationGrid({
         previewState={args.cell.state}
       />
     )
-  }, [autosave, candidates, model, selectCandidate])
+  }, [autosave, candidates, model, selectCandidate, submitOverride])
 
   const renderContextCell = useCallback(({ cell, row }: HorizontalGridContextRenderArgs) => (
     <HorizontalGridContextCellContent
@@ -403,6 +472,26 @@ export default function InteractiveHorizontalCurationGrid({
           return saved
         }}
         open={editingTarget !== null}
+      />
+      <HorizontalGridOverrideEditorDialog
+        error={overrideError}
+        fieldLabel={overrideTarget?.fieldLabel ?? ''}
+        isSaving={overrideSaving}
+        onClose={() => {
+          setOverrideTarget(null)
+          setOverrideError(null)
+        }}
+        onRemove={() => {
+          if (overrideTarget) {
+            void submitOverride(overrideTarget, horizontalGridRemoveOverridePatchValue(overrideTarget.value))
+          }
+        }}
+        onSave={(identity) => {
+          if (overrideTarget) {
+            void submitOverride(overrideTarget, horizontalGridOverridePatchValue(overrideTarget.value, identity))
+          }
+        }}
+        value={overrideTarget?.value ?? null}
       />
     </>
   )

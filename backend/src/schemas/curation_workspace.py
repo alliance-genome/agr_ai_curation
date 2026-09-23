@@ -1037,6 +1037,19 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
         default_factory=list,
         description="Payload paths of the value's identity keys (what a curator edits or clears)",
     )
+    id_key: str | None = Field(default=None, description="The value's identifier key (e.g. curie)")
+    label_key: str | None = Field(default=None, description="The value's name key (e.g. name)")
+    validated_keys: list[str] = Field(
+        default_factory=list,
+        description="Further identity keys only a validator fills (e.g. taxon)",
+    )
+    stored_value: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "The value exactly as stored: the `before` of a whole-value curator override patch, "
+            "whose other keys pass through unchanged"
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_vocabularies(self) -> "DomainEnvelopeReviewResolvedValue":

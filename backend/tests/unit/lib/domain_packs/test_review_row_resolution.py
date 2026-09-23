@@ -200,6 +200,9 @@ def test_resolved_value_shows_label_and_id_with_paper_wording_apart():
             validator_explanation="Exact synonym match.",
             validator_curator_message=None,
             identity_field_paths=["site.curie", "site.name"],
+            id_key="curie",
+            label_key="name",
+            stored_value=site,
         )
     ]
     # An identity key of the value shows that key; the paper wording stays apart.
@@ -486,6 +489,12 @@ def _overridden_site() -> dict:
     return site
 
 
+def _overridden_site_stored(row) -> dict:
+    return next(
+        field.value for field in row.summary_fields if field.field_path == "site"
+    )
+
+
 def _disagreement(*, field_path: str | None, message: str, status=ValidationFindingStatus.OPEN):
     object_ref = ObjectRef(object_id="object-1")
     return ValidationFinding(
@@ -512,6 +521,9 @@ def test_a_curator_override_reads_resolved_with_who_and_when():
     assert value.curator_override.at == OVERRIDE_AT
     assert value.override_disagreements == []
     assert value.identity_field_paths == ["site.curie", "site.name"]
+    # The whole-value override patch sends the value as stored as its `before`.
+    assert value.stored_value == _overridden_site_stored(row)
+    assert (value.id_key, value.label_key, value.validated_keys) == ("curie", "name", [])
     assert _summary_field(row, "site").resolution.display_text == "midgut (ONT:0000555)"
     assert _workspace_field(row, "site.lookup_outcome").resolution.display_text == "Curator override"
 
@@ -550,6 +562,7 @@ def test_an_object_root_override_takes_object_level_disagreements():
     assert value.curator_override.actor_id == "curator-2"
     assert value.override_disagreements == [message]
     assert value.identity_field_paths == ["identifier", "symbol", "taxon"]
+    assert value.validated_keys == ["taxon"]
 
 
 def test_clearing_an_override_reads_unresolved_again():

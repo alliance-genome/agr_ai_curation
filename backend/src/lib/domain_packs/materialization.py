@@ -3254,6 +3254,10 @@ def _read_review_value(
             identity_field_paths=[
                 f"{path_text}.{key}" if path_text else key for key in spec.identity_keys
             ],
+            id_key=spec.id_key,
+            label_key=spec.label_key,
+            validated_keys=list(spec.validated_keys),
+            stored_value=copy.deepcopy(dict(stored)),
         ),
         value=value,
     )

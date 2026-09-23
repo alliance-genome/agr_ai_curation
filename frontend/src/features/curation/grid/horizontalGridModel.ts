@@ -103,9 +103,9 @@ export interface HorizontalGridFieldCell {
   curatorOverride: boolean
   // Open warnings where a validator disagrees with the curator override.
   overrideDisagreements: string[]
-  // The draft fields to clear to remove the override (every identity key of
-  // each overridden value, all editable), or null when it cannot be removed here.
-  removeOverrideFieldKeys: string[] | null
+  // The value a curator override from this cell sets (its identifier and name
+  // in one whole-value edit), or null when the cell cannot override one.
+  overrideTarget: DomainEnvelopeReviewResolvedValue | null
   required: boolean | null
   readOnly: boolean | null
   staleValidation: boolean | null
@@ -549,24 +549,28 @@ function overriddenValues(
   return resolution.values.filter((value) => value.curator_override)
 }
 
-// Clearing every identity key of an overridden value withdraws the override
-// (the backend reverts it to unresolved); each key must be an editable draft field.
-function removeOverrideFieldKeys(
-  values: readonly DomainEnvelopeReviewResolvedValue[],
-  fieldsByPath: ReadonlyMap<string, CurationDraftField>,
-): string[] | null {
-  if (values.length === 0) {
+// A curator overrides one value from a cell that is that value or one of its
+// identity keys. The edit patches the whole value at its own payload path, so a
+// value that is the object itself (an empty path) is not overridden here.
+function overrideTarget(
+  fieldPath: string,
+  resolution: DomainEnvelopeReviewFieldResolution | null,
+  readOnly: boolean,
+): DomainEnvelopeReviewResolvedValue | null {
+  if (readOnly || !resolution || resolution.leaf_key || resolution.values.length !== 1) {
     return null
   }
-  const keys: string[] = []
-  for (const path of new Set(values.flatMap((value) => value.identity_field_paths))) {
-    const field = fieldsByPath.get(path)
-    if (!field || field.read_only) {
-      return null
-    }
-    keys.push(field.field_key)
+  const [value] = resolution.values
+  if (
+    !value
+    || !value.value_path
+    || value.issue
+    || !(value.id_key || value.label_key)
+    || !(fieldPath === value.value_path || value.identity_field_paths.includes(fieldPath))
+  ) {
+    return null
   }
-  return keys
+  return value
 }
 
 function rationaleForCandidate(candidate: CurationCandidate): HorizontalGridRowContext['rationale'] {
@@ -650,6 +654,9 @@ function projectRow(
     const canonicalUnresolved = Boolean(field && !resolution?.leaf_key)
       && hasUnresolvedValue(resolution)
     const overridden = field ? overriddenValues(resolution) : []
+    // A value's own leaves (paper wording, status, lookup result, validator
+    // text) are set by extraction and validation; curators edit its identity.
+    const cellReadOnly = Boolean(field?.read_only || resolution?.leaf_key)
     const overrideDisagreements = overridden.flatMap((value) => value.override_disagreements)
     const projectedComparison = field
       ? extractorComparison(row.candidate, field, fieldPath, canonicalUnresolved)
@@ -701,11 +708,9 @@ function projectRow(
       resolutionDescribedBy: [],
       curatorOverride: overridden.length > 0,
       overrideDisagreements,
-      removeOverrideFieldKeys: removeOverrideFieldKeys(overridden, fieldsByPath),
+      overrideTarget: field ? overrideTarget(fieldPath, resolution, cellReadOnly) : null,
       required: field?.required ?? null,
-      // A value's own leaves (paper wording, status, lookup result, validator
-      // text) are set by extraction and validation; curators edit its identity.
-      readOnly: field ? field.read_only || Boolean(resolution?.leaf_key) : null,
+      readOnly: field ? cellReadOnly : null,
       staleValidation: field?.stale_validation ?? null,
       state: projectedState,
       fieldValidation: field?.validation_result ?? null,

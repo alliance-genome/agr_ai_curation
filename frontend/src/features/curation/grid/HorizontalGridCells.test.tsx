@@ -31,6 +31,10 @@ function resolvedValue(
     validator_curator_message: null,
     override_disagreements: [],
     identity_field_paths: ['site.curie', 'site.name'],
+    id_key: 'curie',
+    label_key: 'name',
+    validated_keys: [],
+    stored_value: {},
     ...overrides,
   }
 }
@@ -73,7 +77,7 @@ function cell(
     readOnly: false,
     curatorOverride: overridden.length > 0,
     overrideDisagreements: overridden.flatMap((value) => value.override_disagreements),
-    removeOverrideFieldKeys: overridden.length > 0 ? ['site.curie', 'site.name'] : null,
+    overrideTarget: overridden[0] ?? null,
     staleValidation: false,
     state: 'resolved',
     fieldValidation: null,

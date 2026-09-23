@@ -96,7 +96,7 @@ function fieldCell(
     readOnly: hasField ? false : null,
     curatorOverride: false,
     overrideDisagreements: [],
-    removeOverrideFieldKeys: null,
+    overrideTarget: null,
     staleValidation: hasField ? false : null,
     state: hasField ? state : null,
     fieldValidation: null,
@@ -204,6 +204,10 @@ describe('HorizontalCurationGrid', () => {
           validator_curator_message: null,
           override_disagreements: [],
           identity_field_paths: ['alpha'],
+          id_key: 'curie',
+          label_key: 'name',
+          validated_keys: [],
+          stored_value: {},
         }],
       },
     }
@@ -242,6 +246,10 @@ describe('HorizontalCurationGrid', () => {
       curator_override: { actor_id: 'curator-1', at: '2026-09-23T20:00:00+00:00' },
       override_disagreements: [message],
       identity_field_paths: ['alpha'],
+      id_key: 'curie',
+      label_key: 'name',
+      validated_keys: [],
+      stored_value: {},
     }
     gridRow.cells[0] = {
       ...fieldCell('field:alpha', 'alpha', 'ONT:1', true, 'needs-review'),

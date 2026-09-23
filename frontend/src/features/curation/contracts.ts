@@ -148,6 +148,14 @@ export interface DomainEnvelopeReviewResolvedValue {
   override_disagreements: string[]
   /** Payload paths of the value's identity keys: what a curator edits, or clears to remove an override. */
   identity_field_paths: string[]
+  /** The value's identifier key (e.g. curie). */
+  id_key: string | null
+  /** The value's name key (e.g. name). */
+  label_key: string | null
+  /** Further identity keys only a validator fills (e.g. taxon). */
+  validated_keys: string[]
+  /** The value exactly as stored: the `before` of a whole-value override patch. */
+  stored_value: Record<string, unknown>
 }
 
 export interface DomainEnvelopeReviewCuratorOverride {
