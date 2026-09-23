@@ -1379,3 +1379,33 @@ def test_a_resolved_mirror_of_a_never_resolved_source_is_overruled_with_its_own_
     assert (copy["lookup_outcome"], copy["curie"], copy["overruled_curie"]) == (OUTCOME_NOT_FOUND, None, "G:1")
     assert not any(finding.code == "domain_pack.validator_materialization_invalid"
                    for finding in result.appended_findings)
+
+
+# --- M3: reading an export stays fast ------------------------------------------
+
+
+def test_effective_payload_reads_a_large_export_quickly():
+    """300 objects x 28 declared values x 30 validator events read well under a second or two."""
+
+    import time
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    specs = {f"value_{index}": spec for index in range(28)}
+    metadata = {"validator_resolved_value_materialization": [
+        {"materialized_field_paths": [f"value_{event % 28}.curie", f"value_{event % 28}.name"],
+         "original_values": {f"value_{event % 28}.name": "x"}}
+        for event in range(30)
+    ]}
+    legacy = {f"value_{index}": {"curie": f"T:{index}", "name": f"term {index}"} for index in range(28)}
+    contract = {
+        f"value_{index}": resolved_value(f"term {index}", {"curie": f"T:{index}", "name": f"term {index}"})
+        for index in range(28)
+    }
+
+    started = time.perf_counter()
+    for index in range(300):
+        effective = effective_payload(legacy if index % 2 else contract, specs, object_metadata=metadata)
+    elapsed = time.perf_counter() - started
+
+    assert effective["value_0"]["lookup_outcome"] == OUTCOME_MATCHED
+    assert elapsed < 2.0, elapsed

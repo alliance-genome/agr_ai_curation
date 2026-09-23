@@ -36,7 +36,7 @@ none of them re-implements the rules.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
@@ -753,10 +753,16 @@ def value_covered_by_validator(
     object_metadata: Mapping[str, Any] | None,
     value_path: str,
     spec: ResolvableSpec | None,
+    *,
+    recorded_paths: Sequence[tuple[str | int, ...]] | None = None,
 ) -> bool:
-    """Validator coverage of one value: its own path, or a declared mirror source (``covered_by``)."""
+    """Validator coverage of one value: its own path, or a declared mirror source (``covered_by``).
 
-    recorded = validator_materialized_paths(object_metadata)
+    ``recorded_paths`` (``validator_materialized_paths``) may be passed so one
+    object's events are parsed once for all its values.
+    """
+
+    recorded = validator_materialized_paths(object_metadata) if recorded_paths is None else recorded_paths
     identity_keys = spec.identity_keys if spec is not None else ()
     if validator_event_covers(object_metadata, value_path, identity_keys, recorded_paths=recorded):
         return True
@@ -937,11 +943,20 @@ def effective_payload(
     # field and one of its elements (``terms`` and ``terms[0]``); the most
     # specific declaration reads the element, and the list pass skips it.
     annotated: set[tuple[str | int, ...]] = set()
+    # One object's validator events are parsed once, and only when some value
+    # stored before the contract needs them.
+    recorded: list[tuple[tuple[str | int, ...], ...]] = []
+
+    def covered(value_path: str, spec: ResolvableSpec) -> bool:
+        if not recorded:
+            recorded.append(validator_materialized_paths(object_metadata))
+        return value_covered_by_validator(object_metadata, value_path, spec, recorded_paths=recorded[0])
+
     for field_path, spec in sorted(resolvable_fields.items(), key=lambda item: -len(item[0])):
         tokens = _path_tokens(field_path)
         if tokens is None:
             continue
-        result = _annotate_at(result, tokens, (), spec, object_metadata, annotated)
+        result = _annotate_at(result, tokens, (), spec, covered, annotated)
     return result
 
 
@@ -960,7 +975,7 @@ def _annotate_at(
     remaining: Sequence[str | int],
     walked: tuple[str | int, ...],
     spec: ResolvableSpec,
-    object_metadata: Mapping[str, Any] | None,
+    covered: Callable[[str, ResolvableSpec], bool],
     annotated: set[tuple[str | int, ...]],
 ) -> Any:
     if isinstance(node, list):
@@ -971,22 +986,25 @@ def _annotate_at(
                 return node
             updated_list = list(node)
             updated_list[index] = _annotate_at(
-                node[index], remaining[1:], (*walked, index), spec, object_metadata, annotated
+                node[index], remaining[1:], (*walked, index), spec, covered, annotated
             )
             return updated_list
         # A declared path without an index names every element; each is its own value.
         return [
-            _annotate_at(item, remaining, (*walked, index), spec, object_metadata, annotated)
+            _annotate_at(item, remaining, (*walked, index), spec, covered, annotated)
             for index, item in enumerate(node)
         ]
     if not remaining:
         if not isinstance(node, Mapping) or walked in annotated:
             return node
         annotated.add(walked)
+        # Coverage matters only for a value stored without the contract state.
         return effective_value(
             node,
             spec,
-            covered_by_validator=value_covered_by_validator(object_metadata, _format_path(walked), spec),
+            covered_by_validator=(
+                not has_resolution_state(node) and covered(_format_path(walked), spec)
+            ),
         )
     if not isinstance(node, Mapping):
         return node
@@ -995,7 +1013,7 @@ def _annotate_at(
         return node
     updated = dict(node)
     updated[key] = _annotate_at(
-        node[key], remaining[1:], (*walked, key), spec, object_metadata, annotated
+        node[key], remaining[1:], (*walked, key), spec, covered, annotated
     )
     return updated
 
