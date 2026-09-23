@@ -40,6 +40,11 @@ from typing import Any, Callable, Sequence
 
 from pydantic import ValidationError, model_validator
 
+from src.lib.domain_packs.resolvable_values import (
+    ResolvableValueError,
+    check_resolvable_value,
+    unresolved_value,
+)
 from src.lib.openai_agents.models import (
     AlleleExtractionResultEnvelope as RuntimeAlleleExtractionResultEnvelope,
 )
@@ -59,6 +64,7 @@ from ..schema_refs import (
     PROVIDER_REFS_METADATA_KEY,
 )
 from .constants import (
+    ALLELE_ASSOCIATION_IDENTITY_KEYS,
     ALLELE_ASSOCIATION_KIND,
     ALLELE_ASSOCIATION_LINKML_SCHEMA_ID,
     ALLELE_ASSOCIATION_MODEL_ID,
@@ -67,6 +73,7 @@ from .constants import (
     ALLELE_DOMAIN_PACK_ID,
     ALLELE_DOMAIN_PACK_VERSION,
     ALLELE_EVIDENCE_QUOTE_OBJECT_TYPE,
+    ALLELE_IDENTITY_KEYS,
     ALLELE_LINKML_SCHEMA_SOURCE_FILE,
     ALLELE_MATERIALIZER_ID,
     ALLELE_MENTION_OBJECT_TYPE,
@@ -213,15 +220,24 @@ def _normalized_evidence_records(
     return normalize_workspace_records(evidence_records)
 
 
-def _mention_payload(staged_fields: Mapping[str, Any], *, source_mentions: Sequence[str]) -> dict[str, Any]:
+def _mention_payload(
+    staged_fields: Mapping[str, Any],
+    *,
+    mention_text: str,
+    source_mentions: Sequence[str],
+) -> dict[str, Any]:
     """Build the AlleleMention payload (the active validator-binding input object).
 
     Mention text is the source anchor (protected). normalized_hint / associated_gene / taxon are
-    OPTIONAL supplemental validator context, exactly as the envelope path emitted them.
+    OPTIONAL supplemental validator context, exactly as the envelope path emitted them. ``allele``
+    is the allele this mention names, staged unresolved with the mention text as its paper
+    wording; the allele validator writes its identity and state (ALL-1283).
     """
 
-    mention_text = _clean_text(staged_fields.get("mention"))
-    payload: dict[str, Any] = {"mention": {"text": mention_text}}
+    payload: dict[str, Any] = {
+        "mention": {"text": mention_text},
+        "allele": unresolved_value(mention_text, identity_keys=ALLELE_IDENTITY_KEYS),
+    }
     normalized_hint = _clean_text(staged_fields.get("normalized_hint"))
     if normalized_hint is not None:
         payload["mention"]["normalized_hint"] = normalized_hint
@@ -365,6 +381,10 @@ def validate_allele_builder_objects(
             errors.append(
                 f"{location}.payload.allele_identifier must be left for the active allele validator"
             )
+        try:
+            check_resolvable_value(payload, identity_keys=ALLELE_ASSOCIATION_IDENTITY_KEYS)
+        except ResolvableValueError as exc:
+            errors.append(f"{location}.payload: {exc}")
 
         ref_types = {ref.object_type for ref in obj.object_refs}
         validator_ref_types = sorted(ref_types & _VALIDATOR_MATERIALIZED_OBJECT_TYPES)
@@ -671,8 +691,19 @@ def materialize_allele_builder_state(
         if candidate_evidence_blocked or not resolved_evidence:
             continue
 
+        source_mentions = _unique_strings(staged_fields.get("source_mentions"))
+        if not source_mentions:
+            issues.append(
+                _materialization_issue(
+                    field_path="source_mentions",
+                    reason="missing_source_mentions",
+                    message="Finalized allele candidates require the exact paper phrases (source_mentions).",
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
+
         retained_count += 1
-        source_mentions = _unique_strings(staged_fields.get("source_mentions")) or [mention_text]
 
         # Capture paper context for the shared Reference from the first retained candidate.
         if not reference_emitted:
@@ -703,7 +734,9 @@ def materialize_allele_builder_state(
         mention_ref_id = f"allele-mention-{retained_count}"
         association_ref_id = f"allele-paper-evidence-association-{retained_count}"
 
-        mention_payload = _mention_payload(staged_fields, source_mentions=source_mentions)
+        mention_payload = _mention_payload(
+            staged_fields, mention_text=mention_text, source_mentions=source_mentions
+        )
         curatable_objects.append(
             CuratableObjectEnvelope(
                 object_type=ALLELE_MENTION_OBJECT_TYPE,
@@ -749,9 +782,11 @@ def materialize_allele_builder_state(
                 )
             )
 
+        # The association's allele is staged unresolved with its paper wording; the validated
+        # allele reaches allele_identifier/allele_label only through validator write-back.
         association_payload: dict[str, Any] = {
+            **unresolved_value(mention_text, identity_keys=ALLELE_ASSOCIATION_IDENTITY_KEYS),
             "association_kind": ALLELE_ASSOCIATION_KIND,
-            "allele_label": mention_text,
             "evidence_record_ids": association_evidence_ids,
             "rationale": rationale,
         }

@@ -244,6 +244,9 @@ def _spec_errors(
             DomainPackFieldType.ARRAY,
         }:
             errors.append(f"{where}: {role} {spec[role]!r} must name a scalar leaf")
+    for key in spec.get("validated") or []:
+        if key not in children:
+            errors.append(f"{where}: validated leaf {key!r} is not a declared child path")
     if ("state" in spec) != ("resolved_states" in spec):
         errors.append(f"{where}: state and resolved_states must be declared together")
     resolved = spec.get("resolved_states")

@@ -2366,8 +2366,8 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
     assert "Extraction result ready: gene" in result
     assert "Objects found: 1" in result
     assert "Recommended supervisor action: answer_from_manifest" in result
-    assert "gene_mention_evidence gene-mention-evidence-1: Crumbs" in result
-    assert "crb" in result
+    # The manifest labels a resolved gene by its validated symbol, not the paper wording.
+    assert "gene_mention_evidence gene-mention-evidence-1: crb" in result
     assert "FB:FBgn0259685" in result
     assert "NCBITaxon:7227" in result
     assert "proposed_primary_external_id" not in result

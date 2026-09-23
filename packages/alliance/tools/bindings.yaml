@@ -1029,7 +1029,7 @@ tools:
           - name: mention
             type: string
             required: true
-            description: The exact wording for this entity as it appears in the paper.
+            description: The exact wording for this gene as it appears in the paper. It is kept as the gene's paper wording, and the gene stays unresolved until the Gene Validation specialist confirms it.
           - name: evidence_record_ids
             type: array
             required: true
@@ -1499,7 +1499,7 @@ tools:
           - name: mention
             type: string
             required: true
-            description: The exact wording for this entity as it appears in the paper.
+            description: The exact wording for this allele as it appears in the paper. It is kept as the allele's paper wording, and the allele stays unresolved until the Allele Validation specialist confirms it.
           - name: evidence_record_ids
             type: array
             required: true

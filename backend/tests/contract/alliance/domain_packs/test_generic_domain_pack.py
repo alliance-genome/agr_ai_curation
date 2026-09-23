@@ -143,7 +143,8 @@ def test_generated_generic_domain_pack_reuses_existing_validator_bindings():
     assert proxy_type in object_definitions
 
     proxy_definition = object_definitions[proxy_type]
-    assert proxy_definition.model_ref is None
+    # The gene object root is a resolvable value, so its display model is proxied with it.
+    assert proxy_definition.model_ref == "proxy__gene__GeneMentionEvidencePayload"
     confidence_field = next(
         field for field in proxy_definition.fields if field.field_path == "confidence"
     )

@@ -23,7 +23,14 @@ from src.schemas.domain_envelope import (
     ObjectRef,
 )
 
+from src.lib.domain_packs.resolvable_values import (
+    RESOLVED,
+    effective_resolution,
+    value_covered_by_validator,
+)
+
 from .._export_utils import stable_object_id
+from .constants import ALLELE_ASSOCIATION_IDENTITY_KEYS, ALLELE_ASSOCIATION_SPEC
 
 
 ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY = "allele_verified_association_targets"
@@ -267,6 +274,31 @@ def _association_submission_operations(
                     or "Allele association write behavior is blocked."
                 ),
                 details={"write_behavior": dict(write_behavior)},
+            )
+        )
+
+    # The association's allele is a resolvable value; an unresolved one never reaches
+    # submission as if resolved (values stored before ALL-1283 read through the legacy rule).
+    state, outcome = effective_resolution(
+        association.payload,
+        identity_keys=ALLELE_ASSOCIATION_IDENTITY_KEYS,
+        covered_by_validator=value_covered_by_validator(
+            association.metadata, "", ALLELE_ASSOCIATION_SPEC
+        ),
+    )
+    if state != RESOLVED:
+        blockers.append(
+            _blocker(
+                object_id=object_id,
+                code="alliance.allele.allele_unresolved",
+                message=(
+                    "The association's allele is unresolved; the allele validator must "
+                    "confirm it before submission."
+                ),
+                details={
+                    "lookup_outcome": outcome,
+                    "paper_wording": association.payload.get("mention"),
+                },
             )
         )
 

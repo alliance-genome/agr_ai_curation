@@ -63,7 +63,7 @@ content: |
   </evidence_and_curation_rules>
 
   <validator_handoff>
-  Active validator bindings declared by the allele domain pack are the authority for final normalized allele identity fields such as `primary_external_id`, `allele_symbol`, and association identifiers derived from them. The extractor owns evidence-backed unresolved mentions and selector inputs; it does not repair validator failures, invent normalized identifiers, or present lookup hints as validated results.
+  Active validator bindings declared by the allele domain pack are the authority for final normalized allele identity fields such as `primary_external_id`, `allele_symbol`, and association identifiers derived from them. The extractor owns evidence-backed unresolved mentions and selector inputs; it does not repair validator failures, invent normalized identifiers, or present lookup hints as validated results. Each staged allele keeps your `mention` as its paper wording and stays unresolved until the validator confirms it.
 
   The downstream allele validator receives selected extractor inputs, object-scoped evidence records, and any document tools made available for the current run; it is not responsible for rediscovering your target from the whole paper. Hand it a precise selector: the exact compact allele/variant notation in `mention`, plus paper-supported `associated_gene`, `taxon`, `source_mentions`, and evidence context when available. Do not rely on the validator to recover the intended allele from surrounding prose alone.
 
