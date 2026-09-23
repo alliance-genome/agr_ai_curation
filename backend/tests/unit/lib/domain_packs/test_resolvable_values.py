@@ -868,3 +868,71 @@ def test_validated_must_be_declared_leaves_of_a_resolvable_value():
         pack([], ["allele.taxon"])
     with pytest.raises(ValueError, match="validated key 'taxon' of 'allele'"):
         pack(["taxon"], [])
+
+
+def test_profile_validator_events_count_as_validator_coverage():
+    metadata = {"profile_validator_materialization": [
+        {"field_paths": ["attributes.gene.gene_id", "attributes.records[1].resolved_id",
+                         "attributes.terms[].curie"]},
+    ]}
+    assert validator_event_covers(metadata, "attributes.gene")
+    assert validator_event_covers(metadata, "attributes.records[1]")
+    assert not validator_event_covers(metadata, "attributes.records[0]")
+    # "[]" covers every element.
+    assert validator_event_covers(metadata, "attributes.terms[3]")
+    assert not validator_event_covers(metadata, "attributes.other")
+
+    spec = ResolvableSpec(id_key="gene_id", label_key="symbol")
+    payload = {"attributes": {"gene": {"gene_id": "G:1", "symbol": "unc-54"}}}
+    effective = effective_payload(payload, {"attributes.gene": spec}, object_metadata=metadata)
+    assert (effective["attributes"]["gene"]["resolution_state"],
+            effective["attributes"]["gene"]["lookup_outcome"]) == (RESOLVED, OUTCOME_MATCHED)
+    unverified = effective_payload(payload, {"attributes.gene": spec}, object_metadata={})
+    assert unverified["attributes"]["gene"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+
+
+def test_a_list_and_its_indexed_element_both_declared_read_each_value_once():
+    """A pack may declare ``terms`` and ``terms[0]``; element 0 must not be read twice."""
+
+    from src.lib.flows.export_fields import PackagedExportSource
+    from src.lib.flows.value_display import display_text
+    from src.schemas.domain_pack_metadata import DomainPackModelDefinition
+    from types import SimpleNamespace
+
+    term_display = {"label": "label", "id": "curie", "mention": "mention"}
+    metadata = DomainPackMetadata(
+        pack_id="fixture.terms", display_name="Terms", version="0.1.0", metadata_api_version="1.0.0",
+        model_definitions=[DomainPackModelDefinition(model_id="Term", display_name="Term",
+                                                     metadata={"display": term_display})],
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Annotation", display_name="Annotation",
+            fields=[
+                DomainPackFieldDefinition(field_path="terms", field_type=DomainPackFieldType.ARRAY,
+                                          model_ref="Term"),
+                DomainPackFieldDefinition(field_path="terms[0]", field_type=DomainPackFieldType.OBJECT,
+                                          model_ref="Term"),
+            ],
+        )],
+    )
+    specs = declared_resolvable_fields_for_test(metadata)
+    assert set(specs) == {"terms", "terms[0]"}
+    legacy = {"terms": [{"curie": "T:1", "label": "slow growth"}, {"curie": "T:2", "label": "small"}]}
+
+    effective = effective_payload(legacy, specs, object_metadata=None)
+
+    for index, (label, curie) in enumerate((("slow growth", "T:1"), ("small", "T:2"))):
+        term = effective["terms"][index]
+        assert (term["resolution_state"], term["lookup_outcome"]) == (UNRESOLVED, OUTCOME_LEGACY_UNVERIFIED)
+        assert term["mention"] == f"{label} ({curie}) {LEGACY_UNVERIFIED_SUFFIX}"
+        assert "invalid record" not in term["mention"]
+    item = PackagedExportSource(SimpleNamespace(metadata=metadata)).effective_item(
+        {"object_type": "Annotation", "payload": legacy}
+    )
+    assert item["payload"] == effective
+    assert display_text(effective["terms"][0], term_display) == "UNRESOLVED"
+
+
+def declared_resolvable_fields_for_test(metadata):
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    return declared_resolvable_fields(metadata, "Annotation")
