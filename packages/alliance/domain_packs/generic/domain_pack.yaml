@@ -47,17 +47,7 @@ object_definitions:
           - source_label
           - description
           - confidence
-        groups:
-          - id: details
-            label: Details
-            fields:
-              - source_label
-              - description
-              - confidence
-          - id: rationale
-            label: Rationale
-            fields:
-              - rationale
+          - rationale
     fields:
       - field_path: label
         field_type: string
@@ -124,16 +114,7 @@ object_definitions:
         summary_fields:
           - claim_text
           - confidence
-        groups:
-          - id: details
-            label: Details
-            fields:
-              - claim_text
-              - confidence
-          - id: rationale
-            label: Rationale
-            fields:
-              - rationale
+          - rationale
     fields:
       - field_path: label
         field_type: string
@@ -199,18 +180,7 @@ object_definitions:
           - source_identifier
           - count
           - reagent_type
-        groups:
-          - id: details
-            label: Details
-            fields:
-              - source
-              - source_identifier
-              - count
-              - reagent_type
-          - id: rationale
-            label: Rationale
-            fields:
-              - rationale
+          - rationale
     fields:
       - field_path: label
         field_type: string
