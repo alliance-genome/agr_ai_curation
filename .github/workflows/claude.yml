@@ -32,15 +32,28 @@ jobs:
       # Explicitly check out the PR's merge ref so `git diff origin/main...HEAD`
       # actually reflects the PR changes (matches pull_request event behavior).
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@main
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/merge', github.event.issue.number) || '' }}
 
+      # Install Claude Code ourselves instead of using the version bundled with the
+      # action, which can lag behind new models (e.g. claude-opus-5-5 needs >= 2.1.280).
+      # CLAUDE_CODE_VERSION org/repo variable: latest | stable | exact version (e.g. 2.1.280).
+      # To roll back a bad Claude Code release, set it to the last known-good version.
+      - name: Install Claude Code
+        id: claude_install
+        run: |
+          set -eo pipefail
+          curl -fsSL https://claude.ai/install.sh | bash -s -- "${{ vars.CLAUDE_CODE_VERSION || 'latest' }}"
+          "$HOME/.local/bin/claude" --version
+          echo "path=$HOME/.local/bin/claude" >> "$GITHUB_OUTPUT"
+
       - name: Run Claude Code Review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@main
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          path_to_claude_code_executable: ${{ steps.claude_install.outputs.path }}
           trigger_phrase: "@claude"
 
           # PR-specific prompt (only for automated PR reviews)
