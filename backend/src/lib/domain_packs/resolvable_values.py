@@ -668,11 +668,22 @@ def _resolution_snapshot(value: Mapping[str, Any], identity_keys: Sequence[str])
     return snapshot
 
 
+# The curator-facing message for an override that leaves the id or label empty,
+# by which of the two the value declares.
+_OVERRIDE_INCOMPLETE_MESSAGE = {
+    (True, True): "Enter both the identifier and the name for a curator override.",
+    (True, False): "Enter the identifier for a curator override.",
+    (False, True): "Enter the name for a curator override.",
+}
+
+
 def apply_curator_identity(
     value: MutableMapping[str, Any],
     edits: Mapping[str, Any],
     *,
     identity_keys: Sequence[str],
+    id_key: str | None,
+    label_key: str | None,
     actor_id: str,
     at: str,
 ) -> dict[str, Any]:
@@ -681,16 +692,22 @@ def apply_curator_identity(
     ``edits`` maps edited identity keys to their new values. The value becomes
     resolved with ``lookup_outcome`` ``curator_override`` and a
     ``curator_override`` record (who, when, and the state before the first
-    override); a validator identity it replaces moves to ``overruled_*``.
-    ``mention`` and the validator's explanation are kept. Clearing the whole
-    identity reverts to unresolved (the validator's last unresolved outcome,
-    else ``not_validated``); entering the identity the value had before the
-    override restores that state. Returns the audit record.
+    override); a validator identity it replaces moves to ``overruled_*``, so
+    a first override names every identity key it keeps. ``mention`` and the
+    validator's explanation are kept. An override fills the declared
+    ``id_key`` and ``label_key`` (other identity keys stay optional), or it
+    is rejected. Clearing the whole identity reverts to unresolved (the
+    validator's last unresolved outcome, else ``not_validated``); entering
+    the identity the value had before the override restores that state.
+    Returns the audit record.
     """
 
     unknown = sorted(set(edits) - set(identity_keys))
     if unknown:
         raise ResolvableValueError(f"Only identity keys take a curator override, not {', '.join(unknown)}")
+    required = tuple(key for key in (id_key, label_key) if key)
+    if not required or not set(required) <= set(identity_keys):
+        raise ResolvableValueError("A curator override needs the value's declared id or label key")
     if not actor_id or not at:
         raise ResolvableValueError("A curator override records who (actor_id) and when (at)")
     overridden = is_curator_override(value)
@@ -724,6 +741,8 @@ def apply_curator_identity(
         value.pop(CURATOR_OVERRIDE_KEY, None)
         action = "restored"
     else:
+        if any(_is_empty(identity[key]) for key in required):
+            raise ResolvableValueError(_OVERRIDE_INCOMPLETE_MESSAGE[(bool(id_key), bool(label_key))])
         if not overridden:
             _overrule_identity(value, identity_keys)
         value.update(identity)
@@ -1281,6 +1300,15 @@ def declared_spec_for(
     return declared.get(_format_path(tokens)) or declared.get(_bare_path(tokens))
 
 
+def _is_read_time_marked(value: Mapping[str, Any]) -> bool:
+    """A legacy or invalid-record reading whose mention already carries its label."""
+
+    outcome = value.get(LOOKUP_OUTCOME_KEY)
+    return outcome == OUTCOME_LEGACY_UNVERIFIED or (
+        outcome == OUTCOME_INVALID_SCHEMA and value.get(VALIDATOR_EXPLANATION_KEY) == INVALID_RECORD_EXPLANATION
+    )
+
+
 def unresolved_header_text(
     payload: Mapping[str, Any],
     field_path: str,
@@ -1297,8 +1325,9 @@ def unresolved_header_text(
     keys. Returns None when it names no resolvable value or the value is
     resolved; the caller then shows the stored value. Otherwise returns the
     paper wording labelled "(paper wording)" (or, for a legacy value, its
-    stored text labelled "(legacy, unverified)"), and UNRESOLVED when no
-    wording was stored. A header never shows paper wording as the item.
+    stored text labelled "(legacy, unverified)"; a value already read
+    through ``effective_payload`` keeps its label as is), and UNRESOLVED
+    when no wording was stored. A header never shows paper wording as the item.
     """
 
     tokens = _path_tokens(field_path)
@@ -1330,6 +1359,9 @@ def unresolved_header_text(
     if has_resolution_state(target):
         if is_resolved(target, identity_keys=spec.identity_keys if spec is not None else ()):
             return None
+        if mention and _is_read_time_marked(target):
+            # A read-time reading (effective_payload) already labels its text.
+            return mention
         if mention:
             return f"{mention} {PAPER_WORDING_SUFFIX}"
         # A pre-contract container re-validated as unresolved: its old text is unverified.

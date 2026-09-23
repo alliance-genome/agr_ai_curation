@@ -373,6 +373,10 @@ class CurationEnvelopeFieldPatchOperation(str, Enum):
     """Supported curator operations against one envelope object field."""
 
     REPLACE = "replace"
+    # One atomic curator override of a resolvable value's identity: field_path
+    # names one identity field of the value, value and before map its identity
+    # keys to the new and current values.
+    REPLACE_IDENTITY = "replace_identity"
 
 
 class CurationEvidenceSource(str, Enum):
