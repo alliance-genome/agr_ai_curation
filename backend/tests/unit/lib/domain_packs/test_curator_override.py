@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from src.lib.domain_envelopes.patches import (
     EnvelopeFieldPatch,
+    EnvelopeFieldPatchOperation,
     EnvelopeFieldPatchStatus,
     apply_curator_field_patch,
 )
@@ -194,7 +195,7 @@ def test_validator_writes_never_change_an_overridden_value():
     assert is_curator_override(value)
 
 
-def _metadata(display=DISPLAY) -> DomainPackMetadata:
+def _metadata(display=DISPLAY, name_editable=True) -> DomainPackMetadata:
     return DomainPackMetadata(
         pack_id="fixture.override",
         display_name="Fixture Override",
@@ -214,14 +215,15 @@ def _metadata(display=DISPLAY) -> DomainPackMetadata:
             object_type="Observation", display_name="Observation", metadata={"object_role": "curatable_unit"},
             fields=[
                 DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT,
-                                          metadata={"display": display, "editable": True}),
+                                          metadata={"display": display}),
                 DomainPackFieldDefinition(field_path="site.curie", field_type=DomainPackFieldType.STRING,
                                           metadata={"editable": True}),
                 DomainPackFieldDefinition(field_path="site.name", field_type=DomainPackFieldType.STRING,
-                                          metadata={"editable": True}),
+                                          metadata={"editable": name_editable}),
                 DomainPackFieldDefinition(field_path="site.mention", field_type=DomainPackFieldType.STRING,
                                           metadata={"editable": True}),
-                DomainPackFieldDefinition(field_path="site.taxon", field_type=DomainPackFieldType.STRING),
+                DomainPackFieldDefinition(field_path="site.taxon", field_type=DomainPackFieldType.STRING,
+                                          metadata={"editable": True}),
                 DomainPackFieldDefinition(field_path="site.lookup_outcome", field_type=DomainPackFieldType.ENUM,
                                           enum_ref="LookupOutcome", metadata={"editable": True}),
             ],
@@ -229,8 +231,8 @@ def _metadata(display=DISPLAY) -> DomainPackMetadata:
     )
 
 
-def _pack(display=DISPLAY) -> LoadedDomainPack:
-    metadata = _metadata(display)
+def _pack(display=DISPLAY, name_editable=True) -> LoadedDomainPack:
+    metadata = _metadata(display, name_editable)
     return LoadedDomainPack(
         pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
         pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
@@ -309,11 +311,12 @@ def test_a_non_decisive_validator_outcome_is_no_disagreement():
 # --- The curator edit path ----------------------------------------------------------------
 
 
-def _patch(envelope, field_path, value, *, before, display=DISPLAY):
+def _patch(envelope, field_path, value, *, before, display=DISPLAY, name_editable=True,
+           operation=EnvelopeFieldPatchOperation.REPLACE, pack=None):
     return apply_curator_field_patch(
-        envelope, _pack(display),
+        envelope, pack or _pack(display, name_editable),
         EnvelopeFieldPatch(envelope_id=envelope.envelope_id, expected_revision=1, object_id="obs-1",
-                           field_path=field_path, before=before, value=value),
+                           field_path=field_path, before=before, value=value, operation=operation),
         current_revision=1, actor_id="curator-7",
     )
 
@@ -421,3 +424,134 @@ def test_a_whole_value_override_changes_only_the_identity():
                         display={**DISPLAY, "validated": ["taxon"]})
     assert with_taxon.status is EnvelopeFieldPatchStatus.ACCEPTED
     assert with_taxon.envelope.extracted_objects[0].payload["site"]["taxon"] == "T:1"
+
+
+# --- Whole-value overrides: identity fields editable, one atomic edit -------------------
+
+
+IDENTITY = EnvelopeFieldPatchOperation.REPLACE_IDENTITY
+
+
+def test_a_whole_value_override_needs_every_identity_field_editable():
+    staged = _staged_envelope()
+    before = staged.extracted_objects[0].payload["site"]
+
+    closed = _patch(staged, "site", {**before, "curie": "ONT:1", "name": "epidermis"}, before=before,
+                    name_editable=False)
+    assert closed.status is EnvelopeFieldPatchStatus.REJECTED
+    assert closed.errors == ("field_path 'site' takes no curator override: site.name not declared editable",)
+    # The container itself needs no editable flag.
+    opened = _patch(staged, "site", {**before, "curie": "ONT:1", "name": "epidermis"}, before=before)
+    assert opened.status is EnvelopeFieldPatchStatus.ACCEPTED
+
+
+def test_a_field_value_identity_patch_overrides_both_keys_atomically():
+    staged = _staged_envelope()
+
+    result = _patch(staged, "site.curie", {"curie": "ONT:1", "name": "epidermis"},
+                    before={"curie": None, "name": None}, operation=IDENTITY)
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED
+    obj = result.envelope.extracted_objects[0]
+    assert (obj.payload["site"]["curie"], obj.payload["site"]["name"], obj.payload["site"]["lookup_outcome"]) == (
+        "ONT:1", "epidermis", OUTCOME_CURATOR_OVERRIDE)
+    [event] = obj.metadata[CURATOR_OVERRIDE_METADATA_KEY]
+    assert (event["value_path"], event["field_path"]) == ("site", "site.curie")
+
+    stale = _patch(staged, "site.curie", {"curie": "ONT:1", "name": "epidermis"},
+                   before={"curie": "ONT:0", "name": None}, operation=IDENTITY)
+    assert stale.status is EnvelopeFieldPatchStatus.REJECTED
+    assert "before does not match" in stale.errors[0]
+    for bad_path in ("site.mention", "site"):
+        wrong = _patch(staged, bad_path, {"curie": "ONT:1", "name": "epidermis"},
+                       before={"curie": None, "name": None}, operation=IDENTITY)
+        assert wrong.errors == (
+            f"field_path '{bad_path}' is not an identity field of a declared resolvable value",)
+
+
+def _root_pack() -> LoadedDomainPack:
+    from src.schemas.domain_pack_metadata import DomainPackModelDefinition
+
+    metadata = DomainPackMetadata(
+        pack_id="fixture.root_override", display_name="Root override", version="0.1.0",
+        metadata_api_version="1.0.0",
+        enum_definitions=[DomainPackEnumDefinition(enum_id="LookupOutcome", display_name="Lookup outcome",
+                                                   values=[{"value": value} for value in LOOKUP_OUTCOMES])],
+        model_definitions=[DomainPackModelDefinition(
+            model_id="MentionPayload", display_name="Mention payload",
+            metadata={"display": {"label": "symbol", "id": "curie", "mention": "mention"}},
+        )],
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Mention", display_name="Mention", model_ref="MentionPayload",
+            metadata={"object_role": "curatable_unit"},
+            fields=[
+                DomainPackFieldDefinition(field_path="symbol", field_type=DomainPackFieldType.STRING,
+                                          metadata={"editable": True}),
+                DomainPackFieldDefinition(field_path="curie", field_type=DomainPackFieldType.STRING,
+                                          metadata={"editable": True}),
+                DomainPackFieldDefinition(field_path="mention", field_type=DomainPackFieldType.STRING),
+                DomainPackFieldDefinition(field_path="entity_type", field_type=DomainPackFieldType.STRING,
+                                          metadata={"editable": True}),
+                DomainPackFieldDefinition(field_path="lookup_outcome", field_type=DomainPackFieldType.ENUM,
+                                          enum_ref="LookupOutcome"),
+            ],
+        )],
+    )
+    return LoadedDomainPack(pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+                            pack_path=Path("."), metadata_path=Path("."), metadata=metadata)
+
+
+def _root_envelope() -> DomainEnvelope:
+    payload = {**unresolved_value("gene-54", identity_keys=("curie", "symbol")), "entity_type": "gene"}
+    return DomainEnvelope(
+        envelope_id="root-env", domain_pack_id="fixture.root_override",
+        extracted_objects=[CuratableObjectEnvelope(object_type="Mention", object_id="obs-1", payload=payload)],
+    )
+
+
+def test_an_object_root_value_is_overridden_in_one_identity_patch():
+    envelope = _root_envelope()
+
+    result = _patch(envelope, "curie", {"curie": "G:54", "symbol": "gene-54"},
+                    before={"curie": None, "symbol": None}, operation=IDENTITY, pack=_root_pack())
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED
+    obj = result.envelope.extracted_objects[0]
+    assert (obj.payload["curie"], obj.payload["symbol"], obj.payload["lookup_outcome"]) == (
+        "G:54", "gene-54", OUTCOME_CURATOR_OVERRIDE)
+    assert (obj.payload["mention"], obj.payload["entity_type"]) == ("gene-54", "gene")
+    [event] = obj.metadata[CURATOR_OVERRIDE_METADATA_KEY]
+    assert (event["action"], event["value_path"], event["field_path"]) == ("override", "", "curie")
+
+
+def test_an_object_root_override_rejects_other_keys_and_a_single_first_leaf():
+    envelope = _root_envelope()
+    pack = _root_pack()
+    payload = envelope.extracted_objects[0].payload
+
+    other = _patch(envelope, "curie", {"curie": "G:54", "symbol": "gene-54", "entity_type": "protein"},
+                   before={"curie": None, "symbol": None, "entity_type": "gene"}, operation=IDENTITY, pack=pack)
+    assert other.errors == (
+        "field_path 'curie' cannot change entity_type; only the identifier and name can be changed "
+        "in a curator override",)
+    for patch_args in (("curie", "G:54", None, EnvelopeFieldPatchOperation.REPLACE),
+                       ("symbol", {"symbol": "gene-54"}, {"symbol": None}, IDENTITY)):
+        field_path, value, before, operation = patch_args
+        single = _patch(envelope, field_path, value, before=before, operation=operation, pack=pack)
+        assert single.status is EnvelopeFieldPatchStatus.REJECTED
+        assert single.errors == ("Enter both the identifier and the name for a curator override.",)
+        assert single.envelope.extracted_objects[0].payload == payload
+
+
+def test_draft_edits_of_one_value_identity_become_one_patch_step():
+    from types import SimpleNamespace
+
+    from src.lib.curation_workspace.session_mutation_service import _draft_patch_steps
+
+    def draft(key, path):
+        return SimpleNamespace(field_key=key, metadata={"source_field_path": path})
+
+    fields = {"a": draft("a", "curie"), "b": draft("b", "entity_type"), "c": draft("c", "symbol")}
+    steps = _draft_patch_steps(["a", "b", "c"], fields, domain_pack=_root_pack(), object_type="Mention",
+                               profile=None)
+    assert steps == [[("a", "curie"), ("c", "symbol")], [("b", None)]]
