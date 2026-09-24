@@ -69,6 +69,7 @@ vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/contexts/AgentMetadataContext', () => ({
   useAgentMetadata: () => ({
     agents: metadataMocks.agents,
+    validatorOutputSchemaKeys: [],
     refresh: metadataMocks.refresh,
     isLoading: false,
     error: null,
@@ -335,7 +336,7 @@ describe('PromptWorkshop', () => {
       curator_visible: true,
       allow_attach: true,
       allow_execute: true,
-      config: { requires_document: true },
+      config: { requires_document: true, identity_lookup: false },
     },
     {
       tool_key: 'admin_only_tool',
@@ -345,7 +346,7 @@ describe('PromptWorkshop', () => {
       curator_visible: true,
       allow_attach: false,
       allow_execute: false,
-      config: { requires_document: false },
+      config: { requires_document: false, identity_lookup: false },
     },
     {
       tool_key: 'chebi_lookup',
@@ -355,7 +356,7 @@ describe('PromptWorkshop', () => {
       curator_visible: true,
       allow_attach: true,
       allow_execute: true,
-      config: { requires_document: false },
+      config: { requires_document: false, identity_lookup: false },
     },
   ]
 

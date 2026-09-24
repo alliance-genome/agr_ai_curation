@@ -29,7 +29,7 @@ def _normalize_tool_ids(tool_ids: Sequence[str] | None) -> list[str]:
 
 
 def _registry_builder_finalization_tool_names() -> frozenset[str]:
-    from src.lib.openai_agents.streaming_tools import (
+    from src.lib.packages.tool_roles import (
         builder_finalization_tool_names as registry_builder_finalization_tool_names,
     )
 

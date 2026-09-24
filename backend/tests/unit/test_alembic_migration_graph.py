@@ -6,8 +6,12 @@ import ast
 from collections import defaultdict
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 
-VERSIONS_DIR = Path(__file__).resolve().parents[2] / "alembic" / "versions"
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+VERSIONS_DIR = BACKEND_DIR / "alembic" / "versions"
 
 
 def _literal_assignment(module: ast.Module, name: str) -> object:
@@ -59,4 +63,12 @@ def test_alembic_revision_graph_has_single_head():
 
     heads = sorted(revision for revision in revisions if revision not in children)
 
-    assert heads == ["r5a6b7c8d9e0"]
+    assert heads == ["s6t7u8v9w0x1"]
+
+
+def test_alembic_script_directory_resolves_exactly_one_head():
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    script = ScriptDirectory.from_config(config)
+
+    assert script.get_heads() == ["s6t7u8v9w0x1"]

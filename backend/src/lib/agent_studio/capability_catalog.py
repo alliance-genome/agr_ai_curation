@@ -403,6 +403,8 @@ def _tool_records(
     db: Session,
     context: CapabilityCatalogContext,
 ) -> list[CapabilityRecord]:
+    from src.lib.packages.tool_roles import identity_lookup_tool_names
+
     records: list[CapabilityRecord] = []
     # Library caching is not an authorization snapshot: re-read revocations on
     # every model-facing search/detail and proposal validation.
@@ -439,6 +441,8 @@ def _tool_records(
                     "attachable": bool(entry.allow_attach),
                     "executable": bool(entry.allow_execute),
                     "requires_document": tool_requires_document(entry.tool_key),
+                    # Extraction agents (builder finalizers) cannot carry identity lookups.
+                    "identity_lookup": entry.tool_key in identity_lookup_tool_names(),
                     "applicable_artifact_kinds": ["agent", "flow_agent"],
                 },
                 detail={

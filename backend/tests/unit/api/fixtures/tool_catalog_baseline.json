@@ -466,6 +466,7 @@
       ],
       "summary": "A single tool for looking up Alliance curation data. It offers many specific methods \u2014 search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. When a lookup returns more than fits in one reply, the reply comes in pages with instructions for continuing, and a single very large record is read back exactly in pieces, so no records or fields are dropped."
     },
+    "identity_lookup": true,
     "methods": {
       "get_allele_by_exact_symbol": {
         "description": "Find the allele whose official symbol exactly matches.",
@@ -898,6 +899,7 @@
       ],
       "summary": "Finds papers in the Alliance literature collection. Give it a known ID (such as a PubMed ID or DOI) to fetch the exact paper, or a title/citation to search for likely matches. It reports what it tried, the candidate papers it found, any cases where the match was unclear or nothing matched, and a plain status message."
     },
+    "identity_lookup": true,
     "methods": {
       "get_literature_reference": {
         "description": "Fetch one exact paper by a known identifier \u2014 a PubMed ID (PMID), DOI, Alliance reference ID, member-group reference ID, or exact title.",
@@ -1027,6 +1029,7 @@
       ],
       "summary": "Finds orthology relationships \u2014 genes that correspond to one another across different species \u2014 using Alliance of Genome Resources data."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Alliance Orthology API",
     "package_backed": true,
@@ -1213,6 +1216,7 @@
       ],
       "summary": "Looks up chemical compound IDs and related information in ChEBI, the standard chemical-compound database hosted at EBI."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "ChEBI API",
     "package_backed": true,
@@ -3034,6 +3038,7 @@
       ],
       "summary": "Retrieves typed existing GO annotations from the Gene Ontology Consortium API, preserving curator-comparison fields and source-record provenance without source fallback."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "GO Consortium Existing Annotations",
     "package_backed": true,
@@ -3174,6 +3179,7 @@
       ],
       "summary": "Shows one ontology term and a small, bounded set of nearby terms so the agent can walk the term tree and compare candidates. It is for exploring and comparing; the official term choice is settled separately with Resolve Domain Field Term."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Inspect Ontology Term",
     "package_backed": true,
@@ -4204,6 +4210,7 @@
       ],
       "summary": "Looks up Gene Ontology (GO) term details \u2014 names, definitions, and relationships \u2014 from the QuickGO service."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "QuickGO API",
     "package_backed": true,
@@ -4509,6 +4516,7 @@
       ],
       "summary": "Confirms the one official standard term for a field, after the agent has explored candidates with the search and inspect tools. Its result is the trusted choice the agent can record, with a clear trail of how the term was decided."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Resolve Domain Field Term",
     "package_backed": true,
@@ -4606,6 +4614,7 @@
       ],
       "summary": "Distinguishes ordinary genes, precursor loci, and mature RNA products using current Alliance curation identity, RNAcentral, and miRBase evidence; returns ambiguity explicitly and never synthesizes an RGD CURIE."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Alliance Gene Product Resolver",
     "package_backed": true,
@@ -4883,6 +4892,7 @@
       ],
       "summary": "Casts a wide net for possible standard-term matches for one field, starting from a phrase backed by evidence in the paper. The results are suggestions to compare, not a final choice \u2014 the agent settles on the official term separately with Resolve Domain Field Term."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Search Domain Field Terms",
     "package_backed": true,

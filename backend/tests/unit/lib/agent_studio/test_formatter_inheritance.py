@@ -22,7 +22,7 @@ def test_formatter_helpers_require_inheritance_and_live_permission(
     monkeypatch.setattr(capability_catalog, 'build_authorized_capability_catalog', lambda **_: [])
     sources = AgentValidationSources(
         models={}, tools={tool_id: AgentToolValidationRecord(tool_id, False, installed)},
-        output_schema_keys=frozenset(), group_ids=frozenset(), builder_finalization_tool_ids=frozenset(),
+        output_schema_keys=frozenset(), group_ids=frozenset(), builder_finalization_tool_ids=frozenset(), identity_lookup_tool_ids=frozenset(), extraction_output_schema_keys=frozenset(),
     )
     filtered = service.authorized_agent_validation_sources(
         object(), user_id=5, active_group_ids=[], sources=sources,

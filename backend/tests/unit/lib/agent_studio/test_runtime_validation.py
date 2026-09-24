@@ -558,3 +558,73 @@ def test_validate_and_cache_agent_runtime_contracts_disables_missing_tool_agents
 
     assert report["status"] == "degraded"
     assert len(disable_calls) == 1
+
+
+def _identity_lookup_report(monkeypatch, row, *, strict):
+    import src.lib.agent_studio.runtime_validation as module
+    from src.lib.packages import tool_roles
+
+    monkeypatch.setattr(tool_roles, "builder_finalization_tool_names", lambda: frozenset({"finalize_demo"}))
+    monkeypatch.setattr(tool_roles, "identity_lookup_tool_names", lambda: frozenset({"lookup_demo", "group_lookup_demo"}))
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [row])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
+    monkeypatch.setattr(module, "_resolve_output_schema", lambda schema_key: object())
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {
+                tool_id: {"required_context": []}
+                for tool_id in ("stage_demo", "finalize_demo", "lookup_demo", "group_lookup_demo")
+            },
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": set(),
+            "package_required_tool_ids": set(),
+        },
+    )
+    return module.build_agent_runtime_report(strict_mode=strict)
+
+
+def test_packaged_extraction_agent_with_identity_lookup_fails_the_runtime_report(monkeypatch):
+    report = _identity_lookup_report(monkeypatch, _agent(
+        agent_key="demo_extractor",
+        visibility="system",
+        user_id=None,
+        category="Extraction",
+        tool_ids=["stage_demo", "finalize_demo", "lookup_demo"],
+        group_tool_policy={"rules": [{"tool_id": "group_lookup_demo", "allowed_group_ids": ["TEAM_C"]}]},
+    ), strict=False)
+
+    assert report["status"] == "unhealthy"
+    [message] = [msg for msg in report["errors"] if "database lookup tools" in msg]
+    # Group-scoped lookups count as well as base tools.
+    assert "group_lookup_demo, lookup_demo" in message
+
+
+def test_validation_agent_keeps_its_identity_lookup_tools(monkeypatch):
+    report = _identity_lookup_report(monkeypatch, _agent(
+        agent_key="demo_validator",
+        visibility="system",
+        user_id=None,
+        category="Validation",
+        output_schema_key="DemoValidationResult",
+        tool_ids=["lookup_demo"],
+    ), strict=True)
+
+    assert not [msg for msg in report["errors"] + report["warnings"] if "database lookup tools" in msg]
+
+
+def test_custom_extraction_agent_with_identity_lookup_warns_unless_strict(monkeypatch):
+    row = _agent(
+        agent_key="ca_demo_extractor",
+        category="Custom",
+        tool_ids=["stage_demo", "finalize_demo", "lookup_demo"],
+    )
+
+    relaxed = _identity_lookup_report(monkeypatch, row, strict=False)
+    strict = _identity_lookup_report(monkeypatch, row, strict=True)
+
+    assert any("database lookup tools" in msg for msg in relaxed["warnings"])
+    assert any("database lookup tools" in msg for msg in strict["errors"])

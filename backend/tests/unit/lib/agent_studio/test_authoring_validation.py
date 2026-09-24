@@ -227,10 +227,15 @@ def _agent_sources() -> AgentValidationSources:
             "finalize_demo": AgentToolValidationRecord(
                 tool_id="finalize_demo", attachable=True, installed=True
             ),
+            "lookup_demo": AgentToolValidationRecord(
+                tool_id="lookup_demo", attachable=True, installed=True
+            ),
         },
         output_schema_keys=frozenset({"DemoEnvelope"}),
         group_ids=frozenset({"TEAM_C", "TEAM_D"}),
         builder_finalization_tool_ids=frozenset({"finalize_demo"}),
+        identity_lookup_tool_ids=frozenset({"lookup_demo"}),
+        extraction_output_schema_keys=frozenset({"DemoEnvelope"}),
     )
 
 
@@ -328,6 +333,23 @@ def test_model_response_schema_requires_available_contract_and_excludes_builder_
     assert "unavailable_output_contract" in {
         finding.code for finding in unavailable.errors
     }
+
+
+@pytest.mark.parametrize("phase", ["proposal", "save"])
+def test_an_extraction_agent_cannot_carry_identity_lookup_tools(phase):
+    extractor = _agent_result(_agent(tool_ids=["search", "finalize_demo", "lookup_demo"]), phase=phase)
+    schema_extractor = _agent_result(
+        _agent(tool_ids=["search", "lookup_demo"], output_schema_key="DemoEnvelope"), phase=phase,
+    )
+    lookup_agent = _agent_result(_agent(tool_ids=["search", "lookup_demo"]), phase=phase)
+
+    for result in (extractor, schema_extractor):
+        [finding] = [item for item in result.errors if item.code == "identity_lookup_on_extraction_agent"]
+        assert finding.path == "custom_agent.tool_ids"
+        assert "lookup_demo" in (finding.fix_hint or "")
+        assert "validators do the database search" in finding.message
+    # An agent that is not an extractor (no builder finalizer) keeps its lookups.
+    assert lookup_agent.valid
 
 
 @pytest.mark.parametrize(

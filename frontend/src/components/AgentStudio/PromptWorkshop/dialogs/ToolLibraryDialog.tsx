@@ -29,6 +29,8 @@ export interface ToolLibraryDialogProps {
   open: boolean
   tools: ToolLibraryItem[]
   attachedToolIds: string[]
+  /** Extraction agents cannot carry database lookup tools, so the library does not offer them. */
+  extractionAgent?: boolean
   onConfirm: (toolIds: string[]) => void
   onClose: () => void
 }
@@ -39,7 +41,13 @@ function footerLabel(adds: number, removes: number): string {
   return 'Attach tools'
 }
 
-export default function ToolLibraryDialog({ open, tools, attachedToolIds, onConfirm, onClose }: ToolLibraryDialogProps) {
+export default function ToolLibraryDialog({
+  open, tools: allTools, attachedToolIds, extractionAgent = false, onConfirm, onClose,
+}: ToolLibraryDialogProps) {
+  const tools = useMemo(
+    () => (extractionAgent ? allTools.filter((tool) => tool.config.identity_lookup !== true) : allTools),
+    [allTools, extractionAgent],
+  )
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
   const [selected, setSelected] = useState<string[]>(attachedToolIds)
