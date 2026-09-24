@@ -1667,3 +1667,34 @@ def test_a_numeric_identity_entry_is_parsed_as_its_declared_type():
     ):
         with pytest.raises(ResolvableValueError, match=f"^{message}$"):
             typed_identity_input(value, value_type=value_type, label="Relation internal ID")
+
+
+# --- Extraction never searches (2026-09-24) -------------------------------------------
+
+
+def test_extraction_stages_every_declared_value_unvalidated():
+    """Extraction reads the paper: a declared value it stages is unresolved/not_validated,
+    except one its pack declares filled from a fixed in-code mapping table."""
+
+    from src.lib.domain_packs.resolvable_values import EXTRACTION_MAPPING_KEY, extraction_value_problems
+
+    metadata = _metadata()
+    staged = {"site": unresolved_value("skin", identity_keys=TERM_KEYS, proposed_curie="ONT:7")}
+    assert extraction_value_problems(staged, metadata, "Observation") == []
+
+    searched = {"site": resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"})}
+    [problem] = extraction_value_problems(searched, metadata, "Observation")
+    assert problem.startswith("Observation.site was staged resolved/matched")
+    claimed = {"site": unresolved_value("skin", identity_keys=TERM_KEYS, outcome=OUTCOME_NOT_FOUND)}
+    assert extraction_value_problems(claimed, metadata, "Observation")
+    # A value stored before the contract is left to the legacy rule.
+    assert extraction_value_problems({"site": {"curie": "ONT:1", "name": "x"}}, metadata, "Observation") == []
+
+    definition = metadata.object_definitions[0]
+    mapped = metadata.model_copy(update={"object_definitions": [definition.model_copy(update={"fields": [
+        field.model_copy(update={"metadata": {**field.metadata, EXTRACTION_MAPPING_KEY: True}})
+        if field.field_path == "site" else field
+        for field in definition.fields
+    ]})]})
+    assert extraction_value_problems(searched, mapped, "Observation") == []
+    assert extraction_value_problems(claimed, mapped, "Observation")
