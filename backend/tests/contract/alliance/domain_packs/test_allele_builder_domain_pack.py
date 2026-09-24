@@ -1266,8 +1266,11 @@ def test_an_allele_override_cannot_change_other_keys_or_start_from_one_leaf():
     ):
         single_leaf = _allele_curator_patch(envelope, object_id, field_path, value, before=None)
         assert single_leaf.status is EnvelopeFieldPatchStatus.REJECTED, field_path
+        # The mention's allele also declares a validated taxon, which a first override names too.
         assert any(
-            "Enter both the identifier and the name" in error for error in single_leaf.errors
+            error.startswith(("Enter both the identifier and the name",
+                              "Enter the identifier, the name and the taxon"))
+            for error in single_leaf.errors
         ), single_leaf.errors
 
 

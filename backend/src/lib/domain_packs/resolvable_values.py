@@ -668,13 +668,17 @@ def _resolution_snapshot(value: Mapping[str, Any], identity_keys: Sequence[str])
     return snapshot
 
 
-# The curator-facing message for an override that leaves the id or label empty,
-# by which of the two the value declares.
-_OVERRIDE_INCOMPLETE_MESSAGE = {
-    (True, True): "Enter both the identifier and the name for a curator override.",
-    (True, False): "Enter the identifier for a curator override.",
-    (False, True): "Enter the name for a curator override.",
-}
+def _override_incomplete_message(missing: Sequence[str], id_key: str | None, label_key: str | None) -> str:
+    """The curator-facing message for an override that leaves identity keys out, in curator words."""
+
+    if id_key and label_key and set(missing) == {id_key, label_key}:
+        return "Enter both the identifier and the name for a curator override."
+    names = [
+        "the identifier" if key == id_key else "the name" if key == label_key else f"the {key.replace('_', ' ')}"
+        for key in missing
+    ]
+    listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+    return f"Enter {listed} for a curator override."
 
 
 def apply_curator_identity(
@@ -692,11 +696,14 @@ def apply_curator_identity(
     ``edits`` maps edited identity keys to their new values. The value becomes
     resolved with ``lookup_outcome`` ``curator_override`` and a
     ``curator_override`` record (who, when, and the state before the first
-    override); a validator identity it replaces moves to ``overruled_*``, so
-    a first override names every identity key it keeps. ``mention`` and the
-    validator's explanation are kept. An override fills the declared
-    ``id_key`` and ``label_key`` (other identity keys stay optional), or it
-    is rejected. Clearing the whole identity reverts to unresolved (the
+    override); a validator identity it replaces moves to ``overruled_*``.
+    ``mention`` and the validator's explanation are kept. A first override
+    names every identity key: the declared ``id_key`` and ``label_key``
+    filled, and each further (validated) key given, possibly null; nothing
+    it leaves out is silently emptied. A later edit of the override may name
+    a subset; the declared id and label stay filled. Otherwise it is
+    rejected with a message naming what is missing. Clearing the whole
+    identity reverts to unresolved (the
     validator's last unresolved outcome, else ``not_validated``); entering
     the identity the value had before the override restores that state.
     Returns the audit record.
@@ -741,8 +748,15 @@ def apply_curator_identity(
         value.pop(CURATOR_OVERRIDE_KEY, None)
         action = "restored"
     else:
-        if any(_is_empty(identity[key]) for key in required):
-            raise ResolvableValueError(_OVERRIDE_INCOMPLETE_MESSAGE[(bool(id_key), bool(label_key))])
+        missing = [
+            key for key in identity_keys
+            if (key in required and _is_empty(identity[key])) or (not overridden and key not in edits)
+        ]
+        if any(key in required for key in missing):
+            # The identifier and the name are asked for together.
+            missing = [*required, *(key for key in missing if key not in required)]
+        if missing:
+            raise ResolvableValueError(_override_incomplete_message(missing, id_key, label_key))
         if not overridden:
             _overrule_identity(value, identity_keys)
         value.update(identity)
@@ -988,7 +1002,8 @@ def effective_value(
 ) -> Any:
     """A read-time copy of a resolvable value with its effective state written in.
 
-    Values with a valid contract state come back unchanged; an invalid stored
+    Values with a valid contract state, and values this function already
+    read (a pack's display copy), come back unchanged; an invalid stored
     one reads as unresolved/``invalid_schema`` (``_invalid_record_value``),
     is logged, and never raises. A legacy value reads
     with the explanation "Recorded before validation tracking; not verified."
@@ -1001,7 +1016,8 @@ def effective_value(
         return value
     if has_resolution_state(value):
         problem = stored_state_problem(value, identity_keys=spec.identity_keys)
-        if problem is None:
+        if problem is None or _is_read_time_marked(value):
+            # A value already read here (a legacy or invalid-record reading) reads as it is.
             return value
         if _is_revalidated_legacy_leftover(value, spec):
             return _legacy_leftover_value(value, spec)

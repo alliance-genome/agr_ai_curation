@@ -151,11 +151,32 @@ def test_an_override_fills_both_the_identifier_and_the_name():
     assert staged["name"] == "epidermis"
 
 
-def test_validated_keys_stay_optional_in_an_override():
-    value = unresolved_value("skin", identity_keys=(*KEYS, "taxon"))
-    apply_curator_identity(value, {"curie": "ONT:1", "name": "epidermis"}, identity_keys=(*KEYS, "taxon"),
+def test_a_first_override_names_every_identity_key_validated_ones_included():
+    """B2: nothing the override leaves out is silently emptied; a validated key may be named null."""
+
+    value = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis", "taxon": "T:9"}, explanation="Matched.")
+    snapshot = dict(value)
+    with pytest.raises(ResolvableValueError, match="^Enter the taxon for a curator override.$"):
+        apply_curator_identity(value, {"curie": "ONT:2", "name": "dermis"}, identity_keys=(*KEYS, "taxon"),
+                               id_key="curie", label_key="name", actor_id="curator-7", at=AT)
+    with pytest.raises(ResolvableValueError,
+                       match="^Enter the identifier, the name and the taxon for a curator override.$"):
+        apply_curator_identity(value, {"curie": "ONT:2"}, identity_keys=(*KEYS, "taxon"),
+                               id_key="curie", label_key="name", actor_id="curator-7", at=AT)
+    assert value == snapshot
+    apply_curator_identity(value, {"curie": "ONT:2", "name": "dermis", "taxon": "T:9"},
+                           identity_keys=(*KEYS, "taxon"), id_key="curie", label_key="name",
+                           actor_id="curator-7", at=AT)
+    assert (value["curie"], value["taxon"], value["overruled_taxon"]) == ("ONT:2", "T:9", "T:9")
+    # Refining the override may name a subset.
+    apply_curator_identity(value, {"name": "skin layer"}, identity_keys=(*KEYS, "taxon"),
                            id_key="curie", label_key="name", actor_id="curator-7", at=AT)
-    assert (value["resolution_state"], value["taxon"]) == (RESOLVED, None)
+    assert (value["name"], value["taxon"]) == ("skin layer", "T:9")
+    unknown_taxon = unresolved_value("skin", identity_keys=(*KEYS, "taxon"))
+    apply_curator_identity(unknown_taxon, {"curie": "ONT:1", "name": "epidermis", "taxon": None},
+                           identity_keys=(*KEYS, "taxon"), id_key="curie", label_key="name",
+                           actor_id="curator-7", at=AT)
+    assert (unknown_taxon["resolution_state"], unknown_taxon["taxon"]) == (RESOLVED, None)
     # A validated key alone is no override: the declared label stays required.
     only_label = unresolved_value("skin", identity_keys=("name", "taxon"))
     with pytest.raises(ResolvableValueError, match="^Enter the name for a curator override.$"):
@@ -621,3 +642,209 @@ def test_a_list_element_identity_takes_its_bare_declaration():
     assert not_a_list.status is EnvelopeFieldPatchStatus.REJECTED
     assert not_a_list.errors == (
         "field_path 'site[0].curie' takes no curator override: site[0].curie, site[0].name not declared editable",)
+
+
+# --- Fix wave: rule parity, removal, mirrors, findings and legacy values --------------------
+
+
+def _envelope_with(payload, findings=()):
+    return DomainEnvelope(
+        envelope_id="override-env", domain_pack_id="fixture.override",
+        extracted_objects=[CuratableObjectEnvelope(object_type="Observation", object_id="obs-1", payload=payload)],
+        validation_findings=list(findings),
+    )
+
+
+def _finding(field_path, code="domain_pack.validator_unresolved", *, details=None):
+    from src.schemas.domain_envelope import (
+        FieldRef, ObjectRef, ValidationFinding, ValidationFindingSeverity, ValidationFindingStatus,
+    )
+
+    object_ref = ObjectRef(object_type="Observation", object_id="obs-1")
+    return ValidationFinding(
+        severity=ValidationFindingSeverity.BLOCKER, status=ValidationFindingStatus.OPEN, code=code,
+        message=f"{code} on {field_path}",
+        object_ref=None if field_path else object_ref,
+        field_ref=FieldRef(object_ref=object_ref, field_path=field_path) if field_path else None,
+        details=details or {},
+    )
+
+
+def _statuses(result):
+    return {(f.field_ref.field_path if f.field_ref else None, f.code): f.status.value
+            for f in result.envelope.validation_findings}
+
+
+def test_a_single_identity_leaf_edit_follows_the_whole_value_rules():
+    """S1: a leaf replace cannot bypass a protected value field or a closed identity field."""
+
+    overridden = _overridden_envelope()
+    protected = _patch(overridden, "site.curie", "ONT:2", before="ONT:1", pack=_pack(site_metadata={"protected": True}))
+    assert protected.errors == ("field_path 'site' is protected",)
+    closed = _patch(overridden, "site.curie", "ONT:2", before="ONT:1", name_editable=False)
+    assert closed.errors == ("field_path 'site.curie' takes no curator override: site.name not declared editable",)
+    assert _patch(overridden, "site.curie", "ONT:2", before="ONT:1").status is EnvelopeFieldPatchStatus.ACCEPTED
+
+
+def _mirrored_list_pack() -> LoadedDomainPack:
+    pack = _list_pack()
+    definition = pack.metadata.object_definitions[0]
+    fields = []
+    for field in definition.fields:
+        if field.field_path == "site.name":
+            field = field.model_copy(update={"metadata": {**field.metadata, "materializes_to_field_paths": ["site_name"]}})
+        if field.field_path == "sites.name":
+            field = field.model_copy(update={"metadata": {**field.metadata,
+                                                          "materializes_to_field_paths": ["sites.name_copy"]}})
+        fields.append(field)
+    fields += [
+        DomainPackFieldDefinition(field_path="site_name", field_type=DomainPackFieldType.STRING),
+        DomainPackFieldDefinition(field_path="sites.name_copy", field_type=DomainPackFieldType.STRING),
+    ]
+    metadata = pack.metadata.model_copy(update={"object_definitions": [definition.model_copy(update={"fields": fields})]})
+    return LoadedDomainPack(pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+                            pack_path=Path("."), metadata_path=Path("."), metadata=metadata)
+
+
+def test_an_override_updates_plain_and_list_element_mirrors():
+    """S2 + N5: a plain mirror beside the value, and a list element's own mirror, follow."""
+
+    envelope = _envelope_with({
+        "site": unresolved_value("skin", identity_keys=KEYS), "site_name": "old name",
+        "sites": [unresolved_value("a", identity_keys=KEYS), unresolved_value("b", identity_keys=KEYS)],
+    })
+    pack = _mirrored_list_pack()
+    site = _patch(envelope, "site.curie", {"curie": "ONT:1", "name": "epidermis"},
+                  before={"curie": None, "name": None}, operation=IDENTITY, pack=pack)
+    assert site.envelope.extracted_objects[0].payload["site_name"] == "epidermis"
+    element = _patch(envelope, "sites[1].curie", {"curie": "ONT:2", "name": "gut"},
+                     before={"curie": None, "name": None}, operation=IDENTITY, pack=pack)
+    sites = element.envelope.extracted_objects[0].payload["sites"]
+    assert sites[1]["name_copy"] == "gut"
+    assert "name_copy" not in sites[0]
+
+
+def test_an_override_past_the_end_of_a_list_is_rejected():
+    envelope = _envelope_with({"sites": [unresolved_value("a", identity_keys=KEYS)]})
+    for operation, field_path, value, before in (
+        (IDENTITY, "sites[1].curie", {"curie": "ONT:1", "name": "x"}, {"curie": None, "name": None}),
+        (EnvelopeFieldPatchOperation.REPLACE, "sites[3].curie", "ONT:1", None),
+    ):
+        result = _patch(envelope, field_path, value, before=before, operation=operation, pack=_list_pack())
+        assert result.errors == ("Edit an existing value.",)
+        assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
+
+
+def test_a_curator_removes_one_list_element_and_its_findings_follow():
+    """S5: remove op; the element's findings resolve and later elements' findings shift."""
+
+    first, second = unresolved_value("a", identity_keys=KEYS), unresolved_value("b", identity_keys=KEYS)
+    envelope = _envelope_with({"sites": [first, second]},
+                              findings=[_finding("sites[0].curie"), _finding("sites[1].curie")])
+    remove = EnvelopeFieldPatchOperation.REMOVE
+
+    result = _patch(envelope, "sites[0]", None, before=first, operation=remove, pack=_list_pack())
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    obj = result.envelope.extracted_objects[0]
+    assert obj.payload["sites"] == [second]
+    [audit] = obj.metadata[CURATOR_OVERRIDE_METADATA_KEY]
+    assert (audit["action"], audit["value_path"], audit["previous"]) == ("removed", "sites[0]", first)
+    assert [(f.field_ref.field_path, f.status.value) for f in result.envelope.validation_findings] == [
+        ("sites[0].curie", "resolved"), ("sites[0].curie", "open")]
+    assert result.envelope.validation_findings[1].message.endswith("sites[1].curie")
+
+    for field_path, value, before, error in (
+        ("sites[0]", None, second, "before does not match"),
+        ("sites[2]", None, None, "Edit an existing value."),
+        ("sites[0]", {"x": 1}, first, "a removal carries no value"),
+        ("site", None, None, "is not an element of a list of resolvable values"),
+    ):
+        rejected = _patch(envelope, field_path, value, before=before, operation=remove, pack=_list_pack())
+        assert rejected.status is EnvelopeFieldPatchStatus.REJECTED
+        assert any(error in message for message in rejected.errors), rejected.errors
+
+
+def test_an_override_resolves_the_values_open_findings():
+    """S9: validator findings on an overridden value no longer block; unrelated ones stay."""
+
+    binding = {"validation_request": {"expected_result_fields": {"curie": "site.curie", "name": "site.name"}}}
+    envelope = _envelope_with(
+        {"site": unresolved_value("skin", identity_keys=KEYS), "other": "x"},
+        findings=[
+            _finding("site.curie"),
+            _finding("site", "domain_pack.validator_disagrees_with_curator_override"),
+            _finding(None, details=binding),
+            _finding("other", "domain_pack.required_field_missing"),
+        ],
+    )
+
+    result = _patch(envelope, "site.curie", {"curie": "ONT:1", "name": "epidermis"},
+                    before={"curie": None, "name": None}, operation=IDENTITY)
+
+    assert _statuses(result) == {
+        ("site.curie", "domain_pack.validator_unresolved"): "resolved",
+        ("site", "domain_pack.validator_disagrees_with_curator_override"): "resolved",
+        (None, "domain_pack.validator_unresolved"): "resolved",
+        ("other", "domain_pack.required_field_missing"): "open",
+    }
+    resolutions = [event for event in result.envelope.history if event.actor_id == "curator-7"
+                   and event.message.startswith("Validation finding resolved")]
+    assert len(resolutions) == 3
+
+
+def test_clearing_an_override_resolves_only_its_disagreement_warning():
+    envelope = _overridden_envelope().model_copy(update={"validation_findings": [
+        _finding("site", "domain_pack.validator_disagrees_with_curator_override"),
+        _finding("site.name", "domain_pack.required_field_missing"),
+    ]})
+
+    cleared = _patch(envelope, "site.curie", {"curie": None, "name": None},
+                     before={"curie": "ONT:1", "name": "epidermis"}, operation=IDENTITY)
+
+    assert _statuses(cleared) == {
+        ("site", "domain_pack.validator_disagrees_with_curator_override"): "resolved",
+        ("site.name", "domain_pack.required_field_missing"): "open",
+    }
+
+
+def test_a_value_stored_as_plain_text_is_overridden_with_its_text_as_paper_wording():
+    """B5: an override of a pre-contract text value keeps the text as the paper wording."""
+
+    envelope = _envelope_with({"site": "gut"})
+
+    result = _patch(envelope, "site.curie", {"curie": "ONT:1", "name": "gut"},
+                    before={"curie": None, "name": None}, operation=IDENTITY)
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    site = result.envelope.extracted_objects[0].payload["site"]
+    assert (site["mention"], site["curie"], site["lookup_outcome"]) == ("gut", "ONT:1", OUTCOME_CURATOR_OVERRIDE)
+
+
+def test_no_disagreement_for_a_key_the_override_holds_empty():
+    """B2 follow-on: an agreeing validator that also returns a key the override left null agrees."""
+
+    site = unresolved_value("skin", identity_keys=(*KEYS, "taxon"))
+    apply_curator_identity(site, {"curie": "ONT:1", "name": "epidermis", "taxon": None},
+                           identity_keys=(*KEYS, "taxon"), id_key="curie", label_key="name",
+                           actor_id="curator-7", at=AT)
+    envelope = _envelope_with({"site": site})
+    from src.lib.domain_packs.materialization import _CuratorOverrides, _curator_override_disagreements
+
+    registry = DomainPackValidationRegistry.from_domain_pack(_pack())
+    match = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])[0]
+    request = build_domain_validation_request(match).request
+    result = DomainValidatorResultBase.model_validate({
+        "status": "resolved", "request_id": request.request_id,
+        "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
+        "target": request.target, "resolved_values": {"curie": "ONT:1", "name": "epidermis", "taxon": "T:1"},
+        "resolved_objects": [], "missing_expected_fields": [], "candidates": [],
+        "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 1, "outcome": "success"}],
+        "curator_message": None, "explanation": "Validator words.",
+    })
+    overrides = _CuratorOverrides(
+        envelope.extracted_objects[0], {"site": site},
+        {"site": [("curie", "site.curie"), ("name", "site.name"), ("taxon", "site.taxon")]}, True,
+    )
+    item = ValidatorResultMaterializationInput(match=match, request=request, result=result)
+    assert _curator_override_disagreements(item, overrides, source_envelope_revision=None) == []
