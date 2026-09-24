@@ -5788,16 +5788,16 @@ object_definitions:
     display_name: Disease annotation subject
     description: Subject reference whose concrete Gene, Allele, or AGM identity is resolved by the active subject validator.
     definition_state: stable
-    # Its payload is the staged value itself (ALL-1283), declared through the value's model.
-    model_ref: DiseaseSubjectSnapshotPayload
+    # A structural reference holding only the paper wording; the validated value lives on the
+    # annotation (ALL-1283), so this object is not a resolvable value.
     metadata:
       object_role: validated_reference
   - object_type: DOTerm
     display_name: Disease ontology term
     description: Disease Ontology term reference resolved by the active ontology validator.
     definition_state: stable
-    # Its payload is the staged value itself (ALL-1283), declared through the value's model.
-    model_ref: DiseaseOntologyTermSnapshotPayload
+    # A structural reference holding only the paper wording; the validated value lives on the
+    # annotation (ALL-1283), so this object is not a resolvable value.
     metadata:
       object_role: validated_reference
   - object_type: Reference

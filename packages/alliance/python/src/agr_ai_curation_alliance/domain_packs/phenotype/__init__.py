@@ -776,13 +776,13 @@ def _subject_payload(item: Mapping[str, Any]) -> dict[str, Any] | None:
     extra: dict[str, Any] = {}
     if subject_type:
         extra["subject_type"] = subject_type
-    taxon = _optional_string(item.get("taxon"), "extraction.items[].taxon")
-    if taxon:
-        extra["taxon"] = taxon
     return staged_value(
         subject_label,
         identity_keys=PHENOTYPE_SUBJECT_IDENTITY_KEYS,
-        proposals={"subject_identifier": subject_identifier},
+        proposals={
+            "subject_identifier": subject_identifier,
+            "taxon": _optional_string(item.get("taxon"), "extraction.items[].taxon"),
+        },
         **extra,
     )
 

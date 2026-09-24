@@ -34,14 +34,7 @@ fixtures:
       status: pending
       definition_state: in_development
       payload:
-        subject_type: gene
-        proposed_subject_identifier: FB:FBgn0000108
-        subject_identifier: null
-        subject_label: null
         mention: Appl
-        resolution_state: unresolved
-        lookup_outcome: not_validated
-        validator_explanation: Not validated yet.
       schema_ref:
         schema_id: alliance.linkml.BiologicalEntity
         provider: alliance_linkml
@@ -64,14 +57,7 @@ fixtures:
       status: pending
       definition_state: in_development
       payload:
-        proposed_curie: DOID:10652
-        proposed_name: Alzheimer's disease
-        curie: null
-        name: null
         mention: Alzheimer's disease
-        resolution_state: unresolved
-        lookup_outcome: not_validated
-        validator_explanation: Not validated yet.
         source_mentions:
         - a transgenic Drosophila model of Alzheimer's disease
       schema_ref:

@@ -368,6 +368,151 @@ def test_phenotype_export_adapter_projects_complete_envelope_to_target_payload()
     }
 
 
+def _override_identity(candidate: dict[str, Any], field_path: str, identity: dict[str, Any]) -> dict[str, Any]:
+    """Apply one curator override in the full-identity patch shape (every identity key,
+    validated keys included) and return the candidate carrying the patched object."""
+
+    from agr_ai_curation_alliance.domain_packs import load_alliance_domain_pack_registry
+    from src.lib.domain_envelopes.patches import (
+        EnvelopeFieldPatch,
+        EnvelopeFieldPatchOperation,
+        EnvelopeFieldPatchStatus,
+        apply_curator_field_patch,
+    )
+    from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope, parse_field_path
+
+    current: Any = candidate["payload"]
+    for part in parse_field_path(field_path.rpartition(".")[0]):
+        current = current[part]
+    envelope = DomainEnvelope(
+        envelope_id=candidate["envelope_id"],
+        domain_pack_id=candidate["domain_pack_id"],
+        extracted_objects=[CuratableObjectEnvelope(
+            object_type=candidate["object_type"], object_id=candidate["object_id"],
+            payload=deepcopy(candidate["payload"]),
+        )],
+    )
+    result = apply_curator_field_patch(
+        envelope,
+        load_alliance_domain_pack_registry().get_pack(candidate["domain_pack_id"]),
+        EnvelopeFieldPatch(
+            envelope_id=envelope.envelope_id, expected_revision=1, object_id=candidate["object_id"],
+            field_path=field_path, operation=EnvelopeFieldPatchOperation.REPLACE_IDENTITY,
+            before={key: current.get(key) for key in identity}, value=identity,
+        ),
+        current_revision=1,
+        actor_id="curator-7",
+    )
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    [patched] = result.envelope.extracted_objects
+    return {**candidate, "payload": patched.payload, "object": {"metadata": patched.metadata}}
+
+
+def test_disease_export_carries_curator_overridden_values():
+    """ALL-1283: a curator override exports like a validated value: the curator's identity,
+    never the paper wording or the extractor's proposal."""
+
+    candidate = deepcopy(_fixtures()["disease"]["candidate"])
+    candidate["payload"]["disease_annotation_subject"] = unresolved_value(
+        "Rad52p", identity_keys=("subject_identifier", "subject_label"), outcome="not_found",
+        subject_type="gene", proposed_subject_identifier="SGD:S000000001",
+    )
+    candidate["payload"]["disease_annotation_object"] = unresolved_value(
+        "breast carcinoma", identity_keys=("curie", "name"), outcome="not_found",
+        proposed_curie="DOID:0000001",
+    )
+    candidate["payload"]["evidence_code_curies"] = [unresolved_value("IDA", identity_keys=("curie",))]
+
+    candidate = _override_identity(
+        candidate, "disease_annotation_subject.subject_identifier",
+        {"subject_identifier": "SGD:S000004578", "subject_label": "RAD52"},
+    )
+    candidate = _override_identity(
+        candidate, "disease_annotation_object.curie", {"curie": "DOID:1612", "name": "breast cancer"},
+    )
+    candidate = _override_identity(candidate, "evidence_code_curies[0].curie", {"curie": "ECO:0000314"})
+
+    payload = build_disease_annotation_export_payload(domain_envelope_candidates=[candidate])
+
+    assert payload["payload_status"] == "ready", payload["adapter_blockers"]
+    linkml = payload["disease_annotations"][0]["linkml_payload"]
+    assert linkml["disease_annotation_subject"] == {
+        "subject_type": "gene", "primary_external_id": "SGD:S000004578", "label": "RAD52",
+    }
+    assert linkml["disease_annotation_object"] == {"curie": "DOID:1612", "name": "breast cancer"}
+    assert linkml["evidence_codes"] == [{"curie": "ECO:0000314"}]
+    assert "DOID:0000001" not in str(payload) and "breast carcinoma" not in str(linkml)
+
+
+def test_disease_export_blocks_a_present_subject_without_a_subject_type():
+    """Review S7: a resolved subject with no subject_type has no export target; it blocks
+    instead of being dropped from an otherwise ready payload."""
+
+    candidate = deepcopy(_fixtures()["disease"]["candidate"])
+    del candidate["payload"]["disease_annotation_subject"]["subject_type"]
+
+    payload = build_disease_annotation_export_payload(domain_envelope_candidates=[candidate])
+
+    assert payload["payload_status"] == "blocked"
+    assert payload["disease_annotations"] == []
+    [blocker] = payload["adapter_blockers"]
+    assert (blocker["code"], blocker["field_path"]) == (
+        "alliance.disease.export.missing_subject_type", "disease_annotation_subject.subject_type",
+    )
+
+
+def test_phenotype_export_carries_a_curator_override_to_another_species():
+    """Review S6: the subject's taxon is part of its identity, so overriding a worm subject
+    to a mouse gene exports the curator's taxon, not the old one."""
+
+    candidate = deepcopy(_fixtures()["phenotype"]["candidate"])
+    candidate["payload"]["phenotype_annotation_subject"] = {
+        "subject_type": "gene", "subject_identifier": "WB:WBGene00000898", "subject_label": "daf-2",
+        "taxon": "NCBITaxon:6239", "mention": "insulin receptor", "resolution_state": "resolved",
+        "lookup_outcome": "matched", "validator_explanation": "Exact label match.",
+    }
+    candidate["payload"]["phenotype_terms"] = [unresolved_value(
+        "thinner inner nuclear layer", identity_keys=("curie", "label"), outcome="not_found",
+    )]
+
+    candidate = _override_identity(
+        candidate, "phenotype_annotation_subject.subject_identifier",
+        {"subject_identifier": "MGI:96575", "subject_label": "Insr", "taxon": "NCBITaxon:10090"},
+    )
+    candidate = _override_identity(
+        candidate, "phenotype_terms[0].curie",
+        {"curie": "MP:0003733", "label": "abnormal retina inner nuclear layer morphology"},
+    )
+
+    payload = build_phenotype_annotation_export_payload(domain_envelope_candidates=[candidate])
+
+    assert payload["payload_status"] == "ready", payload["adapter_blockers"]
+    linkml = payload["phenotype_annotations"][0]["linkml_payload"]
+    assert linkml["phenotype_annotation_subject"] == {
+        "subject_type": "gene", "primary_external_id": "MGI:96575", "label": "Insr",
+        "taxon": "NCBITaxon:10090",
+    }
+    assert linkml["phenotype_terms"] == [
+        {"curie": "MP:0003733", "label": "abnormal retina inner nuclear layer morphology"},
+    ]
+    subject = candidate["payload"]["phenotype_annotation_subject"]
+    assert subject["overruled_taxon"] == "NCBITaxon:6239"
+
+
+def test_phenotype_export_blocks_a_present_subject_without_a_subject_type():
+    candidate = deepcopy(_fixtures()["phenotype"]["candidate"])
+    del candidate["payload"]["phenotype_annotation_subject"]["subject_type"]
+
+    payload = build_phenotype_annotation_export_payload(domain_envelope_candidates=[candidate])
+
+    assert payload["payload_status"] == "blocked"
+    assert payload["phenotype_annotations"] == []
+    [blocker] = payload["adapter_blockers"]
+    assert (blocker["code"], blocker["field_path"]) == (
+        "alliance.phenotype.export.missing_subject_type", "phenotype_annotation_subject.subject_type",
+    )
+
+
 def test_disease_export_blocks_incomplete_subject_context_with_field_details():
     candidate = deepcopy(_fixtures()["disease"]["candidate"])
     del candidate["payload"]["disease_annotation_subject"]

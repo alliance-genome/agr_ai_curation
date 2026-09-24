@@ -61,7 +61,8 @@ fixtures:
             - Pending subject reference; concrete Gene, Allele, or AGM subtype must be resolved before export.
           payload:
             subject_type: gene
-            taxon: NCBITaxon:6239
+            proposed_taxon: NCBITaxon:6239
+            taxon: null
             proposed_subject_identifier: WB:WBGene00000912
             subject_identifier: null
             subject_label: null
@@ -146,7 +147,8 @@ fixtures:
             phenotype_annotation_object: reduced brood size
             phenotype_annotation_subject:
               subject_type: gene
-              taxon: NCBITaxon:6239
+              proposed_taxon: NCBITaxon:6239
+              taxon: null
               proposed_subject_identifier: WB:WBGene00000912
               subject_identifier: null
               subject_label: null

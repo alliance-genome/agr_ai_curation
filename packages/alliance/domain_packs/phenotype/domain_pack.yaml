@@ -103,6 +103,8 @@ model_definitions:
         label: subject_label
         id: subject_identifier
         mention: mention
+        validated:
+          - taxon
   - model_id: PhenotypeTermPayload
     display_name: Phenotype term payload
     description: Pending ontology term reference for a phenotype assertion.
@@ -357,6 +359,16 @@ object_definitions:
       - field_path: phenotype_annotation_subject.taxon
         field_type: string
         display_name: Subject taxon
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: enter the identifier, name and taxon together; typing them marks this value as a curator override.'
+      - field_path: phenotype_annotation_subject.proposed_taxon
+        field_type: string
+        display_name: Subject proposed taxon
+        description: Extractor's proposed species, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: phenotype_annotation_subject.mention
         field_type: string
         display_name: Subject paper wording
@@ -1312,6 +1324,13 @@ object_definitions:
         metadata:
           protected: true
           exported: false
+      - field_path: proposed_taxon
+        field_type: string
+        display_name: Subject proposed taxon
+        description: Extractor's proposed species, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: resolution_state
         field_type: enum
         display_name: Subject status
@@ -1379,6 +1398,7 @@ object_definitions:
           validatable: true
           validator_binding_id: phenotype_subject_entity_validator
           editable: true
+          curator_action_note: 'Curator override: enter the identifier, name and taxon together; typing them marks this value as a curator override.'
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -1964,7 +1984,7 @@ metadata:
             required: false
           taxon:
             source: payload
-            path: taxon
+            path: proposed_taxon
             required: false
         expected_result_fields:
           subject_identifier: subject_identifier

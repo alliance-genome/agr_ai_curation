@@ -933,7 +933,8 @@ def test_disease_term_name_is_never_filled_from_the_paper_mention():
     term_object = next(
         obj for obj in result.payload["curatable_objects"] if obj["object_type"] == DISEASE_TERM_OBJECT_TYPE
     )
-    assert term_object["payload"]["name"] is None
+    # The structural DOTerm reference holds only the paper wording (review S8).
+    assert set(term_object["payload"]) == {"mention", "source_mentions"}
     assert term_object["payload"]["mention"] == "Alzheimer's disease"
 
 
@@ -1095,3 +1096,20 @@ def test_every_staged_disease_value_is_declared_resolvable():
             declared = set(declared_resolvable_fields(metadata, obj["object_type"]))
             staged_paths = set(_staged_contract_value_paths(obj["payload"]))
             assert staged_paths <= declared, (obj["object_type"], sorted(staged_paths - declared))
+
+
+def test_structural_subject_and_term_references_are_not_resolvable_values():
+    """Review S8: no validator targets the DiseaseAnnotationSubject or DOTerm reference objects,
+    so they carry only the paper wording and never read as UNRESOLVED; the annotation holds the
+    validated value."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, has_resolution_state
+
+    metadata = load_alliance_domain_pack_registry().get_pack(DISEASE_DOMAIN_PACK_ID).metadata
+    result = _materialize_staged(_staged_fields())
+    assert result.ok, result.summary()
+    by_type = {obj["object_type"]: obj for obj in result.payload["curatable_objects"]}
+    for object_type in (DISEASE_SUBJECT_OBJECT_TYPE, DISEASE_TERM_OBJECT_TYPE):
+        assert declared_resolvable_fields(metadata, object_type) == {}
+        assert not has_resolution_state(by_type[object_type]["payload"])
+    assert by_type[DISEASE_SUBJECT_OBJECT_TYPE]["payload"] == {"mention": "Appl"}

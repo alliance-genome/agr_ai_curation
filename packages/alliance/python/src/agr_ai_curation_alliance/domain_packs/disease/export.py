@@ -265,11 +265,16 @@ def _project_disease_candidate(
         else None
     )
     target = _SUBJECT_TARGETS.get(subject_type or "")
-    if subject_type and target is None:
+    # A present subject always gets an export target or a blocker; it is never dropped silently.
+    if subject is not None and target is None:
         blockers.append(
             adapter_blocker(
                 candidate=candidate,
-                code="alliance.disease.export.unsupported_subject_type",
+                code=(
+                    "alliance.disease.export.unsupported_subject_type"
+                    if subject_type
+                    else "alliance.disease.export.missing_subject_type"
+                ),
                 field_path="disease_annotation_subject.subject_type",
                 message=(
                     "Disease annotation subject must resolve to gene, allele, or agm "

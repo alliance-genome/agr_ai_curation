@@ -712,7 +712,9 @@ def materialize_disease_builder_state(
         reference_ref_id = f"disease-reference-{annotation_index + 1}"
         primary_evidence_id = _clean_text(resolved_evidence[0].get("evidence_record_id"))
 
-        # Pending DiseaseAnnotationSubject (validated_reference; subject_entity_validation resolves).
+        # Structural DiseaseAnnotationSubject and DOTerm references carry only the paper wording:
+        # the value itself (proposal, identity, validation state) lives on the annotation, which is
+        # what the validators resolve and the export reads (ALL-1283).
         curatable_objects.append(
             CuratableObjectEnvelope(
                 object_type=DISEASE_SUBJECT_OBJECT_TYPE,
@@ -726,7 +728,7 @@ def materialize_disease_builder_state(
                     "by the active subject_entity_validation binding."
                 ],
                 payload=(
-                    copy.deepcopy(subject_payload)
+                    {"mention": subject_payload["mention"]}
                     if subject_payload is not None
                     else {"resolution_note": _SUBJECT_BLOCKED_NOTE}
                 ),
@@ -737,7 +739,6 @@ def materialize_disease_builder_state(
                 },
             )
         )
-        # Pending DOTerm (validated_reference; the active ontology validator resolves the DOID).
         curatable_objects.append(
             CuratableObjectEnvelope(
                 object_type=DISEASE_TERM_OBJECT_TYPE,
@@ -746,7 +747,7 @@ def materialize_disease_builder_state(
                 validation_guidance=staged_fields.get("validation_guidance"),
                 schema_ref=_term_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
-                payload={**copy.deepcopy(term_payload), "source_mentions": list(source_mentions)},
+                payload={"mention": term_payload["mention"], "source_mentions": list(source_mentions)},
                 evidence_record_ids=[primary_evidence_id] if primary_evidence_id else [],
                 metadata={
                     OBJECT_ROLE_METADATA_KEY: "validated_reference",

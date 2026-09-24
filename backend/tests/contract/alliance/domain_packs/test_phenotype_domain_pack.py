@@ -324,7 +324,7 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
         },
         "taxon": {
             "source": "payload",
-            "path": "taxon",
+            "path": "proposed_taxon",
             "required": False,
         },
     }
@@ -544,10 +544,10 @@ def test_tool_verified_phenotype_fixture_preserves_subject_taxon_context():
     annotation = next(
         obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
     )
-    assert subject.payload["taxon"] == "NCBITaxon:6239"
-    assert (
-        annotation.payload["phenotype_annotation_subject"]["taxon"] == "NCBITaxon:6239"
-    )
+    # The paper's species is the validator's input; only a validator or an override sets taxon.
+    assert (subject.payload["proposed_taxon"], subject.payload["taxon"]) == ("NCBITaxon:6239", None)
+    assert annotation.payload["phenotype_annotation_subject"]["proposed_taxon"] == "NCBITaxon:6239"
+    assert annotation.payload["phenotype_annotation_subject"]["taxon"] is None
 
 
 def test_pending_phenotype_term_without_curie_dispatches_with_context():
