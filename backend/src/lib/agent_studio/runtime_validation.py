@@ -17,6 +17,7 @@ from src.lib.agent_studio.agent_finalize_invariant import (
 )
 from src.lib.config.models_loader import list_models, load_models
 from src.models.sql.agent import Agent as DBAgent
+from src.models.sql.agent_execution_revision import AgentExecutionRevision
 from src.models.sql.database import SessionLocal
 
 
@@ -74,6 +75,29 @@ def _fetch_active_agents() -> List[Any]:
             .order_by(DBAgent.agent_key.asc())
             .all()
         )
+    finally:
+        db.close()
+
+
+def _fetch_head_output_contracts(agents: List[Any]) -> Dict[Any, Tuple[str, Optional[str]]]:
+    """Output state and schema of each agent's head revision, as the runtime reads them."""
+    revision_ids = [
+        revision_id
+        for revision_id in (getattr(row, "execution_revision_id", None) for row in agents)
+        if revision_id is not None
+    ]
+    if not revision_ids:
+        return {}
+    db = SessionLocal()
+    try:
+        return {
+            revision.id: (revision.output_state, revision.output_schema_key)
+            for revision in db.query(
+                AgentExecutionRevision.id,
+                AgentExecutionRevision.output_state,
+                AgentExecutionRevision.output_schema_key,
+            ).filter(AgentExecutionRevision.id.in_(revision_ids))
+        }
     finally:
         db.close()
 
@@ -228,6 +252,7 @@ def build_agent_runtime_report(
     critical_tool_ids = document_tool_ids | package_required_tool_ids
 
     agents = _fetch_active_agents()
+    head_output_contracts = _fetch_head_output_contracts(agents)
     system_rows_by_key: Dict[str, Dict[str, Any]] = {}
 
     # First pass: gather canonicalized system template tool profiles.
@@ -344,8 +369,14 @@ def build_agent_runtime_report(
             for rule in ((getattr(row, "group_tool_policy", None) or {}).get("rules") or [])
             if isinstance(rule, dict)
         ]
+        # Classified from the head revision's saved output, as the runtime classifies it.
+        head_output_state, head_output_schema_key = head_output_contracts.get(
+            getattr(row, "execution_revision_id", None), (None, None)
+        )
         identity_lookups = identity_lookup_tools_on_extraction_agent(
-            [*canonical_tool_ids, *group_rule_tool_ids]
+            [*canonical_tool_ids, *group_rule_tool_ids],
+            output_state=head_output_state,
+            output_schema_key=head_output_schema_key,
         )
         if identity_lookups:
             detail = extraction_identity_lookup_message(

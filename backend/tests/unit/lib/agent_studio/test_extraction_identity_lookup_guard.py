@@ -87,12 +87,48 @@ def test_inherited_identity_lookups_are_dropped_for_an_extraction_agent_only():
 
     extractor = _merge_system_managed_tool_ids(["search", "finalize_demo"], ["lookup_demo", "helper"])
     lookup_agent = _merge_system_managed_tool_ids(["search"], ["lookup_demo", "helper"])
-    # A lookup the curator asks for is kept, so validation reports it instead of hiding it.
-    requested = _merge_system_managed_tool_ids(["finalize_demo", "lookup_demo"], ["lookup_demo"])
+    # Editors send the saved list back unchanged: an inherited lookup is withheld even then.
+    resubmitted = _merge_system_managed_tool_ids(["finalize_demo", "lookup_demo"], ["lookup_demo"])
+    # A lookup the curator attached is never inherited, so it stays and validation reports it.
+    attached = _merge_system_managed_tool_ids(["finalize_demo", "lookup_demo"], ["helper"])
 
     assert extractor == ["search", "finalize_demo", "helper"]
     assert lookup_agent == ["search", "lookup_demo", "helper"]
-    assert requested == ["finalize_demo", "lookup_demo"]
+    assert resubmitted == ["finalize_demo"]
+    assert attached == ["finalize_demo", "lookup_demo", "helper"]
+
+
+def test_a_schema_extraction_agent_without_a_finalizer_withholds_inherited_lookups_too():
+    from src.lib.agent_studio.custom_agent_service import _merge_system_managed_tool_ids
+
+    def merge(**output):
+        return _merge_system_managed_tool_ids(["search"], ["lookup_demo"], **output)
+
+    assert merge(output_state="structured_extraction", output_schema_key="DemoEnvelope") == ["search"]
+    assert merge(
+        output_state="structured_extraction", output_schema_key="DemoValidationResult",
+    ) == ["search", "lookup_demo"]
+    assert merge(output_state="none") == ["search", "lookup_demo"]
+
+
+def test_the_save_classifies_by_the_output_it_will_record():
+    from src.lib.agent_studio.custom_agent_service import _saved_output_state
+
+    previous = SimpleNamespace(output_state="structured_extraction")
+    common = dict(
+        output_contract=None, new_generic_profile=None, revise_generic_profile=None,
+        schema_provided=False, output_schema_key=None,
+    )
+    assert _saved_output_state(object(), **common, previous_output=previous) == "structured_extraction"
+    assert _saved_output_state(
+        object(), **{**common, "schema_provided": True}, previous_output=previous,
+    ) == "none"
+    assert _saved_output_state(
+        None, **{**common, "output_schema_key": "DemoEnvelope"}, previous_output=None,
+    ) == "structured_extraction"
+    assert _saved_output_state(
+        object(), **{**common, "output_contract": {"output_state": "none"}}, previous_output=previous,
+    ) == "none"
 
 
 # --- Runtime: a saved or pinned extraction agent with identity lookups does not run ----------

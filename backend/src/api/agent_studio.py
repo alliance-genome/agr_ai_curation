@@ -520,15 +520,13 @@ async def get_models_endpoint(
     description="Returns curator-visible tools from tool_policies.",
 )
 async def get_tool_library_endpoint(
-    # Query flag: leave out database lookup tools, which extraction agents cannot use.
-    for_extraction_agent: bool = False,
     user: Any = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> ToolLibraryResponse:
     from src.lib.packages.tool_roles import identity_lookup_tool_names
 
-    identity_lookups = identity_lookup_tool_names()
     try:
+        identity_lookups = identity_lookup_tool_names()
         entries = get_tool_policy_cache().list_curator_visible(db)
         return ToolLibraryResponse(
             tools=[
@@ -549,8 +547,7 @@ async def get_tool_library_endpoint(
                     ),
                 )
                 for entry in entries
-                if not (for_extraction_agent and entry.tool_key in identity_lookups)
-                and is_resource_access_allowed(
+                if is_resource_access_allowed(
                     visibility_allowed=True,
                     allowed_group_ids=entry.config.get("allowed_group_ids", []),
                     active_group_ids=_authenticated_group_ids(user),

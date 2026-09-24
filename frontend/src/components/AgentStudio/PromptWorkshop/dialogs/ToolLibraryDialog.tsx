@@ -29,7 +29,10 @@ export interface ToolLibraryDialogProps {
   open: boolean
   tools: ToolLibraryItem[]
   attachedToolIds: string[]
-  /** Extraction agents cannot carry database lookup tools, so the library does not offer them. */
+  /**
+   * Extraction agents cannot carry database lookup tools: the library does not offer them,
+   * and lists any already attached so the curator can remove them.
+   */
   extractionAgent?: boolean
   onConfirm: (toolIds: string[]) => void
   onClose: () => void
@@ -44,9 +47,11 @@ function footerLabel(adds: number, removes: number): string {
 export default function ToolLibraryDialog({
   open, tools: allTools, attachedToolIds, extractionAgent = false, onConfirm, onClose,
 }: ToolLibraryDialogProps) {
+  const notForExtraction = (tool: ToolLibraryItem) => extractionAgent && tool.config.identity_lookup === true
   const tools = useMemo(
-    () => (extractionAgent ? allTools.filter((tool) => tool.config.identity_lookup !== true) : allTools),
-    [allTools, extractionAgent],
+    () => allTools.filter((tool) => !(extractionAgent && tool.config.identity_lookup === true)
+      || attachedToolIds.includes(tool.tool_key)),
+    [allTools, attachedToolIds, extractionAgent],
   )
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
@@ -82,10 +87,11 @@ export default function ToolLibraryDialog({
   const adds = selected.filter((toolKey) => !attachedSet.has(toolKey)).length
   const removes = attachedToolIds.filter((toolKey) => !selectedSet.has(toolKey)).length
   const hasChanges = adds > 0 || removes > 0
-  const attachableCount = tools.filter((tool) => tool.allow_attach).length
+  const attachableCount = tools.filter((tool) => tool.allow_attach && !notForExtraction(tool)).length
 
   const toggle = (tool: ToolLibraryItem) => {
-    if (!tool.allow_attach) return
+    // A lookup on an extraction agent can only be removed, never added back.
+    if (notForExtraction(tool) ? !selected.includes(tool.tool_key) : !tool.allow_attach) return
     setSelected((prev) => (
       prev.includes(tool.tool_key) ? prev.filter((key) => key !== tool.tool_key) : [...prev, tool.tool_key]
     ))
@@ -150,7 +156,8 @@ export default function ToolLibraryDialog({
             <List disablePadding aria-label="Tool library">
               {filtered.map((tool) => {
                 const checked = selectedSet.has(tool.tool_key)
-                const attachable = tool.allow_attach
+                const removeOnly = notForExtraction(tool)
+                const attachable = removeOnly ? checked : tool.allow_attach
                 const labelId = `tool-library-${tool.tool_key}`
                 return (
                   <ListItem
@@ -184,15 +191,18 @@ export default function ToolLibraryDialog({
                           </Typography>
                         )}
                         secondary={
-                          attachable
-                            ? `${tool.display_name} · ${tool.description}`
-                            : `Disabled by policy for custom agents: ${tool.description}`
+                          removeOnly
+                            ? 'Not available for extraction agents. This agent records what the paper says, '
+                              + 'and validators look it up in the database. Untick it to remove it.'
+                            : attachable
+                              ? `${tool.display_name} · ${tool.description}`
+                              : `Disabled by policy for custom agents: ${tool.description}`
                         }
                         secondaryTypographyProps={{ fontSize: 12, color: attachable ? 'text.secondary' : 'text.disabled' }}
                       />
-                      {!attachable && (
+                      {(removeOnly || !attachable) && (
                         <Typography component="span" sx={{ fontSize: 11, px: 0.75, border: (theme) => `1px solid ${theme.palette.divider}`, borderRadius: 999, alignSelf: 'center', color: 'text.disabled' }}>
-                          Policy
+                          {removeOnly ? 'Not for extraction' : 'Policy'}
                         </Typography>
                       )}
                     </ListItemButton>

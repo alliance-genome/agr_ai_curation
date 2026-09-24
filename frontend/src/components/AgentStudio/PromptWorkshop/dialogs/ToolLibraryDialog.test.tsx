@@ -29,6 +29,28 @@ describe('ToolLibraryDialog', () => {
     expect(within(screen.getByRole('dialog')).getByRole('checkbox', { name: /term_lookup/ })).toBeInTheDocument()
   })
 
+  it('shows a lookup already attached to an extraction agent so the curator can remove it', () => {
+    const onConfirm = vi.fn()
+    render(
+      <ToolLibraryDialog open tools={[...tools, lookupTool]} attachedToolIds={['search_document', 'term_lookup']} extractionAgent onConfirm={onConfirm} onClose={vi.fn()} />,
+    )
+    const dialog = screen.getByRole('dialog')
+    const lookup = within(dialog).getByRole('checkbox', { name: /term_lookup/ })
+    expect(lookup).toHaveAttribute('aria-checked', 'true')
+    expect(dialog).toHaveTextContent('Not available for extraction agents')
+    // Attached lookups are not counted as available to add.
+    expect(dialog).toHaveTextContent('2 attached · 2 available')
+
+    fireEvent.click(lookup)
+    expect(lookup).toHaveAttribute('aria-checked', 'false')
+    // Once removed it cannot be added back.
+    fireEvent.click(lookup)
+    expect(lookup).toHaveAttribute('aria-checked', 'false')
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove 1 tool' }))
+    expect(onConfirm).toHaveBeenCalledWith(['search_document'])
+  })
+
   it('lists tools with checkboxes, keeps attached tools checked, and counts the attach footer', () => {
     const onConfirm = vi.fn()
     render(<ToolLibraryDialog open tools={tools} attachedToolIds={['search_document']} onConfirm={onConfirm} onClose={vi.fn()} />)

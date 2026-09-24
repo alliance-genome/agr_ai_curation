@@ -114,7 +114,7 @@ def test_get_tool_library_endpoint_returns_curator_visible_policy_rows(monkeypat
     assert [tool.config.requires_document for tool in response.tools] == [True, False]
 
 
-def test_get_tool_library_endpoint_marks_and_filters_identity_lookups_for_extractors(monkeypatch):
+def test_get_tool_library_endpoint_marks_identity_lookups(monkeypatch):
     import src.api.agent_studio as api_module
     from src.lib.packages import tool_roles
 
@@ -129,14 +129,11 @@ def test_get_tool_library_endpoint_marks_and_filters_identity_lookups_for_extrac
     monkeypatch.setattr(tool_roles, "identity_lookup_tool_names", lambda: frozenset({"lookup_demo"}))
 
     everything = asyncio.run(api_module.get_tool_library_endpoint(user={"sub": "test"}, db=SimpleNamespace()))
-    for_extractor = asyncio.run(api_module.get_tool_library_endpoint(
-        for_extraction_agent=True, user={"sub": "test"}, db=SimpleNamespace(),
-    ))
 
+    # The Workshop decides per draft; the library marks the lookups and lists them all.
     assert {tool.tool_key: tool.config.identity_lookup for tool in everything.tools} == {
         "lookup_demo": True, "search": False,
     }
-    assert [tool.tool_key for tool in for_extractor.tools] == ["search"]
 
 
 def test_get_tool_library_endpoint_marks_document_tools_from_one_definition(monkeypatch):

@@ -628,3 +628,28 @@ def test_custom_extraction_agent_with_identity_lookup_warns_unless_strict(monkey
 
     assert any("database lookup tools" in msg for msg in relaxed["warnings"])
     assert any("database lookup tools" in msg for msg in strict["errors"])
+
+
+def test_schema_extraction_agent_without_a_finalizer_is_classified_by_its_head_revision(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+    from src.lib.packages import tool_roles
+
+    monkeypatch.setattr(tool_roles, "is_validator_output_schema", lambda key: key == "DemoValidationResult")
+    extractor = _agent(
+        agent_key="ca_schema_extractor", category="Custom", execution_revision_id="rev-extractor",
+        output_schema_key="DemoEnvelope", tool_ids=["stage_demo", "lookup_demo"],
+    )
+    validator = _agent(
+        agent_key="ca_schema_validator", category="Custom", execution_revision_id="rev-validator",
+        output_schema_key="DemoValidationResult", tool_ids=["lookup_demo"],
+    )
+    monkeypatch.setattr(module, "_fetch_head_output_contracts", lambda _agents: {
+        "rev-extractor": ("structured_extraction", "DemoEnvelope"),
+        "rev-validator": ("structured_extraction", "DemoValidationResult"),
+    })
+
+    report = _identity_lookup_report(monkeypatch, extractor, strict=True)
+    assert any("ca_schema_extractor" in msg and "database lookup tools" in msg for msg in report["errors"])
+
+    report = _identity_lookup_report(monkeypatch, validator, strict=True)
+    assert not [msg for msg in report["errors"] + report["warnings"] if "database lookup tools" in msg]
