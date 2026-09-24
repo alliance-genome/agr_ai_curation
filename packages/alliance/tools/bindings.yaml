@@ -75,7 +75,7 @@ tools:
       audit:
         display_name: AGR Curation Query
       documentation:
-        summary: A single tool for looking up Alliance curation data. It offers many specific methods — search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. When a lookup returns more than fits in one reply, the reply comes in pages with instructions for continuing, and a single very large record is read back exactly in pieces, so no records or fields are dropped.
+        summary: A single tool for looking up Alliance curation data. It offers many specific methods — search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An ontology term search (search_ontology_terms, search_anatomy_terms, search_life_stage_terms, search_go_terms) matches term names and synonyms by exact, then prefix, then contains, then close spelling, returns at least 25 rows, and says how each row matched, along with the term's synonyms and definition; each row is a candidate to check, not a confirmed match. When a lookup returns more than fits in one reply, the reply comes in pages with instructions for continuing, and a single very large record is read back exactly in pieces, so no records or fields are dropped.
         example_queries:
           - Find gene daf-2 in WormBase
           - Get allele information for e1370
@@ -296,7 +296,6 @@ tools:
             method: search_ontology_terms
             term: abnormal locomotor behavior
             ontology_term_type: MPTerm
-            exact_match: true
         map_curies_to_names:
           name: Map CURIEs to Names
           description: Turn a list of IDs into their human-readable names.

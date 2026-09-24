@@ -374,6 +374,13 @@ def test_source_mentions_prompt_and_tool_language_is_consistent():
                 "Use `selected_inputs.taxon`, `selected_inputs.source_mentions`, supplied evidence records, "
                 "and `selected_inputs.evidence_quotes` as context."
             )
+        if path.parent.name == "ontology_term":
+            # The Sep 22 hotfix ontology prompt states the boundary once, with
+            # the other request inputs, instead of the legacy paragraph.
+            expected_context = (
+                "`source_mentions`, `evidence_quotes` and `evidence_summary`: paper context for "
+                "choosing variant searches and judging candidates, never a substitute for a lookup."
+            )
         assert expected_context in prompt_text
         assert "had access to the paper; you do not" not in prompt_text
         assert "paper; you do not" not in prompt_text

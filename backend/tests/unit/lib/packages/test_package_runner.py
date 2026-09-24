@@ -1458,7 +1458,7 @@ class DatabaseMethods:
             and ontology_type == "GOTerm"
             and exact_match is True
             and include_synonyms is False
-            and limit == 3
+            and limit == 25
         ):
             return [self.get_ontology_term("GO:0003674")]
         return []
