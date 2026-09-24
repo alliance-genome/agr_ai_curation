@@ -54,8 +54,7 @@ def _workspace(count):
     workspace = builder.ExtractionBuilderWorkspace(run_id="r", document_id="doc-1")
     for i in range(count):
         workspace.upsert_candidate(candidate_id=f"cand-{i:04d}", staged_fields={"x": i},
-                                   pending_ref_ids=[f"p-{i}"], evidence_record_ids=[f"e-{i}"],
-                                   resolver_selection_refs=[f"r-{i}"])
+                                   pending_ref_ids=[f"p-{i}"], evidence_record_ids=[f"e-{i}"])
     return workspace
 
 

@@ -9,8 +9,8 @@ the disease FULL-LinkML-alignment target:
     concrete Gene/Allele/AGM subtype (D1/D2), role/confidence, data provider, ECO
     evidence_code_curies[] (D3), an optional disease_relation_name (D5), source mentions, and
     evidence_record_ids.
-  * NO resolver-backed controlled fields: the active validator bindings resolve the staged
-    DOID/subject/relation/ECO/data-provider inputs inline (``require_resolver_selections=False``).
+  * NO controlled fields resolved at extraction: the active validator bindings resolve the
+    staged DOID/subject/relation/ECO/data-provider inputs.
     A value that does not match is still staged, unresolved, for the validators to decide
     (ALL-1283); proposals never become validated values.
   * single_reference is NOT staged from free text — it stays pending (D4 is blocked: no durable
@@ -592,7 +592,6 @@ def _stage_disease_observation_impl(
         staged_fields=payload,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -752,7 +751,6 @@ def _patch_disease_observation_impl(
         staged_fields=payload,
         pending_ref_ids=candidate.pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -930,7 +928,6 @@ def _materialize_disease_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     """Domain materializer wrapper emitting disease builder events.
 
@@ -948,7 +945,6 @@ def _materialize_disease_with_events(
         workspace=workspace,
         candidate_ids=candidate_id_list,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     if not materialization.ok or materialization.payload is None:
         _emit_disease_builder_event(
@@ -978,9 +974,8 @@ def _finalize_disease_extraction_impl(candidate_ids: List[str]) -> AgrQueryResul
     Omitting the call or returning only prose does not finalize an empty result.
 
     Thin domain adapter: input validation + result shape live here; all structural staging/finalize
-    control flow is delegated to ``finalize_builder_extraction``. Disease has no resolver-backed
-    controlled fields (the active DOID/subject/relation/ECO/data-provider validators resolve the
-    staged inputs inline), so ``require_resolver_selections=False``.
+    control flow is delegated to ``finalize_builder_extraction``. The active
+    DOID/subject/relation/ECO/data-provider validators resolve the staged inputs.
     """
 
     attempted_query = _attempt_query("finalize_disease_extraction", candidate_ids=candidate_ids)
@@ -1008,9 +1003,7 @@ def _finalize_disease_extraction_impl(candidate_ids: List[str]) -> AgrQueryResul
         candidate_ids=candidate_ids,
         materialize=_materialize_disease_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="disease-annotation-envelope",
-        require_resolver_selections=False,
     )
 
     if not outcome.ok:

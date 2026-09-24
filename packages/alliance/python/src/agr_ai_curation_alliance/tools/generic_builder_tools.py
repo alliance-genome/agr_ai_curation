@@ -636,7 +636,6 @@ def _stage_generic_object_impl(
         staged_fields=staged_payload,
         pending_ref_ids=[stage_input.pending_ref_id] if stage_input.pending_ref_id else [],
         evidence_record_ids=list(stage_input.evidence_record_ids),
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -910,7 +909,6 @@ def _patch_generic_object_impl(
         staged_fields=staged_payload,
         pending_ref_ids=pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -1107,7 +1105,6 @@ def _materialize_generic_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     """Wrap generic materialization with trace events."""
 
@@ -1124,7 +1121,6 @@ def _materialize_generic_with_events(
         workspace=workspace,
         candidate_ids=candidate_id_list,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     if not materialization.ok or materialization.payload is None:
         _emit_generic_builder_event(
@@ -1183,10 +1179,8 @@ def _finalize_generic_extraction_impl(candidate_ids: List[str]) -> AgrQueryResul
         candidate_ids=candidate_ids,
         materialize=_materialize_generic_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="generic-envelope",
         require_evidence_record_ids=True,
-        require_resolver_selections=False,
     )
 
     if not outcome.ok:

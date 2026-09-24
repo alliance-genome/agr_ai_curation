@@ -5,8 +5,8 @@ shared ``finalize_builder_extraction`` orchestration. Mirrors the gene_expressio
 (``stage_gene_expression_observation`` etc. in ``agr_curation.py``) but adapted to the gene
 ``gene_mention_evidence`` target:
 
-  * NO resolver-backed controlled fields (the gene validator owns identity), so staging requires
-    evidence but NOT resolver selections (``require_resolver_selections=False``).
+  * NO controlled fields resolved at extraction (the gene validator owns identity); staging
+    requires evidence.
   * NO mirror/projection fields.
 
 Tool names match the gene extractor prompt/agent: ``stage_gene_mention_evidence``,
@@ -353,7 +353,6 @@ def _stage_gene_mention_evidence_impl(
         staged_fields=payload,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -465,7 +464,6 @@ def _patch_gene_mention_evidence_impl(
         staged_fields=payload,
         pending_ref_ids=candidate.pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -643,7 +641,6 @@ def _materialize_gene_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     """Domain materializer wrapper emitting gene builder events.
 
@@ -661,7 +658,6 @@ def _materialize_gene_with_events(
         workspace=workspace,
         candidate_ids=candidate_id_list,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     if not materialization.ok or materialization.payload is None:
         _emit_gene_builder_event(
@@ -692,8 +688,7 @@ def _finalize_gene_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
     """Finalize staged gene candidates through the builder handoff contract.
 
     Thin domain adapter: input validation + result shape live here; all structural
-    staging/finalize control flow is delegated to ``finalize_builder_extraction``. Gene has no
-    resolver-backed controlled fields, so ``require_resolver_selections=False``.
+    staging/finalize control flow is delegated to ``finalize_builder_extraction``.
     """
 
     attempted_query = _attempt_query("finalize_gene_extraction", candidate_ids=candidate_ids)
@@ -721,9 +716,7 @@ def _finalize_gene_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
         candidate_ids=candidate_ids,
         materialize=_materialize_gene_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="gene-envelope",
-        require_resolver_selections=False,
     )
 
     if not outcome.ok:

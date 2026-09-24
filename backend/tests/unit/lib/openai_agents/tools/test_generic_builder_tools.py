@@ -228,7 +228,6 @@ def test_generic_claim_patch_rejects_attributes(active_generic_builder_context):
         },
         pending_ref_ids=["generic-claim-1"],
         evidence_record_ids=["evidence-1"],
-        resolver_selection_refs=[],
         status=builder.CANDIDATE_STATUS_VALID,
     )
 

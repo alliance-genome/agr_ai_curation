@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import re
 from collections.abc import Mapping
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from pydantic import (
     ValidationError,
@@ -464,7 +464,6 @@ def materialize_gene_builder_state(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]] | None = None,
-    resolver_entry_lookup: Callable[[str], Any] | None = None,
     produced_by: str = "gene_extractor",
 ) -> GeneMaterializationResult:
     """Build canonical GeneExtractionResultEnvelope output from finalized builder state."""

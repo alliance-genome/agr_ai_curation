@@ -543,7 +543,6 @@ def _stage_go_recommendation_impl(
         staged_fields=staged_fields,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=list(stage_input.evidence_record_ids),
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -782,7 +781,6 @@ def _patch_go_recommendation_impl(
         staged_fields=staged_fields,
         pending_ref_ids=list(candidate.pending_ref_ids),
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -972,13 +970,11 @@ def _materialize_go_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     materialization = materialize_go_builder_state(
         workspace=workspace,
         candidate_ids=candidate_ids,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     _emit_go_builder_event(
         "go_materializer.completed"
@@ -1027,10 +1023,8 @@ def _finalize_go_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
         candidate_ids=candidate_ids,
         materialize=_materialize_go_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="rgd-go-envelope",
         require_evidence_record_ids=True,
-        require_resolver_selections=False,
     )
     if not outcome.ok:
         return _go_validation_result(

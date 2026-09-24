@@ -1384,15 +1384,13 @@ async def _run_agent_with_owned_resources(
             ):
                 pass
     try:
-        from .resolver_call_ledger import ResolverCallLedger
         from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
 
-        # Run-state package tools (stage/resolve/finalize) otherwise execute in the
-        # package subprocess, where this run's workspace and resolver ledger do not
-        # exist; every builder agent run directly needs them bound, not only profiles.
+        # Run-state package tools (stage/finalize) otherwise execute in the package
+        # subprocess, where this run's workspace does not exist; every builder agent
+        # run directly needs it bound, not only profiles.
         agent = _bind_run_state_into_tools(
             agent, evidence_records=evidence_records, builder_workspace=builder_workspace,
-            resolver_ledger=ResolverCallLedger(trace_id=trace_id),
         )
         for tool in agent.tools:
             if hasattr(tool, "profile_bound_schema"):

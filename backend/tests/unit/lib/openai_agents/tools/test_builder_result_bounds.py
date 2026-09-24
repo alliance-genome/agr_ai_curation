@@ -29,7 +29,6 @@ def _workspace(candidate_count: int, *, wide: bool = False) -> builder.Extractio
             staged_fields=staged,
             pending_ref_ids=[f"pending-{index:04d}"],
             evidence_record_ids=[f"evidence-{index:04d}-{part}" for part in range(3)],
-            resolver_selection_refs=[f"call-{index:04d}"],
         )
         if wide:
             candidate.validation_errors = [
@@ -59,11 +58,9 @@ def test_builder_ack_does_not_grow_with_the_workspace():
     assert "candidate_ids" not in large
     assert "pending_ref_ids" not in large
     assert "evidence_record_ids" not in large
-    assert "resolver_selection_refs" not in large
     assert large["candidate_count"] == 600
     assert large["pending_ref_count"] == 600
     assert large["evidence_record_count"] == 1800
-    assert large["resolver_selection_ref_count"] == 600
     # Only the digits of the counts differ.
     assert serialized_size(large) - serialized_size(small) < 16
 

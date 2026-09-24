@@ -199,6 +199,8 @@ def test_restoring_an_extraction_revision_with_identity_lookups_is_refused(monke
     )
     db = SimpleNamespace(execute=lambda _statement: SimpleNamespace(scalar_one_or_none=lambda: head))
     saved = SimpleNamespace(
+        # A catalog model, so the restore reaches the identity-lookup refusal.
+        model_id="gpt-6-sol",
         inherited_allowed_group_ids=[],
         tool_ids=["stage_demo", "lookup_demo"],
         output_contract=SimpleNamespace(output_state="structured_extraction", output_schema_key=None),
