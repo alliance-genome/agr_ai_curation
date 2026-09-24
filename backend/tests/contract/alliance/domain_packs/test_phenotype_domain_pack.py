@@ -1489,7 +1489,7 @@ def test_a_curator_can_override_each_phenotype_term_and_condition_part():
             envelope, pack,
             EnvelopeFieldPatch(envelope_id=envelope.envelope_id, expected_revision=1, object_id="pa-1",
                                field_path=field_path, before=before, value=value, operation=operation),
-            current_revision=1, actor_id="curator-7",
+            current_revision=1, actor_id="curator-7", actor_display_name="curator-7",
         )
 
     def identity(field_path, value):

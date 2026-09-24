@@ -1040,6 +1040,7 @@ def _with_curated(envelope, object_type, path, edits):
                 id_key="primary_external_id",
                 label_key="allele_symbol",
                 actor_id="curator-1",
+                actor_display_name="curator-1",
                 at="2026-09-23T20:00:00Z",
             )
             obj = obj.model_copy(update={"payload": payload})
@@ -1161,7 +1162,7 @@ def _allele_curator_patch(envelope, object_id, field_path, value, *, before, ide
             ),
         ),
         current_revision=1,
-        actor_id="curator-7",
+        actor_id="curator-7", actor_display_name="curator-7",
     )
 
 

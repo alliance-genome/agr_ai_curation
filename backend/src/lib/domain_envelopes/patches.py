@@ -112,6 +112,7 @@ def apply_curator_field_patch(
     *,
     current_revision: int,
     actor_id: str,
+    actor_display_name: str,
     registry: DomainPackValidationRegistry | None = None,
     profile: ResolvedGenericProfile | None = None,
     via: Mapping[str, Any] | None = None,
@@ -174,6 +175,7 @@ def apply_curator_field_patch(
             target_patch,
             current_revision=current_revision,
             actor_id=actor_id,
+            actor_display_name=actor_display_name,
             registry=validation_registry,
             profile=profile,
             via=target_via,
@@ -276,6 +278,7 @@ def apply_curator_field_patch(
                 staged_payload.get("attributes", {}),
                 patch.field_path,
                 actor_id=actor_id,
+                actor_display_name=actor_display_name,
                 at=datetime.now(timezone.utc).isoformat(),
             )
         else:
@@ -285,13 +288,16 @@ def apply_curator_field_patch(
                 patch.field_path,
                 patch.value,
                 actor_id=actor_id,
+                actor_display_name=actor_display_name,
                 at=datetime.now(timezone.utc).isoformat(),
             )
     try:
         if patch.operation is EnvelopeFieldPatchOperation.REMOVE and (
             profile is None or not is_generic_attribute_path(patch.field_path)
         ):
-            override_audit = _remove_list_element(staged_payload, patch.field_path, actor_id=actor_id)
+            override_audit = _remove_list_element(
+                staged_payload, patch.field_path, actor_id=actor_id, actor_display_name=actor_display_name,
+            )
         elif profile is None or not is_generic_attribute_path(patch.field_path):
             handled, override_audit = _apply_resolvable_edit(
                 staged_payload,
@@ -299,6 +305,7 @@ def apply_curator_field_patch(
                 domain_pack=domain_pack,
                 object_type=domain_object.object_type,
                 actor_id=actor_id,
+                actor_display_name=actor_display_name,
             )
             if not handled:
                 set_payload_value(staged_payload, patch.field_path, patch.value)
@@ -772,6 +779,7 @@ def _apply_resolvable_edit(
     domain_pack: LoadedDomainPack,
     object_type: str,
     actor_id: str,
+    actor_display_name: str,
 ) -> tuple[bool, dict[str, Any] | None]:
     """Apply a curator's edit of a declared resolvable value's identity as a validation override.
 
@@ -817,6 +825,7 @@ def _apply_resolvable_edit(
         id_key=spec.id_key,
         label_key=spec.label_key,
         actor_id=actor_id,
+        actor_display_name=actor_display_name,
         at=datetime.now(timezone.utc).isoformat(),
     )
     _follow_declared_mirrors(payload, value_path, container, domain_pack, object_type, resolvable_fields)
@@ -907,7 +916,9 @@ def _format_path(parts: Sequence[str | int]) -> str:
     return text
 
 
-def _remove_list_element(payload: dict[str, Any], field_path: str, *, actor_id: str) -> dict[str, Any]:
+def _remove_list_element(
+    payload: dict[str, Any], field_path: str, *, actor_id: str, actor_display_name: str,
+) -> dict[str, Any]:
     """Remove one list element (validated by ``_removal_errors``); returns its audit record."""
 
     tokens = parse_field_path(field_path)
@@ -917,6 +928,7 @@ def _remove_list_element(payload: dict[str, Any], field_path: str, *, actor_id: 
     return {
         "action": "removed",
         "actor_id": actor_id,
+        "actor_display_name": actor_display_name,
         "at": datetime.now(timezone.utc).isoformat(),
         "previous": copy.deepcopy(removed),
         "identity": None,

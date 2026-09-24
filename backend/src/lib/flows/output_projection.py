@@ -584,6 +584,35 @@ def _scalar_payload_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _read_payload_refs_effectively(
+    row: dict[str, Any], effective_item: Mapping[str, Any], resolvable_fields: Mapping[str, Any],
+) -> None:
+    """``object.payload.<key>`` columns on a declared resolvable value read its read-time state.
+
+    Like ``object.pack.*`` refs, they read the effective payload: an
+    identity key of a resolvable object root shows only a verified identity,
+    and a declared value stored as plain text reads as the value it is
+    ("label (ID)" or UNRESOLVED), never as its unverified stored text.
+    """
+
+    from src.lib.domain_packs.resolvable_values import CONTRACT_KEYS
+
+    root = resolvable_fields.get("")
+    root_keys = set(root.identity_keys) | set(CONTRACT_KEYS) if root is not None else set()
+    payload = _object_payload(effective_item)
+    for ref in [ref for ref in row if ref.startswith("object.payload.")]:
+        key = ref.removeprefix("object.payload.")
+        spec = resolvable_fields.get(key)
+        if spec is None and key not in root_keys:
+            continue
+        value = payload.get(key)
+        if spec is not None and isinstance(value, Mapping):
+            roles = {role: name for role, name in (
+                ("label", spec.label_key), ("id", spec.id_key), ("mention", spec.mention_key)) if name}
+            value = display_text(value, roles)
+        row[ref] = value
+
+
 def _normalize_attribute_key(key: Any) -> str:
     normalized = _ATTRIBUTE_KEY_PATTERN.sub("_", str(key or "").strip().lower())
     return re.sub(r"_+", "_", normalized).strip("_")
@@ -1741,6 +1770,10 @@ def _build_artifact_from_step(
             ]
         for row, item in zip(rows_by_source["object"], object_items):
             effective = source.effective_item(item) if source is not None else item
+            if source is not None:
+                _read_payload_refs_effectively(
+                    row, effective, source.resolvable_fields.get(str(item.get("object_type") or ""), {}),
+                )
             for field in export_fields:
                 if "summary_key" not in field:
                     row[field["ref"]] = packaged_field_value(effective, field)

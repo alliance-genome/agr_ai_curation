@@ -864,6 +864,7 @@ def _materialize_candidate_draft_changes_into_envelope(
             ),
             current_revision=current_revision,
             actor_id=actor["actor_id"],
+            actor_display_name=actor["display_name"],
             profile=profile,
         )
         if patch_result.status is EnvelopeFieldPatchStatus.STALE_REVISION:
@@ -1023,6 +1024,7 @@ def patch_envelope_field(
         EnvelopeFieldPatch(**patch_payload),
         current_revision=previous_revision,
         actor_id=_actor_claims_payload(actor_claims)["actor_id"],
+        actor_display_name=_actor_claims_payload(actor_claims)["display_name"],
         profile=profile,
     )
 
