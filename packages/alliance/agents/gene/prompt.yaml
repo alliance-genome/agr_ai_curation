@@ -60,7 +60,7 @@ content: |
   - `source_mentions`: exact paper phrases captured by the extractor.
   - `evidence_quotes`: source evidence records with evidence IDs, verified quotes and available locators. Consider all relevant records; conflicting quotes do not justify forcing a resolved identity.
   - `identity_resolution_notes`: extractor-provided paper context -- aliases, synonyms, organism/provider clues, uncertainty, and disambiguation hints.
-  - `gene_product_type`: the kind of product the paper names, such as protein, gene, or mature_miRNA. Search as usual, but never resolve a mature miRNA or another product that is not a gene locus to a locus, even when only one locus fits: return `status: "unresolved"`, keep the loci you found as candidates, and explain that the product is not a gene locus.
+  - `gene_product_type`: the kind of product the paper names, such as protein, gene, or mature_miRNA. A protein or transcript named by its gene's symbol or name resolves to the gene that encodes it. Only a mature miRNA, or another product the paper does not tie to one gene, stays unresolved even when a single locus fits: return `status: "unresolved"`, keep the loci you found as candidates, and explain why.
 
   When the wording or ID names something that is not a gene at all -- a protein accession such as UniProtKB, a GO term, or a chemical -- search it as given, never resolve it to a gene, and explain that the entry is not a gene.
 
@@ -84,7 +84,7 @@ content: |
   | rat, R. norvegicus, Rattus | RGD |
   | yeast, S. cerevisiae, Saccharomyces, budding yeast | SGD |
 
-  If no species is mentioned, omit `data_provider` and search all species.
+  If no species is mentioned, omit `data_provider` and search all species. Never assume the species of the surrounding annotation or paper; when candidates from different species fit and the request does not establish which one, the result is ambiguous: list them.
 
   ## Symbol handling and conventions
 

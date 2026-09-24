@@ -89,6 +89,7 @@ _GO_ASPECT_VALUES = frozenset(
 _RGD_CURIE = re.compile(r"^RGD:\d+$")
 _GO_CURIE = re.compile(r"^GO:\d{7}$")
 _CURIE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*:[^\s:]+$")
+_TAXON = re.compile(r"^NCBITaxon:\d+$")
 
 
 class _StrictToolModel(BaseModel):
@@ -108,11 +109,20 @@ def _clean_optional(value: Optional[str]) -> Optional[str]:
     return value.strip() or None
 
 
-def _paper_curie(value: Optional[str], pattern: re.Pattern[str], kind: str) -> Optional[str]:
+def _paper_curie(value: Optional[str], pattern: re.Pattern[str], rule: str) -> Optional[str]:
     cleaned = _clean_optional(value)
     if cleaned is not None and not pattern.fullmatch(cleaned):
-        raise ValueError(f"a paper-stated {kind} must be written as the paper prints it, e.g. {pattern.pattern}")
+        raise ValueError(f"a paper-stated identifier {rule}")
     return cleaned
+
+
+_RGD_RULE = "is written RGD:<digits>, for example RGD:619839"
+_GO_RULE = "is written GO:<7 digits>, for example GO:0005515"
+_CURIE_RULE = (
+    "is written with its prefix and a colon, for example PMID:12345678 or DOI:10.1000/xyz; "
+    "add the prefix when the paper prints a bare PMID or DOI"
+)
+_TAXON_RULE = "is an NCBI Taxon ID, for example NCBITaxon:9606"
 
 
 class GOWithFromEntry(_StrictToolModel):
@@ -125,6 +135,13 @@ class GOWithFromEntry(_StrictToolModel):
         default=None,
         description="An identifier for the entry only when the paper itself prints it; never one looked up.",
     )
+    taxon_curie: Optional[StrictStr] = Field(
+        default=None,
+        description=(
+            "The partner's species as an NCBI Taxon ID (from the species tool), only when the "
+            "paper states which species the partner is; leave it out otherwise."
+        ),
+    )
 
     @field_validator("mention")
     @classmethod
@@ -134,7 +151,12 @@ class GOWithFromEntry(_StrictToolModel):
     @field_validator("proposed_curie")
     @classmethod
     def _paper_identifier(cls, value: Optional[str]) -> Optional[str]:
-        return _paper_curie(value, _CURIE, "identifier")
+        return _paper_curie(value, _CURIE, _CURIE_RULE)
+
+    @field_validator("taxon_curie")
+    @classmethod
+    def _paper_species(cls, value: Optional[str]) -> Optional[str]:
+        return _paper_curie(value, _TAXON, _TAXON_RULE)
 
 
 class GOGeneProductInput(_StrictToolModel):
@@ -151,7 +173,7 @@ class GOGeneProductInput(_StrictToolModel):
     @field_validator("proposed_curie")
     @classmethod
     def _paper_identifier(cls, value: Optional[str]) -> Optional[str]:
-        return _paper_curie(value, _RGD_CURIE, "RGD identifier")
+        return _paper_curie(value, _RGD_CURIE, _RGD_RULE)
 
     def value(self) -> dict[str, Any]:
         return gene_product_value(
@@ -175,7 +197,7 @@ class GOTermInput(_StrictToolModel):
     @field_validator("proposed_curie")
     @classmethod
     def _paper_identifier(cls, value: Optional[str]) -> Optional[str]:
-        return _paper_curie(value, _GO_CURIE, "GO identifier")
+        return _paper_curie(value, _GO_CURIE, _GO_RULE)
 
     @model_validator(mode="after")
     def _known_aspect(self) -> "GOTermInput":
@@ -199,7 +221,7 @@ class GOReferenceInput(_StrictToolModel):
     @field_validator("proposed_curie")
     @classmethod
     def _paper_identifier(cls, value: Optional[str]) -> Optional[str]:
-        return _paper_curie(value, _CURIE, "reference identifier")
+        return _paper_curie(value, _CURIE, _CURIE_RULE)
 
     def value(self) -> dict[str, Any]:
         return reference_value(self.mention, proposed_curie=self.proposed_curie)
@@ -208,7 +230,9 @@ class GOReferenceInput(_StrictToolModel):
 def _with_from_values(entries: Sequence[GOWithFromEntry]) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
     for entry in entries:
-        value = with_from_value(entry.mention, proposed_curie=entry.proposed_curie)
+        value = with_from_value(
+            entry.mention, proposed_curie=entry.proposed_curie, taxon_curie=entry.taxon_curie
+        )
         if value not in values:
             values.append(value)
     return values
@@ -472,8 +496,9 @@ def _stage_go_recommendation_impl(
             prints it; leave it out otherwise.
         reference_proposed_curie: A PMID or DOI only when the paper itself prints it, for
             example PMID:12345678; leave it out otherwise.
-        with_from: With/From entries, each with the paper's wording and, only when the
-            paper prints one, its identifier.
+        with_from: With/From entries, each with the paper's wording, its identifier only
+            when the paper prints one, and the partner's species (taxon_curie, from the
+            species tool) only when the paper states it.
         qualifiers: GO relation qualifiers the evidence supports, chosen from the
             relations allowed for the aspect: enables or contributes_to (molecular
             function); involved_in, acts_upstream_of, acts_upstream_of_positive_effect,

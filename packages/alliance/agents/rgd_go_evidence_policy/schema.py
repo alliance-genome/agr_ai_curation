@@ -84,6 +84,9 @@ class RGDGOWithFromEntry(DomainValidatorBaseModel):
     proposed_curie: StrictStr | None = Field(
         default=None, description="Identifier the paper itself prints; a claim, never the identity"
     )
+    taxon_curie: StrictStr | None = Field(
+        default=None, description="The partner's species, only when the paper states it"
+    )
     curie: StrictStr | None = Field(
         default=None, description="Gene identifier validation confirmed; null while unresolved"
     )

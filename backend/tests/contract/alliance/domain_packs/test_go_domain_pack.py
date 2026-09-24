@@ -756,6 +756,25 @@ def test_go_identity_leaves_are_the_editable_fields_and_the_catalog_ignores_it()
     assert all("editable" not in str(entry) for entry in _pack_export_fields(pack))
 
 
+def test_with_from_species_comes_from_the_paper_never_a_fixed_provider():
+    """Review S1: a non-rat partner must not resolve to the rat gene."""
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    bindings = {
+        binding.binding_id: binding
+        for binding in DomainPackValidationRegistry.from_domain_pack(pack).bindings
+    }
+    with_from = bindings["go_with_from_gene_validation"]
+
+    assert "data_provider" not in with_from.input_fields
+    assert with_from.input_fields["taxon_hint"].path == "with_from.taxon_curie"
+    assert with_from.input_fields["evidence_quotes"].source == "evidence_record"
+    assert "go_with_from_gene_validation" in bindings["rgd_go_evidence_policy_validation"].runs_after
+    # Turning either optional check off still leaves the policy check blocking.
+    for binding_id in ("go_reference_validation", "go_with_from_gene_validation"):
+        assert "cannot be turned off" in bindings[binding_id].when_off
+
+
 def test_go_paper_stated_identifiers_are_declared_for_validators_only():
     """Extraction never searches: a paper-stated ID is validator input, never a column or an identity."""
 
@@ -766,7 +785,7 @@ def test_go_paper_stated_identifiers_are_declared_for_validators_only():
     fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
     proposals = {path for path in fields if path.endswith(".proposed_curie")}
     assert proposals == {f"{value_path}.proposed_curie" for value_path in PROPOSAL_FIELDS}
-    for path in proposals:
+    for path in (*proposals, "with_from.taxon_curie"):
         assert fields[path].metadata.get("exported") is False
         assert fields[path].metadata.get("protected") is True
     pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")

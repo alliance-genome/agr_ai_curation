@@ -5859,7 +5859,7 @@
         },
         {
           "default": null,
-          "description": "With/From entries, each with the paper's wording and, only when the\npaper prints one, its identifier.",
+          "description": "With/From entries, each with the paper's wording, its identifier only\nwhen the paper prints one, and the partner's species (taxon_curie, from the\nspecies tool) only when the paper states it.",
           "name": "with_from",
           "required": false,
           "type": "any"
