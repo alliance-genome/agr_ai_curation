@@ -157,6 +157,9 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/agent_studio/test_group_tool_policy.py"),
     # Package-aware forward reconciliation for the Alliance-owned tool policy.
     Path("backend/tests/unit/test_alliance_tool_policy_reconciliation_migration.py"),
+    # Re-saving a legacy extractor withholds the Alliance lookup tools it
+    # inherited (ALL-1276 review S1/S4).
+    Path("backend/tests/integration/persistence/test_inherited_tool_policy_persistence.py"),
     # Bundled Alliance package contracts and prompt/tool policy coverage.
     Path("backend/tests/integration/persistence/test_validator_agent_identity_migration.py"),
     Path("backend/tests/unit/test_config_loaders.py"),
