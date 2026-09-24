@@ -2036,7 +2036,7 @@ def _step_from_extraction_result(
     *,
     step_number: int,
 ) -> dict[str, Any]:
-    envelope = domain_envelope_from_extraction_result(extraction_result)
+    envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
     metadata = dict(extraction_result.metadata or {})
     metadata.setdefault(
         "source_key",

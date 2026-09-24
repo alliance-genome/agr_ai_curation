@@ -641,7 +641,7 @@ def test_batch_flow_ending_in_curation_handoff_creates_owned_sessions(handoff_db
         source_row.id
     )
     assert envelope_row.source_payload_hash == domain_envelope_payload_hash(
-        domain_envelope_from_extraction_result(source_schema)
+        domain_envelope_from_extraction_result(source_schema, stored=True)
     )
     assert {candidate.envelope_id for candidate in candidate_rows} == {
         envelope_row.envelope_id
@@ -736,7 +736,7 @@ async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):
         session_id=origin_session_id,
         flow_run_id=flow_run_id,
     )
-    canonical_payload = domain_envelope_from_extraction_result(fixture).model_dump(
+    canonical_payload = domain_envelope_from_extraction_result(fixture, stored=True).model_dump(
         mode="json"
     )
     assert canonical_payload["metadata"]["source_extraction_result_id"].endswith(

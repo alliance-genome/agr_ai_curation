@@ -664,7 +664,7 @@ def test_evidence_anchor_survives_result_reference_envelope_and_workspace_projec
         }
     )
 
-    envelope = domain_envelope_from_extraction_result(record)
+    envelope = domain_envelope_from_extraction_result(record, stored=False)
     anchors = project_evidence_anchor_projections(envelope, envelope_revision=1)
     assert {anchor.field_path for anchor in anchors} == {"gene_product", "go_term", "rationale"}
     assert {anchor.figure_reference for anchor in anchors} == {"Figure 2A"}

@@ -497,7 +497,7 @@ def test_envelope_conversion_uses_authoritative_result_receipt(extraction):
         payload_json=canonical,
         created_at=datetime.now(timezone.utc),
     )
-    envelope = domain_envelope_from_extraction_result(result)
+    envelope = domain_envelope_from_extraction_result(result, stored=True)
     assert envelope.metadata["execution_receipt"] == receipt.model_dump(mode="json")
     assert (
         envelope.extracted_objects[0].payload

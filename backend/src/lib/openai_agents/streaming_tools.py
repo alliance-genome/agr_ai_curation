@@ -4002,7 +4002,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
             metadata=dict(candidate.metadata),
             execution_receipt=candidate.execution_receipt,
         )
-        envelope = domain_envelope_from_extraction_result(extraction_record)
+        envelope = domain_envelope_from_extraction_result(extraction_record, stored=False)
         domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
         dispatch_phase_timings_ms["envelope_materialization_ms"] = _elapsed_ms(
             envelope_started_at

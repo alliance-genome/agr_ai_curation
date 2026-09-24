@@ -409,7 +409,7 @@ def ensure_domain_envelope_materialization(
     persist: bool,
     db: Session | None = None,
 ) -> CurationPrepEnvelopeRef:
-    envelope = domain_envelope_from_extraction_result(extraction_result)
+    envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
     materializer = _review_row_materializer_for_extraction_result(
         extraction_result,
         domain_pack_id=envelope.domain_pack_id,

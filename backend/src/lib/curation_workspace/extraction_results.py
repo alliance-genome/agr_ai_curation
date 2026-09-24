@@ -941,6 +941,12 @@ def _build_extraction_result_record(
 ) -> CurationExtractionResultRecordModel:
     """Construct an ORM extraction-result record from a validated request."""
 
+    from src.lib.curation_workspace.domain_envelope_normalization import (
+        require_recorded_resolution_states,
+    )
+
+    # A new row is fresh output: none of its declared values may pass as legacy.
+    require_recorded_resolution_states(request.payload_json, adapter_key=request.adapter_key)
     return CurationExtractionResultRecordModel(
         agent_revision_id=request.execution_receipt.agent_revision_id if request.execution_receipt else None,
         execution_receipt=request.execution_receipt.model_dump(mode="json") if request.execution_receipt else None,
