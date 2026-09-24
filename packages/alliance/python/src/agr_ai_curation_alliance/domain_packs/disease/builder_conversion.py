@@ -16,8 +16,8 @@ Per the approach-doc Decisions (D1-D6):
     structural finding). Writes are NOT blocked — the pending/abstract/write-blocked placeholder
     posture is retired for disease.
   * D2 SUBJECT: the candidate carries a pending ``DiseaseAnnotationSubject`` sub-object plus the
-    inline ``disease_annotation_subject`` payload; the active ``subject_entity_validation`` binding
-    resolves concrete Gene/Allele/AGM identity. The resolved subject identity mirrors onto
+    inline ``disease_annotation_subject`` payload; the subject check routes the subject to the
+    gene, allele or AGM validator by subject type, which resolves its concrete identity. The resolved subject identity mirrors onto
     ``disease_annotation_object`` is NOT required; the DOID snapshot mirror is declared in
     ``domain_pack.yaml`` ``materializes_to_field_paths`` (NOT code special-casing, invariant §5.4).
   * D3 ECO: ``evidence_code_curies[]`` are staged and snapshotted; the active
@@ -222,8 +222,8 @@ def _subject_schema_ref() -> SchemaRef:
         uri=_linkml_uri(DISEASE_CORE_SCHEMA_SOURCE_FILE),
         definition_state=DefinitionState.IN_DEVELOPMENT,
         definition_notes=[
-            "Disease annotation subject; concrete Gene, Allele, or AGM identity is resolved by the "
-            "active subject_entity_validation binding."
+            "Disease annotation subject; the subject check routes the subject to the gene, allele "
+            "or AGM validator by subject type."
         ],
     )
 
@@ -718,8 +718,8 @@ def materialize_disease_builder_state(
                 schema_ref=_subject_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 definition_notes=[
-                    "Disease annotation subject; concrete Gene, Allele, or AGM identity is resolved "
-                    "by the active subject_entity_validation binding."
+                    "Disease annotation subject; the subject check routes the subject to the gene, "
+                    "allele or AGM validator by subject type."
                 ],
                 payload=(
                     {"mention": subject_payload["mention"]}
