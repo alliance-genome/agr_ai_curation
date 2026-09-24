@@ -85,6 +85,10 @@ export default function HorizontalGridOverrideEditorDialog({
   const value = targets.find((target) => target.value_path === selectedPath) ?? null
   const identity = value ? entries[value.value_path] ?? horizontalGridOverrideIdentity(value) : {}
   const shownError = problem ?? error
+  // Saving an unresolved value's identity as it stands vouches for it (e.g. a
+  // legacy value's stored identity); a resolved value unchanged has nothing to save.
+  const unchanged = value ? !horizontalGridOverrideChanged(value, identity) : true
+  const accepting = Boolean(value && unchanged && value.resolution_state === 'unresolved')
 
   return (
     <Dialog
@@ -186,8 +190,11 @@ export default function HorizontalGridOverrideEditorDialog({
               />
             ))}
             <Typography color="text.secondary" sx={{ fontSize: 10, lineHeight: 1.4 }}>
-              Saving sets this value by curator override: it counts as validated, and a validator
-              that disagrees later adds a warning instead of changing it.
+              {accepting
+                ? 'Accepting keeps this identity as it stands and sets it by curator override: '
+                : 'Saving sets this value by curator override: '}
+              it counts as validated, and a validator that disagrees later adds a warning
+              instead of changing it.
               {value.curator_override ? ' Removing the override returns the value to unresolved.' : ''}
             </Typography>
           </Stack>
@@ -225,8 +232,7 @@ export default function HorizontalGridOverrideEditorDialog({
           Cancel
         </Button>
         <Button
-          // Nothing to save until an identity key differs from its stored value.
-          disabled={isSaving || !value || !horizontalGridOverrideChanged(value, identity)}
+          disabled={isSaving || !value || (unchanged && !accepting)}
           onClick={() => {
             if (!value) {
               return
@@ -240,7 +246,7 @@ export default function HorizontalGridOverrideEditorDialog({
           }}
           variant="contained"
         >
-          Save override
+          {accepting ? 'Accept this identity' : 'Save override'}
         </Button>
       </DialogActions>
     </Dialog>

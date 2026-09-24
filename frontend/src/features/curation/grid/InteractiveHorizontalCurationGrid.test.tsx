@@ -1133,10 +1133,13 @@ describe('InteractiveHorizontalCurationGrid', () => {
     // The validated key is prefilled from the stored value and editable.
     expect(within(editor).getByRole('textbox', { name: /^Taxon/ })).toHaveValue('NCBITaxon:6239')
 
-    // Nothing to save until an identity key differs from its stored value.
-    expect(within(editor).getByRole('button', { name: 'Save override' })).toBeDisabled()
-    // An incomplete identity is refused before anything is sent, in the
+    // An unresolved value can be accepted as it stands, but an empty
+    // identifier and name are refused before anything is sent, in the
     // backend's words, and the editor stays open.
+    await user.click(within(editor).getByRole('button', { name: 'Accept this identity' }))
+    expect(within(editor).getByTestId('horizontal-grid-override-error')).toHaveTextContent(
+      'Enter both the identifier and the name for a curator override.',
+    )
     await user.type(within(editor).getByRole('textbox', { name: /^Identifier/ }), 'GENE:2')
     await user.click(within(editor).getByRole('button', { name: 'Save override' }))
     expect(within(editor).getByTestId('horizontal-grid-override-error')).toHaveTextContent(
@@ -1157,6 +1160,58 @@ describe('InteractiveHorizontalCurationGrid', () => {
       value: { curie: 'GENE:2', name: 'abc-2', taxon: 'NCBITaxon:7227' },
     })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /curator override/ })).not.toBeInTheDocument())
+  })
+
+  it('vouches for an unresolved legacy identity as it stands', async () => {
+    const user = userEvent.setup()
+    const autosave = createAutosave()
+    const candidate = buildCandidate()
+    const legacy: DomainEnvelopeReviewResolvedValue = {
+      ...UNRESOLVED_SUBJECT,
+      mention: 'abc-1 (GENE:1) (legacy, unverified)',
+      lookup_outcome: 'legacy_unverified',
+      lookup_result: 'Legacy, unverified',
+      stored_identity: { curie: 'GENE:1', name: 'abc-1', taxon: null },
+    }
+    const model = overrideModel(candidate, [legacy], 'UNRESOLVED')
+
+    renderGrid({ autosave, model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', { name: /^Edit Subject ID: UNRESOLVED/ }))
+    const editor = screen.getByRole('dialog', { name: 'Set Subject ID by curator override' })
+    expect(within(editor).queryByRole('button', { name: 'Save override' })).not.toBeInTheDocument()
+    await user.click(within(editor).getByRole('button', { name: 'Accept this identity' }))
+
+    expect(autosave.submitEnvelopeEdit).toHaveBeenCalledWith(candidate.candidate_id, {
+      fieldPath: 'subject.curie',
+      operation: 'replace_identity',
+      before: { curie: 'GENE:1', name: 'abc-1', taxon: null },
+      value: { curie: 'GENE:1', name: 'abc-1', taxon: null },
+    })
+  })
+
+  it('has nothing to save for a resolved value left as it is', async () => {
+    const user = userEvent.setup()
+    const autosave = createAutosave()
+    const candidate = buildCandidate()
+    const matched: DomainEnvelopeReviewResolvedValue = {
+      ...UNRESOLVED_SUBJECT,
+      display_text: 'abc-1 (GENE:1)',
+      resolution_state: 'resolved',
+      lookup_outcome: 'matched',
+      lookup_result: 'Matched',
+      stored_identity: { curie: 'GENE:1', name: 'abc-1', taxon: 'NCBITaxon:6239' },
+    }
+    const model = overrideModel(candidate, [matched], 'GENE:1')
+
+    renderGrid({ autosave, model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', { name: /^Edit Subject ID: GENE:1/ }))
+    const editor = screen.getByRole('dialog', { name: 'Set Subject ID by curator override' })
+    expect(within(editor).getByRole('button', { name: 'Save override' })).toBeDisabled()
+    expect(within(editor).queryByRole('button', { name: 'Accept this identity' })).not.toBeInTheDocument()
+
+    await user.clear(within(editor).getByRole('textbox', { name: /^Name/ }))
+    await user.type(within(editor).getByRole('textbox', { name: /^Name/ }), 'abc-2')
+    expect(within(editor).getByRole('button', { name: 'Save override' })).toBeEnabled()
   })
 
   it('keeps the editor open with the backend\'s words when it refuses the override', async () => {
