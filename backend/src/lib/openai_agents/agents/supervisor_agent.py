@@ -1165,7 +1165,10 @@ def _get_supervisor_specialist_specs(
         ):
             continue
         try:
-            metadata = get_agent_metadata(row.agent_key)
+            # The row passed the caller's group scope above; read its metadata in that scope.
+            metadata = get_agent_metadata(
+                row.agent_key, authenticated_groups=list(active_group_ids or [])
+            )
             requires_document = bool(metadata.get("requires_document", False))
             category = metadata.get("category")
             agent_definition = get_agent_definition(row.agent_key)

@@ -97,6 +97,9 @@ class _FakeQuery:
     def all(self):
         return self._rows
 
+    def first(self):
+        return self._rows[0] if self._rows else None
+
 
 class _FakeSession:
     def __init__(self, rows):
@@ -683,7 +686,7 @@ def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failure
     monkeypatch.setattr("src.models.sql.agent.Agent", _FakeAgentRecord)
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
 
-    def _metadata(agent_key):
+    def _metadata(agent_key, **_kwargs):
         if agent_key == "gene-extractor":
             return {"requires_document": True, "category": "Extraction"}
         raise RuntimeError("metadata failure")
@@ -733,7 +736,7 @@ def test_rgd_go_specialist_is_discoverable_only_to_authenticated_rgd(monkeypatch
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.get_agent_metadata",
-        lambda _agent_key: {"requires_document": True, "category": "Extraction"},
+        lambda _agent_key, **_kwargs: {"requires_document": True, "category": "Extraction"},
     )
 
     rgd_specs = supervisor_agent._get_supervisor_specialist_specs(["RGD"])
@@ -751,6 +754,42 @@ def test_rgd_go_specialist_is_discoverable_only_to_authenticated_rgd(monkeypatch
         "GO": r"^GO:\d{7}$",
         "RGD": r"^RGD:\d+$",
     }
+
+
+def test_group_restricted_specialist_metadata_reads_its_db_row_without_a_denial(monkeypatch, caplog):
+    """Regression: the metadata lookup runs in the caller's group scope, so an RGD-only
+    specialist reads its own DB row and no false authorization denial is logged."""
+
+    row = SimpleNamespace(
+        agent_key="rgd_go_paper_curator",
+        name="RGD GO Paper Curator",
+        description="From the DB row",
+        supervisor_description="Use for paper-derived RGD GO recommendations",
+        supervisor_batchable=0,
+        supervisor_batching_entity=None,
+        allowed_group_ids=["RGD"],
+        tool_ids=[],
+        category="DB row category",
+        output_schema_key=None,
+        is_active=True,
+        visibility="system",
+        supervisor_enabled=True,
+        show_in_palette=True,
+        execution_revision_id=None,
+        template_source=None,
+        group_rules_component=None,
+    )
+    monkeypatch.setattr("src.models.sql.agent.Agent", _FakeAgentRecord)
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: _FakeSession([row]))
+
+    with caplog.at_level("WARNING", logger="src.lib.agent_access"):
+        specs = supervisor_agent._get_supervisor_specialist_specs(["RGD"])
+
+    assert [spec["agent_key"] for spec in specs] == ["rgd_go_paper_curator"]
+    assert specs[0]["category"] == "DB row category"
+    assert not [
+        record for record in caplog.records if record.getMessage() == "Resource authorization denied"
+    ]
 
 
 def test_create_dynamic_specialist_tools_skips_document_required_tools_without_document(monkeypatch):
