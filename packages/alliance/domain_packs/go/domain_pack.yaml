@@ -271,6 +271,8 @@ object_definitions:
         display_name: Evidence code
         required: true
         metadata:
+          # Filled by the builder's fixed evidence-code table, not a database search.
+          extraction_mapping: true
           display:
             label: code
             id: eco_curie
@@ -447,6 +449,8 @@ object_definitions:
         display_name: Qualifiers
         required: true
         metadata:
+          # Filled by the builder's fixed GO relation table, not a database search.
+          extraction_mapping: true
           display:
             label: name
             mention: mention
