@@ -499,10 +499,12 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
         SimpleNamespace(id=pin.agent_revision_id),
         SimpleNamespace(tool_ids=[], output_contract=pin.output_contract,
                         template_source=None, default_export_execution_mode=None,
-                        structured_finalization=None, curation={
+                        structured_finalization=None, model_id="catalog-model", curation={
                             "adapter_key": "gene", "domain_pack_id": "gene", "launchable": True,
                         }),
     ))
+    # The pinned revision's model is in the catalog.
+    monkeypatch.setattr(execution_revisions, "get_model", lambda model_id: object())
     def reject_mutable_metadata(*args, **kwargs):
         raise AssertionError("Pinned custom nodes must not use current metadata")
     monkeypatch.setattr(flows, "get_active_visible_agent_metadata", reject_mutable_metadata)
