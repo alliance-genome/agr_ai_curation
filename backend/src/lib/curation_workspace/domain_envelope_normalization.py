@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+from src.lib.domain_packs.resolvable_values import extraction_value_problems
 from src.schemas.curation_workspace import CurationExtractionResultRecord
 from src.schemas.domain_envelope import (
     DomainEnvelope,
@@ -63,6 +64,17 @@ def domain_envelope_from_extraction_result(
         raise ValueError(
             f"adapter_key={adapter_key!r} does not declare a domain pack for envelope prep"
         )
+    # Extraction reads the paper and never searches: every declared value arrives
+    # unvalidated, except a pack-declared fixed mapping (``extraction_value_problems``).
+    problems = [
+        problem
+        for extracted_object in source.curatable_objects
+        for problem in extraction_value_problems(
+            extracted_object.payload, domain_pack.metadata, extracted_object.object_type,
+        )
+    ]
+    if problems:
+        raise ValueError("extraction staged validated values: " + "; ".join(problems))
 
     metadata = {
         "semantic_source": "domain_envelope.extracted_objects",

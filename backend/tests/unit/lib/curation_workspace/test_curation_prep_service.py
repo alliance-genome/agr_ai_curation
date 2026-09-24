@@ -718,3 +718,23 @@ async def test_run_curation_prep_allele_scope_uses_envelope_refs_not_prep_candid
     assert prep_output.review_row_count == 2
     assert prep_output.envelope_refs[0].domain_pack_id == "fixture.alliance.allele"
     assert captured["request"].candidate_count == 2
+
+
+def test_domain_envelope_normalizer_rejects_extraction_that_staged_a_validated_value():
+    """Extraction never searches: a declared value it stages is unvalidated. A resolved
+    identity in extractor output (a database pre-fill) is rejected at the one place every
+    extraction becomes an envelope."""
+
+    extraction_result = _make_domain_envelope_extraction_result()
+    payload = extraction_result.payload_json["curatable_objects"][0]["payload"]
+    payload.update({"resolution_state": "resolved", "lookup_outcome": "matched", "validator_explanation": None})
+
+    with pytest.raises(ValueError, match="extraction staged validated values: gene_mention_evidence.<object root>"):
+        domain_envelope_from_extraction_result(extraction_result)
+
+    for key in ("gene_symbol", "primary_external_id", "taxon"):
+        payload[key] = None
+    payload.update({"resolution_state": "unresolved", "lookup_outcome": "not_validated",
+                    "validator_explanation": "Not validated yet.", "proposed_primary_external_id": "EXAMPLE:1"})
+    envelope = domain_envelope_from_extraction_result(extraction_result)
+    assert envelope.extracted_objects[0].payload["lookup_outcome"] == "not_validated"
