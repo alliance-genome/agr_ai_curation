@@ -635,3 +635,18 @@ def test_resolved_component_without_a_record_name_stays_unresolved_alone(schemas
         "unresolved", "missing_expected_result_field", {},
     )
     assert result.missing_expected_fields == []
+
+
+@pytest.mark.parametrize(("outcomes", "expected"), [
+    (["not_found"], "not_found"), (["success"], "rejected_candidates"),
+    (["not_found", "error"], "transient"), ([], "not_validated"),
+])
+def test_a_condition_component_outcome_follows_the_shared_classification(outcomes, expected):
+    """V3: a component's outcome comes from its own lookups by the shared rule, with nothing filled."""
+
+    from types import SimpleNamespace
+
+    from agr_ai_curation_alliance.compact_conditions import _component_outcome
+
+    attempts = [SimpleNamespace(method="lookup", outcome=outcome) for outcome in outcomes]
+    assert _component_outcome(SimpleNamespace(request_id="request-1"), attempts) == expected

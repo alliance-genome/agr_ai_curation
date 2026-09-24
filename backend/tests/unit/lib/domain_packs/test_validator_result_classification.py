@@ -93,3 +93,14 @@ def test_a_validator_that_failed_to_produce_a_result_is_never_decisive(method, c
     for outcomes in MATRIX:
         result = _result(outcomes, missing=("curie",), methods={0: method})
         assert validator_failure_classification(result) == classification
+
+
+@pytest.mark.parametrize("empty", [None, "", [], {}])
+@pytest.mark.parametrize(("outcomes", "classification"), [
+    (("not_found",), "not_found"), (("success",), "rejected_candidates"),
+])
+def test_an_empty_resolved_value_fills_nothing(empty, outcomes, classification):
+    """V1: a result carrying an expected field with no value is not partly filled."""
+
+    result = _result(outcomes, missing=("curie", "name"), resolved_values={"curie": empty})
+    assert validator_failure_classification(result) == classification
