@@ -375,7 +375,7 @@ def test_a_curator_override_on_the_referencing_value_is_never_changed():
                 identity_keys=("maker_id", "maker_name"),
                 id_key="maker_id",
                 label_key="maker_name",
-                actor_id="curator-1",
+                actor_id="curator-1", actor_display_name="curator-1",
                 at="2026-09-23T20:00:00Z",
             )
             obj = obj.model_copy(update={"payload": payload})
@@ -431,7 +431,7 @@ def test_no_validated_reference_is_added_for_a_value_a_curator_override_sets():
     overridden = unresolved_value("the Delft workshop", identity_keys=("primary_external_id", "maker_name"))
     apply_curator_identity(overridden, {"primary_external_id": "GAL:M0007", "maker_name": "De Porceleyne Fles"},
                            identity_keys=("primary_external_id", "maker_name"), id_key="primary_external_id",
-                           label_key="maker_name", actor_id="curator-1", at="2026-09-24T00:00:00Z")
+                           label_key="maker_name", actor_id="curator-1", actor_display_name="curator-1", at="2026-09-24T00:00:00Z")
     result = _materialize(envelope_with(overridden), metadata, **_RESOLVED)
     assert not any(obj.object_type == "Maker" for obj in result.envelope.extracted_objects)
     assert result.envelope.extracted_objects[0].payload["maker"]["primary_external_id"] == "GAL:M0007"

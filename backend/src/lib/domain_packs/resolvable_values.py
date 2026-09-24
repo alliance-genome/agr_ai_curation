@@ -334,8 +334,15 @@ def _check_contract_fields(value: Any) -> tuple[str, str]:
         )
     override = value.get(CURATOR_OVERRIDE_KEY)
     if outcome == OUTCOME_CURATOR_OVERRIDE:
-        if not (isinstance(override, Mapping) and override.get("actor_id") and override.get("at")):
-            raise ResolvableValueError("A curator override records who (actor_id) and when (at)")
+        if not (
+            isinstance(override, Mapping)
+            and override.get("actor_id")
+            and override.get("actor_display_name")
+            and override.get("at")
+        ):
+            raise ResolvableValueError(
+                "A curator override records who (actor_id, actor_display_name) and when (at)"
+            )
     elif CURATOR_OVERRIDE_KEY in value:
         raise ResolvableValueError("Only a curator_override value records a curator override")
     if state == UNRESOLVED and outcome not in STORED_UNRESOLVED_OUTCOMES:
@@ -689,6 +696,7 @@ def apply_curator_identity(
     id_key: str | None,
     label_key: str | None,
     actor_id: str,
+    actor_display_name: str,
     at: str,
 ) -> dict[str, Any]:
     """A curator's edit of a resolvable value's identity keys: a validation override.
@@ -715,8 +723,10 @@ def apply_curator_identity(
     required = tuple(key for key in (id_key, label_key) if key)
     if not required or not set(required) <= set(identity_keys):
         raise ResolvableValueError("A curator override needs the value's declared id or label key")
-    if not actor_id or not at:
-        raise ResolvableValueError("A curator override records who (actor_id) and when (at)")
+    if not actor_id or not actor_display_name or not at:
+        raise ResolvableValueError(
+            "A curator override records who (actor_id, actor_display_name) and when (at)"
+        )
     overridden = is_curator_override(value)
     before = _resolution_snapshot(value, identity_keys)
     base = value[CURATOR_OVERRIDE_KEY]["previous"] if overridden else before
@@ -762,12 +772,18 @@ def apply_curator_identity(
         value.update(identity)
         value[RESOLUTION_STATE_KEY] = RESOLVED
         value[LOOKUP_OUTCOME_KEY] = OUTCOME_CURATOR_OVERRIDE
-        value[CURATOR_OVERRIDE_KEY] = {"actor_id": actor_id, "at": at, "previous": copy.deepcopy(base)}
+        value[CURATOR_OVERRIDE_KEY] = {
+            "actor_id": actor_id,
+            "actor_display_name": actor_display_name,
+            "at": at,
+            "previous": copy.deepcopy(base),
+        }
         action = "override"
     _check_contract_fields(value)
     return {
         "action": action,
         "actor_id": actor_id,
+        "actor_display_name": actor_display_name,
         "at": at,
         "previous": before,
         "identity": {key: copy.deepcopy(value.get(key)) for key in identity_keys},
@@ -856,9 +872,12 @@ def _event_path_tokens(path: str) -> tuple[str | int, ...] | None:
 def validator_materialized_paths(object_metadata: Mapping[str, Any] | None) -> tuple[tuple[str | int, ...], ...]:
     """Payload paths validator write-back events recorded for one object.
 
-    Both packaged binding events (``materialized_field_paths`` and the keys of
-    ``original_values``) and closed-profile validator events (``field_paths``)
-    count.
+    Packaged binding events count the paths they wrote
+    (``materialized_field_paths``); closed-profile validator events count
+    their ``field_paths``. An event's ``original_values`` records what the
+    expected-result paths held before, written or not, so it counts only for
+    an event recorded before ``materialized_field_paths`` existed, which was
+    written only for resolved values it wrote.
     """
 
     if not isinstance(object_metadata, Mapping):
@@ -868,7 +887,9 @@ def validator_materialized_paths(object_metadata: Mapping[str, Any] | None) -> t
     for event in events if isinstance(events, list) else ():
         if not isinstance(event, Mapping):
             continue
-        recorded.extend(event.get("materialized_field_paths") or [])
+        if "materialized_field_paths" in event:
+            recorded.extend(event.get("materialized_field_paths") or [])
+            continue
         original_values = event.get("original_values")
         if isinstance(original_values, Mapping):
             recorded.extend(original_values)

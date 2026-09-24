@@ -551,7 +551,7 @@ def test_a_curator_identity_edit_on_a_go_value_is_a_curator_override(field_path,
     result = apply_curator_field_patch(
         envelope, pack,
         _curator_patch(envelope, obj.object_id, field_path, before=before, value=value, operation=operation),
-        current_revision=1, actor_id="curator-1",
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1",
     )
 
     assert result.accepted, result.errors
@@ -575,7 +575,7 @@ def test_a_go_curator_override_needs_both_the_identifier_and_the_name():
 
     result = apply_curator_field_patch(
         envelope, pack, _curator_patch(envelope, obj.object_id, "gene_product.curie", before=None, value="RGD:2325"),
-        current_revision=1, actor_id="curator-1",
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1",
     )
 
     assert not result.accepted
@@ -595,7 +595,7 @@ def test_a_go_whole_value_override_may_not_change_other_keys():
         envelope, pack,
         _curator_patch(envelope, obj.object_id, "gene_product", before=current,
                        value={**current, "curie": "RGD:2325", "label": "Mir21", "entity_type": "gene"}),
-        current_revision=1, actor_id="curator-1",
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1",
     )
 
     assert not result.accepted
@@ -623,7 +623,7 @@ def test_go_paper_wording_and_validation_state_are_not_curator_editable(field_pa
     result = apply_curator_field_patch(
         envelope, pack,
         _curator_patch(envelope, obj.object_id, field_path, before=obj.payload[value_path].get(key), value=value),
-        current_revision=1, actor_id="curator-1",
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1",
     )
 
     assert not result.accepted
@@ -717,7 +717,7 @@ def test_a_legacy_go_value_is_overridden_from_its_review_row_stored_identity():
         legacy_envelope, pack,
         _curator_patch(legacy_envelope, legacy_object.object_id, "gene_product.curie",
                        before=reading["stored_identity"], value=identity, operation="replace_identity"),
-        current_revision=1, actor_id="curator-1",
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1",
     )
     assert result.accepted, result.errors
     gene_product = result.envelope.extracted_objects[0].payload["gene_product"]

@@ -1569,7 +1569,7 @@ def test_an_override_settles_a_binding_whose_other_written_value_is_absent():
     metadata = _metadata(expected=expected)
     site = unresolved_value("skin", identity_keys=TERM_KEYS)
     apply_curator_identity(site, {"curie": "ONT:9", "name": "skin"}, identity_keys=TERM_KEYS, id_key="curie",
-                           label_key="name", actor_id="curator-1", at="2026-09-24T00:00:00+00:00")
+                           label_key="name", actor_id="curator-1", actor_display_name="curator-1", at="2026-09-24T00:00:00+00:00")
 
     def codes(payload):
         envelope = _envelope(payload)
@@ -1581,3 +1581,20 @@ def test_an_override_settles_a_binding_whose_other_written_value_is_absent():
     assert "domain_pack.curator_override" in codes({"site": dict(site)})
     assert "domain_pack.validator_unresolved" in codes(
         {"site": dict(site), "copy": unresolved_value("skin", identity_keys=TERM_KEYS)})
+
+
+def test_an_events_original_values_count_only_for_events_before_written_paths_were_recorded():
+    """Contract S7: an event's original_values names paths it did not necessarily write."""
+
+    current = {"validator_resolved_value_materialization": [
+        {"materialized_field_paths": ["site.curie"], "original_values": {"copy.curie": "ONT:9"}},
+    ]}
+    assert validator_event_covers(current, "site")
+    assert not validator_event_covers(current, "copy")
+    # An event recorded before materialized_field_paths existed was written only for
+    # the resolved values it wrote; its original_values name those.
+    previous = {"validator_resolved_value_materialization": [{"original_values": {"copy.curie": "ONT:9"}}]}
+    assert validator_event_covers(previous, "copy")
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    unwritten = effective_payload({"copy": {"curie": "ONT:9", "name": "old"}}, {"copy": spec}, object_metadata=current)
+    assert unwritten["copy"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
