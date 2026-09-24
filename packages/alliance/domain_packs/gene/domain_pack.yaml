@@ -462,12 +462,6 @@ object_definitions:
           hide_when_empty: true
           evidence_locator_field: true
 fixture_packs:
-  - fixture_pack_id: tool_verified
-    display_name: Tool-verified gene mention evidence fixtures
-    path: fixtures/tool_verified.yaml
-    description: Pending-ref domain envelopes converted from verified gene extraction fixtures.
-    object_types:
-      - gene_mention_evidence
   - fixture_pack_id: daf16_builder_pending
     display_name: Builder-materialized gene mention evidence fixtures
     path: fixtures/daf16_builder_pending.yaml

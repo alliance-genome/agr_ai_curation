@@ -29,7 +29,6 @@ from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
     GENE_DOMAIN_PACK_ID,
     GENE_MENTION_EVIDENCE_MODEL_ID,
     GENE_MENTION_EVIDENCE_OBJECT_TYPE,
-    tool_verified_gene_output_to_pending_envelope,
 )
 
 
@@ -514,32 +513,28 @@ def test_gene_package_normalizer_drops_zfin_compound_like_gene_objects():
     ]["warnings"]
 
 
-def test_gene_domain_pack_fixture_converts_to_pending_gene_mention_envelope():
-    raw_fixture_path = (
-        REPO_ROOT
-        / "backend"
-        / "tests"
-        / "fixtures"
-        / "domain_packs"
-        / "gene"
-        / "tool_verified_gene_output.yaml"
-    )
-    raw_fixture = yaml.safe_load(raw_fixture_path.read_text(encoding="utf-8"))
+def test_builder_gene_envelope_carries_evidence_quotes_into_validator_requests():
+    from agr_ai_curation_alliance.domain_packs import load_alliance_domain_pack_registry
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.domain_packs.loader import load_domain_fixture_pack
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 
-    converted = tool_verified_gene_output_to_pending_envelope(raw_fixture)
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(GENE_DOMAIN_PACK_ID)
+    fixture_ref = registry.get_fixture_pack_ref(GENE_DOMAIN_PACK_ID, "daf16_builder_pending")
+    converted = load_domain_fixture_pack(pack.metadata_path.parent / fixture_ref.path).fixtures[0].envelope
 
     assert converted.domain_pack_id == GENE_DOMAIN_PACK_ID
     assert converted.extracted_objects[0].object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
-    assert converted.extracted_objects[0].payload["primary_external_id"] == "WB:WBGene00000912"
+    assert converted.extracted_objects[0].payload["lookup_outcome"] == "not_validated"
     assert LEGACY_SEMANTIC_LIST_FIELDS.isdisjoint(converted.metadata)
     assert all(LEGACY_SEMANTIC_LIST_FIELDS.isdisjoint(obj.payload) for obj in converted.extracted_objects)
-    from agr_ai_curation_alliance.domain_packs import load_alliance_domain_pack_registry
-    from src.lib.domain_packs.input_selectors import build_domain_validation_request
-    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 
-    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
     matches = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(converted)
-    records = {record["evidence_record_id"]: record for record in converted.metadata["evidence_records"]}
+    records = {
+        record["evidence_record_id"]: record
+        for record in converted.metadata["extraction_metadata"]["evidence_records"]
+    }
     assert matches
     for match in matches:
         built = build_domain_validation_request(match)

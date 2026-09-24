@@ -84,14 +84,39 @@ def _retag_envelope(envelope, *, envelope_id: str):
 
 def _alliance_gate_case(case_key: str):
     if case_key == "gene":
+        from agr_ai_curation_alliance.domain_packs import load_alliance_domain_pack_registry
         from agr_ai_curation_alliance.domain_packs.gene import (
+            GENE_DOMAIN_PACK_ID,
             GENE_MENTION_EVIDENCE_OBJECT_TYPE,
             GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY,
-            tool_verified_gene_output_to_pending_envelope,
         )
+        from src.lib.domain_packs.loader import load_domain_fixture_pack
+        from src.lib.domain_packs.resolvable_values import resolved_value
 
-        envelope = tool_verified_gene_output_to_pending_envelope(
-            _fixture_yaml("gene", "tool_verified_gene_output.yaml")
+        registry = load_alliance_domain_pack_registry()
+        fixture_ref = registry.get_fixture_pack_ref(GENE_DOMAIN_PACK_ID, "daf16_builder_pending")
+        envelope = load_domain_fixture_pack(
+            registry.get_pack(GENE_DOMAIN_PACK_ID).metadata_path.parent / fixture_ref.path
+        ).fixtures[0].envelope
+        # The builder's daf-16 envelope after the gene validator wrote its identity back.
+        domain_object = envelope.extracted_objects[0]
+        validated_payload = {
+            **domain_object.payload,
+            **resolved_value(
+                domain_object.payload["mention"],
+                {
+                    "primary_external_id": "WB:WBGene00000912",
+                    "gene_symbol": "daf-16",
+                    "taxon": "NCBITaxon:6239",
+                },
+            ),
+        }
+        envelope = envelope.model_copy(
+            update={
+                "extracted_objects": [
+                    domain_object.model_copy(update={"payload": validated_payload})
+                ]
+            }
         )
         return {
             "adapter_key": "gene",

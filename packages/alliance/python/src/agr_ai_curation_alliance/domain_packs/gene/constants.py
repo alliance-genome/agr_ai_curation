@@ -9,9 +9,6 @@ GENE_DOMAIN_PACK_VERSION = "0.1.0"
 GENE_MENTION_EVIDENCE_OBJECT_TYPE = "gene_mention_evidence"
 GENE_MENTION_EVIDENCE_MODEL_ID = "GeneMentionEvidencePayload"
 GENE_REFERENCE_VALIDATOR_BINDING_ID = "alliance_gene_reference_lookup"
-GENE_REFERENCE_TOOL_NAME = "agr_curation_query"
-GENE_REFERENCE_TOOL_METHOD = "get_gene_by_id"
-GENE_DOMAIN_PACK_CONVERTER_ID = "agr_ai_curation_alliance.domain_packs.gene"
 
 GENE_LINKML_SCHEMA_ID = "alliance.linkml.Gene"
 GENE_LINKML_SCHEMA_NAME = "Gene"
@@ -32,7 +29,6 @@ GENE_MATERIALIZER_ID = "gene.builder_materializer.v1"
 GENE_OBJECT_ROLE = "validated_reference"
 
 __all__ = [
-    "GENE_DOMAIN_PACK_CONVERTER_ID",
     "GENE_DOMAIN_PACK_ID",
     "GENE_DOMAIN_PACK_VERSION",
     "GENE_LINKML_SCHEMA_ID",
@@ -43,7 +39,5 @@ __all__ = [
     "GENE_MENTION_EVIDENCE_MODEL_ID",
     "GENE_MENTION_EVIDENCE_OBJECT_TYPE",
     "GENE_OBJECT_ROLE",
-    "GENE_REFERENCE_TOOL_METHOD",
-    "GENE_REFERENCE_TOOL_NAME",
     "GENE_REFERENCE_VALIDATOR_BINDING_ID",
 ]
