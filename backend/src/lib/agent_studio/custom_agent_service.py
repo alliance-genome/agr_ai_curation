@@ -453,19 +453,73 @@ def _system_managed_tool_ids(db: Session, tool_ids: List[str]) -> List[str]:
     return managed
 
 
+def _withhold_inherited_identity_lookups(
+    tool_ids: List[str],
+    inherited_tool_ids: List[str],
+    *,
+    output_state: Optional[str] = None,
+    output_schema_key: Optional[str] = None,
+) -> List[str]:
+    """Drop the identity lookups an extraction agent inherited from its source.
+
+    Editors send the saved tool list back unchanged, inherited helpers included, so
+    inheritance is withheld even when those tools are in the request. A lookup the
+    curator attached is never inherited and stays, so validation reports it.
+    """
+    from src.lib.packages.tool_roles import identity_lookup_tool_names, is_extraction_agent
+
+    tool_ids = _dedupe_tool_ids(tool_ids)
+    if not is_extraction_agent(
+        [*tool_ids, *inherited_tool_ids],
+        output_state=output_state,
+        output_schema_key=output_schema_key,
+    ):
+        return tool_ids
+    inherited_lookups = set(inherited_tool_ids) & identity_lookup_tool_names()
+    return [tool_id for tool_id in tool_ids if tool_id not in inherited_lookups]
+
+
 def _merge_system_managed_tool_ids(
     requested_tool_ids: List[str],
     inherited_tool_ids: List[str],
+    *,
+    output_state: Optional[str] = None,
+    output_schema_key: Optional[str] = None,
 ) -> List[str]:
     """Requested tools plus inherited helpers; an extraction agent never inherits identity lookups."""
-    from src.lib.packages.tool_roles import identity_lookup_tool_names, is_extraction_agent
+    return _withhold_inherited_identity_lookups(
+        [*requested_tool_ids, *inherited_tool_ids],
+        inherited_tool_ids,
+        output_state=output_state,
+        output_schema_key=output_schema_key,
+    )
 
-    merged = _dedupe_tool_ids([*requested_tool_ids, *inherited_tool_ids])
-    if not is_extraction_agent(merged):
-        return merged
-    # Only inheritance is withheld: a lookup the curator requested stays, so validation reports it.
-    inherited_lookups = (set(inherited_tool_ids) - set(requested_tool_ids)) & identity_lookup_tool_names()
-    return [tool_id for tool_id in merged if tool_id not in inherited_lookups]
+
+def _saved_output_state(
+    agent,
+    *,
+    output_contract,
+    new_generic_profile,
+    revise_generic_profile,
+    schema_provided: bool,
+    output_schema_key: Optional[str],
+    previous_output,
+) -> str:
+    """The output state _record_execution_save will record for this save.
+
+    Before a new agent's row exists (``agent`` is None) its selected schema decides.
+    """
+    if new_generic_profile is not None or revise_generic_profile is not None:
+        return "structured_extraction"
+    if output_contract is not None:
+        return AgentOutputContract.model_validate(output_contract).output_state
+    if schema_provided or agent is None:
+        return initial_output_contract(output_schema_key).output_state
+    if previous_output is None:
+        from src.lib.agent_studio.domain_output_contract import initial_agent_output_contract
+
+        return initial_agent_output_contract(agent).output_state
+    return previous_output.output_state
 
 
 def _validate_requested_tool_ids(
@@ -1060,19 +1114,6 @@ def create_custom_agent(
     effective_model_id = _validate_model_id(model_id or parent_defaults["model_id"] or "")
 
     parent_tool_ids = list(parent_defaults["tool_ids"] or [])
-    requested_tool_ids = _validate_requested_tool_ids(
-        db,
-        tool_ids,
-        inherited_tool_ids=parent_tool_ids,
-    )
-    if requested_tool_ids is not None:
-        inherited_system_tool_ids = _system_managed_tool_ids(db, parent_tool_ids)
-        effective_tool_ids = _merge_system_managed_tool_ids(
-            requested_tool_ids,
-            inherited_system_tool_ids,
-        )
-    else:
-        effective_tool_ids = _merge_system_managed_tool_ids([], parent_tool_ids)
     effective_output_schema_key = _normalize_output_schema_key(
         _selected_output_schema(
             output_contract, new_generic_profile,
@@ -1081,6 +1122,32 @@ def create_custom_agent(
             output_schema_key_provided or output_schema_key is not None,
         )
     )
+    effective_output = {
+        "output_state": _saved_output_state(
+            None,
+            output_contract=output_contract,
+            new_generic_profile=new_generic_profile,
+            revise_generic_profile=None,
+            schema_provided=output_schema_key_provided or output_schema_key is not None,
+            output_schema_key=effective_output_schema_key,
+            previous_output=None,
+        ),
+        "output_schema_key": effective_output_schema_key,
+    }
+    if tool_ids is not None:
+        inherited_system_tool_ids = _system_managed_tool_ids(db, parent_tool_ids)
+        requested_tool_ids = _validate_requested_tool_ids(
+            db,
+            _withhold_inherited_identity_lookups(tool_ids, inherited_system_tool_ids, **effective_output),
+            inherited_tool_ids=parent_tool_ids,
+        ) or []
+        effective_tool_ids = _merge_system_managed_tool_ids(
+            requested_tool_ids,
+            inherited_system_tool_ids,
+            **effective_output,
+        )
+    else:
+        effective_tool_ids = _merge_system_managed_tool_ids([], parent_tool_ids, **effective_output)
     _validate_output_schema_excludes_finalize_tool(
         output_schema_key=effective_output_schema_key,
         tool_ids=list(effective_tool_ids),
@@ -1554,23 +1621,6 @@ def update_custom_agent(
         *previous_snapshot.system_managed_tool_ids,
         *_system_managed_tool_ids(db, list(previous_snapshot.tool_ids)),
     ])
-    if tool_ids is not None:
-        validated_tool_ids = _validate_requested_tool_ids(
-            db,
-            tool_ids,
-            inherited_tool_ids=inherited_system_tool_ids,
-        ) or []
-        next_tool_ids = _merge_system_managed_tool_ids(
-            validated_tool_ids,
-            inherited_system_tool_ids,
-        )
-        existing_tool_ids = list(custom_agent.tool_ids or [])
-        if existing_tool_ids and not next_tool_ids and not allow_empty_tool_ids:
-            raise ValueError(
-                "Refusing to clear all tool_ids from an existing agent without "
-                "explicit override. "
-                "Re-attach at least one tool before saving."
-            )
     next_output_schema_key = _normalize_output_schema_key(
         _selected_output_schema(
             output_contract, new_generic_profile,
@@ -1580,6 +1630,36 @@ def update_custom_agent(
             revise_generic_profile=revise_generic_profile,
         )
     )
+    next_output = {
+        "output_state": _saved_output_state(
+            custom_agent,
+            output_contract=output_contract,
+            new_generic_profile=new_generic_profile,
+            revise_generic_profile=revise_generic_profile,
+            schema_provided=output_schema_key_provided or output_schema_key is not None,
+            output_schema_key=next_output_schema_key,
+            previous_output=previous_output,
+        ),
+        "output_schema_key": next_output_schema_key,
+    }
+    if tool_ids is not None:
+        validated_tool_ids = _validate_requested_tool_ids(
+            db,
+            _withhold_inherited_identity_lookups(tool_ids, inherited_system_tool_ids, **next_output),
+            inherited_tool_ids=inherited_system_tool_ids,
+        ) or []
+        next_tool_ids = _merge_system_managed_tool_ids(
+            validated_tool_ids,
+            inherited_system_tool_ids,
+            **next_output,
+        )
+        existing_tool_ids = list(custom_agent.tool_ids or [])
+        if existing_tool_ids and not next_tool_ids and not allow_empty_tool_ids:
+            raise ValueError(
+                "Refusing to clear all tool_ids from an existing agent without "
+                "explicit override. "
+                "Re-attach at least one tool before saving."
+            )
     _validate_output_schema_excludes_finalize_tool(
         output_schema_key=next_output_schema_key,
         tool_ids=list(next_tool_ids),
