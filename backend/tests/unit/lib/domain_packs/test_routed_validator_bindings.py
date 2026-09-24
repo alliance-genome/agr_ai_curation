@@ -347,6 +347,39 @@ def test_route_selectors_are_checked_against_the_target_object(tmp_path: Path):
         DomainPackValidationRegistry.from_domain_pack(pack)
 
 
+
+def test_a_routing_value_inside_a_list_element_fails_at_load(tmp_path: Path):
+    """Core review nit: a route is chosen per object (and edits reach mirrors through that
+    one route), so a routing value that could differ per list element is refused."""
+
+    pack_path = tmp_path / "fixture.routed"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(
+        _pack_text().replace(
+            "    fields:\n      - field_path: subject.kind",
+            "    fields:\n      - field_path: subject\n        field_type: object\n        multivalued: true\n"
+            "      - field_path: subject.kind",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    metadata = load_domain_pack_metadata(metadata_path)
+    pack = LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=pack_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+    )
+
+    with pytest.raises(
+        ValidationRegistryError,
+        match="route_by path 'subject.kind' lies in a multivalued field of object_type 'Claim'",
+    ):
+        DomainPackValidationRegistry.from_domain_pack(pack)
+
 # --- A curator override on a routed value -----------------------------------------------
 
 _OVERRIDE_KEYS = ("curie", "name")

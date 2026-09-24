@@ -1789,6 +1789,17 @@ def _validate_active_binding_selectors(
                 target_definitions=target_definitions,
                 object_definitions=object_definitions,
             )
+            # A route is chosen per object, and edits carried to mirrors use that one
+            # route, so the value that chooses it cannot vary per list element.
+            for object_definition in target_definitions:
+                declared_fields = {field.field_path: field for field in object_definition.fields}
+                if _multivalued_fanout_boundaries(binding.route_by_path, declared_fields):
+                    errors.append(
+                        f"Domain pack '{domain_pack.pack_id}' active validator binding "
+                        f"'{binding.binding_id}' route_by path '{binding.route_by_path}' lies in "
+                        f"a multivalued field of object_type '{object_definition.object_type}'; "
+                        "a binding chooses one route per object"
+                    )
         routed_inputs = (
             [
                 (f"routes.{route_value}.{input_name}", selector)
