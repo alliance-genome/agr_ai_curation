@@ -11,6 +11,11 @@ unverified one shows its stored text as "(legacy, unverified)" paper wording.
 Exports apply that rule themselves; the disease review rows apply it here. The
 records are not validated again: re-running extraction produces a record in the
 current format.
+
+The structural DiseaseAnnotationSubject and DOTerm reference objects now hold
+only paper wording. An old one stored the extractor's unverified subject or
+DOID; it reads as that text labelled "(legacy, unverified)", never as an
+identity.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from typing import Any
 from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
 from src.lib.domain_packs.not_validatable import NOT_VALIDATABLE_DETAIL_KEY
 from src.lib.domain_packs.resolvable_values import (
+    LEGACY_UNVERIFIED_SUFFIX,
     MENTION_KEY,
     has_resolution_state,
 )
@@ -34,7 +40,13 @@ from src.schemas.domain_envelope import (
     ValidationFindingStatus,
 )
 
-from .constants import DISEASE_DOMAIN_PACK_ID, DISEASE_OBJECT_TYPE, DISEASE_SUBJECT_SUBTYPES
+from .constants import (
+    DISEASE_DOMAIN_PACK_ID,
+    DISEASE_OBJECT_TYPE,
+    DISEASE_SUBJECT_OBJECT_TYPE,
+    DISEASE_SUBJECT_SUBTYPES,
+    DISEASE_TERM_OBJECT_TYPE,
+)
 
 
 PREVIOUS_FORMAT_FINDING_CODE = "agr.alliance.disease.previous_format"
@@ -52,6 +64,14 @@ _PREVIOUS_STRING_LISTS = ("evidence_code_curies", "disease_qualifier_names", "wi
 # Values that were already objects; the previous format stored them without paper wording.
 _PREVIOUS_OBJECT_VALUES = ("disease_annotation_object", "disease_annotation_subject", "data_provider")
 
+
+# The structural reference objects: the (label, id) keys an old one stored, and the keys a
+# current one holds (paper wording only).
+_REFERENCE_OBJECT_IDENTITY_KEYS = {
+    DISEASE_SUBJECT_OBJECT_TYPE: ("subject_label", "subject_identifier"),
+    DISEASE_TERM_OBJECT_TYPE: ("name", "curie"),
+}
+_REFERENCE_OBJECT_KEYS = frozenset({MENTION_KEY, "source_mentions", "resolution_note"})
 
 # Every value a current-format annotation stores with the contract state.
 _CURRENT_VALUE_KEYS = (
@@ -114,16 +134,33 @@ def previous_format_display_payload(payload: Mapping[str, Any]) -> dict[str, Any
     return display
 
 
+def _previous_reference_display_payload(object_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """An old subject or DOTerm reference as paper wording only: its stored text, unverified."""
+
+    label_key, id_key = _REFERENCE_OBJECT_IDENTITY_KEYS[object_type]
+    label = str(payload.get(label_key) or "").strip()
+    identifier = str(payload.get(id_key) or "").strip()
+    stored = f"{label} ({identifier})" if label and identifier else label or identifier
+    display: dict[str, Any] = {MENTION_KEY: f"{stored} {LEGACY_UNVERIFIED_SUFFIX}"} if stored else {}
+    if "source_mentions" in payload:
+        display["source_mentions"] = copy.deepcopy(payload["source_mentions"])
+    return display
+
+
 def legacy_display_payload(object_type: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-    """The pack's legacy display mapper: previous-format annotations in the current shape.
+    """The pack's legacy display mapper: previous-format records in the current shape.
 
     Registered for the disease pack (``legacy_display_mapper``) so exports read
-    previous-format records the way the review screen does; any other payload
-    comes back unchanged.
+    previous-format records the way the review screen does. Previous-format
+    annotations are reshaped into value objects; an old subject or DOTerm
+    reference (one holding more than paper wording) reads as its stored text,
+    unverified. Any other payload comes back unchanged.
     """
 
     if object_type in _ANNOTATION_OBJECT_TYPES and is_previous_format(payload):
         return previous_format_display_payload(payload)
+    if object_type in _REFERENCE_OBJECT_IDENTITY_KEYS and set(payload) - _REFERENCE_OBJECT_KEYS:
+        return _previous_reference_display_payload(object_type, payload)
     return payload
 
 

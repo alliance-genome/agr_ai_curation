@@ -50,3 +50,42 @@ def test_a_legacy_record_reads_once_through_the_legacy_rule(fixture_path):
         assert INVALID_RECORD_SUFFIX not in mention, reading
         assert mention.count(LEGACY_UNVERIFIED_SUFFIX) <= 1, reading
         assert reading.get("issue") is None, reading
+
+
+def test_legacy_disease_subject_and_term_references_show_only_unverified_wording():
+    """Fix-wave re-review S4: an old DiseaseAnnotationSubject or DOTerm reference stored the
+    extractor's subject id or DOID; its row shows that text labelled "(legacy, unverified)",
+    never as an identity, and exports read it the same way."""
+
+    from agr_ai_curation_alliance.domain_packs.disease.legacy import legacy_display_payload
+
+    references = 0
+    for fixture_path in sorted(LEGACY_FIXTURES.glob("disease__*.yaml")):
+        fixtures = load_domain_fixture_pack(fixture_path)
+        materializer = _registered_materializer_for(fixtures.domain_pack_id)
+        for fixture in fixtures.fixtures:
+            references += _check_disease_references(materializer, fixture.envelope, legacy_display_payload)
+    assert references, "the legacy disease fixtures store subject and term references"
+
+
+def _check_disease_references(materializer, envelope, legacy_display_payload) -> int:
+    stored = {obj.object_id or obj.pending_ref_id: obj.payload for obj in envelope.extracted_objects}
+    references = 0
+    for row in materializer.materialize(envelope, envelope_revision=1):
+        if row.object_type not in ("DiseaseAnnotationSubject", "DOTerm"):
+            continue
+        references += 1
+        fields = {field.field_path: field.value for field in row.summary_fields}
+        assert {"curie", "name", "subject_identifier", "subject_label", "resolution_state"}.isdisjoint(fields)
+        assert fields["mention"].endswith(LEGACY_UNVERIFIED_SUFFIX), fields
+        assert legacy_display_payload(row.object_type, stored[row.object_id])["mention"] == fields["mention"]
+    return references
+
+
+def test_a_current_disease_reference_reads_as_stored():
+    from agr_ai_curation_alliance.domain_packs.disease.legacy import legacy_display_payload
+
+    current = {"mention": "Alzheimer's disease", "source_mentions": ["a fly model of Alzheimer's disease"]}
+
+    assert legacy_display_payload("DOTerm", current) is current
+    assert legacy_display_payload("DiseaseAnnotationSubject", {"mention": "Appl"}) == {"mention": "Appl"}
