@@ -72,7 +72,7 @@ def receipt(mode):
 RETIRED_MODEL = "retired-model"
 
 
-def install_resolver(monkeypatch, receipts, *, model_id="catalog-model"):
+def install_resolver(monkeypatch, receipts, *, model_id="catalog-model", tool_ids=(), group_tool_policy=None):
     by_id = {item.agent_revision_id: item for item in receipts}
     # The model catalog: every model but the retired one.
     monkeypatch.setattr(module, "get_model", lambda requested: None if requested == RETIRED_MODEL else object())
@@ -82,7 +82,8 @@ def install_resolver(monkeypatch, receipts, *, model_id="catalog-model"):
         item = by_id[revision_id]
         return SimpleNamespace(id=revision_id, revision=item.revision,
                                fingerprint=item.fingerprint), SimpleNamespace(
-            output_contract=item.output_contract, tool_ids=[], curation=None,
+            output_contract=item.output_contract, tool_ids=list(tool_ids), curation=None,
+            group_tool_policy=group_tool_policy or {},
             template_source=None, default_export_execution_mode=None,
             structured_finalization=None, model_id=model_id,
         )
@@ -775,3 +776,29 @@ def test_a_pinned_revision_on_a_model_no_longer_in_the_catalog_blocks_before_the
     assert (finding.code, finding.severity, finding.node_id) == ("unavailable_model", "error", "node_0")
     assert finding.message == "This step uses a model that is no longer available; re-save the agent."
     assert resolved.entries_by_node == {"node_0": None}
+
+
+def test_a_pinned_extraction_revision_with_lookup_tools_blocks_before_the_run(monkeypatch):
+    from src.lib.packages import tool_roles
+
+    monkeypatch.setattr(tool_roles, "identity_lookup_tool_names", lambda: frozenset({"lookup_demo"}))
+    monkeypatch.setattr(tool_roles, "is_validator_output_schema", lambda key: key == "AlleleResultEnvelope")
+    pin = receipt("domain")
+    install_resolver(monkeypatch, [pin], tool_ids=["search_document", "lookup_demo"])
+
+    resolved = module.resolve_flow_execution_revisions(Mock(), flow(pin), user_id=7, active_group_ids=[])
+
+    [finding] = resolved.findings
+    assert (finding.code, finding.severity, finding.node_id) == (
+        "extraction_identity_lookup_tools", "error", "node_0",
+    )
+    assert "database lookup tools (lookup_demo)" in finding.message
+    assert resolved.entries_by_node == {"node_0": None}
+
+    # A pinned validator keeps its lookups.
+    validator = receipt("domain")
+    validator.output_contract.output_schema_key = "AlleleResultEnvelope"
+    install_resolver(monkeypatch, [validator], tool_ids=["lookup_demo"])
+    resolved = module.resolve_flow_execution_revisions(Mock(), flow(validator), user_id=7, active_group_ids=[])
+    assert not [f for f in resolved.findings if f.code == "extraction_identity_lookup_tools"]
+    assert resolved.entries_by_node["node_0"] is not None

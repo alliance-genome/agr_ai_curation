@@ -497,7 +497,7 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
     monkeypatch.setattr(execution_revisions, "authorize_execution_receipt", authorize)
     monkeypatch.setattr(execution_revisions, "get_execution_revision", lambda *args, **kwargs: (
         SimpleNamespace(id=pin.agent_revision_id),
-        SimpleNamespace(tool_ids=[], output_contract=pin.output_contract,
+        SimpleNamespace(tool_ids=[], group_tool_policy={}, output_contract=pin.output_contract,
                         template_source=None, default_export_execution_mode=None,
                         structured_finalization=None, model_id="catalog-model", curation={
                             "adapter_key": "gene", "domain_pack_id": "gene", "launchable": True,
