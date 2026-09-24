@@ -177,6 +177,10 @@ def test_rgd_go_evidence_policy_prompt_encodes_only_the_approved_profile():
         assert token in prompt
     assert "disease curation" in prompt
     assert "Never guess an RGD identifier" in prompt
+    # The identity validators run first; the policy reads what they confirmed.
+    assert "the matched identity when one was confirmed" not in prompt
+    assert "`proposed_curie`, a claim and never the identity" in prompt
+    assert "what the identity validators confirmed before you run" in prompt
 
 
 @pytest.mark.parametrize(
@@ -872,3 +876,37 @@ def test_policy_never_passes_a_proposal_with_an_unresolved_qualifier(monkeypatch
 
     assert result.policy_violations == ["qualifier_unresolved"]
     assert (result.status, result.decision) == ("unresolved", "curator_review_required")
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {**_with_from_entry("RGD:621255"), "proposed_curie": "RGD:621255"},
+        {
+            **_with_from_entry("RGD:621255"),
+            "lookup_outcome": "curator_override",
+            "overruled_curie": "RGD:1304619",
+            "curator_override": {"actor_id": "curator-1", "previous": {}},
+        },
+    ],
+)
+def test_policy_reads_with_from_entries_as_validation_leaves_them(monkeypatch, entry):
+    """A With/From entry carries the paper's ID claim and any curator override beside the identity."""
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)[
+        "RGDGOEvidencePolicyValidationResult"
+    ]
+
+    result = schema.model_validate(
+        _result_payload(
+            evidence_basis="physical_interaction",
+            proposed_evidence_code="IPI",
+            proposed_evidence_eco_curie="ECO:0000353",
+            proposed_with_from=[entry],
+            proposed_go_term_curie="GO:0005515",
+        )
+    )
+
+    assert result.proposed_with_from[0].curie == "RGD:621255"
+    assert result.policy_violations == []

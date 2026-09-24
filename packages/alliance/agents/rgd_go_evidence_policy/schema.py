@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, StrictBool, StrictStr, ValidationInfo, model_validator
 
@@ -78,11 +78,20 @@ INSUFFICIENT_EVIDENCE_MESSAGE = (
 
 
 class RGDGOWithFromEntry(DomainValidatorBaseModel):
-    """One With/From entry as the candidate stores it: paper wording and, when matched, its identifier."""
+    """One With/From entry as the candidate stores it: paper wording and, when validated, its identifier."""
 
     mention: StrictStr = Field(description="With/From entry as the paper words it")
+    proposed_curie: StrictStr | None = Field(
+        default=None, description="Identifier the paper itself prints; a claim, never the identity"
+    )
     curie: StrictStr | None = Field(
-        default=None, description="Identifier a lookup matched; null while unresolved"
+        default=None, description="Gene identifier validation confirmed; null while unresolved"
+    )
+    overruled_curie: StrictStr | None = Field(
+        default=None, description="An identity validation or a curator overruled; informational only"
+    )
+    curator_override: dict[str, Any] | None = Field(
+        default=None, description="The curator's override record, when a curator set the identifier"
     )
     resolution_state: Literal["resolved", "unresolved"] | None = Field(
         default=None, description="Whether a lookup matched the entry"
@@ -104,6 +113,12 @@ class RGDGOQualifierEntry(DomainValidatorBaseModel):
     mention: StrictStr = Field(description="Qualifier as the paper supports it")
     name: StrictStr | None = Field(
         default=None, description="GO relation the builder matched; null while unresolved"
+    )
+    overruled_name: StrictStr | None = Field(
+        default=None, description="A relation a curator overruled; informational only"
+    )
+    curator_override: dict[str, Any] | None = Field(
+        default=None, description="The curator's override record, when a curator set the relation"
     )
     resolution_state: Literal["resolved", "unresolved"] | None = Field(
         default=None, description="Whether the qualifier matched an allowed GO relation"

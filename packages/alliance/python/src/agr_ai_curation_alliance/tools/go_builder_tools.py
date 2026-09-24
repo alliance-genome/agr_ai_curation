@@ -42,6 +42,7 @@ from agr_ai_curation_alliance.domain_packs.go.values import (
     BUILDER_OWNED_KEYS,
     GENE_PRODUCT_IDENTITY,
     GO_TERM_IDENTITY,
+    REFERENCE_IDENTITY,
     evidence_code_value,
     gene_product_value,
     go_term_value,
@@ -569,7 +570,15 @@ class _PatchValueError(ValueError):
 
 # Keys the extractor never writes: validation (or a curator override) fills them in.
 _EXTRACTOR_FORBIDDEN_KEYS = frozenset(
-    {*BUILDER_OWNED_KEYS, *GENE_PRODUCT_IDENTITY, *GO_TERM_IDENTITY, "code", "eco_curie", "name"}
+    {
+        *BUILDER_OWNED_KEYS,
+        *GENE_PRODUCT_IDENTITY,
+        *GO_TERM_IDENTITY,
+        *REFERENCE_IDENTITY,
+        "code",
+        "eco_curie",
+        "name",
+    }
 )
 
 

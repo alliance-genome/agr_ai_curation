@@ -33,7 +33,8 @@ from .constants import GO_EVIDENCE_CODE_ECO, GO_QUALIFIERS_BY_ASPECT
 GENE_PRODUCT_IDENTITY = ("curie", "label")
 GO_TERM_IDENTITY = ("curie", "label")
 EVIDENCE_CODE_IDENTITY = ("code", "eco_curie")
-REFERENCE_IDENTITY = ("curie",)
+# The Alliance reference ID, plus the PMID and DOI validation confirms beside it (either may be null).
+REFERENCE_IDENTITY = ("curie", "pmid", "doi")
 WITH_FROM_IDENTITY = ("curie",)
 QUALIFIER_IDENTITY = ("name",)
 

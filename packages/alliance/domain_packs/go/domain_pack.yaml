@@ -103,6 +103,8 @@ object_definitions:
               - evidence_code.resolution_state
               - reference_curie.mention
               - reference_curie.curie
+              - reference_curie.pmid
+              - reference_curie.doi
               - reference_curie.resolution_state
               - with_from
               - qualifiers
@@ -324,6 +326,10 @@ object_definitions:
           display:
             id: curie
             mention: mention
+            # The PMID and DOI validation confirms beside the Alliance reference ID.
+            validated:
+              - pmid
+              - doi
       - field_path: reference_curie.mention
         field_type: string
         display_name: Reference (paper wording)
@@ -333,6 +339,24 @@ object_definitions:
       - field_path: reference_curie.curie
         field_type: string
         display_name: Reference CURIE
+        required: false
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          render_as: curie-chip
+      - field_path: reference_curie.pmid
+        field_type: string
+        display_name: Reference PMID
+        description: The PubMed ID of the confirmed reference, when the literature record has one.
+        required: false
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          render_as: curie-chip
+      - field_path: reference_curie.doi
+        field_type: string
+        display_name: Reference DOI
+        description: The DOI of the confirmed reference, when the literature record has one.
         required: false
         metadata:
           editable: true
@@ -372,6 +396,8 @@ object_definitions:
         display_name: With/From
         required: true
         metadata:
+          # Each entry is validated on its own.
+          multivalued: true
           display:
             id: curie
             mention: mention
@@ -517,6 +543,217 @@ metadata:
           - Blocking and required, with no curator opt-out.
   validator_bindings:
     active:
+      - binding_id: go_gene_product_validation
+        display_name: GO gene product validation
+        curator_label: Confirm the gene product in the Alliance gene records
+        description: Finds the rat gene the paper names as the gene product, from the paper's wording and any RGD ID the paper prints. A mature miRNA or other product that is not a gene locus stays unresolved.
+        definition_notes:
+          - Reuses the packaged gene validator, scoped to RGD.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: gene_validation
+        applies_to:
+          domain_pack_id: agr.alliance.go
+          object_types:
+            - GOCuratableObject
+          field_paths:
+            - gene_product.curie
+            - gene_product.label
+        group_scope:
+          required_any_active_group:
+            - RGD
+          provider_value_field_paths:
+            - provider_context.provider_key
+          allowed_provider_values:
+            - RGD
+        input_fields:
+          gene_symbol:
+            source: payload
+            path: gene_product.mention
+          gene_id:
+            source: payload
+            path: gene_product.proposed_curie
+            required: false
+          data_provider:
+            source: literal
+            value: RGD
+          taxon_hint:
+            source: payload
+            path: gene_product.taxon_curie
+            required: false
+            context_only: true
+          gene_product_type:
+            source: payload
+            path: gene_product.entity_type
+            required: false
+            context_only: true
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: gene_product
+            allow_multiple: true
+            required: false
+            context_only: true
+        expected_result_fields:
+          primary_external_id: gene_product.curie
+          gene_symbol: gene_product.label
+        required: true
+        blocking: true
+        allow_opt_out: true
+        when_off: If you turn this check off, the gene product stays unresolved and the annotation cannot be accepted until it is validated.
+        curator_override:
+          allowed: false
+      - binding_id: go_term_validation
+        display_name: GO term validation
+        curator_label: Confirm the GO term against the Gene Ontology
+        description: Finds the GO term the paper describes, in the annotation's GO aspect, from the paper's wording and any GO ID the paper prints.
+        definition_notes:
+          - Reuses the packaged ontology term validator with the GO term search.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        applies_to:
+          domain_pack_id: agr.alliance.go
+          object_types:
+            - GOCuratableObject
+          field_paths:
+            - go_term.curie
+            - go_term.label
+        group_scope:
+          required_any_active_group:
+            - RGD
+          provider_value_field_paths:
+            - provider_context.provider_key
+          allowed_provider_values:
+            - RGD
+        input_fields:
+          label:
+            source: payload
+            path: go_term.mention
+          curie:
+            source: payload
+            path: go_term.proposed_curie
+            required: false
+          go_aspect:
+            source: payload
+            path: go_term.aspect
+          ontology_family:
+            source: literal
+            value: go
+          lookup_method:
+            source: literal
+            value: search_go_terms
+          accepted_prefixes:
+            source: literal
+            value:
+              - GO
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: go_term
+            allow_multiple: true
+            required: false
+            context_only: true
+        expected_result_fields:
+          curie: go_term.curie
+          name: go_term.label
+        required: true
+        blocking: true
+        allow_opt_out: true
+        when_off: If you turn this check off, the GO term stays unresolved and the annotation cannot be accepted until it is validated.
+        curator_override:
+          allowed: false
+      - binding_id: go_reference_validation
+        display_name: GO reference validation
+        curator_label: Confirm the source paper in the Alliance literature records
+        description: Finds the paper in the Alliance literature records from how it identifies itself and any PMID or DOI it prints, and records its Alliance reference ID with the PMID and DOI the record carries.
+        definition_notes:
+          - Reuses the packaged reference validator; the PMID and DOI are filled only when the literature record has them.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: reference_validation
+        applies_to:
+          domain_pack_id: agr.alliance.go
+          object_types:
+            - GOCuratableObject
+          field_paths:
+            - reference_curie.curie
+        group_scope:
+          required_any_active_group:
+            - RGD
+          provider_value_field_paths:
+            - provider_context.provider_key
+          allowed_provider_values:
+            - RGD
+        input_fields:
+          title:
+            source: payload
+            path: reference_curie.mention
+          curie:
+            source: payload
+            path: reference_curie.proposed_curie
+            required: false
+          source_document_id:
+            source: envelope_metadata
+            path: document_id
+            required: false
+            context_only: true
+        expected_result_fields:
+          curie: reference_curie.curie
+        optional_result_fields:
+          pmid: reference_curie.pmid
+          doi: reference_curie.doi
+        required: true
+        blocking: false
+        allow_opt_out: true
+        when_off: The reference stays as the paper words it, and review rows show it unconfirmed.
+        curator_override:
+          allowed: false
+      - binding_id: go_with_from_gene_validation
+        display_name: GO With/From gene validation
+        curator_label: Confirm each With/From gene in the Alliance gene records
+        description: Finds the gene each With/From entry names, from the paper's wording and any ID the paper prints. An entry that is not a gene, such as a protein, GO term or chemical, stays unresolved.
+        definition_notes:
+          - Reuses the packaged gene validator in batches, scoped to RGD.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: gene_validation
+        applies_to:
+          domain_pack_id: agr.alliance.go
+          object_types:
+            - GOCuratableObject
+          field_paths:
+            - with_from
+        group_scope:
+          required_any_active_group:
+            - RGD
+          provider_value_field_paths:
+            - provider_context.provider_key
+          allowed_provider_values:
+            - RGD
+        input_fields:
+          gene_symbol:
+            source: payload
+            path: with_from.mention
+          gene_id:
+            source: payload
+            path: with_from.proposed_curie
+            required: false
+          data_provider:
+            source: literal
+            value: RGD
+        expected_result_fields:
+          primary_external_id: with_from.curie
+        batch:
+          enabled: true
+          family: go_with_from_gene_validation
+          max_size: 25
+        required: true
+        blocking: false
+        allow_opt_out: true
+        when_off: With/From entries stay as the paper words them, and review rows show them unconfirmed.
+        curator_override:
+          allowed: false
       - binding_id: rgd_go_evidence_policy_validation
         display_name: RGD GO evidence policy validation
         curator_label: Confirm each proposed GO annotation against the RGD evidence policy
@@ -531,6 +768,11 @@ metadata:
           domain_pack_id: agr.alliance.go
           object_types:
             - GOCuratableObject
+        # The policy reads the identities the identity validators write back.
+        runs_after:
+          - go_gene_product_validation
+          - go_term_validation
+          - go_reference_validation
         group_scope:
           required_any_active_group:
             - RGD

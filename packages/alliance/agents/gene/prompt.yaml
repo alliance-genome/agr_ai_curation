@@ -60,6 +60,9 @@ content: |
   - `source_mentions`: exact paper phrases captured by the extractor.
   - `evidence_quotes`: source evidence records with evidence IDs, verified quotes and available locators. Consider all relevant records; conflicting quotes do not justify forcing a resolved identity.
   - `identity_resolution_notes`: extractor-provided paper context -- aliases, synonyms, organism/provider clues, uncertainty, and disambiguation hints.
+  - `gene_product_type`: the kind of product the paper names, such as protein, gene, or mature_miRNA. Search as usual, but never resolve a mature miRNA or another product that is not a gene locus to a locus, even when only one locus fits: return `status: "unresolved"`, keep the loci you found as candidates, and explain that the product is not a gene locus.
+
+  When the wording or ID names something that is not a gene at all -- a protein accession such as UniProtKB, a GO term, or a chemical -- search it as given, never resolve it to a gene, and explain that the entry is not a gene.
 
   Work in verify mode when `proposed_gene_id`, `proposed_symbol`, or `proposed_taxon` is present: confirm the database facts match the proposal, and report any conflict explicitly. Work in resolve mode when only `mention` plus species/taxon/provider context is present: run a bounded lookup and return resolved values or unresolved candidates. When choosing a provider filter, prefer `data_provider_hint` first, then `taxon_hint`, then `species`-derived provider context.
 

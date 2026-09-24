@@ -94,6 +94,52 @@ def _validator_result(request, *, resolved: bool = True):
     }
 
 
+_IDENTITY_RESULTS = {
+    "go_gene_product_validation": {"primary_external_id": "RGD:3023", "gene_symbol": "Lta"},
+    "go_term_validation": {"curie": "GO:0005615", "name": "extracellular space"},
+    "go_reference_validation": {"curie": "AGRKB:101000000400377", "pmid": "PMID:12345678"},
+    "go_with_from_gene_validation": {"primary_external_id": "RGD:619839"},
+}
+
+
+def _identity_result(request, resolved_values):
+    return {
+        **_validator_result(request),
+        "resolved_values": resolved_values,
+        "lookup_attempts": [
+            {
+                "provider": "agr_curation_query",
+                "method": "search",
+                "query": dict(request.selected_inputs),
+                "result_count": 1,
+                "outcome": "success",
+            }
+        ],
+        "curator_message": None,
+        "explanation": "Fixture identity lookup.",
+    }
+
+
+def _go_runner(requests, *, policy_resolved: bool = True):
+    """Identity validators confirm their values; the policy answers as asked."""
+
+    def runner(request, *, binding):
+        requests.append(request)
+        if binding.binding_id == "rgd_go_evidence_policy_validation":
+            return _validator_result(request, resolved=policy_resolved)
+        return _identity_result(request, _IDENTITY_RESULTS[binding.binding_id])
+
+    return runner
+
+
+def _policy_findings(result):
+    return [
+        finding for finding in result.appended_findings
+        if (finding.details.get("validation_metadata") or {}).get("validator_binding_id")
+        == "rgd_go_evidence_policy_validation"
+    ]
+
+
 def test_go_pack_is_auto_discovered_and_review_only():
     registry = load_alliance_domain_pack_registry()
     pack = registry.get_pack("agr.alliance.go")
@@ -143,29 +189,23 @@ def test_rgd_policy_dispatch_materializes_established_finding_and_group_trace():
     envelope = fixtures.fixtures[0].envelope
     requests = []
 
-    def runner(request, *, binding):
-        requests.append(request)
-        return _validator_result(request)
-
     result = dispatch_active_validator_bindings(
         envelope,
         pack,
-        runner=runner,
+        runner=_go_runner(requests),
         runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
     )
 
-    assert len(requests) == 1, [
-        finding.model_dump(mode="json") for finding in result.appended_findings
-    ]
-    request = requests[0]
-    assert request.validator_binding_id == "rgd_go_evidence_policy_validation"
+    # The policy runs last, after the gene product, GO term and reference are validated.
+    assert requests[-1].validator_binding_id == "rgd_go_evidence_policy_validation"
+    request = requests[-1]
     assert request.selected_inputs["evidence_code"]["code"] == "IDA"
     assert request.selected_inputs["go_term"]["aspect"] == "cellular_component"
     assert request.selected_inputs["provider_context"]["provider_key"] == "RGD"
     assert request.selected_inputs["evidence_quotes"][0]["verified_quote"] == (
         "Lta protein was detected in the extracellular fraction."
     )
-    finding = result.appended_findings[0]
+    finding, = _policy_findings(result)
     assert finding.code == "domain_pack.validator_resolved"
     assert finding.status.value == "resolved"
     assert finding.object_ref is not None
@@ -174,7 +214,75 @@ def test_rgd_policy_dispatch_materializes_established_finding_and_group_trace():
         "authenticated_groups": ["RGD"],
         "group_context_identity": '["RGD"]',
     }
-    assert result.binding_audit[0]["eligibility_reason"] == "group_scope_satisfied"
+    assert {entry["eligibility_reason"] for entry in result.binding_audit} == {"group_scope_satisfied"}
+
+
+def test_the_policy_reads_the_identities_the_identity_validators_wrote():
+    """Extraction stages paper wording only; validation fills identities before the policy runs."""
+
+    from agr_ai_curation_alliance.domain_packs.go.values import (
+        gene_product_value,
+        go_term_value,
+        reference_value,
+        with_from_value,
+    )
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    obj = envelope.extracted_objects[0]
+    payload = copy.deepcopy(obj.payload)
+    payload["gene_product"] = gene_product_value(
+        "Lta", proposed_curie=None, entity_type=payload["gene_product"]["entity_type"],
+        taxon_curie="NCBITaxon:10116",
+    )
+    payload["go_term"] = go_term_value(
+        "extracellular fraction", proposed_curie=None, aspect=payload["go_term"]["aspect"],
+    )
+    payload["reference_curie"] = reference_value("Lta secretion in rat", proposed_curie="PMID:12345678")
+    payload["with_from"] = [with_from_value("UniProtKB:P01374", proposed_curie="UniProtKB:P01374")]
+    envelope = envelope.model_copy(
+        update={"extracted_objects": [obj.model_copy(update={"payload": payload})]}
+    )
+    requests = []
+    base_runner = _go_runner(requests)
+
+    def runner(request, *, binding):
+        if binding.binding_id == "go_with_from_gene_validation":
+            requests.append(request)
+            return {
+                **_identity_result(request, {}),
+                "status": "unresolved",
+                "lookup_attempts": [{
+                    "provider": "agr_curation_query", "method": "search_genes",
+                    "query": dict(request.selected_inputs), "result_count": 0, "outcome": "not_found",
+                }],
+                "explanation": "UniProtKB:P01374 is a protein accession, not a gene.",
+            }
+        return base_runner(request, binding=binding)
+
+    result = dispatch_active_validator_bindings(
+        envelope, pack, runner=runner,
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
+    )
+
+    by_binding = {request.validator_binding_id: request for request in requests}
+    assert by_binding["go_gene_product_validation"].selected_inputs["gene_symbol"] == "Lta"
+    assert by_binding["go_term_validation"].selected_inputs["go_aspect"] == payload["go_term"]["aspect"]
+    assert by_binding["go_reference_validation"].selected_inputs["curie"] == "PMID:12345678"
+    assert by_binding["go_reference_validation"].target.optional_fields == ["pmid", "doi"]
+    policy = by_binding["rgd_go_evidence_policy_validation"].selected_inputs
+    assert requests[-1].validator_binding_id == "rgd_go_evidence_policy_validation"
+    assert (policy["gene_product"]["curie"], policy["gene_product"]["label"]) == ("RGD:3023", "Lta")
+    assert policy["resolution_state"] == "resolved"
+    assert (policy["go_term"]["curie"], policy["go_term"]["resolution_state"]) == ("GO:0005615", "resolved")
+    assert policy["reference_curie"]["curie"] == "AGRKB:101000000400377"
+    assert (policy["reference_curie"]["pmid"], policy["reference_curie"]["doi"]) == ("PMID:12345678", None)
+    assert policy["with_from"][0]["lookup_outcome"] == "not_found"
+    stored = result.envelope.extracted_objects[0].payload
+    assert stored["reference_curie"]["resolution_state"] == "resolved"
+    assert stored["reference_curie"]["proposed_curie"] == "PMID:12345678"
+    assert stored["with_from"][0]["resolution_state"] == "unresolved"
 
 
 @pytest.mark.parametrize("active_groups", [(), ("MGI",), ("WB", "ZFIN")])
@@ -186,13 +294,13 @@ def test_rgd_policy_does_not_run_for_non_rgd_authenticated_groups(active_groups)
     result = dispatch_active_validator_bindings(
         fixtures.fixtures[0].envelope,
         pack,
-        runner=lambda *_args, **_kwargs: pytest.fail("RGD policy binding ran"),
+        runner=lambda *_args, **_kwargs: pytest.fail("an RGD GO binding ran"),
         runtime_context=ValidatorRuntimeContext(authenticated_groups=active_groups),
     )
 
     assert result.validator_agent_run_count == 0
     assert result.appended_findings == ()
-    assert result.binding_audit[0]["eligibility_reason"] == "group_not_satisfied"
+    assert {entry["eligibility_reason"] for entry in result.binding_audit} == {"group_not_satisfied"}
 
 
 def test_insufficient_evidence_materializes_the_approved_blocker_finding():
@@ -203,14 +311,11 @@ def test_insufficient_evidence_materializes_the_approved_blocker_finding():
     result = dispatch_active_validator_bindings(
         fixtures.fixtures[0].envelope,
         pack,
-        runner=lambda request, *, binding: _validator_result(
-            request,
-            resolved=False,
-        ),
+        runner=_go_runner([], policy_resolved=False),
         runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
     )
 
-    finding = result.appended_findings[0]
+    finding, = _policy_findings(result)
     assert finding.code == "domain_pack.validator_unresolved"
     assert finding.severity.value == "blocker"
     assert finding.status.value == "open"
@@ -527,7 +632,11 @@ def _mirna_envelope():
         ("gene_product.curie", {"curie": "RGD:2325", "label": "Mir21"}, "replace_identity"),
         ("go_term.curie", {"curie": "GO:0005654", "label": "nucleoplasm"}, "replace_identity"),
         ("evidence_code.code", {"code": "IMP", "eco_curie": "ECO:0000315"}, "replace_identity"),
-        ("reference_curie.curie", {"curie": "AGRKB:101000000999999"}, "replace"),
+        (
+            "reference_curie.curie",
+            {"curie": "AGRKB:101000000999999", "pmid": "PMID:31415926", "doi": None},
+            "replace_identity",
+        ),
     ],
 )
 def test_a_curator_identity_edit_on_a_go_value_is_a_curator_override(field_path, identity, operation):
@@ -641,7 +750,7 @@ def test_go_identity_leaves_are_the_editable_fields_and_the_catalog_ignores_it()
     assert editable == {
         "gene_product.curie", "gene_product.label", "go_term.curie", "go_term.label",
         "evidence_code.code", "evidence_code.eco_curie", "reference_curie.curie",
-        "with_from.curie", "qualifiers.name",
+        "reference_curie.pmid", "reference_curie.doi", "with_from.curie", "qualifiers.name",
     }
     pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
     assert all("editable" not in str(entry) for entry in _pack_export_fields(pack))
