@@ -2082,6 +2082,9 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
         "expression_experiment.single_reference.reference_id",
         "single_reference.curie",
         "single_reference.title",
+        # The experiment's copy mirrors the full reference identity (N6).
+        "expression_experiment.single_reference.curie",
+        "expression_experiment.single_reference.title",
     }
     classifications = {
         finding.field_ref.field_path: finding.details["failure_classification"]

@@ -3732,7 +3732,7 @@ def test_an_override_without_the_vocabulary_blocks_only_where_the_export_needs_i
         identity=True,
     )
     assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
-    relation_only = _annotation_export_candidate(result.envelope.extracted_objects[0])
+    relation_only = copy.deepcopy(_annotation_export_candidate(result.envelope.extracted_objects[0]))
     relation_only["payload"]["expression_pattern"]["when_expressed"].pop("stage_uberon_slim_terms")
     # The relation is found by its term name: no blocker, and the export builds.
     assert gene_expression_export_blockers(relation_only) == ()
@@ -3759,14 +3759,6 @@ def test_an_override_without_the_vocabulary_blocks_only_where_the_export_needs_i
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FOR TEAM-LEAD: waits for r1283-core's S2 fix (overrides copy into plain "
-        "materializes_to_field_paths mirrors such as when_expressed_stage_name). Remove this "
-        "marker when that core SHA is merged; strict, so it fails loudly once core lands."
-    ),
-)
 def test_a_stage_override_is_the_exported_stage_name():
     """S2: overriding the stage term also sets when_expressed_stage_name, which is exported."""
 
@@ -3777,7 +3769,8 @@ def test_a_stage_override_is_the_exported_stage_name():
     payload["expression_pattern"]["when_expressed"]["developmental_stage_start"] = staged_value(
         "expression_pattern.when_expressed.developmental_stage_start", "late embryos"
     )
-    payload.pop("when_expressed_stage_name")
+    # Extraction never writes the stage name; only validation or a curator fills it.
+    assert "when_expressed_stage_name" not in payload
     result = _curator_patch(
         _with_payload(envelope, payload),
         "expression_pattern.when_expressed.developmental_stage_start.curie",
