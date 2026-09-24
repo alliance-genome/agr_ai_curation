@@ -1093,3 +1093,103 @@ def test_phenotype_staging_takes_no_proposed_term_name_or_identity(monkeypatch):
     assert "term_label" not in properties
     assert "paper itself prints" in properties["term_curie"]["description"]
     assert "paper itself prints" in properties["subject_identifier"]["description"]
+
+
+# --- Species context comes from the species tool (2026-09-24, option A) --------------------------
+
+_WORM_CONTEXT = {"data_provider": "WB", "term_taxon_id": "NCBITaxon:6239"}
+_SPECIES_TOOL_HINT = "Call agr_species_context_lookup with the species"
+
+
+@pytest.mark.parametrize(
+    "species_context",
+    [
+        {"data_provider": "WB", "term_taxon_id": "Caenorhabditis elegans"},
+        {**_WORM_CONTEXT, "subject_label": "mus-81", "subject_taxon": "C. elegans"},
+    ],
+    ids=["term_taxon_id species name", "subject_taxon species name"],
+)
+def test_stage_phenotype_rejects_a_species_name_as_the_taxon(monkeypatch, species_context):
+    """The term check needs an NCBITaxon ID; a species name read from the paper blocks it."""
+
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(**_stage_kwargs(**species_context))
+
+    assert result.status == "error"
+    message = result.data["validation_issues"][0]["message"]
+    assert "is not an NCBITaxon ID" in message and _SPECIES_TOOL_HINT in message
+    assert workspace.candidates == {}
+
+
+@pytest.mark.parametrize(
+    ("species_context", "missing"),
+    [
+        ({"data_provider": "WB"}, "term_taxon_id"),
+        ({"term_taxon_id": "NCBITaxon:6239"}, "data_provider"),
+        ({"subject_label": "mus-81", "subject_taxon": "NCBITaxon:6239"}, "data_provider, term_taxon_id"),
+        ({**_WORM_CONTEXT, "subject_label": "mus-81"}, "subject_taxon"),
+    ],
+)
+def test_stage_phenotype_rejects_a_partial_species_context(monkeypatch, species_context, missing):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(**_stage_kwargs(**species_context))
+
+    assert result.status == "error"
+    message = result.data["validation_issues"][0]["message"]
+    assert f"Species context is incomplete: {missing} missing." in message
+    assert _SPECIES_TOOL_HINT in message
+    assert workspace.candidates == {}
+
+
+@pytest.mark.parametrize(
+    "species_context",
+    [
+        {},
+        dict(_WORM_CONTEXT),
+        {**_WORM_CONTEXT, "subject_label": "mus-81", "subject_taxon": "NCBITaxon:6239"},
+    ],
+    ids=["no species", "term context", "term and subject context"],
+)
+def test_stage_phenotype_accepts_no_species_or_the_full_species_tool_context(monkeypatch, species_context):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(**_stage_kwargs(**species_context))
+
+    assert result.status == "ok", result.data
+    staged = workspace.candidates[result.data["candidate_id"]].staged_fields
+    for name, value in species_context.items():
+        assert staged[name] == value
+
+
+def test_patch_phenotype_keeps_the_species_context_complete(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    candidate_id = tools._stage_phenotype_observation_impl(
+        **_stage_kwargs(**_WORM_CONTEXT)
+    ).data["candidate_id"]
+
+    def patch(field_path, value):
+        return tools._patch_phenotype_observation_impl(
+            candidate_id=candidate_id,
+            pending_ref_id="phenotype-annotation-1",
+            updates=[{"field_path": field_path, "string_value": value}],
+        )
+
+    species_name = patch("term_taxon_id", "Caenorhabditis elegans")
+    assert species_name.status == "error"
+    assert species_name.data["validation_issues"][0]["reason"] == "invalid_species_context"
+    partial = patch("data_provider", None)
+    assert partial.status == "error"
+    assert _SPECIES_TOOL_HINT in partial.data["validation_issues"][0]["message"]
+    assert workspace.candidates[candidate_id].staged_fields["term_taxon_id"] == "NCBITaxon:6239"
+
+    mouse = tools._patch_phenotype_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="phenotype-annotation-1",
+        updates=[
+            {"field_path": "data_provider", "string_value": "MGI"},
+            {"field_path": "term_taxon_id", "string_value": "NCBITaxon:10090"},
+        ],
+    )
+    assert mouse.status == "ok"

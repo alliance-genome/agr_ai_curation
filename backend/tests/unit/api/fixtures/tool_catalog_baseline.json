@@ -6037,7 +6037,7 @@
         },
         {
           "default": null,
-          "description": "The species ID of the affected entity, if stated.",
+          "description": "The NCBITaxon ID of the affected entity's species (for example NCBITaxon:6239), as the species lookup returns it; never a species name. Given together with data_provider and term_taxon_id.",
           "name": "subject_taxon",
           "required": false,
           "type": "any"
@@ -6051,14 +6051,14 @@
         },
         {
           "default": null,
-          "description": "The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).",
+          "description": "The Alliance group for the paper's species as the species lookup returns it, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human). Given together with term_taxon_id.",
           "name": "data_provider",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The species ID tied to the proposed phenotype term, if relevant.",
+          "description": "The NCBITaxon ID of the paper's species (for example NCBITaxon:6239), as the species lookup returns it; never a species name. The phenotype term specialist needs it together with data_provider to choose the right phenotype ontology.",
           "name": "term_taxon_id",
           "required": false,
           "type": "any"

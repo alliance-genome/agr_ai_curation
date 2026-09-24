@@ -20,6 +20,7 @@ Tool names match the phenotype extractor prompt/agent: ``stage_phenotype_observa
 
 from __future__ import annotations
 
+import re
 from typing import Any, List, Mapping, Optional, Sequence
 
 from agents import function_tool
@@ -174,6 +175,56 @@ class ConditionRelationInput(_StrictToolModel):
         return cleaned
 
 
+# Species context comes from agr_species_context_lookup, never from the paper's species name: the
+# phenotype term check needs the data provider and the NCBITaxon ID together to pick the ontology.
+_SPECIES_TOOL_INSTRUCTION = (
+    "Call agr_species_context_lookup with the species and stage the taxon ID and data provider it returns."
+)
+_NCBI_TAXON_CURIE = re.compile(r"^NCBITaxon:[0-9]+$")
+_SPECIES_CONTEXT_FIELD_DESCRIPTIONS = {
+    "data_provider": (
+        "The Alliance data provider agr_species_context_lookup returned for the paper's species "
+        "(for example WB or MGI). Staged together with term_taxon_id."
+    ),
+    "term_taxon_id": (
+        "The NCBITaxon ID (for example NCBITaxon:6239) agr_species_context_lookup returned for the "
+        "paper's species; never a species name. Staged together with data_provider."
+    ),
+    "subject_taxon": (
+        "The subject's NCBITaxon ID from agr_species_context_lookup (for example NCBITaxon:6239); "
+        "never a species name. Staged with data_provider and term_taxon_id."
+    ),
+}
+
+
+def _species_context_issue(fields: Mapping[str, Any]) -> Optional[str]:
+    """Why the staged species context is not the species tool's complete answer, or None.
+
+    Staging no species context is allowed (the paper names no species). Otherwise the
+    data provider and the term taxon ID are staged together, a staged subject carries its
+    taxon too, and every taxon is an NCBITaxon ID.
+    """
+
+    def staged(name: str) -> Optional[str]:
+        value = fields.get(name)
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    context = {name: staged(name) for name in ("data_provider", "term_taxon_id", "subject_taxon")}
+    if not any(context.values()):
+        return None
+    for name in ("term_taxon_id", "subject_taxon"):
+        value = context[name]
+        if value is not None and not _NCBI_TAXON_CURIE.match(value):
+            return f"{name} {value!r} is not an NCBITaxon ID. {_SPECIES_TOOL_INSTRUCTION}"
+    required = ["data_provider", "term_taxon_id"]
+    if staged("subject_label"):
+        required.append("subject_taxon")
+    missing = [name for name in required if context[name] is None]
+    if missing:
+        return f"Species context is incomplete: {', '.join(missing)} missing. {_SPECIES_TOOL_INSTRUCTION}"
+    return None
+
+
 class PhenotypeStageInput(_StrictToolModel):
     validation_guidance: Optional[StrictStr] = Field(
         default=None,
@@ -211,13 +262,22 @@ class PhenotypeStageInput(_StrictToolModel):
         ),
     )
     subject_type: Optional[StrictStr] = None
-    subject_taxon: Optional[StrictStr] = None
+    subject_taxon: Optional[StrictStr] = Field(
+        default=None,
+        description=_SPECIES_CONTEXT_FIELD_DESCRIPTIONS["subject_taxon"],
+    )
     term_curie: Optional[StrictStr] = Field(
         default=None,
         description="The phenotype term's ontology ID, only when the paper itself prints it; a validator checks it.",
     )
-    data_provider: Optional[StrictStr] = None
-    term_taxon_id: Optional[StrictStr] = None
+    data_provider: Optional[StrictStr] = Field(
+        default=None,
+        description=_SPECIES_CONTEXT_FIELD_DESCRIPTIONS["data_provider"],
+    )
+    term_taxon_id: Optional[StrictStr] = Field(
+        default=None,
+        description=_SPECIES_CONTEXT_FIELD_DESCRIPTIONS["term_taxon_id"],
+    )
     # Nested experimental conditions. Each ConditionRelation carries a relation type plus its
     # grounded ExperimentalCondition components; the engine fans out per condition and the composite
     # validator decides each one. Optional + sparse — staged only when the paper explicitly states
@@ -238,6 +298,13 @@ class PhenotypeStageInput(_StrictToolModel):
     @model_validator(mode="after")
     def _subject_needs_paper_wording(self) -> "PhenotypeStageInput":
         issue = _subject_wording_issue(self.model_dump())
+        if issue is not None:
+            raise ValueError(issue)
+        return self
+
+    @model_validator(mode="after")
+    def _species_context_from_the_species_tool(self) -> "PhenotypeStageInput":
+        issue = _species_context_issue(self.model_dump())
         if issue is not None:
             raise ValueError(issue)
         return self
@@ -500,6 +567,13 @@ def _stage_phenotype_observation_impl(
             validator checks it.
         subject_identifier: The subject's identifier, only when the paper itself prints it; the
             subject validator checks it.
+        data_provider: The Alliance data provider agr_species_context_lookup returned for the
+            paper's species (for example WB or MGI). Staged together with term_taxon_id.
+        term_taxon_id: The NCBITaxon ID (for example NCBITaxon:6239) agr_species_context_lookup
+            returned for the paper's species; never a species name. Staged together with
+            data_provider.
+        subject_taxon: The subject's NCBITaxon ID from agr_species_context_lookup; never a
+            species name. Staged with data_provider and term_taxon_id.
         subject_label: The subject (gene, allele, or model) as the paper names it. Required
             whenever a subject identifier, type, or taxon is staged.
         validation_guidance: Optional short sentence forwarding relevant rules from your
@@ -696,6 +770,14 @@ def _patch_phenotype_observation_impl(
         return _phenotype_validation_result(
             message=f"patch_phenotype_observation rejected: {subject_issue}.",
             issues=[{"field_path": "subject_label", "reason": "missing_subject_wording", "message": subject_issue}],
+            method="patch_phenotype_observation",
+            attempted_query=attempted_query,
+        )
+    species_issue = _species_context_issue(payload)
+    if species_issue is not None:
+        return _phenotype_validation_result(
+            message=f"patch_phenotype_observation rejected: {species_issue}",
+            issues=[{"field_path": "term_taxon_id", "reason": "invalid_species_context", "message": species_issue}],
             method="patch_phenotype_observation",
             attempted_query=attempted_query,
         )

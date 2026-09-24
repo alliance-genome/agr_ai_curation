@@ -127,7 +127,8 @@ content: |
   - a `rationale`: why you selected this item, in your own words,
   - `term_mention`: the phenotype term as the paper words it (required; staged even when no ontology term matches),
   - the SUBJECT when the paper supports the causative gene/allele/AGM: `subject_label` (the subject as the paper names it; required whenever any subject detail is staged), plus `subject_type`, `subject_taxon`, and `subject_identifier` ONLY when the paper prints the subject's ID,
-  - `term_curie` ONLY when the paper prints the phenotype term's ID; `data_provider`/`term_taxon_id` for validator context,
+  - `term_curie` ONLY when the paper prints the phenotype term's ID,
+  - `data_provider` and `term_taxon_id` -- plus `subject_taxon` when you stage a subject -- exactly as `agr_species_context_lookup` returns them for the paper's species (a provider such as WB and an NCBITaxon ID, never a species name), always together; stage none of them only when the paper names no species,
   - `condition_relations` (experimental conditions) ONLY when the paper explicitly states them -- see `<experimental_condition_rules>`; omit entirely when none are stated,
   - `negated=true` only when the paper explicitly reports the phenotype was NOT observed under defined conditions.
 
