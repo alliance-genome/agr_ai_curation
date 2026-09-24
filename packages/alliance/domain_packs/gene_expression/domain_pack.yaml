@@ -618,6 +618,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_annotation_subject.proposed_primary_external_id
+        field_type: string
+        display_name: Subject gene (proposed ID)
+        description: A gene ID the paper itself states, recorded at extraction. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: expression_annotation_subject.resolution_state
         field_type: enum
         display_name: Subject gene (status)
@@ -1050,6 +1057,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_experiment.expression_assay_used.proposed_curie
+        field_type: string
+        display_name: Expression assay (proposed ID)
+        description: An ontology ID the paper itself states for this value, recorded at extraction. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: expression_experiment.expression_assay_used.resolution_state
         field_type: enum
         display_name: Expression assay (status)
@@ -1231,6 +1245,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_experiment.entity_assayed.proposed_primary_external_id
+        field_type: string
+        display_name: Entity assayed (proposed ID)
+        description: A gene ID the paper itself states, recorded at extraction. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: expression_experiment.entity_assayed.resolution_state
         field_type: enum
         display_name: Entity assayed (status)
@@ -1988,6 +2009,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.when_expressed.developmental_stage_start.proposed_curie
+        field_type: string
+        display_name: Developmental stage start (proposed ID)
+        description: An ontology ID the paper itself states for this value, recorded at extraction. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: expression_pattern.when_expressed.developmental_stage_start.resolution_state
         field_type: enum
         display_name: Developmental stage start (status)
@@ -2274,6 +2302,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.where_expressed.anatomical_structure.proposed_curie
+        field_type: string
+        display_name: Anatomical structure (proposed ID)
+        description: An ontology ID the paper itself states for this value, recorded at extraction. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: expression_pattern.where_expressed.anatomical_structure.resolution_state
         field_type: enum
         display_name: Anatomical structure (status)
@@ -2431,6 +2466,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.proposed_curie
+        field_type: string
+        display_name: Anatomical structure UBERON slim term (proposed ID)
+        description: An ontology ID the paper itself states for this value, recorded at extraction. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.resolution_state
         field_type: enum
         display_name: Anatomical structure UBERON slim term (status)
@@ -2507,6 +2549,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.where_expressed.cellular_component.proposed_curie
+        field_type: string
+        display_name: Cellular component (proposed ID)
+        description: An ontology ID the paper itself states for this value, recorded at extraction. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: expression_pattern.where_expressed.cellular_component.resolution_state
         field_type: enum
         display_name: Cellular component (status)
@@ -2642,6 +2691,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: expression_pattern.where_expressed.cellular_component_qualifiers.proposed_curie
+        field_type: string
+        display_name: Cellular component qualifier (proposed ID)
+        description: An ontology ID the paper itself states for this value, recorded at extraction. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: expression_pattern.where_expressed.cellular_component_qualifiers.resolution_state
         field_type: enum
         display_name: Cellular component qualifier (status)
@@ -2957,7 +3013,7 @@ metadata:
         input_fields:
           gene_id:
             source: payload
-            path: expression_annotation_subject.primary_external_id
+            path: expression_annotation_subject.proposed_primary_external_id
             required: false
           gene_symbol:
             source: payload
@@ -2965,7 +3021,7 @@ metadata:
             required: false
           data_provider:
             source: payload
-            path: data_provider.abbreviation
+            path: data_provider.mention
             required: false
             context_only: true
         expected_result_fields:
@@ -3075,9 +3131,13 @@ metadata:
           label:
             source: payload
             path: expression_pattern.when_expressed.developmental_stage_start.mention
+          curie:
+            source: payload
+            path: expression_pattern.when_expressed.developmental_stage_start.proposed_curie
+            required: false
           data_provider:
             source: payload
-            path: data_provider.abbreviation
+            path: data_provider.mention
             required: false
             context_only: true
           ontology_family:
@@ -3120,7 +3180,7 @@ metadata:
         input_fields:
           curie:
             source: payload
-            path: expression_experiment.expression_assay_used.curie
+            path: expression_experiment.expression_assay_used.proposed_curie
             required: false
           label:
             source: payload
@@ -3205,7 +3265,7 @@ metadata:
         input_fields:
           curie:
             source: payload
-            path: expression_pattern.where_expressed.anatomical_structure.curie
+            path: expression_pattern.where_expressed.anatomical_structure.proposed_curie
             required: false
           label:
             source: payload
@@ -3213,7 +3273,7 @@ metadata:
             required: false
           data_provider:
             source: payload
-            path: data_provider.abbreviation
+            path: data_provider.mention
             required: false
             context_only: true
           ontology_family:
@@ -3257,7 +3317,7 @@ metadata:
           # expression_pattern.where_expressed.anatomical_structure_uberon_terms is multivalued: the engine fans out one lookup per element.
           curie:
             source: payload
-            path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.curie
+            path: expression_pattern.where_expressed.anatomical_structure_uberon_terms.proposed_curie
             required: false
           label:
             source: payload
@@ -3335,7 +3395,7 @@ metadata:
         input_fields:
           curie:
             source: payload
-            path: expression_pattern.where_expressed.cellular_component.curie
+            path: expression_pattern.where_expressed.cellular_component.proposed_curie
             required: false
           label:
             source: payload
@@ -3385,7 +3445,7 @@ metadata:
           # expression_pattern.where_expressed.cellular_component_qualifiers is multivalued: the engine fans out one lookup per element.
           curie:
             source: payload
-            path: expression_pattern.where_expressed.cellular_component_qualifiers.curie
+            path: expression_pattern.where_expressed.cellular_component_qualifiers.proposed_curie
             required: false
           label:
             source: payload
@@ -3543,7 +3603,7 @@ metadata:
             required: false
           data_provider_abbreviation:
             source: payload
-            path: data_provider.abbreviation
+            path: data_provider.mention
             required: false
             context_only: true
           # EVIDENCE CONTRACT: the validator sees the backend-resolved exact source text for the

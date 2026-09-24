@@ -2369,20 +2369,6 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
             "chat",
             "TERM:0001",
         ),
-        (
-            "SubjectEntityValidationResult",
-            "subject_entity_validation",
-            {
-                "subject_candidates": [
-                    {
-                        "subject_identifier": "FB:FBgn0000001",
-                        "subject_type": "gene",
-                    }
-                ]
-            },
-            "csv",
-            "FB:FBgn0000001",
-        ),
     ],
 )
 def test_real_typed_validator_results_build_nonempty_file_and_chat_bundles(

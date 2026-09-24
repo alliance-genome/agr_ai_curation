@@ -15,7 +15,7 @@ Use **Agent Studio → Agents** to inspect the agents available to you, includin
 
 Extractors read the paper and preserve evidence. Supported attached validators resolve biological identifiers or terms afterward. Inspect the output fields before choosing an extractor: a prompt cannot add undeclared fields to a packaged format. Use [Custom data extraction](CUSTOM_OUTPUT_STRUCTURES.md) when your task needs a different set of details.
 
-New extraction drafts use **GPT-5.6 Sol with medium reasoning** by default; GPT-6 Astra remains available if you select it. Existing saved agents and flow revisions retain their model choices. Studio AI Chat uses Astra with medium reasoning, while validation agents retain their Terra settings.
+New extraction drafts use **GPT-6 Sol with medium reasoning** by default; GPT-6 Astra remains available if you select it. Saved agents that used GPT-5.6 Sol or GPT-5.6 Terra were moved to GPT-6 Sol with their reasoning level kept. Studio AI Chat uses Astra with medium reasoning, while validation agents use GPT-6 Sol.
 
 RGD curators also have group-restricted [GO and disease paper-review recipes](RGD_GO_DISEASE_PAPER_REVIEW.md). Use the recipe guide for those tasks.
 

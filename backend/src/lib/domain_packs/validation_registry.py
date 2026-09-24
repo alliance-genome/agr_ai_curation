@@ -7,7 +7,7 @@ bindings, validator metadata entries, match results, and field-level policies.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
@@ -24,6 +24,8 @@ from src.schemas.domain_pack_metadata import (
     DomainPackFieldType,
     DomainPackInputSelector,
     DomainPackObjectDefinition,
+    DomainPackValidatorRoute,
+    DomainPackValidatorRouteSelector,
 )
 
 from .registry import LoadedDomainPack
@@ -113,8 +115,37 @@ class ValidatorMetadataEntry:
 
 
 @dataclass(frozen=True)
+class ValidatorRoute:
+    """The validator and its input/result mapping for one routing value."""
+
+    validator_agent: ValidatorAgentRef
+    input_fields: dict[str, DomainPackInputSelector] = field(default_factory=dict)
+    expected_result_fields: dict[str, Any] = field(default_factory=dict)
+    max_tool_calls: int | None = None
+
+    def identity_details(self) -> dict[str, Any]:
+        details: dict[str, Any] = {
+            "validator_agent": self.validator_agent.to_dict(),
+            "input_fields": {
+                input_name: selector.model_dump(mode="json", exclude_none=True)
+                for input_name, selector in self.input_fields.items()
+            },
+            "expected_result_fields": dict(self.expected_result_fields),
+        }
+        if self.max_tool_calls is not None:
+            details["max_tool_calls"] = self.max_tool_calls
+        return details
+
+
+@dataclass(frozen=True)
 class ValidatorBinding:
-    """One normalized executable or declarative validator binding."""
+    """One normalized executable or declarative validator binding.
+
+    A routed binding (``routes``) chooses its validator, inputs and results by
+    the target's value at ``route_by_path``. Matching an object selects that
+    route (``for_route``); a target whose value names no route stays unrouted
+    and is reported, never sent to another route.
+    """
 
     binding_id: str
     state: ValidationBindingState
@@ -153,6 +184,55 @@ class ValidatorBinding:
     runs_after: tuple[str, ...] = ()
     raw: dict[str, Any] = field(default_factory=dict)
     custom_profile_reuse: CustomProfileValidatorReuse | None = None
+    route_by_path: str | None = None
+    routes: Mapping[str, ValidatorRoute] | None = None
+    route_value: str | None = None
+
+    @property
+    def unrouted(self) -> bool:
+        """True for a routed binding whose route has not been selected."""
+
+        return self.routes is not None and self.route_value is None
+
+    @property
+    def has_dispatch_contract(self) -> bool:
+        """True when matching this binding builds a request or reports why it cannot."""
+
+        return bool(self.routes is not None or self.input_fields or self.expected_result_fields)
+
+    def validator_agents(self) -> tuple[ValidatorAgentRef, ...]:
+        """Every validator this binding can run: its own or each route's."""
+
+        if self.routes is not None and self.route_value is None:
+            return tuple(route.validator_agent for route in self.routes.values())
+        return (self.validator_agent,) if self.validator_agent is not None else ()
+
+    def for_route(self, route_value: str) -> "ValidatorBinding":
+        """This binding with one route's validator, inputs and results selected."""
+
+        if self.routes is None or route_value not in self.routes:
+            raise ValidationRegistryError(
+                f"Validator binding {self.binding_id!r} declares no route {route_value!r}"
+            )
+        route = self.routes[route_value]
+        return replace(
+            self,
+            validator_agent=route.validator_agent,
+            input_fields=dict(route.input_fields),
+            expected_result_fields=dict(route.expected_result_fields),
+            max_tool_calls=route.max_tool_calls,
+            route_value=route_value,
+        )
+
+    def for_payload(self, payload: Mapping[str, Any]) -> "ValidatorBinding":
+        """The route this payload selects, or this binding when it selects none."""
+
+        if self.routes is None or self.route_by_path is None:
+            return self
+        route_value = _payload_field_value(payload, self.route_by_path)
+        if isinstance(route_value, str) and route_value in self.routes:
+            return self.for_route(route_value)
+        return self
 
     def identity_details(self) -> dict[str, Any]:
         """Return stable structured details suitable for findings."""
@@ -235,6 +315,15 @@ class ValidatorBinding:
             }
         if self.curator_override_allowed:
             details["curator_override"] = {"allowed": True}
+        if self.routes is not None:
+            route: dict[str, Any] = {"route_by": {"source": "payload", "path": self.route_by_path}}
+            if self.route_value is not None:
+                route["value"] = self.route_value
+            else:
+                route["routes"] = {
+                    value: item.identity_details() for value, item in self.routes.items()
+                }
+            details["route"] = route
         return details
 
 
@@ -757,7 +846,7 @@ class DomainPackValidationRegistry:
                     )
                 )
 
-        return tuple(matches)
+        return tuple(_routed_match(match) for match in matches)
 
     def validation_attachment_options(self) -> tuple[ValidationAttachmentOption, ...]:
         """Return deterministic flow-builder validation attachment options."""
@@ -887,20 +976,18 @@ def validate_active_validator_agent_references(
         for binding in registry.bindings:
             if binding.state is not ValidationBindingState.ACTIVE:
                 continue
-            if binding.validator_agent is None:
-                continue
-
-            _validate_active_validator_agent_reference(
-                errors=errors,
-                registry=registry,
-                owner_package_id=owner_package_id,
-                ref=binding.validator_agent,
-                reference_kind="binding",
-                reference_id=binding.binding_id,
-                package_registry=package_registry,
-                agent_resolver=agent_resolver,
-                output_schema_resolver=output_schema_resolver,
-            )
+            for ref in binding.validator_agents():
+                _validate_active_validator_agent_reference(
+                    errors=errors,
+                    registry=registry,
+                    owner_package_id=owner_package_id,
+                    ref=ref,
+                    reference_kind="binding",
+                    reference_id=binding.binding_id,
+                    package_registry=package_registry,
+                    agent_resolver=agent_resolver,
+                    output_schema_resolver=output_schema_resolver,
+                )
 
     if errors:
         raise ValidationRegistryError("; ".join(errors))
@@ -1154,9 +1241,45 @@ def _collect_validator_bindings(
                     CustomProfileValidatorReuse.model_validate(raw_item["custom_profile_reuse"])
                     if raw_item.get("custom_profile_reuse") is not None else None
                 ),
+                route_by_path=_route_by_path(raw_item),
+                routes=_validator_routes(raw_item),
             )
         )
     return bindings
+
+
+def _route_by_path(raw_item: Mapping[str, Any]) -> str | None:
+    raw_route_by = raw_item.get("route_by")
+    if raw_route_by is None:
+        return None
+    try:
+        return DomainPackValidatorRouteSelector.model_validate(raw_route_by).path
+    except ValueError as exc:
+        raise ValidationRegistryError(f"route_by: {exc}") from exc
+
+
+def _validator_routes(raw_item: Mapping[str, Any]) -> dict[str, ValidatorRoute] | None:
+    raw_routes = raw_item.get("routes")
+    if raw_routes is None:
+        return None
+    if not isinstance(raw_routes, Mapping) or not raw_routes:
+        raise ValidationRegistryError("routes must be a non-empty mapping")
+    routes: dict[str, ValidatorRoute] = {}
+    for route_value, raw_route in raw_routes.items():
+        try:
+            route = DomainPackValidatorRoute.model_validate(raw_route)
+        except ValueError as exc:
+            raise ValidationRegistryError(f"routes.{route_value}: {exc}") from exc
+        routes[str(route_value)] = ValidatorRoute(
+            validator_agent=ValidatorAgentRef(
+                package_id=route.validator_agent.package_id,
+                agent_id=route.validator_agent.agent_id,
+            ),
+            input_fields=dict(route.input_fields),
+            expected_result_fields=dict(route.expected_result_fields),
+            max_tool_calls=route.max_tool_calls,
+        )
+    return routes
 
 
 def _iter_validator_binding_items(
@@ -1656,7 +1779,26 @@ def _validate_active_binding_selectors(
             binding,
             object_definitions,
         )
-        for input_name, selector in binding.input_fields.items():
+        if binding.route_by_path is not None:
+            _validate_active_selector_against_targets(
+                errors=errors,
+                domain_pack_id=domain_pack.pack_id,
+                binding=binding,
+                input_name="route_by",
+                selector=DomainPackInputSelector(source="payload", path=binding.route_by_path),
+                target_definitions=target_definitions,
+                object_definitions=object_definitions,
+            )
+        routed_inputs = (
+            [
+                (f"routes.{route_value}.{input_name}", selector)
+                for route_value, route in binding.routes.items()
+                for input_name, selector in route.input_fields.items()
+            ]
+            if binding.routes is not None
+            else list(binding.input_fields.items())
+        )
+        for input_name, selector in routed_inputs:
             _validate_active_selector_against_targets(
                 errors=errors,
                 domain_pack_id=domain_pack.pack_id,
@@ -1931,6 +2073,14 @@ def _binding_attachment_option(
         if binding.validator_agent is not None
         else binding.binding_id
     )
+    # A routed binding runs one of several validators; it names their package
+    # only when they share one, and no single agent.
+    route_packages = {ref.package_id for ref in binding.validator_agents()}
+    validator_package_id = (
+        binding.validator_agent.package_id
+        if binding.validator_agent is not None
+        else next(iter(route_packages)) if len(route_packages) == 1 else None
+    )
     target_label = _binding_attachment_target_label(
         object_display_name=object_display_name,
         object_type=object_type,
@@ -1950,11 +2100,7 @@ def _binding_attachment_option(
         domain_pack_version=domain_pack.version,
         validator_id=validator_id,
         validator_binding_id=binding.binding_id,
-        validator_package_id=(
-            binding.validator_agent.package_id
-            if binding.validator_agent is not None
-            else None
-        ),
+        validator_package_id=validator_package_id,
         validator_agent_id=(
             binding.validator_agent.agent_id
             if binding.validator_agent is not None
@@ -2355,6 +2501,29 @@ def _enumerate_multivalued_elements(
         )
 
 
+def _routed_match(match: ValidatorBindingMatch) -> ValidatorBindingMatch:
+    """Select the route the matched object's routing value names.
+
+    A match with no object, or whose value names no route, keeps the unrouted
+    binding; request building reports it instead of running any validator.
+    """
+
+    binding = match.binding
+    if (
+        binding.routes is None
+        or binding.route_by_path is None
+        or match.object_envelope is None
+    ):
+        return match
+    route_value = _payload_field_value(
+        match.object_envelope.payload,
+        match.resolve_input_path(binding.route_by_path),
+    )
+    if isinstance(route_value, str) and route_value in binding.routes:
+        return replace(match, binding=binding.for_route(route_value))
+    return match
+
+
 def _payload_field_value(payload: Mapping[str, Any], field_path: str) -> Any:
     """Return the staged value at ``field_path`` within a payload, or ``None``."""
 
@@ -2466,6 +2635,7 @@ __all__ = [
     "ValidatorBinding",
     "ValidatorBindingMatch",
     "ValidatorMetadataEntry",
+    "ValidatorRoute",
     "validate_active_validator_agent_references",
     "validator_dispatch_waves",
 ]

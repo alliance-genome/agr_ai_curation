@@ -330,9 +330,6 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
         "update_recorded_evidence_metadata",
         "get_agent_contract",
         "agr_species_context_lookup",
-        "search_domain_field_terms",
-        "inspect_ontology_term",
-        "resolve_domain_field_term",
         "stage_disease_observation",
         "patch_disease_observation",
         "discard_disease_observation",
@@ -365,6 +362,9 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
     # extraction-time disease ontology lookup.
     assert "active validator bindings own final disease ontology" in prompt_content
     assert "agr_curation_query" not in prompt_content
+    # Extraction never searches a database for an identity (2026-09-24); validators do.
+    assert "you never search a database for an identity" in prompt_content
+    assert "search_domain_field_terms" not in prompt_content
     assert "repair_mode" not in prompt_content
     assert "repair_notes" not in prompt_content
     assert "repair_hints" not in prompt_content

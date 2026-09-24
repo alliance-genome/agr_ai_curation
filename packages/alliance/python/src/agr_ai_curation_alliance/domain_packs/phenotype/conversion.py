@@ -6,12 +6,10 @@ builder-workspace candidates and emit the shared extraction-output payload
 ``domain_envelope_from_extraction_result`` turns that payload into a DomainEnvelope, nesting
 ``metadata`` under ``metadata.extraction_metadata``.
 
-POSTURE (preserve the existing pack — runbook §3): the migration changes the EXTRACTION
-MECHANISM, not the curation target. This materializer emits the SAME object graph the existing
-envelope converter (``__init__.build_pending_phenotype_envelope_from_tool_verified_fixture``)
-produced — one ``PhenotypeAnnotation`` curatable_unit per candidate, plus pending
-``PhenotypeSubject`` / ``PhenotypeTerm`` / ``Reference`` / ``EvidenceQuote`` objects — with the
-SAME blocked export/write metadata. No new ontology/provider pairs are activated.
+POSTURE (preserve the existing pack — runbook §3): this materializer emits one
+``PhenotypeAnnotation`` curatable_unit per candidate, plus pending ``PhenotypeSubject`` /
+``PhenotypeTerm`` / ``Reference`` / ``EvidenceQuote`` objects, with blocked export/write
+metadata. No new ontology/provider pairs are activated.
 
 EXTRACTED VS VALIDATED (ALL-1283): every term, subject and data provider is staged as one
 resolvable value (``_resolvable_payloads.staged_value``): the paper wording in ``mention``,
@@ -397,16 +395,15 @@ def _phenotype_term_payload(
     *,
     term_mention: str,
     term_curie: str | None,
-    term_label: str | None,
     source_mentions: Sequence[str],
     ontology_lookup_hint: Mapping[str, str],
 ) -> dict[str, Any]:
-    """The staged phenotype term: paper wording, extractor proposals, no validated identity."""
+    """The staged phenotype term: paper wording, a term ID the paper prints, no validated identity."""
 
     return staged_value(
         term_mention,
         identity_keys=PHENOTYPE_TERM_IDENTITY_KEYS,
-        proposals={"curie": term_curie, "label": term_label},
+        proposals={"curie": term_curie},
         source_mentions=list(source_mentions),
         ontology_lookup_hint=dict(ontology_lookup_hint),
     )
@@ -886,7 +883,6 @@ def materialize_phenotype_builder_state(
         term_payload = _phenotype_term_payload(
             term_mention=term_mention,
             term_curie=_clean_text(staged_fields.get("term_curie")),
-            term_label=_clean_text(staged_fields.get("term_label")),
             source_mentions=source_mentions,
             ontology_lookup_hint=ontology_lookup_hint,
         )

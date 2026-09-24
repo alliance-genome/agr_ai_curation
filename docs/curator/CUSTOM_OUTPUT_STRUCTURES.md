@@ -24,7 +24,7 @@ The AI follows the same simple design: one item type, one answer per detail, and
 
 ## Choose an output mode
 
-New drafts from the General PDF Extraction template start with **Custom Output Structure** and **GPT-5.6 Sol with medium reasoning**. AI Chat uses Astra with medium reasoning; validation agents keep their Terra settings. Saved agents and flow revisions keep their existing model choices. Opening or cloning a saved agent keeps its saved output choice. Each format has an explanation directly below the selector.
+New drafts from the General PDF Extraction template start with **Custom Output Structure** and **GPT-6 Sol with medium reasoning**. AI Chat uses Astra with medium reasoning; validation agents use GPT-6 Sol. Saved agents keep their model choices, except that GPT-5.6 Sol and GPT-5.6 Terra choices were moved to GPT-6 Sol. Opening or cloning a saved agent keeps its saved output choice. Each format has an explanation directly below the selector.
 
 - **Custom Output Structure** defines consistent details, answer types, and inclusion rules across papers. Attach supported validators to details or parts when needed. It is not automatically ready for Alliance submission.
 - **Flexible extraction** lets the agent choose useful fields while reading. Fields may vary between runs, and custom-field validators are not applied. It suits exploratory chat or CSV, TSV, and JSON exports when fixed columns are unnecessary; general record and evidence rules still apply.

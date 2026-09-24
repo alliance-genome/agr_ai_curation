@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import copy
 import sys
-from collections import Counter
 from collections.abc import Mapping
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +27,6 @@ from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
     DomainEnvelope,
-    field_path_exists,
 )
 from src.schemas.domain_pack_metadata import DomainPackFieldType
 from src.schemas.domain_validator import DomainValidatorResultBase
@@ -54,11 +51,9 @@ from agr_ai_curation_alliance.domain_packs.phenotype import (  # noqa: E402
     PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID,
     PHENOTYPE_TERM_OBJECT_TYPE,
     PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
-    build_pending_phenotype_envelope_from_tool_verified_fixture,
     get_phenotype_domain_pack_metadata_path,
     validate_pending_phenotype_envelope,
 )
-from tests.fixtures.evidence.harness import load_evidence_fixture  # noqa: E402
 
 from .test_alliance_domain_pack_scaffold import (  # noqa: E402
     _assert_range_exists,
@@ -77,6 +72,36 @@ PHENOTYPE_FIXTURE_PATH = (
     / "phenotype"
     / "tool_verified_pending_envelope.yaml"
 )
+
+
+def _pending_envelope(
+    *, drop_proposed_curie: bool = False, lookup_hint: Mapping[str, str] | None = None,
+) -> DomainEnvelope:
+    """A pending phenotype envelope: one unvalidated annotation with its term and subject.
+
+    The term is edited in both places it is stored (the annotation's ``phenotype_terms[0]``
+    and the ``PhenotypeTerm`` object) so tests can vary the paper-printed CURIE and the
+    species context the validator reads.
+    """
+
+    envelope = DomainEnvelope.model_validate(
+        yaml.safe_load(PHENOTYPE_FIXTURE_PATH.read_text(encoding="utf-8"))["envelope"]
+    )
+    for obj in envelope.extracted_objects:
+        if obj.object_type == PHENOTYPE_OBJECT_TYPE:
+            terms = [obj.payload["phenotype_terms"][0]]
+        elif obj.object_type == PHENOTYPE_TERM_OBJECT_TYPE:
+            terms = [obj.payload]
+        else:
+            continue
+        for term in terms:
+            if drop_proposed_curie:
+                term.pop("proposed_curie")
+            if lookup_hint is not None:
+                term["ontology_lookup_hint"] = {**lookup_hint, **term["ontology_lookup_hint"]}
+    return envelope
+
+
 LEGACY_SEMANTIC_KEYS = {
     "items",
     "annotations",
@@ -302,38 +327,27 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
     ]
 
     subject_binding = under_development_bindings[0]
-    assert subject_binding["validator_agent"] == {
-        "package_id": "agr.alliance",
-        "agent_id": "subject_entity_validation",
-    }
-    assert subject_binding["input_fields"] == {
-        "subject_type": {
-            "source": "payload",
-            "path": "subject_type",
-            "required": True,
-        },
-        "subject_identifier": {
+    assert "validator_agent" not in subject_binding
+    assert subject_binding["route_by"] == {"source": "payload", "path": "subject_type"}
+    assert {
+        value: route["validator_agent"]["agent_id"]
+        for value, route in subject_binding["routes"].items()
+    } == {"gene": "gene_validation", "allele": "allele_validation", "agm": "agm_validation"}
+    assert subject_binding["routes"]["gene"]["input_fields"] == {
+        "mention": {"source": "payload", "path": "mention", "required": True},
+        "proposed_gene_id": {
             "source": "payload",
             "path": "proposed_subject_identifier",
-            "required": True,
-        },
-        "subject_label": {
-            "source": "payload",
-            "path": "mention",
             "required": False,
         },
-        "taxon": {
+        "proposed_taxon": {
             "source": "payload",
             "path": "proposed_taxon",
             "required": False,
         },
     }
-    assert subject_binding["expected_result_fields"] == {
-        "subject_identifier": "subject_identifier",
-        "subject_type": "subject_type",
-        "subject_label": "subject_label",
-        "taxon": "taxon",
-    }
+    for route in subject_binding["routes"].values():
+        assert "subject_type" not in route["expected_result_fields"]
 
     reference_binding = under_development_bindings[1]
     assert reference_binding["binding_id"] == "phenotype_reference_validator"
@@ -462,108 +476,11 @@ def test_phenotype_subject_declares_linkml_grounded_taxon_context():
     assert taxon_ref["range"] == "NCBITaxonTerm"
 
 
-def test_tool_verified_phenotype_fixture_converts_to_pending_envelope():
-    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
-    envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(
-        fixture,
-        envelope_id="phenotype-tool-verified-envelope",
-        created_at=datetime(2026, 5, 9, tzinfo=timezone.utc),
-    )
-
-    assert validate_pending_phenotype_envelope(envelope) == ()
-    assert envelope.domain_pack_id == PHENOTYPE_DOMAIN_PACK_ID
-    assert {obj.status for obj in envelope.extracted_objects} == {CuratableObjectStatus.PENDING}
-
-    counts = Counter(obj.object_type for obj in envelope.extracted_objects)
-    assert counts == {
-        "Reference": 1,
-        PHENOTYPE_SUBJECT_OBJECT_TYPE: 1,
-        PHENOTYPE_TERM_OBJECT_TYPE: 1,
-        "EvidenceQuote": 2,
-        PHENOTYPE_OBJECT_TYPE: 1,
-    }
-
-    annotation = next(
-        obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
-    )
-    assert annotation.payload["phenotype_annotation_object"] == "reduced brood size"
-    # The fixture's normalized_id is the extractor's proposal, never a validated CURIE.
-    assert annotation.payload["phenotype_terms"] == [
-        {
-            "source_mentions": ["reduced brood size"],
-            "ontology_lookup_hint": {"evidence_record_id": "verified_exact"},
-            "proposed_curie": "WBPhenotype:0000886",
-            "curie": None,
-            "label": None,
-            "mention": "reduced brood size",
-            "resolution_state": "unresolved",
-            "lookup_outcome": "not_validated",
-            "validator_explanation": "Not validated yet.",
-        }
-    ]
-    assert annotation.metadata["export_behavior"]["status"] == "blocked"
-    assert annotation.metadata["write_behavior"]["status"] == "blocked"
-
-    missing_required_fields = [
-        field.field_path
-        for field in _phenotype_object_definition().fields
-        if field.required
-        and not field_path_exists(annotation.payload, field.field_path)
-    ]
-    assert missing_required_fields == []
-
-    expected = yaml.safe_load(PHENOTYPE_FIXTURE_PATH.read_text(encoding="utf-8"))
-    assert (
-        envelope.model_dump(
-            mode="json",
-            exclude_defaults=True,
-            exclude_none=True,
-        )
-        == expected["envelope"]
-    )
-
-
-def test_tool_verified_phenotype_fixture_preserves_subject_taxon_context():
-    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
-    fixture["extraction"]["items"][0].update(
-        {
-            "subject_identifier": "WB:WBGene00000912",
-            "subject_label": "daf-2(e1370)",
-            "subject_type": "gene",
-            "taxon": "NCBITaxon:6239",
-        }
-    )
-    envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
-
-    assert validate_pending_phenotype_envelope(envelope) == ()
-    subject = next(
-        obj
-        for obj in envelope.extracted_objects
-        if obj.object_type == PHENOTYPE_SUBJECT_OBJECT_TYPE
-    )
-    annotation = next(
-        obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
-    )
-    # The paper's species is the validator's input; only a validator or an override sets taxon.
-    assert (subject.payload["proposed_taxon"], subject.payload["taxon"]) == ("NCBITaxon:6239", None)
-    assert annotation.payload["phenotype_annotation_subject"]["proposed_taxon"] == "NCBITaxon:6239"
-    assert annotation.payload["phenotype_annotation_subject"]["taxon"] is None
-
-
 def test_pending_phenotype_term_without_curie_dispatches_with_context():
-    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
-    item = fixture["extraction"]["items"][0]
-    item.pop("normalized_id")
-    item.update(
-        {
-            "data_provider": "MGI",
-            "taxon": "NCBITaxon:10090",
-            "subject_identifier": "MGI:109583",
-            "subject_label": "Pax6",
-            "subject_type": "gene",
-        }
+    envelope = _pending_envelope(
+        drop_proposed_curie=True,
+        lookup_hint={"data_provider": "MGI", "taxon_id": "NCBITaxon:10090"},
     )
-    envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
 
     assert validate_pending_phenotype_envelope(envelope) == ()
     phenotype_term = next(
@@ -698,14 +615,7 @@ def test_unsupported_phenotype_provider_taxon_label_lookup_is_blocked_preflight(
 
 
 def test_phenotype_term_curie_remains_optional_fast_path_for_dispatch():
-    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
-    fixture["extraction"]["items"][0].update(
-        {
-            "data_provider": "WB",
-            "taxon": "NCBITaxon:6239",
-        }
-    )
-    envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
+    envelope = _pending_envelope(lookup_hint={"data_provider": "WB", "taxon_id": "NCBITaxon:6239"})
     registry = DomainPackValidationRegistry.from_domain_pack(_phenotype_pack())
     match = registry.match_bindings(
         envelope,
@@ -723,9 +633,7 @@ def test_phenotype_term_curie_remains_optional_fast_path_for_dispatch():
 
 
 def test_phenotype_term_materializes_only_after_validator_resolution():
-    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
-    fixture["extraction"]["items"][0].pop("normalized_id")
-    envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
+    envelope = _pending_envelope(drop_proposed_curie=True)
     pack = _phenotype_pack()
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
     match = registry.match_bindings(
@@ -853,17 +761,16 @@ def test_phenotype_term_materializes_only_after_validator_resolution():
     }
 
 
-def test_tool_verified_phenotype_envelope_omits_legacy_semantic_stores():
-    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
-    envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
+def test_pending_phenotype_envelope_omits_legacy_semantic_stores():
+    envelope = _pending_envelope()
 
     observed_keys = set(_iter_mapping_keys(envelope.model_dump(mode="python")))
     assert LEGACY_SEMANTIC_KEYS.isdisjoint(observed_keys)
 
 
 def test_pending_phenotype_validator_requires_explicit_blockers():
-    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
-    envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
+    envelope = _pending_envelope()
+    assert validate_pending_phenotype_envelope(envelope) == ()
 
     without_export_behavior = copy.deepcopy(envelope)
     annotation = next(
@@ -938,92 +845,6 @@ def test_phenotype_pack_linkml_class_slot_attribute_and_range_refs_exist(
             )
 
         _assert_range_exists(index, provider_ref)
-
-
-def test_tool_verified_phenotype_fixture_rejects_malformed_required_data():
-    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
-
-    missing_extraction = copy.deepcopy(fixture)
-    missing_extraction.pop("extraction")
-    with pytest.raises(ValueError, match="extraction must be an object"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(missing_extraction)
-
-    legacy_items_missing = copy.deepcopy(fixture)
-    legacy_items_missing["extraction"].pop("items")
-    with pytest.raises(ValueError, match="extraction.items must be a list"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(
-            legacy_items_missing
-        )
-
-    missing_term_identity = copy.deepcopy(fixture)
-    missing_term_identity["extraction"]["items"][0].pop("normalized_id")
-    missing_term_identity["extraction"]["items"][0].pop("label")
-    with pytest.raises(ValueError, match="extraction.items\\[\\].label"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(
-            missing_term_identity
-        )
-
-    missing_label = copy.deepcopy(fixture)
-    missing_label["extraction"]["items"][0].pop("label")
-    with pytest.raises(ValueError, match="extraction.items\\[\\].label"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(missing_label)
-
-    missing_source_mentions = copy.deepcopy(fixture)
-    missing_source_mentions["extraction"]["items"][0].pop("source_mentions")
-    with pytest.raises(ValueError, match="extraction.items\\[\\].source_mentions"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(
-            missing_source_mentions
-        )
-
-    empty_source_mentions = copy.deepcopy(fixture)
-    empty_source_mentions["extraction"]["items"][0]["source_mentions"] = []
-    with pytest.raises(ValueError, match="source_mentions must include at least one"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(
-            empty_source_mentions
-        )
-
-    missing_tool_evidence_id = copy.deepcopy(fixture)
-    missing_tool_evidence_id["tool_cases"][0]["expected_tool_result"].pop(
-        "evidence_record_id"
-    )
-    with pytest.raises(
-        ValueError,
-        match="tool_cases\\[\\].expected_tool_result.evidence_record_id",
-    ):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(
-            missing_tool_evidence_id
-        )
-
-    missing_embedded_evidence_id = copy.deepcopy(fixture)
-    first_item = missing_embedded_evidence_id["extraction"]["items"][0]
-    first_item.pop("evidence_case_ids")
-    first_item["evidence_records"] = [
-        {
-            "verified_quote": (
-                "daf-2(e1370) adults produced 40% fewer progeny than wild type."
-            ),
-            "page": 5,
-            "section": "Results",
-            "chunk_id": "chunk-phenotype-count",
-        }
-    ]
-    first_item["evidence_record_ids"] = ["missing-id"]
-    with pytest.raises(
-        ValueError,
-        match="extraction.items\\[\\].evidence_records\\[\\].evidence_record_id",
-    ):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(
-            missing_embedded_evidence_id
-        )
-
-    unknown_evidence_case = copy.deepcopy(fixture)
-    unknown_evidence_case["extraction"]["items"][0]["evidence_case_ids"] = [
-        "missing-case"
-    ]
-    with pytest.raises(ValueError, match="unknown tool case"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(
-            unknown_evidence_case
-        )
 
 
 def test_phenotype_constants_include_fixture_id_for_contract_callers():
@@ -1285,8 +1106,8 @@ def _export_candidate(**payload_overrides: Any) -> dict[str, Any]:
 
 def test_phenotype_export_reads_every_resolved_term_identity():
     from agr_ai_curation_alliance.domain_packs.phenotype import (
-        build_phenotype_annotation_export_payload,
-    )
+    build_phenotype_annotation_export_payload,
+)
 
     candidate = _export_candidate()
     candidate["payload"]["phenotype_terms"].append(
@@ -1314,8 +1135,8 @@ def test_phenotype_export_reads_every_resolved_term_identity():
 
 def test_phenotype_export_blocks_an_unresolved_term_instead_of_exporting_it():
     from agr_ai_curation_alliance.domain_packs.phenotype import (
-        build_phenotype_annotation_export_payload,
-    )
+    build_phenotype_annotation_export_payload,
+)
 
     candidate = _export_candidate()
     candidate["payload"]["phenotype_terms"].append(
@@ -1343,8 +1164,8 @@ def test_phenotype_export_blocks_an_unresolved_term_instead_of_exporting_it():
 @pytest.mark.parametrize("covered", [False, True])
 def test_phenotype_export_applies_the_legacy_rule_to_old_terms(covered):
     from agr_ai_curation_alliance.domain_packs.phenotype import (
-        build_phenotype_annotation_export_payload,
-    )
+    build_phenotype_annotation_export_payload,
+)
 
     candidate = _export_candidate(
         phenotype_terms=[
@@ -1374,8 +1195,8 @@ def test_phenotype_export_applies_the_legacy_rule_to_old_terms(covered):
 
 def test_phenotype_export_blocks_unresolved_condition_parts():
     from agr_ai_curation_alliance.domain_packs.phenotype import (
-        build_phenotype_annotation_export_payload,
-    )
+    build_phenotype_annotation_export_payload,
+)
 
     candidate = _export_candidate(
         condition_relations=[
@@ -1427,8 +1248,7 @@ def test_phenotype_export_blocks_unresolved_condition_parts():
 def test_pending_phenotype_validator_requires_first_term_paper_wording():
     # Regression (__init__.py :1006-1008): the first-term check accepted a CURIE or label; it
     # now requires the term's paper wording.
-    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
-    envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
+    envelope = _pending_envelope()
     annotation = next(
         obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
     )
@@ -1441,26 +1261,16 @@ def test_pending_phenotype_validator_requires_first_term_paper_wording():
     assert "alliance.phenotype.missing_phenotype_term" in codes
 
 
-def test_tool_verified_converter_requires_subject_paper_wording():
-    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
-    fixture["extraction"]["items"][0].update(
-        {"subject_identifier": "WB:WBGene00000912", "subject_type": "gene"}
-    )
-
-    with pytest.raises(ValueError, match="subject_label"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
-
-
 def test_a_curator_can_override_each_phenotype_term_and_condition_part():
     """ALL-1283: phenotype identity leaves (every term, condition components) are
     curator-editable; the paper wording and the data provider are not."""
 
     from src.lib.domain_envelopes.patches import (
-        EnvelopeFieldPatch,
-        EnvelopeFieldPatchOperation,
-        EnvelopeFieldPatchStatus,
-        apply_curator_field_patch,
-    )
+    EnvelopeFieldPatch,
+    EnvelopeFieldPatchOperation,
+    EnvelopeFieldPatchStatus,
+    apply_curator_field_patch,
+)
     from src.lib.domain_packs.resolvable_values import unresolved_value
     from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 

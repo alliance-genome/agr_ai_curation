@@ -64,10 +64,10 @@ def test_disabled_provider_models_are_not_returned_to_workshop(monkeypatch):
     monkeypatch.delenv("LLM_DISABLED_PROVIDERS", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "dummy-not-a-secret")
     monkeypatch.setattr(api_module, "list_model_definitions", lambda: [
-        get_model("gpt-5.6-sol"), get_model("deepseek/deepseek-v4-pro-0813"),
+        get_model("gpt-6-sol"), get_model("deepseek/deepseek-v4-pro-0813"),
     ])
     response = asyncio.run(api_module.get_models_endpoint(user={"sub": "test"}))
-    assert [model.model_id for model in response.models] == ["gpt-5.6-sol"]
+    assert [model.model_id for model in response.models] == ["gpt-6-sol"]
 
 
 def test_get_tool_library_endpoint_returns_curator_visible_policy_rows(monkeypatch):
@@ -112,6 +112,31 @@ def test_get_tool_library_endpoint_returns_curator_visible_policy_rows(monkeypat
         "stale_seeded_tool",
     ]
     assert [tool.config.requires_document for tool in response.tools] == [True, False]
+
+
+def test_get_tool_library_endpoint_marks_and_filters_identity_lookups_for_extractors(monkeypatch):
+    import src.api.agent_studio as api_module
+    from src.lib.packages import tool_roles
+
+    def _entry(tool_key):
+        return SimpleNamespace(
+            tool_key=tool_key, display_name=tool_key, description="", category="Database",
+            curator_visible=True, allow_attach=True, allow_execute=True, config={},
+        )
+
+    fake_service = SimpleNamespace(list_curator_visible=lambda _db: [_entry("lookup_demo"), _entry("search")])
+    monkeypatch.setattr(api_module, "get_tool_policy_cache", lambda: fake_service)
+    monkeypatch.setattr(tool_roles, "identity_lookup_tool_names", lambda: frozenset({"lookup_demo"}))
+
+    everything = asyncio.run(api_module.get_tool_library_endpoint(user={"sub": "test"}, db=SimpleNamespace()))
+    for_extractor = asyncio.run(api_module.get_tool_library_endpoint(
+        for_extraction_agent=True, user={"sub": "test"}, db=SimpleNamespace(),
+    ))
+
+    assert {tool.tool_key: tool.config.identity_lookup for tool in everything.tools} == {
+        "lookup_demo": True, "search": False,
+    }
+    assert [tool.tool_key for tool in for_extractor.tools] == ["search"]
 
 
 def test_get_tool_library_endpoint_marks_document_tools_from_one_definition(monkeypatch):

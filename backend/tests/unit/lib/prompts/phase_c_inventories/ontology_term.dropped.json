@@ -25,5 +25,111 @@
     "reason": "ALL-1283: bindings pass the paper's wording (the value's mention) as label, not necessarily an ontology term name; the replacement phrase says so.",
     "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<scope>",
     "new_home": ""
+  },
+  {
+    "phrase": "you are the resolver that settles it",
+    "category": "deleted",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): allele-derived role (ALL-1208). The 'final say' framing pushed the validator to force a resolution; replaced by 'A clear unresolved result is a successful validation outcome when the evidence cannot establish which term the paper means.', pinned in ontology_term.txt.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<role>",
+    "new_home": ""
+  },
+  {
+    "phrase": "Treat each request as yours to resolve well rather than as something to hand back.",
+    "category": "deleted",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): removed on purpose, as ALL-1208 did for allele; see the replacement role sentence pinned in ontology_term.txt.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<role>",
+    "new_home": ""
+  },
+  {
+    "phrase": "`curie`: ontology CURIE supplied by the payload; often an ID the extractor proposed, so confirm it with a lookup like any other input.",
+    "category": "deleted",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): extraction no longer searches, so curie is a paper-stated or fixed-choice proposal. The replacement input line adds that a successful fetch does not tie the term to the paper wording (allele f726329a5 rule).",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<scope>",
+    "new_home": ""
+  },
+  {
+    "phrase": "`name`: a term name supplied by the payload, often one the extractor proposed; a hint to check, never a result on its own.",
+    "category": "deleted",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): reworded without the extractor-proposal clause; the hint-not-result rule is kept verbatim in the replacement line pinned in ontology_term.txt.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<scope>",
+    "new_home": ""
+  },
+  {
+    "phrase": "to explain or break ties among tool-returned candidates only after the structured ontology family/type is already selected.",
+    "category": "deleted",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): paper context now also drives bounded variant searches and closest-fit judgement. Ontology family/type selection stays structured (narrowest-helper and provider/taxon mapping rules are unchanged).",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<resolution_and_validation_rules>",
+    "new_home": ""
+  },
+  {
+    "phrase": "If only a label/name is present, choose the narrowest search helper supported by the request per the narrowest-helper rule above.",
+    "category": "deleted",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): replaced by lookup step 3 (normal-mode search of the paper wording, exact mode only when the request sets exact_match) and step 4 (bounded source-supported variants), pinned in ontology_term.invariants.txt. The narrowest-helper rule itself is kept.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<lookup_workflow>",
+    "new_home": ""
+  },
+  {
+    "phrase": "If the tool returns zero results, return `status: \"unresolved\"` with `lookup_attempts`, `missing_expected_fields`, and a curator-facing explanation.",
+    "category": "deleted",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): one empty search demoted correct values (WB 'end of gastrulation' returned 0 in exact mode, 2 fitting candidates in normal mode). Replaced by bounded variants and the distinct no-candidates / rejected / ambiguous / tool-failure outcomes; an empty scoped search is not global absence.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<lookup_workflow>",
+    "new_home": ""
+  },
+  {
+    "phrase": "If multiple plausible candidates remain, return `status: \"unresolved\"` with `candidates` and `ontology_term_candidates`.",
+    "synonyms": [
+      "If multiple plausible candidates remain that fit equally well, return `status: \"unresolved\"` with `candidates` and `ontology_term_candidates`."
+    ],
+    "category": "relocated",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): the ambiguity rule is stated once in <term_decision>; under the closest-fit policy only equally fitting candidates make the result ambiguous.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<lookup_workflow>",
+    "new_home": "render"
+  },
+  {
+    "phrase": "Stop once you have the database evidence you need; do not keep searching to improve phrasing.",
+    "category": "deleted",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): replaced by 'Stop when the evidence supports a decision, or bounded searches cannot distinguish the candidates.' (lookup step 6, pinned in ontology_term.invariants.txt) with an explicit budget of about four lookups per value.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<stop_rules>",
+    "new_home": ""
+  },
+  {
+    "phrase": "If the request stays ambiguous after lookup, return the verified candidate set rather than guessing.",
+    "synonyms": [
+      "If multiple plausible candidates remain that fit equally well, return `status: \"unresolved\"` with `candidates` and `ontology_term_candidates`."
+    ],
+    "category": "relocated",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): duplicate of the ambiguity rule; stated once in <term_decision>.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<stop_rules>",
+    "new_home": "render"
+  },
+  {
+    "phrase": "If data is outside this agent's scope, do not fabricate, transfer work, or call another specialist",
+    "synonyms": [
+      "For other tasks, state the scope limit and preserve any supported ontology results; do not transfer work, invoke another agent, or perform another agent's task."
+    ],
+    "category": "relocated",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): duplicate of the scope rule; stated once in <role>.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<stop_rules>",
+    "new_home": "render"
+  },
+  {
+    "phrase": "Before your final answer, call `finalize_ontology_term_lookup` with the complete `OntologyTermValidationResult` payload you intend to return.",
+    "synonyms": [
+      "Complete the finalization tool required by the active runtime contract."
+    ],
+    "category": "relocated",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): domain-pack dispatch uses finalize_validator_result / finalize_validator_batch_results, so the base prompt no longer names a competing tool (ALL-1208 pattern). The runtime contract appends the actual finalization instructions.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<result_contract>",
+    "new_home": "render"
+  },
+  {
+    "phrase": "`selected_inputs.source_mentions` are the exact paper phrases the extractor captured for the target finding.",
+    "synonyms": [
+      "`source_mentions`, `evidence_quotes` and `evidence_summary`: paper context for choosing variant searches and judging candidates, never a substitute for a lookup."
+    ],
+    "category": "relocated",
+    "reason": "Sep 22 hotfix validator TLC (ontology_term): the <source_mentions_context> paragraph is stated once with the other request inputs; paper context now also supports bounded variant searches, and a lookup is still required.",
+    "old_source": "packages/alliance/agents/ontology_term/prompt.yaml:<source_mentions_context>",
+    "new_home": "render"
   }
 ]

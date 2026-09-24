@@ -52,7 +52,7 @@ BENCHMARK_ROOT=packages/alliance/benchmarks \
   --profile isolated-gene-agent-v1 \
   --case synthetic-gene-lookup-1 \
   --provider openai \
-  --model gpt-5.6-sol
+  --model gpt-6-sol
 ```
 
 ## Execute
@@ -67,7 +67,7 @@ BENCHMARK_ENABLED=true \
   python scripts/run_benchmarks.py \
   --profile isolated-gene-agent-v1 \
   --provider openai \
-  --model gpt-5.6-sol
+  --model gpt-6-sol
 ```
 
 The protected API exposes profile and case discovery, dry-run validation, and
@@ -79,7 +79,7 @@ Operational concurrency, matrix/case/result caps, timeouts, retries, output
 preview/inline limits, and all adjudication bounds are documented under
 `BENCHMARK_*` in `.env.example`. `BENCHMARK_ADJUDICATION_ENABLED` defaults to
 false. When explicitly enabled, only eligible records use the direct
-`gpt-5.6-sol` structured-output adjudicator; case, turn, tool, timeout, retry, and
+`gpt-6-sol` structured-output adjudicator; case, turn, tool, timeout, retry, and
 result-size settings bound that path.
 
 Case-run responses contain stable target/route/fixture identity, timing, normalized

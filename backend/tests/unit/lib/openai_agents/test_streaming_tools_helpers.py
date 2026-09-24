@@ -1155,12 +1155,6 @@ def test_lookup_structured_finalization_tool_names_are_enabled():
     )
     assert (
         streaming_tools._structured_specialist_finalization_tool_name(
-            _finalization_config("ask_subject_entity_specialist")
-        )
-        == "finalize_subject_entity_lookup"
-    )
-    assert (
-        streaming_tools._structured_specialist_finalization_tool_name(
             _finalization_config("ask_agm_specialist")
         )
         == "finalize_agm_lookup"

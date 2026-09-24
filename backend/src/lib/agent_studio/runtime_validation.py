@@ -8,6 +8,10 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.lib.packages.tool_roles import (
+    extraction_identity_lookup_message,
+    identity_lookup_tools_on_extraction_agent,
+)
 from src.lib.agent_studio.agent_finalize_invariant import (
     validate_agent_finalize_tool_invariant,
 )
@@ -334,6 +338,23 @@ def build_agent_runtime_report(
                 row_warnings.append(violation.detail)
             else:
                 row_errors.append(violation.detail)
+        # Group-scoped tools count too: an extraction agent may not gain a lookup for any group.
+        group_rule_tool_ids = [
+            str(rule.get("tool_id") or "")
+            for rule in ((getattr(row, "group_tool_policy", None) or {}).get("rules") or [])
+            if isinstance(rule, dict)
+        ]
+        identity_lookups = identity_lookup_tools_on_extraction_agent(
+            [*canonical_tool_ids, *group_rule_tool_ids]
+        )
+        if identity_lookups:
+            detail = extraction_identity_lookup_message(
+                f"Agent '{getattr(row, 'agent_key', '')}'", identity_lookups
+            )
+            if _should_warn_for_user_agent_contract_violation(strict=strict, visibility=visibility):
+                row_warnings.append(detail)
+            else:
+                row_errors.append(detail)
 
         if visibility == "project" and project_id is None:
             row_errors.append("project visibility requires project_id")

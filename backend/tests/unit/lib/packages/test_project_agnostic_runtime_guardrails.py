@@ -161,7 +161,6 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/integration/persistence/test_validator_agent_identity_migration.py"),
     Path("backend/tests/unit/test_config_loaders.py"),
     Path("backend/tests/unit/test_gene_allele_validator_result_contract.py"),
-    Path("backend/tests/unit/test_subject_entity_validator_result_contract.py"),
     Path("backend/tests/unit/test_disease_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_domain_envelope_repair_prompt_contract.py"),
     Path("backend/tests/unit/test_gene_extractor_domain_envelope_contract.py"),
@@ -398,9 +397,10 @@ def _reset_runtime_caches():
 
 
 def _reset_streaming_tool_caches(streaming_tools: ModuleType) -> None:
-    streaming_tools._tool_metadata_by_name.cache_clear()
+    from src.lib.packages import tool_roles
+
+    tool_roles.reset_cache()
     streaming_tools._tool_provider_adapter_factories.cache_clear()
-    streaming_tools.builder_finalization_tool_names.cache_clear()
     streaming_tools._run_state_tool_impls.cache_clear()
 
 

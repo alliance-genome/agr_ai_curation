@@ -21,6 +21,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
@@ -31,6 +32,8 @@ from src.lib.openai_agents.extraction_builder_workspace import (
 from src.schemas.domain_envelope import field_path_exists
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
+# Identity lookups belong to validators; extraction never searches a database (2026-09-24).
+_IDENTITY_LOOKUP_TOOLS = {"search_domain_field_terms", "inspect_ontology_term", "resolve_domain_field_term"}
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
 if str(ALLIANCE_PYTHON_SRC) not in sys.path:
     sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
@@ -72,7 +75,6 @@ def _staged_fields() -> dict[str, Any]:
         "subject_type": "gene",
         "subject_taxon": "NCBITaxon:6239",
         "term_mention": "truncated sensory cilia",
-        "term_label": "abnormal sensory cilium morphology",
         "data_provider": "WB",
         "term_taxon_id": "NCBITaxon:6239",
         "rationale": "Amphid cilia were truncated in che-2 mutants, a morphology defect rather than a behaviour.",
@@ -241,9 +243,9 @@ def test_phenotype_builder_stages_term_as_unresolved_paper_wording():
         obj for obj in payload["curatable_objects"] if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
     )
     term_value = annotation["payload"]["phenotype_terms"][0]
-    # The paper wording is the mention; the proposed label never fills the validated label.
+    # The paper wording is the mention; extraction never proposes a term name.
     assert term_value["mention"] == "truncated sensory cilia"
-    assert term_value["proposed_label"] == "abnormal sensory cilium morphology"
+    assert "proposed_label" not in term_value
     assert term_value["curie"] is None
     assert term_value["label"] is None
     assert term_value["resolution_state"] == "unresolved"
@@ -284,10 +286,9 @@ def test_phenotype_builder_never_marks_an_extractor_curie_resolved():
 
 
 def test_phenotype_builder_term_label_never_falls_back_to_the_statement():
-    # Regression (conversion.py :397 `term_label or statement`): no term proposal means no
-    # proposed label, and the validated label stays empty.
+    # Regression (conversion.py :397 `term_label or statement`): the validated label stays
+    # empty; neither the statement nor any proposal fills it.
     staged_fields = _staged_fields()
-    del staged_fields["term_label"]
     result = _materialize_one_candidate(staged_fields=staged_fields)
     annotation = next(
         obj for obj in result.payload["curatable_objects"] if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
@@ -510,12 +511,10 @@ def test_phenotype_extractor_agent_has_no_output_schema_and_builder_tools():
     tools = set(agent["tools"])
     assert "stage_phenotype_observation" in tools
     assert "finalize_phenotype_extraction" in tools
-    # Experimental-condition grounding tools (same as gene_expression's extractor).
-    assert {
-        "search_domain_field_terms",
-        "inspect_ontology_term",
-        "resolve_domain_field_term",
-    } <= tools
+    # Extraction never searches a database for an identity (2026-09-24); only species
+    # context lookup stays.
+    assert _IDENTITY_LOOKUP_TOOLS.isdisjoint(tools)
+    assert "agr_species_context_lookup" in tools
     assert "PhenotypeResultEnvelope" not in str(agent.get("output_schema"))
 
 
@@ -1065,3 +1064,132 @@ def test_every_staged_phenotype_value_is_declared_resolvable():
         declared = set(declared_resolvable_fields(metadata, obj["object_type"]))
         staged_paths = set(_staged_contract_value_paths(obj["payload"]))
         assert staged_paths <= declared, (obj["object_type"], sorted(staged_paths - declared))
+
+
+# --- Extraction never searches a database (2026-09-24) -------------------------------------------
+
+
+def test_phenotype_staging_takes_no_proposed_term_name_or_identity(monkeypatch):
+    """Extraction records paper wording plus IDs the paper prints; it never stages a proposed
+    term name or a validated identity key."""
+
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    for extra in ({"term_label": "abnormal sensory cilium morphology"}, {"curie": "WBPhenotype:0000180"}):
+        with pytest.raises(TypeError):
+            tools._stage_phenotype_observation_impl(**_stage_kwargs(**extra))
+    candidate_id = tools._stage_phenotype_observation_impl(
+        **_stage_kwargs(term_curie="WBPhenotype:0000180")
+    ).data["candidate_id"]
+
+    patched = tools._patch_phenotype_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="phenotype-annotation-1",
+        updates=[{"field_path": "term_label", "string_value": "abnormal sensory cilium morphology"}],
+    )
+    assert patched.status == "error"
+    assert "term_label" not in workspace.candidates[candidate_id].staged_fields
+
+    properties = tools.stage_phenotype_observation.params_json_schema["properties"]
+    assert "term_label" not in properties
+    assert "paper itself prints" in properties["term_curie"]["description"]
+    assert "paper itself prints" in properties["subject_identifier"]["description"]
+
+
+# --- Species context comes from the species tool (2026-09-24, option A) --------------------------
+
+_WORM_CONTEXT = {"data_provider": "WB", "term_taxon_id": "NCBITaxon:6239"}
+_SPECIES_TOOL_HINT = "Call agr_species_context_lookup with the species"
+
+
+@pytest.mark.parametrize(
+    "species_context",
+    [
+        {"data_provider": "WB", "term_taxon_id": "Caenorhabditis elegans"},
+        {**_WORM_CONTEXT, "subject_label": "mus-81", "subject_taxon": "C. elegans"},
+    ],
+    ids=["term_taxon_id species name", "subject_taxon species name"],
+)
+def test_stage_phenotype_rejects_a_species_name_as_the_taxon(monkeypatch, species_context):
+    """The term check needs an NCBITaxon ID; a species name read from the paper blocks it."""
+
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(**_stage_kwargs(**species_context))
+
+    assert result.status == "error"
+    message = result.data["validation_issues"][0]["message"]
+    assert "is not an NCBITaxon ID" in message and _SPECIES_TOOL_HINT in message
+    assert workspace.candidates == {}
+
+
+@pytest.mark.parametrize(
+    ("species_context", "missing"),
+    [
+        ({"data_provider": "WB"}, "term_taxon_id"),
+        ({"term_taxon_id": "NCBITaxon:6239"}, "data_provider"),
+        ({"subject_label": "mus-81", "subject_taxon": "NCBITaxon:6239"}, "data_provider, term_taxon_id"),
+        ({**_WORM_CONTEXT, "subject_label": "mus-81"}, "subject_taxon"),
+    ],
+)
+def test_stage_phenotype_rejects_a_partial_species_context(monkeypatch, species_context, missing):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(**_stage_kwargs(**species_context))
+
+    assert result.status == "error"
+    message = result.data["validation_issues"][0]["message"]
+    assert f"Species context is incomplete: {missing} missing." in message
+    assert _SPECIES_TOOL_HINT in message
+    assert workspace.candidates == {}
+
+
+@pytest.mark.parametrize(
+    "species_context",
+    [
+        {},
+        dict(_WORM_CONTEXT),
+        {**_WORM_CONTEXT, "subject_label": "mus-81", "subject_taxon": "NCBITaxon:6239"},
+    ],
+    ids=["no species", "term context", "term and subject context"],
+)
+def test_stage_phenotype_accepts_no_species_or_the_full_species_tool_context(monkeypatch, species_context):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(**_stage_kwargs(**species_context))
+
+    assert result.status == "ok", result.data
+    staged = workspace.candidates[result.data["candidate_id"]].staged_fields
+    for name, value in species_context.items():
+        assert staged[name] == value
+
+
+def test_patch_phenotype_keeps_the_species_context_complete(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    candidate_id = tools._stage_phenotype_observation_impl(
+        **_stage_kwargs(**_WORM_CONTEXT)
+    ).data["candidate_id"]
+
+    def patch(field_path, value):
+        return tools._patch_phenotype_observation_impl(
+            candidate_id=candidate_id,
+            pending_ref_id="phenotype-annotation-1",
+            updates=[{"field_path": field_path, "string_value": value}],
+        )
+
+    species_name = patch("term_taxon_id", "Caenorhabditis elegans")
+    assert species_name.status == "error"
+    assert species_name.data["validation_issues"][0]["reason"] == "invalid_species_context"
+    partial = patch("data_provider", None)
+    assert partial.status == "error"
+    assert _SPECIES_TOOL_HINT in partial.data["validation_issues"][0]["message"]
+    assert workspace.candidates[candidate_id].staged_fields["term_taxon_id"] == "NCBITaxon:6239"
+
+    mouse = tools._patch_phenotype_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="phenotype-annotation-1",
+        updates=[
+            {"field_path": "data_provider", "string_value": "MGI"},
+            {"field_path": "term_taxon_id", "string_value": "NCBITaxon:10090"},
+        ],
+    )
+    assert mouse.status == "ok"

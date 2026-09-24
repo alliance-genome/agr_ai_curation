@@ -428,11 +428,14 @@ def resolved_value(
     explanation: str | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
-    """A value whose identity a deterministic lookup (that is the validation) supplied.
+    """A value whose identity a validator, or a fixed in-code mapping table, supplied.
 
+    Extraction never searches for an identity: it stages ``unresolved_value``,
+    except for a value its pack declares as filled from a fixed in-code
+    mapping table (``EXTRACTION_MAPPING_KEY``; see ``extraction_value_problems``).
     ``identity`` holds the domain's id/label keys (e.g. ``{"curie": ..., "name": ...}``);
     ``extra`` holds other domain keys kept alongside (e.g. ``vocabulary``);
-    ``explanation`` says how the lookup matched, when the caller has it.
+    ``explanation`` says how it matched, when the caller has it.
     """
 
     if not identity:
@@ -1368,6 +1371,85 @@ def _with_mirror_sources(
     }
 
 
+# Field metadata marking a resolvable value whose identity extraction fills from a fixed,
+# local, in-code mapping table (e.g. an evidence code to its ECO term): mapping, not a
+# database search, so it may be staged resolved. Every other value is staged unvalidated.
+EXTRACTION_MAPPING_KEY = "extraction_mapping"
+# What a fixed mapping table itself decides about an entry it does not map.
+_MAPPING_MISS_OUTCOMES = frozenset({OUTCOME_NOT_FOUND, OUTCOME_CONFLICT})
+
+
+def extraction_value_problems(payload: Mapping[str, Any], metadata: Any, object_type: str) -> list[str]:
+    """What an extracted object's declared resolvable values claim that extraction may not.
+
+    Extraction reads the paper; validators do every identity search. So each
+    declared value an extractor stages is unresolved and ``not_validated``
+    (its paper wording, with any paper-stated identifier as ``proposed_*``).
+    The one exception is a value whose field declares ``EXTRACTION_MAPPING_KEY``:
+    its fixed in-code table is the authority, so it may be staged resolved and
+    matched, or unresolved (no identity) as a table miss (not_found) or an
+    entry that does not apply (conflict). A value stored
+    before the contract (no state) is left to the legacy rule. Returns one
+    message per offending value; empty when the object conforms.
+    """
+
+    object_definition = next(
+        (obj for obj in metadata.object_definitions if obj.object_type == object_type), None,
+    )
+    mapped = {
+        field.field_path
+        for field in (object_definition.fields if object_definition is not None else [])
+        if field.metadata.get(EXTRACTION_MAPPING_KEY) is True
+    }
+    problems: list[str] = []
+    for declared, spec in declared_resolvable_fields(metadata, object_type).items():
+        tokens = _path_tokens(declared) if declared else ()
+        if tokens is None:
+            continue
+        for path, value in _declared_values(payload, tokens, ()):
+            if not has_resolution_state(value):
+                continue
+            state, outcome = value.get(RESOLUTION_STATE_KEY), value.get(LOOKUP_OUTCOME_KEY)
+            where = f"{object_type}.{_format_path(path) or '<object root>'}"
+            identity_empty = all(_is_empty(value.get(key)) for key in spec.identity_keys)
+            if state == UNRESOLVED and outcome == OUTCOME_NOT_VALIDATED and identity_empty:
+                continue
+            if declared in mapped and (
+                (state == RESOLVED and outcome == OUTCOME_MATCHED)
+                # The fixed table is the authority for its field: a miss, or an entry that
+                # does not apply here, is its outcome.
+                or (state == UNRESOLVED and outcome in _MAPPING_MISS_OUTCOMES and identity_empty)
+            ):
+                continue
+            problems.append(
+                f"{where} was staged {state}/{outcome}; extraction stages every value unvalidated "
+                "(its paper wording only) unless the pack declares it filled from a fixed mapping table"
+            )
+    return problems
+
+
+def _declared_values(
+    node: Any, remaining: Sequence[str | int], walked: tuple[str | int, ...],
+) -> Iterable[tuple[tuple[str | int, ...], Mapping[str, Any]]]:
+    """(path, value) for each stored mapping a declared path names; an unindexed list fans out."""
+
+    if isinstance(node, list):
+        if remaining and isinstance(remaining[0], int):
+            if remaining[0] < len(node):
+                yield from _declared_values(node[remaining[0]], remaining[1:], (*walked, remaining[0]))
+            return
+        for index, item in enumerate(node):
+            yield from _declared_values(item, remaining, (*walked, index))
+        return
+    if not isinstance(node, Mapping):
+        return
+    if not remaining:
+        yield walked, node
+        return
+    if remaining[0] in node:
+        yield from _declared_values(node[remaining[0]], remaining[1:], (*walked, remaining[0]))
+
+
 def _bare_path(tokens: Sequence[str | int]) -> str:
     return ".".join(str(token) for token in tokens if isinstance(token, str))
 
@@ -1480,6 +1562,7 @@ __all__ = [
     "CONTRACT_KEYS",
     "CURATOR_OVERRIDE_KEY",
     "CURATOR_OVERRIDE_METADATA_KEY",
+    "EXTRACTION_MAPPING_KEY",
     "EXTRACTOR_PROPOSAL_PREFIX",
     "DECISIVE_OUTCOMES",
     "INVALID_RECORD_EXPLANATION",
@@ -1535,6 +1618,7 @@ __all__ = [
     "effective_payload",
     "effective_resolution",
     "effective_value",
+    "extraction_value_problems",
     "has_resolution_state",
     "is_curator_override",
     "is_resolved",

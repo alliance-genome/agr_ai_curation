@@ -146,7 +146,9 @@ def _component_outcome(request, attempts) -> str:
         # The component was judged without a lookup of its own: nothing validated it.
         return OUTCOME_NOT_VALIDATED
     return lookup_outcome_for_failure(validator_failure_classification(
-        SimpleNamespace(lookup_attempts=attempts, missing_expected_fields=[], request_id=request.request_id)
+        # A component's decision rests on its own lookups: nothing of it was filled.
+        SimpleNamespace(lookup_attempts=attempts, missing_expected_fields=[], resolved_values={},
+                        request_id=request.request_id)
     ))
 
 

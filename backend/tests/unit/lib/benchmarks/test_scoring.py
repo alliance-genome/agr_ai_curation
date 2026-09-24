@@ -203,7 +203,7 @@ def test_golden_score_and_aggregate_are_identical_across_reruns():
             "profile_id": "profile-1",
             "case_id": "case-1",
             "target": BenchmarkTarget(kind="agent", id="gene"),
-            "requested_route": BenchmarkRoute(provider="openai", model="gpt-5.6-sol"),
+            "requested_route": BenchmarkRoute(provider="openai", model="gpt-6-sol"),
             "started_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
             "completed_at": datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
             "latency_ms": 1000,
@@ -216,7 +216,7 @@ def test_golden_score_and_aggregate_are_identical_across_reruns():
     assert aggregate.case_count == 1
     assert aggregate.profile_id == "profile-1"
     assert aggregate.requested_route == BenchmarkRoute(
-        provider="openai", model="gpt-5.6-sol"
+        provider="openai", model="gpt-6-sol"
     )
     assert aggregate.partial_count == 1
     assert aggregate.weighted_score == first.weighted_score
@@ -225,7 +225,7 @@ def test_golden_score_and_aggregate_are_identical_across_reruns():
         update={
             "run_id": "run-2",
             "requested_route": BenchmarkRoute(
-                provider="openrouter", model="openai/gpt-5.6-sol"
+                provider="openrouter", model="openai/gpt-6-sol"
             ),
         }
     )

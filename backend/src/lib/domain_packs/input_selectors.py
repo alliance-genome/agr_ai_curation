@@ -58,6 +58,16 @@ def build_domain_validation_request(
     """Build a validator request or structured selector findings for one match."""
 
     binding = match.binding
+    if binding.unrouted:
+        # No route means no validator to run; the target stays unresolved.
+        problem = _route_problem(match)
+        return SelectorBuildResult(
+            request=None,
+            findings=(_problem_finding(match, problem),),
+            selected_inputs={},
+            input_selectors={"route_by": _selector_payload(problem.selector)},
+            evidence=_evidence_records_for_target(match),
+        )
     problems: list[_SelectorProblem] = []
     selected_inputs: dict[str, Any] = {}
     selectors: dict[str, dict[str, Any]] = {}
@@ -756,6 +766,44 @@ def _unresolved_ref(
             details=details,
             field_path=field_path,
         ),
+    )
+
+
+def _route_problem(match: ValidatorBindingMatch) -> _SelectorProblem:
+    """Why a routed binding's target selects no route."""
+
+    binding = match.binding
+    selector = DomainPackInputSelector(source="payload", path=binding.route_by_path)
+    if match.object_envelope is None:
+        return _SelectorProblem(
+            code="selector_missing",
+            input_name="route_by",
+            message="routed bindings require an object target",
+            selector=selector,
+            details={},
+        )
+    resolved_path = _element_indexed_path(match, binding.route_by_path or "")
+    value, exists = _value_at_path(match.object_envelope.payload, resolved_path)
+    routes = sorted(binding.routes or ())
+    if not exists or value is None or value == "":
+        return _SelectorProblem(
+            code="selector_missing",
+            input_name="route_by",
+            message=f"Payload path '{resolved_path}' is missing, so no validator route applies.",
+            selector=selector,
+            details={"routes": routes},
+            field_path=resolved_path,
+        )
+    return _SelectorProblem(
+        code="selector_unrouted",
+        input_name="route_by",
+        message=(
+            f"Payload path '{resolved_path}' value {value!r} names no validator route "
+            f"(routes: {', '.join(routes)})."
+        ),
+        selector=selector,
+        details={"route_value": value, "routes": routes},
+        field_path=resolved_path,
     )
 
 

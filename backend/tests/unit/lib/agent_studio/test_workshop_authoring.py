@@ -38,7 +38,7 @@ def db(monkeypatch):
         models={"model-a": AgentModelValidationRecord("model-a", True, True, ("low", "high"))},
         tools={"read": AgentToolValidationRecord("read", True, True)},
         output_schema_keys=frozenset({"facts"}), group_ids=frozenset({"TEAM"}),
-        builder_finalization_tool_ids=frozenset(),
+        builder_finalization_tool_ids=frozenset(), identity_lookup_tool_ids=frozenset(), extraction_output_schema_keys=frozenset(),
     )
     monkeypatch.setattr(custom_agent_service, "_agent_validation_sources", lambda *a, **kw: sources)
     monkeypatch.setattr(custom_agent_service, "custom_agent_name_exists", lambda *a, **kw: False)
@@ -79,7 +79,7 @@ def builder_catalog(db, monkeypatch, installed_builder):  # noqa: F811
     sources = custom_agent_service._agent_validation_sources(db)
     monkeypatch.setattr(custom_agent_service, "_agent_validation_sources", lambda *_args, **_kwargs: replace(
         sources, tools={**sources.tools, "finalize_gene_extraction": AgentToolValidationRecord("finalize_gene_extraction", True, True)},
-        builder_finalization_tool_ids=frozenset({"finalize_gene_extraction"}),
+        builder_finalization_tool_ids=frozenset({"finalize_gene_extraction"}), identity_lookup_tool_ids=frozenset(), extraction_output_schema_keys=frozenset(),
     ))
     return key, ref
 

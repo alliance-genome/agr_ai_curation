@@ -15,7 +15,7 @@ describe('smoke configuration', () => {
     assert.equal(config.appUrl, 'http://localhost:3002')
     assert.equal(config.provider, 'codex')
     assert.equal(config.model.baseUrl, 'codex://app-server')
-    assert.equal(config.model.name, 'gpt-5.6-sol')
+    assert.equal(config.model.name, 'gpt-6-sol')
     assert.equal(config.model.reasoningEffort, 'low')
     assert.equal(config.model.temperature, 1)
     assert.equal(config.model.retryCount, 1)
@@ -32,7 +32,7 @@ describe('smoke configuration', () => {
       AGENT_UI_SMOKE_CASE: 'upload-ask,run-saved-flow',
       AGENT_UI_SMOKE_HEADLESS: 'false',
       AGENT_UI_SMOKE_TEST_TIMEOUT_MS: '12345',
-      MIDSCENE_MODEL_NAME: 'gpt-5.6-terra',
+      MIDSCENE_MODEL_NAME: 'gpt-6-astra',
       MIDSCENE_MODEL_RETRY_COUNT: '2',
       MIDSCENE_MODEL_TEMPERATURE: '0.7',
       AGENT_UI_SMOKE_OPENAI_COST_WARNING_USD: '2.5',
@@ -42,7 +42,7 @@ describe('smoke configuration', () => {
     assert.deepEqual(config.cases, ['upload-ask', 'run-saved-flow'])
     assert.equal(config.headless, false)
     assert.equal(config.testTimeoutMs, 12345)
-    assert.equal(config.model.name, 'gpt-5.6-terra')
+    assert.equal(config.model.name, 'gpt-6-astra')
     assert.equal(config.model.retryCount, 2)
     assert.equal(config.model.temperature, 0.7)
     assert.equal(config.openaiCostWarningUsd, 2.5)

@@ -317,18 +317,16 @@ def _fetch_document_sections_sync(document_id: str, user_id: str) -> List[Dict[s
     from src.lib.weaviate_client.chunks import get_document_sections
 
     try:
-        # Try to get the running loop
         try:
             asyncio.get_running_loop()
-            # If there's a running loop, we can't use asyncio.run()
-            # Create a new event loop in a thread or use run_coroutine_threadsafe
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, get_document_sections(document_id, user_id))
-                return future.result(timeout=10)
         except RuntimeError:
             # No running loop, safe to use asyncio.run()
             return asyncio.run(get_document_sections(document_id, user_id))
+        # A running loop forbids asyncio.run() here; run the fetch on a worker thread.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, get_document_sections(document_id, user_id))
+            return future.result(timeout=10)
     except Exception as e:
         logger.warning("Failed to fetch document sections: %s", e)
         return []
@@ -346,17 +344,16 @@ def fetch_document_hierarchy_sync(document_id: str, user_id: str) -> Optional[Di
     from src.lib.weaviate_client.chunks import get_document_sections_hierarchical
 
     try:
-        # Try to get the running loop
         try:
             asyncio.get_running_loop()
-            # If there's a running loop, we can't use asyncio.run()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, get_document_sections_hierarchical(document_id, user_id))
-                return future.result(timeout=10)
         except RuntimeError:
             # No running loop, safe to use asyncio.run()
             return asyncio.run(get_document_sections_hierarchical(document_id, user_id))
+        # A running loop forbids asyncio.run() here; run the fetch on a worker thread.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, get_document_sections_hierarchical(document_id, user_id))
+            return future.result(timeout=10)
     except Exception as e:
         logger.warning("Failed to fetch document hierarchy: %s", e)
         try:
@@ -1065,7 +1062,7 @@ def _build_model_settings(
     Build ModelSettings with optional reasoning for models that support it.
 
     Reasoning is supported on:
-    - GPT-5.6 Sol/Terra models
+    - GPT-6 Sol/Astra models
     - Gemini 3 models (gemini-3.0-pro) - uses "low"/"high" thinking levels
     - Gemini 2.5 models (gemini-2.5-pro, gemini-2.5-flash) - uses thinking budgets
 
@@ -1078,7 +1075,7 @@ def _build_model_settings(
     - high/xhigh -> "high" thinking level (Gemini 3) or 24,576 budget (Gemini 2.5)
 
     Args:
-        model: The model name (e.g., "gpt-5.6-sol", "gpt-5.6-terra", "gemini-3-pro-preview")
+        model: The model name (e.g., "gpt-6-sol", "gpt-6-astra", "gemini-3-pro-preview")
         temperature: Optional temperature override (0.0-1.0)
         reasoning_effort: Optional reasoning effort for models that support it
         prompt_cache: The supervisor's static prompt identity (stable cache key)

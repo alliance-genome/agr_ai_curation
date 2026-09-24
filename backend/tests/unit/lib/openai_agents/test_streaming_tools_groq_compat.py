@@ -100,7 +100,7 @@ def test_try_parse_markdown_field_table_extracts_expected_fields():
 
 def test_required_tool_names_prefers_document_tools_over_package_required_tools(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        "src.lib.packages.tool_roles.tool_metadata_by_name",
         lambda: {
             "artifact_lookup": {
                 "required_tool_call": {
@@ -126,7 +126,7 @@ def test_required_tool_names_prefers_document_tools_over_package_required_tools(
 
 def test_required_tool_failure_message_for_missing_package_required_call(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        "src.lib.packages.tool_roles.tool_metadata_by_name",
         lambda: {
             "artifact_lookup": {
                 "required_tool_call": {
@@ -155,7 +155,7 @@ def test_required_tool_failure_message_requires_package_declared_failure_message
     monkeypatch,
 ):
     monkeypatch.setattr(
-        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        "src.lib.packages.tool_roles.tool_metadata_by_name",
         lambda: {
             "artifact_lookup": {
                 "required_tool_call": {
@@ -176,7 +176,7 @@ def test_required_tool_failure_message_requires_package_declared_failure_message
 
 def test_required_tool_failure_message_is_none_when_required_tool_called(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        "src.lib.packages.tool_roles.tool_metadata_by_name",
         lambda: {
             "artifact_lookup": {
                 "required_tool_call": {
@@ -261,7 +261,7 @@ def test_estimate_bulk_entity_count_detects_list_payload():
 
 def test_compute_adaptive_specialist_max_turns_scales_for_large_package_bulk_lists(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        "src.lib.packages.tool_roles.tool_metadata_by_name",
         lambda: {
             "artifact_lookup": {
                 "bulk_list_optimization": {
@@ -288,7 +288,7 @@ def test_compute_adaptive_specialist_max_turns_scales_for_large_package_bulk_lis
 
 def test_compute_adaptive_specialist_max_turns_honors_zero_minimum_entities(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        "src.lib.packages.tool_roles.tool_metadata_by_name",
         lambda: {
             "artifact_lookup": {
                 "bulk_list_optimization": {
@@ -313,7 +313,7 @@ def test_compute_adaptive_specialist_max_turns_honors_zero_minimum_entities(monk
 
 def test_compute_adaptive_specialist_max_turns_requires_numeric_package_metadata(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        "src.lib.packages.tool_roles.tool_metadata_by_name",
         lambda: {
             "artifact_lookup": {
                 "bulk_list_optimization": {
@@ -349,7 +349,7 @@ def test_compute_adaptive_specialist_max_turns_keeps_default_for_non_bulk_agents
 
 def test_tool_efficiency_instruction_requires_package_declared_text(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        "src.lib.packages.tool_roles.tool_metadata_by_name",
         lambda: {
             "artifact_lookup": {
                 "bulk_list_optimization": {

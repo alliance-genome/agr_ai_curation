@@ -33,3 +33,4 @@ avoid_when:
 limitations:
   - "Requires an uploaded PDF document — cannot extract phenotypes from chat text alone"
   - "Wild-type/control observations are baselines, not phenotype assertions"
+  - "Does not look anything up in the Alliance database: it records the paper's wording, plus an ID only when the paper prints one, and the validators find the official term and subject"

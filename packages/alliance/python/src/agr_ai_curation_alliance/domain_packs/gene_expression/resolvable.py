@@ -1,8 +1,8 @@
 """Gene-expression resolvable values (ALL-1283).
 
 Every validated gene-expression value is one object holding the paper's
-wording (``mention``) beside the identity a validator (or the builder's
-deterministic lookup) supplied, plus the shared contract state from
+wording (``mention``) beside the identity a validator supplied (extraction
+never supplies one), plus the shared contract state from
 ``src.lib.domain_packs.resolvable_values``. This table names each such value,
 the keys that carry its identity, and whether the curation DB export reads it.
 The pack's display declarations (``metadata.display`` with a ``mention``
@@ -26,7 +26,6 @@ from src.lib.domain_packs.resolvable_values import (
     ResolvableSpec,
     declared_resolvable_fields,
     effective_payload,
-    resolved_value,
     unresolved_value,
 )
 
@@ -195,53 +194,6 @@ def staged_value(field_path: str, mention: str, **extra: Any) -> dict[str, Any]:
     )
 
 
-def resolver_selected_value(
-    field_path: str,
-    mention: str,
-    selection: Mapping[str, Any],
-) -> dict[str, Any]:
-    """A value a ``resolve_domain_field_term`` call resolved, from its helper selection.
-
-    The resolver's deterministic lookup is the validation here, so the value
-    is resolved with the selected term's own identity keys. A vocabulary term
-    is identified by its term name, an ontology term by its CURIE.
-    """
-
-    declared = resolvable_value_for(field_path)
-    if declared.identity_keys == RELATION_IDENTITY_KEYS:
-        identity = {
-            "name": selection.get("selected_value"),
-            "vocabulary": selection.get("vocabulary"),
-            "id": selection.get("selected_internal_id"),
-        }
-        if value_is_blank(identity["name"]):
-            raise ValueError(f"The resolver selection for {field_path} has no term name")
-    else:
-        identity = {
-            "curie": selection.get("selected_curie"),
-            "name": selection.get("selected_name"),
-        }
-        if value_is_blank(identity["curie"]):
-            raise ValueError(f"The resolver selection for {field_path} has no CURIE")
-    return resolved_value(mention, identity)
-
-
-def data_provider_value(mention: str, matched_abbreviation: str | None) -> dict[str, Any]:
-    """The data provider the extractor named, resolved only by an exact provider-list match."""
-
-    if value_is_blank(matched_abbreviation):
-        return staged_value("data_provider", mention)
-    return resolved_value(
-        mention,
-        {"abbreviation": matched_abbreviation},
-        explanation="Matched exactly one Alliance data provider by abbreviation.",
-    )
-
-
-def value_is_blank(value: Any) -> bool:
-    return value is None or (isinstance(value, str) and not value.strip())
-
-
 def is_resolved(value: Any) -> bool:
     """Whether a value read through ``effective_gene_expression_payload`` is resolved."""
 
@@ -301,13 +253,10 @@ __all__ = [
     "RELATION_IDENTITY_KEYS",
     "SUBJECT_IDENTITY_KEYS",
     "TERM_IDENTITY_KEYS",
-    "data_provider_value",
     "declared_gene_expression_values",
     "effective_gene_expression_payload",
     "is_resolved",
     "resolvable_value_for",
-    "resolver_selected_value",
     "staged_value",
     "unresolved_value_message",
-    "value_is_blank",
 ]

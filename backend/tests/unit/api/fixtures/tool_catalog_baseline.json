@@ -87,20 +87,6 @@
           "search_go_terms",
           "map_curies_to_names"
         ]
-      },
-      "subject_entity_validation": {
-        "agent_name": "Subject Entity Validation Agent",
-        "description": "The Subject specialist confirms the affected entity \u2014 sending it to the gene, allele, or modified-organism path depending on what it is.",
-        "methods": [
-          "get_gene_by_id",
-          "search_genes",
-          "get_gene_by_exact_symbol",
-          "get_allele_by_id",
-          "search_alleles",
-          "get_allele_by_exact_symbol",
-          "map_entity_curies_to_info",
-          "map_entity_names_to_curies"
-        ]
       }
     },
     "agent_studio": {
@@ -464,8 +450,9 @@
           "type": "array[string]"
         }
       ],
-      "summary": "A single tool for looking up Alliance curation data. It offers many specific methods \u2014 search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. When a lookup returns more than fits in one reply, the reply comes in pages with instructions for continuing, and a single very large record is read back exactly in pieces, so no records or fields are dropped."
+      "summary": "A single tool for looking up Alliance curation data. It offers many specific methods \u2014 search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An ontology term search (search_ontology_terms, search_anatomy_terms, search_life_stage_terms, search_go_terms) matches term names and synonyms by exact, then prefix, then contains, then close spelling, returns at least 25 rows, and says how each row matched, along with the term's synonyms and definition; each row is a candidate to check, not a confirmed match. When a lookup returns more than fits in one reply, the reply comes in pages with instructions for continuing, and a single very large record is read back exactly in pieces, so no records or fields are dropped."
     },
+    "identity_lookup": true,
     "methods": {
       "get_allele_by_exact_symbol": {
         "description": "Find the allele whose official symbol exactly matches.",
@@ -797,7 +784,6 @@
       "search_ontology_terms": {
         "description": "Search ontology terms by name within one chosen kind of term (for example, mouse phenotype terms).",
         "example": {
-          "exact_match": true,
           "method": "search_ontology_terms",
           "ontology_term_type": "MPTerm",
           "term": "abnormal locomotor behavior"
@@ -898,6 +884,7 @@
       ],
       "summary": "Finds papers in the Alliance literature collection. Give it a known ID (such as a PubMed ID or DOI) to fetch the exact paper, or a title/citation to search for likely matches. It reports what it tried, the candidate papers it found, any cases where the match was unclear or nothing matched, and a plain status message."
     },
+    "identity_lookup": true,
     "methods": {
       "get_literature_reference": {
         "description": "Fetch one exact paper by a known identifier \u2014 a PubMed ID (PMID), DOI, Alliance reference ID, member-group reference ID, or exact title.",
@@ -1027,6 +1014,7 @@
       ],
       "summary": "Finds orthology relationships \u2014 genes that correspond to one another across different species \u2014 using Alliance of Genome Resources data."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Alliance Orthology API",
     "package_backed": true,
@@ -1213,6 +1201,7 @@
       ],
       "summary": "Looks up chemical compound IDs and related information in ChEBI, the standard chemical-compound database hosted at EBI."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "ChEBI API",
     "package_backed": true,
@@ -3034,6 +3023,7 @@
       ],
       "summary": "Retrieves typed existing GO annotations from the Gene Ontology Consortium API, preserving curator-comparison fields and source-record provenance without source fallback."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "GO Consortium Existing Annotations",
     "package_backed": true,
@@ -3174,6 +3164,7 @@
       ],
       "summary": "Shows one ontology term and a small, bounded set of nearby terms so the agent can walk the term tree and compare candidates. It is for exploring and comparing; the official term choice is settled separately with Resolve Domain Field Term."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Inspect Ontology Term",
     "package_backed": true,
@@ -3903,7 +3894,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording and are looked up again; a standard-term field takes its paper wording plus the selected term, or no term to keep it UNRESOLVED. A `rationale` update must be non-empty; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording; a standard-term field takes its paper wording plus, only when the paper prints one, the term's ID. Every corrected value stays UNRESOLVED until a specialist looks it up. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -4204,6 +4195,7 @@
       ],
       "summary": "Looks up Gene Ontology (GO) term details \u2014 names, definitions, and relationships \u2014 from the QuickGO service."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "QuickGO API",
     "package_backed": true,
@@ -4509,6 +4501,7 @@
       ],
       "summary": "Confirms the one official standard term for a field, after the agent has explored candidates with the search and inspect tools. Its result is the trusted choice the agent can record, with a clear trail of how the term was decided."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Resolve Domain Field Term",
     "package_backed": true,
@@ -4606,6 +4599,7 @@
       ],
       "summary": "Distinguishes ordinary genes, precursor loci, and mature RNA products using current Alliance curation identity, RNAcentral, and miRBase evidence; returns ambiguity explicitly and never synthesizes an RGD CURIE."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Alliance Gene Product Resolver",
     "package_backed": true,
@@ -4883,6 +4877,7 @@
       ],
       "summary": "Casts a wide net for possible standard-term matches for one field, starting from a phrase backed by evidence in the paper. The results are suggestions to compare, not a final choice \u2014 the agent settles on the official term separately with Resolve Domain Field Term."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Search Domain Field Terms",
     "package_backed": true,
@@ -5161,7 +5156,6 @@
       "summary": "Search ontology terms by name within one chosen kind of term (for example, mouse phenotype terms)."
     },
     "example": {
-      "exact_match": true,
       "method": "search_ontology_terms",
       "ontology_term_type": "MPTerm",
       "term": "abnormal locomotor behavior"
@@ -5366,12 +5360,6 @@
           "type": "string"
         },
         {
-          "description": "The Disease Ontology name the agent proposes for this disease; the disease specialist checks it, and it never replaces the paper's wording.",
-          "name": "disease_name",
-          "required": true,
-          "type": "string"
-        },
-        {
           "description": "How the disease appears in this paper: the main disease studied (primary), mentioned as background, used for comparison (comparative), the disease being modeled (model context), or unspecified. This is the agent's read of the paper context, not a stored relationship.",
           "name": "role",
           "required": true,
@@ -5409,7 +5397,7 @@
         },
         {
           "default": null,
-          "description": "The Disease Ontology ID (DOID, a standard disease term ID) the agent proposes, if it found one; the disease specialist confirms it.",
+          "description": "The Disease Ontology ID (DOID, a standard disease term ID), only when the paper itself prints it; the disease specialist checks it.",
           "name": "disease_curie",
           "required": false,
           "type": "any"
@@ -5423,7 +5411,7 @@
         },
         {
           "default": null,
-          "description": "The ID the agent proposes for the gene, allele, or model the disease is associated with; the subject specialist confirms it.",
+          "description": "The ID of the gene, allele, or model the disease is associated with, only when the paper itself prints it; the subject specialist checks it.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
@@ -5472,7 +5460,7 @@
         },
         {
           "default": null,
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (set only when the paper itself prints that ID, for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"
@@ -5534,7 +5522,7 @@
           "type": "string"
         },
         {
-          "description": "The Alliance member database for the paper's organism, by its abbreviation (such as ZFIN or WB). It is checked against the Alliance provider list; one that does not match stays UNRESOLVED for the data-provider specialist.",
+          "description": "The Alliance member database for the paper's organism, by its abbreviation (such as ZFIN or WB). The data-provider specialist checks it against the Alliance provider list.",
           "name": "data_provider",
           "required": true,
           "type": "string"
@@ -5552,7 +5540,7 @@
           "type": "any"
         },
         {
-          "description": "The standard-term choices for this observation (such as the anatomy and developmental-stage terms). Each carries the paper's own wording and, when a term matched, the value the agent selected; one with no match is kept as UNRESOLVED with its wording. A term specialist confirms these.",
+          "description": "The standard-term choices for this observation (such as the anatomy and developmental-stage terms). Each carries the paper's own wording and, only when the paper itself prints one, the term's ID as a proposal. Each stays UNRESOLVED until a term specialist looks it up.",
           "name": "controlled_fields",
           "required": true,
           "type": "array"
@@ -5564,7 +5552,7 @@
           "type": "any"
         }
       ],
-      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value keeps the paper's own wording; a term the agent could not match is kept as UNRESOLVED with that wording instead of being dropped. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage."
+      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value is the paper's own wording and stays UNRESOLVED until a specialist looks it up; the agent never searches the database itself. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage."
     },
     "methods": null,
     "name": "Stage Gene Expression Observation",
@@ -5984,7 +5972,7 @@
         },
         {
           "default": null,
-          "description": "The ID the agent proposes for the gene, allele, or model that shows this phenotype; a specialist confirms it before it counts as the subject's ID.",
+          "description": "The ID of the gene, allele, or model that shows this phenotype, only when the paper itself prints it; a specialist checks it before it counts as the subject's ID.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
@@ -6005,42 +5993,35 @@
         },
         {
           "default": null,
-          "description": "The species ID of the affected entity, if stated.",
+          "description": "The NCBITaxon ID of the affected entity's species (for example NCBITaxon:6239), as the species lookup returns it; never a species name. Given together with data_provider and term_taxon_id.",
           "name": "subject_taxon",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The phenotype term ID the agent proposes, if the paper gives one; a term specialist confirms it, and it is never shown as the confirmed ID.",
+          "description": "The phenotype term ID, only when the paper itself prints it; a term specialist checks it, and it is never shown as the confirmed ID.",
           "name": "term_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The phenotype term name the agent proposes; kept apart from the confirmed term name.",
-          "name": "term_label",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "description": "The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).",
+          "description": "The Alliance group for the paper's species as the species lookup returns it, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human). Given together with term_taxon_id.",
           "name": "data_provider",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The species ID tied to the proposed phenotype term, if relevant.",
+          "description": "The NCBITaxon ID of the paper's species (for example NCBITaxon:6239), as the species lookup returns it; never a species name. The phenotype term specialist needs it together with data_provider to choose the right phenotype ontology.",
           "name": "term_taxon_id",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (set only when the paper itself prints that ID, for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"

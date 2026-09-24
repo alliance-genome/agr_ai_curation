@@ -7,9 +7,8 @@ emit the shared extraction-output payload (``curatable_objects[]`` + ``metadata`
 payload into a DomainEnvelope, nesting ``metadata`` under ``metadata.extraction_metadata``.
 
 POSTURE (preserve the existing pack — runbook §3): the migration changes the EXTRACTION
-MECHANISM, not the curation target. This materializer emits the SAME 4-object pending association
-graph the existing envelope converter
-(``__init__.build_pending_allele_envelope_from_tool_verified_fixture``) produced:
+MECHANISM, not the curation target. This materializer emits the same 4-object pending association
+graph as the pack's pending fixture (``fixtures/tool_verified.yaml``):
 
   * one shared ``Reference`` (the source paper),
   * one ``AlleleMention`` per retained candidate (the validator-binding input object),

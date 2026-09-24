@@ -9,11 +9,15 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
 from pydantic import ValidationError, model_validator
 
 from src.lib.domain_packs.resolvable_values import (
+    LOOKUP_OUTCOME_KEY,
+    OUTCOME_NOT_VALIDATED,
+    RESOLUTION_STATE_KEY,
+    UNRESOLVED,
     ResolvableValueError,
     check_resolvable_list,
     check_resolvable_value,
@@ -97,8 +101,8 @@ REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
         "expression_pattern.where_expressed",
     }
 )
-# Required fields the extractor does not supply: a validator (or the builder's
-# deterministic lookup) writes the identity keys of each resolvable value, and a
+# Required fields the extractor does not supply: a validator writes the identity
+# keys of each resolvable value, and a
 # paper may state no stage or leave the expression site UNRESOLVED. The pending
 # envelope and export still report them.
 _VALIDATOR_OWNED_IDENTITY_FIELDS = frozenset(
@@ -135,26 +139,8 @@ FIELD_SPECIFIC_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
 GENE_EXPRESSION_LINKML_CONTRACT_VALIDATOR_ID = (
     "gene_expression.linkml_extraction_contract"
 )
-# Controlled-vocabulary list fields the builder resolves only through
-# resolve_domain_field_term (by term name).
-_RESOLVER_BACKED_VOCABULARY_FIELDS = (
-    "expression_pattern.when_expressed.stage_uberon_slim_terms",
-)
-# Ontology-term fields the builder resolves only through resolve_domain_field_term.
-_RESOLVER_BACKED_TERM_FIELDS = (
-    "expression_experiment.expression_assay_used",
-    "expression_pattern.when_expressed.developmental_stage_start",
-    "expression_pattern.where_expressed.anatomical_structure",
-    "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
-    "expression_pattern.where_expressed.cellular_component",
-    "expression_pattern.where_expressed.cellular_component_qualifiers",
-)
 VALID_GENE_EXPRESSION_RELATION_NAMES = frozenset({"is_expressed_in"})
 EXPRESSION_RELATION_VOCABULARY = "Expression Relation"
-CONTROLLED_FIELD_RESOLVER_TOOL_NAME = "resolve_domain_field_term"
-ACCEPTED_CONTROLLED_FIELD_PROVENANCE_TOOLS = frozenset(
-    {CONTROLLED_FIELD_RESOLVER_TOOL_NAME}
-)
 LOGGER = logging.getLogger(__name__)
 FORBIDDEN_PAYLOAD_EVIDENCE_FIELDS = frozenset(
     {
@@ -191,7 +177,6 @@ class GeneExpressionMaterializationResult:
     issues: tuple[dict[str, Any], ...]
     source_candidate_ids: tuple[str, ...]
     evidence_record_ids: tuple[str, ...]
-    helper_selection_count: int
 
     @property
     def ok(self) -> bool:
@@ -202,7 +187,6 @@ class GeneExpressionMaterializationResult:
             "status": "ok" if self.ok else "error",
             "source_candidate_ids": list(self.source_candidate_ids),
             "evidence_record_ids": list(self.evidence_record_ids),
-            "helper_selection_count": self.helper_selection_count,
             "validation_issues": [dict(issue) for issue in self.issues],
         }
 
@@ -231,6 +215,32 @@ def _resolvable_value_errors(payload: Mapping[str, Any]) -> list[str]:
                     check_resolvable_value(value, identity_keys=declared.identity_keys)
             except ResolvableValueError as exc:
                 errors.append(f"{path}: {exc}")
+    return errors
+
+
+def _extraction_state_errors(payload: Mapping[str, Any]) -> list[str]:
+    """Extraction records the paper's wording only: every value it stages is not yet validated.
+
+    A validator is the only source of a value's identity, so a value staged
+    resolved (or with any other lookup outcome) is rejected.
+    """
+
+    errors: list[str] = []
+    for declared in GENE_EXPRESSION_RESOLVABLE_VALUES:
+        for path, value in _values_at(payload, declared.field_path):
+            for index, item in enumerate(value if declared.multivalued and isinstance(value, list) else [value]):
+                item_path = f"{path}[{index}]" if declared.multivalued else path
+                if not isinstance(item, Mapping):
+                    continue
+                if (
+                    item.get(RESOLUTION_STATE_KEY) != UNRESOLVED
+                    or item.get(LOOKUP_OUTCOME_KEY) != OUTCOME_NOT_VALIDATED
+                ):
+                    errors.append(
+                        f"{item_path} must be staged not yet validated: extraction records the "
+                        "paper's wording (and any ID the paper states as a proposal); only a "
+                        "validator supplies its identity"
+                    )
     return errors
 
 
@@ -274,83 +284,6 @@ def _payload_value_missing_or_blank(payload: Mapping[str, Any], field_path: str)
     if not field_path_exists(payload, field_path):
         return True
     return _value_missing_or_blank(_payload_value(payload, field_path))
-
-
-def _helper_selections(output: DomainEnvelopeExtractionResult) -> list[Mapping[str, Any]]:
-    selections = output.metadata.provenance.get("helper_selections")
-    if not isinstance(selections, list):
-        return []
-    valid_selections: list[Mapping[str, Any]] = []
-    dropped_count = 0
-    for entry in selections:
-        if isinstance(entry, Mapping):
-            valid_selections.append(entry)
-        else:
-            dropped_count += 1
-    if dropped_count:
-        LOGGER.warning(
-            "Dropped %s malformed gene expression helper_selections entries",
-            dropped_count,
-        )
-    return valid_selections
-
-
-def _has_helper_selection(
-    output: DomainEnvelopeExtractionResult,
-    *,
-    field_path: str,
-    selected_value: str | None = None,
-    selected_curie: str | None = None,
-) -> bool:
-    for selection in _helper_selections(output):
-        if selection.get("field_path") != field_path:
-            continue
-        if selection.get("source_tool") not in ACCEPTED_CONTROLLED_FIELD_PROVENANCE_TOOLS:
-            continue
-        if selection.get("authority") not in {"selector_evidence", "live_validated_option"}:
-            continue
-        lookup_status = selection.get("lookup_status")
-        if lookup_status not in {"success", "resolved"}:
-            continue
-        source_phrase = selection.get("source_phrase")
-        if not isinstance(source_phrase, str) or not source_phrase.strip():
-            continue
-        term_source = selection.get("term_source")
-        if not isinstance(term_source, Mapping) or not isinstance(term_source.get("kind"), str):
-            continue
-        values = {
-            str(value).strip()
-            for value in (
-                selection.get("selected_value"),
-                selection.get("selected_name"),
-                selection.get("selected_curie"),
-            )
-            if value is not None and str(value).strip()
-        }
-        if selected_curie is not None and not (
-            isinstance(selection.get("selected_curie"), str)
-            or ":" in str(selection.get("selected_value") or "")
-        ):
-            continue
-        if selected_value is None and selected_curie is None:
-            return True
-        if selected_value is not None and selected_value.strip() in values:
-            return True
-        if selected_curie is not None and selected_curie.strip() in values:
-            return True
-    return False
-
-
-def _resolver_provenance_error(
-    *,
-    location: str,
-    field_path: str,
-) -> str:
-    return (
-        f"{location}.payload {field_path} must include "
-        "metadata.provenance.helper_selections[] evidence from "
-        f"{CONTROLLED_FIELD_RESOLVER_TOOL_NAME}"
-    )
 
 
 def _diagnostic_details(
@@ -456,58 +389,13 @@ def validate_gene_expression_extraction_objects(
         errors.extend(
             f"{location}.payload {error}" for error in _resolvable_value_errors(obj.payload)
         )
-        relation = obj.payload.get("relation")
-        if not _term_present(relation):
+        errors.extend(
+            f"{location}.payload {error}" for error in _extraction_state_errors(obj.payload)
+        )
+        if not _term_present(obj.payload.get("relation")):
             errors.append(
                 f"{location}.payload relation must be staged with its paper wording"
             )
-        elif is_resolved(relation):
-            relation_name = relation.get("name")
-            if relation_name not in VALID_GENE_EXPRESSION_RELATION_NAMES:
-                errors.append(
-                    f"{location}.payload relation.name must be a valid "
-                    f"{EXPRESSION_RELATION_VOCABULARY} option"
-                )
-            elif not _has_helper_selection(
-                output,
-                field_path="relation.name",
-                selected_value=relation_name,
-            ):
-                errors.append(
-                    _resolver_provenance_error(
-                        location=location,
-                        field_path="relation.name",
-                    )
-                )
-        # A term the builder staged as resolved carries the resolver call that matched it.
-        for field_path in _RESOLVER_BACKED_VOCABULARY_FIELDS:
-            for value_path, value in _values_at(obj.payload, field_path):
-                for term in value if isinstance(value, list) else [value]:
-                    if is_resolved(term) and not _has_helper_selection(
-                        output,
-                        field_path=field_path,
-                        selected_value=str(term.get("name") or ""),
-                    ):
-                        errors.append(
-                            _resolver_provenance_error(location=location, field_path=value_path)
-                        )
-        for field_path in _RESOLVER_BACKED_TERM_FIELDS:
-            for value_path, value in _values_at(obj.payload, field_path):
-                terms = value if isinstance(value, list) else [value]
-                for term in terms:
-                    if not is_resolved(term):
-                        continue
-                    if not _has_helper_selection(
-                        output,
-                        field_path=field_path,
-                        selected_curie=str(term.get("curie") or ""),
-                    ):
-                        errors.append(
-                            _resolver_provenance_error(
-                                location=location,
-                                field_path=value_path,
-                            )
-                        )
         if not _term_present(obj.payload.get("data_provider")):
             errors.append(
                 f"{location}.payload data_provider must be staged with the "
@@ -639,7 +527,6 @@ def materialize_gene_expression_builder_state(
     workspace: Any,
     candidate_ids: list[str] | tuple[str, ...],
     evidence_records: list[Mapping[str, Any]] | None = None,
-    resolver_entry_lookup: Callable[[str], Any] | None = None,
     produced_by: str = "gene_expression_extraction",
 ) -> GeneExpressionMaterializationResult:
     """Build canonical GeneExpressionEnvelope output from finalized builder state."""
@@ -670,7 +557,6 @@ def materialize_gene_expression_builder_state(
     }
     curatable_objects: list[CuratableObjectEnvelope] = []
     raw_mentions: list[dict[str, Any]] = []
-    helper_selections: list[dict[str, Any]] = []
     retained_evidence_ids: list[str] = []
     default_date_created = _clean_text(getattr(workspace, "created_at", None))
     if default_date_created is None:
@@ -753,14 +639,6 @@ def materialize_gene_expression_builder_state(
             default_date_created=default_date_created,
             issues=issues,
         )
-        selections = _materialized_helper_selections(
-            staged_fields,
-            resolver_selection_refs=getattr(candidate, "resolver_selection_refs", ()),
-            resolver_entry_lookup=resolver_entry_lookup,
-            candidate_id=candidate.candidate_id,
-            issues=issues,
-        )
-        helper_selections.extend(selections)
         retained_evidence_ids.extend(evidence_ids)
         raw_mentions.append(
             {
@@ -793,7 +671,7 @@ def materialize_gene_expression_builder_state(
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 definition_notes=[
                     "The envelope carries exactly one GeneExpressionAnnotation object per annotation.",
-                    "Evidence and resolver provenance are materialized by backend builder finalization.",
+                    "Evidence provenance is materialized by backend builder finalization.",
                 ],
                 payload=payload,
                 evidence_record_ids=evidence_ids,
@@ -807,7 +685,6 @@ def materialize_gene_expression_builder_state(
         "produced_by": produced_by,
         "builder_run_id": getattr(workspace, "run_id", None),
         "source_candidate_ids": list(normalized_candidate_ids),
-        "helper_selections": _dedupe_helper_selections(helper_selections),
     }
     output_payload = {
         "summary": (
@@ -851,7 +728,6 @@ def materialize_gene_expression_builder_state(
         issues=tuple(issues),
         source_candidate_ids=normalized_candidate_ids,
         evidence_record_ids=tuple(_unique_strings(retained_evidence_ids)),
-        helper_selection_count=len(provenance["helper_selections"]),
     )
 
 
@@ -1040,88 +916,6 @@ def _reference_mention_issue(mention: Any) -> dict[str, str] | None:
             "message": "Placeholder references such as PMID:12345678 cannot be finalized.",
         }
     return None
-
-
-def _materialized_helper_selections(
-    staged_fields: Mapping[str, Any],
-    *,
-    resolver_selection_refs: Any,
-    resolver_entry_lookup: Callable[[str], Any] | None,
-    candidate_id: str,
-    issues: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    selections: list[dict[str, Any]] = []
-    provenance = staged_fields.get("metadata")
-    if isinstance(provenance, Mapping):
-        nested = provenance.get("provenance")
-        raw_selections = (
-            nested.get("helper_selections")
-            if isinstance(nested, Mapping)
-            else provenance.get("helper_selections")
-        )
-        if isinstance(raw_selections, list):
-            selections.extend(
-                dict(item)
-                for item in raw_selections
-                if (
-                    isinstance(item, Mapping)
-                    and item.get("source_tool") == CONTROLLED_FIELD_RESOLVER_TOOL_NAME
-                )
-            )
-
-    for resolver_call_id in _string_list(resolver_selection_refs):
-        if any(selection.get("resolver_call_id") == resolver_call_id for selection in selections):
-            continue
-        if resolver_entry_lookup is None:
-            issues.append(
-                _materialization_issue(
-                    field_path="metadata.provenance.helper_selections",
-                    reason="resolver_ledger_unavailable",
-                    message="Resolver selections must be copied from the active resolver ledger.",
-                    candidate_id=candidate_id,
-                    resolver_call_id=resolver_call_id,
-                )
-            )
-            continue
-        try:
-            entry = resolver_entry_lookup(resolver_call_id)
-        except (KeyError, RuntimeError, ValueError) as exc:
-            issues.append(
-                _materialization_issue(
-                    field_path="metadata.provenance.helper_selections",
-                    reason="unknown_resolver_call_id",
-                    message=str(exc),
-                    candidate_id=candidate_id,
-                    resolver_call_id=resolver_call_id,
-                )
-            )
-            continue
-        if hasattr(entry, "provenance_selection"):
-            selection = entry.provenance_selection()
-        else:
-            selection = getattr(entry, "helper_selection", None)
-        if isinstance(selection, Mapping):
-            materialized_selection = dict(selection)
-            materialized_selection.setdefault("resolver_call_id", resolver_call_id)
-            materialized_selection.setdefault("source_tool", CONTROLLED_FIELD_RESOLVER_TOOL_NAME)
-            selections.append(materialized_selection)
-    return selections
-
-
-def _dedupe_helper_selections(selections: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    deduped: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for selection in selections:
-        key = (
-            str(selection.get("resolver_call_id") or ""),
-            str(selection.get("field_path") or ""),
-            str(selection.get("selected_value") or selection.get("selected_curie") or ""),
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(selection)
-    return deduped
 
 
 def _deterministic_experiment_id(

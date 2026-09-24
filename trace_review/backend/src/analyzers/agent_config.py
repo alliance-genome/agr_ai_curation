@@ -8,7 +8,7 @@ with name pattern: {agent_name}_config (e.g., "pdf_specialist_config")
 The event metadata contains an ``agent_config`` object with:
 - agent_name: Name of the agent (e.g., "PDF Specialist")
 - instructions: Full system prompt/instructions
-- model: Model name (e.g., "gpt-5.6-sol")
+- model: Model name (e.g., "gpt-6-sol")
 - tools: List of tool names available to the agent
 - model_settings: Dict with temperature, reasoning, tool_choice
 - metadata: Optional additional metadata (document_id, hierarchy, etc.)

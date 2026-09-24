@@ -151,14 +151,13 @@ def _alliance_gate_case(case_key: str):
     elif case_key == "allele":
         from agr_ai_curation_alliance.domain_packs.allele import (
             ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
-            build_pending_allele_envelope_from_tool_verified_fixture,
         )
-        from tests.fixtures.evidence.harness import load_evidence_fixture
+        from src.lib.domain_packs.loader import load_domain_fixture_pack
 
-        envelope = build_pending_allele_envelope_from_tool_verified_fixture(
-            load_evidence_fixture("tool_verified_allele_paper"),
-            envelope_id="allele-alliance-e2e-envelope",
-        )
+        # The allele pack's declared fixture: a pending, unvalidated allele association.
+        envelope = load_domain_fixture_pack(
+            REPO_ROOT / "packages" / "alliance" / "domain_packs" / "allele" / "fixtures" / "tool_verified.yaml"
+        ).fixtures[0].envelope
         return {
             "adapter_key": "allele",
             "envelope": _retag_envelope(
@@ -179,12 +178,13 @@ def _alliance_gate_case(case_key: str):
         from agr_ai_curation_alliance.domain_packs.disease import (
             DISEASE_EXPORT_TARGET_ID,
             DISEASE_OBJECT_TYPE,
-            tool_verified_disease_output_to_pending_envelope,
         )
+        from src.lib.domain_packs.loader import load_domain_fixture_pack
 
-        envelope = tool_verified_disease_output_to_pending_envelope(
-            _fixture_yaml("disease", "tool_verified_disease_output.yaml")
-        )
+        # The disease pack's declared fixture: a pending, unvalidated disease annotation.
+        envelope = load_domain_fixture_pack(
+            REPO_ROOT / "packages" / "alliance" / "domain_packs" / "disease" / "fixtures" / "tool_verified.yaml"
+        ).fixtures[0].envelope
         return {
             "adapter_key": "disease",
             "envelope": _retag_envelope(
@@ -204,13 +204,12 @@ def _alliance_gate_case(case_key: str):
         from agr_ai_curation_alliance.domain_packs.phenotype import (
             PHENOTYPE_EXPORT_TARGET_ID,
             PHENOTYPE_OBJECT_TYPE,
-            build_pending_phenotype_envelope_from_tool_verified_fixture,
         )
-        from tests.fixtures.evidence.harness import load_evidence_fixture
+        from src.schemas.domain_envelope import DomainEnvelope
 
-        envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(
-            load_evidence_fixture("tool_verified_phenotype_paper"),
-            envelope_id="phenotype-alliance-e2e-envelope",
+        # A pending, unvalidated phenotype annotation with its term and subject.
+        envelope = DomainEnvelope.model_validate(
+            _fixture_yaml("phenotype", "tool_verified_pending_envelope.yaml")["envelope"]
         )
         return {
             "adapter_key": "phenotype",
@@ -254,9 +253,9 @@ def _tmem67_gene_expression_envelope(*, envelope_id: str):
 def _with_tmem67_validator_results(envelope):
     """The extracted values as their validators resolve them (ALL-1283).
 
-    The extractor stages the subject gene, the reference, the stage and the
-    UBERON slim term as paper wording; export needs each one resolved, as the
-    gene, reference and ontology validators do in a real run.
+    The extractor stages every value as paper wording (extraction never searches);
+    export needs each one resolved, as the data-provider, gene, reference,
+    vocabulary and ontology validators do in a real run.
     """
 
     from src.lib.domain_packs.resolvable_values import mark_resolved
@@ -265,6 +264,16 @@ def _with_tmem67_validator_results(envelope):
     payload = copy.deepcopy(annotation.payload)
     experiment = payload["expression_experiment"]
     resolved = [
+        (payload["data_provider"], {"abbreviation": "MGI"}),
+        (payload["relation"], {"name": "is_expressed_in", "vocabulary": "Expression Relation", "id": 200000200}),
+        (
+            experiment["expression_assay_used"],
+            {"curie": "MMO:0000655", "name": "reverse transcription polymerase chain reaction assay"},
+        ),
+        (
+            payload["expression_pattern"]["where_expressed"]["anatomical_structure"],
+            {"curie": "EMAPA:17373", "name": "metanephros"},
+        ),
         (payload["expression_annotation_subject"], {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"}),
         (experiment["entity_assayed"], {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"}),
         (payload["single_reference"], {"reference_id": 203506}),

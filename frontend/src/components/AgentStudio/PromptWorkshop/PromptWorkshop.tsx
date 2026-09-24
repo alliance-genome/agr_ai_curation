@@ -46,6 +46,7 @@ import SaveAsDialog from './dialogs/SaveAsDialog'
 import OpenAgentDialog from './dialogs/OpenAgentDialog'
 import ManageAgentsDialog from './dialogs/ManageAgentsDialog'
 import ToolLibraryDialog from './dialogs/ToolLibraryDialog'
+import { isExtractionOutput } from './workshopOutputDraft'
 import ToolRequestDialog from './dialogs/ToolRequestDialog'
 import {
   DeleteAgentDialog,
@@ -138,7 +139,7 @@ function PromptWorkshop({
       setPendingChatContinuation({ send: onChatContinuation, message: 'I saved the agent. Review my current saved settings, including any changes I made in the editor, and continue with the next step we discussed. If we are finished, briefly confirm that. Do not make additional changes without a request.' })
     }
   }
-  const { agents: agentMetadata } = useAgentMetadata()
+  const { agents: agentMetadata, validatorOutputSchemaKeys } = useAgentMetadata()
   const draft = useWorkshopDraft({
     catalog,
     continuationOrigin,
@@ -704,6 +705,7 @@ function PromptWorkshop({
         open={toolLibraryOpen}
         tools={draft.toolLibrary}
         attachedToolIds={draft.selectedToolIds}
+        extractionAgent={isExtractionOutput(draft.outputDraft, validatorOutputSchemaKeys)}
         onConfirm={(toolIds) => {
           draft.applyToolSelection(toolIds)
           setToolLibraryOpen(false)

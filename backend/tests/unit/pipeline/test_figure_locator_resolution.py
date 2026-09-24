@@ -83,7 +83,7 @@ def _provider_reference_for(chunk: DocumentChunk) -> ProviderFigureReference:
 
 @pytest.fixture(autouse=True)
 def figure_locator_env(monkeypatch):
-    monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-6-sol")
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "low")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -994,7 +994,7 @@ def test_provider_reference_does_not_cross_final_subsection_boundary(
             "figure_locator_resolution": {
                 "schema_version": 1,
                 "prompt_version": "figure-locator-v1",
-                "model": "gpt-5.6-terra",
+                "model": "gpt-6-sol",
                 "reasoning": "low",
                 "status": "resolved",
                 "annotations": [],
@@ -1052,7 +1052,7 @@ async def test_terra_minimal_reasoning_is_rejected_from_catalog(monkeypatch) -> 
     monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
     chunk = _chunk("chunk-0", "Figure 1 shows signal.")
 
-    with pytest.raises(ValueError, match="not supported by model 'gpt-5.6-terra'"):
+    with pytest.raises(ValueError, match="not supported by model 'gpt-6-sol'"):
         await locator.resolve_figure_locators([chunk])
 
     classifier.assert_not_awaited()

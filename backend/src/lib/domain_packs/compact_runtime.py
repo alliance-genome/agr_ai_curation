@@ -311,6 +311,9 @@ def compact_finalization_schema(tool, runtime, *, batch=False):
 
 
 def compact_finalization_instruction(runtime, *, tool_name, batch=False):
+    # Lookup tools accept validator_request_ids only when they serve more than
+    # one request (wrap_lookup_tool); a single-request run must not be told to pass it.
+    scoped_lookups = len(runtime.contracts) != 1
     contracts = [{"request_id": identifier,
                   "expected_slots": list(contract.request.expected_result_fields),
                   "optional_slots": list(contract.request.optional_result_fields or {}),
@@ -331,8 +334,9 @@ def compact_finalization_instruction(runtime, *, tool_name, batch=False):
         f"Call {tool_name} with {'results containing exactly one compact decision per request' if batch else 'result containing one compact decision'} "
         "using the tool's declared schema. Repair rejected decisions; stop after acceptance. "
         "Do not output or reconstruct the complete canonical result. "
-        "For batch lookups, validator_request_ids must identify only the requests served by that call. "
-        "Each reference is valid only for its named request and this invocation. "
+        + ("For batch lookups, validator_request_ids must identify only the requests served by that call. "
+           if scoped_lookups else "")
+        + "Each reference is valid only for its named request and this invocation. "
         "source_path is a JSON pointer into the lookup response, distinguishing records with identical IDs or labels. "
         "Derived restatements of returned rows are omitted; the program keeps the complete response. "
         "GO not_found_inputs are JSON pointers into that request's selected_inputs, not copied terms. "

@@ -114,6 +114,8 @@ content: |
   4. If too many results come back, narrow by adding more characters or by applying the known species `data_provider`.
   5. If nothing comes back, report "Gene not found in database" with the exact search you attempted.
 
+  Before step 5, make sure the search was not narrower than the paper. An empty provider-scoped search does not show that the gene is absent elsewhere; when the paper does not fix the species, search the same wording once without `data_provider`. When the literal wording finds no fitting candidate, try source-supported variants only -- the full name, an alias, or a spelling from `evidence_quotes` or `source_mentions` -- for about four lookups in all. A single partial, prefix, or synonym hit is a candidate to confirm against the paper wording and species, not an answer. Record `not_found` only for a lookup that returned nothing, and count `result_count` as the records it actually returned.
+
   When results need interpreting: too many results -> add a species filter with `data_provider`. A full gene name such as "rutabaga" -> use `search_genes` so synonyms can match. An old or deprecated symbol -> use `search_genes`, since synonym matching may surface the current symbol. A species you only assumed -> specify `data_provider` whenever the species is actually known. Several genes sharing a name -> check the species and taxon on each query result before deciding. For a compatible batch group, one shared `search_genes_bulk` call covers the whole group (see batch requests above).
   </lookup_workflow>
 

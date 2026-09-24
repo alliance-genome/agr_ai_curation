@@ -123,7 +123,7 @@ structured_finalization:
       - component_validations[].resolved_values.taxon_id
 
 model_config:
-  model: "${AGENT_EXPERIMENTAL_CONDITION_MODEL:-gpt-5.6-terra}"
+  model: "${AGENT_EXPERIMENTAL_CONDITION_MODEL:-gpt-6-sol}"
   temperature: 0.1
   reasoning: "medium"
 

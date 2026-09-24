@@ -1468,7 +1468,13 @@ def test_validator_result_materialization_is_deterministic_for_existing_referenc
     assert second_result.appended_findings == ()
 
 
-def test_unresolved_validator_result_materializes_missing_field_finding():
+@pytest.mark.parametrize(("lookup_outcome", "classification"), [
+    # The lookup outcome says why the fields are missing; it decides.
+    ("not_found", "not_found"),
+    # Lookups that found something the validator rejected, filling nothing.
+    ("success", "rejected_candidates"),
+])
+def test_unresolved_validator_result_materializes_missing_field_finding(lookup_outcome, classification):
     metadata = _validator_metadata()
     envelope = _validator_envelope()
     envelope = envelope.model_copy(
@@ -1485,7 +1491,7 @@ def test_unresolved_validator_result_materializes_missing_field_finding():
         envelope,
         status="unresolved",
         missing_expected_fields=["curie", "symbol"],
-        lookup_outcome="not_found",
+        lookup_outcome=lookup_outcome,
     )
 
     result = materialize_validator_results_into_envelope(envelope, metadata, [item])
@@ -1498,9 +1504,11 @@ def test_unresolved_validator_result_materializes_missing_field_finding():
     finding = result.appended_findings[0]
     assert finding.status is ValidationFindingStatus.OPEN
     assert finding.code == "domain_pack.validator_unresolved"
-    assert finding.details["failure_classification"] == "missing_expected_result_field"
+    assert finding.details["failure_classification"] == classification
     assert finding.details["missing_expected_fields"] == ["curie", "symbol"]
-    assert finding.details["lookup_attempts"][0]["lookup_status"] == "not_found"
+    assert finding.details["lookup_attempts"][0]["lookup_status"] == (
+        "not_found" if lookup_outcome == "not_found" else "success"
+    )
 
 
 def test_errored_validator_result_materializes_validator_error_finding():

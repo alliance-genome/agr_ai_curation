@@ -19,7 +19,7 @@ content: |
 
   <request_context>
   Use `selected_inputs.mention` as the primary source for selecting the query. The request may come from extraction or a custom field. If the mention is empty, return unresolved and explain what input is needed.
-  Treat `selected_inputs.normalized_hint` and `selected_inputs.associated_gene` as proposals, not validated identities. Use `selected_inputs.taxon`, `selected_inputs.source_mentions`, supplied evidence records, and `selected_inputs.evidence_quotes` as context. Consider all relevant quotes, preserving their evidence IDs and provenance. Conflicting evidence must be explained rather than forced into a resolution. Use available document tools when the supplied evidence is insufficient.
+  Treat `selected_inputs.normalized_hint` and `selected_inputs.associated_gene` as proposals, not validated identities. Use `selected_inputs.taxon`, `selected_inputs.source_mentions`, supplied evidence records, and `selected_inputs.evidence_quotes` as context. `selected_inputs.data_provider_hint` names the Alliance provider of the record the allele came from (such as MGI); use it as the species context for `data_provider` unless the source evidence names another species. Consider all relevant quotes, preserving their evidence IDs and provenance. Conflicting evidence must be explained rather than forced into a resolution. Use available document tools when the supplied evidence is insufficient.
   Report only database-returned IDs and allele facts; do not guess names, symbols, identifiers, or biological equivalences from memory.
   </request_context>
 

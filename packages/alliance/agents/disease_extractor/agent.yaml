@@ -38,8 +38,9 @@ supervisor_routing:
 # TOOLS
 # -----------------------------------------------------------------------------
 # Builder tool-loop: record evidence -> stage disease observations -> finalize. Mirrors the
-# phenotype builder tool set. The active validator bindings resolve the staged DOID/subject/relation/
-# ECO/data-provider inputs inline, so there is no controlled-field resolver loop here.
+# phenotype builder tool set. Extraction reads the paper and never searches a database for an
+# identity; the validator bindings search for every staged value (ALL-1283). agr_species_context_lookup
+# only turns a species into provider/taxon context.
 tools:
   - search_document
   - read_chunk
@@ -54,13 +55,6 @@ tools:
   - update_recorded_evidence_metadata
   - get_agent_contract
   - agr_species_context_lookup
-  # GROUNDING (experimental conditions): the same extractor-side lookup tools gene_expression
-  # uses. Used to ground condition terms to REAL CURIEs while reading — ZECO condition
-  # class/id via the ontology term helpers declared on condition_relations.conditions.* —
-  # rather than guessing obscure ontology CURIEs from memory.
-  - search_domain_field_terms
-  - inspect_ontology_term
-  - resolve_domain_field_term
   - stage_disease_observation
   - patch_disease_observation
   - discard_disease_observation
@@ -80,7 +74,7 @@ output_schema: null
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_DISEASE_EXTRACTOR_MODEL:-gpt-5.6-sol}"
+  model: "${AGENT_DISEASE_EXTRACTOR_MODEL:-gpt-6-sol}"
   temperature: 0.1
   reasoning: "medium"
 

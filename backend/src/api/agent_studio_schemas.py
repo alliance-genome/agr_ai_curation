@@ -169,6 +169,12 @@ class ToolLibraryConfig(BaseModel):
     requires_document: bool = Field(
         description="True when the tool only works against an uploaded document.",
     )
+    identity_lookup: bool = Field(
+        description=(
+            "True when the tool searches a database or service for an identity. Extraction "
+            "agents cannot use it; validators and lookup agents can."
+        ),
+    )
 
 
 class ToolLibraryItem(BaseModel):

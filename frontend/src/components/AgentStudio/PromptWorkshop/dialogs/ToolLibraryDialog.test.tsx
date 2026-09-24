@@ -6,12 +6,29 @@ import type { ToolLibraryItem } from '@/types/promptExplorer'
 import ToolLibraryDialog from './ToolLibraryDialog'
 
 const tools: ToolLibraryItem[] = [
-  { tool_key: 'search_document', display_name: 'Search Document', description: 'Search document sections', category: 'Document', curator_visible: true, allow_attach: true, allow_execute: true, config: { requires_document: true } },
-  { tool_key: 'admin_only_tool', display_name: 'Admin Tool', description: 'writes are not permitted', category: 'Admin', curator_visible: true, allow_attach: false, allow_execute: false, config: { requires_document: false } },
-  { tool_key: 'chebi_lookup', display_name: 'ChEBI Lookup', description: 'Chemicals', category: 'External API', curator_visible: true, allow_attach: true, allow_execute: true, config: { requires_document: false } },
+  { tool_key: 'search_document', display_name: 'Search Document', description: 'Search document sections', category: 'Document', curator_visible: true, allow_attach: true, allow_execute: true, config: { requires_document: true, identity_lookup: false } },
+  { tool_key: 'admin_only_tool', display_name: 'Admin Tool', description: 'writes are not permitted', category: 'Admin', curator_visible: true, allow_attach: false, allow_execute: false, config: { requires_document: false, identity_lookup: false } },
+  { tool_key: 'chebi_lookup', display_name: 'ChEBI Lookup', description: 'Chemicals', category: 'External API', curator_visible: true, allow_attach: true, allow_execute: true, config: { requires_document: false, identity_lookup: false } },
 ]
 
+const lookupTool: ToolLibraryItem = {
+  tool_key: 'term_lookup', display_name: 'Term Lookup', description: 'Searches a term database', category: 'Database',
+  curator_visible: true, allow_attach: true, allow_execute: true, config: { requires_document: false, identity_lookup: true },
+}
+
 describe('ToolLibraryDialog', () => {
+  it('does not offer database lookup tools to an extraction agent', () => {
+    const { rerender } = render(
+      <ToolLibraryDialog open tools={[...tools, lookupTool]} attachedToolIds={[]} extractionAgent onConfirm={vi.fn()} onClose={vi.fn()} />,
+    )
+    expect(within(screen.getByRole('dialog')).queryByRole('checkbox', { name: /term_lookup/ })).toBeNull()
+
+    rerender(
+      <ToolLibraryDialog open tools={[...tools, lookupTool]} attachedToolIds={[]} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    )
+    expect(within(screen.getByRole('dialog')).getByRole('checkbox', { name: /term_lookup/ })).toBeInTheDocument()
+  })
+
   it('lists tools with checkboxes, keeps attached tools checked, and counts the attach footer', () => {
     const onConfirm = vi.fn()
     render(<ToolLibraryDialog open tools={tools} attachedToolIds={['search_document']} onConfirm={onConfirm} onClose={vi.fn()} />)

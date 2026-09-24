@@ -263,9 +263,9 @@ def test_compose_model_defaults_match_supported_runtime_roles():
     expected_backend_defaults = {
         "DEFAULT_AGENT_MODEL": "${DEFAULT_AGENT_MODEL:-gpt-6-astra}",
         "DEFAULT_AGENT_REASONING": "${DEFAULT_AGENT_REASONING:-low}",
-        "HIERARCHY_LLM_MODEL": "${HIERARCHY_LLM_MODEL:-gpt-5.6-terra}",
+        "HIERARCHY_LLM_MODEL": "${HIERARCHY_LLM_MODEL:-gpt-6-sol}",
         "HIERARCHY_LLM_REASONING": "${HIERARCHY_LLM_REASONING:-low}",
-        "FIGURE_LOCATOR_LLM_MODEL": "${FIGURE_LOCATOR_LLM_MODEL:-gpt-5.6-terra}",
+        "FIGURE_LOCATOR_LLM_MODEL": "${FIGURE_LOCATOR_LLM_MODEL:-gpt-6-sol}",
         "FIGURE_LOCATOR_LLM_REASONING": "${FIGURE_LOCATOR_LLM_REASONING:-low}",
         "FIGURE_LOCATOR_RESOLUTION_MAX_TURNS": "${FIGURE_LOCATOR_RESOLUTION_MAX_TURNS:-10}",
         "FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS": "${FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS:-60000}",
@@ -278,7 +278,7 @@ def test_compose_model_defaults_match_supported_runtime_roles():
         expected_backend_defaults
     )
     assert live_test_env["LIVE_LLM_OPENAI_MODEL"] == (
-        "${LIVE_LLM_OPENAI_MODEL:-gpt-5.6-terra}"
+        "${LIVE_LLM_OPENAI_MODEL:-gpt-6-sol}"
     )
 
 

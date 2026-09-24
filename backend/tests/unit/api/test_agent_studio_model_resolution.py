@@ -8,15 +8,15 @@ def test_chat_default_is_astra_medium_without_changing_extraction(monkeypatch):
     monkeypatch.delenv("AGENT_STUDIO_OPENAI_MODEL", raising=False)
     monkeypatch.delenv("AGENT_STUDIO_REASONING_EFFORT", raising=False)
     assert openai_runtime.resolve_agent_studio_model() == ("gpt-6-astra", "medium")
-    assert get_default_model().model_id == "gpt-5.6-sol"
+    assert get_default_model().model_id == "gpt-6-sol"
     assert get_default_model().default_reasoning == "medium"
     assert get_default_model().curator_visible is True
 
 
 def test_chat_model_and_reasoning_can_be_configured(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_OPENAI_MODEL", "gpt-5.6-sol")
+    monkeypatch.setenv("AGENT_STUDIO_OPENAI_MODEL", "gpt-6-sol")
     monkeypatch.setenv("AGENT_STUDIO_REASONING_EFFORT", "high")
-    assert openai_runtime.resolve_agent_studio_model() == ("gpt-5.6-sol", "high")
+    assert openai_runtime.resolve_agent_studio_model() == ("gpt-6-sol", "high")
 
 
 @pytest.mark.parametrize("model,effort,message", [

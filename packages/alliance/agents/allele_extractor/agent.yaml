@@ -72,7 +72,7 @@ output_schema: null
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_ALLELE_EXTRACTOR_MODEL:-gpt-5.6-sol}"
+  model: "${AGENT_ALLELE_EXTRACTOR_MODEL:-gpt-6-sol}"
   temperature: 0.1
   reasoning: "medium"
 

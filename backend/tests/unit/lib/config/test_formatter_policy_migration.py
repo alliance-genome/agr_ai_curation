@@ -49,3 +49,26 @@ def test_chat_output_policy_backfill_seeds_only_new_runtime_helpers(monkeypatch)
         assert not values['curator_visible']
         assert values['allow_execute']
         assert isinstance(json.loads(values['config']), dict)
+
+
+def test_extraction_resolver_helpers_stop_being_inherited(monkeypatch):
+    root = find_repo_root(Path(__file__))
+    path = root / 'backend/alembic/versions/s6t7u8v9w0x1_stop_inheriting_extraction_resolver_helpers.py'
+    spec = spec_from_file_location('resolver_inheritance_migration_test', path)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    # Chained after the model migration (q4f5a6b7c8d9 -> r5a6b7c8d9e0 -> here): one head.
+    assert module.down_revision == 'r5a6b7c8d9e0'
+    calls = []
+    monkeypatch.setattr(module.op, 'get_bind', lambda: SimpleNamespace(execute=lambda sql, values: calls.append((str(sql), values))))
+
+    module.upgrade()
+
+    assert [values['tool_key'] for _, values in calls] == [
+        'search_domain_field_terms', 'inspect_ontology_term', 'resolve_domain_field_term',
+    ]
+    for sql, values in calls:
+        # Only the inheritance designation changes; the row is never inserted or replaced.
+        assert sql.strip().startswith('UPDATE tool_policies')
+        assert "'{system_managed_inheritance}'" in sql
+        assert values['value'] == 'false'

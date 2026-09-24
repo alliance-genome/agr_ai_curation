@@ -106,39 +106,6 @@ def test_simple_contract_requires_lookup_and_preserves_typed_judgment(schemas):
     assert result.resolved_objects == []
 
 
-def test_subject_route_copies_facts_but_keeps_scientific_route_reason(schemas):
-    from agr_ai_curation_alliance.compact_contracts import simple_decision_contract
-    from agr_ai_curation_alliance.compact_validation import canonical_record
-    from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
-    from src.schemas.domain_validator import DomainValidationRequest, ValidatorLookupAttempt
-
-    schema = schemas["SubjectEntityValidationResult"]
-    request = DomainValidationRequest(
-        request_id="subject", validator_binding_id="subject",
-        validator_agent={"package_id": "agr.alliance", "agent_id": "subject_entity_validation"},
-        target={"domain_pack_id": "fixture"}, selected_inputs={"subject_type": "Gene", "subject_identifier": "RGD:1"},
-    )
-    contract = simple_decision_contract(request, schema)
-    workspace = ValidatorDecisionWorkspace([contract])
-    refs = workspace.record_lookup("subject", call_id="call-1", attempt=ValidatorLookupAttempt(
-        provider="agr_curation_query", method="get_gene_by_id", query={"gene_id": "RGD:1"}, result_count=1, outcome="success",
-    ), records=[canonical_record({"curie": "RGD:1", "symbol": "Abc", "taxon": "NCBITaxon:10116"}, schema, request=request)])
-    decision = contract.decision_schema(
-        request_id="subject", status="resolved", explanation="Subject matches.",
-        scientific={"route_reason": "The supplied subject type explicitly selects gene validation.", "unresolved_explanations": []},
-        candidates=[{"record_ref": refs[0], "disposition": "selected", "explanation": "Identifier and taxon match."}],
-    )
-    result = workspace.assemble(decision)
-    assert result.normalized_subject_identifier == "RGD:1"
-    assert result.normalized_subject_type == "gene"
-    assert result.selected_validator.validator_agent.agent_id == "gene_validation"
-    assert result.selected_validator.tool_methods == ["get_gene_by_id"]
-    assert result.subject_candidates[0].selected_validator == result.selected_validator
-    unsupported = request.model_copy(update={"selected_inputs": {"subject_type": "unknown"}})
-    with pytest.raises(ValueError, match="explicit supported"):
-        canonical_record({"curie": "RGD:1", "symbol": "Abc"}, schema, request=unsupported)
-
-
 def test_composite_assembles_component_facts_audits_and_partial_results(schemas):
     from agr_ai_curation_alliance.compact_conditions import condition_decision_contract
     from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord, ValidatorDecisionWorkspace
@@ -415,7 +382,7 @@ def test_all_alliance_validator_schemas_load_the_package_runtime(schemas, monkey
         schema_discovery.reset_cache()
         schemas = schema_discovery.discover_agent_schemas(force_reload=True)
     names = ["GeneResultEnvelope", "AlleleResultEnvelope", "AgmValidationResult",
-        "SubjectEntityValidationResult", "OntologyTermValidationResult", "ControlledVocabularyValidationResult",
+        "OntologyTermValidationResult", "ControlledVocabularyValidationResult",
         "DataProviderValidationResult", "GOTermResultEnvelope", "GOAnnotationsResult", "ReferenceValidationResult",
         "OrthologsResult", "ChemicalValidationResult", "DiseaseValidationResult",
         "ExperimentalConditionValidationResult", "RGDGOEvidencePolicyValidationResult"]
@@ -474,25 +441,6 @@ def test_records_without_their_identity_never_fall_through_to_internal_ids(schem
     from agr_ai_curation_alliance.compact_validation import canonical_record
     with pytest.raises(ValueError, match="no authoritative identity"):
         canonical_record(record, schemas[schema])
-
-
-def test_subject_label_reads_the_subject_type_label_only(schemas):
-    from types import SimpleNamespace
-
-    from agr_ai_curation_alliance.compact_validation import canonical_record
-
-    def request(subject_type):
-        return SimpleNamespace(selected_inputs={"subject_type": subject_type},
-                               target=SimpleNamespace(input_values={}))
-
-    schema = schemas["SubjectEntityValidationResult"]
-    gene = canonical_record({"curie": "RGD:1", "symbol": "Abc", "name": "a gene"}, schema, request=request("gene"))
-    assert gene.values["subject_label"] == "Abc"
-    agm = canonical_record({"curie": "ZFIN:1", "name": "strain"}, schema, request=request("agm"))
-    assert agm.values["subject_label"] == "strain"
-    # No symbol: the label is absent, never another field.
-    allele = canonical_record({"curie": "MGI:1", "name": "an allele"}, schema, request=request("allele"))
-    assert allele.values["subject_label"] is None
 
 
 _CONDITION_EXPECTED = {
@@ -635,3 +583,18 @@ def test_resolved_component_without_a_record_name_stays_unresolved_alone(schemas
         "unresolved", "missing_expected_result_field", {},
     )
     assert result.missing_expected_fields == []
+
+
+@pytest.mark.parametrize(("outcomes", "expected"), [
+    (["not_found"], "not_found"), (["success"], "rejected_candidates"),
+    (["not_found", "error"], "transient"), ([], "not_validated"),
+])
+def test_a_condition_component_outcome_follows_the_shared_classification(outcomes, expected):
+    """V3: a component's outcome comes from its own lookups by the shared rule, with nothing filled."""
+
+    from types import SimpleNamespace
+
+    from agr_ai_curation_alliance.compact_conditions import _component_outcome
+
+    attempts = [SimpleNamespace(method="lookup", outcome=outcome) for outcome in outcomes]
+    assert _component_outcome(SimpleNamespace(request_id="request-1"), attempts) == expected

@@ -59,9 +59,9 @@ DEFAULT_FLOW_QUERY = (
     "Extract exactly one experimentally supported gene from the loaded paper: crb/Crumbs. "
     "Include the organism and one verified evidence record for that gene."
 )
-DEFAULT_FLOW_MODEL = "gpt-5.6-terra"
-DEFAULT_CHAT_MODEL = "gpt-5.6-sol"
-DEFAULT_SPECIALIST_MODEL = "gpt-5.6-terra"
+DEFAULT_FLOW_MODEL = "gpt-6-sol"
+DEFAULT_CHAT_MODEL = "gpt-6-astra"
+DEFAULT_SPECIALIST_MODEL = "gpt-6-sol"
 OPENAI_AGENTS_DISTRIBUTION = "openai-agents"
 OPENAI_AGENTS_LOCKFILE_RELATIVE_PATH = Path("backend/requirements.lock.txt")
 # Batch plumbing exports now project canonical extraction object rows. The curation
@@ -1525,6 +1525,38 @@ def create_chat_session(
     return session_id
 
 
+def catalog_default_reasoning(
+    *,
+    base_url: str,
+    headers: Dict[str, str],
+    model_id: str,
+) -> str:
+    """Return the backend catalog's default reasoning effort for one model."""
+    response = http_request(
+        "GET",
+        f"{base_url}/api/agent-studio/models",
+        headers=headers,
+        timeout=20.0,
+    )
+    require(
+        response.status_code == 200 and isinstance(response.json_body, dict),
+        f"Unexpected model catalog response: {response.status_code} {response.text}",
+    )
+    models = response.json_body.get("models")
+    require(isinstance(models, list), f"Model catalog response missing models: {response.text}")
+    entry = next(
+        (model for model in models if isinstance(model, dict) and model.get("model_id") == model_id),
+        None,
+    )
+    require(entry is not None, f"Model {model_id!r} is not in the backend model catalog")
+    reasoning = str(entry.get("default_reasoning") or "").strip()
+    require(
+        bool(entry.get("supports_reasoning")) and reasoning in (entry.get("reasoning_options") or []),
+        f"Model {model_id!r} has no catalog default reasoning effort: {entry}",
+    )
+    return reasoning
+
+
 def ask_chat_question(
     *,
     base_url: str,
@@ -1543,11 +1575,15 @@ def ask_chat_question(
     if chat_model:
         request_body["model"] = chat_model
         request_body["supervisor_temperature"] = 0.1
-        request_body["supervisor_reasoning"] = "minimal"
+        request_body["supervisor_reasoning"] = catalog_default_reasoning(
+            base_url=base_url, headers=headers, model_id=chat_model
+        )
     if specialist_model:
         request_body["specialist_model"] = specialist_model
         request_body["specialist_temperature"] = 0.1
-        request_body["specialist_reasoning"] = "minimal"
+        request_body["specialist_reasoning"] = catalog_default_reasoning(
+            base_url=base_url, headers=headers, model_id=specialist_model
+        )
 
     response = http_request(
         "POST",
@@ -1599,11 +1635,15 @@ def ask_streaming_chat_question(
     if chat_model:
         request_body["model"] = chat_model
         request_body["supervisor_temperature"] = 0.1
-        request_body["supervisor_reasoning"] = "minimal"
+        request_body["supervisor_reasoning"] = catalog_default_reasoning(
+            base_url=base_url, headers=headers, model_id=chat_model
+        )
     if specialist_model:
         request_body["specialist_model"] = specialist_model
         request_body["specialist_temperature"] = 0.1
-        request_body["specialist_reasoning"] = "minimal"
+        request_body["specialist_reasoning"] = catalog_default_reasoning(
+            base_url=base_url, headers=headers, model_id=specialist_model
+        )
 
     request_headers = dict(headers)
     request_headers["Accept"] = "text/event-stream"
@@ -1693,7 +1733,9 @@ def create_custom_agent(
         "description": "Temporary dev release smoke gene extraction agent",
         "include_group_rules": False,
         "model_id": model_id,
-        "model_reasoning": "low",
+        "model_reasoning": catalog_default_reasoning(
+            base_url=base_url, headers=headers, model_id=model_id
+        ),
     }
     response = http_request(
         "POST",
