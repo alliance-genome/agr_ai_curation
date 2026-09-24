@@ -339,7 +339,9 @@ def gene_expression_export_blockers(
                         blocker(
                             f"{field_path}.{join_key}",
                             "alliance.gene_expression.required_field_missing",
-                            f"Required gene-expression export field is missing: {field_path}.{join_key}.",
+                            f"{declared.label} has no {join_key.replace('_', ' ')}, which the export "
+                            "needs to find it in the curation database. Re-run validation, or enter "
+                            "it in a curator override.",
                         )
                     )
 

@@ -64,6 +64,9 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E40
     materialize_gene_expression_builder_state,
     validate_pending_gene_expression_envelope,
 )
+from agr_ai_curation_alliance.domain_packs._resolvable_payloads import (  # noqa: E402
+    condition_relations_payload,
+)
 from agr_ai_curation_alliance.domain_packs.gene_expression.export import (  # noqa: E402
     gene_expression_export_blockers,
 )
@@ -2462,30 +2465,27 @@ def _gene_expression_condition_payload() -> dict[str, Any]:
                 "chunk_id": "chunk-9",
             }
         ],
-        "condition_relations": [
-            {
-                "condition_relation_type": staged_value(
-                    "condition_relations.condition_relation_type", "has_condition"
-                ),
-                "conditions": [
-                    {
-                        "condition_class": staged_value(
-                            "condition_relations.conditions.condition_class", "ZECO:0000111"
-                        ),
-                        "condition_chemical": staged_value(
-                            "condition_relations.conditions.condition_chemical", "CHEBI:9168"
-                        ),
-                        "condition_summary": "treated with 3 pM rapamycin",
-                    },
-                    {
-                        "condition_class": staged_value(
-                            "condition_relations.conditions.condition_class", "ZECO:0000160"
-                        ),
-                        "condition_summary": "reared at 28C",
-                    },
-                ],
-            }
-        ],
+        "condition_relations": condition_relations_payload(
+            [
+                {
+                    "condition_relation_type": "has_condition",
+                    "conditions": [
+                        {
+                            "condition_class_mention": "chemical treatment",
+                            "condition_class_curie": "ZECO:0000111",
+                            "condition_chemical_mention": "rapamycin",
+                            "condition_chemical_curie": "CHEBI:9168",
+                            "condition_summary": "treated with 3 pM rapamycin",
+                        },
+                        {
+                            "condition_class_mention": "temperature exposure",
+                            "condition_class_curie": "ZECO:0000160",
+                            "condition_summary": "reared at 28C",
+                        },
+                    ],
+                }
+            ]
+        ),
     }
 
 
@@ -2544,10 +2544,15 @@ def test_gene_expression_condition_binding_scoped_and_shaped(monkeypatch):
     # Scoped to the SINGLE curatable object type for this pack.
     assert composite["applies_to"]["object_types"] == [GENE_EXPRESSION_OBJECT_TYPE]
     assert composite["applies_to"]["field_paths"] == ["condition_relations.conditions"]
-    # Component inputs read the extractor's wording (a proposed CURIE is its mention).
-    assert composite["input_fields"]["condition_class_curie"]["path"] == (
-        "condition_relations.conditions.condition_class.mention"
-    )
+    # Each part's paper wording goes in as its name, the extractor's proposed CURIE as its CURIE.
+    for part in ("condition_class", "condition_id", "condition_chemical"):
+        assert composite["input_fields"][f"{part}_name"]["path"] == (
+            f"condition_relations.conditions.{part}.mention"
+        )
+    for part in ("condition_class", "condition_id", "condition_chemical", "condition_taxon"):
+        assert composite["input_fields"][f"{part}_curie"]["path"] == (
+            f"condition_relations.conditions.{part}.proposed_curie"
+        )
     assert composite["input_fields"]["condition_relation_type"]["path"] == (
         "condition_relations.condition_relation_type.mention"
     )
@@ -2560,10 +2565,12 @@ def test_gene_expression_condition_binding_scoped_and_shaped(monkeypatch):
         "required": False,
         "context_only": True,
     }
+    # Every condition part the validator decides is written back (review S5).
     assert composite["expected_result_fields"] == {
-        "condition_class_curie": "condition_relations.conditions.condition_class.curie"
+        f"{part}_{key}": f"condition_relations.conditions.{part}.{key}"
+        for part in ("condition_class", "condition_id", "condition_chemical", "condition_taxon")
+        for key in ("curie", "name")
     }
-    assert "condition_id" not in composite["expected_result_fields"]
     assert composite["batch"]["enabled"] is True
     assert composite["batch"]["family"] == "experimental_condition_validation"
     assert composite["batch"]["max_size"] == 4
@@ -2615,7 +2622,9 @@ def test_gene_expression_condition_binding_fans_out_one_composite_per_condition(
     assert all(result.request is not None for result in requests)
     first, second = (result.request for result in requests)
     assert first.selected_inputs["condition_class_curie"] == "ZECO:0000111"
+    assert first.selected_inputs["condition_class_name"] == "chemical treatment"
     assert first.selected_inputs["condition_chemical_curie"] == "CHEBI:9168"
+    assert first.selected_inputs["condition_chemical_name"] == "rapamycin"
     assert first.selected_inputs["condition_relation_type"] == "has_condition"
     assert second.selected_inputs["condition_class_curie"] == "ZECO:0000160"
     assert "condition_chemical_curie" not in second.selected_inputs
@@ -2771,11 +2780,14 @@ def _staged_gene_expression_condition_relations() -> list[dict[str, Any]]:
             "condition_relation_type": "has_condition",
             "conditions": [
                 {
+                    "condition_class_mention": "chemical treatment",
                     "condition_class_curie": "ZECO:0000111",
+                    "condition_chemical_mention": "rapamycin",
                     "condition_chemical_curie": "CHEBI:9168",
                     "condition_summary": "treated with 3 pM rapamycin",
                 },
                 {
+                    "condition_class_mention": "temperature exposure",
                     "condition_class_curie": "ZECO:0000160",
                     "condition_free_text": "28 degrees C",
                 },
@@ -3115,25 +3127,24 @@ def test_gene_expression_builder_materializes_staged_condition_relations():
     relations = annotation["payload"]["condition_relations"]
     assert len(relations) == 1
     relation = relations[0]
-    # Materialized in the exact target shape the active bindings read.
-    # The extractor's relation type and proposed CURIEs are its wording, UNRESOLVED until a
-    # validator writes their identity back.
-    assert relation["condition_relation_type"] == staged_value(
-        "condition_relations.condition_relation_type", "has_condition"
-    )
+    # Materialized by the shared Alliance condition helper, in the shape the active bindings read.
+    assert relations == condition_relations_payload(_staged_gene_expression_condition_relations())
+    assert relation["condition_relation_type"]["mention"] == "has_condition"
     conditions = relation["conditions"]
     assert len(conditions) == 2
-    assert conditions[0]["condition_class"] == staged_value(
-        "condition_relations.conditions.condition_class", "ZECO:0000111"
+    # Each part keeps the paper's wording as its mention; the extractor's CURIE is only a
+    # proposal, and the part stays UNRESOLVED until the condition validator writes it back.
+    condition_class = conditions[0]["condition_class"]
+    assert (condition_class["mention"], condition_class["proposed_curie"]) == (
+        "chemical treatment",
+        "ZECO:0000111",
     )
-    assert conditions[0]["condition_chemical"] == staged_value(
-        "condition_relations.conditions.condition_chemical", "CHEBI:9168"
-    )
-    assert conditions[0]["condition_class"]["curie"] is None
+    assert (condition_class["curie"], condition_class["name"]) == (None, None)
+    assert condition_class["resolution_state"] == "unresolved"
+    assert conditions[0]["condition_chemical"]["mention"] == "rapamycin"
+    assert conditions[0]["condition_chemical"]["proposed_curie"] == "CHEBI:9168"
     assert conditions[0]["condition_summary"] == "treated with 3 pM rapamycin"
-    assert conditions[1]["condition_class"] == staged_value(
-        "condition_relations.conditions.condition_class", "ZECO:0000160"
-    )
+    assert conditions[1]["condition_class"]["mention"] == "temperature exposure"
     assert conditions[1]["condition_free_text"] == "28 degrees C"
     # Empty leaves are dropped (condition 2 had no chemical).
     assert "condition_chemical" not in conditions[1]
@@ -3146,6 +3157,56 @@ def test_gene_expression_builder_materializes_staged_condition_relations():
             "field_path": "expression_pattern.where_expressed.anatomical_structure",
         }
     ]
+
+
+def test_every_condition_part_the_validator_matches_is_resolved():
+    """Review S5: each stated condition part is written back, not only the condition class."""
+
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    payload["condition_relations"] = condition_relations_payload(
+        [
+            {
+                "condition_relation_type": "has_condition",
+                "conditions": [
+                    {
+                        "condition_class_mention": "chemical treatment",
+                        "condition_class_curie": "ZECO:0000111",
+                        "condition_id_mention": "rapamycin exposure",
+                        "condition_id_curie": "XCO:0000108",
+                        "condition_chemical_mention": "rapamycin",
+                        "condition_chemical_curie": "CHEBI:9168",
+                        "condition_taxon_mention": "E. coli",
+                        "condition_taxon_curie": "NCBITaxon:562",
+                        "condition_summary": "treated with 3 pM rapamycin",
+                    }
+                ],
+            }
+        ]
+    )
+    matched = {
+        "condition_class": ("ZECO:0000111", "chemical treatment"),
+        "condition_id": ("XCO:0000108", "rapamycin exposure"),
+        "condition_chemical": ("CHEBI:9168", "rapamycin"),
+        "condition_taxon": ("NCBITaxon:562", "Escherichia coli"),
+    }
+    result = _revalidate(
+        _with_payload(envelope, payload),
+        {
+            "experimental_condition_validation": {
+                f"{part}_{key}": value
+                for part, (curie, name) in matched.items()
+                for key, value in (("curie", curie), ("name", name))
+            }
+        },
+    )
+
+    [condition] = result.envelope.extracted_objects[0].payload["condition_relations"][0]["conditions"]
+    for part, (curie, name) in matched.items():
+        value = condition[part]
+        assert (value["curie"], value["name"]) == (curie, name), part
+        assert (value["resolution_state"], value["lookup_outcome"]) == ("resolved", "matched"), part
+    assert condition["condition_taxon"]["mention"] == "E. coli"
 
 
 def test_gene_expression_builder_omits_condition_relations_when_unstaged():
@@ -3360,9 +3421,13 @@ def test_every_contract_value_the_builder_stages_is_declared():
                 "condition_relation_type": "has_condition",
                 "conditions": [
                     {
+                        "condition_class_mention": "chemical treatment",
                         "condition_class_curie": "ZECO:0000111",
+                        "condition_id_mention": "rapamycin exposure",
                         "condition_id_curie": "XCO:0000108",
+                        "condition_chemical_mention": "rapamycin",
                         "condition_chemical_curie": "CHEBI:9168",
+                        "condition_taxon_mention": "E. coli",
                         "condition_taxon_curie": "NCBITaxon:562",
                         "condition_summary": "treated with 3 pM rapamycin",
                     }
@@ -3627,6 +3692,71 @@ def test_the_experiment_reference_copies_the_full_reference_identity():
             "resolved",
             "curator_override",
         )
+
+
+def _annotation_export_candidate(annotation: Any) -> dict[str, Any]:
+    candidate = _export_candidate(annotation)
+    candidate.update(
+        {
+            "envelope_revision": 1,
+            "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
+            "projection_ref": {"envelope_id": "envelope-1", "object_id": candidate["object_id"]},
+        }
+    )
+    return candidate
+
+
+def test_an_override_without_the_vocabulary_blocks_only_where_the_export_needs_it():
+    """B2: validated keys may be null in an override. The stage slim joins on its vocabulary,
+    so a missing one is a curator-facing blocker; the relation joins on its term name alone."""
+
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+    from agr_ai_curation_alliance.domain_packs.gene_expression.export import (
+        _gene_expression_annotation_payload,
+    )
+
+    # The grounded tmem67 annotation: every exported value resolved.
+    envelope = _load_gene_expression_fixture_pack(GENE_EXPRESSION_FIXTURE_PACK_ID).fixtures[0].envelope
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    slim_path = "expression_pattern.when_expressed.stage_uberon_slim_terms"
+    payload["expression_pattern"]["when_expressed"]["stage_uberon_slim_terms"] = [
+        staged_value(slim_path, "embryo stage")
+    ]
+    envelope = _with_payload(envelope, payload)
+    relation = payload["relation"]
+    result = _curator_patch(
+        envelope,
+        "relation.name",
+        {"name": "is_expressed_in", "vocabulary": None, "id": None},
+        before={key: relation.get(key) for key in ("name", "vocabulary", "id")},
+        identity=True,
+    )
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    relation_only = _annotation_export_candidate(result.envelope.extracted_objects[0])
+    relation_only["payload"]["expression_pattern"]["when_expressed"].pop("stage_uberon_slim_terms")
+    # The relation is found by its term name: no blocker, and the export builds.
+    assert gene_expression_export_blockers(relation_only) == ()
+    relation_row = _gene_expression_annotation_payload(relation_only)
+    assert "is_expressed_in" in str(relation_row)
+
+    result = _curator_patch(
+        result.envelope,
+        f"{slim_path}[0].name",
+        {"name": "UBERON:0000068", "vocabulary": None, "id": None},
+        before={"name": None, "vocabulary": None, "id": None},
+        identity=True,
+    )
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    blockers = gene_expression_export_blockers(
+        _annotation_export_candidate(result.envelope.extracted_objects[0])
+    )
+    assert [(blocker.field_path, blocker.code) for blocker in blockers] == [
+        (f"{slim_path}[0].vocabulary", "alliance.gene_expression.required_field_missing")
+    ]
+    assert blockers[0].message == (
+        "Stage UBERON slim term has no vocabulary, which the export needs to find it in the "
+        "curation database. Re-run validation, or enter it in a curator override."
+    )
 
 
 @pytest.mark.xfail(
@@ -3948,6 +4078,30 @@ def test_legacy_tmem67_record_exports_those_values_a_matching_revalidation_verif
             for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
             if match.binding.binding_id == binding_id
         )
+
+
+@pytest.mark.parametrize(
+    ("stored", "term_name"),
+    [
+        ({"curie": "UBERON:0000068", "name": "embryo stage"}, "UBERON:0000068"),
+        ("UBERON:0000113", "UBERON:0000113"),
+        ({"curie": None, "name": "post embryonic, pre-adult"}, "post embryonic, pre-adult"),
+        ("post embryonic, pre-adult", "post embryonic, pre-adult"),
+        # A label that is not one of the vocabulary's terms names no term.
+        ({"curie": None, "name": "embryo stage"}, None),
+        ("embryo stage", None),
+    ],
+)
+def test_previous_format_stage_slims_map_only_to_the_vocabulary_term_they_name(stored, term_name):
+    """Review S9: the CURIE names the term; only the one non-CURIE term is read from a label."""
+
+    from agr_ai_curation_alliance.domain_packs.gene_expression.legacy import legacy_display_payload
+
+    payload = {"expression_pattern": {"when_expressed": {"stage_uberon_slim_terms": [stored]}}}
+    [mapped] = legacy_display_payload(GENE_EXPRESSION_OBJECT_TYPE, payload)["expression_pattern"][
+        "when_expressed"
+    ]["stage_uberon_slim_terms"]
+    assert mapped == {"name": term_name, "vocabulary": "Stage Uberon Slim Terms"}
 
 
 def test_previous_format_stage_slims_display_as_legacy_vocabulary_terms_and_are_not_validatable():

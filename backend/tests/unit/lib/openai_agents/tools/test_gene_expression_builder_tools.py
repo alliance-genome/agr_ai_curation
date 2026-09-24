@@ -1469,3 +1469,36 @@ def test_search_builder_candidates_pages_matches():
     assert second["returned_candidate_count"] == 1
     assert second["next_offset"] is None
     assert second["truncated"] is False
+
+
+def test_inspect_ontology_term_carries_the_paper_wording_not_the_term_name(monkeypatch):
+    """Regression (ALL-1283 S4): the suggested resolve call uses the staged paper wording."""
+
+    def _lookup(*, method: str, **kwargs: Any) -> agr_curation.AgrQueryResult:
+        if method == "get_ontology_term":
+            return agr_curation.AgrQueryResult(
+                status="ok",
+                data={"curie": kwargs["term"], "name": "cilium", "ontology_type": kwargs.get("ontology_term_type")},
+            )
+        return agr_curation.AgrQueryResult(status="ok", data=[])
+
+    monkeypatch.setattr(agr_curation, "_AGR_QUERY_CALLABLE", _lookup)
+    inspect = _tool_fn(agr_curation.inspect_ontology_term, "inspect_ontology_term")
+    arguments = {
+        "domain_pack_id": agr_curation.GENE_EXPRESSION_DOMAIN_PACK_ID,
+        "object_type": "GeneExpressionAnnotation",
+        "field_path": "expression_pattern.where_expressed.anatomical_structure",
+        "curie": "WBbt:0001234",
+        "include_parents": False,
+        "include_children": False,
+    }
+
+    result = inspect(**arguments, source_phrase="cilia")
+    assert result.status == "ok", result
+    assert result.data["next_tool_call"]["arguments"]["source_phrase"] == "cilia"
+    assert "cilium" not in str(result.data["next_tool_call"])
+    assert "cilia" in result.data["diagnostic_summary"]
+
+    missing = inspect(**arguments, source_phrase="  ")
+    assert missing.status == "error"
+    assert "requires source_phrase: the paper's wording" in str(missing.message)

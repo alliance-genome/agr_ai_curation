@@ -30,6 +30,7 @@ from src.lib.domain_packs.resolvable_values import (
     unresolved_value,
 )
 
+from .._resolvable_payloads import CONDITION_TERM_IDENTITY_KEYS
 from .constants import GENE_EXPRESSION_DOMAIN_PACK_ID, GENE_EXPRESSION_OBJECT_TYPE
 
 
@@ -64,8 +65,8 @@ RELATION_IDENTITY_KEYS = ("name", "vocabulary", "id")
 _VOCABULARY_TERM = ResolvableSpec(label_key="name")
 DATA_PROVIDER_IDENTITY_KEYS = ("abbreviation",)
 _DATA_PROVIDER = ResolvableSpec(label_key="abbreviation")
-CONDITION_TERM_IDENTITY_KEYS = ("curie",)
-_CONDITION_TERM = ResolvableSpec(id_key="curie")
+# A condition part: the shared Alliance condition-term identity (its curie and name).
+_CONDITION_TERM = ResolvableSpec(id_key="curie", label_key="name")
 
 
 GENE_EXPRESSION_RESOLVABLE_VALUES: tuple[GeneExpressionResolvableValue, ...] = (
@@ -293,7 +294,6 @@ def unresolved_value_message(label: str, value: Mapping[str, Any]) -> str:
 
 
 __all__ = [
-    "CONDITION_TERM_IDENTITY_KEYS",
     "DATA_PROVIDER_IDENTITY_KEYS",
     "GENE_EXPRESSION_RESOLVABLE_VALUES",
     "GeneExpressionResolvableValue",
