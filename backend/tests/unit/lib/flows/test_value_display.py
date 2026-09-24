@@ -47,11 +47,15 @@ PRODUCTION_SHAPES = [
     ({"allele_symbol": "e1370", "primary_external_id": "WB:WBVar00143949", "taxon": "NCBITaxon:6239"},
      {"label": "allele_symbol", "id": "primary_external_id"}, "e1370 (WB:WBVar00143949)"),
     ({"subject_label": "daf-2", "subject_identifier": "WB:WBGene00000898", "subject_type": "gene",
+      "resolution_state": "resolved", "lookup_outcome": "matched"}, SUBJECT, "daf-2 (WB:WBGene00000898)"),
+    # Without the contract state (no lookup_outcome) and without a declared mention role,
+    # a value reads through its spec's own state role, as before ALL-1283 (H1).
+    ({"subject_label": "daf-2", "subject_identifier": "WB:WBGene00000898", "subject_type": "gene",
       "resolution_state": "resolved"}, SUBJECT, "daf-2 (WB:WBGene00000898)"),
     ({"subject_label": "daf-2(e1370)", "resolution_state": "pending_lookup", "resolution_note": "n"},
      SUBJECT, "daf-2(e1370) (unresolved)"),
     ({"curie": "WBPhenotype:0000154", "label": "reduced brood size", "resolution_state": "resolved",
-      "export_state": "ready", "write_blocked_reason": None}, PHENOTYPE_TERM,
+      "lookup_outcome": "matched", "export_state": "ready", "write_blocked_reason": None}, PHENOTYPE_TERM,
      "reduced brood size (WBPhenotype:0000154)"),
     ({"name": "is_expressed_in", "vocabulary": "Expression Relation", "id": 200000200},
      {"label": "name"}, "is_expressed_in"),
@@ -205,10 +209,25 @@ def test_packaged_field_value_fans_out_through_arrays():
     assert display_text(export_fields.packaged_field_value(item, field)) == "heat, cold | dark"
 
 
+def _validated_value(mention, **identity):
+    """A stored value a validator resolved (ALL-1283 contract)."""
+
+    return {**identity, "mention": mention, "resolution_state": "resolved",
+            "lookup_outcome": "matched", "validator_explanation": None}
+
+
+RESIDUAL_BODY = "structures associated with the residual body"
+
+
 def _gene_expression_step():
-    subject = {"gene_symbol": "Y71G12B.17", "primary_external_id": "WB:WBGene00022155",
-               "source_phrase": "PPIT-2 (Y71G12B.17)"}
-    assay = {"curie": "MMO:0000672", "name": "knock-in in situ reporter assay"}
+    subject = _validated_value("PPIT-2 (Y71G12B.17)", gene_symbol="Y71G12B.17",
+                               primary_external_id="WB:WBGene00022155")
+    assay = _validated_value("knock-in", curie="MMO:0000672", name="knock-in in situ reporter assay")
+    # Daniela's statement: the anatomy term matched nothing, so it stays UNRESOLVED
+    # with the paper's wording instead of being dropped.
+    residual_body = {"curie": None, "name": None, "mention": RESIDUAL_BODY,
+                     "resolution_state": "unresolved", "lookup_outcome": "not_found",
+                     "validator_explanation": "No anatomy term matches this wording."}
 
     def statement(object_id, anatomy, stage, statement_text):
         pattern = {"where_expressed": {"anatomical_structure": anatomy} if anatomy else {}}
@@ -220,18 +239,25 @@ def _gene_expression_step():
                 "expression_annotation_subject": deepcopy(subject),
                 "expression_experiment": {"expression_assay_used": deepcopy(assay),
                                           "entity_assayed": deepcopy(subject)},
-                "relation": {"name": "is_expressed_in", "vocabulary": "Expression Relation", "id": 200000200},
+                "relation": _validated_value("expressed in", name="is_expressed_in",
+                                             vocabulary="Expression Relation", id=200000200),
                 "expression_pattern": pattern,
                 "where_expressed_statement": statement_text,
-                "when_expressed_stage_name": (stage or {}).get("name") or "young adult",
-                "single_reference": {"reference_id": "DOI:10.17912/micropub.biology.002386"},
+                "single_reference": _validated_value(
+                    "DOI:10.17912/micropub.biology.002386",
+                    reference_id="DOI:10.17912/micropub.biology.002386",
+                ),
             },
         }
 
     objects = [
-        statement("s1", {"curie": "WBbt:0005733", "name": "hypodermis"},
-                  {"curie": "WBls:0000109", "name": "L4 larval stage"}, "GFP::PPIT-2 in hypodermis"),
-        statement("s2", None, None, "signal near the residual body"),
+        statement("s1", _validated_value("hypodermis", curie="WBbt:0005733", name="hypodermis"),
+                  _validated_value("L4 larval stage", curie="WBls:0000109", name="L4 larval stage"),
+                  "GFP::PPIT-2 in hypodermis"),
+        statement("s2", residual_body, {"curie": None, "name": None, "mention": "young adult",
+                                        "resolution_state": "unresolved", "lookup_outcome": "not_validated",
+                                        "validator_explanation": "Not validated yet."},
+                  "signal near the residual body"),
     ]
     return {
         "step": 1, "node_id": "node_1", "agent_id": "gene_expression", "agent_name": "Gene Expression",
@@ -242,9 +268,9 @@ def _gene_expression_step():
                           "extracted_objects": objects,
                           "validation_findings": [{
                               "finding_id": "f1", "status": "open",
-                              "field_path": "when_expressed_stage_name",
+                              "field_path": "expression_pattern.when_expressed.developmental_stage_start",
                               "field_ref": {"object_ref": {"object_id": "s2"},
-                                            "field_path": "when_expressed_stage_name"},
+                                            "field_path": "expression_pattern.when_expressed.developmental_stage_start"},
                           }]},
         ),
     }
@@ -294,8 +320,12 @@ def test_default_layout_for_gene_expression_uses_declared_parents(monkeypatch, o
     assert "Y71G12B.17 (WB:WBGene00022155)" in first.values()
     assert "knock-in in situ reporter assay (MMO:0000672)" in first.values()
     assert "hypodermis (WBbt:0005733)" in first.values()
-    # Open finding on the flat stage text of s2 marks that value.
-    assert "young adult (unresolved)" in result.rows[1].values()
+    # s2's stage matched no term: its cell reads UNRESOLVED, never the paper wording.
+    stage_ref = "object.pack.GeneExpressionAnnotation.expression_pattern.when_expressed.developmental_stage_start"
+    stage_key = next(column.key for column in plan.columns if column.field_ref == stage_ref)
+    assert first[stage_key] == "L4 larval stage (WBls:0000109)"
+    assert result.rows[1][stage_key] == "UNRESOLVED"
+    assert "young adult" not in " ".join(cells)
 
 
 def test_selected_saved_plan_for_packaged_source_still_validates(monkeypatch):
@@ -335,6 +365,9 @@ def test_packaged_gene_expression_declarations_render_daniela_values():
         assert "hypodermis (WBbt:0005733)" in " ".join(values)
         assert "Y71G12B.17 (WB:WBGene00022155)" in values
         assert "knock-in in situ reporter assay (MMO:0000672)" in values
+        # The unmatched anatomy reads UNRESOLVED; its paper wording never fills the cell.
+        assert RESIDUAL_BODY not in values
+        assert "UNRESOLVED" in " ".join(values)
         if output_format == "csv":
             _no_object_text(_projection_content_for_file_type(output_format="csv", projection=result))
 
@@ -525,7 +558,8 @@ async def test_split_list_through_formatter_tools_with_lock_and_inventory():
 def test_declared_field_never_substitutes_another_field():
     """A resolved field renders only its own label/id (Chris, Sep 22)."""
 
-    # Label and id empty: the mention is a separate column, not a substitute.
+    # Label and id empty: the mention is a separate column, not a substitute. A mapping
+    # that merely holds a mention is not a resolvable value unless declared (ALL-1283 H1).
     assert display_text({"curie": None, "name": None, "mention": "PPIT-2"}, TERM) == ""
     assert display_text({"label": "", "mention": "gene X", "curie": ""},
                         {"label": "label", "id": "curie"}) == ""
@@ -625,25 +659,33 @@ def test_packaged_object_label_never_falls_back_to_mention(monkeypatch):
     declared = SimpleNamespace(metadata=pack.metadata.model_copy(deep=True))
     for model in declared.metadata.model_definitions:
         if model.model_id == "GeneMentionEvidencePayload":
-            model.metadata["display"] = {"label": "gene_symbol", "id": "primary_external_id"}
+            model.metadata["display"] = {"label": "gene_symbol", "id": "primary_external_id", "mention": "mention"}
     monkeypatch.setattr(export_fields, "_packaged_domain_pack", lambda *_args, **_kwargs: declared)
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_gene_mention_step([
-            {"gene_symbol": "unc-54", "primary_external_id": "WB:WBGene00006789", "mention": "UNC-54 myosin"},
-            {"gene_symbol": "", "mention": "PPIT-2", "symbol": "ppit-2", "name": "PPIT"},
+            {"gene_symbol": "unc-54", "primary_external_id": "WB:WBGene00006789", "mention": "UNC-54 myosin",
+             "resolution_state": "resolved", "lookup_outcome": "matched"},
+            {"gene_symbol": None, "primary_external_id": None, "mention": "PPIT-2", "symbol": "ppit-2",
+             "name": "PPIT", "resolution_state": "unresolved", "lookup_outcome": "not_found"},
+            # Stored before ALL-1283 and not covered by a validator event.
+            {"gene_symbol": "egl-1", "primary_external_id": "WB:WBGene00001170", "mention": "EGL-1"},
         ])],
         flow_name="Genes", output_format="csv",
     )
     rows = bundle.rows_for_source("object")
-    assert [row["object.label"] for row in rows] == ["unc-54", None]
+    # The label never takes another field; an unresolved item's label is its
+    # paper wording, labelled as such (ALL-1283).
+    assert [row["object.label"] for row in rows] == [
+        "unc-54", "PPIT-2 (paper wording)", "EGL-1 (legacy, unverified)"]
     plan = FlowOutputProjectionPlan.model_validate({
         "format": "csv", "row_source": "object", "missing_value": "—",
         "columns": [{"key": "label", "header": "Label", "field_ref": "object.label"}],
     })
     result = finalize_output_projection(bundle, plan)
-    assert [row["label"] for row in result.rows] == ["unc-54", "—"]
+    assert [row["label"] for row in result.rows] == [
+        "unc-54", "PPIT-2 (paper wording)", "EGL-1 (legacy, unverified)"]
     json_result = finalize_output_projection(bundle, plan.model_copy(update={"format": "json"}))
-    assert json_result.rows[1]["label"] == "—" or json_result.rows[1]["label"] is None
+    assert json_result.rows[1]["label"] == "PPIT-2 (paper wording)"
 
 
 def test_custom_profile_object_label_is_its_payload_label():
@@ -692,14 +734,19 @@ def _object_plan(output_format, columns):
 
 
 def test_open_findings_only_mark_objects_in_their_own_envelope():
-    """Pending ref ids restart per envelope; step 1's finding never marks step 2's row."""
+    """Pending ref ids restart per envelope; step 1's finding never marks step 2's row.
+
+    A resolvable value's cell reads its own stored state, so the marker is shown on a
+    plain field.
+    """
 
     def annotation():
         return {"object_type": "GeneExpressionAnnotation", "pending_ref_id": "gene-expression-annotation-1",
-                "payload": {"expression_annotation_subject": {"gene_symbol": "Y71", "primary_external_id": "WB:1"},
+                "payload": {"expression_annotation_subject": _validated_value(
+                                "Y71", gene_symbol="Y71", primary_external_id="WB:1"),
                             "where_expressed_statement": "hyp"}}
 
-    finding = _open_finding("expression_annotation_subject", pending_ref_id="gene-expression-annotation-1",
+    finding = _open_finding("where_expressed_statement", pending_ref_id="gene-expression-annotation-1",
                             object_type="GeneExpressionAnnotation")
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[
@@ -710,9 +757,10 @@ def test_open_findings_only_mark_objects_in_their_own_envelope():
         flow_name="P", output_format="csv",
     )
     result = apply_projection_plan(bundle, _object_plan("csv", [
-        ("node", "artifact.node_id"), ("gene", SUBJECT_REF),
+        ("node", "artifact.node_id"),
+        ("statement", "object.pack.GeneExpressionAnnotation.where_expressed_statement"),
     ]))
-    marked = {row["node"]: "unresolved" in row["gene"] for row in result.rows}
+    marked = {row["node"]: "unresolved" in row["statement"] for row in result.rows}
     assert marked == {"node_1": True, "node_2": False}
 
 
@@ -861,9 +909,10 @@ PHENOTYPE_TERM_REF = "object.pack.PhenotypeAnnotation.phenotype_terms[0]"
 
 
 def _phenotype_objects(term_count=1):
-    terms = [{"curie": f"WBPhenotype:{index}", "label": f"term {index}", "resolution_state": "resolved"}
+    # Terms without a stored state: open findings place the marker (ALL-1283 states decide otherwise).
+    terms = [{"curie": f"WBPhenotype:{index}", "label": f"term {index}"}
              for index in range(term_count)]
-    subject = {"resolution_state": "resolved", "subject_label": "daf-2",
+    subject = {"resolution_state": "resolved", "lookup_outcome": "matched", "subject_label": "daf-2",
                "subject_identifier": "WB:WBGene00000898", "subject_type": "gene", "taxon": "NCBITaxon:6239"}
     annotation = {
         "object_type": "PhenotypeAnnotation", "pending_ref_id": "ann-1",
@@ -897,10 +946,15 @@ def test_object_ref_cells_carry_open_findings_on_the_referenced_object():
                     {"key": "term", "field_ref": PHENOTYPE_TERM_REF}],
     })
     [row] = apply_projection_plan(bundle, plan).rows
-    assert "unresolved" in row["term"]
-    assert "unresolved" not in row["subject"]
+    # The phenotype term is a resolvable value (ALL-1283): stored without a state and with no
+    # validator write-back event, it reads UNRESOLVED under the legacy rule whatever the findings.
+    assert row["term"] == "UNRESOLVED"
+    assert "unresolved" not in row["subject"].lower()
     json_plan = plan.model_copy(update={"format": "json"})
-    assert apply_projection_plan(bundle, json_plan).rows[0]["term"]["curie"] == "WBPhenotype:0"
+    json_term = apply_projection_plan(bundle, json_plan).rows[0]["term"]
+    # The legacy read never presents the unverified CURIE as the validated one.
+    assert json_term["curie"] is None
+    assert json_term["mention"] == "term 0 (WBPhenotype:0) (legacy, unverified)"
 
 
 def test_indexed_object_ref_field_maps_to_the_referenced_object_at_that_position():
@@ -951,3 +1005,62 @@ def test_group_by_a_structured_field_uses_display_text(monkeypatch):
     })).json_data
     assert len(grouped) == 1
     assert grouped[0]["group"][SUBJECT_REF]["gene_symbol"] == "Y71G12B.17"
+
+
+RESOLVABLE_TERM = {"label": "name", "id": "curie", "mention": "mention"}
+
+
+def test_resolvable_values_read_label_id_or_the_literal_unresolved():
+    """ALL-1283: resolved "label (ID)", unresolved UNRESOLVED, absent blank; never the mention."""
+
+    resolved = {"curie": "WBbt:0005733", "name": "hypodermis", "mention": "hypodermal cells",
+                "resolution_state": "resolved", "lookup_outcome": "matched"}
+    unresolved = {"curie": None, "name": None, "mention": "structures associated with the residual body",
+                  "resolution_state": "unresolved", "lookup_outcome": "not_found"}
+    assert display_text(resolved, RESOLVABLE_TERM) == "hypodermis (WBbt:0005733)"
+    assert display_text(unresolved, RESOLVABLE_TERM) == "UNRESOLVED"
+    assert display_text(None, RESOLVABLE_TERM) == ""
+    # The state decides; findings do not add markers to a resolvable value.
+    assert display_text(resolved, RESOLVABLE_TERM, unresolved=True) == "hypodermis (WBbt:0005733)"
+    assert display_text(unresolved, RESOLVABLE_TERM, marked=False) == "UNRESOLVED"
+    # A legacy value the caller did not verify reads as unresolved.
+    assert display_text({"curie": "WBbt:1", "name": "hyp"}, RESOLVABLE_TERM) == "UNRESOLVED"
+    # List elements are separate values.
+    assert display_text([resolved, unresolved], RESOLVABLE_TERM) == "hypodermis (WBbt:0005733) | UNRESOLVED"
+
+
+def test_generic_reading_never_mixes_paper_wording_into_a_cell():
+    """Custom profiles without a display spec (ALL-1283)."""
+
+    assert display_text({"curie": "X:1", "name": "Y", "mention": "Z", "resolution_state": "resolved",
+                         "lookup_outcome": "matched"}) == "Y (X:1)"
+    assert display_text({"curie": None, "name": None, "mention": "Z", "resolution_state": "unresolved",
+                         "lookup_outcome": "not_validated"}) == "UNRESOLVED"
+    # Only the contract state makes an undeclared mapping a resolvable value (H1).
+    assert display_text({"curie": "X:1", "name": "Y", "mention": "Z"}) == "curie: X:1; name: Y; mention: Z"
+    assert display_text({"abbreviation": "WB", "mention": "WormBase", "resolution_state": "resolved",
+                         "lookup_outcome": "matched"}) == "abbreviation: WB"
+
+
+def test_display_mention_role_is_a_key_of_the_value():
+    from pydantic import ValidationError
+
+    from src.schemas.domain_pack_metadata import DomainPackFieldDefinition
+
+    DomainPackFieldDefinition(field_path="term", metadata={"display": RESOLVABLE_TERM})
+    with pytest.raises(ValidationError, match="keys of the value itself"):
+        DomainPackFieldDefinition(field_path="term",
+                                  metadata={"display": {"label": "term.name", "mention": "mention"}})
+    with pytest.raises(ValidationError, match="takes no state"):
+        DomainPackFieldDefinition(field_path="term", metadata={"display": {
+            **RESOLVABLE_TERM, "state": "resolution_state", "resolved_states": ["resolved"]}})
+
+
+def test_vocabulary_leaves_read_in_plain_words():
+    from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOME_LABELS
+
+    spec = {"value_labels": LOOKUP_OUTCOME_LABELS}
+    assert display_text("not_found", spec) == "Not found"
+    assert display_text("ambiguous", spec) == "Several matches"
+    assert display_text(None, spec) == ""
+    assert display_text("something else", spec) == "Invalid value (something else)"

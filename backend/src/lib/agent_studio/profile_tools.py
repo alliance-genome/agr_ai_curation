@@ -48,6 +48,13 @@ def profile_runtime_instruction(profile: ResolvedGenericProfile) -> str:
         "finalize_generic_extraction before responding, including an empty list when none qualify."
     )
 
+    if profile.resolvable_objects():
+        instructions += (
+            " For a value a validator confirms (an object with a mention field), write the "
+            "paper's wording in mention and leave its identity out: validation fills it in, "
+            "and a value it cannot confirm stays unresolved and visible to curators."
+        )
+
     if contract.description:
         instructions += (
             "\n\nAdditional curator guidance for this item type "

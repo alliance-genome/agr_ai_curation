@@ -71,6 +71,7 @@ def _staged_fields() -> dict[str, Any]:
         "subject_label": "che-2",
         "subject_type": "gene",
         "subject_taxon": "NCBITaxon:6239",
+        "term_mention": "truncated sensory cilia",
         "term_label": "abnormal sensory cilium morphology",
         "data_provider": "WB",
         "term_taxon_id": "NCBITaxon:6239",
@@ -160,6 +161,7 @@ def test_phenotype_annotation_declares_protected_data_provider_fields():
 
     abbreviation = fields_by_path["data_provider.abbreviation"]
     assert abbreviation.field_type == "string"
+    # Workflow context: a curator override here would submit under another group's provider.
     assert abbreviation.metadata["protected"] is True
     assert "validator_binding_id" not in abbreviation.metadata
     assert abbreviation.metadata["provider_refs"]["alliance_linkml"] == {
@@ -201,7 +203,13 @@ def test_phenotype_builder_materializer_produces_clean_extraction_output():
         annotation["payload"]["phenotype_annotation_object"]
         == "abnormal sensory cilia morphology"
     )
-    assert annotation["payload"]["data_provider"] == {"abbreviation": "WB"}
+    assert annotation["payload"]["data_provider"] == {
+        "abbreviation": None,
+        "mention": "WB",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
     # Existing-pack posture preserved: export/write remain blocked.
     assert annotation["metadata"]["export_behavior"]["status"] == "blocked"
     assert annotation["metadata"]["write_behavior"]["status"] == "blocked"
@@ -225,28 +233,145 @@ def test_phenotype_builder_leaves_data_provider_unset_when_not_staged():
     assert "data_provider" not in annotation["payload"]
 
 
-def test_phenotype_builder_pending_term_preserves_resolution_state():
+def test_phenotype_builder_stages_term_as_unresolved_paper_wording():
     result = _materialize_one_candidate()
     payload = result.payload
     assert payload is not None
-    term = next(
-        obj
-        for obj in payload["curatable_objects"]
-        if obj["object_type"] == PHENOTYPE_TERM_OBJECT_TYPE
+    annotation = next(
+        obj for obj in payload["curatable_objects"] if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
     )
-    # The staged term stays a pending label-backed candidate (no invented CURIE) so the active
-    # ontology validator resolves it. CURIE was not supplied, so it must remain unset.
-    assert term["payload"]["resolution_state"] == "pending_ontology_resolution"
-    assert term["payload"]["label"] == "abnormal sensory cilium morphology"
-    assert "curie" not in term["payload"] or term["payload"]["curie"] is None
-    assert term["payload"]["export_state"] == "blocked_pending_ontology_resolution"
-    # The validator binding id is preserved exactly as the existing pack declares it.
-    assert term["metadata"]["validator_binding_id"] == "phenotype_term_ontology_validator"
-    assert (
-        term["payload"]["ontology_lookup_hint"]["evidence_record_id"]
-        == "evidence-cilia-1"
+    term_value = annotation["payload"]["phenotype_terms"][0]
+    # The paper wording is the mention; the proposed label never fills the validated label.
+    assert term_value["mention"] == "truncated sensory cilia"
+    assert term_value["proposed_label"] == "abnormal sensory cilium morphology"
+    assert term_value["curie"] is None
+    assert term_value["label"] is None
+    assert term_value["resolution_state"] == "unresolved"
+    assert term_value["lookup_outcome"] == "not_validated"
+    assert term_value["validator_explanation"] == "Not validated yet."
+    assert term_value["ontology_lookup_hint"] == {
+        "data_provider": "WB",
+        "taxon_id": "NCBITaxon:6239",
+        "evidence_record_id": "evidence-cilia-1",
+    }
+    # The support object is a structural copy the validator no longer targets.
+    support = next(
+        obj for obj in payload["curatable_objects"] if obj["object_type"] == PHENOTYPE_TERM_OBJECT_TYPE
     )
-    assert term["payload"]["ontology_lookup_hint"]["data_provider"] == "WB"
+    assert support["payload"] == term_value
+    assert "validator_binding_id" not in support["metadata"]
+    assert support["metadata"]["validation_state"] == "pending_ontology_resolution"
+
+
+def test_phenotype_builder_never_marks_an_extractor_curie_resolved():
+    # Regression (ALL-1283, conversion.py :422-424): a CURIE the extractor supplied was stored
+    # as resolved without any validator. It is now a proposal on an unresolved value.
+    staged_fields = _staged_fields()
+    staged_fields["term_curie"] = "WBPhenotype:0000886"
+    result = _materialize_one_candidate(staged_fields=staged_fields)
+    assert result.ok, result.summary()
+    for obj in result.payload["curatable_objects"]:
+        if obj["object_type"] == PHENOTYPE_OBJECT_TYPE:
+            term_value = obj["payload"]["phenotype_terms"][0]
+        elif obj["object_type"] == PHENOTYPE_TERM_OBJECT_TYPE:
+            term_value = obj["payload"]
+        else:
+            continue
+        assert term_value["proposed_curie"] == "WBPhenotype:0000886"
+        assert term_value["curie"] is None
+        assert term_value["resolution_state"] == "unresolved"
+        assert term_value["lookup_outcome"] == "not_validated"
+
+
+def test_phenotype_builder_term_label_never_falls_back_to_the_statement():
+    # Regression (conversion.py :397 `term_label or statement`): no term proposal means no
+    # proposed label, and the validated label stays empty.
+    staged_fields = _staged_fields()
+    del staged_fields["term_label"]
+    result = _materialize_one_candidate(staged_fields=staged_fields)
+    annotation = next(
+        obj for obj in result.payload["curatable_objects"] if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
+    )
+    term_value = annotation["payload"]["phenotype_terms"][0]
+    assert "proposed_label" not in term_value
+    assert term_value["label"] is None
+    assert term_value["mention"] == "truncated sensory cilia"
+
+
+def test_phenotype_builder_requires_term_mention_and_source_mentions():
+    # Regression (conversion.py ~:886 `source_mentions or [statement]`): nothing fills in for
+    # missing paper wording.
+    without_term = _staged_fields()
+    del without_term["term_mention"]
+    result = _materialize_one_candidate(staged_fields=without_term)
+    assert not result.ok
+    assert [issue["reason"] for issue in result.issues] == ["missing_term_mention"]
+
+    without_mentions = _staged_fields()
+    del without_mentions["source_mentions"]
+    result = _materialize_one_candidate(staged_fields=without_mentions)
+    assert not result.ok
+    assert [issue["reason"] for issue in result.issues] == ["missing_source_mentions"]
+
+
+def test_phenotype_builder_taxon_hints_read_one_staged_key_each():
+    # Regression (conversion.py :340 subject_taxon-or-taxon and :370-374 taxon chains).
+    staged_fields = _staged_fields()
+    del staged_fields["term_taxon_id"]
+    del staged_fields["subject_taxon"]
+    staged_fields["taxon"] = "NCBITaxon:10090"
+    result = _materialize_one_candidate(staged_fields=staged_fields)
+    annotation = next(
+        obj for obj in result.payload["curatable_objects"] if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
+    )
+    assert "taxon_id" not in annotation["payload"]["phenotype_terms"][0]["ontology_lookup_hint"]
+    subject = annotation["payload"]["phenotype_annotation_subject"]
+    assert (subject["taxon"], "proposed_taxon" in subject) == (None, False)
+
+    staged_fields = _staged_fields()
+    del staged_fields["term_taxon_id"]
+    result = _materialize_one_candidate(staged_fields=staged_fields)
+    annotation = next(
+        obj for obj in result.payload["curatable_objects"] if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
+    )
+    # The subject's taxon never stands in for the term lookup taxon.
+    assert "taxon_id" not in annotation["payload"]["phenotype_terms"][0]["ontology_lookup_hint"]
+    # The extractor's species is a validator input; the validated taxon stays empty (ALL-1283).
+    subject = annotation["payload"]["phenotype_annotation_subject"]
+    assert (subject["proposed_taxon"], subject["taxon"]) == ("NCBITaxon:6239", None)
+
+
+def test_phenotype_builder_stages_subject_with_proposed_identifier():
+    result = _materialize_one_candidate()
+    annotation = next(
+        obj for obj in result.payload["curatable_objects"] if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
+    )
+    subject = annotation["payload"]["phenotype_annotation_subject"]
+    assert subject == {
+        "subject_type": "gene",
+        "proposed_taxon": "NCBITaxon:6239",
+        "taxon": None,
+        "proposed_subject_identifier": "WB:WBGene00000111",
+        "subject_identifier": None,
+        "subject_label": None,
+        "mention": "che-2",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+    assert annotation["metadata"]["validation_state"] == "pending_entity_resolution"
+
+
+def test_phenotype_builder_without_subject_leaves_the_subject_absent():
+    staged_fields = _staged_fields()
+    for key in ("subject_identifier", "subject_label", "subject_type", "subject_taxon"):
+        del staged_fields[key]
+    result = _materialize_one_candidate(staged_fields=staged_fields)
+    assert result.ok, result.summary()
+    by_type = {obj["object_type"]: obj for obj in result.payload["curatable_objects"]}
+    assert "phenotype_annotation_subject" not in by_type[PHENOTYPE_OBJECT_TYPE]["payload"]
+    assert by_type[PHENOTYPE_OBJECT_TYPE]["metadata"]["validation_state"] == "blocked_missing_subject"
+    assert set(by_type[PHENOTYPE_SUBJECT_OBJECT_TYPE]["payload"]) == {"resolution_note"}
 
 
 def test_phenotype_builder_metadata_refs_are_relative_and_resolve():
@@ -338,7 +463,8 @@ def test_phenotype_builder_golden_fixture_loads_with_relative_refs():
         obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
     )
     assert annotation.pending_ref_id == "phenotype-annotation-1"
-    assert annotation.payload["data_provider"] == {"abbreviation": "WB"}
+    assert annotation.payload["data_provider"]["mention"] == "WB"
+    assert annotation.payload["data_provider"]["abbreviation"] is None
 
     extraction_metadata = envelope.metadata.get("extraction_metadata")
     assert isinstance(extraction_metadata, Mapping)
@@ -400,11 +526,14 @@ def _staged_fields_with_conditions(**overrides: Any) -> dict[str, Any]:
             "condition_relation_type": "has_condition",
             "conditions": [
                 {
+                    "condition_class_mention": "chemical treatment",
                     "condition_class_curie": "ZECO:0000111",
+                    "condition_chemical_mention": "rapamycin",
                     "condition_chemical_curie": "CHEBI:9168",
                     "condition_summary": "treated with 3 pM rapamycin",
                 },
                 {
+                    "condition_class_mention": "temperature exposure",
                     "condition_class_curie": "ZECO:0000160",
                     "condition_free_text": "28 degrees C",
                 },
@@ -461,15 +590,40 @@ def test_phenotype_builder_materializes_staged_condition_relations():
                if obj["object_type"].endswith(("Reference", "EvidenceQuote")))
     assert len(relations) == 1
     relation = relations[0]
-    # Materialized in the exact target shape the bindings read.
-    assert relation["condition_relation_type"] == {"name": "has_condition"}
+    # Every relation type and component is a staged resolvable value: paper wording plus any
+    # proposed CURIE, with no validated identity yet.
+    unresolved = {
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+    assert relation["condition_relation_type"] == {
+        "name": None, "mention": "has_condition", **unresolved,
+    }
     conditions = relation["conditions"]
     assert len(conditions) == 2
-    assert conditions[0]["condition_class"] == {"curie": "ZECO:0000111"}
-    assert conditions[0]["condition_chemical"] == {"curie": "CHEBI:9168"}
+    assert conditions[0]["condition_class"] == {
+        "proposed_curie": "ZECO:0000111", "curie": None, "name": None, "mention": "chemical treatment",
+        **unresolved,
+    }
+    assert conditions[0]["condition_chemical"] == {
+        "proposed_curie": "CHEBI:9168", "curie": None, "name": None, "mention": "rapamycin", **unresolved,
+    }
     assert conditions[0]["condition_summary"] == "treated with 3 pM rapamycin"
-    assert conditions[1]["condition_class"] == {"curie": "ZECO:0000160"}
+    assert conditions[1]["condition_class"]["proposed_curie"] == "ZECO:0000160"
     assert conditions[1]["condition_free_text"] == "28 degrees C"
+    condition_request = next(
+        request for request in requests
+        if request.validator_binding_id == "experimental_condition_validation"
+    )
+    assert condition_request.selected_inputs["condition_class_curie"] == "ZECO:0000111"
+    assert condition_request.selected_inputs["condition_class_name"] == "chemical treatment"
+    assert condition_request.selected_inputs["condition_chemical_name"] == "rapamycin"
+    relation_request = next(
+        request for request in requests
+        if request.validator_binding_id == "phenotype_condition_relation_lookup"
+    )
+    assert relation_request.selected_inputs["term_name"] == "has_condition"
     # Empty leaves are dropped (condition 2 had no chemical).
     assert "condition_chemical" not in conditions[1]
 
@@ -496,6 +650,7 @@ def _stage_kwargs(**overrides: Any) -> dict[str, Any]:
         "evidence_record_ids": ["evidence-cilia-1"],
         "source_mentions": ["sensory cilia were truncated in mutant animals"],
         "rationale": "  Amphid cilia were truncated in che-2 mutants, a morphology defect.  ",
+        "term_mention": "truncated sensory cilia",
     }
     kwargs.update(overrides)
     return kwargs
@@ -637,3 +792,276 @@ def test_stored_phenotype_annotation_without_rationale_validates_without_new_fin
     assert [finding.code for finding in legacy.appended_findings] == [
         finding.code for finding in baseline.appended_findings
     ]
+
+
+# --- ALL-1283: extracted vs validated values ----------------------------------------------------
+
+
+def test_stage_phenotype_observation_requires_term_mention(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    schema = tools.stage_phenotype_observation.params_json_schema
+    assert "term_mention" in schema["required"]
+
+    blank = tools._stage_phenotype_observation_impl(**_stage_kwargs(term_mention="  "))
+
+    assert blank.status == "error"
+    assert blank.data["validation_issues"][0]["field_path"] == "term_mention"
+    assert workspace.candidates == {}
+
+
+def test_stage_phenotype_observation_rejects_subject_details_without_paper_wording(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(
+        **_stage_kwargs(subject_identifier="WB:WBGene00000111", subject_type="gene")
+    )
+
+    assert result.status == "error"
+    assert "need subject_label" in result.data["validation_issues"][0]["message"]
+    assert workspace.candidates == {}
+
+    staged = tools._stage_phenotype_observation_impl(
+        **_stage_kwargs(subject_identifier="WB:WBGene00000111", subject_label="che-2")
+    )
+    assert staged.status == "ok"
+    cleared = tools._patch_phenotype_observation_impl(
+        candidate_id=staged.data["candidate_id"],
+        pending_ref_id="phenotype-annotation-1",
+        updates=[{"field_path": "subject_label", "string_value": None}],
+    )
+    assert cleared.status == "error"
+    assert cleared.data["validation_issues"][0]["reason"] == "missing_subject_wording"
+
+
+def test_stage_phenotype_observation_keeps_an_unmatched_term_as_paper_wording(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(
+        **_stage_kwargs(term_mention="wobbly cilia of no known ontology class")
+    )
+
+    assert result.status == "ok"
+    staged = workspace.candidates[result.data["candidate_id"]].staged_fields
+    assert staged["term_mention"] == "wobbly cilia of no known ontology class"
+
+
+def test_stage_phenotype_condition_curie_needs_its_paper_wording(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(
+        **_stage_kwargs(
+            condition_relations=[
+                {
+                    "condition_relation_type": "has_condition",
+                    "conditions": [{"condition_class_curie": "ZECO:0000111"}],
+                }
+            ]
+        )
+    )
+
+    assert result.status == "error"
+    assert "condition_class_curie needs condition_class_mention" in (
+        result.data["validation_issues"][0]["message"]
+    )
+    assert workspace.candidates == {}
+
+
+def _builder_envelope(staged_fields: Mapping[str, Any] | None = None) -> Any:
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    result = _materialize_one_candidate(staged_fields=staged_fields)
+    assert result.ok, result.summary()
+    return DomainEnvelope(
+        envelope_id="phenotype-term-write-back",
+        domain_pack_id=PHENOTYPE_DOMAIN_PACK_ID,
+        extracted_objects=result.payload["curatable_objects"],
+        metadata={"extraction_metadata": result.payload["metadata"]},
+    )
+
+
+def _term_materialization_inputs(envelope: Any, *, status: str, lookup_outcome: str) -> list[Any]:
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
+    from src.lib.domain_packs.validation_registry import (
+        DomainPackValidationRegistry,
+        ValidationBindingState,
+    )
+    from src.schemas.domain_validator import DomainValidatorResultBase
+
+    pack = load_alliance_domain_pack_registry().get_pack(PHENOTYPE_DOMAIN_PACK_ID)
+    matches = [
+        match
+        for match in DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(
+            envelope, states=[ValidationBindingState.ACTIVE]
+        )
+        if match.binding.binding_id == "phenotype_term_ontology_validator"
+    ]
+    items = []
+    for match in matches:
+        request = build_domain_validation_request(match).request
+        assert request is not None
+        resolved = status == "resolved"
+        result = DomainValidatorResultBase.model_validate(
+            {
+                "status": status,
+                "request_id": request.request_id,
+                "validator_binding_id": request.validator_binding_id,
+                "validator_agent": request.validator_agent,
+                "target": request.target,
+                "resolved_values": (
+                    {"curie": "WBPhenotype:0001174", "label": "cilium morphology variant"}
+                    if resolved
+                    else {}
+                ),
+                "resolved_objects": [],
+                "missing_expected_fields": [],
+                "candidates": [],
+                "curator_message": None,
+                "lookup_attempts": [
+                    {
+                        "provider": "fixture_lookup",
+                        "method": "search_ontology_terms",
+                        "query": {"term": request.selected_inputs["label"]},
+                        "result_count": 1 if resolved else 0,
+                        "outcome": lookup_outcome,
+                    }
+                ],
+                "explanation": "Fixture ontology decision.",
+            }
+        )
+        items.append(
+            ValidatorResultMaterializationInput(match=match, request=request, result=result)
+        )
+    return items
+
+
+def test_phenotype_term_validator_fans_out_over_the_annotation_terms():
+    envelope = _builder_envelope()
+    items = _term_materialization_inputs(envelope, status="resolved", lookup_outcome="success")
+
+    # One request per annotation term; the PhenotypeTerm support object is not a target.
+    assert len(items) == 1
+    item = items[0]
+    assert item.match.object_envelope.object_type == PHENOTYPE_OBJECT_TYPE
+    assert item.match.field_path == "phenotype_terms[0]"
+    assert item.request.selected_inputs["label"] == "truncated sensory cilia"
+    assert "curie" not in item.request.selected_inputs
+    assert item.request.expected_result_fields == {
+        "curie": "phenotype_terms[0].curie",
+        "label": "phenotype_terms[0].label",
+    }
+
+
+def test_phenotype_term_validator_writes_resolution_into_the_annotation_term():
+    from src.lib.domain_packs.materialization import materialize_validator_results_into_envelope
+
+    pack = load_alliance_domain_pack_registry().get_pack(PHENOTYPE_DOMAIN_PACK_ID)
+    envelope = _builder_envelope()
+
+    resolved = materialize_validator_results_into_envelope(
+        envelope,
+        pack.metadata,
+        _term_materialization_inputs(envelope, status="resolved", lookup_outcome="success"),
+    ).envelope
+    annotation = next(
+        obj for obj in resolved.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
+    )
+    term_value = annotation.payload["phenotype_terms"][0]
+    assert term_value["curie"] == "WBPhenotype:0001174"
+    assert term_value["label"] == "cilium morphology variant"
+    assert term_value["mention"] == "truncated sensory cilia"
+    assert term_value["resolution_state"] == "resolved"
+    assert term_value["lookup_outcome"] == "matched"
+    assert term_value["validator_explanation"] == "Fixture ontology decision."
+
+    unresolved = materialize_validator_results_into_envelope(
+        envelope,
+        pack.metadata,
+        _term_materialization_inputs(envelope, status="unresolved", lookup_outcome="not_found"),
+    ).envelope
+    annotation = next(
+        obj for obj in unresolved.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
+    )
+    term_value = annotation.payload["phenotype_terms"][0]
+    assert term_value["curie"] is None
+    assert term_value["label"] is None
+    assert term_value["mention"] == "truncated sensory cilia"
+    assert term_value["resolution_state"] == "unresolved"
+    assert term_value["lookup_outcome"] == "not_found"
+    assert term_value["validator_explanation"] == "Fixture ontology decision."
+
+
+def test_nested_term_normalizer_never_invents_wording_or_resolution():
+    # Regression (conversion.py :418 source_mentions=[label] and :422-424 CURIE -> "resolved"):
+    # a nested term without paper wording is not a term value, and a term's stored state is
+    # kept exactly as written.
+    from agr_ai_curation_alliance.domain_packs.phenotype import (
+        normalize_phenotype_extraction_payload,
+    )
+
+    def _payload(term: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "curatable_objects": [
+                {
+                    "object_type": PHENOTYPE_OBJECT_TYPE,
+                    "pending_ref_id": "phenotype-annotation-1",
+                    "evidence_record_ids": ["evidence-cilia-1"],
+                    "payload": {"phenotype_terms": [term]},
+                }
+            ]
+        }
+
+    no_wording = {"curie": "WBPhenotype:0000886", "label": "reduced brood size"}
+    assert normalize_phenotype_extraction_payload(_payload(no_wording)) == _payload(no_wording)
+
+    staged = {
+        "proposed_curie": "WBPhenotype:0000886",
+        "curie": None,
+        "label": None,
+        "mention": "fewer progeny",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+    normalized = normalize_phenotype_extraction_payload(_payload(staged))
+    support = next(
+        obj for obj in normalized["curatable_objects"] if obj["object_type"] == PHENOTYPE_TERM_OBJECT_TYPE
+    )
+    assert support["payload"] == staged
+    assert "source_mentions" not in support["payload"]
+
+
+def _staged_contract_value_paths(node: Any, path: str = "") -> list[str]:
+    """Payload paths (indexes dropped) of every value stored with the contract state."""
+
+    from src.lib.domain_packs.resolvable_values import has_resolution_state
+
+    found = [path] if has_resolution_state(node) else []
+    if isinstance(node, Mapping):
+        for key, child in node.items():
+            found += _staged_contract_value_paths(child, f"{path}.{key}" if path else str(key))
+    elif isinstance(node, list):
+        for child in node:
+            found += _staged_contract_value_paths(child, path)
+    return found
+
+
+def test_every_staged_phenotype_value_is_declared_resolvable():
+    """Guard (ALL-1283 H1/F2): a validator write into an undeclared contract value raises, so
+    every value the builder stages with contract state is declared by the pack."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    metadata = load_alliance_domain_pack_registry().get_pack(PHENOTYPE_DOMAIN_PACK_ID).metadata
+    staged = _staged_fields_with_conditions()
+    staged["condition_relations"][0]["conditions"].append({
+        f"{part}_{suffix}": f"{part} {suffix}"
+        for part in ("condition_class", "condition_id", "condition_chemical", "condition_taxon")
+        for suffix in ("mention", "curie")
+    })
+    result = _materialize_one_candidate(staged_fields=staged)
+    assert result.ok, result.summary()
+    for obj in result.payload["curatable_objects"]:
+        declared = set(declared_resolvable_fields(metadata, obj["object_type"]))
+        staged_paths = set(_staged_contract_value_paths(obj["payload"]))
+        assert staged_paths <= declared, (obj["object_type"], sorted(staged_paths - declared))

@@ -47,17 +47,76 @@ def packaged_export_fields(agent_id: str, entry: dict | None = None) -> list[dic
     return _pack_export_fields(domain_pack) if domain_pack is not None else []
 
 
+def _declared_display(field: Any, models: dict[str, Any], object_models: dict[str, Any]) -> dict[str, Any] | None:
+    """Field-level display wins, then its model's (or referenced object's model's)."""
+
+    display = field.metadata.get("display")
+    if display:
+        return deepcopy(display)
+    model_ref = field.model_ref
+    if model_ref is None and getattr(field, "object_type_ref", None):
+        model_ref = object_models.get(field.object_type_ref)
+    model = models.get(model_ref) if model_ref else None
+    display = model.metadata.get("display") if model is not None else None
+    return deepcopy(display) if display else None
+
+
+def _field_label(field: Any) -> str:
+    return field.display_name or field.field_path.replace("_", " ")
+
+
+def _resolvable_leaf_key(
+    field: Any, obj: Any, by_path: dict[str, Any], models: dict, object_models: dict,
+) -> tuple[str, str, str] | None:
+    """(parent label, leaf key, mention key) when ``field`` is a resolvable value's own leaf.
+
+    The parent is the declared field above it, or the object root (a top-level
+    leaf) when the object's model declares the root resolvable.
+    """
+
+    parent_path, _, key = field.field_path.rpartition(".")
+    if parent_path:
+        parent = by_path.get(parent_path)
+        if parent is None:
+            return None
+        parent_display, parent_label = _declared_display(parent, models, object_models), _field_label(parent)
+    else:
+        model = models.get(obj.model_ref) if obj.model_ref else None
+        parent_display = model.metadata.get("display") if model is not None else None
+        parent_label = obj.display_name
+    if not parent_display or not parent_display.get("mention"):
+        return None
+    return parent_label, key, str(parent_display["mention"])
+
+
 def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
+    from src.lib.domain_packs.resolvable_values import resolvable_leaf_header
+
+    metadata = domain_pack.metadata
+    models = {model.model_id: model for model in metadata.model_definitions}
+    object_models = {obj.object_type: obj.model_ref for obj in metadata.object_definitions}
+    enums = {enum.enum_id: [value.value for value in enum.values] for enum in metadata.enum_definitions}
     result = []
-    for obj in domain_pack.metadata.object_definitions:
+    for obj in metadata.object_definitions:
         summary = obj.metadata.get("export_validation_summary")
         if summary:
             from src.lib.flows.validation_summary_export import summary_fields
             result.extend(summary_fields(obj.object_type, summary))
+        by_path = {field.field_path: field for field in obj.fields}
         for field in obj.fields:
-            result.append({
+            if field.metadata.get("exported") is False:
+                # Declared for validators only (e.g. an extractor's proposal); never a column.
+                continue
+            label = _field_label(field)
+            # A resolvable value's paper wording, status, lookup result and
+            # validator explanation are their own columns (ALL-1283).
+            leaf = _resolvable_leaf_key(field, obj, by_path, models, object_models)
+            if leaf is not None:
+                parent_label, key, mention_key = leaf
+                label = resolvable_leaf_header(parent_label, key, mention_key=mention_key) or label
+            entry = {
                 "ref": f"object.pack.{obj.object_type}.{field.field_path}",
-                "label": field.display_name or field.field_path.replace("_", " "),
+                "label": label,
                 "group": obj.display_name, "object_type": obj.object_type,
                 "payload_path": field.field_path, "pack_version": domain_pack.metadata.version,
                 "value_type": "list" if field.multivalued else field.field_type.value,
@@ -65,8 +124,20 @@ def _pack_export_fields(domain_pack: Any) -> list[dict[str, Any]]:
                 "required": field.required, "nullable": not field.required,
                 "array_depth": int(field.multivalued),
                 "description": field.description,
-            })
+            }
+            if field.enum_ref is not None:
+                # Controlled vocabularies carry their allowed values.
+                entry["enum_values"] = list(enums[field.enum_ref])
+            result.append(entry)
     return result
+
+
+def _legacy_display_mapper(domain_pack_id: str) -> Any | None:
+    from src.lib.curation_workspace.adapter_registry import (
+        resolve_curation_legacy_display_mapper_by_id,
+    )
+
+    return resolve_curation_legacy_display_mapper_by_id(domain_pack_id)
 
 
 def source_catalog(fields: list[dict], receipt: Any = None) -> dict:
@@ -105,6 +176,7 @@ class PackagedExportSource:
             object_type for object_type, role in self._roles.items() if role == "curatable_unit"
         ]
         self.display_specs = self._display_specs()
+        self.resolvable_fields = self._resolvable_fields()
         self.object_ref_fields = {
             obj.object_type: fields
             for obj in metadata.object_definitions
@@ -115,19 +187,53 @@ class PackagedExportSource:
             })
         }
         self.object_label_paths = self._object_label_paths()
+        self.legacy_display_mapper = _legacy_display_mapper(metadata.pack_id)
 
     def _field_display(self, field: Any) -> dict[str, Any] | None:
-        """Field-level display wins, then its model's (or referenced object's model's)."""
+        return _declared_display(field, self._models, self._object_models)
 
-        display = field.metadata.get("display")
-        if display:
-            return deepcopy(display)
-        model_ref = field.model_ref
-        if model_ref is None and getattr(field, "object_type_ref", None):
-            model_ref = self._object_models.get(field.object_type_ref)
-        model = self._models.get(model_ref) if model_ref else None
-        display = model.metadata.get("display") if model is not None else None
-        return deepcopy(display) if display else None
+    def _resolvable_fields(self) -> dict[str, dict[str, Any]]:  # {object_type: {path: ResolvableSpec}}
+        """Declared resolvable values per object type ("" is the object root)."""
+
+        from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+        metadata = self.domain_pack.metadata
+        return {
+            obj.object_type: specs
+            for obj in metadata.object_definitions
+            if (specs := declared_resolvable_fields(metadata, obj.object_type))
+        }
+
+    def effective_item(self, item: dict) -> dict:
+        """An object row's item with the read-time resolution state of its declared values.
+
+        A record stored in a previous pack format is first read in the current
+        value shape by the pack's registered legacy display mapper; values
+        stored before ALL-1283 then read through the legacy rule
+        (``resolvable_values.effective_payload``); overruled identities are
+        left out. Nothing is written back.
+        """
+
+        from src.lib.domain_packs.resolvable_values import effective_payload, without_overruled
+
+        object_type = str(item.get("object_type") or "")
+        specs = self.resolvable_fields.get(object_type)
+        payload = item.get("payload")
+        if not isinstance(payload, dict):
+            return item
+        if self.legacy_display_mapper is not None:
+            payload = self.legacy_display_mapper(object_type, payload)
+        # An identity a validator overruled is never exported.
+        payload = without_overruled(payload)
+        if not specs:
+            return {**item, "payload": payload}
+        metadata = item.get("metadata")
+        return {
+            **item,
+            "payload": effective_payload(
+                payload, specs, object_metadata=metadata if isinstance(metadata, dict) else None,
+            ),
+        }
 
     def _resolved(self, display: dict[str, Any], field_path: str, by_path: dict[str, Any]) -> dict[str, Any]:
         """Composite parts carry their own resolved specs, recursively."""
@@ -154,15 +260,21 @@ class PackagedExportSource:
         their schema fingerprints do not change.
         """
 
+        from src.lib.domain_packs.resolvable_values import LEAF_VALUE_LABELS
+
         specs: dict[str, dict[str, Any]] = {}
         for obj in self.domain_pack.metadata.object_definitions:
             by_path = {field.field_path: field for field in obj.fields}
             for field in obj.fields:
+                ref = f"object.pack.{obj.object_type}.{field.field_path}"
                 display = self._field_display(field)
                 if display is not None:
-                    specs[f"object.pack.{obj.object_type}.{field.field_path}"] = self._resolved(
-                        display, field.field_path, by_path,
-                    )
+                    specs[ref] = self._resolved(display, field.field_path, by_path)
+                    continue
+                leaf = _resolvable_leaf_key(field, obj, by_path, self._models, self._object_models)
+                if leaf is not None and leaf[1] in LEAF_VALUE_LABELS:
+                    # A resolvable value's status and lookup result read in plain words.
+                    specs[ref] = {"value_labels": dict(LEAF_VALUE_LABELS[leaf[1]])}
         return specs
 
     def _object_label_paths(self) -> dict[str, str]:

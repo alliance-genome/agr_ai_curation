@@ -665,15 +665,19 @@ class DomainPackValidatorBindings(DomainPackMetadataBaseModel):
         return self
 
 
-_DISPLAY_ROLES = ("label", "id", "state")
-_DISPLAY_KEYS = frozenset({*_DISPLAY_ROLES, "resolved_states", "compose", "separator"})
+_DISPLAY_ROLES = ("label", "id", "state", "mention")
+_DISPLAY_KEYS = frozenset({*_DISPLAY_ROLES, "resolved_states", "compose", "separator", "validated"})
 
 
 def _validate_display_spec(display: Any, where: str) -> None:
     """A ``metadata.display`` declaration (see ``src.lib.flows.value_display``).
 
     Roles are single leaf paths, never fallback lists; ``compose`` joins
-    declared parts and cannot be mixed with roles. Checked when a pack loads.
+    declared parts and cannot be mixed with roles. A ``mention`` role declares
+    a resolvable value (``src.lib.domain_packs.resolvable_values``): its
+    mention, label and id are keys of the value itself, and its state is the
+    contract's ``resolution_state``, so it takes no ``state`` role. Checked
+    when a pack loads.
     """
 
     if not isinstance(display, dict) or not display:
@@ -689,7 +693,7 @@ def _validate_display_spec(display: Any, where: str) -> None:
     if "separator" in display and not isinstance(display["separator"], str):
         raise ValueError(f"{where}.separator must be a string")
     if "compose" in display:
-        if any(key in display for key in (*_DISPLAY_ROLES, "resolved_states")):
+        if any(key in display for key in (*_DISPLAY_ROLES, "resolved_states", "validated")):
             raise ValueError(f"{where}.compose cannot be combined with label, id or state roles")
         compose = display["compose"]
         if not isinstance(compose, list) or not compose:
@@ -718,6 +722,33 @@ def _validate_display_spec(display: Any, where: str) -> None:
         return
     if not (display.get("label") or display.get("id")):
         raise ValueError(f"{where} needs a label, id or compose declaration")
+    if "mention" in display:
+        if "state" in display or "resolved_states" in display:
+            raise ValueError(
+                f"{where}: a resolvable value (mention role) reads its state from resolution_state; "
+                "it takes no state or resolved_states"
+            )
+        for role in ("label", "id", "mention"):
+            if "." in str(display.get(role) or ""):
+                raise ValueError(
+                    f"{where}.{role}: a resolvable value's mention, label and id are keys of the value itself"
+                )
+    if "validated" in display:
+        validated = display["validated"]
+        if "mention" not in display:
+            raise ValueError(f"{where}.validated is only for a resolvable value (a mention role)")
+        roles = {display.get(role) for role in ("label", "id", "mention")}
+        if (
+            not isinstance(validated, list)
+            or not validated
+            or not all(isinstance(key, str) and key.strip() and "." not in key for key in validated)
+            or len(set(validated)) != len(validated)
+            or roles.intersection(validated)
+        ):
+            raise ValueError(
+                f"{where}.validated must list distinct keys of the value itself, "
+                "other than its label, id and mention"
+            )
     if "state" in display:
         states = display.get("resolved_states")
         if not isinstance(states, list) or not states or not all(
@@ -939,6 +970,15 @@ class DomainPackObjectDefinition(DomainPackMetadataBaseModel):
     @field_validator("metadata")
     @classmethod
     def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        for key in ("workspace_display", "supervisor_manifest"):
+            config = value.get(key)
+            if isinstance(config, dict) and "primary_label_fields" in config:
+                # A label chain fills an item's label from another field when the
+                # first is empty; the label is one declared field (ALL-1283).
+                raise ValueError(
+                    f"metadata.{key} declares primary_label_fields; "
+                    "declare a single primary_label_field instead"
+                )
         return _validate_metadata_mapping(value)
 
     @model_validator(mode="after")
@@ -982,6 +1022,77 @@ class DomainPackFixturePackRef(DomainPackMetadataBaseModel):
         ]
         _require_unique(validated, "fixture_packs.object_types")
         return validated
+
+
+def _resolvable_vocabulary_errors(metadata: "DomainPackMetadata") -> list[str]:
+    """A resolvable value's resolution_state and lookup_outcome leaves (including
+    those of a resolvable object root) are enums whose values are exactly the
+    shared controlled vocabularies (ALL-1283)."""
+
+    from src.lib.domain_packs.resolvable_values import (
+        LOOKUP_OUTCOME_KEY,
+        LOOKUP_OUTCOMES,
+        RESOLUTION_STATE_KEY,
+        RESOLUTION_STATES,
+    )
+
+    vocabularies = {RESOLUTION_STATE_KEY: RESOLUTION_STATES, LOOKUP_OUTCOME_KEY: LOOKUP_OUTCOMES}
+    enums = {item.enum_id: [value.value for value in item.values] for item in metadata.enum_definitions}
+    models = {item.model_id: item for item in metadata.model_definitions}
+    object_models = {item.object_type: item.model_ref for item in metadata.object_definitions}
+
+    def display(field: "DomainPackFieldDefinition") -> Any:
+        if field.metadata.get("display"):
+            return field.metadata["display"]
+        model_ref = field.model_ref or (
+            object_models.get(field.object_type_ref) if field.object_type_ref else None
+        )
+        model = models.get(model_ref) if model_ref else None
+        return model.metadata.get("display") if model is not None else None
+
+    errors: list[str] = []
+    for object_definition in metadata.object_definitions:
+        by_path = {field.field_path: field for field in object_definition.fields}
+        root_model = models.get(object_definition.model_ref) if object_definition.model_ref else None
+        for field in object_definition.fields:
+            parent_path, _, key = field.field_path.rpartition(".")
+            if key not in vocabularies:
+                continue
+            # Only a resolvable value's own leaves: under a declared field, or
+            # top-level leaves of an object whose root is declared resolvable.
+            if parent_path:
+                parent = by_path.get(parent_path)
+                parent_display = display(parent) if parent is not None else None
+            else:
+                parent_display = root_model.metadata.get("display") if root_model is not None else None
+            if not (isinstance(parent_display, dict) and parent_display.get("mention")):
+                continue
+            allowed = list(vocabularies[key])
+            if field.field_type is not DomainPackFieldType.ENUM or enums.get(field.enum_ref or "") != allowed:
+                errors.append(
+                    f"object_definitions.{object_definition.object_type}.fields.{field.field_path} "
+                    f"must be an enum field whose enum lists exactly {allowed}"
+                )
+    return errors
+
+
+def _resolvable_validated_key_errors(metadata: "DomainPackMetadata") -> list[str]:
+    """Each ``validated`` key of a declared resolvable value is a declared leaf of it."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    errors: list[str] = []
+    for object_definition in metadata.object_definitions:
+        declared_paths = {field.field_path for field in object_definition.fields}
+        for field_path, spec in declared_resolvable_fields(metadata, object_definition.object_type).items():
+            for key in spec.validated_keys:
+                leaf = f"{field_path}.{key}" if field_path else key
+                if leaf not in declared_paths:
+                    errors.append(
+                        f"object_definitions.{object_definition.object_type}: validated key "
+                        f"'{key}' of '{field_path or '<object root>'}' is not a declared field ({leaf})"
+                    )
+    return errors
 
 
 class DomainPackMetadata(DomainPackMetadataBaseModel):
@@ -1072,6 +1183,9 @@ class DomainPackMetadata(DomainPackMetadataBaseModel):
                         f"{field_location}.object_type_ref references unknown object_type "
                         f"'{field_definition.object_type_ref}'"
                     )
+
+        errors.extend(_resolvable_vocabulary_errors(self))
+        errors.extend(_resolvable_validated_key_errors(self))
 
         for fixture_pack in self.fixture_packs:
             for object_type in fixture_pack.object_types:

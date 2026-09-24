@@ -70,6 +70,7 @@ from .validator_result_classification import (
     lookup_status_for_validator_outcome,
     validator_failure_classification,
 )
+from .not_validatable import is_not_validatable, not_validatable_object_keys
 from .validator_result_policies import allowed_term_policy_violations
 from .value_presence import missing_resolved_value
 from .validation_findings import append_validation_findings_to_envelope
@@ -407,7 +408,11 @@ def dispatch_active_validator_bindings(
     dispatch_context = group_dispatch_context(authenticated_groups)
     flow_selections = current_flow_validator_selections()
     suppressed_bindings = []
+    not_validatable = not_validatable_object_keys(envelope)
     for match in eligible_matches:
+        if is_not_validatable(match.object_envelope, not_validatable):
+            # A package validator's one "not validatable" finding speaks for the object.
+            continue
         selection = flow_selections.get(match.binding.binding_id)
         if selection is not None:
             suppressed_bindings.append({

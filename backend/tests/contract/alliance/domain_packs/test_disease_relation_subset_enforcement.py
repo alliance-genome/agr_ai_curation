@@ -15,6 +15,7 @@ from pathlib import Path
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.resolvable_values import unresolved_value
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
@@ -45,21 +46,22 @@ def _disease_pack() -> LoadedDomainPack:
 
 
 def _annotation_envelope(*, object_type: str, subject_type: str | None, relation: str) -> DomainEnvelope:
-    subject: dict = {
-        "subject_identifier": "FB:FBgn0000108",
-        "subject_label": "Appl",
-    }
-    if subject_type is not None:
-        subject["subject_type"] = subject_type
+    subject_extra = {"subject_type": subject_type} if subject_type is not None else {}
     payload = {
         "mention": "Alzheimer's disease",
-        "disease_relation_name": relation,
-        "disease_annotation_subject": subject,
-        "disease_annotation_object": {
-            "curie": "DOID:10652",
-            "name": "Alzheimer's disease",
-        },
-        "data_provider": {"abbreviation": "FB"},
+        "disease_relation": unresolved_value(relation, identity_keys=("name",)),
+        "disease_annotation_subject": unresolved_value(
+            "Appl",
+            identity_keys=("subject_identifier", "subject_label"),
+            proposed_subject_identifier="FB:FBgn0000108",
+            **subject_extra,
+        ),
+        "disease_annotation_object": unresolved_value(
+            "Alzheimer's disease",
+            identity_keys=("curie", "name"),
+            proposed_curie="DOID:10652",
+        ),
+        "data_provider": unresolved_value("FB", identity_keys=("abbreviation",)),
     }
     return DomainEnvelope(
         envelope_id="disease-subset-env",

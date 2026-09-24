@@ -127,7 +127,7 @@ Only `resolve_domain_field_term` output may justify setting a controlled selecto
 Use `slot_hint` values to decide whether a site label belongs under `anatomical_structure` or `cellular_component`.
 
 # GEX-37 no resolver option -> keep paper label, record unresolved path, no invention
-keep the paper label in metadata/provenance or a nullable pending selector and record the unresolved field path.
+stage the field anyway with its `mention` and `selected_value` null: it is kept UNRESOLVED with the paper wording and its validator looks it up.
 Do not invent ontology IDs, vocabulary terms, or enumerated values from memory.
 
 # GEX-38 extraction-time lookup limited to agr_species_context_lookup; no broad lookup
@@ -139,7 +139,7 @@ call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated 
 reuse that `evidence_record_id`; do not call `record_evidence` again for the same evidence unit.
 
 # GEX-42 stage call payload
-Call `stage_gene_expression_observation` once per retained curatable finding, passing a stable `pending_ref_id`, the verified `evidence_record_ids`, `where_expressed_statement`, subject, reference
+Call `stage_gene_expression_observation` once per retained curatable finding, passing a stable `pending_ref_id`, the verified `evidence_record_ids`, `where_expressed_statement`, `data_provider`
 
 # GEX-45 evidence records are ID handles plus backend-owned source fields
 Every verified evidence record you keep has an `evidence_record_id` plus backend-owned source quote/provenance fields created by `record_evidence`; never type or copy those source fields yourself.
@@ -192,28 +192,28 @@ Do not author or return full `GeneExpressionEnvelope` JSON.
 Do not include the materialized envelope in the final assistant message.
 
 # GEX-56 required staged values include resolver calls
-relation resolver call, assay resolver call, stage resolver call
+relation, assay, and anatomy or cellular-component controlled fields
 
 # GEX-57 relation.name resolved before staging
 call `resolve_domain_field_term` for `relation.name` before staging
-set `relation.name` only from the returned resolved controlled-vocabulary value.
+call `resolve_domain_field_term` for `relation.name` before staging and use only its returned resolved value as `selected_value`.
 
 # GEX-58 backend records helper_selections; do not author them
 The backend records resolver outputs into `metadata.provenance.helper_selections[]`; do not author `helper_selections` yourself.
 
 # GEX-59 data_provider.abbreviation selector
-Set `data_provider.abbreviation` when the organism/provider context is clear
+Pass `data_provider` as the Alliance member abbreviation for the paper's organism
 zebrafish / Danio rerio => `ZFIN`
 
 # GEX-60 spatial context under where_expressed; CC-only valid
-Put spatial context under `expression_pattern.where_expressed`
+Put spatial context in the `expression_pattern.where_expressed.anatomical_structure` and/or `expression_pattern.where_expressed.cellular_component` controlled fields.
 cellular-component-only sites such as nucleus or cytoplasm are valid when helper routing points to the GO cellular-component slot.
 
 # GEX-61 temporal context under when_expressed_stage_name
-Put temporal context under `when_expressed_stage_name`
+Put the stage in the `expression_pattern.when_expressed.developmental_stage_start` controlled field: the paper's stage wording is its `mention`
 
 # GEX-62 assay context under expression_assay_used
-Put assay context under `expression_experiment.expression_assay_used` only from resolver-backed MMO/assay options or explicit paper-provided identifiers.
+Put the assay in the `expression_experiment.expression_assay_used` controlled field: the resolved MMO term, or the paper's assay wording with `selected_value` null. Never invent a CURIE.
 
 # GEX-65 stage conditions via condition_relations, not field metadata
 Stage experimental conditions via the `condition_relations` parameter of `stage_gene_expression_observation`

@@ -7,15 +7,34 @@ model definition or a field (``metadata.display``):
   optional and each is one (possibly dotted) leaf path, never a list of
   fallbacks. ``state`` plus ``resolved_states`` name an explicit resolution
   leaf. A declared value whose own label and id are empty renders empty.
+- ``{label: <key>, id: <key>, mention: <key>}`` declares a resolvable value
+  (``src.lib.domain_packs.resolvable_values``): the extracted paper wording
+  sits at ``mention`` and the validated identity at ``label``/``id``. A
+  resolved value renders "label (id)"; an unresolved one renders the literal
+  ``UNRESOLVED`` with neither label nor paper wording in the cell. The paper
+  wording is its own field (``<field>.mention``), never part of this cell.
+  An optional ``validated: [<key>, ...]`` names further keys only a
+  validator fills (e.g. a taxon); they count as identity, and the cell still
+  reads "label (id)".
 - ``{compose: [<child path>, ...], separator: "; "}`` joins the display text of
   child values (each child carries its own resolved spec). An entry may be a
   mapping ``{path, display}``; one without a path reads the value itself with
   its ``display`` (e.g. "label (id)" followed by other parts).
 
-Without a spec a generic reading applies: a term-like value holding only one
-of ``curie|id|identifier`` and one of ``name|label|display_name`` reads
-"label (id)"; any other value renders all its ``key: value`` pairs so nothing
-is dropped.
+Without a spec a generic reading applies: a value stored with the contract
+state (``resolution_state`` and ``lookup_outcome``) reads as above with the
+generic keys; a mapping that merely holds a ``mention`` key is not a
+resolvable value; a term-like value holding only one of ``curie|id|identifier`` and
+one of ``name|label|display_name`` reads "label (id)"; any other value renders
+all its ``key: value`` pairs so nothing is dropped.
+
+A resolvable value's own vocabulary leaves (``resolution_state``,
+``lookup_outcome``) carry an internal ``value_labels`` spec so their codes read
+in plain words ("Matched", "Not found", ...).
+
+A resolvable value's state is the one stored with it. A value stored before
+that contract has no state and reads as unresolved unless the caller applied
+the read-time legacy rule (``resolvable_values.effective_payload``) first.
 Lists join with "; ", and lists of structured records (or of lists) with " | "
 so record boundaries stay visible; a list nested inside a record joins its
 items with ", ". CSV, TSV and chat cells therefore never contain JSON or
@@ -28,9 +47,19 @@ to the value (tuples of keys and list indexes).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
+from src.lib.domain_packs.resolvable_values import (
+    CONTRACT_KEYS,
+    EXTRACTOR_PROPOSAL_PREFIX,
+    UNRESOLVED_DISPLAY,
+    has_resolution_state,
+    is_resolved,
+    resolvable_spec_from_display,
+    without_overruled,
+)
 from src.schemas.domain_envelope import parse_field_path
 
 GENERIC_ID_KEYS = ("curie", "id", "identifier")
@@ -39,6 +68,10 @@ LIST_SEPARATOR = "; "
 RECORD_SEPARATOR = " | "
 NESTED_SEPARATOR = ", "
 UNRESOLVED = "unresolved"
+# Cell text for a stored controlled-vocabulary word outside its vocabulary.
+INVALID_VOCABULARY_VALUE = "Invalid value"
+
+_log = logging.getLogger(__name__)
 
 PathToken = str | int
 FindingPaths = frozenset[tuple[PathToken, ...]]
@@ -216,6 +249,10 @@ def _mapping_text(
     if spec and spec.get("compose"):
         return _compose_text(value, spec, keyed, whole, marked)
     unresolved = bool(paths)
+    # A declared resolvable value, or a value stored with the contract state;
+    # a mapping that merely holds a ``mention`` key is read like any other.
+    if (spec and spec.get("mention")) or has_resolution_state(value):
+        return _resolvable_text(value, spec)
     if spec and (spec.get("label") or spec.get("id")):
         label = _first(value, [spec["label"]]) if spec.get("label") else ""
         identifier = _first(value, [spec["id"]]) if spec.get("id") else ""
@@ -251,6 +288,42 @@ def _mapping_text(
     text = _pairs_text(value, keyed, marked)
     unplaced = whole or any(path[0] not in present for path in keyed)
     return f"{text} ({UNRESOLVED})" if marked and unplaced and text else text
+
+
+
+
+def _resolvable_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None) -> str:
+    """A resolvable value: "label (id)" when resolved, else the literal UNRESOLVED.
+
+    Only the stored state decides; the paper wording is never shown here, so
+    an unresolved value never reads as if it were the validated item.
+    """
+
+    # A declared resolvable value (mention role) is checked against its own id/label keys.
+    identity_keys = (
+        resolvable_spec_from_display(spec).identity_keys
+        if spec and spec.get("mention")
+        else ()
+    )
+    if not is_resolved(value, identity_keys=identity_keys):
+        # Unresolved, stored before the contract, or a stored record that breaks it.
+        return UNRESOLVED_DISPLAY
+    if spec and (spec.get("label") or spec.get("id")):
+        label = _first(value, [spec["label"]]) if spec.get("label") else ""
+        identifier = _first(value, [spec["id"]]) if spec.get("id") else ""
+        return _labeled(label, identifier, False)
+    label = _first(value, GENERIC_LABEL_KEYS)
+    identifier = _first(value, GENERIC_ID_KEYS)
+    if label or identifier:
+        return _labeled(label, identifier, False)
+    # Undeclared identity keys: show the validated content, never the paper wording.
+    # Neither the extractor's proposals nor an overruled identity is the value.
+    identity = {
+        key: item
+        for key, item in without_overruled(value).items()
+        if key not in CONTRACT_KEYS and not str(key).startswith(EXTRACTOR_PROPOSAL_PREFIX)
+    }
+    return _pairs_text(identity, frozenset(), False)
 
 
 def display_text(
@@ -307,6 +380,14 @@ def _render(
     if isinstance(value, Mapping):
         return _mapping_text(value, spec, paths, marked)
     text = _scalar_text(value)
+    if spec and spec.get("value_labels"):
+        # A controlled-vocabulary leaf (e.g. a lookup outcome) reads in plain words;
+        # a stored word outside the vocabulary is marked, never raised on.
+        labels = spec["value_labels"]
+        if text not in labels:
+            _log.warning("Stored value %r is outside its controlled vocabulary", text)
+            return f"{INVALID_VOCABULARY_VALUE} ({text})"
+        return labels[text]
     return f"{text} ({UNRESOLVED})" if marked and paths and text else text
 
 
@@ -320,4 +401,5 @@ __all__ = [
     "NESTED_SEPARATOR",
     "RECORD_SEPARATOR",
     "UNRESOLVED",
+    "UNRESOLVED_DISPLAY",
 ]

@@ -3130,6 +3130,12 @@
           "type": "string"
         },
         {
+          "description": "The paper's own wording for this value, exactly as it will be recorded.",
+          "name": "source_phrase",
+          "required": true,
+          "type": "string"
+        },
+        {
           "description": "The Alliance group to scope species-specific anatomy context to.",
           "name": "data_provider",
           "required": false,
@@ -3854,7 +3860,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3897,7 +3903,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording and are looked up again; a standard-term field takes its paper wording plus the selected term, or no term to keep it UNRESOLVED. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -4014,7 +4020,7 @@
           "type": "string"
         },
         {
-          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA `rationale` update must be non-empty; it cannot be cleared.",
+          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nqualifiers takes the qualifiers as the paper supports them; the builder\nlooks each one up again against the GO term's aspect.\nA GO value (gene_product, go_term, reference_curie, each with_from entry) takes the\nsame shape as staging: the paper wording as `mention` plus the identifier only\nwhen a lookup returned it; evidence_code takes the code. The builder works out\nagain whether each value is matched or unresolved.\nA `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -4057,7 +4063,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5264,7 +5270,7 @@
           "type": "string"
         },
         {
-          "description": "The exact wording for this entity as it appears in the paper.",
+          "description": "The exact wording for this allele as it appears in the paper. It is kept as the allele's paper wording, and the allele stays unresolved until the Allele Validation specialist confirms it.",
           "name": "mention",
           "required": true,
           "type": "string"
@@ -5354,13 +5360,13 @@
           "type": "string"
         },
         {
-          "description": "The exact wording for this entity as it appears in the paper.",
+          "description": "The disease exactly as the paper words it. It stays as the paper's wording and is kept even when no Disease Ontology term matches; the disease specialist decides the term.",
           "name": "mention",
           "required": true,
           "type": "string"
         },
         {
-          "description": "The disease name as the agent read it from the paper.",
+          "description": "The Disease Ontology name the agent proposes for this disease; the disease specialist checks it, and it never replaces the paper's wording.",
           "name": "disease_name",
           "required": true,
           "type": "string"
@@ -5378,7 +5384,7 @@
           "type": "string"
         },
         {
-          "description": "The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).",
+          "description": "The Alliance group the agent chooses for this finding, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human); the data provider specialist confirms it.",
           "name": "data_provider",
           "required": true,
           "type": "string"
@@ -5417,14 +5423,14 @@
         },
         {
           "default": null,
-          "description": "The ID of the gene, allele, or model the disease is associated with.",
+          "description": "The ID the agent proposes for the gene, allele, or model the disease is associated with; the subject specialist confirms it.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The name of the gene, allele, or model the disease is associated with.",
+          "description": "The gene, allele, or model the disease is associated with, as the paper names it. Needed whenever a subject type or ID is given; it stays as the paper's wording.",
           "name": "subject_label",
           "required": false,
           "type": "any"
@@ -5466,7 +5472,7 @@
         },
         {
           "default": null,
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"
@@ -5528,31 +5534,37 @@
           "type": "string"
         },
         {
-          "description": "The gene whose expression was observed, with the exact phrase from the paper and the agent's proposed symbol/ID.",
+          "description": "The Alliance member database for the paper's organism, by its abbreviation (such as ZFIN or WB). It is checked against the Alliance provider list; one that does not match stays UNRESOLVED for the data-provider specialist.",
+          "name": "data_provider",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The gene whose expression was observed, written as the paper names it. The gene specialist looks it up and fills in the confirmed gene.",
           "name": "subject",
           "required": true,
           "type": "any"
         },
         {
-          "description": "The paper the observation came from, with the exact phrase and its reference ID.",
+          "description": "The identifier of the paper the observation came from (such as a PMID or DOI), as the paper gives it. The reference specialist looks it up.",
           "name": "reference",
           "required": true,
           "type": "any"
         },
         {
-          "description": "The standard-term choices the agent made for this observation (such as the anatomy and developmental-stage terms), each paired with the value it selected. A term specialist confirms these.",
+          "description": "The standard-term choices for this observation (such as the anatomy and developmental-stage terms). Each carries the paper's own wording and, when a term matched, the value the agent selected; one with no match is kept as UNRESOLVED with its wording. A term specialist confirms these.",
           "name": "controlled_fields",
           "required": true,
           "type": "array"
         },
         {
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": true,
           "type": "any"
         }
       ],
-      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms."
+      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value keeps the paper's own wording; a term the agent could not match is kept as UNRESOLVED with that wording instead of being dropped. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage."
     },
     "methods": null,
     "name": "Stage Gene Expression Observation",
@@ -5583,7 +5595,7 @@
           "type": "string"
         },
         {
-          "description": "The exact wording for this entity as it appears in the paper.",
+          "description": "The exact wording for this gene as it appears in the paper. It is kept as the gene's paper wording, and the gene stays unresolved until the Gene Validation specialist confirms it.",
           "name": "mention",
           "required": true,
           "type": "string"
@@ -5716,7 +5728,7 @@
           "type": "string"
         },
         {
-          "description": "The source-paper label or mention when it differs from label.",
+          "description": "The paper's own wording for this object. It is kept as the paper wording; the label is never used in its place.",
           "name": "source_label",
           "required": false,
           "type": "string"
@@ -5740,7 +5752,7 @@
           "type": "string"
         },
         {
-          "description": "Class-specific evidence-backed payload fields.",
+          "description": "Class-specific evidence-backed payload fields. Write each value's paper wording in the class's paper_wording_fields; never write its system_written_payload_fields, which validation, the builder or the verified evidence record fill in.",
           "name": "payload",
           "required": false,
           "type": "object"
@@ -5777,62 +5789,50 @@
     "documentation": {
       "parameters": [
         {
+          "description": "Stable reference for this recommendation; evidence records\nattach to it.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The gene or gene product exactly as the paper words it.",
           "name": "gene_product_mention",
           "required": true,
           "type": "string"
         },
         {
-          "name": "gene_product_label",
-          "required": true,
-          "type": "string"
-        },
-        {
+          "description": "The kind of product the paper describes, for example\nprotein, gene, or mature_miRNA.",
           "name": "gene_product_entity_type",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The NCBI Taxon CURIE of the organism.",
           "name": "gene_product_taxon_curie",
           "required": true,
           "type": "string"
         },
         {
-          "name": "resolution_state",
+          "description": "The GO process, function, or location as the paper words it.",
+          "name": "go_term_mention",
           "required": true,
           "type": "string"
         },
         {
-          "name": "go_term_curie",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "name": "go_term_label",
-          "required": true,
-          "type": "string"
-        },
-        {
+          "description": "The GO aspect: molecular_function, biological_process, or\ncellular_component.",
           "name": "go_term_aspect",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The GO experimental evidence code for the experiment, for\nexample IDA, IPI, IMP, IGI, IEP, or EXP. Its ECO class is looked up for you.",
           "name": "evidence_code",
           "required": true,
           "type": "string"
         },
         {
-          "name": "evidence_eco_curie",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "name": "reference_curie",
+          "description": "How you identified the paper for the reference lookup, for\nexample its PMID or title.",
+          "name": "reference_mention",
           "required": true,
           "type": "string"
         },
@@ -5843,29 +5843,62 @@
           "type": "string"
         },
         {
+          "description": "Whether the existing-annotation lookup returned\nannotations (available), returned none (not_found), or could not run\n(unavailable).",
           "name": "existing_annotation_status",
           "required": true,
           "type": "string"
         },
         {
+          "description": "Verified evidence record IDs supporting this recommendation.",
           "name": "evidence_record_ids",
           "required": true,
           "type": "array"
         },
         {
           "default": null,
+          "description": "The RGD CURIE exactly as resolve_gene_product returned it;\nleave it out when the identity is unresolved or ambiguous.",
           "name": "gene_product_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The gene-product symbol resolve_gene_product returned with\nthat CURIE; leave it out without a CURIE.",
+          "name": "gene_product_label",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "description": "The GO term CURIE exactly as quickgo_api_call returned it; leave\nit out when no term was confirmed.",
+          "name": "go_term_curie",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "description": "The GO term name quickgo_api_call returned with that CURIE.",
+          "name": "go_term_label",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "description": "The reference CURIE exactly as agr_literature_reference_lookup\nreturned it; leave it out when the paper could not be matched.",
+          "name": "reference_curie",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "description": "With/From entries, each with the paper's wording and, when a lookup\nreturned one, its identifier.",
           "name": "with_from",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "GO relation qualifiers as the paper supports them, for example\nenables, involved_in, located_in, colocalizes_with, or contributes_to.\nEach is looked up in the GO relation vocabulary for the term's aspect; one\nthat does not fit stays unresolved. Negation is its own field.",
           "name": "qualifiers",
           "required": false,
           "type": "any"
@@ -5884,6 +5917,7 @@
         },
         {
           "default": null,
+          "description": "Concrete reasons a curator must resolve before acceptance;\nrequired when the gene product has no confirmed CURIE.",
           "name": "blocking_reasons",
           "required": false,
           "type": "any"
@@ -5932,7 +5966,7 @@
           "type": "any"
         }
       ],
-      "summary": "Stages one typed GOCuratableObject recommendation with verified evidence, resolved or explicitly ambiguous identity, current-annotation context, and curator-visible limitations."
+      "summary": "Stages one typed GOCuratableObject recommendation with verified evidence, the paper's wording for each GO value next to any identifier a lookup confirmed (unconfirmed values stay unresolved), current-annotation context, and curator-visible limitations."
     },
     "methods": null,
     "name": "Stage GO Recommendation",
@@ -5987,15 +6021,21 @@
           "type": "string"
         },
         {
+          "description": "The phenotype term as the paper words it. It is kept as the paper wording and staged even when no ontology term matches; the phenotype term specialist decides the term.",
+          "name": "term_mention",
+          "required": true,
+          "type": "string"
+        },
+        {
           "default": null,
-          "description": "The ID of the gene, allele, or model that shows this phenotype.",
+          "description": "The ID the agent proposes for the gene, allele, or model that shows this phenotype; a specialist confirms it before it counts as the subject's ID.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The name of the gene, allele, or model that shows this phenotype.",
+          "description": "The gene, allele, or model that shows this phenotype, as the paper names it. Needed whenever any other subject detail is given.",
           "name": "subject_label",
           "required": false,
           "type": "any"
@@ -6016,14 +6056,14 @@
         },
         {
           "default": null,
-          "description": "The phenotype term ID the agent proposes, if it found one; a term specialist confirms it.",
+          "description": "The phenotype term ID the agent proposes, if the paper gives one; a term specialist confirms it, and it is never shown as the confirmed ID.",
           "name": "term_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The phenotype term name the agent proposes.",
+          "description": "The phenotype term name the agent proposes; kept apart from the confirmed term name.",
           "name": "term_label",
           "required": false,
           "type": "any"
@@ -6044,7 +6084,7 @@
         },
         {
           "default": null,
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"

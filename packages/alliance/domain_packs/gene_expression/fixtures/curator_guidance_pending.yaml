@@ -37,28 +37,56 @@ fixtures:
             obsolete: false
             data_provider:
               abbreviation: ZFIN
+              mention: ZFIN
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             expression_annotation_subject:
               primary_external_id: ZFIN:ZDB-GENE-050417-357
               gene_symbol: flcn
+              mention: flcn
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             relation:
               name: is_expressed_in
+              mention: is_expressed_in
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             single_reference:
               reference_id: 555001
               curie: AGRKB:101000000900001
               pmid: PMID:00000001
               title: Curator guidance fixture for zebrafish flcn expression
+              mention: Curator guidance fixture for zebrafish flcn expression
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             expression_experiment:
               unique_id: ZFIN:ZDB-GENE-050417-357|AGRKB:101000000900001|MMO:0000642
               single_reference:
                 reference_id: 555001
                 curie: AGRKB:101000000900001
                 title: Curator guidance fixture for zebrafish flcn expression
+                mention: Curator guidance fixture for zebrafish flcn expression
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
               entity_assayed:
                 primary_external_id: ZFIN:ZDB-GENE-050417-357
                 gene_symbol: flcn
+                mention: flcn
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
               expression_assay_used:
                 curie: MMO:0000642
                 name: whole mount in situ hybridization assay
+                mention: whole mount in situ hybridization assay
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
               detection_reagents:
                 - name: flcn riboprobe
                   placeholder: true
@@ -86,16 +114,33 @@ fixtures:
                 developmental_stage_start:
                   curie: ZFS:0000029
                   name: Prim-5
+                  mention: Prim-5
+                  resolution_state: resolved
+                  lookup_outcome: matched
+                  validator_explanation: null
                 stage_uberon_slim_terms:
-                  - curie: UBERON:0000068
-                    name: embryo stage
+                  - name: UBERON:0000068
+                    vocabulary: Stage Uberon Slim Terms
+                    id: 200006300
+                    mention: UBERON:0000068
+                    resolution_state: resolved
+                    lookup_outcome: matched
+                    validator_explanation: null
               where_expressed:
                 anatomical_structure:
                   curie: ZFA:0000260
                   name: pronephric duct
+                  mention: pronephric duct
+                  resolution_state: resolved
+                  lookup_outcome: matched
+                  validator_explanation: null
                 anatomical_structure_uberon_terms:
                   - curie: UBERON:0001008
                     name: renal system
+                    mention: renal system
+                    resolution_state: resolved
+                    lookup_outcome: matched
+                    validator_explanation: null
           evidence_record_ids:
             - evidence-flcn-pronephric-duct-1
           metadata_refs:
@@ -142,25 +187,53 @@ fixtures:
             obsolete: false
             data_provider:
               abbreviation: ZFIN
+              mention: ZFIN
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             expression_annotation_subject:
               primary_external_id: ZFIN:ZDB-GENE-050417-357
               gene_symbol: flcn
+              mention: flcn
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             relation:
               name: is_expressed_in
+              mention: is_expressed_in
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             single_reference:
               reference_id: 555001
               curie: AGRKB:101000000900001
+              mention: "555001"
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             expression_experiment:
               unique_id: ZFIN:ZDB-GENE-050417-357|AGRKB:101000000900001|MMO:0000642
               single_reference:
                 reference_id: 555001
                 curie: AGRKB:101000000900001
+                mention: "555001"
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
               entity_assayed:
                 primary_external_id: ZFIN:ZDB-GENE-050417-357
                 gene_symbol: flcn
+                mention: flcn
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
               expression_assay_used:
                 curie: MMO:0000642
                 name: whole mount in situ hybridization assay
+                mention: whole mount in situ hybridization assay
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
             when_expressed_stage_name: ZFS:0000030
             where_expressed_statement: nucleus
             expression_pattern:
@@ -168,10 +241,18 @@ fixtures:
                 developmental_stage_start:
                   curie: ZFS:0000030
                   name: Prim-15
+                  mention: Prim-15
+                  resolution_state: resolved
+                  lookup_outcome: matched
+                  validator_explanation: null
               where_expressed:
                 cellular_component:
                   curie: GO:0005634
                   name: nucleus
+                  mention: nucleus
+                  resolution_state: resolved
+                  lookup_outcome: matched
+                  validator_explanation: null
           evidence_record_ids:
             - evidence-flcn-nucleus-1
           metadata_refs:
@@ -200,25 +281,53 @@ fixtures:
             uncertain: true
             data_provider:
               abbreviation: ZFIN
+              mention: ZFIN
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             expression_annotation_subject:
               primary_external_id: ZFIN:ZDB-GENE-050417-357
               gene_symbol: flcn
+              mention: flcn
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             relation:
               name: is_expressed_in
+              mention: is_expressed_in
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             single_reference:
               reference_id: 555001
               curie: AGRKB:101000000900001
+              mention: "555001"
+              resolution_state: resolved
+              lookup_outcome: matched
+              validator_explanation: null
             expression_experiment:
               unique_id: ZFIN:ZDB-GENE-050417-357|AGRKB:101000000900001|MMO:0000642
               single_reference:
                 reference_id: 555001
                 curie: AGRKB:101000000900001
+                mention: "555001"
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
               entity_assayed:
                 primary_external_id: ZFIN:ZDB-GENE-050417-357
                 gene_symbol: flcn
+                mention: flcn
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
               expression_assay_used:
                 curie: MMO:0000642
                 name: whole mount in situ hybridization assay
+                mention: whole mount in situ hybridization assay
+                resolution_state: resolved
+                lookup_outcome: matched
+                validator_explanation: null
             when_expressed_stage_name: ZFS:0000030
             where_expressed_statement: retina cytoplasm
             expression_pattern:
@@ -226,16 +335,32 @@ fixtures:
                 developmental_stage_start:
                   curie: ZFS:0000030
                   name: Prim-15
+                  mention: Prim-15
+                  resolution_state: resolved
+                  lookup_outcome: matched
+                  validator_explanation: null
               where_expressed:
                 anatomical_structure:
                   curie: ZFA:0000151
                   name: retina
+                  mention: retina
+                  resolution_state: resolved
+                  lookup_outcome: matched
+                  validator_explanation: null
                 cellular_component:
                   curie: GO:0005737
                   name: cytoplasm
+                  mention: cytoplasm
+                  resolution_state: resolved
+                  lookup_outcome: matched
+                  validator_explanation: null
                 cellular_component_qualifiers:
                   - curie: RO:0002170
                     name: present in
+                    mention: present in
+                    resolution_state: resolved
+                    lookup_outcome: matched
+                    validator_explanation: null
           evidence_record_ids:
             - evidence-flcn-retina-cytoplasm-negated-1
           metadata_refs:

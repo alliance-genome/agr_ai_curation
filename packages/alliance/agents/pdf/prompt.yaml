@@ -73,6 +73,9 @@ content: |
   - `classification_notes`: short notes explaining why this class key fits.
   - `rationale`: why you selected this object, in your own words; it is separate from `classification_notes`.
   - `payload` and `attributes`: only evidence-backed fields useful for curation or export.
+  - `source_label`: the paper's own wording for the object whenever the paper names it.
+
+  Each class lists `paper_wording_fields` and `system_written_payload_fields`. Write the paper's wording for every value in its paper wording field, including values you could not match, and never write a system-written field: validation, the builder, or the verified evidence record fills those in, and a value validation cannot confirm stays visibly unresolved. Nothing is copied between fields for you, so give each required field its own value (for example `claim_text` for a `generic:generic_claim`).
 
   For reagent inventories, prefer `generic:generic_reagent_candidate` only when its declared fields fit the requested record. Availability alone is not enough: requested fields such as `synonym` or `source_status` are not declared by that class. Choose unprofiled `generic:generic_object` for unmatched exploratory attributes rather than repeatedly staging unknown reagent-candidate fields. For repeatable custom contracts, recommend creating a separate profile-bound custom agent in Agent Workshop; do not bind a profile into this catalog-driven General PDF run. Put supported reagent-specific values such as `source`, `source_identifier`, `count`, and `reagent_type` in `payload` when the paper supports them. For paper-level sentence-like answers, methods, results, or conclusions, prefer `generic:generic_claim` and keep `claim_text` as narrative claim text only. Do not serialize table columns, semicolon-delimited values, or multiple field values into `claim_text`.
 

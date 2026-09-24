@@ -710,6 +710,10 @@ tools:
             type: string
             required: true
             description: The ID of the ontology term to look at.
+          - name: source_phrase
+            type: string
+            required: true
+            description: The paper's own wording for this value, exactly as it will be recorded.
           - name: data_provider
             type: string
             required: false
@@ -805,7 +809,7 @@ tools:
       audit:
         display_name: Stage Gene Expression Observation
       documentation:
-        summary: 'Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, a plain "where expressed" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms.'
+        summary: 'Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain "where expressed" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value keeps the paper''s own wording; a term the agent could not match is kept as UNRESOLVED with that wording instead of being dropped. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage.'
         parameters:
           - name: pending_ref_id
             type: string
@@ -823,22 +827,26 @@ tools:
             type: string
             required: true
             description: The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
+          - name: data_provider
+            type: string
+            required: true
+            description: The Alliance member database for the paper's organism, by its abbreviation (such as ZFIN or WB). It is checked against the Alliance provider list; one that does not match stays UNRESOLVED for the data-provider specialist.
           - name: subject
             type: any
             required: true
-            description: The gene whose expression was observed, with the exact phrase from the paper and the agent's proposed symbol/ID.
+            description: The gene whose expression was observed, written as the paper names it. The gene specialist looks it up and fills in the confirmed gene.
           - name: reference
             type: any
             required: true
-            description: The paper the observation came from, with the exact phrase and its reference ID.
+            description: The identifier of the paper the observation came from (such as a PMID or DOI), as the paper gives it. The reference specialist looks it up.
           - name: controlled_fields
             type: array
             required: true
-            description: The standard-term choices the agent made for this observation (such as the anatomy and developmental-stage terms), each paired with the value it selected. A term specialist confirms these.
+            description: The standard-term choices for this observation (such as the anatomy and developmental-stage terms). Each carries the paper's own wording and, when a term matched, the value the agent selected; one with no match is kept as UNRESOLVED with its wording. A term specialist confirms these.
           - name: condition_relations
             type: any
             required: true
-            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.
+            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.
   - tool_id: patch_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:patch_gene_expression_observation
@@ -867,7 +875,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.
+            description: The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording and are looked up again; a standard-term field takes its paper wording plus the selected term, or no term to keep it UNRESOLVED. A `rationale` update must be non-empty; it cannot be cleared.
   - tool_id: discard_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:discard_gene_expression_observation
@@ -1025,7 +1033,7 @@ tools:
           - name: mention
             type: string
             required: true
-            description: The exact wording for this entity as it appears in the paper.
+            description: The exact wording for this gene as it appears in the paper. It is kept as the gene's paper wording, and the gene stays unresolved until the Gene Validation specialist confirms it.
           - name: evidence_record_ids
             type: array
             required: true
@@ -1294,7 +1302,7 @@ tools:
           - name: source_label
             type: string
             required: false
-            description: The source-paper label or mention when it differs from label.
+            description: The paper's own wording for this object. It is kept as the paper wording; the label is never used in its place.
           - name: description
             type: string
             required: false
@@ -1310,7 +1318,7 @@ tools:
           - name: payload
             type: object
             required: false
-            description: Class-specific evidence-backed payload fields.
+            description: Class-specific evidence-backed payload fields. Write each value's paper wording in the class's paper_wording_fields; never write its system_written_payload_fields, which validation, the builder or the verified evidence record fill in.
           - name: attributes
             type: object
             required: false
@@ -1495,7 +1503,7 @@ tools:
           - name: mention
             type: string
             required: true
-            description: The exact wording for this entity as it appears in the paper.
+            description: The exact wording for this allele as it appears in the paper. It is kept as the allele's paper wording, and the allele stays unresolved until the Allele Validation specialist confirms it.
           - name: evidence_record_ids
             type: array
             required: true
@@ -1734,16 +1742,20 @@ tools:
             type: string
             required: true
             description: The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
+          - name: term_mention
+            type: string
+            required: true
+            description: The phenotype term as the paper words it. It is kept as the paper wording and staged even when no ontology term matches; the phenotype term specialist decides the term.
           - name: subject_identifier
             type: any
             required: false
             default: null
-            description: The ID of the gene, allele, or model that shows this phenotype.
+            description: The ID the agent proposes for the gene, allele, or model that shows this phenotype; a specialist confirms it before it counts as the subject's ID.
           - name: subject_label
             type: any
             required: false
             default: null
-            description: The name of the gene, allele, or model that shows this phenotype.
+            description: The gene, allele, or model that shows this phenotype, as the paper names it. Needed whenever any other subject detail is given.
           - name: subject_type
             type: any
             required: false
@@ -1758,12 +1770,12 @@ tools:
             type: any
             required: false
             default: null
-            description: The phenotype term ID the agent proposes, if it found one; a term specialist confirms it.
+            description: The phenotype term ID the agent proposes, if the paper gives one; a term specialist confirms it, and it is never shown as the confirmed ID.
           - name: term_label
             type: any
             required: false
             default: null
-            description: The phenotype term name the agent proposes.
+            description: The phenotype term name the agent proposes; kept apart from the confirmed term name.
           - name: data_provider
             type: any
             required: false
@@ -1778,7 +1790,7 @@ tools:
             type: any
             required: false
             default: null
-            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.
+            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.
           - name: negated
             type: any
             required: false
@@ -1812,7 +1824,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations.
   - tool_id: discard_phenotype_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:discard_phenotype_observation
@@ -1973,11 +1985,11 @@ tools:
           - name: mention
             type: string
             required: true
-            description: The exact wording for this entity as it appears in the paper.
+            description: The disease exactly as the paper words it. It stays as the paper's wording and is kept even when no Disease Ontology term matches; the disease specialist decides the term.
           - name: disease_name
             type: string
             required: true
-            description: The disease name as the agent read it from the paper.
+            description: The Disease Ontology name the agent proposes for this disease; the disease specialist checks it, and it never replaces the paper's wording.
           - name: role
             type: string
             required: true
@@ -1989,7 +2001,7 @@ tools:
           - name: data_provider
             type: string
             required: true
-            description: The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).
+            description: The Alliance group the agent chooses for this finding, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human); the data provider specialist confirms it.
           - name: evidence_record_ids
             type: array
             required: true
@@ -2016,12 +2028,12 @@ tools:
             type: any
             required: false
             default: null
-            description: The ID of the gene, allele, or model the disease is associated with.
+            description: The ID the agent proposes for the gene, allele, or model the disease is associated with; the subject specialist confirms it.
           - name: subject_label
             type: any
             required: false
             default: null
-            description: The name of the gene, allele, or model the disease is associated with.
+            description: The gene, allele, or model the disease is associated with, as the paper names it. Needed whenever a subject type or ID is given; it stays as the paper's wording.
           - name: disease_relation_name
             type: any
             required: false
@@ -2051,7 +2063,7 @@ tools:
             type: any
             required: false
             default: null
-            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.
+            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.
           - name: negated
             type: any
             required: false
@@ -2085,7 +2097,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations.
   - tool_id: discard_disease_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:discard_disease_observation
@@ -2674,7 +2686,7 @@ tools:
       audit:
         display_name: Stage GO Recommendation
       documentation:
-        summary: Stages one typed GOCuratableObject recommendation with verified evidence, resolved or explicitly ambiguous identity, current-annotation context, and curator-visible limitations.
+        summary: Stages one typed GOCuratableObject recommendation with verified evidence, the paper's wording for each GO value next to any identifier a lookup confirmed (unconfirmed values stay unresolved), current-annotation context, and curator-visible limitations.
   - tool_id: patch_go_recommendation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.go_builder_tools:patch_go_recommendation

@@ -520,6 +520,25 @@ def test_alliance_validator_binding_capability_groups_have_explicit_policies():
                 assert binding["blocking"] is True
                 assert binding["allow_opt_out"] is True
                 assert binding["curator_override"] == {"allowed": True}
+            elif pack_id == "agr.alliance.disease":
+                # ALL-1283: the gate and the export agree. Every other disease value the
+                # export needs blocks readiness while unresolved; opting out is allowed and
+                # its consequence is stated.
+                assert binding["blocking"] is True
+                assert binding["allow_opt_out"] is True
+                assert binding["curator_override"] == {"allowed": False}
+                if binding["binding_id"] == "disease_annotation_type_cv_lookup":
+                    # The backend fixes the annotation type, so no curator override exists.
+                    assert binding["when_off"] == (
+                        "If you turn this check off, the annotation type stays unresolved and "
+                        "cannot be exported, and since curators cannot override it, a failing "
+                        "lookup needs a developer."
+                    )
+                else:
+                    assert binding["when_off"] == (
+                        "If you turn this check off, these values stay unresolved and the "
+                        "annotation cannot be exported until they are validated."
+                    )
             else:
                 assert binding["blocking"] is False
                 assert binding["allow_opt_out"] is True
@@ -755,8 +774,11 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "ontology_family": "assay",
         "ontology_term_type": "MMOTerm",
     }
+    # The stage term is looked up on developmental_stage_start; when_expressed_stage_name
+    # is the paper's stage wording and has no term helper (ALL-1283).
+    assert "term_helper" not in expression_fields["when_expressed_stage_name"].metadata
     assert expression_fields[
-        "when_expressed_stage_name"
+        "expression_pattern.when_expressed.developmental_stage_start"
     ].metadata["term_helper"]["lookup"] == {
         "package_tool": "search_domain_field_terms",
         "method": "search_life_stage_terms",
@@ -814,12 +836,13 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert disease_relation_binding.input_fields["vocabulary"].value == (
         "Disease Relation"
     )
+    # The extractor's chosen relation text is the input; the validator writes the term.
     assert disease_relation_binding.input_fields["term_name"].path == (
-        "disease_relation_name"
+        "disease_relation.mention"
     )
     assert (
         disease_relation_binding.expected_result_fields["internal_id"]
-        == "disease_relation_id"
+        == "disease_relation.id"
     )
 
     disease_condition_binding = disease_bindings["disease_condition_relation_lookup"]
@@ -904,20 +927,24 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "taxon": "taxon",
     }
 
+    # ALL-1283: the term validator resolves each annotation term in place, reading the
+    # paper wording as its label and the extractor's CURIE only as a proposal.
     phenotype_term_binding = phenotype_bindings["phenotype_term_ontology_validator"]
     assert phenotype_term_binding.validator_agent is not None
     assert phenotype_term_binding.validator_agent.agent_id == "ontology_term_validation"
     assert phenotype_term_binding.state is ValidationBindingState.ACTIVE
-    assert phenotype_term_binding.object_types == ("PhenotypeTerm",)
-    assert phenotype_term_binding.field_paths == ()
+    assert phenotype_term_binding.object_types == ("PhenotypeAnnotation",)
+    assert phenotype_term_binding.field_paths == ("phenotype_terms",)
+    assert phenotype_term_binding.input_fields["curie"].path == "phenotype_terms.proposed_curie"
     assert phenotype_term_binding.input_fields["curie"].required is False
-    assert phenotype_term_binding.input_fields["label"].required is False
+    assert phenotype_term_binding.input_fields["label"].path == "phenotype_terms.mention"
+    assert phenotype_term_binding.input_fields["label"].required is True
     assert phenotype_term_binding.input_fields["data_provider"].path == (
-        "ontology_lookup_hint.data_provider"
+        "phenotype_terms.ontology_lookup_hint.data_provider"
     )
     assert phenotype_term_binding.input_fields["data_provider"].context_only is True
     assert phenotype_term_binding.input_fields["taxon_id"].path == (
-        "ontology_lookup_hint.taxon_id"
+        "phenotype_terms.ontology_lookup_hint.taxon_id"
     )
     assert phenotype_term_binding.input_fields["taxon_id"].context_only is True
     assert (
@@ -943,7 +970,7 @@ def test_subject_entity_selectors_require_type_and_omit_absent_optional_context(
                 object_type="PhenotypeSubject",
                 pending_ref_id="subject-1",
                 payload={
-                    "subject_identifier": "WB:WBGene00000001",
+                    "proposed_subject_identifier": "WB:WBGene00000001",
                     "subject_type": "gene",
                 },
             )
@@ -976,7 +1003,7 @@ def test_subject_entity_selectors_require_type_and_omit_absent_optional_context(
             CuratableObjectEnvelope(
                 object_type="PhenotypeSubject",
                 pending_ref_id="subject-1",
-                payload={"subject_identifier": "WB:WBGene00000001"},
+                payload={"proposed_subject_identifier": "WB:WBGene00000001"},
             )
         ],
     )
@@ -1015,9 +1042,9 @@ def test_subject_entity_selectors_reject_ambiguous_optional_taxon_context():
                 object_type="PhenotypeSubject",
                 pending_ref_id="subject-1",
                 payload={
-                    "subject_identifier": "WB:WBGene00000001",
+                    "proposed_subject_identifier": "WB:WBGene00000001",
                     "subject_type": "gene",
-                    "taxon": ["NCBITaxon:6239", "NCBITaxon:10090"],
+                    "proposed_taxon": ["NCBITaxon:6239", "NCBITaxon:10090"],
                 },
             )
         ],
@@ -1110,7 +1137,8 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "disease",
                 "accepted_prefixes": ["DOID"],
-                "optional_inputs": ["curie", "label"],
+                # The paper wording (label) is required; the proposals are optional.
+                "optional_inputs": ["curie", "name"],
                 "expected_result_fields": {
                     "curie": "disease_annotation_object.curie",
                     "label": "disease_annotation_object.name",
@@ -1123,7 +1151,7 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "accepted_prefixes": ["ECO"],
                 "optional_inputs": ["curie"],
                 "expected_result_fields": {
-                    "curie": "evidence_code_curies",
+                    "curie": "evidence_code_curies.curie",
                 },
             },
         },
@@ -1134,15 +1162,14 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "accepted_prefixes": ["MP", "WBPhenotype"],
                 "optional_inputs": [
                     "curie",
-                    "label",
                     "data_provider",
                     "taxon_id",
                     "evidence_record_id",
                     "evidence_quotes",
                 ],
                 "expected_result_fields": {
-                    "curie": "curie",
-                    "label": "label",
+                    "curie": "phenotype_terms.curie",
+                    "label": "phenotype_terms.label",
                 },
             }
         },
@@ -1152,7 +1179,6 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "ontology_family": "life_stage",
                 "optional_inputs": ["data_provider"],
                 "expected_result_fields": {
-                    "label": "when_expressed_stage_name",
                     "curie": (
                         "expression_pattern.when_expressed."
                         "developmental_stage_start.curie"
@@ -1282,12 +1308,21 @@ def test_representative_alliance_active_validators_dispatch_unresolved_results()
                 domain_pack_id="agr.alliance.phenotype",
                 extracted_objects=[
                     CuratableObjectEnvelope(
-                        object_type="PhenotypeTerm",
-                        object_role="validated_reference",
-                        pending_ref_id="phenotype-term-1",
+                        object_type="PhenotypeAnnotation",
+                        pending_ref_id="phenotype-annotation-1",
                         payload={
-                            "curie": "WBPhenotype:0000001",
-                            "label": "fixture phenotype",
+                            "phenotype_annotation_object": "fixture phenotype",
+                            "phenotype_terms": [
+                                {
+                                    "proposed_curie": "WBPhenotype:0000001",
+                                    "curie": None,
+                                    "label": None,
+                                    "mention": "fixture phenotype",
+                                    "resolution_state": "unresolved",
+                                    "lookup_outcome": "not_validated",
+                                    "validator_explanation": "Not validated yet.",
+                                }
+                            ],
                         },
                     )
                 ],

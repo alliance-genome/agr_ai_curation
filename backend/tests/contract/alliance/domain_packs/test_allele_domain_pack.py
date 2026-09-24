@@ -90,7 +90,12 @@ def _resolved_allele_association_envelope():
             payload["information_content_entity_id"] = 269867
         elif obj.object_type == "AllelePaperEvidenceAssociation":
             payload["association_id"] = 210252399
+            # What the allele validator's write-back leaves on the association.
             payload["allele_identifier"] = "WB:WBVar00000001"
+            payload["allele_label"] = "daf-2(m41)"
+            payload["allele_taxon"] = "NCBITaxon:6239"
+            payload["resolution_state"] = "resolved"
+            payload["lookup_outcome"] = "matched"
             object_refs = [allele_ref, *object_refs]
             metadata.pop("write_behavior", None)
             metadata.pop("export_behavior", None)
@@ -169,7 +174,6 @@ def test_allele_pack_declares_object_roles_and_validator_bindings(monkeypatch):
         "allele": "Allele",
         "reference": "Reference",
         "evidence_quote": "EvidenceQuote",
-        "mention": "AlleleMention",
     }
 
     validator_bindings = metadata.metadata["validator_bindings"]
@@ -757,7 +761,9 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
         for obj in envelope.extracted_objects
         if obj.object_type == "AllelePaperEvidenceAssociation"
     )
-    assert "allele_identifier" not in association.payload
+    assert association.payload["allele_identifier"] is None
+    assert association.payload["mention"] == "daf-2(m41)"
+    assert association.payload["resolution_state"] == "unresolved"
     assert association.payload["evidence_record_ids"] == [
         "daf-2-m41-evidence-1",
         "daf-2-m41-evidence-2",
@@ -821,8 +827,9 @@ def test_allele_association_review_row_surfaces_allele_label_not_pending_ref_id(
 
     Before the fix the curatable association row fell back to its opaque
     ``allele-paper-evidence-association-N`` pending id (the curator saw "nothing but a
-    title"). The label must instead come from the payload ``allele_label`` (with the
-    associated gene as the fallback), and the Title-only Reference row must not lead.
+    title"). ALL-1283: the label is the validated ``allele_label``; until the allele
+    validator writes it, the row reads as the paper wording, marked as such. The
+    Title-only Reference row must not lead.
     """
 
     fixture = load_evidence_fixture("tool_verified_allele_paper")
@@ -843,15 +850,12 @@ def test_allele_association_review_row_surfaces_allele_label_not_pending_ref_id(
     assert set(rows_by_type) == {"AllelePaperEvidenceAssociation", "Reference"}
 
     association_row = rows_by_type["AllelePaperEvidenceAssociation"]
-    assert association_row.display_label == "daf-2(m41)"
-    assert not association_row.display_label.startswith(
-        "allele-paper-evidence-association"
-    )
-    # The allele label surfaces as a row field so the curator sees it inline.
+    assert association_row.display_label == "daf-2(m41) (paper wording)"
+    # The paper wording never fills the validated allele label.
     summary_field_values = {
         field.field_path: field.value for field in association_row.summary_fields
     }
-    assert summary_field_values.get("allele_label") == "daf-2(m41)"
+    assert summary_field_values.get("allele_label") in (None, "")
 
     # The curatable unit leads; the Title-only Reference does not dominate first.
     assert rows[0].object_type == "AllelePaperEvidenceAssociation"
@@ -898,6 +902,20 @@ def test_tool_verified_allele_fixture_rejects_malformed_required_data():
     missing_taxon["extraction"]["alleles"][0].pop("taxon")
     with pytest.raises(ValueError, match="taxon must be a non-empty string"):
         build_pending_allele_envelope_from_tool_verified_fixture(missing_taxon)
+
+    # ALL-1283: the paper wording comes from the label only; no mention or
+    # normalized symbol stands in for it, and source mentions never default to it.
+    label_from_other_fields = copy.deepcopy(fixture)
+    item = label_from_other_fields["extraction"]["alleles"][0]
+    item["mention"] = item.pop("label")
+    item["normalized_symbol"] = "daf-2(m41)"
+    with pytest.raises(ValueError, match="label must be a non-empty string"):
+        build_pending_allele_envelope_from_tool_verified_fixture(label_from_other_fields)
+
+    missing_source_mentions = copy.deepcopy(fixture)
+    missing_source_mentions["extraction"]["alleles"][0].pop("source_mentions")
+    with pytest.raises(ValueError, match="source_mentions must be a list"):
+        build_pending_allele_envelope_from_tool_verified_fixture(missing_source_mentions)
 
 
 def test_allele_submission_plan_blocks_until_durable_targets_resolve():

@@ -26,5 +26,61 @@
     "reason": "GEX-69/template rule 1. INACCURATE: the <unresolved_validation> block told the model to preserve unresolved context in metadata.ambiguities[]/normalization_notes[]/notes[]. All three are backend-materialized (exclusions/ambiguities/notes hard-coded to [], normalization_notes hard-coded to one backend string) and the model never types metadata.*. Removed when the block was folded into <stop_rules>. The accurate, retained intent: keep the extraction evidence-backed, preserve the paper label in the staged finding's selector/provenance for the validator, do not describe under-development fields as database-validated, and let unresolved required values remain envelope validation findings.",
     "old_source": "packages/alliance/agents/gene_expression/prompt.yaml:<unresolved_validation>",
     "new_home": ""
+  },
+  {
+    "phrase": "keep the paper label in metadata/provenance or a nullable pending selector and record the unresolved field path.",
+    "category": "deleted",
+    "reason": "ALL-1283 (extracted vs validated values). The builder now stores every controlled value as the paper's wording (`mention`) beside its validated identity; an unmatched term is staged UNRESOLVED with selected_value null instead of being parked in metadata/provenance, the data provider and stage wording are stage parameters, and subject/reference are passed as paper wording only. The old phrase described the removed behavior; its replacement phrase is in gene_expression.txt.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "Call `stage_gene_expression_observation` once per retained curatable finding, passing a stable `pending_ref_id`, the verified `evidence_record_ids`, `where_expressed_statement`, subject, reference",
+    "category": "deleted",
+    "reason": "ALL-1283 (extracted vs validated values). The builder now stores every controlled value as the paper's wording (`mention`) beside its validated identity; an unmatched term is staged UNRESOLVED with selected_value null instead of being parked in metadata/provenance, the data provider and stage wording are stage parameters, and subject/reference are passed as paper wording only. The old phrase described the removed behavior; its replacement phrase is in gene_expression.txt.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "relation resolver call, assay resolver call, stage resolver call",
+    "category": "deleted",
+    "reason": "ALL-1283 (extracted vs validated values). The builder now stores every controlled value as the paper's wording (`mention`) beside its validated identity; an unmatched term is staged UNRESOLVED with selected_value null instead of being parked in metadata/provenance, the data provider and stage wording are stage parameters, and subject/reference are passed as paper wording only. The old phrase described the removed behavior; its replacement phrase is in gene_expression.txt.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "set `relation.name` only from the returned resolved controlled-vocabulary value.",
+    "category": "deleted",
+    "reason": "ALL-1283 (extracted vs validated values). The builder now stores every controlled value as the paper's wording (`mention`) beside its validated identity; an unmatched term is staged UNRESOLVED with selected_value null instead of being parked in metadata/provenance, the data provider and stage wording are stage parameters, and subject/reference are passed as paper wording only. The old phrase described the removed behavior; its replacement phrase is in gene_expression.txt.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "Set `data_provider.abbreviation` when the organism/provider context is clear",
+    "category": "deleted",
+    "reason": "ALL-1283 (extracted vs validated values). The builder now stores every controlled value as the paper's wording (`mention`) beside its validated identity; an unmatched term is staged UNRESOLVED with selected_value null instead of being parked in metadata/provenance, the data provider and stage wording are stage parameters, and subject/reference are passed as paper wording only. The old phrase described the removed behavior; its replacement phrase is in gene_expression.txt.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "Put spatial context under `expression_pattern.where_expressed`",
+    "category": "deleted",
+    "reason": "ALL-1283 (extracted vs validated values). The builder now stores every controlled value as the paper's wording (`mention`) beside its validated identity; an unmatched term is staged UNRESOLVED with selected_value null instead of being parked in metadata/provenance, the data provider and stage wording are stage parameters, and subject/reference are passed as paper wording only. The old phrase described the removed behavior; its replacement phrase is in gene_expression.txt.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "Put temporal context under `when_expressed_stage_name`",
+    "category": "deleted",
+    "reason": "ALL-1283 (extracted vs validated values). The builder now stores every controlled value as the paper's wording (`mention`) beside its validated identity; an unmatched term is staged UNRESOLVED with selected_value null instead of being parked in metadata/provenance, the data provider and stage wording are stage parameters, and subject/reference are passed as paper wording only. The old phrase described the removed behavior; its replacement phrase is in gene_expression.txt.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "Put assay context under `expression_experiment.expression_assay_used` only from resolver-backed MMO/assay options or explicit paper-provided identifiers.",
+    "category": "deleted",
+    "reason": "ALL-1283 (extracted vs validated values). The builder now stores every controlled value as the paper's wording (`mention`) beside its validated identity; an unmatched term is staged UNRESOLVED with selected_value null instead of being parked in metadata/provenance, the data provider and stage wording are stage parameters, and subject/reference are passed as paper wording only. The old phrase described the removed behavior; its replacement phrase is in gene_expression.txt.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
   }
 ]

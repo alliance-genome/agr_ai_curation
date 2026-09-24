@@ -25,6 +25,16 @@ from src.lib.observability.runtime import report_runtime_exception
 from src.lib.chat_state import document_state
 from src.lib.context import get_current_session_id, get_current_user_id
 from src.lib.curation_workspace.extraction_results import list_extraction_results
+from src.lib.domain_packs.resolvable_values import (
+    LOOKUP_OUTCOME_KEY,
+    RESOLUTION_STATE_KEY,
+    declared_resolvable_fields,
+    effective_payload,
+    has_resolution_state,
+    stated_value,
+    unresolved_header_text,
+    without_overruled,
+)
 from src.lib.domain_packs.supervisor_manifest import (
     SupervisorManifestPolicy,
     supervisor_manifest_policy_for_object,
@@ -971,9 +981,50 @@ def _descriptor(value: Any, *, read: Mapping[str, Any]) -> dict[str, Any]:
     return descriptor
 
 
-def _value_view(value: Any, *, read: Mapping[str, Any]) -> Any:
-    """Inline a value up to the per-field allowance; otherwise describe it."""
+def _effective_object_payload(
+    obj: CuratableObjectEnvelope,
+    metadata: DomainPackMetadata,
+) -> Mapping[str, Any]:
+    """The object's payload read as exports read it (ALL-1283).
 
+    Each declared resolvable value carries its read-time state, with the
+    legacy rule and validator coverage applied, and overruled identities are
+    left out, so supervisor views and CSV exports agree.
+    """
+
+    return effective_payload(
+        without_overruled(obj.payload),
+        declared_resolvable_fields(metadata, obj.object_type),
+        object_metadata=obj.metadata,
+    )
+
+
+def _with_resolution_states(value: Any) -> Any:
+    """Every resolvable value states a valid resolution, so a mention never reads as the item.
+
+    A value stored before ALL-1283 reads unresolved/legacy_unverified and an
+    invalid stored one unresolved/invalid_schema (``stated_value``); nothing
+    here can verify either.
+    """
+
+    if isinstance(value, list):
+        return [_with_resolution_states(item) for item in value]
+    if not isinstance(value, Mapping):
+        return value
+    # An identity a validator overruled is never presented as the value.
+    annotated = {key: _with_resolution_states(item) for key, item in without_overruled(value).items()}
+    return stated_value(annotated)
+
+
+def _value_view(value: Any, *, read: Mapping[str, Any], payload_value: bool = False) -> Any:
+    """Inline a value up to the per-field allowance; otherwise describe it.
+
+    ``payload_value`` marks a curation object's payload value, whose
+    resolvable values are shown with their state.
+    """
+
+    if payload_value:
+        value = _with_resolution_states(value)
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
@@ -1394,6 +1445,7 @@ def _object_row(
     result: _Result,
     obj: CuratableObjectEnvelope,
     *,
+    metadata: DomainPackMetadata,
     policy: SupervisorManifestPolicy,
     findings: Sequence[ValidationFinding],
     selected: Sequence[str],
@@ -1408,21 +1460,31 @@ def _object_row(
         "object_type": obj.object_type,
         "status": obj.status.value,
     }
-    for field in policy.primary_label_fields:
-        value = _payload_path_value(obj.payload, field.path)
+    payload = _effective_object_payload(obj, metadata)
+    # One declared field each; an unresolved value reads as its paper wording (ALL-1283).
+    for key, field in (
+        ("display_label", policy.primary_label_field),
+        ("secondary_label", policy.secondary_label_field),
+    ):
+        if field is None:
+            continue
+        paper_wording = unresolved_header_text(
+            obj.payload,
+            field.path,
+            object_metadata=obj.metadata,
+            resolvable_fields=declared_resolvable_fields(metadata, obj.object_type),
+        )
+        if paper_wording is not None:
+            row[key] = paper_wording
+            continue
+        value = _payload_path_value(payload, field.path)
         if value not in (None, ""):
-            row["display_label"] = _value_view(value, read=read(field.path))
-            break
-    if policy.secondary_label_field is not None:
-        path = policy.secondary_label_field.path
-        value = _payload_path_value(obj.payload, path)
-        if value not in (None, ""):
-            row["secondary_label"] = _value_view(value, read=read(path))
+            row[key] = _value_view(value, read=read(field.path), payload_value=True)
     row["fields"] = {
-        path: _value_view(value, read=read(path))
+        path: _value_view(value, read=read(path), payload_value=True)
         for path in selected
         if path in policy.field_paths
-        and (value := _payload_path_value(obj.payload, path)) is not None
+        and (value := _payload_path_value(payload, path)) is not None
     }
     row["validation"] = _object_validation_counts(findings)
     row["evidence_count"] = len(obj.evidence_record_ids)
@@ -1473,7 +1535,7 @@ def _objects_response(
         labels = {
             field.path: field.label
             for field in (
-                *policy.primary_label_fields,
+                *((policy.primary_label_field,) if policy.primary_label_field else ()),
                 *((policy.secondary_label_field,) if policy.secondary_label_field else ()),
                 *policy.summary_fields,
             )
@@ -1486,7 +1548,7 @@ def _objects_response(
         obj, findings = item
         policy = policies[obj.object_type]
         return _object_row(
-            result, obj, policy=policy, findings=findings, selected=selected_paths(policy)
+            result, obj, metadata=metadata, policy=policy, findings=findings, selected=selected_paths(policy)
         )
 
     def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
@@ -1547,7 +1609,7 @@ def _object_response(result: _Result, *, object_ref: str | None) -> dict[str, An
     policy = _policies(metadata, [obj.object_type])[obj.object_type]
     findings = _object_findings(obj, _findings_by_object(result.envelope))
     labels = {field.path: field.label for field in (
-        *policy.primary_label_fields,
+        *((policy.primary_label_field,) if policy.primary_label_field else ()),
         *((policy.secondary_label_field,) if policy.secondary_label_field else ()),
         *policy.summary_fields,
     )}
@@ -1555,10 +1617,11 @@ def _object_response(result: _Result, *, object_ref: str | None) -> dict[str, An
     def read(path: str) -> dict[str, Any]:
         return result.call("field", object_ref=object_ref, field_path=path)
 
+    payload = _effective_object_payload(obj, metadata)
     values = {
-        path: _value_view(value, read=read(path))
+        path: _value_view(value, read=read(path), payload_value=True)
         for path in policy.field_paths
-        if (value := _payload_path_value(obj.payload, path)) is not None
+        if (value := _payload_path_value(payload, path)) is not None
     }
 
     def render(shown: dict[str, Any]) -> dict[str, Any]:
@@ -1646,7 +1709,10 @@ def _field_response(
             visible_field_paths=sorted(visible_paths),
         )
     try:
-        value = _payload_path_value(obj.payload, field_path)
+        value = _payload_path_value(
+            _effective_object_payload(obj, _domain_pack_metadata(result.envelope.domain_pack_id)),
+            field_path,
+        )
     except ValueError as exc:
         raise _RequestError(
             "invalid_field_path",
@@ -1730,6 +1796,14 @@ def _details_response(
             expected_sha=expected_sha,
             cursor=cursor,
             message="Saved detail value is ready.",
+        )
+    if has_resolution_state(value):
+        # A resolvable value states whether it is resolved, so its mention is
+        # never read as the item (ALL-1283).
+        state = _with_resolution_states(value)
+        head.update(
+            resolution_state=state[RESOLUTION_STATE_KEY],
+            lookup_outcome=state[LOOKUP_OUTCOME_KEY],
         )
     children = list(value.items()) if isinstance(value, Mapping) else list(enumerate(value))
 

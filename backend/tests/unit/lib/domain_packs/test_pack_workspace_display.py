@@ -11,6 +11,7 @@ import pytest
 
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+from src.lib.domain_packs.resolvable_values import unresolved_value
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
@@ -276,18 +277,20 @@ def test_allele_association_promotes_identifier_hides_routing():
 
 def test_disease_groups_hide_plumbing_and_keep_curatable():
     payload = {
-        "disease_annotation_object": {"curie": "DOID:0050200", "name": "x"},
-        "disease_annotation_subject": {
-            "subject_identifier": "WB:WBGene1",
-            "subject_type": "gene",
-            "subject_label": "pef-1",
-        },
-        "disease_relation_name": "is_implicated_in",
-        "evidence_code_curies": ["ECO:0000033"],
-        "data_provider": {"abbreviation": "WB"},
+        "disease_annotation_object": unresolved_value(
+            "x", identity_keys=("curie", "name"), proposed_curie="DOID:0050200"
+        ),
+        "disease_annotation_subject": unresolved_value(
+            "pef-1",
+            identity_keys=("subject_identifier", "subject_label"),
+            subject_type="gene",
+            proposed_subject_identifier="WB:WBGene1",
+        ),
+        "disease_relation": unresolved_value("is_implicated_in", identity_keys=("name",)),
+        "evidence_code_curies": [unresolved_value("ECO:0000033", identity_keys=("curie",))],
+        "data_provider": unresolved_value("WB", identity_keys=("abbreviation",)),
         "confidence": "high",
-        "annotation_type_vocabulary": "v",
-        "annotation_type_id": "i",
+        "annotation_type": unresolved_value("manually_curated", identity_keys=("name",)),
     }
 
     paths = _draft_paths(
@@ -297,21 +300,25 @@ def test_disease_groups_hide_plumbing_and_keep_curatable():
     )
 
     assert "disease_annotation_object.curie" in paths
+    # The paper wording is its own field beside the validated value.
+    assert "disease_annotation_object.mention" in paths
     assert "disease_annotation_subject.subject_identifier" in paths
+    assert "disease_annotation_subject.mention" in paths
     assert "evidence_code_curies" in paths
     assert "confidence" not in paths
-    assert "annotation_type_vocabulary" not in paths
-    assert "annotation_type_id" not in paths
+    assert "annotation_type.vocabulary" not in paths
+    assert "annotation_type.id" not in paths
 
 
 def test_disease_term_curie_workspace_field_stays_visible_when_empty():
     payload = {
-        "disease_annotation_object": {"name": "x"},
-        "disease_annotation_subject": {
-            "subject_identifier": "WB:WBGene1",
-            "subject_type": "gene",
-        },
-        "disease_relation_name": "is_implicated_in",
+        "disease_annotation_object": unresolved_value("x", identity_keys=("curie", "name")),
+        "disease_annotation_subject": unresolved_value(
+            "pef-1",
+            identity_keys=("subject_identifier", "subject_label"),
+            subject_type="gene",
+        ),
+        "disease_relation": unresolved_value("is_implicated_in", identity_keys=("name",)),
     }
 
     fields = _workspace_fields(
@@ -324,6 +331,7 @@ def test_disease_term_curie_workspace_field_stays_visible_when_empty():
     curie_field = by_path["disease_annotation_object.curie"]
     assert curie_field["value"] is None
     assert curie_field["metadata"]["render_as"] == "curie-chip"
+    assert by_path["disease_annotation_object.mention"]["value"] == "x"
 
 
 def test_phenotype_hides_lookup_hints_and_scaffolding():

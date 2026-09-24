@@ -219,13 +219,20 @@ def _sample_pdf_gene_envelope() -> dict:
         "domain_pack_id": "gene",
         "extracted_objects": [
             {
-                "object_type": "Gene",
+                # The gene pack's object type, as the gene validator resolved
+                # it: its declared label is the model display label
+                # (gene_symbol), not the paper mention.
+                "object_type": "gene_mention_evidence",
                 "pending_ref_id": "gene-crumb",
                 "status": "candidate",
                 "payload": {
-                    "symbol": "crumb",
-                    "name": "crumbs",
+                    "mention": "crumbs",
+                    "gene_symbol": "crumb",
                     "primary_external_id": "FlyBase:FBgn0259211",
+                    "taxon": "NCBITaxon:7227",
+                    "resolution_state": "resolved",
+                    "lookup_outcome": "matched",
+                    "validator_explanation": None,
                 },
                 "evidence_record_ids": ["sample-pdf-ev-1"],
                 "evidence_records": [
@@ -308,6 +315,10 @@ def client(test_db, get_auth_mock, monkeypatch):
         ],
     )
     load_prompts(db=test_db, force_reload=True)
+    # The cached PromptTemplates belong to this test's session; restore the
+    # process-wide cache so later tests never see them detached and expired.
+    for name in ("_active_cache", "_version_cache", "_initialized", "_loaded_at"):
+        monkeypatch.setattr(prompt_cache, name, getattr(prompt_cache, name))
     prompt_cache.initialize(test_db)
     sync_system_agents(test_db, force_reload=True)
     test_db.commit()

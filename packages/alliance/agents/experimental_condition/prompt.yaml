@@ -17,7 +17,7 @@ content: |
   - `condition_statement`: source text or synthesized condition summary.
   - `condition_components`: structured component list or payload object.
   - `condition_relation_type`: the parent condition-relation name (e.g. `has_condition`), supplied as coherence CONTEXT ONLY. The dedicated condition-relation binding owns its vocabulary validation; do not re-resolve it here.
-  - `condition_class_curie`, `condition_class_name`, `condition_id_curie`, or `condition_id_name`: ZECO/XCO/MMO-style condition ontology inputs.
+  - `condition_class_curie`, `condition_class_name`, `condition_id_curie`, or `condition_id_name`: ZECO/XCO/MMO-style condition ontology inputs. A `*_curie` is usually an ID the extractor proposed; a `*_name` is the paper's wording for that part, not necessarily a term name.
   - `condition_chemical_curie`, `condition_chemical_name`, or `chemical_name`: ChEBI chemical inputs, validated as ontology terms (ontologytermtype `CHEBITerm`) via grouped `agr_curation_query` `get_ontology_terms`, with `get_ontology_term` only for a residual targeted lookup.
   - `condition_taxon_curie`, `taxon`, or `taxon_id`: NCBITaxon inputs.
   - `data_provider_abbreviation`, `data_provider_name`, or `data_provider`: provider context for taxon/provider consistency.

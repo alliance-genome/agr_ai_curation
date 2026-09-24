@@ -21,6 +21,8 @@ from src.lib.domain_envelopes.patches import (
     apply_curator_field_patch,
     set_payload_value,
     is_generic_attribute_path,
+    resolvable_identity_field,
+    resolvable_identity_keys,
 )
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
@@ -79,6 +81,7 @@ from src.lib.curation_workspace.session_validation_service import (
     _validator_runtime_context_for_candidate,
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.resolvable_values import is_curator_override
 from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
@@ -803,17 +806,49 @@ def _materialize_candidate_draft_changes_into_envelope(
     materialized_field_paths: list[str] = []
     current_revision = envelope_row.revision
 
-    for field_key in changed_field_keys:
-        draft_field = field_by_key[field_key]
-        field_path = _draft_field_projection_paths(draft_field)[0]
-        materialized_value = _draft_field_materialized_value(draft_field, profile_bound=profile_bound)
+    for step in _draft_patch_steps(
+        changed_field_keys,
+        field_by_key,
+        domain_pack=domain_pack,
+        object_type=domain_object.object_type,
+        profile=profile,
+    ):
+        field_paths = {field_key: _draft_field_projection_paths(field_by_key[field_key])[0] for field_key, _ in step}
+        materialized_values = {
+            field_key: _draft_field_materialized_value(field_by_key[field_key], profile_bound=profile_bound)
+            for field_key, _ in step
+        }
         current_object = _envelope_object_by_stable_id(working_envelope, object_id)
         if current_object is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Draft materialization target disappeared from the envelope",
             )
-        before = _payload_value(current_object.payload, field_path)
+        first_key, identity_key = step[0]
+        if identity_key is None:
+            # An ordinary field edit.
+            before = _current_field_value(current_object.payload, field_paths[first_key])
+            value = copy.deepcopy(materialized_values[first_key])
+            operation = EnvelopeFieldPatchOperation.REPLACE
+        else:
+            # The edited identity fields of one resolvable value: one atomic curator override.
+            # A first override names every identity key; the unchanged ones keep their stored value.
+            value_path, _ = resolvable_identity_field(domain_pack, domain_object.object_type, field_paths[first_key])
+            stored_value = (
+                _current_field_value(current_object.payload, value_path) if value_path else current_object.payload
+            )
+            stored_value = stored_value if isinstance(stored_value, Mapping) else {}
+            named = [key for _, key in step]
+            if not is_curator_override(stored_value):
+                named += [
+                    key for key in resolvable_identity_keys(domain_pack, domain_object.object_type, value_path)
+                    if key not in named
+                ]
+            value = {key: copy.deepcopy(stored_value.get(key)) for key in named} | {
+                key: copy.deepcopy(materialized_values[field_key]) for field_key, key in step
+            }
+            before = {key: copy.deepcopy(stored_value.get(key)) for key in value}
+            operation = EnvelopeFieldPatchOperation.REPLACE_IDENTITY
         patch_result = apply_curator_field_patch(
             working_envelope,
             domain_pack,
@@ -821,14 +856,15 @@ def _materialize_candidate_draft_changes_into_envelope(
                 envelope_id=envelope_id,
                 expected_revision=current_revision,
                 object_id=object_id,
-                field_path=field_path,
-                before=None if before is _MISSING else before,
-                value=copy.deepcopy(materialized_value),
-                operation=EnvelopeFieldPatchOperation.REPLACE,
+                field_path=field_paths[first_key],
+                before=before,
+                value=value,
+                operation=operation,
                 reason="draft_materialization",
             ),
             current_revision=current_revision,
             actor_id=actor["actor_id"],
+            actor_display_name=actor["display_name"],
             profile=profile,
         )
         if patch_result.status is EnvelopeFieldPatchStatus.STALE_REVISION:
@@ -842,31 +878,35 @@ def _materialize_candidate_draft_changes_into_envelope(
                 detail="; ".join(patch_result.errors),
             )
         working_envelope = patch_result.envelope
-        materialized_field_paths.append(field_path)
-        for projected_field_path in _draft_field_materializes_to_paths(draft_field):
-            if projected_field_path == field_path:
-                continue
-            if profile is not None and is_generic_attribute_path(projected_field_path):
-                projected_object = _envelope_object_by_stable_id(working_envelope, object_id)
-                assert projected_object is not None
-                profile.patch_attributes(
-                    projected_object.payload.get("attributes", {}),
-                    [{"field_path": projected_field_path, "value": materialized_value}],
-                    candidate_id=object_id,
-                )
-            else:
-                _ensure_domain_pack_declares_field_path(
-                    domain_pack,
-                    object_type=domain_object.object_type,
+        for field_key, _ in step:
+            draft_field = field_by_key[field_key]
+            field_path = field_paths[field_key]
+            materialized_value = materialized_values[field_key]
+            materialized_field_paths.append(field_path)
+            for projected_field_path in _draft_field_materializes_to_paths(draft_field):
+                if projected_field_path == field_path:
+                    continue
+                if profile is not None and is_generic_attribute_path(projected_field_path):
+                    projected_object = _envelope_object_by_stable_id(working_envelope, object_id)
+                    assert projected_object is not None
+                    profile.patch_attributes(
+                        projected_object.payload.get("attributes", {}),
+                        [{"field_path": projected_field_path, "value": materialized_value}],
+                        candidate_id=object_id,
+                    )
+                else:
+                    _ensure_domain_pack_declares_field_path(
+                        domain_pack,
+                        object_type=domain_object.object_type,
+                        field_path=projected_field_path,
+                    )
+                working_envelope = _replace_envelope_object_payload_value(
+                    working_envelope,
+                    object_id=object_id,
                     field_path=projected_field_path,
+                    value=copy.deepcopy(materialized_value),
                 )
-            working_envelope = _replace_envelope_object_payload_value(
-                working_envelope,
-                object_id=object_id,
-                field_path=projected_field_path,
-                value=copy.deepcopy(materialized_value),
-            )
-            materialized_field_paths.append(projected_field_path)
+                materialized_field_paths.append(projected_field_path)
 
     checkpoint_revision = _checkpoint_patch_result(
         db,
@@ -984,6 +1024,7 @@ def patch_envelope_field(
         EnvelopeFieldPatch(**patch_payload),
         current_revision=previous_revision,
         actor_id=_actor_claims_payload(actor_claims)["actor_id"],
+        actor_display_name=_actor_claims_payload(actor_claims)["display_name"],
         profile=profile,
     )
 
@@ -1640,6 +1681,44 @@ def _draft_field_matches_any_path(
     if isinstance(field_path, str):
         return _draft_field_matches_path(draft_field, field_path)
     return any(_draft_field_matches_path(draft_field, path) for path in field_path)
+
+
+def _draft_patch_steps(
+    changed_field_keys: Sequence[str],
+    field_by_key: Mapping[str, CurationDraftFieldSchema],
+    *,
+    domain_pack: Any,
+    object_type: str,
+    profile: Any,
+) -> list[list[tuple[str, str | None]]]:
+    """Changed draft fields in order, as patch steps of (field key, identity key or None).
+
+    The changed identity fields of one resolvable value form one step, so a
+    curator override applies them together; every other field is its own step.
+    """
+
+    steps: list[list[tuple[str, str | None]]] = []
+    by_value: dict[str, list[tuple[str, str | None]]] = {}
+    for field_key in changed_field_keys:
+        field_path = _draft_field_projection_paths(field_by_key[field_key])[0]
+        identity = (
+            None if profile is not None and is_generic_attribute_path(field_path)
+            else resolvable_identity_field(domain_pack, object_type, field_path)
+        )
+        if identity is None:
+            steps.append([(field_key, None)])
+            continue
+        value_path, identity_key = identity
+        if value_path not in by_value:
+            by_value[value_path] = []
+            steps.append(by_value[value_path])
+        by_value[value_path].append((field_key, identity_key))
+    return steps
+
+
+def _current_field_value(payload: Mapping[str, Any], field_path: str) -> Any:
+    before = _payload_value(payload, field_path)
+    return None if before is _MISSING else before
 
 
 def _draft_field_projection_paths(

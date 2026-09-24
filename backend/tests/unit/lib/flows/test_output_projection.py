@@ -387,6 +387,11 @@ def _completed_domain_source_step(
     return result
 
 
+# A validated gene-expression anatomy value (ALL-1283 contract).
+PVD = {"curie": "WBbt:0006831", "name": "PVD", "mention": "PVD", "resolution_state": "resolved",
+       "lookup_outcome": "matched", "validator_explanation": None}
+
+
 @pytest.mark.parametrize("selection_mode", ["guided", "selected_fields"])
 def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monkeypatch, selection_mode):
     import csv
@@ -408,10 +413,14 @@ def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monk
                 "object_type": "GeneExpressionAnnotation",
                 "object_id": object_id,
                 "payload": {
-                    "expression_annotation_subject": {"gene_symbol": symbol},
+                    "expression_annotation_subject": {
+                        "gene_symbol": symbol, "primary_external_id": None, "mention": symbol,
+                        "resolution_state": "resolved", "lookup_outcome": "matched",
+                        "validator_explanation": None,
+                    },
                     "expression_pattern": {
                         "where_expressed": {
-                            "anatomical_structure": {"curie": "WBbt:0006831", "name": "PVD"},
+                            "anatomical_structure": PVD,
                         },
                     },
                 },
@@ -432,7 +441,7 @@ def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monk
     assert gene_ref in {field.ref for field in artifact.declared_fields}
     assert [row[gene_ref] for row in artifact.rows_by_source["object"]] == ["dma-1", "dma-1", "tiam-1"]
     anatomy_ref = "object.pack.GeneExpressionAnnotation.expression_pattern.where_expressed.anatomical_structure"
-    assert artifact.rows_by_source["object"][0][anatomy_ref] == {"curie": "WBbt:0006831", "name": "PVD"}
+    assert artifact.rows_by_source["object"][0][anatomy_ref] == PVD
     plan = FlowOutputProjectionPlan.model_validate({
         "format": "csv", "row_source": "object", "row_strategy": "wide_union",
         "selection_mode": selection_mode,
@@ -2431,7 +2440,8 @@ def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():
     )
 
     row = bundle.rows_for_source("object")[0]
-    assert row["object.label"] == "signaling"
+    # Every declared label field reads; one never stands in for another (ALL-1283).
+    assert row["object.label"] == "signaling; daf-16"
     assert row["object.payload.gene_id"] == "WB:WBGene00000898"
     assert row["object.payload.gene_symbol"] == "daf-16"
 
@@ -2580,3 +2590,42 @@ def test_canonical_validation_review_retains_candidates_and_field_identity():
         columns=[FlowOutputColumnSpec(key='candidates', field_ref='validation.candidate_matches')],
     ))
     assert any(r['candidates'] == candidates for r in exported.rows)
+
+
+def test_payload_refs_on_a_resolvable_root_read_the_legacy_rule():
+    """Gate: an object.payload column on an unverified legacy gene shows no unverified id."""
+
+    def gene_step(payload, metadata):
+        step = _completed_domain_step()
+        candidate = step["candidate"]
+        candidate.payload_json = {
+            "domain_pack_id": "gene",
+            "envelope_id": "env-gene-legacy",
+            "extracted_objects": [{
+                "object_type": "gene_mention_evidence", "object_id": "gene-legacy-1", "status": "validated",
+                "payload": payload, "metadata": metadata,
+            }],
+        }
+        return step
+
+    legacy = {"mention": "Appl", "primary_external_id": "FB:FBgn0000108", "gene_symbol": "Appl",
+              "taxon": "NCBITaxon:7227"}
+    plan = FlowOutputProjectionPlan(
+        format="csv", row_source="object",
+        columns=[
+            FlowOutputColumnSpec(key="id", header="ID", field_ref="object.payload.primary_external_id"),
+            FlowOutputColumnSpec(key="wording", header="Wording", field_ref="object.payload.mention"),
+        ],
+    )
+
+    def rows(metadata):
+        bundle = build_flow_output_artifact_bundle(
+            completed_steps=[gene_step(dict(legacy), metadata)], flow_name="Legacy Flow", output_format="csv",
+        )
+        return apply_projection_plan(bundle, plan).rows
+
+    # The paper wording reads as the legacy rule reads it, as an object.pack column would.
+    assert rows({}) == [{"id": "", "wording": "Appl (legacy, unverified)"}]
+    covered = {"validator_resolved_value_materialization": [
+        {"materialized_field_paths": ["primary_external_id", "gene_symbol", "taxon"]}]}
+    assert rows(covered) == [{"id": "FB:FBgn0000108", "wording": "Appl"}]

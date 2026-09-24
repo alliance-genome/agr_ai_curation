@@ -11,9 +11,13 @@ MECHANISM, not the curation target. This materializer emits the SAME object grap
 envelope converter (``__init__.build_pending_phenotype_envelope_from_tool_verified_fixture``)
 produced — one ``PhenotypeAnnotation`` curatable_unit per candidate, plus pending
 ``PhenotypeSubject`` / ``PhenotypeTerm`` / ``Reference`` / ``EvidenceQuote`` objects — with the
-SAME blocked export/write metadata, the SAME pending ontology/subject resolution states, and the
-SAME validator-binding ids. No new ontology/provider pairs are activated; the active
-``phenotype_term_ontology_validator`` resolves the staged label/CURIE candidate inline.
+SAME blocked export/write metadata. No new ontology/provider pairs are activated.
+
+EXTRACTED VS VALIDATED (ALL-1283): every term, subject and data provider is staged as one
+resolvable value (``_resolvable_payloads.staged_value``): the paper wording in ``mention``,
+anything the extractor proposed under ``proposed_<key>``, and the shared unresolved /
+``not_validated`` state. Only a validator fills the id/label keys: the active
+``phenotype_term_ontology_validator`` resolves each ``phenotype_terms[i]`` in place.
 
 NO ``materializes_to_field_paths`` mirror: the phenotype subject IS the canonical subject; there is
 no second field that must mirror it (confirmed against the existing ``domain_pack.yaml``).
@@ -39,6 +43,11 @@ from src.schemas.domain_envelope import (
 from src.schemas.models.base import EvidenceRecord
 from src.schemas.evidence_workspace import normalize_workspace_records
 
+from .._resolvable_payloads import (
+    clean_text,
+    condition_relations_payload,
+    staged_value,
+)
 from ..schema_refs import (
     ALLIANCE_LINKML_COMMIT,
     ALLIANCE_LINKML_PROVIDER_KEY,
@@ -67,16 +76,26 @@ from .constants import (
     PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID,
     PHENOTYPE_TERM_LINKML_SCHEMA_ID,
     PHENOTYPE_TERM_OBJECT_TYPE,
-    PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
 )
 
-# Pending-resolution sentinels (preserve the existing-pack posture verbatim).
+# Object-level workflow states (object metadata only). The values themselves carry the
+# shared extracted-vs-validated state (``resolution_state`` / ``lookup_outcome``).
 _SUBJECT_PENDING_STATE = "pending_entity_resolution"
 _SUBJECT_BLOCKED_STATE = "blocked_missing_subject"
+_SUBJECT_BLOCKED_NOTE = (
+    "Phenotype extraction did not stage the subject the paper names; "
+    "phenotype_annotation_subject is absent."
+)
 _TERM_PENDING_STATE = "pending_ontology_resolution"
 _TERM_EXPORT_BLOCKED = "blocked_pending_ontology_resolution"
 _TERM_WRITE_BLOCKED_REASON = "phenotype term CURIE unresolved"
 _REFERENCE_PENDING_STATE = "pending_reference_resolution"
+
+# A phenotype term's validated identity; everything the extractor proposed for it
+# stays under proposed_curie / proposed_label.
+PHENOTYPE_TERM_IDENTITY_KEYS = ("curie", "label")
+PHENOTYPE_SUBJECT_IDENTITY_KEYS = ("subject_identifier", "subject_label", "taxon")
+DATA_PROVIDER_IDENTITY_KEYS = ("abbreviation",)
 
 
 def normalize_phenotype_extraction_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -331,34 +350,31 @@ def _candidate_pending_ref_id(candidate: Any, staged_fields: Mapping[str, Any], 
     return f"phenotype-annotation-{index + 1}"
 
 
-def _subject_payload(staged_fields: Mapping[str, Any]) -> dict[str, Any]:
-    """Build the pending PhenotypeSubject payload (preserve existing-pack resolution logic)."""
+def _subject_payload(staged_fields: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The staged subject value, or None when the extractor staged no subject.
 
-    subject_identifier = _clean_text(staged_fields.get("subject_identifier"))
-    subject_label = _clean_text(staged_fields.get("subject_label"))
-    subject_type = _clean_text(staged_fields.get("subject_type"))
-    taxon = _clean_text(staged_fields.get("subject_taxon")) or _clean_text(staged_fields.get("taxon"))
+    ``subject_label`` is the subject as the paper names it (the value's paper
+    wording); a staged ``subject_identifier`` or ``subject_taxon`` is the extractor's
+    proposal and stays under ``proposed_subject_identifier`` / ``proposed_taxon`` until a
+    validator resolves it.
+    """
 
-    if subject_identifier and subject_type:
-        resolution_state = _SUBJECT_PENDING_STATE
-    else:
-        resolution_state = _SUBJECT_BLOCKED_STATE
-
-    payload: dict[str, Any] = {"resolution_state": resolution_state}
-    if subject_identifier:
-        payload["subject_identifier"] = subject_identifier
-    if subject_label:
-        payload["subject_label"] = subject_label
-    if subject_type:
-        payload["subject_type"] = subject_type
-    if taxon:
-        payload["taxon"] = taxon
-    if resolution_state == _SUBJECT_BLOCKED_STATE:
-        payload["resolution_note"] = (
-            "Tool-verified phenotype extraction did not provide a durable "
-            "phenotype_annotation_subject identifier and subtype."
-        )
-    return payload
+    mention = clean_text(staged_fields.get("subject_label"))
+    if mention is None:
+        return None
+    extra: dict[str, Any] = {}
+    subject_type = clean_text(staged_fields.get("subject_type"))
+    if subject_type is not None:
+        extra["subject_type"] = subject_type
+    return staged_value(
+        mention,
+        identity_keys=PHENOTYPE_SUBJECT_IDENTITY_KEYS,
+        proposals={
+            "subject_identifier": staged_fields.get("subject_identifier"),
+            "taxon": staged_fields.get("subject_taxon"),
+        },
+        **extra,
+    )
 
 
 def _ontology_lookup_hint(
@@ -366,12 +382,8 @@ def _ontology_lookup_hint(
     primary_evidence_record_id: str | None,
 ) -> dict[str, str]:
     hint: dict[str, str] = {}
-    data_provider = _clean_text(staged_fields.get("data_provider"))
-    taxon_id = (
-        _clean_text(staged_fields.get("term_taxon_id"))
-        or _clean_text(staged_fields.get("subject_taxon"))
-        or _clean_text(staged_fields.get("taxon"))
-    )
+    data_provider = clean_text(staged_fields.get("data_provider"))
+    taxon_id = clean_text(staged_fields.get("term_taxon_id"))
     if data_provider:
         hint["data_provider"] = data_provider
     if taxon_id:
@@ -383,48 +395,35 @@ def _ontology_lookup_hint(
 
 def _phenotype_term_payload(
     *,
-    statement: str,
+    term_mention: str,
     term_curie: str | None,
     term_label: str | None,
     source_mentions: Sequence[str],
     ontology_lookup_hint: Mapping[str, str],
 ) -> dict[str, Any]:
-    """Pending PhenotypeTerm payload aligned to the active ontology validator binding inputs."""
+    """The staged phenotype term: paper wording, extractor proposals, no validated identity."""
 
-    return {
-        "resolution_state": _TERM_PENDING_STATE,
-        "curie": term_curie,
-        "label": term_label or statement,
-        "source_mentions": list(source_mentions),
-        "ontology_lookup_hint": dict(ontology_lookup_hint),
-        "export_state": _TERM_EXPORT_BLOCKED,
-        "write_blocked_reason": _TERM_WRITE_BLOCKED_REASON,
-    }
+    return staged_value(
+        term_mention,
+        identity_keys=PHENOTYPE_TERM_IDENTITY_KEYS,
+        proposals={"curie": term_curie, "label": term_label},
+        source_mentions=list(source_mentions),
+        ontology_lookup_hint=dict(ontology_lookup_hint),
+    )
 
 
 def _normalized_phenotype_term_payload(
     raw_term: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    curie = _clean_text(raw_term.get("curie"))
-    label = _clean_text(raw_term.get("label"))
-    if curie is None and label is None:
+    """A nested phenotype term as a support-object payload, or None without paper wording.
+
+    Only a term that carries its paper wording (``mention``) is a phenotype term
+    value; its stored state is kept exactly as written.
+    """
+
+    if clean_text(raw_term.get("mention")) is None:
         return None
-
-    term_payload = dict(raw_term)
-    term_payload["curie"] = curie
-    term_payload["label"] = label
-    source_mentions = _string_list(term_payload.get("source_mentions"))
-    if not source_mentions and label is not None:
-        source_mentions = [label]
-    term_payload["source_mentions"] = source_mentions
-
-    resolution_state = _clean_text(term_payload.get("resolution_state"))
-    term_payload["resolution_state"] = resolution_state or (
-        "resolved" if curie is not None else _TERM_PENDING_STATE
-    )
-    term_payload.setdefault("export_state", _TERM_EXPORT_BLOCKED)
-    term_payload.setdefault("write_blocked_reason", _TERM_WRITE_BLOCKED_REASON)
-    return term_payload
+    return dict(raw_term)
 
 
 def _phenotype_term_support_object(
@@ -437,15 +436,6 @@ def _phenotype_term_support_object(
         term_payload,
         fallback_evidence_ids=fallback_evidence_ids,
     )
-    metadata = {
-        "object_role": "validated_reference",
-        "validation_state": term_payload.get("resolution_state") or _TERM_PENDING_STATE,
-        "validator_binding_id": PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
-    }
-    for key in ("export_state", "write_blocked_reason"):
-        value = term_payload.get(key)
-        if value is not None:
-            metadata[key] = value
     return {
         "object_type": PHENOTYPE_TERM_OBJECT_TYPE,
         "object_role": "validated_reference",
@@ -454,12 +444,21 @@ def _phenotype_term_support_object(
         "status": "pending",
         "definition_state": "in_development",
         "definition_notes": [
-            "Materialized from nested PhenotypeAnnotation.phenotype_terms[] "
-            "for active ontology validation."
+            "Materialized from nested PhenotypeAnnotation.phenotype_terms[] as a "
+            "structural copy; the ontology validator resolves the annotation's own terms."
         ],
         "payload": dict(term_payload),
         "evidence_record_ids": evidence_record_ids,
-        "metadata": metadata,
+        "metadata": _term_support_metadata(),
+    }
+
+
+def _term_support_metadata() -> dict[str, Any]:
+    return {
+        OBJECT_ROLE_METADATA_KEY: "validated_reference",
+        "validation_state": _TERM_PENDING_STATE,
+        "export_state": _TERM_EXPORT_BLOCKED,
+        "write_blocked_reason": _TERM_WRITE_BLOCKED_REASON,
     }
 
 
@@ -498,8 +497,8 @@ def _phenotype_term_signature(
     hint = term_payload.get("ontology_lookup_hint")
     hint = hint if isinstance(hint, Mapping) else {}
     return (
-        _clean_text(term_payload.get("curie")),
-        _clean_text(term_payload.get("label")),
+        _clean_text(term_payload.get("mention")),
+        _clean_text(term_payload.get("proposed_curie")),
         _clean_text(hint.get("data_provider")),
         _clean_text(hint.get("taxon_id")),
         tuple(
@@ -564,61 +563,6 @@ def _evidence_quote_payload(
     return payload
 
 
-def _condition_relations_payload(raw_relations: Any) -> list[dict[str, Any]]:
-    """Materialize staged condition_relations into the concrete nested annotation shape.
-
-    Maps each staged ``{condition_relation_type, conditions: [{condition_*_curie, ...}]}`` into
-    ``{condition_relation_type: {name}, conditions: [{condition_class: {curie}, ...}]}`` — the exact
-    target paths the active bindings read (``condition_relations.condition_relation_type.name`` and
-    ``condition_relations.conditions.condition_<x>.curie``). Empty leaves are dropped; a relation
-    with no resolvable conditions is dropped entirely. Only invoked when conditions were staged, so
-    absent conditions leave the payload untouched (mirrors the optional-field pattern).
-    """
-
-    if not isinstance(raw_relations, Sequence) or isinstance(raw_relations, (str, bytes)):
-        return []
-    # The condition CURIE leaf is nested one object deep (e.g. condition_class.curie).
-    _curie_leaf = {
-        "condition_class_curie": "condition_class",
-        "condition_id_curie": "condition_id",
-        "condition_chemical_curie": "condition_chemical",
-        "condition_taxon_curie": "condition_taxon",
-    }
-    relations: list[dict[str, Any]] = []
-    for raw_relation in raw_relations:
-        if not isinstance(raw_relation, Mapping):
-            continue
-        relation_type = _clean_text(raw_relation.get("condition_relation_type"))
-        if not relation_type:
-            continue
-        conditions: list[dict[str, Any]] = []
-        raw_conditions = raw_relation.get("conditions")
-        if not isinstance(raw_conditions, Sequence) or isinstance(raw_conditions, (str, bytes)):
-            raw_conditions = []
-        for raw_condition in raw_conditions:
-            if not isinstance(raw_condition, Mapping):
-                continue
-            condition: dict[str, Any] = {}
-            for staged_key, leaf_key in _curie_leaf.items():
-                curie = _clean_text(raw_condition.get(staged_key))
-                if curie:
-                    condition[leaf_key] = {"curie": curie}
-            for text_key in ("condition_free_text", "condition_summary"):
-                value = _clean_text(raw_condition.get(text_key))
-                if value:
-                    condition[text_key] = value
-            if condition:
-                conditions.append(condition)
-        if conditions:
-            relations.append(
-                {
-                    "condition_relation_type": {"name": relation_type},
-                    "conditions": conditions,
-                }
-            )
-    return relations
-
-
 class PhenotypeBuilderExtractionOutput(RuntimePhenotypeResultEnvelope):
     """Validated builder output for one phenotype extraction run.
 
@@ -667,11 +611,17 @@ def validate_phenotype_builder_objects(
         payload = obj.payload if isinstance(obj.payload, Mapping) else {}
         if not _clean_text(payload.get("phenotype_annotation_object")):
             errors.append(f"{location}.payload.phenotype_annotation_object is required")
-        if not isinstance(payload.get("phenotype_annotation_subject"), Mapping):
-            errors.append(f"{location}.payload.phenotype_annotation_subject is required")
+        subject = payload.get("phenotype_annotation_subject")
+        if subject is not None and not isinstance(subject, Mapping):
+            errors.append(f"{location}.payload.phenotype_annotation_subject must be an object")
         terms = payload.get("phenotype_terms")
-        if not isinstance(terms, list) or not terms or not isinstance(terms[0], Mapping):
-            errors.append(f"{location}.payload.phenotype_terms[0] is required")
+        if (
+            not isinstance(terms, list)
+            or not terms
+            or not isinstance(terms[0], Mapping)
+            or not _clean_text(terms[0].get("mention"))
+        ):
+            errors.append(f"{location}.payload.phenotype_terms[0].mention is required")
 
         ref_types = {ref.object_type for ref in obj.object_refs}
         missing_ref_types = {
@@ -847,10 +797,8 @@ def materialize_phenotype_builder_state(
             )
             continue
 
-        evidence_ids = _unique_strings(
-            getattr(candidate, "evidence_record_ids", None)
-            or staged_fields.get("evidence_record_ids")
-        )
+        # The builder workspace owns a candidate's evidence ids; no staged field stands in.
+        evidence_ids = _unique_strings(getattr(candidate, "evidence_record_ids", None))
         if not evidence_ids:
             issues.append(
                 _materialization_issue(
@@ -897,32 +845,51 @@ def materialize_phenotype_builder_state(
         if candidate_evidence_blocked or not resolved_evidence:
             continue
 
-        source_mentions = _unique_strings(staged_fields.get("source_mentions")) or [statement]
+        source_mentions = _unique_strings(staged_fields.get("source_mentions"))
+        if not source_mentions:
+            issues.append(
+                _materialization_issue(
+                    field_path="source_mentions",
+                    reason="missing_source_mentions",
+                    message="Finalized phenotype candidates require source_mentions from the paper.",
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
+        term_mention = _clean_text(staged_fields.get("term_mention"))
+        if term_mention is None:
+            issues.append(
+                _materialization_issue(
+                    field_path="term_mention",
+                    reason="missing_term_mention",
+                    message=(
+                        "Finalized phenotype candidates require term_mention, the phenotype "
+                        "term as the paper words it."
+                    ),
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
         negated = bool(staged_fields.get("negated"))
-        condition_relations = _condition_relations_payload(staged_fields.get("condition_relations"))
-        term_curie = _clean_text(staged_fields.get("term_curie"))
-        term_label = _clean_text(staged_fields.get("term_label"))
+        condition_relations = condition_relations_payload(staged_fields.get("condition_relations"))
         primary_evidence_id = _clean_text(resolved_evidence[0].get("evidence_record_id"))
         ontology_lookup_hint = _ontology_lookup_hint(staged_fields, primary_evidence_id)
         subject_payload = _subject_payload(staged_fields)
-        subject_resolution_state = subject_payload["resolution_state"]
+        subject_resolution_state = (
+            _SUBJECT_BLOCKED_STATE if subject_payload is None else _SUBJECT_PENDING_STATE
+        )
 
         subject_ref_id = f"phenotype-subject-{annotation_index + 1}"
         term_ref_id = f"phenotype-term-{annotation_index + 1}"
         reference_ref_id = f"phenotype-reference-{annotation_index + 1}"
 
         term_payload = _phenotype_term_payload(
-            statement=statement,
-            term_curie=term_curie,
-            term_label=term_label,
+            term_mention=term_mention,
+            term_curie=_clean_text(staged_fields.get("term_curie")),
+            term_label=_clean_text(staged_fields.get("term_label")),
             source_mentions=source_mentions,
             ontology_lookup_hint=ontology_lookup_hint,
         )
-        reference_payload: dict[str, Any] = {}
-        for field_name in ("reference_id", "title", "filename", "pmid", "doi", "curie"):
-            value = _clean_text(staged_fields.get(field_name))
-            if value is not None:
-                reference_payload[field_name] = value
 
         # Pending PhenotypeSubject (validated_reference; routes to gene/allele/AGM validation).
         curatable_objects.append(
@@ -937,7 +904,11 @@ def materialize_phenotype_builder_state(
                     "Pending subject reference; concrete Gene, Allele, or AGM subtype must be "
                     "resolved before export."
                 ],
-                payload=copy.deepcopy(subject_payload),
+                payload=(
+                    copy.deepcopy(subject_payload)
+                    if subject_payload is not None
+                    else {"resolution_note": _SUBJECT_BLOCKED_NOTE}
+                ),
                 metadata={
                     OBJECT_ROLE_METADATA_KEY: "validated_reference",
                     "validation_state": subject_resolution_state,
@@ -945,7 +916,8 @@ def materialize_phenotype_builder_state(
                 },
             )
         )
-        # Pending PhenotypeTerm (validated_reference; the active ontology validator resolves it).
+        # PhenotypeTerm support object: a structural copy of the staged term. The active
+        # ontology validator resolves the annotation's own phenotype_terms[i] in place.
         curatable_objects.append(
             CuratableObjectEnvelope(
                 object_type=PHENOTYPE_TERM_OBJECT_TYPE,
@@ -956,13 +928,7 @@ def materialize_phenotype_builder_state(
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 payload=copy.deepcopy(term_payload),
                 evidence_record_ids=[primary_evidence_id] if primary_evidence_id else [],
-                metadata={
-                    OBJECT_ROLE_METADATA_KEY: "validated_reference",
-                    "validation_state": _TERM_PENDING_STATE,
-                    "validator_binding_id": PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
-                    "export_state": _TERM_EXPORT_BLOCKED,
-                    "write_blocked_reason": _TERM_WRITE_BLOCKED_REASON,
-                },
+                metadata=_term_support_metadata(),
             )
         )
         # Pending Reference (validated_reference; reference validator is under development).
@@ -973,7 +939,7 @@ def materialize_phenotype_builder_state(
                 pending_ref_id=reference_ref_id,
                 schema_ref=_reference_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
-                payload=copy.deepcopy(reference_payload),
+                payload={},
                 metadata={
                     OBJECT_ROLE_METADATA_KEY: "validated_reference",
                     "validation_state": _REFERENCE_PENDING_STATE,
@@ -1018,23 +984,25 @@ def materialize_phenotype_builder_state(
                 )
             )
 
+        # single_reference stays absent: the extractor stages no reference wording, and the
+        # source paper is resolved downstream from the workspace document identity.
         annotation_payload: dict[str, Any] = {
             "annotation_kind": PHENOTYPE_ANNOTATION_KIND,
             "phenotype_annotation_object": statement,
-            "phenotype_annotation_subject": copy.deepcopy(subject_payload),
             "phenotype_terms": [copy.deepcopy(term_payload)],
-            "single_reference": copy.deepcopy(reference_payload),
             "evidence_quote": evidence_payload_refs[0],
             "evidence_record_ids": annotation_evidence_ids,
             "source_mentions": list(source_mentions),
             "rationale": rationale,
             "negated": negated,
         }
-        data_provider_abbreviation = ontology_lookup_hint.get("data_provider")
-        if data_provider_abbreviation:
-            annotation_payload["data_provider"] = {
-                "abbreviation": data_provider_abbreviation,
-            }
+        if subject_payload is not None:
+            annotation_payload["phenotype_annotation_subject"] = copy.deepcopy(subject_payload)
+        data_provider = _clean_text(staged_fields.get("data_provider"))
+        if data_provider is not None:
+            annotation_payload["data_provider"] = staged_value(
+                data_provider, identity_keys=DATA_PROVIDER_IDENTITY_KEYS
+            )
         # EXPERIMENTAL CONDITIONS: nested condition_relations[].conditions[]. Only carried when the
         # extractor staged them. Each condition references the annotation's evidence
         # (evidence_record_ids on the annotation) per the evidence contract — no condition-level

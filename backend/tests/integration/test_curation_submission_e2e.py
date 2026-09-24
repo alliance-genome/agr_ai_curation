@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -215,12 +216,49 @@ def _tmem67_gene_expression_envelope(*, envelope_id: str):
         "tmem67_gene_expression_output.yaml",
     )
     context = raw_fixture["envelope_context"]
-    return gene_expression_extraction_output_to_pending_envelope(
+    envelope = gene_expression_extraction_output_to_pending_envelope(
         raw_fixture["output"],
         envelope_id=envelope_id,
         document_id=context["document_id"],
         produced_by=context["produced_by"],
         produced_at=context["produced_at"],
+    )
+    return _with_tmem67_validator_results(envelope)
+
+
+def _with_tmem67_validator_results(envelope):
+    """The extracted values as their validators resolve them (ALL-1283).
+
+    The extractor stages the subject gene, the reference, the stage and the
+    UBERON slim term as paper wording; export needs each one resolved, as the
+    gene, reference and ontology validators do in a real run.
+    """
+
+    from src.lib.domain_packs.resolvable_values import mark_resolved
+
+    annotation = envelope.extracted_objects[0]
+    payload = copy.deepcopy(annotation.payload)
+    experiment = payload["expression_experiment"]
+    resolved = [
+        (payload["expression_annotation_subject"], {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"}),
+        (experiment["entity_assayed"], {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"}),
+        (payload["single_reference"], {"reference_id": 203506}),
+        (experiment["single_reference"], {"reference_id": 203506}),
+        (
+            payload["expression_pattern"]["where_expressed"]["anatomical_structure_uberon_terms"][0],
+            {"curie": "UBERON:0001008", "name": "renal system"},
+        ),
+        (
+            payload["expression_pattern"]["when_expressed"]["developmental_stage_start"],
+            {"curie": "FIXTURE_STAGE:00026", "name": "TS26"},
+        ),
+    ]
+    for value, identity in resolved:
+        mark_resolved(value, identity, explanation="Fixture validator result.")
+    # The stage validator also fills the stage name from the resolved term.
+    payload["when_expressed_stage_name"] = "TS26"
+    return envelope.model_copy(
+        update={"extracted_objects": [annotation.model_copy(update={"payload": payload})]}
     )
 
 
@@ -722,8 +760,15 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
                         "object_type": "gene_mention_evidence",
                         "object_role": "validated_reference",
                         "pending_ref_id": "gene-fixture-review-object-1",
+                        # Seeded as the gene validator resolved it: review rows
+                        # read an unvalidated gene as legacy, unverified.
                         "payload": {
                             "gene_symbol": "alpha-1",
+                            "primary_external_id": "FB:FBgn0000008",
+                            "taxon": "NCBITaxon:7227",
+                            "resolution_state": "resolved",
+                            "lookup_outcome": "matched",
+                            "validator_explanation": None,
                             "entity_type": "gene",
                             "normalized_id": "FB:FBgn0000008",
                             "source_mentions": ["Alpha mention"],
@@ -890,12 +935,16 @@ def test_submission_workflow_e2e_with_retry_and_history(
     )
     candidate_id = candidate["candidate_id"]
     draft = candidate["draft"]
-    string_field = next(
-        field
-        for field in draft["fields"]
-        if isinstance(field.get("value"), str) and not field.get("read_only", False)
-    )
-    edited_value = f"{string_field['value']} (reviewed)"
+    # A gene's editable fields are its validated identity, so a curator edit
+    # is a validation override naming every identity key: the identifier,
+    # the symbol and the validated taxon the gene export requires.
+    fields_by_key = {field["field_key"]: field for field in draft["fields"]}
+    edited_values = {
+        "primary_external_id": "FB:FBgn0000490",
+        "gene_symbol": "dpp",
+        "taxon": "NCBITaxon:7227",
+    }
+    assert all(not fields_by_key[key]["read_only"] for key in edited_values)
 
     draft_response = client.patch(
         (
@@ -908,20 +957,16 @@ def test_submission_workflow_e2e_with_retry_and_history(
             "draft_id": draft["draft_id"],
             "expected_version": draft["version"],
             "field_changes": [
-                {
-                    "field_key": string_field["field_key"],
-                    "value": edited_value,
-                }
+                {"field_key": key, "value": value}
+                for key, value in edited_values.items()
             ],
             "autosave": True,
         },
     )
     assert draft_response.status_code == 200, draft_response.text
     draft_payload = draft_response.json()
-    assert any(
-        field["field_key"] == string_field["field_key"] and field["value"] == edited_value
-        for field in draft_payload["draft"]["fields"]
-    )
+    saved_values = {field["field_key"]: field["value"] for field in draft_payload["draft"]["fields"]}
+    assert {key: saved_values[key] for key in edited_values} == edited_values
     assert draft_payload["action_log_entry"]["action_type"] == "candidate_updated"
 
     decision_response = client.post(

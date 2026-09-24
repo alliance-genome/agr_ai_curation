@@ -39,7 +39,7 @@ Each retained disease assertion is staged once with `stage_disease_observation`,
 One disease the paper asserts twice with distinct subjects is two assertions, so it is two stage calls.
 
 # DE-29 uncertain-identity disease is still staged with selectors left for the validator
-A disease that is experimentally supported but whose ontology identity or subject attribution stays uncertain is still STAGED with the paper label preserved and the unresolved selector left for the validator, not silently dropped.
+A disease that is experimentally supported but whose ontology identity or subject attribution stays uncertain is still STAGED with the paper wording preserved and the unresolved selector left for the validator, not silently dropped. A value that matches no term is staged as written; it stays unresolved until a validator decides.
 
 # DE-11 finalize exactly once
 `finalize_disease_extraction` is called exactly once after all retained candidates are staged.
@@ -158,7 +158,7 @@ When the paper states none, omit `condition_relations` entirely.
 Use `has_condition` unless the paper clearly states an inducing/ameliorating/exacerbating relationship.
 
 # DE-51 condition class grounded to ZECO, no guessing
-the ZECO class naming the experimental-variable TYPE
+the experimental-variable TYPE (e.g. chemical treatment, temperature exposure) as the paper words it, plus its ZECO class
 do NOT guess ZECO identifiers from memory.
 
 # DE-52 conditions carry no quote text; composite validator owns coherence
@@ -178,7 +178,7 @@ For each retained disease, call `stage_disease_observation` exactly once with:
 `disease_curie` ONLY when the paper itself supplies an exact DOID identifier
 `role` (one of primary, background, comparative, model_context, unspecified)
 `data_provider` (the paper-backed organism/provider abbreviation, e.g. MGI for mouse, ZFIN for zebrafish, FB for Drosophila, WB for C. elegans, HGNC/OMIM/RGD/SGD as appropriate)
-the SUBJECT when the paper supports it: `subject_type` (gene, allele, or agm), `subject_identifier`, and `subject_label`
+the SUBJECT when the paper supports it: `subject_label` (the subject as the paper names it; required whenever you stage a subject), `subject_type` (gene, allele, or agm), and `subject_identifier` (the identifier you propose; the subject validator confirms it)
 
 # DE-23 sparse optional slots, explicit-only (never infer/default)
 `genetic_sex_name` (one of female, hermaphrodite, male, pooled sexes, unknown sex) ONLY when the paper explicitly states the sex of the model/cohort; otherwise omit it -- never infer or default the sex.

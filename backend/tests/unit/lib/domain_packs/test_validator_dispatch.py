@@ -411,6 +411,18 @@ def _multi_object_envelope(
     )
 
 
+def _staged_value(mention: str, *identity_keys: str) -> dict[str, Any]:
+    """A gene-expression value staged for validation (ALL-1283): paper wording, no identity."""
+
+    return {
+        **{key: None for key in identity_keys},
+        "mention": mention,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+
+
 def _gene_expression_envelope() -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="gene-expression-env",
@@ -422,21 +434,27 @@ def _gene_expression_envelope() -> DomainEnvelope:
                 pending_ref_id="gene-expression-1",
                 object_role="curatable_unit",
                 payload={
-                    "data_provider": {"abbreviation": "MGI"},
-                    "expression_annotation_subject": {
-                        "primary_external_id": "Tmem67",
-                        "gene_symbol": "Tmem67",
+                    # The builder's exact provider-list lookup resolved the data provider.
+                    "data_provider": {
+                        "abbreviation": "MGI",
+                        "mention": "MGI",
+                        "resolution_state": "resolved",
+                        "lookup_outcome": "matched",
+                        "validator_explanation": None,
                     },
+                    "expression_annotation_subject": _staged_value(
+                        "Tmem67", "primary_external_id", "gene_symbol"
+                    ),
                     "when_expressed_stage_name": "TS26",
                     "expression_pattern": {
+                        "when_expressed": {
+                            "developmental_stage_start": _staged_value("TS26", "curie", "name"),
+                        },
                         "where_expressed": {
-                            "anatomical_structure": {
-                                "curie": "EMAPA:17373",
-                                "name": "metanephros",
-                            }
-                        }
+                            "anatomical_structure": _staged_value("metanephros", "curie", "name"),
+                        },
                     },
-                    "relation": {"name": "is_expressed_in"},
+                    "relation": _staged_value("is_expressed_in", "name", "vocabulary", "id"),
                     "single_reference": {
                         "pmid": "PMID:203506",
                         "title": "Paper supplied title",
@@ -1719,8 +1737,8 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
             "explanation": "Fixture validator resolved this field.",
         }
         if binding.binding_id == "subject_gene_validation":
+            # The gene lookup reads the subject's paper wording.
             assert request.selected_inputs == {
-                "gene_id": "Tmem67",
                 "gene_symbol": "Tmem67",
                 "data_provider": "MGI",
             }
@@ -1849,15 +1867,23 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
         "subject_gene_validation",
     }
     annotation = result.envelope.extracted_objects[0]
-    assert annotation.payload["expression_annotation_subject"] == {
+    subject = annotation.payload["expression_annotation_subject"]
+    assert {key: subject[key] for key in ("primary_external_id", "gene_symbol", "mention")} == {
         "primary_external_id": "MGI:1923928",
         "gene_symbol": "Tmem67",
+        "mention": "Tmem67",
     }
+    assert (subject["resolution_state"], subject["lookup_outcome"]) == ("resolved", "matched")
+    # A reference stored before the contract is verified by this re-validation (ALL-1283).
     assert annotation.payload["single_reference"] == {
         "pmid": "PMID:203506",
         "title": "Resolved literature title",
         "reference_id": 203506,
         "curie": "PMID:203506",
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": "Fixture validator resolved this field.",
+        "validator_curator_message": "source_reference_validation resolved.",
     }
     patch_events = {
         event["validator_binding_id"]: event
@@ -1866,10 +1892,10 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
     assert patch_events["source_reference_validation"]["original_values"] == {
         "single_reference.title": "Paper supplied title"
     }
-    assert patch_events["subject_gene_validation"]["original_values"] == {
-        "expression_annotation_subject.primary_external_id": "Tmem67",
-        "expression_annotation_subject.gene_symbol": "Tmem67",
-    }
+    assert patch_events["subject_gene_validation"]["materialized_field_paths"] == [
+        "expression_annotation_subject.primary_external_id",
+        "expression_annotation_subject.gene_symbol",
+    ]
     field_paths = [
         finding.field_ref.field_path
         for finding in result.appended_findings
@@ -2024,9 +2050,15 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
     )
 
     annotation = result.envelope.extracted_objects[0]
+    # The unresolved gene keeps its paper wording and records why; no identity is written.
     assert annotation.payload["expression_annotation_subject"] == {
-        "primary_external_id": "Tmem67",
-        "gene_symbol": "Tmem67",
+        "primary_external_id": None,
+        "gene_symbol": None,
+        "mention": "Tmem67",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "missing_expected_result_field",
+        "validator_explanation": "Multiple provider candidates matched.",
+        "validator_curator_message": "Subject gene lookup is ambiguous.",
     }
     assert annotation.payload["single_reference"] == {
         "pmid": "PMID:203506",
@@ -2050,6 +2082,9 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
         "expression_experiment.single_reference.reference_id",
         "single_reference.curie",
         "single_reference.title",
+        # The experiment's copy mirrors the full reference identity (N6).
+        "expression_experiment.single_reference.curie",
+        "expression_experiment.single_reference.title",
     }
     classifications = {
         finding.field_ref.field_path: finding.details["failure_classification"]
@@ -4097,3 +4132,32 @@ def test_an_update_leaves_the_object_reference_intact():
     )
 
     assert updated.extracted_objects[0].evidence_record_ids == ["evidence-1"]
+
+
+def test_allowed_term_list_checks_identifier_fields_not_per_element_labels():
+    """A slim element's name comes back as a plain label; only its CURIE is checked."""
+
+    from src.lib.domain_packs.validator_result_policies import allowed_term_policy_violations
+
+    base_request = _array_terms_validation_request()
+    request = base_request.model_copy(
+        update={
+            "selected_inputs": {**base_request.selected_inputs, "allowed_term_curies": ["UBERON:0000068"]},
+            "expected_result_fields": {
+                "curie": "stage_uberon_slim_terms[1].curie",
+                "name": "stage_uberon_slim_terms[1].name",
+            },
+        }
+    )
+
+    def violations(values):
+        result = DomainValidatorResultBase.model_validate(
+            _result_payload(request, resolved_values=values)
+        )
+        return [violation.field_name for violation in allowed_term_policy_violations(result, request=request)]
+
+    assert violations({"curie": "UBERON:0000068", "name": "embryo stage"}) == []
+    assert violations({"curie": "UBERON:0000092", "name": "embryo stage"}) == ["curie"]
+    # A result field named as an identifier is checked even when its write leaf is not.
+    request = request.model_copy(update={"expected_result_fields": {"id": "stage_term_ref"}})
+    assert violations({"id": "UBERON:0000092"}) == ["id"]

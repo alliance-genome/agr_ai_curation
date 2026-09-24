@@ -64,6 +64,14 @@ fixtures:
           curie: NCBITaxon:6239
         source_mentions:
         - unc-54(e190)
+        allele:
+          primary_external_id: null
+          allele_symbol: null
+          taxon: null
+          mention: unc-54(e190)
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
       evidence_record_ids:
       - evidence-unc54-1
       metadata:
@@ -95,7 +103,13 @@ fixtures:
       - Evidence and pending references are materialized by backend builder finalization.
       payload:
         association_kind: allele_paper_evidence
-        allele_label: unc-54(e190)
+        allele_identifier: null
+        allele_label: null
+        allele_taxon: null
+        mention: unc-54(e190)
+        resolution_state: unresolved
+        lookup_outcome: not_validated
+        validator_explanation: Not validated yet.
         evidence_record_ids:
         - evidence-unc54-1
         rationale: The paper's own paralysis assay characterizes e190, so this allele is curatable here rather than only named.

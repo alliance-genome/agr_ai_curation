@@ -34,9 +34,16 @@ import HorizontalGridEvidencePopover, {
   type HorizontalGridEvidencePopoverTarget,
 } from './HorizontalGridEvidencePopover'
 import HorizontalGridFieldEditorDialog from './HorizontalGridFieldEditorDialog'
+import HorizontalGridOverrideEditorDialog from './HorizontalGridOverrideEditorDialog'
 import HorizontalGridValidationPreviewRowActions from './HorizontalGridValidationPreviewRowActions'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import { HORIZONTAL_GRID_UNRESOLVED_TEXT } from './horizontalGridFormatting'
 import type { HorizontalGridModel } from './horizontalGridModel'
+import {
+  horizontalGridOverridePatch,
+  horizontalGridRemoveElementPatch,
+  horizontalGridRemoveOverridePatch,
+  type HorizontalGridOverridePatch,
+} from './horizontalGridOverride'
 import {
   applyHorizontalGridValidationPreview,
   horizontalGridValidationPreviewKey,
@@ -47,6 +54,16 @@ interface EditingTarget {
   candidateId: string
   fieldKey: string
   fieldPath: string
+}
+
+interface OverrideTarget {
+  candidateId: string
+  // The cell the editor was opened from; its override targets come from the
+  // current model, so a refresh after a rejection updates their stored state.
+  fieldPath: string
+  fieldLabel: string
+  // Distinguishes each opening, so the editor starts from stored values again.
+  openedAt: number
 }
 
 interface ValidationPreviewState {
@@ -114,6 +131,9 @@ export default function InteractiveHorizontalCurationGrid({
   } = useCurationWorkspaceContext()
   const autosave = useCurationWorkspaceAutosave()
   const [editingTarget, setEditingTarget] = useState<EditingTarget | null>(null)
+  const [overrideTarget, setOverrideTarget] = useState<OverrideTarget | null>(null)
+  const [overrideError, setOverrideError] = useState<string | null>(null)
+  const [overrideSaving, setOverrideSaving] = useState(false)
   const [evidenceTarget, setEvidenceTarget] = useState<HorizontalGridEvidencePopoverTarget | null>(null)
   const [validationPreview, setValidationPreview] = useState<ValidationPreviewState>(() => ({
     model,
@@ -136,6 +156,42 @@ export default function InteractiveHorizontalCurationGrid({
       setActiveCandidate(candidateId)
     }
   }, [activeCandidateId, setActiveCandidate])
+
+  const overrideTargets = useMemo(() => {
+    if (!overrideTarget) {
+      return []
+    }
+    const row = model.rows.find((item) => item.candidateId === overrideTarget.candidateId)
+    const cell = row?.cells.find((item) => item.fieldPath === overrideTarget.fieldPath)
+    return cell?.overrideTargets ?? []
+  }, [model, overrideTarget])
+
+  // A curator override is one atomic edit of every identity key of one value
+  // (horizontalGridOverridePatch), or all of them cleared to remove it. It goes
+  // through autosave, at the envelope's latest revision. A rejection (e.g. a
+  // missing name) is shown in the editor, which stays open.
+  const submitOverride = useCallback(async (
+    target: OverrideTarget,
+    patch: HorizontalGridOverridePatch,
+  ) => {
+    setOverrideSaving(true)
+    setOverrideError(null)
+    try {
+      await autosave.submitEnvelopeEdit(target.candidateId, {
+        fieldPath: patch.field_path,
+        operation: patch.operation,
+        before: patch.before,
+        value: patch.value,
+      })
+      setOverrideTarget(null)
+    } catch (error) {
+      // The editor opens (or stays open) on the value with the backend's words.
+      setOverrideTarget(target)
+      setOverrideError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOverrideSaving(false)
+    }
+  }, [autosave])
 
   const selectedEditor = useMemo(() => {
     if (!editingTarget) {
@@ -187,6 +243,16 @@ export default function InteractiveHorizontalCurationGrid({
         recordLabel={args.row.contextCell.value.identityLabel}
         onEdit={(editableField) => {
           setEvidenceTarget(null)
+          if (args.cell.overrideTargets.length > 0) {
+            setOverrideError(null)
+            setOverrideTarget({
+              candidateId: candidate.candidate_id,
+              fieldPath: args.cell.fieldPath,
+              fieldLabel: editableField.label,
+              openedAt: Date.now(),
+            })
+            return
+          }
           setEditingTarget({
             candidateId: candidate.candidate_id,
             fieldKey: editableField.field_key,
@@ -214,14 +280,17 @@ export default function InteractiveHorizontalCurationGrid({
           }
           setEvidenceTarget({
             anchorEl,
-            canonicalFieldValue: field && args.cell.extractorComparison?.outcome !== 'unresolved'
-              ? formatHorizontalGridValue(field.value)
+            canonicalFieldValue: field
+              && args.cell.extractorComparison?.outcome !== 'unresolved'
+              && args.cell.displayText !== HORIZONTAL_GRID_UNRESOLVED_TEXT
+              ? args.cell.displayText
               : null,
             extractorComparison: args.cell.extractorComparison,
             fieldLabel: field?.label ?? args.column.label,
-            fieldValue: formatHorizontalGridValue(args.cell.value) ?? '—',
+            fieldValue: args.cell.displayText ?? '—',
             onEvidence: navigateEvidence,
             projections: args.cell.evidence,
+            resolutionValues: args.cell.resolution?.values ?? [],
             sourceMention: args.row.contextCell.value.identityLabel,
             state: args.cell.state,
             validatorResolved: !args.cell.staleValidation
@@ -237,6 +306,19 @@ export default function InteractiveHorizontalCurationGrid({
           if (projection) {
             navigateEvidence(projection)
           }
+        }}
+        onRemoveOverride={(value) => {
+          // Clearing every identity key withdraws the override; the backend
+          // returns the value to unresolved.
+          void submitOverride(
+            {
+              candidateId: candidate.candidate_id,
+              fieldPath: args.cell.fieldPath,
+              fieldLabel: field?.label ?? args.column.label,
+              openedAt: Date.now(),
+            },
+            horizontalGridRemoveOverridePatch(value),
+          )
         }}
         onSelect={() => selectCandidate(candidate.candidate_id)}
         onToggleValidationPreview={(previewField) => {
@@ -268,7 +350,7 @@ export default function InteractiveHorizontalCurationGrid({
         previewState={args.cell.state}
       />
     )
-  }, [autosave.isSaving, candidates, model, selectCandidate])
+  }, [autosave, candidates, model, selectCandidate, submitOverride])
 
   const renderContextCell = useCallback(({ cell, row }: HorizontalGridContextRenderArgs) => (
     <HorizontalGridContextCellContent
@@ -302,6 +384,7 @@ export default function InteractiveHorizontalCurationGrid({
           fieldValue: cell.value.identityLabel,
           onEvidence: navigateEvidence,
           projections: [projection],
+          resolutionValues: [],
           sourceMention: null,
           state: null,
           validatorResolved: false,
@@ -394,6 +477,31 @@ export default function InteractiveHorizontalCurationGrid({
         }}
         open={editingTarget !== null}
       />
+      {overrideTarget ? (
+        <HorizontalGridOverrideEditorDialog
+          error={overrideError}
+          fieldLabel={overrideTarget.fieldLabel}
+          fieldPath={overrideTarget.fieldPath}
+          isSaving={overrideSaving}
+          key={`${overrideTarget.candidateId}:${overrideTarget.fieldPath}:${overrideTarget.openedAt}`}
+          onClose={() => {
+            setOverrideTarget(null)
+            setOverrideError(null)
+          }}
+          onRemove={(value) => {
+            void submitOverride(overrideTarget, horizontalGridRemoveOverridePatch(value))
+          }}
+          onRemoveElement={(value) => {
+            void submitOverride(overrideTarget, horizontalGridRemoveElementPatch(value))
+          }}
+          onSave={(value, identity) => {
+            void submitOverride(overrideTarget, horizontalGridOverridePatch(value, identity))
+          }}
+          onSelectValue={() => setOverrideError(null)}
+          open
+          targets={overrideTargets}
+        />
+      ) : null}
     </>
   )
 }

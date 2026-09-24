@@ -58,51 +58,81 @@ def _plan(output_format, columns, **extra):
     })
 
 
-# --- ExperimentalCondition shows its chemical --------------------------------------------
+# --- ExperimentalCondition parts are each a resolvable value --------------------------
 
-CHEMICAL_RELATIONS = [{
-    "condition_relation_type": {"name": "has_condition"},
-    "conditions": [
-        {"condition_class": {"curie": "ZECO:0000111"}, "condition_chemical": {"curie": "CHEBI:6909"},
-         "condition_summary": "chemical treatment"},
-        {"condition_chemical": {"curie": "CHEBI:16236", "name": "ethanol"}},
-    ],
-}]
+
+def _condition_value(mention, curie=None, **extra):
+    resolved = curie is not None
+    return {**extra, "curie": curie, "mention": mention,
+            "resolution_state": "resolved" if resolved else "unresolved",
+            "lookup_outcome": "matched" if resolved else "not_validated"}
 
 
 @pytest.mark.parametrize("agent_id,pack_id,object_type", [
-    ("disease", "agr.alliance.disease", "DiseaseAnnotation"),
-    ("gene_expression", "agr.alliance.gene_expression", "GeneExpressionAnnotation"),
     ("phenotype", "agr.alliance.phenotype", "PhenotypeAnnotation"),
+    ("disease", "agr.alliance.disease", "DiseaseAnnotation"),
 ])
 @pytest.mark.parametrize("output_format", ["csv", "chat"])
-def test_experimental_condition_cell_includes_its_chemical(agent_id, pack_id, object_type, output_format):
+def test_condition_cell_shows_each_part_by_its_own_state(agent_id, pack_id, object_type, output_format):
+    """ALL-1283: every condition part is a resolvable value; paper wording stays out."""
+
     ref = f"object.pack.{object_type}.condition_relations"
+    relations = [{
+        "condition_relation_type": {"name": "has_condition", "mention": "has_condition",
+                                    "resolution_state": "resolved", "lookup_outcome": "matched"},
+        "conditions": [
+            {"condition_class": _condition_value("chemical treatment", "ZECO:0000111"),
+             "condition_chemical": _condition_value("rapamycin", proposed_curie="CHEBI:9168"),
+             "condition_free_text": "3 pM",
+             "condition_summary": "treated with 3 pM rapamycin"},
+        ],
+    }]
     item = {"object_type": object_type, "object_id": "a1",
-            "payload": {"condition_relations": deepcopy(CHEMICAL_RELATIONS)}}
-    finding = {"finding_id": "f1", "status": "open", "severity": "warning",
-               "field_path": "condition_relations[0].conditions[0].condition_chemical",
-               "field_ref": {"object_ref": {"object_id": "a1"},
-                             "field_path": "condition_relations[0].conditions[0].condition_chemical"}}
+            "payload": {"condition_relations": deepcopy(relations)}}
     bundle = build_flow_output_artifact_bundle(
-        completed_steps=[_envelope_step(agent_id, pack_id, [item])], flow_name="C", output_format=output_format,
+        completed_steps=[_envelope_step(agent_id, pack_id, [item])],
+        flow_name="C", output_format=output_format,
     )
     [row] = apply_projection_plan(bundle, _plan(output_format, [{"key": "c", "field_ref": ref}])).rows
-    assert row["c"] == (
-        "has_condition: chemical treatment (ZECO:0000111) with CHEBI:6909, ethanol (CHEBI:16236)"
-    )
-    # An open finding on the chemical marks the chemical, not the condition class.
-    marked = build_flow_output_artifact_bundle(
-        completed_steps=[_envelope_step(agent_id, pack_id, [item], [finding])], flow_name="C",
-        output_format=output_format,
-    )
-    [row] = apply_projection_plan(marked, _plan(output_format, [{"key": "c", "field_ref": ref}])).rows
-    assert row["c"] == (
-        "has_condition: chemical treatment (ZECO:0000111) with CHEBI:6909 (unresolved), ethanol (CHEBI:16236)"
-    )
-    # JSON keeps the stored value unchanged.
+    assert row["c"] == "has_condition: ZECO:0000111; UNRESOLVED; 3 pM"
+    assert "rapamycin" not in row["c"]
     [json_row] = apply_projection_plan(bundle, _plan("json", [{"key": "c", "field_ref": ref}])).rows
-    assert json_row["c"] == CHEMICAL_RELATIONS
+    assert json_row["c"] == relations
+
+
+def _resolvable(mention, curie=None, **identity):
+    """A gene-expression condition part under the ALL-1283 contract."""
+
+    state = ("resolved", "matched") if curie or identity else ("unresolved", "not_validated")
+    return {"curie": curie, **identity, "mention": mention, "resolution_state": state[0],
+            "lookup_outcome": state[1], "validator_explanation": None}
+
+
+@pytest.mark.parametrize("output_format", ["csv", "chat"])
+def test_gene_expression_condition_cell_reads_each_part_resolved_or_unresolved(output_format):
+    """Each condition part is its own resolvable value: resolved "label (ID)" or UNRESOLVED."""
+
+    relations = [{
+        "condition_relation_type": {"name": "has_condition", "vocabulary": None, "id": None,
+                                    "mention": "has_condition", "resolution_state": "resolved",
+                                    "lookup_outcome": "matched", "validator_explanation": None},
+        "conditions": [
+            {"condition_class": _resolvable("ZECO:0000111", "ZECO:0000111"),
+             "condition_chemical": _resolvable("CHEBI:6909", "CHEBI:6909"),
+             "condition_summary": "chemical treatment"},
+            {"condition_chemical": _resolvable("ethanol")},
+        ],
+    }]
+    ref = "object.pack.GeneExpressionAnnotation.condition_relations"
+    item = {"object_type": "GeneExpressionAnnotation", "object_id": "a1",
+            "payload": {"condition_relations": relations}}
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("gene_expression", "agr.alliance.gene_expression", [item])],
+        flow_name="C", output_format=output_format,
+    )
+    [row] = apply_projection_plan(bundle, _plan(output_format, [{"key": "c", "field_ref": ref}])).rows
+    # The unmatched chemical never shows its paper wording in the cell.
+    assert row["c"] == "has_condition: chemical treatment; ZECO:0000111; CHEBI:6909, UNRESOLVED"
 
 
 # --- Generic reading keeps a second identifier ---------------------------------------------
@@ -115,7 +145,7 @@ def test_generic_display_keeps_both_identifiers():
     )
 
 
-# --- Saved plans that template the marker by status ----------------------------------------
+# --- A template is never chosen by another field's value (ALL-1283) ------------------------
 
 TERMS_REF = "object.pack.PhenotypeAnnotation.phenotype_terms"
 STATE_REF = "object.pack.PhenotypeAnnotation.phenotype_terms.resolution_state"
@@ -123,8 +153,8 @@ STATE_REF = "object.pack.PhenotypeAnnotation.phenotype_terms.resolution_state"
 
 def _status_template_bundle(findings=()):
     rows = [{"artifact.is_canonical_curation_data": True, "object.object_id": "p1", TERMS_REF: [
-        {"curie": "WBPhenotype:1", "label": "slow", "resolution_state": "resolved"},
-        {"curie": "WBPhenotype:2", "label": "small", "resolution_state": "pending_lookup"},
+        {"curie": "WBPhenotype:1", "label": "slow"},
+        {"curie": "WBPhenotype:2", "label": "small"},
     ], STATE_REF: ["resolved", "pending_lookup"]}]
     catalog = [FlowOutputField(ref=TERMS_REF, label="Terms", value_type="list", row_source="object",
                                display=PHENOTYPE_TERM),
@@ -132,43 +162,26 @@ def _status_template_bundle(findings=()):
     return _bundle(rows, catalog, findings)
 
 
-def _status_template_plan(output_format="csv"):
-    # The pre-ALL-1282 guidance: a format_elements template selected by status.
-    return _plan(output_format, [{"key": "terms", "transform": {
-        "type": "format_elements", "field_refs": [TERMS_REF], "field_ref": STATE_REF,
-        "default": "{1}", "mapping": {"pending_lookup": "{1} (unresolved)"}, "separator": "; ",
-    }}])
-
-
-@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
-def test_status_selected_template_does_not_double_the_marker(output_format):
-    finding = {"object.object_id": "p1", "validation.status": "open",
-               "validation.field_path": "phenotype_terms[1]"}
-    for bundle in (_status_template_bundle(), _status_template_bundle([finding])):
-        [row] = apply_projection_plan(bundle, _status_template_plan(output_format)).rows
-        assert row["terms"] == "slow (WBPhenotype:1); small (WBPhenotype:2) (unresolved)"
-        assert row["terms"].count("unresolved") == 1
-    # A template without its own marker keeps the application's marker.
-    other = {"object.object_id": "p1", "validation.status": "open", "validation.field_path": "phenotype_terms[0]"}
-    [row] = apply_projection_plan(_status_template_bundle([other]), _status_template_plan(output_format)).rows
-    assert row["terms"] == "slow (WBPhenotype:1, unresolved); small (WBPhenotype:2) (unresolved)"
-
-
-def test_multi_value_template_keeps_the_application_marker_per_value():
-    organs = "object.pack.PhenotypeAnnotation.organs"
-    bundle = _status_template_bundle([{"object.object_id": "p1", "validation.status": "open",
-                                       "validation.field_path": "organs[1]"}])
-    bundle.artifacts[0].rows_by_source["object"][0][organs] = ["head", "tail"]
-    bundle.field_catalog.append(FlowOutputField(ref=organs, label="Organs", value_type="list", row_source="object"))
+@pytest.mark.parametrize("selector", [
+    {"field_ref": STATE_REF, "mapping": {"pending_lookup": "{1} (unresolved)"}},
+    {"field_ref": STATE_REF},
+    {"mapping": {"pending_lookup": "{1} (unresolved)"}},
+])
+def test_format_elements_rejects_a_per_element_template_selector(selector):
     plan = _plan("csv", [{"key": "terms", "transform": {
-        "type": "format_elements", "field_refs": [TERMS_REF, organs], "field_ref": STATE_REF,
-        "default": "{1} in {2}", "mapping": {"pending_lookup": "{1} (unresolved) in {2}"}, "separator": "; ",
+        "type": "format_elements", "field_refs": [TERMS_REF], "default": "{1}", "separator": "; ", **selector,
     }}])
-    [row] = apply_projection_plan(bundle, plan).rows
-    # The template's marker cannot say which value it means, so each value keeps its own.
-    assert row["terms"] == (
-        "slow (WBPhenotype:1) in head; small (WBPhenotype:2, unresolved) (unresolved) in tail (unresolved)"
-    )
+    with pytest.raises(ValueError, match="template selector is not supported"):
+        apply_projection_plan(_status_template_bundle(), plan)
+
+
+def test_format_elements_renders_every_element_with_its_one_template():
+    finding = {"object.object_id": "p1", "validation.status": "open", "validation.field_path": "phenotype_terms[1]"}
+    plan = _plan("csv", [{"key": "terms", "transform": {
+        "type": "format_elements", "field_refs": [TERMS_REF], "default": "[{1}]", "separator": " ",
+    }}])
+    [row] = apply_projection_plan(_status_template_bundle([finding]), plan).rows
+    assert row["terms"] == "[slow (WBPhenotype:1)] [small (WBPhenotype:2, unresolved)]"
 
 
 def test_list_elements_join_their_items_like_the_whole_cell():
@@ -234,7 +247,10 @@ def test_map_value_keys_structured_values_by_display_text(output_format):
 
 def _gene_expression_item(object_id):
     return {"object_type": "GeneExpressionAnnotation", "object_id": object_id,
-            "payload": {"expression_annotation_subject": {"gene_symbol": "Y71", "primary_external_id": "WB:1"},
+            "payload": {"expression_annotation_subject": {
+                            "gene_symbol": "Y71", "primary_external_id": "WB:1", "mention": "Y71",
+                            "resolution_state": "resolved", "lookup_outcome": "matched",
+                            "validator_explanation": None},
                         "where_expressed_statement": "hyp"}}
 
 
@@ -254,7 +270,7 @@ def test_pack_display_specs_resolve_once_per_bundle(monkeypatch):
     assert len(calls) == 1
     subject = "object.pack.GeneExpressionAnnotation.expression_annotation_subject"
     assert {field.ref: field.display for field in bundle.field_catalog}[subject] == {
-        "label": "gene_symbol", "id": "primary_external_id",
+        "label": "gene_symbol", "id": "primary_external_id", "mention": "mention",
     }
 
 
@@ -412,3 +428,69 @@ def test_nested_lists_inside_a_record_use_commas_between_items():
     assert display_text({"synonyms": ["a", "b"], "curie": "X:1"}) == "synonyms: a, b; curie: X:1"
     assert display_text([["heat", "cold"], ["dark"]]) == "heat, cold | dark"
     assert display_text(["heat", "diet"]) == "heat; diet"
+
+
+def test_a_field_declared_not_exported_is_never_an_export_column():
+    """Validator-only inputs (e.g. an extractor's proposal) stay out of the export catalog."""
+
+    from types import SimpleNamespace
+
+    from src.lib.flows.export_fields import _pack_export_fields
+    from src.schemas.domain_pack_metadata import (
+        DomainPackFieldDefinition, DomainPackFieldType, DomainPackMetadata, DomainPackObjectDefinition,
+    )
+
+    metadata = DomainPackMetadata(
+        pack_id="fixture.exported", display_name="Fixture", version="0.1.0", metadata_api_version="1.0.0",
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Observation", display_name="Observation", metadata={"object_role": "curatable_unit"},
+            fields=[
+                DomainPackFieldDefinition(field_path="term", field_type=DomainPackFieldType.OBJECT),
+                DomainPackFieldDefinition(field_path="term.proposed_curie", field_type=DomainPackFieldType.STRING,
+                                          metadata={"exported": False}),
+            ],
+        )],
+    )
+
+    paths = [entry["payload_path"] for entry in _pack_export_fields(SimpleNamespace(metadata=metadata))]
+
+    assert paths == ["term"]
+
+
+@pytest.mark.parametrize("output_format", ["csv", "chat"])
+def test_previous_format_disease_record_exports_unresolved_with_legacy_wording(output_format):
+    """ALL-1283: the disease pack's legacy display mapper reads a previous-format record in the
+    current shape, so its old strings export as UNRESOLVED with "(legacy, unverified)" wording,
+    never as bare unverified identifiers, and its flat relation text is not lost."""
+
+    stored = {
+        "annotation_type_name": "manually_curated",
+        "mention": "Alzheimer's disease",
+        "disease_annotation_object": {"curie": "DOID:10652", "name": "Alzheimer's disease"},
+        "data_provider": {"abbreviation": "FB"},
+        "disease_relation_name": "is_implicated_in",
+        "evidence_code_curies": ["ECO:0000315"],
+        "with_gene_identifiers": ["FB:FBgn0003089"],
+    }
+    item = {"object_type": "GeneDiseaseAnnotation", "object_id": "d-old", "payload": deepcopy(stored)}
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("disease", "agr.alliance.disease", [item])],
+        flow_name="D", output_format=output_format,
+    )
+    ref = "object.pack.GeneDiseaseAnnotation."
+    columns = [{"key": key, "field_ref": ref + path} for key, path in (
+        ("relation", "disease_relation"), ("relation_wording", "disease_relation.mention"),
+        ("codes", "evidence_code_curies"), ("codes_wording", "evidence_code_curies.mention"),
+        ("genes", "with_gene_identifiers"), ("term", "disease_annotation_object"),
+    )]
+
+    [row] = apply_projection_plan(bundle, _plan(output_format, columns)).rows
+
+    assert row["relation"] == "UNRESOLVED"
+    assert row["relation_wording"] == "is_implicated_in (legacy, unverified)"
+    assert row["codes"] == "UNRESOLVED"
+    assert row["codes_wording"] == "ECO:0000315 (legacy, unverified)"
+    assert row["genes"] == "UNRESOLVED"
+    assert row["term"] == "UNRESOLVED"
+    assert "ECO:0000315" not in row["codes"]
+    assert item["payload"] == stored  # The stored record is never rewritten.

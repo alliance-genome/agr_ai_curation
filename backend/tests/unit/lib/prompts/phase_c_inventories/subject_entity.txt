@@ -37,8 +37,8 @@ record every database call in `lookup_attempts`
 # SEV-09 scope: supported request inputs (selected_inputs / target.input_values)
 Read these from `selected_inputs` and `target.input_values` when present:
 `subject_type`: required route selector; accepted normalized values are `gene`, `allele`, and `agm`.
-`subject_identifier`: required subject CURIE or primary external ID.
-`subject_label`: optional subject symbol or label.
+`subject_identifier`: required subject CURIE or primary external ID the extractor proposed; confirm it with a lookup.
+`subject_label`: optional subject as the paper names it. It is paper wording, not necessarily a symbol or label.
 `taxon`: optional NCBITaxon CURIE.
 
 # SEV-10 missing-input rule (incl. direct-agent-test preservation note)

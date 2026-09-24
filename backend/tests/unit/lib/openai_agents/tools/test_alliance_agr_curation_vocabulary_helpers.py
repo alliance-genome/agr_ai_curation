@@ -461,7 +461,7 @@ def test_domain_field_term_options_searches_assay_stage_and_direct_site_fields(m
     stage = _term_helper_fn()(
         domain_pack_id="agr.alliance.gene_expression",
         object_type="GeneExpressionAnnotation",
-        field_path="when_expressed_stage_name",
+        field_path="expression_pattern.when_expressed.developmental_stage_start",
         source_phrase="18 hpf",
         data_provider="ZFIN",
     )
@@ -890,6 +890,7 @@ def test_inspect_ontology_term_returns_bounded_context(monkeypatch):
         object_type="GeneExpressionAnnotation",
         field_path="expression_pattern.where_expressed.anatomical_structure",
         curie="WBbt:0004758",
+        source_phrase="pharynx",
         data_provider="WB",
         include_siblings=True,
     )
@@ -906,6 +907,8 @@ def test_inspect_ontology_term_returns_bounded_context(monkeypatch):
         "siblings": 1,
     }
     assert result.data["next_tool_call"]["tool"] == "resolve_domain_field_term"
+    # The suggested resolve call carries the paper's wording, never the term's name (S4).
+    assert result.data["next_tool_call"]["arguments"]["source_phrase"] == "pharynx"
 
 
 def test_inspect_ontology_term_uses_targeted_tree_lookup_when_session_available(monkeypatch):
@@ -985,6 +988,7 @@ def test_inspect_ontology_term_uses_targeted_tree_lookup_when_session_available(
         object_type="GeneExpressionAnnotation",
         field_path="expression_pattern.where_expressed.anatomical_structure",
         curie="WBbt:0004758",
+        source_phrase="pharynx",
         data_provider="WB",
         include_siblings=True,
     )
@@ -1053,6 +1057,7 @@ def test_inspect_ontology_term_falls_back_when_targeted_tree_lookup_fails(monkey
         object_type="GeneExpressionAnnotation",
         field_path="expression_pattern.where_expressed.anatomical_structure",
         curie="WBbt:0004758",
+        source_phrase="pharynx",
         data_provider="WB",
     )
 
@@ -1086,6 +1091,7 @@ def test_inspect_ontology_term_blocks_terms_outside_slim_allowlist(monkeypatch):
         object_type="GeneExpressionAnnotation",
         field_path="expression_pattern.where_expressed.anatomical_structure_uberon_terms",
         curie="UBERON:9999999",
+        source_phrase="imaginary structure",
     )
 
     assert result.status == "ok"
@@ -1123,6 +1129,7 @@ def test_inspect_ontology_term_blocks_go_term_with_wrong_aspect(monkeypatch):
         object_type="GeneExpressionAnnotation",
         field_path="expression_pattern.where_expressed.cellular_component",
         curie="GO:0008150",
+        source_phrase="biological process",
     )
 
     assert result.status == "ok"

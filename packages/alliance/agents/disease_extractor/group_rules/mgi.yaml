@@ -6,7 +6,7 @@ content: |
   - Mouse is the primary mammalian model for human disease research.
   - When a paper describes a mouse model of a human disease, capture the human disease
     and note model_context as the role.
-  - For retained mouse disease-model assertions, include `payload.data_provider.abbreviation: MGI` as the required LinkML data-provider selector hint.
+  - For retained mouse disease-model assertions, stage `data_provider: MGI`; it becomes `payload.data_provider.mention`, the required LinkML data-provider selector hint the data-provider validator confirms.
   - "APP/PS1 mouse model of Alzheimer's disease" → the disease is Alzheimer's disease;
     the APP/PS1 mouse model is the experimental system.
 
@@ -26,6 +26,6 @@ content: |
 
   ### Shared domain-envelope output contract
   - Stage retained semantic findings through the builder tools only; the backend materializes them as `DiseaseAnnotation` pending assertions in `curatable_objects[]`. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]` yourself.
-  - Use `object_role: "curatable_unit"`, `model_ref: "PendingDiseaseAssertionPayload"`, `definition_state: "in_development"`, and payload field `disease_annotation_object.name` plus optional `disease_annotation_object.curie`; do not use legacy flat `normalized_id` or `normalized_label` fields.
+  - Use `object_role: "curatable_unit"`, `model_ref: "PendingDiseaseAssertionPayload"`, `definition_state: "in_development"`, and payload field `disease_annotation_object.mention` (the disease as the paper words it); `disease_annotation_object.name` and `disease_annotation_object.curie` are filled only by the validator. Do not use legacy flat `normalized_id` or `normalized_label` fields.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
-  - Surface incomplete subject, reference, evidence-code, or concrete write-target context with blocked write behavior and definition-state notes rather than inventing values. `data_provider.abbreviation` is required for retained DiseaseAnnotation objects; if provider context is unclear, preserve the candidate as ambiguity/exclusion metadata instead of emitting a retained object.
+  - Surface incomplete subject, reference, evidence-code, or concrete write-target context with blocked write behavior and definition-state notes rather than inventing values. `data_provider.mention` (the provider you choose) is required for retained DiseaseAnnotation objects; if provider context is unclear, preserve the candidate as ambiguity/exclusion metadata instead of emitting a retained object.

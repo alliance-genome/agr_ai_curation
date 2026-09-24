@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from pydantic import ValidationError
 
+from src.lib.domain_packs.resolvable_values import OVERRULED_KEY_PREFIX, without_overruled
 from src.lib.domain_packs.validation_registry import ValidatorBindingMatch
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -233,14 +234,17 @@ def _resolve_selector(
         value, exists = _value_at_path(
             match.object_envelope.payload, resolved_path
         )
-        if not exists:
+        if not exists or _names_overruled_identity(resolved_path):
             return _missing_field(
                 input_name,
                 selector,
                 f"Payload path '{resolved_path}' is missing from the target object.",
                 field_path=resolved_path,
             )
-        return _single_value(input_name, selector, value, field_path=resolved_path)
+        # An identity a validator overruled is never a validator input.
+        return _single_value(
+            input_name, selector, without_overruled(value), field_path=resolved_path
+        )
 
     if selector.source == "object_metadata":
         if match.object_envelope is None:
@@ -614,6 +618,12 @@ def _object_for_ref(
         if ref_key in domain_object.ref_keys():
             return domain_object
     return None
+
+
+def _names_overruled_identity(path: str) -> bool:
+    return any(
+        segment.split("[", 1)[0].startswith(OVERRULED_KEY_PREFIX) for segment in str(path).split(".")
+    )
 
 
 def _single_value(

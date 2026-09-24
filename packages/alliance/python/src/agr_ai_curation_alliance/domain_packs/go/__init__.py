@@ -3,6 +3,7 @@
 from .constants import (
     GO_DOMAIN_PACK_ID,
     GO_DOMAIN_PACK_VERSION,
+    GO_EVIDENCE_CODE_ECO,
     GO_MATERIALIZER_ID,
     GO_MODEL_ID,
     GO_OBJECT_ROLE,
@@ -17,6 +18,7 @@ from .conversion import (
 __all__ = [
     "GO_DOMAIN_PACK_ID",
     "GO_DOMAIN_PACK_VERSION",
+    "GO_EVIDENCE_CODE_ECO",
     "GO_MATERIALIZER_ID",
     "GO_MODEL_ID",
     "GO_OBJECT_ROLE",

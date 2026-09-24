@@ -599,3 +599,405 @@ def test_configured_provider_serialization_preserves_final_profile_schema(profil
     assert "sources" not in attributes["required"]
     assert "synonym" not in attributes["properties"]
     assert attributes["properties"]["sources"]["anyOf"][0]["items"]["additionalProperties"] is False
+
+
+# --- ALL-1302: a profile's resolvable values ----------------------------------
+
+_MAPPING = {
+    "mapping_id": "gene_lookup",
+    "capability_ref": {"package_id": "example", "package_version": "1.0.0", "domain_pack_id": "example.record",
+                       "domain_pack_version": "1.0.0", "binding_id": "lookup"},
+    "capability_fingerprint": "sha256:" + "b" * 64,
+    "inputs": {"mention": {"field_path": "attributes.genes[].mention"}},
+    "outputs": {"identifier": "attributes.genes[].gene_id", "symbol": "attributes.genes[].symbol"},
+    "policy": {"unresolved": "requires_curator_review", "blocks_readiness": False},
+    "mode": "per_element",
+}
+
+
+@pytest.fixture
+def resolvable_profile():
+    contract = GenericProfileContract.model_validate({
+        "name": "Genes", "semantic_class": "gene_mention",
+        "fields": [
+            {"key": "genes", "required": True, "value_schema": {"kind": "array", "items": {"kind": "object", "fields": [
+                {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+                {"key": "gene_id", "required": True, "value_schema": {"kind": "string"}},
+                {"key": "symbol", "value_schema": {"kind": "string"}},
+                {"key": "role", "value_schema": {"kind": "string"}},
+            ]}}},
+            {"key": "note", "value_schema": {"kind": "string"}},
+        ],
+        "validator_mappings": [_MAPPING],
+    })
+    pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1,
+                            fingerprint=contract.fingerprint())
+    return ResolvedGenericProfile(pin, contract)
+
+
+def _resolved_gene():
+    return {"mention": "daf-16", "gene_id": "EX:1", "symbol": "daf-16", "role": "subject",
+            "resolution_state": "resolved", "lookup_outcome": "matched",
+            "validator_explanation": "Exact symbol match.", "validator_curator_message": None}
+
+
+def test_resolvable_values_are_the_mapped_objects_with_paper_wording(resolvable_profile, profile):
+    assert resolvable_profile.resolvable_objects() == {"attributes.genes[]": ("gene_id", "symbol")}
+    assert resolvable_profile.resolvable_container("attributes.genes[2].gene_id") == ("attributes.genes[2]", "gene_id")
+    assert resolvable_profile.resolvable_container("attributes.genes[2].role") is None
+    # A profile without mapped paper-wording objects is unchanged.
+    assert profile.resolvable_objects() == {}
+
+
+def test_extractor_schemas_omit_a_resolvable_values_identity_and_state(resolvable_profile):
+    item = resolvable_profile.attributes_schema()["properties"]["genes"]["items"]
+    assert set(item["properties"]) == {"mention", "role"}
+    assert item["required"] == ["mention"]
+    patterns = [variant["properties"]["field_path"]["pattern"]
+                for variant in resolvable_profile.patch_schema()["items"]["anyOf"]
+                if "pattern" in variant["properties"]["field_path"]]
+    assert any(pattern.endswith(r"\.mention$") for pattern in patterns)
+    assert not any(key in pattern for pattern in patterns
+                   for key in ("gene_id", "symbol", "resolution_state", "lookup_outcome", "validator_"))
+
+
+@pytest.mark.parametrize("gene,reason", [
+    ({"mention": "daf-16", "gene_id": "EX:1"}, "validator_owned_field"),
+    ({"mention": "daf-16", "resolution_state": "resolved"}, "validator_owned_field"),
+    ({"role": "subject"}, "missing_paper_wording"),
+    ({"mention": "  "}, "missing_paper_wording"),
+])
+def test_extractor_input_never_writes_identity_or_state(resolvable_profile, gene, reason):
+    issues = resolvable_profile.validate_attributes({"genes": [gene]}, extractor_input=True)
+    assert reason in {issue["reason"] for issue in issues}
+
+
+def test_extractor_input_with_paper_wording_only_conforms(resolvable_profile):
+    record = {"genes": [{"mention": "daf-16", "role": "subject"}, {"mention": "unc-22"}]}
+    assert resolvable_profile.validate_attributes(record, extractor_input=True) == []
+    staged = resolvable_profile.unresolved_attributes(record)
+    assert staged["genes"][1] == {
+        "mention": "unc-22", "gene_id": None, "symbol": None, "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated", "validator_explanation": "Not validated yet.",
+    }
+    resolvable_profile.require_attributes(staged)
+    assert record == {"genes": [{"mention": "daf-16", "role": "subject"}, {"mention": "unc-22"}]}
+
+
+def test_stored_resolvable_values_follow_the_shared_vocabulary_and_invariant(resolvable_profile):
+    resolvable_profile.require_attributes({"genes": [_resolved_gene()]})
+    # Values stored before the contract carry no state and still load.
+    resolvable_profile.require_attributes({"genes": [{"mention": "daf-16", "gene_id": "EX:1"}]})
+    for change, reason in [
+        ({"resolution_state": "partially_resolved"}, "invalid_enum"),
+        ({"lookup_outcome": "legacy_unverified", "resolution_state": "unresolved"}, "invalid_resolution"),
+        ({"resolution_state": "unresolved", "lookup_outcome": "not_found"}, "invalid_resolution"),
+        ({"gene_id": None, "symbol": None}, "invalid_resolution"),
+        ({"validator_explanation": 3}, "wrong_type"),
+    ]:
+        issues = resolvable_profile.validate_attributes({"genes": [{**_resolved_gene(), **change}]})
+        assert reason in {issue["reason"] for issue in issues}, change
+
+
+def test_profile_builder_stages_paper_wording_and_materializes_it_unresolved(resolvable_profile, monkeypatch):
+    from agr_ai_curation_alliance.tools import generic_builder_tools as tools
+    from agr_ai_curation_alliance.domain_packs.generic import materialize_generic_builder_state
+    from src.lib.openai_agents import extraction_builder_workspace as builder
+
+    monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_: None)
+    monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **_: None)
+    workspace = builder.ExtractionBuilderWorkspace(
+        run_id="profile-resolvable", agent_id="ca_test", generic_profile=resolvable_profile,
+        execution_receipt={"agent_key": "ca_test", "revision": 3},
+    )
+    token = builder.set_active_extraction_builder_workspace(workspace)
+    stage_args = dict(class_key="generic:generic_object", semantic_class="gene_mention", label="daf-16",
+                      evidence_record_ids=["evidence-1"], classification_notes=["Paper names this gene."],
+                      rationale="The paper names this gene in its Results.")
+    try:
+        denied = tools._stage_generic_object_impl(
+            **stage_args, attributes={"genes": [{"mention": "daf-16", "gene_id": "EX:1"}]})
+        assert denied.status == "error"
+        assert denied.data["validation_issues"][0]["reason"] == "validator_owned_field"
+        stage = tools._stage_generic_object_impl(**stage_args, attributes={"genes": [{"mention": "daf-16"}]})
+        assert stage.status == "ok", stage
+        candidate_id = stage.data["candidate_id"]
+        denied = tools._patch_generic_object_impl(candidate_id, [
+            {"field_path": "attributes.genes[0].gene_id", "value": "EX:1"},
+        ])
+        assert denied.status == "error"
+        assert workspace.get_candidate(candidate_id).staged_fields["attributes"] == {"genes": [{"mention": "daf-16"}]}
+        evidence = [{"evidence_record_id": "evidence-1", "verified_quote": "daf-16", "page": 1}]
+        materialized = materialize_generic_builder_state(
+            workspace=workspace, candidate_ids=[candidate_id], evidence_records=evidence,
+        )
+        assert materialized.ok, materialized.issues
+        gene, = materialized.payload["curatable_objects"][0]["payload"]["attributes"]["genes"]
+        assert (gene["mention"], gene["gene_id"], gene["resolution_state"], gene["lookup_outcome"]) == (
+            "daf-16", None, "unresolved", "not_validated")
+        resolvable_profile.require_envelope(materialized.payload, agent_key="ca_test")
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)
+
+
+def test_runtime_instruction_explains_paper_wording_only_for_resolvable_profiles(resolvable_profile, profile):
+    from src.lib.agent_studio.profile_tools import profile_runtime_instruction
+
+    assert "write the paper's wording in mention" in profile_runtime_instruction(resolvable_profile)
+    assert "mention" not in profile_runtime_instruction(profile)
+
+
+def _profile_with(fields, outputs, inputs):
+    mapping = {**_MAPPING, "mode": "whole", "inputs": inputs, "outputs": outputs}
+    contract = GenericProfileContract.model_validate({
+        "name": "Records", "semantic_class": "record", "fields": fields, "validator_mappings": [mapping],
+    })
+    pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1,
+                            fingerprint=contract.fingerprint())
+    return ResolvedGenericProfile(pin, contract)
+
+
+def test_resolvable_value_display_roles_name_the_identifier_and_label(resolvable_profile):
+    spec = resolvable_profile.resolvable_specs()["attributes.genes[]"]
+    assert (spec.id_key, spec.label_key, spec.mention_key) == ("gene_id", "symbol", "mention")
+
+
+def test_flat_mapping_destination_is_validator_owned():
+    """ALL-1302 review #4: the extractor never writes a flat scalar a validator fills in."""
+
+    profile = _profile_with(
+        [{"key": "paper_name", "required": True, "value_schema": {"kind": "string"}},
+         {"key": "resolved_id", "required": True, "value_schema": {"kind": "string"}}],
+        outputs={"identifier": "attributes.resolved_id"},
+        inputs={"mention": {"field_path": "attributes.paper_name"}},
+    )
+    assert profile.validator_owned_paths() == {"attributes.resolved_id"}
+    assert set(profile.attributes_schema()["properties"]) == {"paper_name"}
+    assert not any("resolved_id" in variant["properties"]["field_path"].get("pattern", "")
+                   for variant in profile.patch_schema()["items"]["anyOf"])
+    issues = profile.validate_attributes({"paper_name": "A", "resolved_id": "EX:1"}, extractor_input=True)
+    assert [issue["reason"] for issue in issues] == ["validator_owned_field"]
+    # Staged without it, then filled in by validation.
+    profile.require_attributes({"paper_name": "A"})
+    profile.require_attributes({"paper_name": "A", "resolved_id": "EX:1"})
+
+
+def test_a_key_a_mapping_both_reads_and_writes_stays_the_extractors_input():
+    """ALL-1302 review #4: saved profiles that read and write the same field keep their input."""
+
+    profile = _profile_with(
+        [{"key": "gene", "required": True, "value_schema": {"kind": "object", "fields": [
+            {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+            {"key": "symbol", "required": True, "value_schema": {"kind": "string"}},
+        ]}}],
+        outputs={"identifier": "attributes.gene.symbol"},
+        inputs={"mention": {"field_path": "attributes.gene.symbol"}},
+    )
+    assert profile.resolvable_objects() == {}
+    assert profile.validator_owned_paths() == set()
+    gene = profile.attributes_schema()["properties"]["gene"]
+    assert set(gene["properties"]) == {"mention", "symbol"}
+    assert profile.validate_attributes({"gene": {"mention": "daf-16", "symbol": "daf-16"}},
+                                       extractor_input=True) == []
+
+
+def test_identifier_role_prefers_the_key_an_exact_identifier_slot_writes():
+    """ALL-1302 re-review: {taxon: gene.taxon_id, curie: gene.gene_id} picks gene_id."""
+
+    profile = _profile_with(
+        [{"key": "gene", "required": True, "value_schema": {"kind": "object", "fields": [
+            {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+            {"key": "taxon_id", "value_schema": {"kind": "string"}},
+            {"key": "gene_id", "value_schema": {"kind": "string"}},
+        ]}}],
+        outputs={"taxon": "attributes.gene.taxon_id", "curie": "attributes.gene.gene_id"},
+        inputs={"mention": {"field_path": "attributes.gene.mention"}},
+    )
+    spec = profile.resolvable_specs()["attributes.gene"]
+    assert (spec.id_key, spec.label_key) == ("gene_id", "taxon_id")
+
+
+def test_an_overruled_identity_is_stored_record_only(resolvable_profile):
+    """ALL-1302 with core aadd93a03: overruled_<key> identities conform when stored, never as extractor input."""
+
+    demoted = {**_resolved_gene(), "gene_id": None, "symbol": None, "overruled_gene_id": "EX:1",
+               "overruled_symbol": "daf-16", "resolution_state": "unresolved", "lookup_outcome": "not_found"}
+    resolvable_profile.require_attributes({"genes": [demoted]})
+    wrong = resolvable_profile.validate_attributes({"genes": [{**demoted, "overruled_gene_id": 3}]})
+    assert [issue["reason"] for issue in wrong] == ["wrong_type"]
+    issues = resolvable_profile.validate_attributes(
+        {"genes": [{"mention": "daf-16", "overruled_gene_id": "EX:1"}]}, extractor_input=True)
+    assert [issue["reason"] for issue in issues] == ["validator_owned_field"]
+
+
+def test_a_curator_identity_edit_on_a_profile_value_is_a_curator_override(resolvable_profile):
+    """ALL-1302 with core ec1c320c6: profile values take the same curator override as pack values."""
+
+    staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16", "role": "subject"}]})
+    edited, audit = resolvable_profile.apply_curator_edit(
+        staged, "attributes.genes[0]", {**staged["genes"][0], "gene_id": "EX:9", "symbol": "daf-16"},
+        actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:00:00+00:00",
+    )
+    gene = edited["genes"][0]
+    assert (gene["gene_id"], gene["symbol"], gene["resolution_state"], gene["lookup_outcome"]) == (
+        "EX:9", "daf-16", "resolved", "curator_override")
+    assert gene["curator_override"]["actor_id"] == "curator-1"
+    assert gene["mention"] == "daf-16"
+    assert audit["value_path"] == "attributes.genes[0]"
+    resolvable_profile.require_attributes(edited)
+
+    other, audit = resolvable_profile.apply_curator_edit(
+        edited, "attributes.genes[0].role", "object", actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:01:00+00:00",
+    )
+    assert audit is None and other["genes"][0]["role"] == "object"
+    for path, value in [("attributes.genes[0].mention", "other wording"),
+                        ("attributes.genes[0].lookup_outcome", "matched")]:
+        with pytest.raises(ProfileConformanceError):
+            resolvable_profile.apply_curator_edit(edited, path, value, actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:02:00+00:00")
+
+
+def test_a_curator_can_never_write_an_overruled_identity(resolvable_profile):
+    """ALL-1302 core review 1: overruled_* is set by validation, like the state keys."""
+
+    staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16"}]})
+    whole = {**staged["genes"][0], "gene_id": "EX:9", "overruled_gene_id": "EX:0"}
+    with pytest.raises(ProfileConformanceError):
+        resolvable_profile.apply_curator_edit(
+            staged, "attributes.genes[0]", whole, actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:00:00+00:00")
+    with pytest.raises(ProfileConformanceError):
+        resolvable_profile.apply_curator_edit(
+            staged, "attributes.genes[0].overruled_gene_id", "EX:0", actor_id="curator-1", actor_display_name="curator-1",
+            at="2026-09-23T20:00:00+00:00")
+    edited, audit = resolvable_profile.apply_curator_edit(
+        staged, "attributes.genes[0]", {**staged["genes"][0], "gene_id": "EX:9", "symbol": "daf-16"},
+        actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:00:00+00:00")
+    assert audit is not None and "overruled_gene_id" not in edited["genes"][0]
+
+
+def test_a_profile_curator_override_needs_both_the_identifier_and_the_name(resolvable_profile):
+    """ALL-1302 with core 7df09b2c2: a partial override is rejected; a full one is accepted."""
+
+    staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16"}]})
+    at = "2026-09-23T21:00:00+00:00"
+    for path, value in [("attributes.genes[0].gene_id", "EX:9"),
+                        ("attributes.genes[0]", {**staged["genes"][0], "gene_id": "EX:9"})]:
+        with pytest.raises(ProfileConformanceError) as rejected:
+            resolvable_profile.apply_curator_edit(staged, path, value, actor_id="curator-1", actor_display_name="curator-1", at=at)
+        assert "Enter both the identifier and the name" in rejected.value.issues[0]["message"]
+
+    edited, audit = resolvable_profile.apply_curator_edit(
+        staged, "attributes.genes[0]", {**staged["genes"][0], "gene_id": "EX:9", "symbol": "daf-16"},
+        actor_id="curator-1", actor_display_name="curator-1", at=at)
+    assert audit is not None and edited["genes"][0]["lookup_outcome"] == "curator_override"
+    # A later single-key edit keeps the name the first override carried.
+    again, _ = resolvable_profile.apply_curator_edit(
+        edited, "attributes.genes[0].gene_id", "EX:10", actor_id="curator-1", actor_display_name="curator-1", at=at)
+    assert (again["genes"][0]["gene_id"], again["genes"][0]["symbol"]) == ("EX:10", "daf-16")
+
+
+def test_a_whole_value_override_changes_only_the_identity(resolvable_profile):
+    """ALL-1302 with core cbb92a769: any changed non-identity key rejects a whole-value override."""
+
+    staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16", "role": "subject"}]})
+    at = "2026-09-23T22:00:00+00:00"
+    full = {**staged["genes"][0], "gene_id": "EX:9", "symbol": "daf-16"}
+    for changed in ({"role": "object"}, {"mention": "other"}, {"lookup_outcome": "matched"},
+                    {"overruled_gene_id": "EX:0"}):
+        with pytest.raises(ProfileConformanceError) as rejected:
+            resolvable_profile.apply_curator_edit(
+                staged, "attributes.genes[0]", {**full, **changed}, actor_id="curator-1", actor_display_name="curator-1", at=at)
+        assert "Only the identifier and name can be changed" in rejected.value.issues[0]["message"]
+    edited, audit = resolvable_profile.apply_curator_edit(
+        staged, "attributes.genes[0]", full, actor_id="curator-1", actor_display_name="curator-1", at=at)
+    assert audit is not None and edited["genes"][0]["role"] == "subject"
+
+
+def test_a_list_parent_or_attributes_replace_cannot_forge_a_values_identity_or_state(resolvable_profile):
+    """B1: every declared value inside a replaced subtree keeps its identity and state."""
+
+    staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16", "role": "subject"}]})
+    at = "2026-09-24T00:00:00+00:00"
+    forged = {**staged["genes"][0], "gene_id": "EX:FAKE", "symbol": "daf-16",
+              "resolution_state": "resolved", "lookup_outcome": "matched"}
+    someone_else = {**forged, "lookup_outcome": "curator_override",
+                    "curator_override": {"actor_id": "someone-else", "actor_display_name": "Someone Else",
+                                         "at": at, "previous": {}}}
+    for path, value in (
+        ("attributes.genes", [forged]),
+        ("attributes.genes", [someone_else]),
+        ("attributes", {**staged, "genes": [forged]}),
+        ("attributes.genes", [{**staged["genes"][0], "overruled_gene_id": "EX:0"}]),
+        ("attributes.genes", [{**staged["genes"][0], "mention": "other wording"}]),
+    ):
+        with pytest.raises(ProfileConformanceError) as rejected:
+            resolvable_profile.apply_curator_edit(staged, path, value, actor_id="curator-1", actor_display_name="curator-1", at=at)
+        assert "cannot change" in rejected.value.issues[0]["message"]
+
+
+def test_a_list_replace_stages_new_values_unresolved_and_keeps_stored_ones(resolvable_profile):
+    staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16", "role": "subject"}]})
+    at = "2026-09-24T00:00:00+00:00"
+
+    edited, audit = resolvable_profile.apply_curator_edit(
+        staged, "attributes.genes", [{**staged["genes"][0], "role": "object"}, {"mention": "unc-54"}],
+        actor_id="curator-1", actor_display_name="curator-1", at=at)
+
+    assert audit is None
+    kept, added = edited["genes"]
+    assert (kept["role"], kept["lookup_outcome"]) == ("object", "not_validated")
+    assert (added["mention"], added["resolution_state"], added["lookup_outcome"]) == (
+        "unc-54", "unresolved", "not_validated")
+    with pytest.raises(ProfileConformanceError) as carried:
+        resolvable_profile.apply_curator_edit(
+            staged, "attributes.genes", [staged["genes"][0], {"mention": "unc-54", "gene_id": "EX:2"}],
+            actor_id="curator-1", actor_display_name="curator-1", at=at)
+    assert "A new value cannot carry gene_id" in carried.value.issues[0]["message"]
+
+
+def test_a_curator_removes_one_profile_list_element(resolvable_profile):
+    """S5 (profiles): the remove op drops one element of a list of resolvable values."""
+
+    staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16"}, {"mention": "unc-54"}]})
+    at = "2026-09-24T00:00:00+00:00"
+
+    edited, audit = resolvable_profile.remove_curator_element(staged, "attributes.genes[0]", actor_id="c", actor_display_name="c", at=at)
+
+    assert [gene["mention"] for gene in edited["genes"]] == ["unc-54"]
+    assert (audit["action"], audit["value_path"], audit["previous"]) == ("removed", "attributes.genes[0]",
+                                                                        staged["genes"][0])
+    for path, message in (("attributes.genes[5]", "Edit an existing value."),
+                          ("attributes.note", "Only an element of a list of resolvable values")):
+        with pytest.raises(ProfileConformanceError) as rejected:
+            resolvable_profile.remove_curator_element(staged, path, actor_id="c", actor_display_name="c", at=at)
+        assert message in rejected.value.issues[0]["message"]
+
+
+def test_a_numeric_profile_identity_entry_is_stored_as_a_number():
+    """Fix wave 3 S1 (profiles): a typed entry for an integer identity key is parsed, or rejected."""
+
+    contract = GenericProfileContract.model_validate({
+        "name": "Refs", "semantic_class": "reference_mention",
+        "fields": [{"key": "ref", "required": True, "value_schema": {"kind": "object", "fields": [
+            {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+            {"key": "reference_id", "value_schema": {"kind": "integer"}},
+            {"key": "title", "value_schema": {"kind": "string"}},
+        ]}}],
+        "validator_mappings": [{**_MAPPING, "inputs": {"mention": {"field_path": "attributes.ref.mention"}},
+                                "outputs": {"identifier": "attributes.ref.reference_id",
+                                            "label": "attributes.ref.title"}}],
+    })
+    pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1,
+                            fingerprint=contract.fingerprint())
+    profile = ResolvedGenericProfile(pin, contract)
+    staged = profile.unresolved_attributes({"ref": {"mention": "Smith 2020"}})
+    at = "2026-09-24T00:00:00+00:00"
+
+    edited, _ = profile.apply_curator_edit(
+        staged, "attributes.ref", {**staged["ref"], "reference_id": "42", "title": "A paper"},
+        actor_id="c", actor_display_name="C", at=at)
+    assert edited["ref"]["reference_id"] == 42
+    with pytest.raises(ProfileConformanceError) as rejected:
+        profile.apply_curator_edit(
+            staged, "attributes.ref", {**staged["ref"], "reference_id": "forty-two", "title": "A paper"},
+            actor_id="c", actor_display_name="C", at=at)
+    assert rejected.value.issues[0]["message"] == "Enter a whole number for the reference id."

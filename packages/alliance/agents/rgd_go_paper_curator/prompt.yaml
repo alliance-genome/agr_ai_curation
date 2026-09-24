@@ -58,15 +58,25 @@ content: |
 
   <grounding>
   For every retained entity:
+  Every staged GO value keeps the paper's wording apart from the identifier a
+  lookup confirmed. Always pass the paper wording (`gene_product_mention`,
+  `go_term_mention`, `reference_mention`, each With/From `mention`). Pass an
+  identifier only when a lookup returned it in this run; the builder then
+  records the value as matched. When no lookup confirms a value, still stage its
+  paper wording without the identifier: the builder keeps it as unresolved for
+  curator review. Never drop an unmatched value and never put paper wording in
+  an identifier or label field. Pass each qualifier as the paper supports it;
+  the builder matches it to a GO relation allowed for the term's aspect and
+  keeps any other qualifier unresolved.
   1. Call `agr_literature_reference_lookup` for the active paper and use only
-     its returned Alliance reference CURIE as `reference_curie`. Preserve an
-     unresolved blocker when the paper cannot be matched unambiguously.
+     its returned Alliance reference CURIE as `reference_curie`. Omit it and
+     keep an unresolved blocker when the paper cannot be matched unambiguously.
   2. Call `resolve_gene_product` with `NCBITaxon:10116`, provider prefix `RGD`,
      and miRBase organism prefix `rno`. Use only returned identity and provenance.
      Never synthesize an RGD CURIE. For mature RNA, precursor, or multi-gene
-     ambiguity, omit `gene_product_curie`, set `resolution_state: unresolved`,
-     and retain every resolver candidate and ambiguity in `identity_resolution`
-     plus a concrete `blocking_reasons` entry.
+     ambiguity, omit `gene_product_curie` and `gene_product_label` so the gene
+     product stays unresolved, and retain every resolver candidate and ambiguity
+     in `identity_resolution` plus a concrete `blocking_reasons` entry.
   3. Call `quickgo_api_call` for every proposed GO CURIE, label, aspect, and any
      hierarchy claim. Never answer from memory. Preserve upstream or hierarchy
      limitations rather than guessing a parent, child, term, or aspect.
@@ -103,9 +113,11 @@ content: |
 
   <builder_workflow>
   Call `stage_go_recommendation` once per retained GO recommendation. Preserve
-  evidence IDs, exact identity state, GO term/aspect, evidence/ECO, reference,
-  With/From, qualifiers, extensions, negation, existing-annotation context,
-  hierarchy/section limitations, and blocker state. Give each a `rationale`
+  evidence IDs, paper wording and looked-up identifiers, GO term/aspect, the
+  evidence code (the builder matches its ECO class), reference, With/From,
+  qualifiers, extensions, negation, existing-annotation context,
+  hierarchy/section limitations, and blocker state. The builder derives each
+  value's resolution state; there is no state to set. Give each a `rationale`
   saying why you selected it; for IMP it must name the perturbation and the
   phenotype in the paper's exact wording.
   Multiple GO terms or experimentally distinct claims require separate staged

@@ -4,12 +4,15 @@ Thin domain adapter over the project-agnostic ``ExtractionBuilderWorkspace`` eng
 ``finalize_builder_extraction`` orchestration. Mirrors ``phenotype_builder_tools.py`` but adapted to
 the disease FULL-LinkML-alignment target:
 
-  * The candidate stages a disease mention, a pending DOID term (name/CURIE), the SUBJECT
-    (subject_type + identifier/label) that selects the concrete Gene/Allele/AGM subtype (D1/D2),
-    role/confidence, data provider, ECO evidence_code_curies[] (D3), an optional
-    disease_relation_name (D5), source mentions, and evidence_record_ids.
+  * The candidate stages the disease as the paper words it (plus a proposed DOID/name), the
+    SUBJECT as the paper names it (plus subject_type and a proposed identifier) that selects the
+    concrete Gene/Allele/AGM subtype (D1/D2), role/confidence, data provider, ECO
+    evidence_code_curies[] (D3), an optional disease_relation_name (D5), source mentions, and
+    evidence_record_ids.
   * NO resolver-backed controlled fields: the active validator bindings resolve the staged
     DOID/subject/relation/ECO/data-provider inputs inline (``require_resolver_selections=False``).
+    A value that does not match is still staged, unresolved, for the validators to decide
+    (ALL-1283); proposals never become validated values.
   * single_reference is NOT staged from free text — it stays pending (D4 is blocked: no durable
     Alliance reference identity exists at chat-extraction time; see disease-approach.md).
 
@@ -31,6 +34,7 @@ from pydantic import (
     StrictStr,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 from agr_ai_curation_runtime.agr_lookup import (
@@ -97,22 +101,71 @@ class _StrictToolModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ExperimentalConditionInput(_StrictToolModel):
-    """One grounded ExperimentalCondition the extractor read from the paper.
+_CONDITION_TERM_COMPONENTS = (
+    "condition_class",
+    "condition_id",
+    "condition_chemical",
+    "condition_taxon",
+)
 
-    All ontology/chemical/taxon CURIEs are GROUNDED by the extractor via the term-helper
-    lookup tools before staging (do not guess ZECO/ChEBI from memory). Every field is
-    optional and sparse — stage only what the paper explicitly states. The condition carries
-    no quote text: the validator reads the annotation's evidence_record_ids (the spans the
-    condition was read from) per the evidence contract.
+
+class ExperimentalConditionInput(_StrictToolModel):
+    """One experimental condition the extractor read from the paper.
+
+    Each condition part (class, specific condition, chemical, taxon) is staged with its paper
+    wording in ``<part>_mention``; a CURIE found with the term-helper lookup tools goes in
+    ``<part>_curie`` as a proposal the condition validator checks. A part with a CURIE but no
+    paper wording is rejected. Every field is optional and sparse — stage only what the paper
+    explicitly states. The condition carries no quote text: the validator reads the
+    annotation's evidence_record_ids (the spans the condition was read from) per the evidence
+    contract.
     """
 
-    condition_class_curie: Optional[StrictStr] = None
-    condition_id_curie: Optional[StrictStr] = None
-    condition_chemical_curie: Optional[StrictStr] = None
-    condition_taxon_curie: Optional[StrictStr] = None
+    condition_class_mention: Optional[StrictStr] = Field(
+        default=None,
+        description="The kind of experimental variable as the paper words it (for example 'chemical treatment').",
+    )
+    condition_class_curie: Optional[StrictStr] = Field(
+        default=None,
+        description="Proposed ZECO class ID for that wording, from the term lookup tools; a validator confirms it.",
+    )
+    condition_id_mention: Optional[StrictStr] = Field(
+        default=None,
+        description="The specific condition as the paper words it, when stated.",
+    )
+    condition_id_curie: Optional[StrictStr] = Field(
+        default=None,
+        description="Proposed ZECO/XCO ID for the specific condition; a validator confirms it.",
+    )
+    condition_chemical_mention: Optional[StrictStr] = Field(
+        default=None,
+        description="The chemical as the paper names it, when a chemical treatment is stated.",
+    )
+    condition_chemical_curie: Optional[StrictStr] = Field(
+        default=None,
+        description="Proposed ChEBI ID for the chemical; a validator confirms it.",
+    )
+    condition_taxon_mention: Optional[StrictStr] = Field(
+        default=None,
+        description="The organism as the paper names it, only when the condition involves a distinct organism.",
+    )
+    condition_taxon_curie: Optional[StrictStr] = Field(
+        default=None,
+        description="Proposed NCBITaxon ID for that organism; a validator confirms it.",
+    )
     condition_free_text: Optional[StrictStr] = None
     condition_summary: Optional[StrictStr] = None
+
+    @model_validator(mode="after")
+    def _curie_needs_paper_wording(self) -> "ExperimentalConditionInput":
+        for component in _CONDITION_TERM_COMPONENTS:
+            curie = getattr(self, f"{component}_curie")
+            mention = getattr(self, f"{component}_mention")
+            if curie is not None and curie.strip() and not (mention and mention.strip()):
+                raise ValueError(
+                    f"{component}_curie needs {component}_mention, the paper's wording for it"
+                )
+        return self
 
 
 class ConditionRelationInput(_StrictToolModel):
@@ -136,11 +189,26 @@ class DiseaseStageInput(_StrictToolModel):
         description="One short advisory sentence conveying relevant configured validation rules and evidence-backed context for this finding; not source evidence or a resolved identity",
     )
     pending_ref_id: StrictStr
-    mention: StrictStr
-    disease_name: StrictStr
+    mention: StrictStr = Field(
+        description=(
+            "The disease exactly as the paper words it. It is kept as the paper wording and "
+            "staged even when no Disease Ontology term matches; validators decide."
+        ),
+    )
+    disease_name: StrictStr = Field(
+        description=(
+            "The Disease Ontology name you propose for this disease. The disease ontology "
+            "validator checks it; it never replaces the paper wording."
+        ),
+    )
     role: StrictStr
     confidence: StrictStr
-    data_provider: StrictStr
+    data_provider: StrictStr = Field(
+        description=(
+            "The Alliance member abbreviation you choose for the paper's organism (for example "
+            "MGI or ZFIN); the data provider validator confirms it."
+        ),
+    )
     rationale: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
     source_mentions: List[StrictStr] = Field(
@@ -152,12 +220,31 @@ class DiseaseStageInput(_StrictToolModel):
             "verified quote/provenance stays in evidence_record_ids."
         ),
     )
-    disease_curie: Optional[StrictStr] = None
+    disease_curie: Optional[StrictStr] = Field(
+        default=None,
+        description="A DOID the paper itself gives for this disease; a validator confirms it.",
+    )
     subject_type: Optional[StrictStr] = None
-    subject_identifier: Optional[StrictStr] = None
-    subject_label: Optional[StrictStr] = None
-    disease_relation_name: Optional[StrictStr] = None
-    evidence_code_curies: List[StrictStr] = Field(default_factory=list, max_length=20)
+    subject_identifier: Optional[StrictStr] = Field(
+        default=None,
+        description="The subject identifier you propose; the subject validator confirms it.",
+    )
+    subject_label: Optional[StrictStr] = Field(
+        default=None,
+        description=(
+            "The subject (gene, allele, or model) as the paper names it. Required whenever "
+            "subject_type or subject_identifier is staged."
+        ),
+    )
+    disease_relation_name: Optional[StrictStr] = Field(
+        default=None,
+        description="The Disease Relation term you choose; the relation validator confirms it.",
+    )
+    evidence_code_curies: List[StrictStr] = Field(
+        default_factory=list,
+        max_length=20,
+        description="ECO IDs you propose; each is confirmed separately by the evidence code validator.",
+    )
     # R4 optional slots. genetic_sex_name is a single Genetic Sex CV term; disease_qualifier_names
     # and with_gene_identifiers are multivalued (validated/snapshotted at [0], full list carried).
     genetic_sex_name: Optional[StrictStr] = None
@@ -192,6 +279,32 @@ class DiseaseStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("source_mentions must contain at least one non-empty value")
         return cleaned
+
+    @model_validator(mode="after")
+    def _subject_needs_paper_wording(self) -> "DiseaseStageInput":
+        issue = _subject_wording_issue(self.model_dump())
+        if issue is not None:
+            raise ValueError(issue)
+        return self
+
+
+_SUBJECT_DETAIL_FIELDS = ("subject_identifier", "subject_type")
+
+
+def _subject_wording_issue(fields: Mapping[str, Any]) -> Optional[str]:
+    """Why staged subject details lack the subject's paper wording, or None."""
+
+    label = fields.get("subject_label")
+    if isinstance(label, str) and label.strip():
+        return None
+    staged = [
+        name
+        for name in _SUBJECT_DETAIL_FIELDS
+        if isinstance(fields.get(name), str) and fields[name].strip()
+    ]
+    if not staged:
+        return None
+    return f"{', '.join(staged)} need subject_label, the subject as the paper names it"
 
 
 class DiseasePatchUpdateInput(_StrictToolModel):
@@ -337,10 +450,11 @@ def _staged_condition_relations(
         for condition in relation.conditions:
             component: dict[str, Any] = {}
             for field_name in (
-                "condition_class_curie",
-                "condition_id_curie",
-                "condition_chemical_curie",
-                "condition_taxon_curie",
+                *(
+                    f"{part}_{suffix}"
+                    for part in _CONDITION_TERM_COMPONENTS
+                    for suffix in ("mention", "curie")
+                ),
                 "condition_free_text",
                 "condition_summary",
             ):
@@ -424,6 +538,13 @@ def _stage_disease_observation_impl(
     """Stage one retained, evidence-backed disease assertion through the builder workspace.
 
     Args:
+        mention: The disease exactly as the paper words it. It is kept as paper wording and
+            staged even when no Disease Ontology term matches; the disease ontology validator
+            decides the term.
+        disease_name: The Disease Ontology name you propose; the validator checks it and it
+            never replaces the paper wording.
+        subject_label: The subject (gene, allele, or model) as the paper names it. Required
+            whenever subject_type or subject_identifier is staged.
         validation_guidance: Optional short sentence forwarding relevant rules from your
             configured prompt and case-specific paper context to this finding's validators.
             Distinguish domain rules from paper facts. Do not copy whole prompts, quote
@@ -624,6 +745,15 @@ def _patch_disease_observation_impl(
                 )
             continue
         _set_disease_patch_value(payload, update.field_path, update.string_value)
+
+    subject_issue = _subject_wording_issue(payload)
+    if subject_issue is not None:
+        return _disease_validation_result(
+            message=f"patch_disease_observation rejected: {subject_issue}.",
+            issues=[{"field_path": "subject_label", "reason": "missing_subject_wording", "message": subject_issue}],
+            method="patch_disease_observation",
+            attempted_query=attempted_query,
+        )
 
     workspace.upsert_candidate(
         candidate_id=patch_input.candidate_id,

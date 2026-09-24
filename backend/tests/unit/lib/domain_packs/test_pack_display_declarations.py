@@ -50,8 +50,10 @@ PACK_PATHS = {
 }
 SHAPES_PATH = REPO_ROOT / "backend" / "tests" / "fixtures" / "flows" / "display_value_shapes.json"
 
-ROLE_KEYS = {"label", "id", "state"}
-SPEC_KEYS = ROLE_KEYS | {"resolved_states", "compose", "separator"}
+# ``mention`` declares a resolvable value (ALL-1283): the paper wording leaf beside label/id.
+ROLE_KEYS = {"label", "id", "state", "mention"}
+# ``validated`` names further identity keys only a validator fills (not a display role).
+SPEC_KEYS = ROLE_KEYS | {"resolved_states", "compose", "separator", "validated"}
 
 # Models no display can be declared for yet, each with the reason. Keep this list short:
 # a new structured model must declare display instead of being added here.
@@ -76,9 +78,6 @@ EXEMPT_MODELS = {
     ("agr.alliance.phenotype", "PhenotypeAnnotationPayload"): (
         "curatable-unit row whose only own label leaf is the free-text statement; the "
         "phenotype terms render through the phenotype_terms list field"
-    ),
-    ("agr.alliance.disease", "VocabularyTermSnapshotPayload"): (
-        "declared but referenced by no field (condition_relation_type leaves are declared directly)"
     ),
 }
 EXEMPT_FIELDS = {
@@ -190,10 +189,11 @@ def _compose_path(entry: Any) -> str | None:
 
 
 def _display_leaves(spec: dict[str, Any]) -> list[str]:
-    """Paths a spec reads: its label/id leaves, or its compose parts' paths."""
+    """Paths a spec reads: its label/id leaves (and a resolvable value's paper
+    wording, shown beside UNRESOLVED), or its compose parts' paths."""
 
     if "compose" not in spec:
-        return [spec[role] for role in ("label", "id") if role in spec]
+        return [spec[role] for role in ("label", "id", "mention") if role in spec]
     return [
         leaf
         for entry in spec["compose"]
@@ -244,6 +244,9 @@ def _spec_errors(
             DomainPackFieldType.ARRAY,
         }:
             errors.append(f"{where}: {role} {spec[role]!r} must name a scalar leaf")
+    for key in spec.get("validated") or []:
+        if key not in children:
+            errors.append(f"{where}: validated leaf {key!r} is not a declared child path")
     if ("state" in spec) != ("resolved_states" in spec):
         errors.append(f"{where}: state and resolved_states must be declared together")
     resolved = spec.get("resolved_states")

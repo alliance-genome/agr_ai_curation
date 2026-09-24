@@ -199,8 +199,9 @@ def test_semantic_fixture_reproduces_original_payload_size():
     assert {row["validation.status"] for row in validation_rows} == {"resolved", "open"}
     # Resolved and unresolved values share one statement.
     first = object_rows[0]
-    assert first["object.attribute.anatomy_term_status"] == ["resolved", "unresolved_proposal"]
-    assert first["object.attribute.anatomy_term_ids"][1] is None
+    assert [term["resolution_state"] for term in first["object.attribute.anatomy_term_terms"]] == [
+        "resolved", "unresolved"]
+    assert first["object.attribute.anatomy_term_terms"][1]["curie"] is None
 
 
 @pytest.mark.asyncio
@@ -252,7 +253,8 @@ async def test_chat_output_uses_tools_over_bundle_not_instruction_payload(monkey
     for output in outputs.values():
         assert len(output) <= budget
     catalog_page = json.loads(outputs["call-0"])["inventory"]["field_catalog"]
-    assert catalog_page["matching_fields"] >= 3
+    # One resolvable-term field (ALL-1283) instead of parallel label/id/status lists.
+    assert catalog_page["matching_fields"] >= 1
     assert all("anatomy" in entry["ref"] for entry in catalog_page["entries"])
     validation_catalog = json.loads(outputs["call-1"])["inventory"]["field_catalog"]
     assert validation_catalog["row_source"] == "validation_finding"
@@ -287,7 +289,9 @@ async def test_chat_output_uses_tools_over_bundle_not_instruction_payload(monkey
     lines = content.split("\n")
     assert lines[: len(EXPECTED_ROWS) + 2] == _expected_table_lines()
     assert content.endswith(UNRESOLVED_CAVEAT)
-    assert "vulval muscle [unresolved proposal]" in content
+    # An unresolved term reads UNRESOLVED; its paper wording never fills the cell (ALL-1283).
+    assert "body wall musculature (WBbt:9000001); UNRESOLVED" in content
+    assert "vulval muscle" not in content
     assert "body wall musculature (WBbt:9000001)" in content
     assert EM_DASH in content
     for reagent in EXCLUDED_REAGENT_VALUES:
