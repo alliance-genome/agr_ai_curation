@@ -760,8 +760,15 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
                         "object_type": "gene_mention_evidence",
                         "object_role": "validated_reference",
                         "pending_ref_id": "gene-fixture-review-object-1",
+                        # Seeded as the gene validator resolved it: review rows
+                        # read an unvalidated gene as legacy, unverified.
                         "payload": {
                             "gene_symbol": "alpha-1",
+                            "primary_external_id": "FB:FBgn0000008",
+                            "taxon": "NCBITaxon:7227",
+                            "resolution_state": "resolved",
+                            "lookup_outcome": "matched",
+                            "validator_explanation": None,
                             "entity_type": "gene",
                             "normalized_id": "FB:FBgn0000008",
                             "source_mentions": ["Alpha mention"],
