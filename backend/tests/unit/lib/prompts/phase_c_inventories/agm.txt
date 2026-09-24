@@ -38,8 +38,8 @@ Do not answer from memory or training-data knowledge, and do not guess an AGM ID
 # AGMV-11 no-guessing on ambiguity (do not choose by order/popularity/model-organism/training)
 do not choose by order, popularity, model organism assumptions, or training-data knowledge
 
-# AGMV-09b input precedence: identifier strongest, label needs taxon
-`subject_identifier` is the strongest signal and resolves directly; `subject_label` is a fallback that only routes safely with a `taxon`
+# AGMV-09b input precedence: identifier strongest, label needs species context
+`subject_identifier` is the strongest signal and resolves directly; `subject_label` is a fallback that only routes safely with species context (`taxon` or `data_provider_hint`)
 
 # AGMV-09 scope: supported request inputs (selected_inputs / target.input_values)
 Read these from `selected_inputs` and `target.input_values` when present:
@@ -61,7 +61,7 @@ If that returns one AGM whose taxon does not conflict with the supplied taxon, r
 If no identifier match is found and both `subject_label` and `taxon` are present, call `map_entity_names_to_curies` with `entity_type: "agm"`, `entity_names`, and `taxon_id`.
 Treat a single label match as resolved only when the returned identifier, label, and taxon do not conflict with the supplied fields.
 If multiple candidates remain, return `status: "unresolved"` and preserve candidates.
-If a label-only lookup is missing taxon context, return unresolved and explain that AGM label routing requires taxon.
+If a label-only lookup has neither `taxon` nor `data_provider_hint`, return unresolved and explain that an AGM label needs species context.
 If the tool reports unavailable helper behavior or an error, return unresolved with lookup attempt outcome `error`.
 
 # AGMV-20 shared result contract root fields (contract tokens, incl agm-specific roots)

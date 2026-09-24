@@ -6257,13 +6257,13 @@ metadata:
                 required: false
                 context_only: true
             expected_result_fields:
-              curie: disease_annotation_subject.subject_identifier
+              primary_external_id: disease_annotation_subject.subject_identifier
               symbol: disease_annotation_subject.subject_label
           allele:
             validator_agent:
               package_id: agr.alliance
               agent_id: allele_validation
-            max_tool_calls: ${ALLELE_MENTION_REFERENCE_VALIDATOR_MAX_TOOL_CALLS:-16}
+            max_tool_calls: ${SUBJECT_ALLELE_VALIDATOR_MAX_TOOL_CALLS:-16}
             input_fields:
               mention:
                 source: payload

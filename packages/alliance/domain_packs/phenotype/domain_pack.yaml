@@ -1994,14 +1994,14 @@ metadata:
                 path: proposed_taxon
                 required: false
             expected_result_fields:
-              curie: subject_identifier
+              primary_external_id: subject_identifier
               symbol: subject_label
               taxon: taxon
           allele:
             validator_agent:
               package_id: agr.alliance
               agent_id: allele_validation
-            max_tool_calls: ${ALLELE_MENTION_REFERENCE_VALIDATOR_MAX_TOOL_CALLS:-16}
+            max_tool_calls: ${SUBJECT_ALLELE_VALIDATOR_MAX_TOOL_CALLS:-16}
             input_fields:
               mention:
                 source: payload

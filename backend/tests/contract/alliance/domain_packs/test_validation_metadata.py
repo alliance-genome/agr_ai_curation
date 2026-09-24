@@ -930,14 +930,17 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert disease_gene_route.input_fields["proposed_gene_id"].required is False
     assert disease_gene_route.input_fields["data_provider_hint"].path == "data_provider.mention"
     assert disease_gene_route.expected_result_fields == {
-        "curie": "disease_annotation_subject.subject_identifier",
+        "primary_external_id": "disease_annotation_subject.subject_identifier",
         "symbol": "disease_annotation_subject.subject_label",
     }
     disease_allele_route = disease_subject_binding.for_route("allele")
     assert set(disease_allele_route.input_fields) == {
         "mention", "normalized_hint", "data_provider_hint", "source_mentions", "evidence_quotes",
     }
-    assert disease_allele_route.expected_result_fields == disease_gene_route.expected_result_fields
+    assert disease_allele_route.expected_result_fields == {
+        "curie": "disease_annotation_subject.subject_identifier",
+        "symbol": "disease_annotation_subject.subject_label",
+    }
     assert disease_subject_binding.for_route("agm").expected_result_fields == {
         "agm_id": "disease_annotation_subject.subject_identifier",
         "label": "disease_annotation_subject.subject_label",
@@ -965,7 +968,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         for value, route in phenotype_subject_binding.routes.items()
     } == {"gene": "gene_validation", "allele": "allele_validation", "agm": "agm_validation"}
     assert phenotype_subject_binding.for_route("gene").expected_result_fields == {
-        "curie": "subject_identifier",
+        "primary_external_id": "subject_identifier",
         "symbol": "subject_label",
         "taxon": "taxon",
     }
@@ -1036,7 +1039,7 @@ def test_subject_routes_search_the_paper_wording_with_the_route_validator():
     # The paper wording is the search input; an identifier the paper never printed is absent.
     assert result.selected_inputs == {"mention": "daf-2", "proposed_taxon": "NCBITaxon:6239"}
     assert result.request.expected_result_fields == {
-        "curie": "subject_identifier",
+        "primary_external_id": "subject_identifier",
         "symbol": "subject_label",
         "taxon": "taxon",
     }
@@ -1048,6 +1051,48 @@ def test_subject_routes_search_the_paper_wording_with_the_route_validator():
     )
     assert allele.request.validator_agent.agent_id == "allele_validation"
     assert allele.selected_inputs == {"mention": "e1370", "normalized_hint": "WB:WBVar00143949"}
+
+
+def _validator_lookup_configs() -> dict[str, Mapping[str, Any]]:
+    configs = {}
+    for agent_path in (REPO_ROOT / "packages/alliance/agents").glob("*/agent.yaml"):
+        agent = yaml.safe_load(agent_path.read_text())
+        lookup = (agent.get("structured_finalization") or {}).get("lookup")
+        if lookup:
+            configs[agent["agent_id"]] = lookup
+    return configs
+
+
+def _result_key_is_grounded(lookup: Mapping[str, Any], key: str) -> bool:
+    if f"resolved_values.{key}" in lookup.get("fact_identity_paths", ()):
+        return True
+    grounding = lookup.get("record_grounding") or {}
+    return "resolved_values" in grounding.get("result_paths", ()) and key in grounding.get(
+        "identity_fields", ()
+    )
+
+
+def test_subject_routes_write_identifiers_their_validator_grounds():
+    """The subject identifier each route writes is checked against the lookup output
+    by that validator's finalization provenance check, so an identifier no lookup
+    returned can never reach the blocking subject_identifier."""
+
+    alliance_registry = load_alliance_domain_pack_registry()
+    lookups = _validator_lookup_configs()
+    for pack_id, binding_id in (
+        ("agr.alliance.disease", "disease_subject_materialization"),
+        ("agr.alliance.phenotype", "phenotype_subject_entity_validator"),
+    ):
+        registry = DomainPackValidationRegistry.from_domain_pack(alliance_registry.get_pack(pack_id))
+        binding = next(item for item in registry.bindings if item.binding_id == binding_id)
+        for route_value, route in binding.routes.items():
+            lookup = lookups[route.validator_agent.agent_id]
+            identity_keys = [
+                key for key, path in route.expected_result_fields.items()
+                if path.endswith("subject_identifier")
+            ]
+            assert len(identity_keys) == 1, (binding_id, route_value)
+            assert _result_key_is_grounded(lookup, identity_keys[0]), (binding_id, route_value)
 
 
 def test_subject_without_a_route_is_reported_and_never_validated():
