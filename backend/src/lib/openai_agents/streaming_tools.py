@@ -143,6 +143,7 @@ from src.lib.curation_workspace.extraction_results import (
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 from src.schemas.domain_validator import is_domain_validator_result_schema
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
+from src.lib.packages import tool_roles
 from .model_request_measurement import install_model_request_measurement
 
 logger = logging.getLogger(__name__)
@@ -854,32 +855,9 @@ def _extract_tool_name(tool: Any) -> str:
     ).strip()
 
 
-# Tool-binding metadata flag (in each domain pack's bindings.yaml) that marks a
-# tool as a builder-materializer finalize tool. The runtime derives the set of
-# finalize-tool names from this flag instead of a hardcoded literal, so adding a
-# new builder data type is a domain-pack edit, not a platform edit.
-_BUILDER_FINALIZATION_METADATA_KEY = "builder_finalization"
-
-
-@lru_cache(maxsize=1)
-def builder_finalization_tool_names() -> frozenset[str]:
-    """Return the registry-derived set of builder-materializer finalize-tool names.
-
-    A tool is a builder finalize tool when its package tool-binding metadata
-    declares ``builder_finalization: true``. This makes builder detection a
-    domain-pack/registry concern (project-agnostic core) rather than a hardcoded
-    per-type literal in the platform runtime.
-    """
-    return frozenset(
-        tool_id
-        for tool_id, metadata in _tool_metadata_by_name().items()
-        if bool(metadata.get(_BUILDER_FINALIZATION_METADATA_KEY))
-    )
-
-
 def is_builder_materializer_agent(agent: Agent) -> bool:
     """Return whether an agent finalizes backend-materialized builder output."""
-    finalization_tool_names = builder_finalization_tool_names()
+    finalization_tool_names = tool_roles.builder_finalization_tool_names()
     return any(
         _extract_tool_name(tool) in finalization_tool_names
         for tool in (getattr(agent, "tools", None) or [])
@@ -890,19 +868,6 @@ def _import_callable(import_path: str) -> Any:
     module_name, attr_name = import_path.split(":", 1)
     module = importlib.import_module(module_name)
     return getattr(module, attr_name)
-
-
-@lru_cache(maxsize=16)
-def _tool_metadata_by_name() -> Dict[str, Dict[str, Any]]:
-    """Return package-declared tool metadata keyed by tool ID."""
-    from src.lib.packages.tool_registry import load_tool_registry
-
-    registry = load_tool_registry()
-    return {
-        binding.tool_id: dict(binding.metadata)
-        for binding in registry.bindings
-        if isinstance(binding.metadata, dict)
-    }
 
 
 @lru_cache(maxsize=16)
@@ -927,7 +892,7 @@ def _tool_provider_adapter_factories(adapter_key: str) -> Dict[str, Any]:
 def _required_package_tool_names(available_tool_names: set[str]) -> set[str]:
     return required_package_tool_names_from_metadata(
         available_tool_names,
-        _tool_metadata_by_name(),
+        tool_roles.tool_metadata_by_name(),
     )
 
 
@@ -1005,7 +970,7 @@ def _compute_adaptive_specialist_max_turns(
     """Increase turn budget for package-declared bulk lookup workloads."""
     tool_names = _agent_tool_names(agent)
     bulk_specs = [
-        _tool_metadata_by_name().get(tool_name, {}).get("bulk_list_optimization")
+        tool_roles.tool_metadata_by_name().get(tool_name, {}).get("bulk_list_optimization")
         for tool_name in tool_names
     ]
     bulk_specs = [spec for spec in bulk_specs if isinstance(spec, dict) and spec.get("enabled")]
@@ -1067,7 +1032,7 @@ def _build_tool_efficiency_instruction(agent: Agent, input_text: str) -> str:
     """Return guidance that nudges large list processing toward fewer tool turns."""
     tool_names = _agent_tool_names(agent)
     bulk_specs = [
-        _tool_metadata_by_name().get(tool_name, {}).get("bulk_list_optimization")
+        tool_roles.tool_metadata_by_name().get(tool_name, {}).get("bulk_list_optimization")
         for tool_name in tool_names
     ]
     bulk_specs = [spec for spec in bulk_specs if isinstance(spec, dict) and spec.get("enabled")]
@@ -1152,7 +1117,7 @@ def _required_tool_failure_message(
             f"Required: {required_text}. Called: {called_text}."
         )
 
-    metadata_by_name = _tool_metadata_by_name()
+    metadata_by_name = tool_roles.tool_metadata_by_name()
     message = None
     for tool_name in sorted(required_tools):
         required_call = metadata_by_name.get(tool_name, {}).get("required_tool_call")
@@ -1438,7 +1403,7 @@ def _structured_specialist_finalization_required(
     if _structured_specialist_finalization_tool_name(finalization_config) is None:
         return False
     existing_tool_names = _agent_tool_names(agent)
-    if any(name in builder_finalization_tool_names() for name in existing_tool_names):
+    if any(name in tool_roles.builder_finalization_tool_names() for name in existing_tool_names):
         return False
     return True
 
@@ -4605,7 +4570,7 @@ def _builder_finalizer_tool_calls(
 ) -> List[SpecialistToolCall]:
     """Return builder finalizer tool calls observed in the specialist stream."""
 
-    finalizer_names = builder_finalization_tool_names()
+    finalizer_names = tool_roles.builder_finalization_tool_names()
     return [
         call
         for call in tool_calls

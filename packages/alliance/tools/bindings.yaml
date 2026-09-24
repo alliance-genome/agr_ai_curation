@@ -66,6 +66,9 @@ tools:
         callable_factory: agr_ai_curation_alliance.tools.agr_curation:create_groq_agr_curation_query_tool
         description: Compact method and payload_json wrapper for Groq tool schema constraints
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       namespace: reference_data_lookup
       name: AGR Curation Query
       category: Database
@@ -632,6 +635,9 @@ tools:
     description: Search for candidate standard terms (from an ontology or controlled list) that could fill one specific field, based on a phrase the agent read in the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       name: Search Domain Field Terms
       category: Database
       audit:
@@ -686,6 +692,9 @@ tools:
     description: Look at one ontology term in detail, plus a limited view of its neighbors in the term tree (broader terms above it, narrower terms below it, or terms beside it).
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       namespace: ontology_term_lookup
       name: Inspect Ontology Term
       category: Database
@@ -745,6 +754,9 @@ tools:
     description: Settle the official standard term for one field and return a confirmed value with its supporting trail, ready to use.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       name: Resolve Domain Field Term
       category: Database
       # Run-state builder/resolver tool: platform closure-binds the active resolver ledger +
@@ -2610,6 +2622,9 @@ tools:
     description: Look up a chemical compound in ChEBI (Chemical Entities of Biological Interest, a standard chemical database).
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       name: ChEBI API
       category: API
       documentation:
@@ -2773,6 +2788,9 @@ tools:
     description: Look up a Gene Ontology term in QuickGO.
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       name: QuickGO API
       category: API
       documentation:
@@ -2842,6 +2860,9 @@ tools:
     description: Fetch typed existing GO annotations for one validated gene CURIE.
     source_file: python/src/agr_ai_curation_alliance/tools/go_annotations.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       name: GO Consortium Existing Annotations
       category: API
       documentation:
@@ -2905,6 +2926,9 @@ tools:
     description: Resolve genes, precursor loci, and mature RNA products to typed evidence-backed Alliance gene candidates.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_product_resolution.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       namespace: reference_data_lookup
       name: Alliance Gene Product Resolver
       category: Database
@@ -2972,6 +2996,9 @@ tools:
     description: Look up which genes are counterparts of each other across species (orthology).
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       namespace: reference_data_lookup
       name: Alliance Orthology API
       category: API
@@ -3001,6 +3028,9 @@ tools:
     description: Look up a paper in the Alliance literature collection by its ID, or find candidate papers by title or citation text.
     source_file: python/src/agr_ai_curation_alliance/tools/literature_references.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       namespace: reference_data_lookup
       name: AGR Literature Reference Lookup
       category: Literature

@@ -10,7 +10,7 @@ def require_no_output_without_builder_tools(output: AgentOutputContract, tool_id
     """Ordinary response mode cannot secretly invoke builder finalization."""
     if output.output_state != "none":
         return
-    from src.lib.openai_agents.streaming_tools import builder_finalization_tool_names
+    from src.lib.packages.tool_roles import builder_finalization_tool_names
 
     if set(tool_ids).intersection(builder_finalization_tool_names()):
         raise ValueError(
@@ -33,7 +33,7 @@ def initial_agent_output_contract(agent) -> AgentOutputContract:
     definition = _inherited_curation_definition_for_db_agent(agent)
     if definition is None and getattr(agent, "visibility", None) == "system":
         from src.lib.config.agent_loader import get_agent_definition
-        from src.lib.openai_agents.streaming_tools import builder_finalization_tool_names
+        from src.lib.packages.tool_roles import builder_finalization_tool_names
 
         if set(agent.tool_ids or []).intersection(builder_finalization_tool_names()):
             definition = get_agent_definition(agent.agent_key)
@@ -82,7 +82,7 @@ def domain_extraction_ref_for_agent(
 
 def resolve_domain_extraction_definition(ref: DomainExtractionRef) -> AgentDefinition:
     from src.lib.flows.validation_attachments import domain_pack_validation_registries
-    from src.lib.openai_agents.streaming_tools import builder_finalization_tool_names
+    from src.lib.packages.tool_roles import builder_finalization_tool_names
 
     definition = get_agent_definition_for_package(ref.package_id, ref.agent_id)
     if definition is None:
@@ -110,7 +110,7 @@ def validate_domain_extraction_selection(
     active_group_ids: list[str] | None,
 ) -> None:
     """Changing format does not grant tools or erase package access policy."""
-    from src.lib.openai_agents.streaming_tools import builder_finalization_tool_names
+    from src.lib.packages.tool_roles import builder_finalization_tool_names
 
     finalizers = builder_finalization_tool_names()
     expected = set(definition.tools).intersection(finalizers)

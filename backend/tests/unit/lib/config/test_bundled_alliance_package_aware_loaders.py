@@ -669,3 +669,32 @@ def test_bundled_alliance_first_pass_extractors_still_register_domain_envelope_s
         assert any(_b.__qualname__ == DomainEnvelopeExtractionResult.__qualname__ for _b in type.mro(discovered_schema))
         assert "curatable_objects" in discovered_schema.model_fields
         assert "metadata" in discovered_schema.model_fields
+
+
+def test_no_packaged_extraction_agent_carries_identity_lookup_tools(monkeypatch):
+    """Extraction reads the paper; validators do every database search (ALL-1276).
+
+    Base tools and group-scoped tools both count. Only the species context helper, which
+    maps a species to its provider and taxon (not an identity), stays on extractors.
+    """
+    from src.lib.packages import tool_roles
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    tool_roles.reset_cache()
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+    lookups = tool_roles.identity_lookup_tool_names()
+
+    assert "agr_species_context_lookup" not in lookups
+    assert {
+        "agr_curation_query", "search_domain_field_terms", "resolve_domain_field_term",
+        "inspect_ontology_term", "agr_literature_reference_lookup", "quickgo_api_call",
+    } <= lookups
+    violations = {
+        agent.agent_id: sorted(
+            ({*agent.tools, *(rule.tool_id for rule in agent.group_tool_policy.rules)}) & lookups
+        )
+        for agent in agents.values()
+        if tool_roles.is_extraction_agent(agent.tools)
+    }
+    assert {agent_id: tools for agent_id, tools in violations.items() if tools} == {}
+    tool_roles.reset_cache()

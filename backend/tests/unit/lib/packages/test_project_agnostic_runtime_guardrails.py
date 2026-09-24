@@ -398,9 +398,10 @@ def _reset_runtime_caches():
 
 
 def _reset_streaming_tool_caches(streaming_tools: ModuleType) -> None:
-    streaming_tools._tool_metadata_by_name.cache_clear()
+    from src.lib.packages import tool_roles
+
+    tool_roles.reset_cache()
     streaming_tools._tool_provider_adapter_factories.cache_clear()
-    streaming_tools.builder_finalization_tool_names.cache_clear()
     streaming_tools._run_state_tool_impls.cache_clear()
 
 

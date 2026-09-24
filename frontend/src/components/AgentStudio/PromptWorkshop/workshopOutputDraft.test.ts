@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { GenericProfileApiError, type GenericProfileContract, type GenericProfileRevision } from '@/services/genericProfileService'
-import { emptyOutputDraft, hydrateProfileOutput, outputDraftEqual, outputDraftFromContract, outputDraftSavePayload, profileValidationIssues } from './workshopOutputDraft'
+import { emptyOutputDraft, hydrateProfileOutput, isExtractionOutput, outputDraftEqual, outputDraftFromContract, outputDraftSavePayload, profileValidationIssues } from './workshopOutputDraft'
 
 const contract: GenericProfileContract = { name: 'Records', semantic_class: 'record', fields: [{ key: 'title', value_schema: { kind: 'string' } }] }
 const revision: GenericProfileRevision = { id: 'revision-id', profile_id: 'profile-id', revision: 2, fingerprint: 'sha256:fixture', contract, creator_id: 1, created_at: '2026-09-05T00:00:00Z' }
@@ -60,5 +60,19 @@ describe('explicit Workshop output draft', () => {
     const issue = { path: 'validator_mappings[0].inputs', code: 'provider_scope', message: 'Provider input is required' }
     expect(profileValidationIssues(new GenericProfileApiError(422, { issues: [issue] }))).toEqual([issue])
     expect(profileValidationIssues(new GenericProfileApiError(409, 'Stale revision'))[0].code).toBe('conflict')
+  })
+})
+
+describe('isExtractionOutput', () => {
+  it('treats structured extraction as extraction and a validator result schema as not', () => {
+    expect(isExtractionOutput(emptyOutputDraft(), [])).toBe(false)
+    expect(isExtractionOutput(emptyOutputDraft('profile_bound_generic'), [])).toBe(true)
+    expect(isExtractionOutput(emptyOutputDraft('unprofiled_generic'), [])).toBe(true)
+    expect(isExtractionOutput({ ...emptyOutputDraft('domain'), schemaKey: 'DemoEnvelope' }, ['DemoValidationResult'])).toBe(true)
+    expect(isExtractionOutput({ ...emptyOutputDraft('domain'), schemaKey: 'DemoValidationResult' }, ['DemoValidationResult'])).toBe(false)
+    expect(isExtractionOutput({
+      ...emptyOutputDraft('domain'),
+      domainExtractionRef: { package_id: 'demo.pkg', agent_id: 'demo_extractor', domain_pack_id: 'demo.pack' },
+    }, [])).toBe(true)
   })
 })

@@ -399,9 +399,21 @@ def _dedupe_tool_ids(tool_ids: List[str]) -> List[str]:
 
 
 def _builder_finalization_tool_ids() -> set[str]:
-    from src.lib.openai_agents.streaming_tools import builder_finalization_tool_names
+    from src.lib.packages.tool_roles import builder_finalization_tool_names
 
     return set(builder_finalization_tool_names())
+
+
+def is_validator_output_schema(output_schema_key: str) -> bool:
+    from src.lib.packages.tool_roles import is_validator_output_schema as _is_validator_schema
+
+    return _is_validator_schema(output_schema_key)
+
+
+def _identity_lookup_tool_ids() -> frozenset[str]:
+    from src.lib.packages.tool_roles import identity_lookup_tool_names
+
+    return identity_lookup_tool_names()
 
 
 def _tool_policy_by_key(db: Session) -> Dict[str, Any]:
@@ -445,7 +457,15 @@ def _merge_system_managed_tool_ids(
     requested_tool_ids: List[str],
     inherited_tool_ids: List[str],
 ) -> List[str]:
-    return _dedupe_tool_ids([*requested_tool_ids, *inherited_tool_ids])
+    """Requested tools plus inherited helpers; an extraction agent never inherits identity lookups."""
+    from src.lib.packages.tool_roles import identity_lookup_tool_names, is_extraction_agent
+
+    merged = _dedupe_tool_ids([*requested_tool_ids, *inherited_tool_ids])
+    if not is_extraction_agent(merged):
+        return merged
+    # Only inheritance is withheld: a lookup the curator requested stays, so validation reports it.
+    inherited_lookups = (set(inherited_tool_ids) - set(requested_tool_ids)) & identity_lookup_tool_names()
+    return [tool_id for tool_id in merged if tool_id not in inherited_lookups]
 
 
 def _validate_requested_tool_ids(
@@ -610,6 +630,10 @@ def _agent_validation_sources(
         output_schema_keys=output_schema_keys,
         group_ids=frozenset(get_valid_group_ids()),
         builder_finalization_tool_ids=frozenset(_builder_finalization_tool_ids()),
+        identity_lookup_tool_ids=_identity_lookup_tool_ids(),
+        extraction_output_schema_keys=frozenset(
+            key for key in output_schema_keys if not is_validator_output_schema(key)
+        ),
     )
 
 
@@ -1048,7 +1072,7 @@ def create_custom_agent(
             inherited_system_tool_ids,
         )
     else:
-        effective_tool_ids = parent_tool_ids
+        effective_tool_ids = _merge_system_managed_tool_ids([], parent_tool_ids)
     effective_output_schema_key = _normalize_output_schema_key(
         _selected_output_schema(
             output_contract, new_generic_profile,

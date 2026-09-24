@@ -158,9 +158,13 @@ export interface ModelOption {
   avoid_for: string[]
 }
 
-/** Tool policy config; `requires_document` is derived by the backend from the tool registry. */
+/**
+ * Tool policy config. `requires_document` and `identity_lookup` are derived by the backend from
+ * the tool registry; extraction agents cannot carry `identity_lookup` tools.
+ */
 export interface ToolLibraryConfig {
   requires_document: boolean
+  identity_lookup: boolean
   [key: string]: unknown
 }
 

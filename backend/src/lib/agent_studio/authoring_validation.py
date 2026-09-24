@@ -627,6 +627,9 @@ class AgentValidationSources:
     output_schema_keys: frozenset[str]
     group_ids: frozenset[str]
     builder_finalization_tool_ids: frozenset[str]
+    identity_lookup_tool_ids: frozenset[str]
+    # Output schemas whose agents extract (structured extraction, not validator results).
+    extraction_output_schema_keys: frozenset[str]
 
 
 class AgentDraftExtensionValidator(Protocol):
@@ -819,6 +822,24 @@ def validate_custom_agent_authoring_draft(
                 fix_hint="Choose a packaged builder format with no model schema, or remove the builder finalizer.",
             )
         )
+
+    if set(normalized_tool_ids) & set(sources.builder_finalization_tool_ids) or (
+        schema_key is not None and schema_key in sources.extraction_output_schema_keys
+    ):
+        lookups = [tool_id for tool_id in normalized_tool_ids if tool_id in sources.identity_lookup_tool_ids]
+        if lookups:
+            findings.append(
+                AuthoringValidationFinding(
+                    code="identity_lookup_on_extraction_agent",
+                    severity="error",
+                    path="custom_agent.tool_ids",
+                    message=(
+                        "Extraction agents cannot use database lookup tools. Extraction records the "
+                        "paper's wording; validators do the database search."
+                    ),
+                    fix_hint=f"Remove these tools: {', '.join(lookups)}.",
+                )
+            )
 
     normalized_allowed = list(dict.fromkeys(draft.allowed_group_ids))
     normalized_inherited = list(dict.fromkeys(draft.inherited_allowed_group_ids))

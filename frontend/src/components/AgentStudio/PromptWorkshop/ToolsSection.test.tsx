@@ -14,7 +14,7 @@ const toolLibrary: ToolLibraryItem[] = [
     curator_visible: true,
     allow_attach: true,
     allow_execute: true,
-    config: { requires_document: true },
+    config: { requires_document: true, identity_lookup: false },
   },
   {
     tool_key: 'chebi_lookup',
@@ -24,7 +24,7 @@ const toolLibrary: ToolLibraryItem[] = [
     curator_visible: true,
     allow_attach: true,
     allow_execute: true,
-    config: { requires_document: false },
+    config: { requires_document: false, identity_lookup: false },
   },
   {
     tool_key: 'blocked_tool',
@@ -34,7 +34,7 @@ const toolLibrary: ToolLibraryItem[] = [
     curator_visible: true,
     allow_attach: true,
     allow_execute: false,
-    config: { requires_document: false },
+    config: { requires_document: false, identity_lookup: false },
   },
 ]
 

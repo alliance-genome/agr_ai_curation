@@ -2131,6 +2131,20 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
     )
     requested_tool_ids = group_tool_resolution.tool_ids
     group_tool_audit = group_tool_resolution.audit_metadata()
+    # An extraction agent never runs with identity-lookup tools (pinned and restored
+    # revisions included); it is refused until re-saved without them.
+    from src.lib.packages.tool_roles import require_no_identity_lookup_on_extraction
+
+    require_no_identity_lookup_on_extraction(
+        requested_tool_ids,
+        output_state=(
+            execution_snapshot.output_contract.output_state if execution_snapshot is not None else None
+        ),
+        output_schema_key=(
+            execution_snapshot.output_contract.output_schema_key if execution_snapshot is not None else None
+        ),
+        agent_label=f"Agent '{db_agent.agent_key}'",
+    )
     if raw_group_tool_policy.get("rules"):
         logger.info(
             "Resolved group-scoped tools for agent '%s': base=%s added=%s denied=%s",
