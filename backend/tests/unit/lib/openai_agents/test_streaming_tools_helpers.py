@@ -2963,6 +2963,12 @@ def _gene_extractor_domain_output() -> str:
                     ],
                     "payload": {
                         "mention": "crumbs",
+                        "gene_symbol": None,
+                        "primary_external_id": None,
+                        "taxon": None,
+                        "resolution_state": "unresolved",
+                        "lookup_outcome": "not_validated",
+                        "validator_explanation": "Not validated yet.",
                         "species": "Drosophila melanogaster",
                         "taxon_hint": "NCBITaxon:7227",
                         "data_provider_hint": "FB",
@@ -3314,7 +3320,8 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     )
     observed_record = {}
 
-    def fake_envelope_normalizer(record):
+    def fake_envelope_normalizer(record, *, stored):
+        assert stored is False  # the chat runtime normalizes fresh output
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
         return source_envelope
@@ -3436,7 +3443,8 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
     )
     observed_record = {}
 
-    def fake_envelope_normalizer(record):
+    def fake_envelope_normalizer(record, *, stored):
+        assert stored is False  # the chat runtime normalizes fresh output
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
         observed_record["execution_receipt"] = record.execution_receipt
@@ -3608,7 +3616,7 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     monkeypatch.setattr(
         domain_envelope_normalization,
         "domain_envelope_from_extraction_result",
-        lambda _record: envelope,
+        lambda _record, *, stored: envelope,
     )
 
     captured_requests = []

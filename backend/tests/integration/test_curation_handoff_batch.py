@@ -377,6 +377,18 @@ def _extraction_record(
         else "tool_verified_gene_paper"
     )
     payload = build_domain_envelope_extraction_payload(load_evidence_fixture(fixture_name))
+    # A new flow extraction stages each declared value unvalidated (core review S2).
+    for curatable_object in payload.get("curatable_objects") or []:
+        if curatable_object["object_type"] == "gene_mention_evidence":
+            curatable_object["payload"].update({
+                "mention": curatable_object["payload"]["entity_name"],
+                "gene_symbol": None,
+                "primary_external_id": None,
+                "taxon": None,
+                "resolution_state": "unresolved",
+                "lookup_outcome": "not_validated",
+                "validator_explanation": "Not validated yet.",
+            })
     candidate_count = len(payload.get("curatable_objects") or [])
     extraction_result_id = f"{flow_run_id}:{adapter_key}:source"
     return CurationExtractionResultRecord(
@@ -641,7 +653,7 @@ def test_batch_flow_ending_in_curation_handoff_creates_owned_sessions(handoff_db
         source_row.id
     )
     assert envelope_row.source_payload_hash == domain_envelope_payload_hash(
-        domain_envelope_from_extraction_result(source_schema)
+        domain_envelope_from_extraction_result(source_schema, stored=True)
     )
     assert {candidate.envelope_id for candidate in candidate_rows} == {
         envelope_row.envelope_id
@@ -736,7 +748,7 @@ async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):
         session_id=origin_session_id,
         flow_run_id=flow_run_id,
     )
-    canonical_payload = domain_envelope_from_extraction_result(fixture).model_dump(
+    canonical_payload = domain_envelope_from_extraction_result(fixture, stored=True).model_dump(
         mode="json"
     )
     assert canonical_payload["metadata"]["source_extraction_result_id"].endswith(

@@ -44,7 +44,7 @@ class ChatMessage(BaseModel):
     Supports advanced OpenAI Agents SDK features:
     - Per-agent model selection (supervisor vs specialists)
     - Temperature control for response determinism
-    - Reasoning effort for GPT-5 models (extended thinking)
+    - Reasoning effort for models that support reasoning (extended thinking)
     - Conversation history for multi-turn context
     """
     message: str
@@ -57,8 +57,8 @@ class ChatMessage(BaseModel):
     supervisor_temperature: Optional[float] = None
     specialist_temperature: Optional[float] = None
 
-    # Reasoning effort for GPT-5 models ("minimal", "low", "medium", "high")
-    # Only applies when using gpt-5 family models
+    # Reasoning effort; each model's catalog entry lists the levels it accepts.
+    # Only applies to models that support reasoning
     supervisor_reasoning: Optional[str] = None
     specialist_reasoning: Optional[str] = None
 

@@ -4002,7 +4002,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
             metadata=dict(candidate.metadata),
             execution_receipt=candidate.execution_receipt,
         )
-        envelope = domain_envelope_from_extraction_result(extraction_record)
+        envelope = domain_envelope_from_extraction_result(extraction_record, stored=False)
         domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
         dispatch_phase_timings_ms["envelope_materialization_ms"] = _elapsed_ms(
             envelope_started_at
@@ -5299,7 +5299,7 @@ async def run_specialist_with_events(
                                 preview = result._accumulated_text[-200:] if text_len > 200 else result._accumulated_text
                                 logger.debug("%s TEXT OUTPUT (%s chars): ...%s", specialist_name, text_len, preview)
 
-                    # Capture reasoning summary delta events (GPT-5 reasoning mode)
+                    # Capture reasoning summary delta events (reasoning mode)
                     elif response_type == "ResponseReasoningSummaryPartDoneEvent":
                         # This event contains a part of the reasoning summary
                         part = getattr(data, "part", None)
@@ -6013,7 +6013,7 @@ async def run_specialist_with_events(
         # =============================================================================
         # STREAMING TEXT FALLBACK
         # =============================================================================
-        # GPT-5 + reasoning mode may not include a message_output_item in new_items,
+        # Reasoning mode may not include a message_output_item in new_items,
         # but the text IS streamed via ResponseTextDeltaEvent and accumulated in
         # result._accumulated_text. Use this as a last-resort fallback for plain text agents.
         if (
@@ -6039,7 +6039,7 @@ async def run_specialist_with_events(
                         "specialist": specialist_name,
                         "text_length": len(final_output),
                         "extraction_method": "streaming_text_fallback",
-                        "message": f"{specialist_name} output extracted from streaming deltas (GPT-5 reasoning mode workaround)"
+                        "message": f"{specialist_name} output extracted from streaming deltas (reasoning mode workaround)"
                     }
                 })
 

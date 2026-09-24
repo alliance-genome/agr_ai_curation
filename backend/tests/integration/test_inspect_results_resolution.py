@@ -138,6 +138,9 @@ def _gene_envelope(*, object_count: int) -> dict:
                     "gene_symbol": f"sym-{index}",
                     "primary_external_id": f"FB:FBgn{index:07d}",
                     "taxon": "NCBITaxon:7227",
+                    "resolution_state": "resolved",
+                    "lookup_outcome": "matched",
+                    "validator_explanation": None,
                 },
                 "evidence_record_ids": [f"evidence-{index}"],
             }

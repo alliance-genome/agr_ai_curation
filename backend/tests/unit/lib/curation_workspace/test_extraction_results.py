@@ -99,7 +99,12 @@ def _sample_persisted_domain_envelope_payload() -> dict:
                 "pending_ref_id": "gene-notch",
                 "payload": {
                     "mention": "notch",
+                    "gene_symbol": "N",
                     "primary_external_id": "FB:FBgn0004647",
+                    "taxon": "NCBITaxon:7227",
+                    "resolution_state": "resolved",
+                    "lookup_outcome": "matched",
+                    "validator_explanation": None,
                 },
                 "evidence_record_ids": ["evidence-notch"],
             }
@@ -738,6 +743,32 @@ def test_persist_extraction_result_leaves_flush_error_for_caller_rollback():
     assert session.flush_calls == 1
     assert session.rollback_calls == 0
     assert session.refresh_calls == 0
+
+
+def test_a_new_extraction_row_may_not_carry_values_without_resolution_state():
+    """Core review S2: only a record stored before the contract reads as legacy, so a new
+    row whose declared value records no state is refused before anything is written."""
+
+    session = _FakeSession()
+    payload = _sample_persisted_domain_envelope_payload()
+    for key in ("resolution_state", "lookup_outcome", "validator_explanation"):
+        payload["extracted_objects"][0]["payload"].pop(key)
+    request = CurationExtractionPersistenceRequest(
+        document_id=str(uuid4()),
+        adapter_key="gene",
+        agent_key="gene",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        payload_json=payload,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="gene_mention_evidence.<object root> records no resolution state",
+    ):
+        persist_extraction_result(request, db=session)
+
+    assert session.added is None
+    assert session.flush_calls == 0
 
 
 def test_persist_inline_validated_extraction_result_creates_idempotent_row():

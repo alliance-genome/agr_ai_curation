@@ -359,3 +359,20 @@ def test_a_binding_without_optional_fields_keeps_its_request_shape(tmp_path):
     request = captured["request"]
     assert request.optional_result_fields is None
     assert "optional_fields" not in request.target.model_dump(mode="json", exclude_none=True)
+
+
+def test_a_later_wave_target_missing_from_the_envelope_is_a_clear_error():
+    """Core review nit: materialization never drops an object, so a later wave that cannot
+    find its target names the binding and object instead of stopping on a bare StopIteration."""
+
+    from types import SimpleNamespace
+
+    from src.lib.domain_packs.validator_dispatch import _match_on_envelope
+
+    match = SimpleNamespace(
+        binding=SimpleNamespace(binding_id="fixture.check"),
+        object_envelope=CuratableObjectEnvelope(object_type="Claim", pending_ref_id="claim-9", payload={}),
+    )
+
+    with pytest.raises(ValueError, match=r"'fixture.check' targets object \[\('pending_ref_id', 'claim-9'\)\]"):
+        _match_on_envelope(match, _envelope())

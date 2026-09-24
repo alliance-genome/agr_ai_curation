@@ -276,7 +276,7 @@ def _make_allele_domain_payload(
 def test_domain_envelope_normalizer_promotes_extraction_result_to_objects_payload():
     extraction_result = _make_domain_envelope_extraction_result()
 
-    envelope = domain_envelope_from_extraction_result(extraction_result)
+    envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
     dumped = envelope.model_dump(mode="json")
 
     assert envelope.envelope_id == "extraction-result:extract-domain-1"
@@ -309,12 +309,12 @@ def test_domain_envelope_normalizer_rejects_mixed_canonical_and_extractor_shapes
     )
 
     with pytest.raises(ValueError, match="mixes DomainEnvelope.extracted_objects"):
-        domain_envelope_from_extraction_result(mixed_result)
+        domain_envelope_from_extraction_result(mixed_result, stored=True)
 
 
 def test_existing_envelope_id_rejects_cross_document_scope_collision():
     extraction_result = _make_domain_envelope_extraction_result(document_id="document-2")
-    envelope = domain_envelope_from_extraction_result(extraction_result)
+    envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
     row = SimpleNamespace(
         envelope_id=envelope.envelope_id,
         project_key="agr",
@@ -340,7 +340,7 @@ def test_existing_envelope_id_rejects_cross_document_scope_collision():
 
 def test_existing_envelope_id_rejects_changed_source_payload():
     extraction_result = _make_domain_envelope_extraction_result()
-    envelope = domain_envelope_from_extraction_result(extraction_result)
+    envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
     row = SimpleNamespace(
         envelope_id=envelope.envelope_id,
         project_key="agr",
@@ -366,8 +366,8 @@ def test_existing_envelope_id_rejects_changed_source_payload():
 
 def test_existing_envelope_id_accepts_identical_extraction_retry():
     extraction_result = _make_domain_envelope_extraction_result()
-    first_envelope = domain_envelope_from_extraction_result(extraction_result)
-    retry_envelope = domain_envelope_from_extraction_result(extraction_result)
+    first_envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
+    retry_envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
     source_payload_hash = domain_envelope_payload_hash(first_envelope)
     row = SimpleNamespace(
         envelope_id=first_envelope.envelope_id,
@@ -730,11 +730,33 @@ def test_domain_envelope_normalizer_rejects_extraction_that_staged_a_validated_v
     payload.update({"resolution_state": "resolved", "lookup_outcome": "matched", "validator_explanation": None})
 
     with pytest.raises(ValueError, match="extraction staged validated values: gene_mention_evidence.<object root>"):
-        domain_envelope_from_extraction_result(extraction_result)
+        domain_envelope_from_extraction_result(extraction_result, stored=False)
 
     for key in ("gene_symbol", "primary_external_id", "taxon"):
         payload[key] = None
     payload.update({"resolution_state": "unresolved", "lookup_outcome": "not_validated",
                     "validator_explanation": "Not validated yet.", "proposed_primary_external_id": "EXAMPLE:1"})
-    envelope = domain_envelope_from_extraction_result(extraction_result)
+    envelope = domain_envelope_from_extraction_result(extraction_result, stored=False)
     assert envelope.extracted_objects[0].payload["lookup_outcome"] == "not_validated"
+
+
+def test_only_a_stored_extraction_may_carry_values_without_resolution_state():
+    """Core review S2: a stateless value reads as "Recorded before validation tracking".
+    That is true only of a record stored before the contract, so fresh output may not
+    carry one, with or without an identity."""
+
+    extraction_result = _make_domain_envelope_extraction_result()
+    envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
+    assert envelope.extracted_objects[0].payload["primary_external_id"] == "EXAMPLE:1"
+
+    with pytest.raises(
+        ValueError,
+        match="extraction staged validated values: gene_mention_evidence.<object root> records no resolution state",
+    ):
+        domain_envelope_from_extraction_result(extraction_result, stored=False)
+
+    payload = extraction_result.payload_json["curatable_objects"][0]["payload"]
+    for key in ("gene_symbol", "primary_external_id", "taxon"):
+        payload[key] = None
+    with pytest.raises(ValueError, match="records no resolution state"):
+        domain_envelope_from_extraction_result(extraction_result, stored=False)
