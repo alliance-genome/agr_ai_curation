@@ -872,9 +872,12 @@ def _event_path_tokens(path: str) -> tuple[str | int, ...] | None:
 def validator_materialized_paths(object_metadata: Mapping[str, Any] | None) -> tuple[tuple[str | int, ...], ...]:
     """Payload paths validator write-back events recorded for one object.
 
-    Both packaged binding events (``materialized_field_paths`` and the keys of
-    ``original_values``) and closed-profile validator events (``field_paths``)
-    count.
+    Packaged binding events count the paths they wrote
+    (``materialized_field_paths``); closed-profile validator events count
+    their ``field_paths``. An event's ``original_values`` records what the
+    expected-result paths held before, written or not, so it counts only for
+    an event recorded before ``materialized_field_paths`` existed, which was
+    written only for resolved values it wrote.
     """
 
     if not isinstance(object_metadata, Mapping):
@@ -884,7 +887,9 @@ def validator_materialized_paths(object_metadata: Mapping[str, Any] | None) -> t
     for event in events if isinstance(events, list) else ():
         if not isinstance(event, Mapping):
             continue
-        recorded.extend(event.get("materialized_field_paths") or [])
+        if "materialized_field_paths" in event:
+            recorded.extend(event.get("materialized_field_paths") or [])
+            continue
         original_values = event.get("original_values")
         if isinstance(original_values, Mapping):
             recorded.extend(original_values)

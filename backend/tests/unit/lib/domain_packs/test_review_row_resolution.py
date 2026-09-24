@@ -369,8 +369,10 @@ def test_legacy_values_follow_the_read_time_rule(covered):
         assert value.lookup_outcome == "legacy_unverified"
         assert value.lookup_result == "Legacy, unverified"
         assert value.mention == f"gut (ONT:0000101) {LEGACY_UNVERIFIED_SUFFIX}"
-    # The stored payload is read, never rewritten.
-    assert _workspace_field(row, "site.curie").value == "ONT:0000101"
+    # The field shows the read-time value (an unverified id is not shown as a value);
+    # the stored identity, never rewritten, is what an override's `before` names.
+    assert _workspace_field(row, "site.curie").value == ("ONT:0000101" if covered else None)
+    assert value.stored_identity == {"curie": "ONT:0000101", "name": "gut"}
 
 
 def test_resolved_value_vocabularies_are_closed():
