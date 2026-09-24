@@ -709,13 +709,13 @@
         "name": "Role classification"
       },
       {
-        "description": "Determines the relationship type between genes and diseases using Alliance annotation types: is_implicated_in, is_marker_for, contributes_to, is_model_of",
+        "description": "Uses the relationship allowed for the paper's subject: genes can be is_implicated_in or is_marker_for (including supported orthology variants), alleles can be is_implicated_in, and affected genomic models can be is_model_of, is_ameliorated_model_of or is_exacerbated_model_of.",
         "example_query": "What gene-disease relationships are reported?",
         "example_result": "Returns association types with evidence (e.g., LRRK2 is_implicated_in Parkinson's disease)",
         "name": "Gene-disease association typing"
       },
       {
-        "description": "Passes each proposed disease \u2014 with the name as written, the gene-disease relationship, the data provider, the subject, and the supporting quote \u2014 to the Disease Validation Agent, the stronger specialist that authoritatively confirms each one. The extractor proposes; the validator looks the disease up in the Disease Ontology, confirms the vocabulary, and settles the result.",
+        "description": "Retains paper wording, the subject kind, relation, provider and supporting quote. Active specialist validators check their assigned fields: the Disease Validation Agent confirms the disease term, and subject validation routes separately to the gene, allele or affected-genomic-model validator. Unresolved checks remain visible for review.",
         "example_query": "Extract the diseases and pass them on for confirmation",
         "example_result": "Returns each proposed disease, its relationship, provider, and subject, with the supporting quote, ready for the Disease Validation Agent to confirm",
         "name": "Hands diseases to the validator"
@@ -927,9 +927,9 @@
   },
   "gene_expression": {
     "avoid_when": [
-      "For expression changes caused by mutations, RNAi, heat shock, or drug treatment; only wild-type patterns are captured.",
+      "For rescue-only overexpression, marker-only cell labeling or methods-only reagent descriptions without an expression finding. Measured expression changes after perturbation are in scope when supported by the paper.",
       "To turn tissue or stage wording into official ontology IDs; the domain pack's validators do that automatically on everything this agent extracts.",
-      "To produce a downloadable file; add a File Formatter after this agent."
+      "To produce a downloadable file by itself; attach a CSV, TSV or JSON output branch to this extractor."
     ],
     "capabilities": [
       {
@@ -951,7 +951,7 @@
         "name": "Negative Evidence Capture"
       },
       {
-        "description": "Passes each expression observation \u2014 the gene, the tissue or cell type, the developmental stage, the data provider, and the reagent used \u2014 to the specialist validators, each backed by its supporting quote. The extractor proposes; the validators authoritatively confirm the official terms and the data provider.",
+        "description": "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, tissue/cell-type, stage and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed.",
         "example_query": "Extract the expression observations and pass them on for confirmation",
         "example_result": "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms",
         "name": "Hands expression details to the validators"
@@ -983,9 +983,9 @@
   },
   "gene_expression_extraction": {
     "avoid_when": [
-      "For expression changes caused by mutations, RNAi, heat shock, or drug treatment; only wild-type patterns are captured.",
+      "For rescue-only overexpression, marker-only cell labeling or methods-only reagent descriptions without an expression finding. Measured expression changes after perturbation are in scope when supported by the paper.",
       "To turn tissue or stage wording into official ontology IDs; the domain pack's validators do that automatically on everything this agent extracts.",
-      "To produce a downloadable file; add a File Formatter after this agent."
+      "To produce a downloadable file by itself; attach a CSV, TSV or JSON output branch to this extractor."
     ],
     "capabilities": [
       {
@@ -1007,7 +1007,7 @@
         "name": "Negative Evidence Capture"
       },
       {
-        "description": "Passes each expression observation \u2014 the gene, the tissue or cell type, the developmental stage, the data provider, and the reagent used \u2014 to the specialist validators, each backed by its supporting quote. The extractor proposes; the validators authoritatively confirm the official terms and the data provider.",
+        "description": "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, tissue/cell-type, stage and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed.",
         "example_query": "Extract the expression observations and pass them on for confirmation",
         "example_result": "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms",
         "name": "Hands expression details to the validators"
@@ -1731,7 +1731,8 @@
     "limitations": [
       "Requires an uploaded PDF document \u2014 cannot extract phenotypes from chat text alone",
       "Wild-type/control observations are baselines, not phenotype assertions",
-      "Does not look anything up in the Alliance database: it records the paper's wording, plus an ID only when the paper prints one, and the validators find the official term and subject"
+      "Records paper wording and paper-printed IDs without identity lookups; the active term validator can confirm phenotype terms, while subject and reference resolution remain under development. Extraction does not imply submission readiness.",
+      "An assertion can contain several phenotype terms. Export the complete term list to retain all of them; the primary display label is not the full list."
     ],
     "note": "",
     "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence.",
