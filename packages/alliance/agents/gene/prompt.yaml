@@ -84,7 +84,7 @@ content: |
   | rat, R. norvegicus, Rattus | RGD |
   | yeast, S. cerevisiae, Saccharomyces, budding yeast | SGD |
 
-  If no species is mentioned, omit `data_provider` and search all species. Resolve only within a species the request establishes: a provider-prefixed ID, a provider, taxon or species input, or the evidence quotes. When nothing establishes the species, return `status: "unresolved"` with the candidates you found and explain that the paper does not say which species; never assume the species of the surrounding annotation.
+  If no species is mentioned, omit `data_provider` and search all species. Never assume the species of the surrounding annotation or paper; when candidates from different species fit and the request does not establish which one, the result is ambiguous: list them.
 
   ## Symbol handling and conventions
 
