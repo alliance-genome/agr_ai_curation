@@ -159,6 +159,55 @@ def _materialize(**kwargs):
     return result, result.envelope.extracted_objects[0]
 
 
+@pytest.mark.parametrize("adapter_key,object_type", [("phenotype", "PhenotypeAnnotation"), ("disease", "DiseaseAnnotation")])
+def test_composite_cannot_create_absent_declared_identity_from_root_slots(adapter_key, object_type):
+    """Real packaged nested condition: absent taxon cannot become a stateless identity."""
+    from agr_ai_curation_alliance.domain_packs._resolvable_payloads import condition_relations_payload
+    from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
+    from src.lib.curation_workspace.domain_envelope_normalization import require_recorded_resolution_states
+
+    pack = load_curation_adapter_registry().get_domain_pack(adapter_key)
+    envelope = DomainEnvelope(
+        envelope_id="absent-condition-taxon", domain_pack_id=pack.pack_id,
+        extracted_objects=[CuratableObjectEnvelope(object_type=object_type, pending_ref_id="observation-1", payload={
+            "condition_relations": condition_relations_payload([{
+                "condition_relation_type": "has_condition", "conditions": [{
+                    "condition_class_mention": "treatment", "condition_id_mention": "SB225002 treatment",
+                    "condition_chemical_mention": "SB225002", "condition_free_text": "3 μM; from tailbud",
+                }],
+            }]),
+        })],
+    )
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    match = next(match for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
+                 if match.binding.binding_id == "experimental_condition_validation")
+    request = build_domain_validation_request(match).request
+    values = {"condition_class": ("ZECO:0000111", "chemical treatment"),
+              "condition_id": ("ZECO:0000111", "chemical treatment"),
+              "condition_chemical": ("CHEBI:90705", "SB225002")}
+    decisions = {f"{component}_curie": {"status": "resolved", "lookup_outcome": "matched",
+                  "resolved_values": {f"{component}_curie": curie, f"{component}_name": name}}
+                 for component, (curie, name) in values.items()}
+    result = DomainValidatorResultBase.model_validate({
+        "request_id": request.request_id, "validator_binding_id": request.validator_binding_id,
+        "validator_agent": request.validator_agent, "target": request.target, "status": "resolved",
+        "resolved_values": {"condition_taxon_curie": "NCBITaxon:7955", "condition_taxon_name": "Danio rerio"},
+        "field_resolutions": decisions, "explanation": "Three stored components confirmed; no taxon component.",
+        "resolved_objects": [], "missing_expected_fields": [], "candidates": [],
+        "lookup_attempts": [], "curator_message": None,
+    })
+    patched = materialize_validator_results_into_envelope(envelope, pack.metadata, [
+        ValidatorResultMaterializationInput(match=match, request=request, result=result),
+    ]).envelope
+    condition = patched.extracted_objects[0].payload["condition_relations"][0]["conditions"][0]
+    assert "condition_taxon" not in condition
+    for component, (curie, name) in values.items():
+        assert condition[component]["resolution_state"] == "resolved"
+        assert condition[component]["curie"] == curie
+        assert condition[component]["name"] == name
+    require_recorded_resolution_states(patched.model_dump(mode="json"), adapter_key=adapter_key)
+
+
 def test_each_value_takes_its_own_decision_and_unlisted_values_get_no_write():
     result, patched = _materialize(
         status="unresolved",

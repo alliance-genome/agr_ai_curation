@@ -539,6 +539,31 @@ def test_stored_condition_resolves_without_its_absent_components(schemas):
     assert result.missing_expected_fields == []
 
 
+@pytest.mark.parametrize("root_key,record_field", [("condition_taxon_curie", "curie"), ("condition_taxon_name", "name")])
+def test_condition_rejects_root_identity_for_an_absent_component(schemas, root_key, record_field):
+    """Cross-domain dev trace 7a029a7d: a real taxon lookup is not a taxon decision."""
+    from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord
+    from src.schemas.domain_validator import ValidatorCandidate, ValidatorLookupAttempt
+
+    contract, workspace, decision = _stored_condition_workspace(schemas, with_chemical=False)
+    taxon_ref = workspace.record_lookup("stored-condition", call_id="taxon-lookup", attempt=ValidatorLookupAttempt(
+        provider="agr_curation_query", method="get_ontology_terms", query={"terms": ["NCBITaxon:7955"]},
+        result_count=1, outcome="success",
+    ), records=[CanonicalValidatorRecord(
+        candidate=ValidatorCandidate(value="NCBITaxon:7955", label="Danio rerio"),
+        values={"curie": "NCBITaxon:7955", "name": "Danio rerio"},
+        resolved_object={"curie": "NCBITaxon:7955", "name": "Danio rerio"},
+    )])[0]
+    decision["candidates"].append(_assessment(taxon_ref))
+    decision["slots"][root_key] = {"kind": "record", "record_ref": taxon_ref, "field": record_field}
+    with pytest.raises(ValueError, match="absent component condition_taxon"):
+        workspace.assemble(contract.decision_schema.model_validate(decision))
+    del decision["slots"][root_key]
+    result = workspace.assemble(contract.decision_schema.model_validate(decision))
+    assert set(result.field_resolutions) == {"condition_class_curie"}
+    assert not any(key.startswith("condition_taxon_") for key in result.resolved_values)
+
+
 def test_stored_component_judged_without_its_own_lookup_is_not_validated(schemas):
     contract, workspace, decision = _stored_condition_workspace(schemas)
     decision["components"][1] = {

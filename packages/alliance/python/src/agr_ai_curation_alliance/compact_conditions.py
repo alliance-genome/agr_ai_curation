@@ -249,6 +249,17 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
         if decision.status == "resolved" and unresolved:
             raise ValueError("An unresolved required component keeps the condition unresolved")
         values = deepcopy(payload["resolved_values"])
+        for component_type in _TERM_COMPONENTS:
+            if component_type in components:
+                continue
+            for suffix in ("curie", "name"):
+                root_slot = f"{component_type}_{suffix}"
+                if _present(values.get(root_slot)):
+                    raise ValueError(
+                        f"Condition root slot {root_slot} supplies an identity for absent component "
+                        f"{component_type}. Remove that root slot; only components listed in this "
+                        "request's domain_contract may supply condition identities."
+                    )
         for snapshot in normalized:
             root_slot = snapshot["component_type"] + "_curie"
             if root_slot not in request.expected_result_fields:
@@ -296,6 +307,8 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                                             "root condition_class_curie separately copies field curie.",
                                 },
                                 "rules": "Assess every listed component exactly once, no extras. "
+                                         "Root component CURIE/name slots must refer only to listed components; "
+                                         "omit root identity slots for absent components even when a lookup returns them. "
                                          "Lookup components use candidate record_refs and their actual lookup_refs. "
                                          "Resolved requires one selected record, lookup evidence and resolved fields. "
                                          "Supplemental not_checked components have no candidates, slots or lookup_refs. "

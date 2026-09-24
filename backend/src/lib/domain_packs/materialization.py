@@ -1244,6 +1244,11 @@ def _patch_target_object_from_field_resolutions(
                 or _resolvable_container_path(
                     payload, materialized_field_path, resolvable_fields=resolvable_fields
                 ) is not None
+                # An absent declared component still requires its own decision;
+                # a root slot must not create a bare identity without state.
+                or declared_spec_for(
+                    resolvable_fields or {}, parse_field_path(materialized_field_path)[:-1]
+                ) is not None
             ):
                 continue
             if _payload_value(payload, materialized_field_path) != resolved_value:
