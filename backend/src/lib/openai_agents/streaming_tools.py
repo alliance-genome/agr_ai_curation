@@ -5299,7 +5299,7 @@ async def run_specialist_with_events(
                                 preview = result._accumulated_text[-200:] if text_len > 200 else result._accumulated_text
                                 logger.debug("%s TEXT OUTPUT (%s chars): ...%s", specialist_name, text_len, preview)
 
-                    # Capture reasoning summary delta events (GPT-5 reasoning mode)
+                    # Capture reasoning summary delta events (reasoning mode)
                     elif response_type == "ResponseReasoningSummaryPartDoneEvent":
                         # This event contains a part of the reasoning summary
                         part = getattr(data, "part", None)
@@ -6013,7 +6013,7 @@ async def run_specialist_with_events(
         # =============================================================================
         # STREAMING TEXT FALLBACK
         # =============================================================================
-        # GPT-5 + reasoning mode may not include a message_output_item in new_items,
+        # Reasoning mode may not include a message_output_item in new_items,
         # but the text IS streamed via ResponseTextDeltaEvent and accumulated in
         # result._accumulated_text. Use this as a last-resort fallback for plain text agents.
         if (
@@ -6039,7 +6039,7 @@ async def run_specialist_with_events(
                         "specialist": specialist_name,
                         "text_length": len(final_output),
                         "extraction_method": "streaming_text_fallback",
-                        "message": f"{specialist_name} output extracted from streaming deltas (GPT-5 reasoning mode workaround)"
+                        "message": f"{specialist_name} output extracted from streaming deltas (reasoning mode workaround)"
                     }
                 })
 

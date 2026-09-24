@@ -774,10 +774,19 @@ def _match_on_envelope(match: ValidatorBindingMatch, envelope: DomainEnvelope) -
         return dataclasses.replace(match, envelope=envelope)
     keys = set(match.object_envelope.ref_keys())
     current = next(
-        domain_object
-        for domain_object in envelope.extracted_objects
-        if keys.intersection(domain_object.ref_keys())
+        (
+            domain_object
+            for domain_object in envelope.extracted_objects
+            if keys.intersection(domain_object.ref_keys())
+        ),
+        None,
     )
+    if current is None:
+        # Materialization writes into objects and never drops one, so this is a broken envelope.
+        raise ValueError(
+            f"Validator binding {match.binding.binding_id!r} targets object "
+            f"{sorted(keys)!r}, which the envelope its earlier validators wrote into no longer holds."
+        )
     return dataclasses.replace(match, envelope=envelope, object_envelope=current)
 
 

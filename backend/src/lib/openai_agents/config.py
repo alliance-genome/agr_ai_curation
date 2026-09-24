@@ -492,8 +492,8 @@ def supports_reasoning(model: str) -> bool:
 def supports_temperature(model: str) -> bool:
     """Check if a model supports temperature parameter.
 
-    GPT-5 models don't support temperature when reasoning is enabled.
-    Gemini 3 models and most other models support temperature.
+    The model catalog (models.yaml) declares it; reasoning models such as
+    gpt-6-sol do not accept a temperature.
     """
     model_def = _get_model_definition(model)
     return bool(model_def.supports_temperature)
@@ -807,7 +807,7 @@ def build_model_settings(
     - medium/high/xhigh -> "high" thinking level
 
     Args:
-        model: The model name (e.g., "gpt-5", "gemini-3-pro-preview")
+        model: The model name (e.g., "gpt-6-sol", "gemini-3-pro-preview")
         temperature: Optional temperature override (0.0-1.0)
         reasoning_effort: Optional reasoning effort for models that support it
         tool_choice: Optional tool choice mode ("auto", "required", etc.)
@@ -842,10 +842,10 @@ def build_model_settings(
             reasoning_kwargs["summary"] = summary
         reasoning = Reasoning(**reasoning_kwargs)
 
-    # GPT-5 models don't support temperature parameter, others do
+    # Only models whose catalog entry accepts a temperature are sent one
     effective_temperature = temperature if supports_temperature(model) else None
 
-    # Verbosity is needed for GPT-5 + reasoning to fix structured output issues
+    # Verbosity is sent only with reasoning, where it fixes structured output issues
     # See: https://github.com/langchain-ai/langchain/issues/32492
     effective_verbosity = verbosity if reasoning else None
 
@@ -941,9 +941,9 @@ def get_default_model() -> str:
 def get_default_temperature() -> Optional[float]:
     """Get the optional default temperature from DEFAULT_AGENT_TEMPERATURE (.env).
 
-    Temperature is optional and has no code default: GPT-5 ignores it, and agents
-    that need it (e.g. Gemini) declare it in their package agent.yaml. Returns
-    None when unset.
+    Temperature is optional and has no code default: reasoning models such as
+    gpt-6-sol do not accept it, and agents that need it (e.g. Gemini) declare it
+    in their package agent.yaml. Returns None when unset.
     """
     from src.lib.config.env import optional_env_float
 
@@ -1559,8 +1559,7 @@ def get_standard_chat_context_token_budget() -> int:
     """Model-live context budget for standard assistant chat (STANDARD_CHAT_CONTEXT_TOKEN_BUDGET).
 
     This is the budget the standard-chat compaction trigger compares against.
-    Default 400000 matches the current GPT-5 family context target used by the
-    supervisor; tune lower to compact sooner or higher when moving to a larger
+    Default 400000 matches the context target used by the supervisor; tune lower to compact sooner or higher when moving to a larger
     context model.
     """
     return max(1, _get_env_int_with_fallback("STANDARD_CHAT_CONTEXT_TOKEN_BUDGET", 400_000))

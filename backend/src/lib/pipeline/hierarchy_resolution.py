@@ -322,7 +322,7 @@ async def _call_llm_for_hierarchy(
     """
     Call LLM to classify section titles into top-level sections and subsections.
 
-    Uses the OpenAI Agents SDK for proper gpt-5 reasoning support.
+    Uses the OpenAI Agents SDK for proper reasoning support.
 
     Args:
         section_info_list: List of dicts with "title" and "preview" keys

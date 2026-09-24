@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 # Template for structured output requirement instruction
-# NOTE: GPT-5 models with reasoning enabled may output JSON as plain text instead of
+# NOTE: reasoning models may output JSON as plain text instead of
 # using the structured output mechanism. The explicit JSON instructions ensure the
 # model outputs parseable JSON that our text fallback can capture.
 STRUCTURED_OUTPUT_INSTRUCTION_TEMPLATE = """

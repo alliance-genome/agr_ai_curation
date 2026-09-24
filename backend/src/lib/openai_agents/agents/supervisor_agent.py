@@ -14,7 +14,7 @@ to capture internal tool calls and emit events to the audit panel.
 
 Advanced features used:
 - ModelSettings: Per-agent temperature and reasoning configuration
-- Reasoning: Extended thinking time for complex routing decisions (GPT-5 models)
+- Reasoning: Extended thinking time for complex routing decisions (reasoning models)
 - Guardrails: Optional input validation for safety (PII detection, topic relevance)
 - Streaming tool wrappers: Specialists run with event capture for audit visibility
 
@@ -1066,7 +1066,7 @@ def _build_model_settings(
     - Gemini 3 models (gemini-3.0-pro) - uses "low"/"high" thinking levels
     - Gemini 2.5 models (gemini-2.5-pro, gemini-2.5-flash) - uses thinking budgets
 
-    IMPORTANT: GPT-5 models don't support the temperature parameter -
+    IMPORTANT: GPT-6 models don't support the temperature parameter -
     they use reasoning instead. Gemini models support both.
 
     For Gemini, the OpenAI SDK's reasoning_effort parameter maps to:
