@@ -2590,3 +2590,42 @@ def test_canonical_validation_review_retains_candidates_and_field_identity():
         columns=[FlowOutputColumnSpec(key='candidates', field_ref='validation.candidate_matches')],
     ))
     assert any(r['candidates'] == candidates for r in exported.rows)
+
+
+def test_payload_refs_on_a_resolvable_root_read_the_legacy_rule():
+    """Gate: an object.payload column on an unverified legacy gene shows no unverified id."""
+
+    def gene_step(payload, metadata):
+        step = _completed_domain_step()
+        candidate = step["candidate"]
+        candidate.payload_json = {
+            "domain_pack_id": "gene",
+            "envelope_id": "env-gene-legacy",
+            "extracted_objects": [{
+                "object_type": "gene_mention_evidence", "object_id": "gene-legacy-1", "status": "validated",
+                "payload": payload, "metadata": metadata,
+            }],
+        }
+        return step
+
+    legacy = {"mention": "Appl", "primary_external_id": "FB:FBgn0000108", "gene_symbol": "Appl",
+              "taxon": "NCBITaxon:7227"}
+    plan = FlowOutputProjectionPlan(
+        format="csv", row_source="object",
+        columns=[
+            FlowOutputColumnSpec(key="id", header="ID", field_ref="object.payload.primary_external_id"),
+            FlowOutputColumnSpec(key="wording", header="Wording", field_ref="object.payload.mention"),
+        ],
+    )
+
+    def rows(metadata):
+        bundle = build_flow_output_artifact_bundle(
+            completed_steps=[gene_step(dict(legacy), metadata)], flow_name="Legacy Flow", output_format="csv",
+        )
+        return apply_projection_plan(bundle, plan).rows
+
+    # The paper wording reads as the legacy rule reads it, as an object.pack column would.
+    assert rows({}) == [{"id": "", "wording": "Appl (legacy, unverified)"}]
+    covered = {"validator_resolved_value_materialization": [
+        {"materialized_field_paths": ["primary_external_id", "gene_symbol", "taxon"]}]}
+    assert rows(covered) == [{"id": "FB:FBgn0000108", "wording": "Appl"}]

@@ -1959,7 +1959,7 @@ def _curator_patch(envelope: DomainEnvelope, field_path: str, value: Any, *, bef
             field_path=field_path, before=before, value=value, operation=operation,
         ),
         current_revision=1,
-        actor_id="curator-7",
+        actor_id="curator-7", actor_display_name="curator-7",
     )
 
 
@@ -2102,3 +2102,87 @@ def test_a_whole_subject_override_keeps_the_subject_type():
     overridden = result.envelope.extracted_objects[0].payload["disease_annotation_subject"]
     assert (overridden["subject_identifier"], overridden["subject_type"], overridden["lookup_outcome"]) == (
         "MGI:97491", "gene", "curator_override")
+
+
+def test_a_condition_component_override_clears_its_blocker_through_revalidation_and_preview():
+    """B3: override the one present component, revalidate (the validator still cannot find it),
+    then check submission readiness: nothing about that condition blocks."""
+
+    from src.lib.curation_workspace.session_submission_service import _finding_blocks_readiness
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+    from src.schemas.domain_envelope import ValidationFindingStatus
+
+    component = "condition_relations[0].conditions[1].condition_class"
+    envelope = _override_envelope()
+    overridden = _curator_patch(
+        envelope, f"{component}.curie", {"curie": "ZECO:0000160", "name": "temperature exposure"},
+        before={"curie": None, "name": None}, identity=True,
+    )
+    assert overridden.status is EnvelopeFieldPatchStatus.ACCEPTED, overridden.errors
+
+    pack = _disease_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    inputs = []
+    for match in registry.match_bindings(overridden.envelope, states=[ValidationBindingState.ACTIVE]):
+        if match.binding.binding_id != "experimental_condition_validation":
+            continue
+        request = build_domain_validation_request(match).request
+        if not request.target.field_path.endswith("conditions[1]"):
+            continue
+        inputs.append(ValidatorResultMaterializationInput(
+            match=match, request=request,
+            result=_validator_result(request, status="unresolved", resolved_values={}, outcome="not_found"),
+        ))
+    assert inputs
+    revalidated = materialize_validator_results_into_envelope(overridden.envelope, pack.metadata, inputs)
+
+    blocking = [
+        finding for finding in revalidated.envelope.validation_findings
+        if finding.status is ValidationFindingStatus.OPEN and _finding_blocks_readiness(finding)
+    ]
+    assert blocking == []
+    assert any(finding.code == "domain_pack.curator_override" for finding in revalidated.appended_findings)
+    value = _value_at(revalidated.envelope.extracted_objects[0].payload, component)
+    assert (value["curie"], value["lookup_outcome"]) == ("ZECO:0000160", "curator_override")
+
+
+def test_demoting_a_disease_subject_keeps_its_routing_subject_type():
+    """Contract review S1: subject_type is routing context, not identity, so a decisive
+    demotion of a resolved subject never clears it."""
+
+    envelope = DomainEnvelope(
+        envelope_id="disease-subject-demotion-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        extracted_objects=[CuratableObjectEnvelope(
+            object_type="GeneDiseaseAnnotation", pending_ref_id="gene-disease-1",
+            payload={
+                "mention": "Appl",
+                "disease_annotation_subject": unresolved_value(
+                    "Appl", identity_keys=("subject_identifier", "subject_label"),
+                    subject_type="gene", proposed_subject_identifier="FB:FBgn0000108",
+                ),
+                "source_mentions": ["Appl"],
+            },
+        )],
+    )
+
+    def resolve(request):
+        return _validator_result(
+            request, status="resolved", outcome="success",
+            resolved_values={"subject_identifier": "FB:FBgn0000108", "subject_label": "Appl",
+                             "subject_type": "gene"},
+        )
+
+    envelope.extracted_objects[0].payload.update(_materialize(envelope, "disease_subject_materialization", resolve))
+    assert envelope.extracted_objects[0].payload["disease_annotation_subject"]["resolution_state"] == "resolved"
+
+    def demote(request):
+        return _validator_result(request, status="unresolved", resolved_values={}, outcome="not_found")
+
+    subject = _materialize(envelope, "disease_subject_materialization", demote)["disease_annotation_subject"]
+
+    assert (subject["resolution_state"], subject["lookup_outcome"]) == ("unresolved", "not_found")
+    assert (subject["subject_identifier"], subject["subject_label"]) == (None, None)
+    assert subject["overruled_subject_identifier"] == "FB:FBgn0000108"
+    assert subject["subject_type"] == "gene"
+    assert "overruled_subject_type" not in subject

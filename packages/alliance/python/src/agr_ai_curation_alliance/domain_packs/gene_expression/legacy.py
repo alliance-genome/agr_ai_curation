@@ -26,8 +26,6 @@ from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMate
 from src.lib.domain_packs.not_validatable import NOT_VALIDATABLE_DETAIL_KEY
 from src.lib.domain_packs.resolvable_values import (
     RESOLUTION_STATE_KEY,
-    declared_resolvable_fields,
-    effective_payload,
 )
 from src.schemas.curation_workspace import DomainEnvelopeReviewRow
 from src.schemas.domain_envelope import (
@@ -133,14 +131,13 @@ def previous_format_finding(domain_object: CuratableObjectEnvelope) -> Validatio
     )
 
 
-def _display_envelope(envelope: DomainEnvelope, metadata: Any) -> DomainEnvelope:
-    objects = []
-    for obj in envelope.extracted_objects:
-        payload = legacy_display_payload(obj.object_type, obj.payload)
-        specs = declared_resolvable_fields(metadata, obj.object_type)
-        if specs:
-            payload = effective_payload(payload, specs, object_metadata=obj.metadata)
-        objects.append(obj.model_copy(update={"payload": dict(payload)}))
+def _display_envelope(envelope: DomainEnvelope) -> DomainEnvelope:
+    """The envelope with previous-format values reshaped; the core review reader applies the legacy rule."""
+
+    objects = [
+        obj.model_copy(update={"payload": dict(legacy_display_payload(obj.object_type, obj.payload))})
+        for obj in envelope.extracted_objects
+    ]
     return envelope.model_copy(update={"extracted_objects": objects})
 
 
@@ -155,7 +152,9 @@ class GeneExpressionReviewRowMaterializer(DomainPackMetadataReviewRowMaterialize
         envelope_revision: int,
     ) -> list[DomainEnvelopeReviewRow]:
         return super().materialize(
-            _display_envelope(envelope, self.metadata), envelope_revision=envelope_revision
+            _display_envelope(envelope),
+            envelope_revision=envelope_revision,
+            stored_envelope=envelope,
         )
 
 

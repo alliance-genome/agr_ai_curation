@@ -211,6 +211,7 @@ def test_resolved_value_shows_label_and_id_with_paper_wording_apart():
             id_key="curie",
             label_key="name",
             stored_identity={"curie": "ONT:0000101", "name": "gut"},
+            overridable=True,
         )
     ]
     # An identity key of the value shows that key; the paper wording stays apart.
@@ -368,8 +369,10 @@ def test_legacy_values_follow_the_read_time_rule(covered):
         assert value.lookup_outcome == "legacy_unverified"
         assert value.lookup_result == "Legacy, unverified"
         assert value.mention == f"gut (ONT:0000101) {LEGACY_UNVERIFIED_SUFFIX}"
-    # The stored payload is read, never rewritten.
-    assert _workspace_field(row, "site.curie").value == "ONT:0000101"
+    # The field shows the read-time value (an unverified id is not shown as a value);
+    # the stored identity, never rewritten, is what an override's `before` names.
+    assert _workspace_field(row, "site.curie").value == ("ONT:0000101" if covered else None)
+    assert value.stored_identity == {"curie": "ONT:0000101", "name": "gut"}
 
 
 def test_resolved_value_vocabularies_are_closed():
@@ -493,7 +496,7 @@ def _overridden_site() -> dict:
         identity_keys=TERM_KEYS,
         id_key="curie",
         label_key="name",
-        actor_id="curator-1",
+        actor_id="curator-1", actor_display_name="Curator One",
         at=OVERRIDE_AT,
     )
     return site
@@ -522,6 +525,7 @@ def test_a_curator_override_reads_resolved_with_who_and_when():
     assert value.lookup_result == "Curator override"
     assert value.mention == "gut lining"
     assert value.curator_override.actor_id == "curator-1"
+    assert value.curator_override.actor_display_name == "Curator One"
     assert value.curator_override.at == OVERRIDE_AT
     assert value.override_disagreements == []
     assert value.identity_field_paths == ["site.curie", "site.name"]
@@ -553,11 +557,11 @@ def test_an_object_root_override_takes_object_level_disagreements():
     subject = unresolved_value("abc-1", identity_keys=("symbol", "identifier", "taxon"))
     apply_curator_identity(
         subject,
-        {"symbol": "abc-1", "identifier": "GENE:7"},
+        {"symbol": "abc-1", "identifier": "GENE:7", "taxon": None},
         identity_keys=("symbol", "identifier", "taxon"),
         id_key="identifier",
         label_key="symbol",
-        actor_id="curator-2",
+        actor_id="curator-2", actor_display_name="curator-2",
         at=OVERRIDE_AT,
     )
     message = "Validator disagrees with the curator override: it resolved identifier 'GENE:8'."
@@ -576,7 +580,7 @@ def test_clearing_an_override_reads_unresolved_again():
     site = _overridden_site()
     apply_curator_identity(
         site, {"curie": None, "name": None}, identity_keys=TERM_KEYS, id_key="curie", label_key="name",
-        actor_id="curator-1", at=OVERRIDE_AT,
+        actor_id="curator-1", actor_display_name="curator-1", at=OVERRIDE_AT,
     )
     row = _row({"site": site})
 
@@ -602,16 +606,64 @@ def test_a_protected_value_field_is_flagged_as_blocking_overrides():
 
     [open_value] = _workspace_field(open_row, "site.curie").resolution.values
     [protected_value] = _workspace_field(protected_row, "site.curie").resolution.values
-    assert open_value.container_protected is False
-    assert protected_value.container_protected is True
+    assert (open_value.container_protected, open_value.overridable) == (False, True)
+    assert (protected_value.container_protected, protected_value.overridable) == (True, False)
 
 
-def test_only_profile_attribute_values_carry_their_stored_value():
+def test_profile_values_and_list_elements_carry_their_stored_value():
     gene = unresolved_value("abc one", identity_keys=TERM_KEYS, outcome="not_found")
-    row = _row({"site": _overridden_site(), "attributes": {"gene": gene}})
+    codes = [unresolved_value("IMP", identity_keys=("curie",)), unresolved_value("IDA", identity_keys=("curie",))]
+    row = _row({"site": _overridden_site(), "attributes": {"gene": gene}, "codes": codes})
 
     [attribute_value] = _summary_field(row, "attributes.gene").resolution.values
     [site_value] = _workspace_field(row, "site.curie").resolution.values
-    # A profile value takes a whole-value replace, whose `before` is the value as stored.
+    code_values = _workspace_field(row, "codes").resolution.values
+    # A profile value takes a whole-value replace, and a list element a removal,
+    # whose `before` is the value as stored.
     assert attribute_value.stored_value == gene
+    assert [value.stored_value for value in code_values] == codes
+    assert [value.value_path for value in code_values] == ["codes[0]", "codes[1]"]
     assert site_value.stored_value is None
+
+
+def test_a_value_stored_as_plain_text_reads_as_legacy_text():
+    """B5: a pre-contract text value (or list of texts) reads legacy, unverified, and never crashes."""
+
+    row = _row({"site": "gut", "codes": ["ECO:0000314"]})
+
+    [site] = _workspace_field(row, "site.curie").resolution.values
+    assert (site.lookup_outcome, site.mention) == ("legacy_unverified", "gut (legacy, unverified)")
+    assert site.stored_identity == {"curie": None, "name": None}
+    assert site.overridable is True
+    [code] = _summary_field(row, "codes").resolution.values if _summary_field_exists(row, "codes") else (
+        _workspace_field(row, "codes").resolution.values)
+    assert code.lookup_outcome == "legacy_unverified"
+
+
+def _summary_field_exists(row, field_path):
+    return any(field.field_path == field_path for field in row.summary_fields)
+
+
+def test_a_display_copy_takes_its_stored_identity_from_storage():
+    """B5: a pack reading through a display copy passes the stored envelope for override `before`s."""
+
+    stored_site = {"curie": "ONT:7", "name": "old guess"}
+    stored = DomainEnvelope(
+        envelope_id="env-resolution", domain_pack_id="fixture.resolution", domain_pack_version="0.1.0",
+        status=DomainEnvelopeStatus.EXTRACTED,
+        extracted_objects=[CuratableObjectEnvelope(object_type="Observation", object_id="object-1",
+                                                   payload={"site": stored_site})],
+    )
+    display = stored.model_copy(update={"extracted_objects": [stored.extracted_objects[0].model_copy(update={
+        "payload": {"site": {"curie": None, "name": None, "mention": "old guess (ONT:7) (legacy, unverified)",
+                             "resolution_state": "unresolved", "lookup_outcome": "legacy_unverified",
+                             "validator_explanation": "Recorded before validation tracking; not verified."}},
+    })]})
+
+    [row] = DomainPackMetadataReviewRowMaterializer(_metadata()).materialize(
+        display, envelope_revision=1, stored_envelope=stored,
+    )
+
+    [site] = _workspace_field(row, "site.curie").resolution.values
+    assert site.lookup_outcome == "legacy_unverified"
+    assert site.stored_identity == {"curie": "ONT:7", "name": "old guess"}

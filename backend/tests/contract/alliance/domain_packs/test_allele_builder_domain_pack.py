@@ -1045,7 +1045,7 @@ def _with_curated(envelope, object_type, path, edits):
                 identity_keys=keys,
                 id_key=id_key,
                 label_key=label_key,
-                actor_id="curator-1",
+                actor_id="curator-1", actor_display_name="curator-1",
                 at="2026-09-23T20:00:00Z",
             )
             obj = obj.model_copy(update={"payload": payload})
@@ -1193,7 +1193,7 @@ def _allele_curator_patch(envelope, object_id, field_path, value, *, before, ide
             ),
         ),
         current_revision=1,
-        actor_id="curator-7",
+        actor_id="curator-7", actor_display_name="curator-7",
     )
 
 
@@ -1266,8 +1266,11 @@ def test_an_allele_override_cannot_change_other_keys_or_start_from_one_leaf():
     ):
         single_leaf = _allele_curator_patch(envelope, object_id, field_path, value, before=None)
         assert single_leaf.status is EnvelopeFieldPatchStatus.REJECTED, field_path
+        # The mention's allele also declares a validated taxon, which a first override names too.
         assert any(
-            "Enter both the identifier and the name" in error for error in single_leaf.errors
+            error.startswith(("Enter both the identifier and the name",
+                              "Enter the identifier, the name and the taxon"))
+            for error in single_leaf.errors
         ), single_leaf.errors
 
 

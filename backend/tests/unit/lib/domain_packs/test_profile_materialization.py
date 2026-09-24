@@ -555,7 +555,7 @@ def test_a_curator_override_stands_and_a_disagreeing_validator_adds_a_warning(ex
     source, context = resolvable(example)
     attributes, _ = context.profile.apply_curator_edit(
         source.extracted_objects[0].payload["attributes"], "attributes.gene.gene_id", "EX:7",
-        actor_id="curator-1", at="2026-09-23T20:00:00+00:00",
+        actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:00:00+00:00",
     )
     source.extracted_objects[0].payload["attributes"] = attributes
     overridden = attributes["gene"]

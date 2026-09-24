@@ -902,7 +902,7 @@ def _curator_patch(envelope, field_path, value, *, before, identity=False):
             ),
         ),
         current_revision=1,
-        actor_id="curator-7",
+        actor_id="curator-7", actor_display_name="curator-7",
     )
 
 
@@ -959,9 +959,7 @@ def test_a_gene_override_cannot_change_other_keys_or_start_from_one_leaf():
 
     single_leaf = _curator_patch(envelope, "gene_symbol", "daf-16", before=None)
     assert single_leaf.status is EnvelopeFieldPatchStatus.REJECTED
-    assert any(
-        "Enter both the identifier and the name" in error for error in single_leaf.errors
-    )
+    assert single_leaf.errors == ("Enter the identifier, the name and the taxon for a curator override.",)
 
 
 def test_curators_cannot_edit_the_gene_paper_wording_or_validation_state():
@@ -977,3 +975,27 @@ def test_curators_cannot_edit_the_gene_paper_wording_or_validation_state():
     ):
         result = _curator_patch(envelope, field_path, value, before=before)
         assert result.status is EnvelopeFieldPatchStatus.REJECTED, field_path
+
+
+def test_a_full_identity_gene_override_exports_with_its_taxon():
+    """B2: the override the review screen sends names the taxon too, so the export has it."""
+
+    from agr_ai_curation_alliance.domain_packs.gene.export import build_gene_mention_evidence_export
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    result = _curator_patch(
+        _staged_gene_object_envelope(), "primary_external_id", _GENE_IDENTITY,
+        before=_NO_GENE_IDENTITY, identity=True,
+    )
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+
+    export = build_gene_mention_evidence_export(result.envelope)
+    [record] = export["records"]
+    assert "NCBITaxon:6239" in str(record)
+    # Leaving the taxon out is rejected by name instead of exporting without it.
+    partial = _curator_patch(
+        _staged_gene_object_envelope(), "primary_external_id",
+        {key: _GENE_IDENTITY[key] for key in ("primary_external_id", "gene_symbol")},
+        before={"primary_external_id": None, "gene_symbol": None}, identity=True,
+    )
+    assert partial.errors == ("Enter the taxon for a curator override.",)

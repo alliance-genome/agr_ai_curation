@@ -92,7 +92,6 @@ from src.lib.domain_packs.resolvable_values import (
     declared_resolvable_fields,
     declared_spec_for,
     effective_payload,
-    effective_value,
     has_resolution_state,
     is_curator_override,
     lookup_outcome_for_failure,
@@ -101,7 +100,6 @@ from src.lib.domain_packs.resolvable_values import (
     stored_state_problem,
     unresolved_header_text,
     validator_event_covers,
-    value_covered_by_validator,
 )
 from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.lib.openai_agents.config import (
@@ -191,8 +189,14 @@ class DomainPackMetadataReviewRowMaterializer:
         envelope: DomainEnvelope,
         *,
         envelope_revision: int,
+        stored_envelope: DomainEnvelope | None = None,
     ) -> list[DomainEnvelopeReviewRow]:
-        """Project one review row per non-metadata-only envelope object."""
+        """Project one review row per non-metadata-only envelope object.
+
+        A pack that reads its values through a display copy passes the stored
+        envelope as ``stored_envelope`` (same objects, same order): a value's
+        stored identity, the ``before`` of an override, comes from storage.
+        """
 
         if envelope.domain_pack_id != self.metadata.pack_id:
             raise DomainEnvelopeMaterializationError(
@@ -222,6 +226,9 @@ class DomainPackMetadataReviewRowMaterializer:
         )
         rows: list[DomainEnvelopeReviewRow] = []
 
+        stored_objects = (stored_envelope or envelope).extracted_objects
+        if len(stored_objects) != len(envelope.extracted_objects):
+            raise DomainEnvelopeMaterializationError("stored_envelope must hold the same objects as the envelope")
         for object_index, domain_object in enumerate(envelope.extracted_objects):
             object_definition = object_definitions.get(domain_object.object_type)
             object_id = stable_object_id(domain_object)
@@ -241,8 +248,15 @@ class DomainPackMetadataReviewRowMaterializer:
             if self.profile_context is not None:
                 display_config = object_definition.metadata.get("workspace_display", {}) if object_definition else {}
             resolvable_fields = declared_resolvable_fields(self.metadata, domain_object.object_type)
+            if resolvable_fields:
+                # The one read-time pass of the legacy rule: every surface of the
+                # row (values, readings, labels) reads this copy.
+                domain_object = domain_object.model_copy(update={"payload": dict(effective_payload(
+                    domain_object.payload, resolvable_fields, object_metadata=domain_object.metadata,
+                ))})
             value_reader = _review_value_reader(
                 domain_object,
+                stored_objects[object_index].payload,
                 resolvable_fields,
                 value_display_source,
                 envelope_id=envelope.envelope_id,
@@ -560,6 +574,10 @@ def _materialize_one_result(
         source_envelope_revision=source_envelope_revision,
     )
     if materialization_problem is None:
+        if overrides.covers_every_write:
+            # A validated reference object is not added or linked for values a
+            # curator override sets.
+            new_objects = []
         working_envelope, linked_objects = _append_materialized_objects(
             working_envelope,
             item,
@@ -577,9 +595,9 @@ def _materialize_one_result(
             item,
             source_envelope_revision=source_envelope_revision,
         )
-        if overrides.covers_every_write:
-            # Every value this binding writes is a curator override, which wins:
-            # the validator's own outcome is not an open problem.
+        if overrides.settles(item.result):
+            # Curator overrides settle what this binding writes: the
+            # validator's own outcome is not an open problem.
             validator_finding = _as_curator_override_finding(validator_finding)
         findings.append(validator_finding)
         findings.extend(
@@ -628,6 +646,29 @@ class _CuratorOverrides:
     # Expected-result fields per overridden value: [(result field, materialized path)].
     fields: Mapping[str, Sequence[tuple[str, str]]]
     covers_every_write: bool
+    # Result fields and value paths of declared values absent from the payload.
+    absent: frozenset[str] = frozenset()
+
+    def settles(self, result: DomainValidatorResultBase) -> bool:
+        """Whether curator overrides settle this result's binding-level outcome.
+
+        They do when they cover every present value the binding writes, or,
+        for a composite result (``field_resolutions``), when every value it
+        did not resolve is overridden or absent.
+        """
+
+        if self.covers_every_write:
+            return True
+        if not self.values or not result.field_resolutions:
+            return False
+        overridden = set(self.values) | {
+            result_field for entries in self.fields.values() for result_field, _ in entries
+        }
+        return all(
+            resolution.status == "resolved"
+            for key, resolution in result.field_resolutions.items()
+            if key not in overridden and key not in self.absent
+        )
 
     def covers_field(self, field_path: str) -> bool:
         try:
@@ -651,28 +692,82 @@ def _curator_overridden_values(
     )
     if target is None or object_definition is None:
         return _CuratorOverrides(target, {}, {}, False)
-    declared_fields = {field.field_path: field for field in object_definition.fields}
+    values, fields, mapped, absent = _overridden_writes(
+        target.payload,
+        item.request.expected_result_fields,
+        declared_fields={field.field_path: field for field in object_definition.fields},
+        resolvable_fields=resolvable_fields,
+    )
+    covered = sum(len(entries) for entries in fields.values())
+    return _CuratorOverrides(target, values, fields, bool(values) and covered == mapped, absent)
+
+
+def _overridden_writes(
+    payload: Mapping[str, Any],
+    expected_result_fields: Mapping[str, Any],
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec],
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, list[tuple[str, str]]], int, frozenset[str]]:
+    """What a binding writes into curator overrides on one object payload.
+
+    Returns (overridden values by path, their (result field, path) writes,
+    the number of writes into present values, the result fields and value
+    paths of declared values absent from the payload). A write into a
+    declared value the payload does not hold (e.g. an absent condition
+    component) is not counted: nothing is there to settle.
+    """
+
     values: dict[str, Mapping[str, Any]] = {}
     fields: dict[str, list[tuple[str, str]]] = {}
+    absent: set[str] = set()
     mapped = 0
-    for result_field, raw_field_path in item.request.expected_result_fields.items():
+    for result_field, raw_field_path in expected_result_fields.items():
         if not isinstance(raw_field_path, str) or not raw_field_path.strip():
             continue
         materialized_field_path = _materialized_field_path(raw_field_path, declared_fields=declared_fields)
         if materialized_field_path is None:
             continue
+        parts = parse_field_path(materialized_field_path)
+        container_parts = parts[:-1] if isinstance(parts[-1], str) else parts
+        if (
+            declared_spec_for(resolvable_fields, container_parts) is not None
+            and _payload_container(payload, _format_field_path(container_parts)) is None
+        ):
+            absent.update((result_field, _format_field_path(container_parts)))
+            continue
         mapped += 1
         container_path = _resolvable_container_path(
-            target.payload, materialized_field_path, resolvable_fields=resolvable_fields
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
         )
         if container_path is None:
             continue
-        container = _payload_container(target.payload, container_path)
+        container = _payload_container(payload, container_path)
         if is_curator_override(container):
             values[container_path] = container
             fields.setdefault(container_path, []).append((result_field, materialized_field_path))
-    covered = sum(len(entries) for entries in fields.values())
-    return _CuratorOverrides(target, values, fields, bool(values) and covered == mapped)
+    return values, fields, mapped, frozenset(absent)
+
+
+def expected_writes_settled_by_overrides(
+    payload: Mapping[str, Any],
+    expected_result_fields: Mapping[str, Any],
+    *,
+    object_definition: DomainPackObjectDefinition,
+    resolvable_fields: Mapping[str, ResolvableSpec],
+) -> bool:
+    """Whether curator overrides now cover every present value a binding writes on this payload."""
+
+    try:
+        values, fields, mapped, _absent = _overridden_writes(
+            payload,
+            expected_result_fields,
+            declared_fields={field.field_path: field for field in object_definition.fields},
+            resolvable_fields=resolvable_fields,
+        )
+    except ResolvableValueError:
+        return False
+    return bool(values) and sum(len(entries) for entries in fields.values()) == mapped
 
 
 def _as_curator_override_finding(finding: ValidationFinding) -> ValidationFinding:
@@ -733,6 +828,8 @@ def _curator_override_disagreements(
                 str(parse_field_path(path)[-1]): resolved_values[result_field]
                 for result_field, path in entries
                 if not missing_resolved_value(resolved_values.get(result_field))
+                # A key the override holds empty is not compared.
+                and value.get(str(parse_field_path(path)[-1])) is not None
                 and resolved_values[result_field] != value.get(str(parse_field_path(path)[-1]))
             }
             if not differing:
@@ -1709,8 +1806,10 @@ def _container_identity_keys(
     declared_fields: Mapping[str, DomainPackFieldDefinition],
     resolvable_fields: Mapping[str, ResolvableSpec] | None,
 ) -> tuple[str, ...]:
-    """Every key a validator supplies for one value: its declared identity plus the
-    keys this binding writes into it (so an overruled identity is fully cleared)."""
+    """The keys that make up one value's identity. A declared value's identity is its display
+    id, label and ``validated`` keys only; other keys a binding writes (routing context such
+    as a subject type) are never cleared or overruled. An undeclared container's keys are
+    the ones this binding writes into it."""
 
     keys: list[str] = []
     try:
@@ -1719,7 +1818,7 @@ def _container_identity_keys(
         container_tokens = ()
     spec = declared_spec_for(resolvable_fields, container_tokens) if resolvable_fields else None
     if spec is not None:
-        keys.extend(spec.identity_keys)
+        return spec.identity_keys
     for raw_field_path in item.request.expected_result_fields.values():
         if not isinstance(raw_field_path, str) or not raw_field_path.strip():
             continue
@@ -3448,6 +3547,7 @@ def _review_value_display_source(metadata: DomainPackMetadata) -> Any:
 
 def _review_value_reader(
     domain_object: CuratableObjectEnvelope,
+    stored_payload: Mapping[str, Any],
     specs: Mapping[str, ResolvableSpec],
     display_source: Any,
     *,
@@ -3458,9 +3558,8 @@ def _review_value_reader(
 ) -> _ReviewValueReader | None:
     if not specs:
         return None
-    payload = effective_payload(
-        domain_object.payload, specs, object_metadata=domain_object.metadata,
-    )
+    # The row's read-time copy (effective_payload already applied).
+    payload = domain_object.payload
     readings: dict[tuple[str | int, ...], tuple[int, _ValueReading]] = {}
     declared = list(specs.items())
     # The most specific declaration reads a value declared both as a list and
@@ -3474,12 +3573,16 @@ def _review_value_reader(
         except ValueError:
             continue
         for value_path in _concrete_value_paths(payload, tokens, ()):
-            if value_path in readings:
+            if value_path in readings or not has_resolution_state(
+                _payload_container(payload, _format_field_path(value_path))
+            ):
+                # An empty value (nothing the legacy rule reads) has no reading.
                 continue
             readings[value_path] = (
                 order,
                 _read_review_value(
                     domain_object,
+                    stored_payload,
                     value_path,
                     spec,
                     envelope_id=envelope_id,
@@ -3508,6 +3611,7 @@ def _review_value_reader(
 
 def _read_review_value(
     domain_object: CuratableObjectEnvelope,
+    stored_payload: Mapping[str, Any],
     value_path: tuple[str | int, ...],
     spec: ResolvableSpec,
     *,
@@ -3518,25 +3622,21 @@ def _read_review_value(
 ) -> _ValueReading:
     """Read one value from the read-time payload; a broken stored record says so plainly."""
 
-    from src.lib.domain_envelopes.patches import _field_editability, is_generic_attribute_path
+    from src.lib.domain_envelopes.patches import curator_override_allowed, is_generic_attribute_path
     from src.lib.flows.value_display import display_text
 
     path_text = _format_field_path(value_path)
-    # Read the stored value as effective_payload does; the read-time copy
-    # already carries a legacy state and must not be read a second time.
-    stored = _payload_container(domain_object.payload, path_text)
-    value = effective_value(
-        stored,
-        spec,
-        covered_by_validator=value_covered_by_validator(domain_object.metadata, path_text, spec),
-    )
+    # The value as the row's read-time copy holds it: the legacy rule already
+    # read it once (a plain-text value became legacy text), never again here.
+    value = _payload_container(domain_object.payload, path_text)
+    raw = _payload_container(stored_payload, path_text)
+    # The legacy rule read a broken stored record as an invalid-record reading;
+    # validator words that are not text are broken too.
     problem = (
-        stored_state_problem(stored, identity_keys=spec.identity_keys)
-        if has_resolution_state(stored)
-        else None
-    )
-    if problem is None:
-        problem = next(
+        (stored_state_problem(raw, identity_keys=spec.identity_keys) if has_resolution_state(raw) else None)
+        or "the stored validation record is invalid"
+        if value.get(VALIDATOR_EXPLANATION_KEY) == INVALID_RECORD_EXPLANATION
+        else next(
             (
                 f"{text_key} must be text or null"
                 for text_key in (VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY)
@@ -3544,12 +3644,8 @@ def _read_review_value(
             ),
             None,
         )
-    # A value re-read under the legacy rule (an old container a validator left
-    # unresolved) is not a broken record; only one read as invalid is.
-    broken = problem is not None and (
-        value.get(VALIDATOR_EXPLANATION_KEY) == INVALID_RECORD_EXPLANATION
-        or not has_resolution_state(stored)
     )
+    broken = problem is not None
     if broken:
         logger.warning(
             "Review row reads an unreadable resolvable value as unresolved: "
@@ -3587,7 +3683,9 @@ def _read_review_value(
             issue=_UNREADABLE_ISSUE if broken else None,
             curator_override=(
                 DomainEnvelopeReviewCuratorOverride(
-                    actor_id=str(override["actor_id"]), at=str(override["at"]),
+                    actor_id=str(override["actor_id"]),
+                    actor_display_name=str(override["actor_display_name"]),
+                    at=str(override["at"]),
                 )
                 if override is not None
                 else None
@@ -3599,17 +3697,22 @@ def _read_review_value(
             id_key=spec.id_key,
             label_key=spec.label_key,
             validated_keys=list(spec.validated_keys),
-            stored_identity={key: copy.deepcopy(stored.get(key)) for key in spec.identity_keys},
-            # A saved profile's attribute values take a whole-value replace
-            # (not replace_identity), whose `before` is the value as stored.
+            # As stored (a legacy identity included; null for a value stored as plain text).
+            stored_identity={
+                key: copy.deepcopy(raw.get(key)) if isinstance(raw, Mapping) else None
+                for key in spec.identity_keys
+            },
+            # The value as stored, for the edits whose `before` is the whole value: a
+            # saved profile's attribute value (a whole-value replace) and a list
+            # element (a removal).
             stored_value=(
-                copy.deepcopy(dict(stored)) if path_text and is_generic_attribute_path(path_text) else None
+                copy.deepcopy(dict(raw))
+                if isinstance(raw, Mapping)
+                and path_text
+                and (is_generic_attribute_path(path_text) or isinstance(value_path[-1], int))
+                else None
             ),
-            # Curator overrides follow the patch rules: a protected value field blocks them.
-            container_protected=(
-                path_text in field_definitions
-                and _field_editability(field_definitions[path_text])[1]["protected"]
-            ),
+            **curator_override_allowed(field_definitions, path_text, spec),
         ),
         value=value,
     )

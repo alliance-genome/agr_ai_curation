@@ -514,7 +514,8 @@ class ResolvedGenericProfile:
             raise ProfileConformanceError(issues[:get_generic_profile_max_issues()])
 
     def apply_curator_edit(self, attributes: dict[str, Any], field_path: str, value: Any, *,
-                           actor_id: str, at: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+                           actor_id: str, actor_display_name: str,
+                           at: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
         """One curator edit of a profile record; an identity edit is a validation override.
 
         Editing a resolvable value's identity (one identity key, or the whole
@@ -532,7 +533,14 @@ class ResolvedGenericProfile:
             raise ProfileConformanceError([_patch_issue(
                 None, field_path, "The paper wording and validation state are not editable; edit the identity.")])
         if identity is None or (whole is None and key not in identity):
-            return self.patch_attributes(attributes, [{"field_path": field_path, "value": value}]), None
+            # A plain, parent, list or ``attributes`` replace: resolvable values inside it keep
+            # their identity and state, and new ones are staged unresolved.
+            result = self._with_guarded_values(
+                attributes, self.patch_attributes(attributes, [{"field_path": field_path, "value": value}]),
+                field_path,
+            )
+            self.require_attributes(result)
+            return result, None
         value_path = field_path if whole is not None else parent
         result = deepcopy(attributes)
         container = _attribute_container(result, value_path)
@@ -558,13 +566,77 @@ class ResolvedGenericProfile:
             try:
                 audit = apply_curator_identity(
                     container, edits, identity_keys=identity, id_key=spec.id_key, label_key=spec.label_key,
-                    actor_id=actor_id, at=at,
+                    actor_id=actor_id, actor_display_name=actor_display_name, at=at,
                 )
             except ResolvableValueError as exc:
                 raise ProfileConformanceError([_patch_issue(None, field_path, str(exc))]) from exc
             audit = {**audit, "value_path": value_path}
         self.require_attributes(result)
         return result, audit
+
+    def remove_curator_element(self, attributes: dict[str, Any], field_path: str, *, actor_id: str,
+                               actor_display_name: str, at: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Remove one element of a list of resolvable values; returns the record and the audit."""
+        if not re.search(r"\[[0-9]+\]$", field_path) or declared_value_path(field_path) not in self.resolvable_objects():
+            raise ProfileConformanceError([_patch_issue(
+                None, field_path, "Only an element of a list of resolvable values can be removed.")])
+        result = deepcopy(attributes)
+        list_path, _, index = field_path[:-1].rpartition("[")
+        items = _attribute_container(result, list_path)
+        if not isinstance(items, list) or int(index) >= len(items):
+            raise ProfileConformanceError([_patch_issue(None, field_path, "Edit an existing value.")])
+        removed = items.pop(int(index))
+        self.require_attributes(result)
+        return result, {"action": "removed", "actor_id": actor_id, "actor_display_name": actor_display_name,
+                        "at": at, "previous": removed,
+                        "identity": None, "value_path": field_path}
+
+    def _with_guarded_values(self, before: dict[str, Any], after: dict[str, Any], field_path: str) -> dict[str, Any]:
+        """``after`` with every resolvable value inside the edited subtree checked against ``before``.
+
+        A value stored at the same path keeps its paper wording, identity,
+        state, overruled identities and override record; a curator changes
+        those through the value's own path. A new value carries only what the
+        extractor writes and is staged unresolved (not validated).
+        """
+        resolvable = self.resolvable_objects()
+
+        def edited(path: str) -> bool:
+            return path == field_path or path.startswith((f"{field_path}.", f"{field_path}["))
+
+        def walk(node: Any, path: str) -> Any:
+            if isinstance(node, list):
+                return [walk(item, f"{path}[{index}]") for index, item in enumerate(node)]
+            if not isinstance(node, dict):
+                return node
+            node = {key: walk(item, f"{path}.{key}") for key, item in node.items()}
+            identity = resolvable.get(declared_value_path(path))
+            if identity is None or not edited(path):
+                return node
+            stored = _attribute_container(before, path)
+            guarded = {MENTION_KEY, *identity, *RESOLUTION_KEYS} | {
+                key for key in (*node, *(stored if isinstance(stored, dict) else {}))
+                if key.startswith(OVERRULED_KEY_PREFIX)
+            }
+            if isinstance(stored, dict):
+                changed = sorted(key for key in guarded if node.get(key) != stored.get(key))
+                if changed:
+                    raise ProfileConformanceError([_patch_issue(
+                        None, path, f"This edit cannot change {', '.join(changed)} of a value; "
+                                    "edit its identity through the value itself.")])
+                return node
+            carried = sorted(key for key in guarded - {MENTION_KEY} if node.get(key) not in (None, "", [], {}))
+            if carried:
+                raise ProfileConformanceError([_patch_issue(
+                    None, path, f"A new value cannot carry {', '.join(carried)}; "
+                                "give its paper wording and let validation fill in the rest.")])
+            mention = node.get(MENTION_KEY)
+            if not isinstance(mention, str) or not mention.strip():
+                raise ProfileConformanceError([_patch_issue(None, path, "A new value needs its paper wording.")])
+            return unresolved_value(mention, identity_keys=identity,
+                                    **{key: item for key, item in node.items() if key not in guarded})
+
+        return walk(after, "attributes")
 
     def patch_attributes(self, attributes: dict[str, Any], updates: list[dict[str, Any]],
                          *, candidate_id: str | None = None) -> dict[str, Any]:

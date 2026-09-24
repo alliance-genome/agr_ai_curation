@@ -8,7 +8,7 @@ read time ``legacy_display_payload`` (the pack's registered
 objects without any state; the shared legacy rule
 (``resolvable_values.effective_payload``) then reads every value, so an
 unverified one shows its stored text as "(legacy, unverified)" paper wording.
-Exports apply that rule themselves; the GO review rows apply it here. The
+Exports apply that rule themselves; review rows read it in the core reader. The
 records are not validated again: re-running extraction produces a record in the
 current format.
 """
@@ -23,8 +23,6 @@ from typing import Any
 from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
 from src.lib.domain_packs.not_validatable import NOT_VALIDATABLE_DETAIL_KEY
 from src.lib.domain_packs.resolvable_values import (
-    declared_resolvable_fields,
-    effective_payload,
     has_resolution_state,
 )
 from src.schemas.domain_envelope import (
@@ -118,14 +116,13 @@ def legacy_display_payload(object_type: str, payload: Mapping[str, Any]) -> Mapp
     return payload
 
 
-def _display_envelope(envelope: DomainEnvelope, metadata: Any) -> DomainEnvelope:
-    objects = []
-    for obj in envelope.extracted_objects:
-        payload = legacy_display_payload(obj.object_type, obj.payload)
-        specs = declared_resolvable_fields(metadata, obj.object_type)
-        if specs:
-            payload = effective_payload(payload, specs, object_metadata=obj.metadata)
-        objects.append(obj.model_copy(update={"payload": dict(payload)}))
+def _display_envelope(envelope: DomainEnvelope) -> DomainEnvelope:
+    """The envelope with previous-format values reshaped; the core review reader applies the legacy rule."""
+
+    objects = [
+        obj.model_copy(update={"payload": dict(legacy_display_payload(obj.object_type, obj.payload))})
+        for obj in envelope.extracted_objects
+    ]
     return envelope.model_copy(update={"extracted_objects": objects})
 
 
@@ -140,7 +137,9 @@ class GOReviewRowMaterializer(DomainPackMetadataReviewRowMaterializer):
         envelope_revision: int,
     ) -> list[DomainEnvelopeReviewRow]:
         return super().materialize(
-            _display_envelope(envelope, self.metadata), envelope_revision=envelope_revision
+            _display_envelope(envelope),
+            envelope_revision=envelope_revision,
+            stored_envelope=envelope,
         )
 
 

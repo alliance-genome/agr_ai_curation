@@ -377,6 +377,9 @@ class CurationEnvelopeFieldPatchOperation(str, Enum):
     # names one identity field of the value, value and before map its identity
     # keys to the new and current values.
     REPLACE_IDENTITY = "replace_identity"
+    # Remove one element of a list of resolvable values: field_path names the
+    # element, before is the stored element, value is null.
+    REMOVE = "remove"
 
 
 class CurationEvidenceSource(str, Enum):
@@ -992,6 +995,7 @@ class DomainEnvelopeReviewCuratorOverride(CurationWorkspaceBaseModel):
     """Who set a value's identity by curator validation override, and when."""
 
     actor_id: str = Field(description="The curator who made the override")
+    actor_display_name: str = Field(description="The curator's display name")
     at: str = Field(description="When the override was made (ISO 8601)")
 
 
@@ -1057,13 +1061,21 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
     stored_value: dict[str, Any] | None = Field(
         default=None,
         description=(
-            "For a saved profile's attribute value only: the value as stored, the `before` of "
-            "its whole-value replace override (profile values take no replace_identity)"
+            "The value as stored, for a saved profile's attribute value (the `before` of its "
+            "whole-value replace override; profile values take no replace_identity) and for a "
+            "list element (the `before` of its removal); null otherwise"
         ),
     )
     container_protected: bool = Field(
         default=False,
         description="The value's own field is protected, which blocks a curator override",
+    )
+    overridable: bool = Field(
+        default=False,
+        description=(
+            "A curator may override this value: its own field is not protected and every "
+            "identity field is declared editable"
+        ),
     )
 
     @model_validator(mode="after")

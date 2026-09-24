@@ -304,3 +304,40 @@ def test_each_resolved_decision_obeys_the_allowed_term_list():
     assert setting["agent"]["lookup_outcome"] == "not_found"
     [finding] = [f for f in result.appended_findings if f.code == "domain_pack.validator_materialization_invalid"]
     assert "allowed term list" in finding.details["materialization_error"]
+
+
+def _binding_finding(result):
+    [finding] = [f for f in result.appended_findings if f.field_ref is None or f.field_ref.field_path == "setting"
+                 if f.code in ("domain_pack.validator_unresolved", "domain_pack.curator_override")]
+    return finding
+
+
+def test_a_composite_result_is_settled_when_its_unresolved_values_are_overridden_or_absent():
+    """B3: a curator override of the one value a composite validator cannot find clears its blocker.
+
+    The absent host value (no decision for it) does not keep the binding open.
+    """
+
+    from src.lib.domain_packs.resolvable_values import apply_curator_identity
+
+    metadata = _metadata()
+    envelope = _envelope()
+    setting = envelope.extracted_objects[0].payload["setting"]
+    apply_curator_identity(setting["kind"], {"curie": "ONT:9", "name": "heat"}, identity_keys=TERM_KEYS,
+                           id_key="curie", label_key="name", actor_id="curator-1", actor_display_name="curator-1", at="2026-09-24T00:00:00+00:00")
+    del setting["host"]
+    decisions = {
+        "setting.kind": {"status": "unresolved", "lookup_outcome": "not_found", "explanation": "No class."},
+        "setting.agent": {"status": "resolved", "lookup_outcome": "matched",
+                          "resolved_values": {"agent_curie": "CHEM:1"}, "explanation": "Found."},
+    }
+
+    settled = materialize_validator_results_into_envelope(envelope, metadata, [
+        _item(metadata, envelope, status="unresolved", field_resolutions=decisions)])
+    assert _binding_finding(settled).code == "domain_pack.curator_override"
+
+    # A present value it did not resolve and no override covers still blocks.
+    decisions["setting.agent"] = {"status": "unresolved", "lookup_outcome": "not_found", "explanation": "No."}
+    open_result = materialize_validator_results_into_envelope(envelope, metadata, [
+        _item(metadata, envelope, status="unresolved", field_resolutions=decisions)])
+    assert _binding_finding(open_result).code == "domain_pack.validator_unresolved"
