@@ -94,7 +94,6 @@ fixtures:
               taxon_id: NCBITaxon:6239
               evidence_record_id: reduced-brood-size-evidence-1
             proposed_curie: WBPhenotype:0000886
-            proposed_label: reduced brood size
             curie: null
             label: null
             mention: reduced brood size
@@ -164,7 +163,6 @@ fixtures:
                   taxon_id: NCBITaxon:6239
                   evidence_record_id: reduced-brood-size-evidence-1
                 proposed_curie: WBPhenotype:0000886
-                proposed_label: reduced brood size
                 curie: null
                 label: null
                 mention: reduced brood size

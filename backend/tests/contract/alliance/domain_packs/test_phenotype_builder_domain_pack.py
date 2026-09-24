@@ -1185,3 +1185,41 @@ def test_patch_phenotype_keeps_the_species_context_complete(monkeypatch):
         ],
     )
     assert mouse.status == "ok"
+
+
+# --- Review S1 (integration-2): the subject kind is exactly what the subject check routes on ------
+
+
+@pytest.mark.parametrize("subject_type", ["AGM", "Gene", "model"])
+def test_stage_phenotype_rejects_a_subject_type_the_subject_check_cannot_route(monkeypatch, subject_type):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(
+        **_stage_kwargs(subject_label="mus-81", subject_type=subject_type)
+    )
+
+    assert result.status == "error"
+    assert workspace.candidates == {}
+
+
+@pytest.mark.parametrize("subject_type", ["gene", "allele", "agm"])
+def test_stage_and_patch_phenotype_accept_each_routable_subject_type(monkeypatch, subject_type):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_phenotype_observation_impl(
+        **_stage_kwargs(subject_label="mus-81", subject_type=subject_type)
+    )
+
+    assert result.status == "ok", result.data
+    candidate_id = result.data["candidate_id"]
+    assert workspace.candidates[candidate_id].staged_fields["subject_type"] == subject_type
+
+    def patch(value):
+        return tools._patch_phenotype_observation_impl(
+            candidate_id=candidate_id,
+            pending_ref_id="phenotype-annotation-1",
+            updates=[{"field_path": "subject_type", "string_value": value}],
+        )
+
+    assert patch("Allele").status == "error"
+    assert patch("allele").status == "ok"

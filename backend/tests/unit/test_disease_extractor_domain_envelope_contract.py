@@ -103,12 +103,11 @@ def test_disease_extractor_schema_accepts_pending_disease_annotation_output():
     assert obj.object_role == "curatable_unit"
     assert obj.model_ref == DISEASE_MODEL_ID
     assert obj.definition_state.value == "in_development"
-    # The extractor's DOID/name are proposals; the term is unresolved until validated.
+    # A paper-printed DOID is a proposal; the term is unresolved until validated.
     assert obj.payload["disease_annotation_object"] == unresolved_value(
         "Andersen-Tawil syndrome",
         identity_keys=("curie", "name"),
         proposed_curie="DOID:0050434",
-        proposed_name="Andersen-Tawil syndrome",
     )
     assert obj.payload["data_provider"] == unresolved_value("ZFIN", identity_keys=("abbreviation",))
     assert obj.evidence_record_ids == [
@@ -131,7 +130,6 @@ def test_disease_extractor_schema_accepts_label_backed_pending_disease_candidate
     assert obj.payload["disease_annotation_object"] == unresolved_value(
         "Andersen-Tawil syndrome",
         identity_keys=("curie", "name"),
-        proposed_name="Andersen-Tawil syndrome",
     )
 
 

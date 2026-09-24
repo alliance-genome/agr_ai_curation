@@ -89,11 +89,11 @@ def _staged_fields(subject_type: str = "gene", subject_identifier: str = "FB:FBg
         "subject_identifier": subject_identifier,
         "subject_label": "Appl",
         "disease_relation_name": "is_implicated_in",
-        "evidence_code_curies": ["ECO:0000315"],
+        "evidence_code_curies": [{"mention": "IMP"}],
         # R4 optional slots.
         "genetic_sex_name": "male",
         "disease_qualifier_names": ["severity_of", "onset_of"],
-        "with_gene_identifiers": ["FB:FBgn0000108", "FB:FBgn0003089"],
+        "with_gene_identifiers": [{"mention": "Appl", "gene_id": "FB:FBgn0000108"}, {"mention": "Bace"}],
         "source_mentions": ["a transgenic Drosophila model of Alzheimer's disease"],
         "rationale": "APP and BACE over-expression reproduced core Alzheimer's features in this line.",
         "negated": False,
@@ -208,8 +208,8 @@ def test_disease_builder_materializes_concrete_gene_subtype():
         curie=None,
         name=None,
     )
-    # D3: every proposed ECO code is its own value.
-    assert payload_obj["evidence_code_curies"] == [_staged("ECO:0000315", curie=None)]
+    # D3: every evidence code is its own value, searched from the paper's evidence wording.
+    assert payload_obj["evidence_code_curies"] == [_staged("IMP", curie=None)]
     # D5: relation rides on the concrete object.
     assert payload_obj["disease_relation"] == _staged("is_implicated_in", name=None)
     assert payload_obj["data_provider"] == _staged("FB", abbreviation=None)
@@ -221,9 +221,10 @@ def test_disease_builder_materializes_concrete_gene_subtype():
         _staged("severity_of", name=None),
         _staged("onset_of", name=None),
     ]
+    # A with/from gene is its paper wording; a printed ID is only a proposal.
     assert payload_obj["with_gene_identifiers"] == [
-        _staged("FB:FBgn0000108", primary_external_id=None),
-        _staged("FB:FBgn0003089", primary_external_id=None),
+        _staged("Appl", proposed_primary_external_id="FB:FBgn0000108", primary_external_id=None),
+        _staged("Bace", primary_external_id=None),
     ]
     # D4: nothing names the source reference, so single_reference is absent.
     assert "single_reference" not in payload_obj
@@ -518,7 +519,11 @@ def test_disease_r4_optional_slot_bindings_are_active():
     # SLOT 4: with_or_from — gene_validation, multivalued bare path, primary_external_id result key.
     with_gene = bindings_by_id["disease_with_gene_validation"]
     assert with_gene["validator_agent"]["agent_id"] == "gene_validation"
-    assert with_gene["input_fields"]["gene_id"]["path"] == "with_gene_identifiers.mention"
+    assert with_gene["input_fields"]["mention"]["path"] == "with_gene_identifiers.mention"
+    assert with_gene["input_fields"]["proposed_gene_id"]["path"] == (
+        "with_gene_identifiers.proposed_primary_external_id"
+    )
+    assert "gene_id" not in with_gene["input_fields"]
     assert with_gene["input_fields"]["data_provider"]["context_only"] is True
     assert with_gene["applies_to"]["field_paths"] == ["with_gene_identifiers"]
     assert with_gene["expected_result_fields"] == {
@@ -1130,3 +1135,135 @@ def test_disease_staging_takes_no_proposed_term_name_or_identity(monkeypatch):
     )
     assert (term["proposed_curie"], term["curie"], term["name"]) == ("DOID:10652", None, None)
     assert (term["resolution_state"], term["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_VALIDATED)
+
+
+# --- Review S1/S3 (integration-2): exact subject kinds, paper-worded evidence and with/from -------
+
+
+@pytest.mark.parametrize("subject_type", ["AGM", "Gene", "model", "affected_genomic_model"])
+def test_stage_disease_rejects_a_subject_type_the_subject_check_cannot_route(monkeypatch, subject_type):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(
+        **_stage_kwargs(subject_label="Appl", subject_type=subject_type)
+    )
+
+    assert result.status == "error"
+    assert "subject_type" in result.data["validation_issues"][0]["field_path"]
+    assert workspace.candidates == {}
+
+
+@pytest.mark.parametrize(
+    ("subject_type", "object_type"),
+    [("gene", "GeneDiseaseAnnotation"), ("allele", "AlleleDiseaseAnnotation"), ("agm", "AGMDiseaseAnnotation")],
+)
+def test_stage_disease_accepts_each_routable_subject_type(monkeypatch, subject_type, object_type):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(
+        **_stage_kwargs(subject_label="Appl", subject_type=subject_type)
+    )
+
+    assert result.status == "ok", result.data
+    staged = dict(workspace.candidates[result.data["candidate_id"]].staged_fields)
+    assert staged["subject_type"] == subject_type
+    assert _annotation_payload(_materialize_staged(staged), object_type)["disease_annotation_subject"][
+        "subject_type"
+    ] == subject_type
+
+
+def test_patch_disease_subject_type_must_stay_routable(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    candidate_id = tools._stage_disease_observation_impl(
+        **_stage_kwargs(subject_label="Appl", subject_type="gene")
+    ).data["candidate_id"]
+
+    def patch(value):
+        return tools._patch_disease_observation_impl(
+            candidate_id=candidate_id,
+            pending_ref_id="disease-annotation-1",
+            updates=[{"field_path": "subject_type", "string_value": value}],
+        )
+
+    rejected = patch("AGM")
+    assert rejected.status == "error"
+    assert "exactly one of gene, allele, agm" in rejected.data["validation_issues"][0]["message"]
+    assert workspace.candidates[candidate_id].staged_fields["subject_type"] == "gene"
+    assert patch("agm").status == "ok"
+    assert workspace.candidates[candidate_id].staged_fields["subject_type"] == "agm"
+
+
+def test_stage_disease_evidence_and_with_from_are_paper_wording_plus_printed_ids(monkeypatch):
+    """Extraction never supplies an ECO or gene ID from memory: each entry is the paper's wording,
+    with an ID only when the paper prints it, and every value stays unvalidated."""
+
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(
+        **_stage_kwargs(
+            evidence_code_curies=[{"mention": "IMP"}, {"mention": "author statement", "curie": "ECO:0000033"}],
+            with_gene_identifiers=[{"mention": "Psn"}, {"mention": "Appl", "gene_id": "FB:FBgn0000108"}],
+        )
+    )
+
+    assert result.status == "ok", result.data
+    staged = dict(workspace.candidates[result.data["candidate_id"]].staged_fields)
+    assert staged["evidence_code_curies"] == [
+        {"mention": "IMP"}, {"mention": "author statement", "curie": "ECO:0000033"},
+    ]
+    payload = next(
+        obj["payload"]
+        for obj in _materialize_staged(staged).payload["curatable_objects"]
+        if "evidence_code_curies" in obj["payload"]
+    )
+    assert payload["evidence_code_curies"] == [
+        _staged("IMP", curie=None),
+        _staged("author statement", proposed_curie="ECO:0000033", curie=None),
+    ]
+    assert payload["with_gene_identifiers"] == [
+        _staged("Psn", primary_external_id=None),
+        _staged("Appl", proposed_primary_external_id="FB:FBgn0000108", primary_external_id=None),
+    ]
+
+
+def test_disease_evidence_and_with_from_take_structured_entries_only(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    # A custom extractor whose prompt still describes plain string lists is told the entry shape.
+    bare = tools._stage_disease_observation_impl(**_stage_kwargs(evidence_code_curies=["ECO:0000315"]))
+    assert bare.status == "error"
+    message = bare.data["validation_issues"][0]["message"]
+    assert "evidence_code_curies entries are objects, not strings" in message
+    assert '"mention"' in message and '"curie"' in message
+    bare_genes = tools._stage_disease_observation_impl(**_stage_kwargs(with_gene_identifiers=["Psn"]))
+    assert '"gene_id"' in bare_genes.data["validation_issues"][0]["message"]
+    assert workspace.candidates == {}
+
+    candidate_id = tools._stage_disease_observation_impl(**_stage_kwargs()).data["candidate_id"]
+    string_patch = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[{"field_path": "evidence_code_curies", "string_list_value": ["IMP"]}],
+    )
+    assert string_patch.status == "error"
+    assert "evidence_codes_value" in string_patch.data["validation_issues"][0]["message"]
+    assert '"mention"' in string_patch.data["validation_issues"][0]["message"]
+    bare_value = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[{"field_path": "with_gene_identifiers", "with_genes_value": ["Psn"]}],
+    )
+    assert "with_gene_identifiers entries are objects" in bare_value.data["validation_issues"][0]["message"]
+
+    structured = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[
+            {"field_path": "evidence_code_curies", "evidence_codes_value": [{"mention": "IGI"}]},
+            {"field_path": "with_gene_identifiers", "with_genes_value": [{"mention": "Psn"}]},
+        ],
+    )
+    assert structured.status == "ok", structured.data
+    staged = workspace.candidates[candidate_id].staged_fields
+    assert staged["evidence_code_curies"] == [{"mention": "IGI"}]
+    assert staged["with_gene_identifiers"] == [{"mention": "Psn"}]

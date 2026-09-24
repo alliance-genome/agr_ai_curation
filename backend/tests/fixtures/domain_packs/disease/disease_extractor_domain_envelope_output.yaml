@@ -22,7 +22,6 @@ output:
       mention: Andersen-Tawil syndrome
       disease_annotation_object:
         proposed_curie: DOID:0050434
-        proposed_name: Andersen-Tawil syndrome
         curie: null
         name: null
         mention: Andersen-Tawil syndrome

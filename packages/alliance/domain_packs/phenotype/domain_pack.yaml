@@ -479,13 +479,6 @@ object_definitions:
         metadata:
           protected: true
           exported: false
-      - field_path: phenotype_terms.proposed_label
-        field_type: string
-        display_name: Phenotype term proposed name
-        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
-        metadata:
-          protected: true
-          exported: false
       - field_path: phenotype_terms.resolution_state
         field_type: enum
         display_name: Phenotype term status
@@ -595,13 +588,6 @@ object_definitions:
         field_type: string
         display_name: First phenotype term proposed ID
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
-        metadata:
-          protected: true
-          exported: false
-      - field_path: phenotype_terms[0].proposed_label
-        field_type: string
-        display_name: First phenotype term proposed name
-        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
           exported: false
@@ -1451,13 +1437,6 @@ object_definitions:
         field_type: string
         display_name: Phenotype term proposed ID
         description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
-        metadata:
-          protected: true
-          exported: false
-      - field_path: proposed_label
-        field_type: string
-        display_name: Phenotype term proposed name
-        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
           exported: false

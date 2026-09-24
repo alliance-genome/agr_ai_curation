@@ -1759,7 +1759,7 @@ tools:
             type: any
             required: false
             default: null
-            description: What kind of thing shows the phenotype — a gene, an allele, or a whole modified organism (model).
+            description: What shows the phenotype, exactly gene, allele or agm (a whole modified organism such as a strain or line). It decides which specialist checks the subject.
           - name: subject_taxon
             type: any
             required: false
@@ -1818,7 +1818,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations. A subject_type update is exactly gene, allele or agm.
   - tool_id: discard_phenotype_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:discard_phenotype_observation
@@ -2013,7 +2013,7 @@ tools:
             type: any
             required: false
             default: null
-            description: What kind of thing has the disease association — a gene, an allele, or a whole modified organism (model). This choice decides what kind of record is produced.
+            description: What has the disease association, exactly gene, allele or agm (a whole modified organism such as a strain or line). This choice decides what kind of record is produced and which specialist checks the subject.
           - name: subject_identifier
             type: any
             required: false
@@ -2033,7 +2033,7 @@ tools:
             type: any
             required: false
             default: null
-            description: The Evidence and Conclusion Ontology codes (ECO, a standard set of "how was this shown" codes) the agent proposes for this association.
+            description: 'The evidence for this association, one entry per evidence code: mention is the evidence as the paper states it or the evidence code that fits (for example IMP), and curie is the Evidence and Conclusion Ontology ID (ECO) only when the paper itself prints it. The evidence code specialist finds the ECO term.'
           - name: genetic_sex_name
             type: any
             required: false
@@ -2048,7 +2048,7 @@ tools:
             type: any
             required: false
             default: null
-            description: IDs of additional genes the paper says were involved together with the subject.
+            description: 'Additional genes the paper says were involved together with the subject: mention is the gene as the paper names it, and gene_id its ID only when the paper itself prints it. The gene specialist finds each gene.'
           - name: condition_relations
             type: any
             required: false
@@ -2087,7 +2087,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations; an evidence_code_curies update carries evidence_codes_value and a with_gene_identifiers update carries with_genes_value, shaped like the stage tool's lists. A subject_type update is exactly gene, allele or agm.
   - tool_id: discard_disease_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:discard_disease_observation

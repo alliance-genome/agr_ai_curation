@@ -95,6 +95,35 @@ def staged_list(mentions: Iterable[Any], *, identity_keys: Sequence[str]) -> lis
     return staged
 
 
+def staged_item_list(
+    items: Iterable[Mapping[str, Any]],
+    *,
+    identity_keys: Sequence[str],
+    proposal_keys: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Stage each distinct structured entry (its ``mention`` plus any paper-printed ID) as a value.
+
+    ``proposal_keys`` maps an entry's printed-ID key to the identity key it proposes, stored
+    under ``proposed_<identity key>``.
+    """
+
+    staged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items or []:
+        mention = clean_text(item.get("mention"))
+        if mention is None or mention in seen:
+            continue
+        seen.add(mention)
+        staged.append(
+            staged_value(
+                mention,
+                identity_keys=identity_keys,
+                proposals={identity_key: item.get(key) for key, identity_key in proposal_keys.items()},
+            )
+        )
+    return staged
+
+
 def condition_relations_payload(raw_relations: Any) -> list[dict[str, Any]]:
     """Materialize staged condition relations as resolvable values.
 
@@ -299,6 +328,7 @@ __all__ = [
     "export_identity",
     "export_identity_list",
     "proposed_key",
+    "staged_item_list",
     "staged_list",
     "staged_value",
 ]
