@@ -658,16 +658,23 @@ class _CuratorOverrides:
         did not resolve is overridden or absent.
         """
 
+        return self.settles_decisions(
+            {key: resolution.status for key, resolution in result.field_resolutions.items()}
+        )
+
+    def settles_decisions(self, field_resolution_statuses: Mapping[str, str]) -> bool:
+        """``settles`` from a composite result's per-value statuses ({key: status})."""
+
         if self.covers_every_write:
             return True
-        if not self.values or not result.field_resolutions:
+        if not self.values or not field_resolution_statuses:
             return False
         overridden = set(self.values) | {
             result_field for entries in self.fields.values() for result_field, _ in entries
         }
         return all(
-            resolution.status == "resolved"
-            for key, resolution in result.field_resolutions.items()
+            status == "resolved"
+            for key, status in field_resolution_statuses.items()
             if key not in overridden and key not in self.absent
         )
 
@@ -754,13 +761,19 @@ def expected_writes_settled_by_overrides(
     payload: Mapping[str, Any],
     expected_result_fields: Mapping[str, Any],
     *,
+    field_resolution_statuses: Mapping[str, str],
     object_definition: DomainPackObjectDefinition,
     resolvable_fields: Mapping[str, ResolvableSpec],
 ) -> bool:
-    """Whether curator overrides now cover every present value a binding writes on this payload."""
+    """Whether curator overrides now settle a binding's outcome on this payload.
+
+    The rule the materializer applies (``_CuratorOverrides.settles``): the
+    overrides cover every present value the binding writes, or every value
+    its composite result did not resolve (``field_resolution_statuses``).
+    """
 
     try:
-        values, fields, mapped, _absent = _overridden_writes(
+        values, fields, mapped, absent = _overridden_writes(
             payload,
             expected_result_fields,
             declared_fields={field.field_path: field for field in object_definition.fields},
@@ -768,7 +781,9 @@ def expected_writes_settled_by_overrides(
         )
     except ResolvableValueError:
         return False
-    return bool(values) and sum(len(entries) for entries in fields.values()) == mapped
+    covered = sum(len(entries) for entries in fields.values())
+    overrides = _CuratorOverrides(None, values, fields, bool(values) and covered == mapped, absent)
+    return overrides.settles_decisions(field_resolution_statuses)
 
 
 def _as_curator_override_finding(finding: ValidationFinding) -> ValidationFinding:
@@ -1830,6 +1845,10 @@ def _with_unresolved_values(
     """
 
     payload = copy.deepcopy(target.payload)
+    # Each value is marked once; every path written into a value that changed
+    # then carries the change to its mirrors.
+    changed: dict[str, bool] = {}
+    written: list[tuple[str, str]] = []
     for raw_field_path in item.request.expected_result_fields.values():
         if not isinstance(raw_field_path, str) or not raw_field_path.strip():
             continue
@@ -1844,6 +1863,9 @@ def _with_unresolved_values(
         )
         if container_path is None:
             continue
+        written.append((container_path, materialized_field_path))
+        if container_path in changed:
+            continue
         container = _payload_container(payload, container_path)
         before = copy.deepcopy(container)
         mark_unresolved(
@@ -1855,13 +1877,14 @@ def _with_unresolved_values(
                 item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
             ),
         )
-        if container == before:
-            # A non-decisive outcome left a resolved value as it was; so do its mirrors.
-            continue
-        _propagate_materialized_resolution_state(
-            payload, materialized_field_path, declared_fields=declared_fields,
-            resolvable_fields=resolvable_fields,
-        )
+        # A non-decisive outcome leaves a resolved value as it was; so do its mirrors.
+        changed[container_path] = container != before
+    for container_path, materialized_field_path in written:
+        if changed[container_path]:
+            _propagate_materialized_resolution_state(
+                payload, materialized_field_path, declared_fields=declared_fields,
+                resolvable_fields=resolvable_fields,
+            )
     if payload == target.payload:
         return envelope
     return _with_object_payload(envelope, target, payload)
@@ -2394,7 +2417,12 @@ def _propagate_materialized_resolution_state(
     declared_fields: Mapping[str, DomainPackFieldDefinition],
     resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> None:
-    """Give each resolvable mirror of a written field its source value's resolution."""
+    """Give each mirror of a written field its source value's resolution.
+
+    A resolvable mirror takes the source's state and identity; a plain mirror
+    (e.g. a name kept beside its term) takes the source key's current value,
+    so a demoted term leaves no stale name behind.
+    """
 
     source_path = _resolvable_container_path(
         payload, materialized_field_path, resolvable_fields=resolvable_fields
@@ -2402,6 +2430,7 @@ def _propagate_materialized_resolution_state(
     if source_path is None:
         return
     source = _payload_container(payload, source_path)
+    source_key = str(parse_field_path(materialized_field_path)[-1])
     for mirror_path in _mirror_field_paths(
         materialized_field_path, declared_fields=declared_fields
     ):
@@ -2409,6 +2438,15 @@ def _propagate_materialized_resolution_state(
             payload, mirror_path, resolvable_fields=resolvable_fields
         )
         if mirror_container_path is None:
+            parent_path = _format_field_path(parse_field_path(mirror_path)[:-1])
+            current = _payload_value(payload, mirror_path)
+            value = source.get(source_key)
+            if (
+                isinstance(_payload_container(payload, parent_path), dict)
+                and current != value
+                and not (current is _MISSING and value is None)
+            ):
+                _set_payload_value(payload, mirror_path, copy.deepcopy(value))
             continue
         mirror_spec = declared_spec_for(
             resolvable_fields or {},
@@ -3037,6 +3075,11 @@ def _validation_result_finding_payload(
         ]
         if len(resolved_objects) > _VALIDATION_DETAIL_LIST_LIMIT:
             compact["resolved_object_count"] = len(resolved_objects)
+    if result.field_resolutions:
+        # Each composite decision's status, which a later curator override settles against.
+        compact["field_resolution_statuses"] = {
+            key: resolution.status for key, resolution in result.field_resolutions.items()
+        }
     lookup_attempts = payload.get("lookup_attempts")
     if isinstance(lookup_attempts, list):
         compact["lookup_attempt_count"] = len(lookup_attempts)
