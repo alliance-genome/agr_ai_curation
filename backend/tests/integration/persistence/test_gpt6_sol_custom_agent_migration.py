@@ -132,7 +132,9 @@ def test_upgrade_moves_every_custom_gpt56_agent_to_gpt6_sol(migration_connection
     }
     expected = {
         "sol_high": ("gpt-6-sol", "high"),
-        "sol_disabled": ("gpt-6-sol", "disabled"),
+        # Reviewed mapping: "disabled" was never sent, so the provider default
+        # (medium) applied; keep that behavior on a GPT-6 Sol catalog level.
+        "sol_disabled": ("gpt-6-sol", "medium"),
         "terra_low": ("gpt-6-sol", "low"),
         # GPT-6 Sol rejects "minimal" (live-verified 2026-09-24).
         "terra_minimal": ("gpt-6-sol", "low"),
