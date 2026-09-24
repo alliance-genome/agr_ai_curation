@@ -688,3 +688,37 @@ def test_no_overridable_go_value_has_a_protected_container():
     fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
     for value_path in declared_resolvable_fields(metadata, "GOCuratableObject"):
         assert not fields[value_path].metadata.get("protected"), value_path
+
+
+def test_a_legacy_go_value_is_overridden_from_its_review_row_stored_identity():
+    """B5: the review row's stored identity is the stored one, so its override `before` matches."""
+
+    from src.lib.domain_envelopes.patches import apply_curator_field_patch
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    legacy_object = envelope.extracted_objects[0].model_copy(update={"payload": _legacy_go_payload()})
+    legacy_envelope = envelope.model_copy(update={"extracted_objects": [legacy_object]})
+
+    [row] = _registered_go_materializer().materialize(legacy_envelope, envelope_revision=1)
+    [reading] = [
+        value
+        for field in row.metadata["workspace_fields"]
+        if field.get("resolution")
+        for value in field["resolution"]["values"]
+        if value["value_path"] == "gene_product"
+    ][:1]
+    assert reading["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+    assert (reading["stored_identity"]["curie"], reading["stored_identity"]["label"]) == ("RGD:3020", "Lta")
+
+    identity = {**reading["stored_identity"], "curie": "RGD:3020", "label": "Lta"}
+    result = apply_curator_field_patch(
+        legacy_envelope, pack,
+        _curator_patch(legacy_envelope, legacy_object.object_id, "gene_product.curie",
+                       before=reading["stored_identity"], value=identity, operation="replace_identity"),
+        current_revision=1, actor_id="curator-1",
+    )
+    assert result.accepted, result.errors
+    gene_product = result.envelope.extracted_objects[0].payload["gene_product"]
+    assert (gene_product["lookup_outcome"], gene_product["mention"]) == ("curator_override", "Lta protein")
