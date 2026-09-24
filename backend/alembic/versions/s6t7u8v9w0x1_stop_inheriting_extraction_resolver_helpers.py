@@ -6,13 +6,13 @@ Only the inheritance designation changes; attach/execute policy and any other
 operator config stay as they are.
 
 Revision ID: s6t7u8v9w0x1
-Revises: q4f5a6b7c8d9
+Revises: r5a6b7c8d9e0
 """
 from alembic import op  # pyright: ignore[reportAttributeAccessIssue]
 import sqlalchemy as sa
 
 revision = 's6t7u8v9w0x1'
-down_revision = 'q4f5a6b7c8d9'
+down_revision = 'r5a6b7c8d9e0'
 branch_labels = None
 depends_on = None
 

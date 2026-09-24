@@ -57,7 +57,8 @@ def test_extraction_resolver_helpers_stop_being_inherited(monkeypatch):
     spec = spec_from_file_location('resolver_inheritance_migration_test', path)
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
-    assert module.down_revision == 'q4f5a6b7c8d9'
+    # Chained after the model migration (q4f5a6b7c8d9 -> r5a6b7c8d9e0 -> here): one head.
+    assert module.down_revision == 'r5a6b7c8d9e0'
     calls = []
     monkeypatch.setattr(module.op, 'get_bind', lambda: SimpleNamespace(execute=lambda sql, values: calls.append((str(sql), values))))
 
