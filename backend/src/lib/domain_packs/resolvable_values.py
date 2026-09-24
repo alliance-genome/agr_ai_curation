@@ -1375,6 +1375,8 @@ def _with_mirror_sources(
 # local, in-code mapping table (e.g. an evidence code to its ECO term): mapping, not a
 # database search, so it may be staged resolved. Every other value is staged unvalidated.
 EXTRACTION_MAPPING_KEY = "extraction_mapping"
+# What a fixed mapping table itself decides about an entry it does not map.
+_MAPPING_MISS_OUTCOMES = frozenset({OUTCOME_NOT_FOUND, OUTCOME_CONFLICT})
 
 
 def extraction_value_problems(payload: Mapping[str, Any], metadata: Any, object_type: str) -> list[str]:
@@ -1384,7 +1386,9 @@ def extraction_value_problems(payload: Mapping[str, Any], metadata: Any, object_
     declared value an extractor stages is unresolved and ``not_validated``
     (its paper wording, with any paper-stated identifier as ``proposed_*``).
     The one exception is a value whose field declares ``EXTRACTION_MAPPING_KEY``:
-    a fixed in-code mapping may stage it resolved and matched. A value stored
+    its fixed in-code table is the authority, so it may be staged resolved and
+    matched, or unresolved (no identity) as a table miss (not_found) or an
+    entry that does not apply (conflict). A value stored
     before the contract (no state) is left to the legacy rule. Returns one
     message per offending value; empty when the object conforms.
     """
@@ -1407,9 +1411,15 @@ def extraction_value_problems(payload: Mapping[str, Any], metadata: Any, object_
                 continue
             state, outcome = value.get(RESOLUTION_STATE_KEY), value.get(LOOKUP_OUTCOME_KEY)
             where = f"{object_type}.{_format_path(path) or '<object root>'}"
-            if state == UNRESOLVED and outcome == OUTCOME_NOT_VALIDATED:
+            identity_empty = all(_is_empty(value.get(key)) for key in spec.identity_keys)
+            if state == UNRESOLVED and outcome == OUTCOME_NOT_VALIDATED and identity_empty:
                 continue
-            if state == RESOLVED and outcome == OUTCOME_MATCHED and declared in mapped:
+            if declared in mapped and (
+                (state == RESOLVED and outcome == OUTCOME_MATCHED)
+                # The fixed table is the authority for its field: a miss, or an entry that
+                # does not apply here, is its outcome.
+                or (state == UNRESOLVED and outcome in _MAPPING_MISS_OUTCOMES and identity_empty)
+            ):
                 continue
             problems.append(
                 f"{where} was staged {state}/{outcome}; extraction stages every value unvalidated "
