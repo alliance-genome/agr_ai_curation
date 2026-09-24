@@ -79,7 +79,6 @@ _PHENOTYPE_PATCH_FIELD_PATHS = frozenset(
         "subject_taxon",
         "term_mention",
         "term_curie",
-        "term_label",
         "data_provider",
         "term_taxon_id",
         "negated",
@@ -106,9 +105,9 @@ class ExperimentalConditionInput(_StrictToolModel):
     """One experimental condition the extractor read from the paper.
 
     Each condition part (class, specific condition, chemical, taxon) is staged with its paper
-    wording in ``<part>_mention``; a CURIE found with the term-helper lookup tools goes in
-    ``<part>_curie`` as a proposal the condition validator checks. A part with a CURIE but no
-    paper wording is rejected. Every field is optional and sparse — stage only what the paper
+    wording in ``<part>_mention``; ``<part>_curie`` holds only an ID the paper itself prints, as
+    a proposal the condition validator checks. The validator searches for every part. A part
+    with a CURIE but no paper wording is rejected. Every field is optional and sparse — stage only what the paper
     explicitly states. The condition carries no quote text: the validator reads the annotation's
     evidence_record_ids (the spans the condition was read from) per the evidence contract.
     """
@@ -119,7 +118,7 @@ class ExperimentalConditionInput(_StrictToolModel):
     )
     condition_class_curie: Optional[StrictStr] = Field(
         default=None,
-        description="Proposed ZECO class ID for that wording, from the term lookup tools; a validator confirms it.",
+        description="The ZECO class ID, only when the paper prints it; a validator checks it.",
     )
     condition_id_mention: Optional[StrictStr] = Field(
         default=None,
@@ -127,7 +126,7 @@ class ExperimentalConditionInput(_StrictToolModel):
     )
     condition_id_curie: Optional[StrictStr] = Field(
         default=None,
-        description="Proposed ZECO/XCO ID for the specific condition; a validator confirms it.",
+        description="The ZECO/XCO ID of the specific condition, only when the paper prints it; a validator checks it.",
     )
     condition_chemical_mention: Optional[StrictStr] = Field(
         default=None,
@@ -135,7 +134,7 @@ class ExperimentalConditionInput(_StrictToolModel):
     )
     condition_chemical_curie: Optional[StrictStr] = Field(
         default=None,
-        description="Proposed ChEBI ID for the chemical; a validator confirms it.",
+        description="The chemical's ChEBI ID, only when the paper prints it; a validator checks it.",
     )
     condition_taxon_mention: Optional[StrictStr] = Field(
         default=None,
@@ -143,7 +142,7 @@ class ExperimentalConditionInput(_StrictToolModel):
     )
     condition_taxon_curie: Optional[StrictStr] = Field(
         default=None,
-        description="Proposed NCBITaxon ID for that organism; a validator confirms it.",
+        description="The organism's NCBITaxon ID, only when the paper prints it; a validator checks it.",
     )
     condition_free_text: Optional[StrictStr] = None
     condition_summary: Optional[StrictStr] = None
@@ -196,10 +195,14 @@ class PhenotypeStageInput(_StrictToolModel):
     term_mention: StrictStr = Field(
         description=(
             "The phenotype term as the paper words it. It is kept as the paper wording and "
-            "staged even when no ontology term matches; validators decide."
+            "staged even when no ontology term matches; the phenotype ontology validator "
+            "searches for the term."
         ),
     )
-    subject_identifier: Optional[StrictStr] = None
+    subject_identifier: Optional[StrictStr] = Field(
+        default=None,
+        description="The subject's identifier, only when the paper itself prints it; the subject validator checks it.",
+    )
     subject_label: Optional[StrictStr] = Field(
         default=None,
         description=(
@@ -209,8 +212,10 @@ class PhenotypeStageInput(_StrictToolModel):
     )
     subject_type: Optional[StrictStr] = None
     subject_taxon: Optional[StrictStr] = None
-    term_curie: Optional[StrictStr] = None
-    term_label: Optional[StrictStr] = None
+    term_curie: Optional[StrictStr] = Field(
+        default=None,
+        description="The phenotype term's ontology ID, only when the paper itself prints it; a validator checks it.",
+    )
     data_provider: Optional[StrictStr] = None
     term_taxon_id: Optional[StrictStr] = None
     # Nested experimental conditions. Each ConditionRelation carries a relation type plus its
@@ -454,7 +459,6 @@ def _stage_payload_from_phenotype_input(stage_input: PhenotypeStageInput) -> dic
         "subject_taxon",
         "term_mention",
         "term_curie",
-        "term_label",
         "data_provider",
         "term_taxon_id",
     ):
@@ -480,7 +484,6 @@ def _stage_phenotype_observation_impl(
     subject_type: Optional[str] = None,
     subject_taxon: Optional[str] = None,
     term_curie: Optional[str] = None,
-    term_label: Optional[str] = None,
     data_provider: Optional[str] = None,
     term_taxon_id: Optional[str] = None,
     condition_relations: Optional[List[Mapping[str, Any]]] = None,
@@ -491,8 +494,12 @@ def _stage_phenotype_observation_impl(
 
     Args:
         term_mention: The phenotype term as the paper words it. It is kept as paper wording and
-            staged even when no ontology term matches; the phenotype ontology validator decides
-            the term.
+            staged even when no ontology term matches; the phenotype ontology validator searches
+            for the term.
+        term_curie: The phenotype term's ontology ID, only when the paper itself prints it; a
+            validator checks it.
+        subject_identifier: The subject's identifier, only when the paper itself prints it; the
+            subject validator checks it.
         subject_label: The subject (gene, allele, or model) as the paper names it. Required
             whenever a subject identifier, type, or taxon is staged.
         validation_guidance: Optional short sentence forwarding relevant rules from your
@@ -524,7 +531,6 @@ def _stage_phenotype_observation_impl(
             subject_type=subject_type,
             subject_taxon=subject_taxon,
             term_curie=term_curie,
-            term_label=term_label,
             data_provider=data_provider,
             term_taxon_id=term_taxon_id,
             condition_relations=list(condition_relations or []),

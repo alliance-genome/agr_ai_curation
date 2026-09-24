@@ -5366,12 +5366,6 @@
           "type": "string"
         },
         {
-          "description": "The Disease Ontology name the agent proposes for this disease; the disease specialist checks it, and it never replaces the paper's wording.",
-          "name": "disease_name",
-          "required": true,
-          "type": "string"
-        },
-        {
           "description": "How the disease appears in this paper: the main disease studied (primary), mentioned as background, used for comparison (comparative), the disease being modeled (model context), or unspecified. This is the agent's read of the paper context, not a stored relationship.",
           "name": "role",
           "required": true,
@@ -5409,7 +5403,7 @@
         },
         {
           "default": null,
-          "description": "The Disease Ontology ID (DOID, a standard disease term ID) the agent proposes, if it found one; the disease specialist confirms it.",
+          "description": "The Disease Ontology ID (DOID, a standard disease term ID), only when the paper itself prints it; the disease specialist checks it.",
           "name": "disease_curie",
           "required": false,
           "type": "any"
@@ -5423,7 +5417,7 @@
         },
         {
           "default": null,
-          "description": "The ID the agent proposes for the gene, allele, or model the disease is associated with; the subject specialist confirms it.",
+          "description": "The ID of the gene, allele, or model the disease is associated with, only when the paper itself prints it; the subject specialist checks it.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
@@ -5472,7 +5466,7 @@
         },
         {
           "default": null,
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (set only when the paper itself prints that ID, for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"
@@ -6028,7 +6022,7 @@
         },
         {
           "default": null,
-          "description": "The ID the agent proposes for the gene, allele, or model that shows this phenotype; a specialist confirms it before it counts as the subject's ID.",
+          "description": "The ID of the gene, allele, or model that shows this phenotype, only when the paper itself prints it; a specialist checks it before it counts as the subject's ID.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
@@ -6056,15 +6050,8 @@
         },
         {
           "default": null,
-          "description": "The phenotype term ID the agent proposes, if the paper gives one; a term specialist confirms it, and it is never shown as the confirmed ID.",
+          "description": "The phenotype term ID, only when the paper itself prints it; a term specialist checks it, and it is never shown as the confirmed ID.",
           "name": "term_curie",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "description": "The phenotype term name the agent proposes; kept apart from the confirmed term name.",
-          "name": "term_label",
           "required": false,
           "type": "any"
         },
@@ -6084,7 +6071,7 @@
         },
         {
           "default": null,
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (set only when the paper itself prints that ID, for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"

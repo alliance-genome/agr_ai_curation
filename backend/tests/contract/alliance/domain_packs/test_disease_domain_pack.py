@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
-from pydantic import ValidationError
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
@@ -58,7 +56,6 @@ from agr_ai_curation_alliance.domain_packs.disease import (  # noqa: E402
     DISEASE_OBJECT_TYPE,
     DISEASE_VALIDATOR_STATES,
     get_disease_domain_pack_metadata_path,
-    tool_verified_disease_output_to_pending_envelope,
     validate_pending_disease_envelope,
 )
 
@@ -71,15 +68,6 @@ from .test_alliance_domain_pack_scaffold import (  # noqa: E402
 )
 
 DISEASE_PACK_DIR = REPO_ROOT / "packages" / "alliance" / "domain_packs" / "disease"
-DISEASE_RAW_FIXTURE_PATH = (
-    REPO_ROOT
-    / "backend"
-    / "tests"
-    / "fixtures"
-    / "domain_packs"
-    / "disease"
-    / "tool_verified_disease_output.yaml"
-)
 FORBIDDEN_LEGACY_COLLECTIONS = {
     "items",
     "annotations",
@@ -117,8 +105,15 @@ def _staged_list(mentions: list[str], identity_keys: tuple[str, ...]) -> list[di
     return [unresolved_value(mention, identity_keys=identity_keys) for mention in mentions]
 
 
-def _load_raw_disease_fixture() -> dict[str, Any]:
-    return yaml.safe_load(DISEASE_RAW_FIXTURE_PATH.read_text(encoding="utf-8"))
+def _pack_fixture_envelope() -> DomainEnvelope:
+    """The disease pack's declared fixture envelope: a pending, unvalidated disease annotation."""
+
+    fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
+        DISEASE_DOMAIN_PACK_ID,
+        DISEASE_FIXTURE_PACK_ID,
+    )
+    assert fixture_ref is not None
+    return load_domain_fixture_pack(DISEASE_PACK_DIR / fixture_ref.path).fixtures[0].envelope
 
 
 def _iter_mapping_keys(value: Any):
@@ -614,103 +609,38 @@ def test_disease_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path:
         _assert_range_exists(index, provider_ref)
 
 
-def test_tool_verified_disease_fixture_converts_to_pending_envelope():
-    raw_fixture = _load_raw_disease_fixture()
-    converted_envelope = tool_verified_disease_output_to_pending_envelope(raw_fixture)
+def test_the_disease_pack_fixture_is_a_valid_pending_envelope():
+    envelope = _pack_fixture_envelope()
 
-    fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
-        DISEASE_DOMAIN_PACK_ID,
-        DISEASE_FIXTURE_PACK_ID,
-    )
-    assert fixture_ref is not None
-    fixture_pack = load_domain_fixture_pack(DISEASE_PACK_DIR / fixture_ref.path)
-    expected_envelope = fixture_pack.fixtures[0].envelope
-
-    assert converted_envelope.model_dump(mode="json", exclude_none=True) == (
-        expected_envelope.model_dump(mode="json", exclude_none=True)
-    )
-    assert validate_pending_disease_envelope(converted_envelope) == ()
-    assert converted_envelope.domain_pack_id == DISEASE_DOMAIN_PACK_ID
-    assert converted_envelope.schema_ref.schema_id == DISEASE_LINKML_SCHEMA_ID
-    assert converted_envelope.extracted_objects[0].pending_ref_id == "disease-assertion-1"
-    assert converted_envelope.extracted_objects[0].status is CuratableObjectStatus.PENDING
-    assert converted_envelope.extracted_objects[0].metadata[OBJECT_ROLE_METADATA_KEY] == (
-        "curatable_unit"
-    )
-
-    payload = converted_envelope.extracted_objects[0].payload
-    # The tool-verified DOID/name are proposals: the term stays unresolved until a validator
-    # resolves it (ALL-1283).
-    assert payload["disease_annotation_object"] == unresolved_value(
-        "Andersen-Tawil syndrome",
-        identity_keys=("curie", "name"),
-        proposed_curie="DOID:0050434",
-        proposed_name="Andersen-Tawil syndrome",
-    )
-    assert payload["data_provider"] == unresolved_value("ZFIN", identity_keys=("abbreviation",))
-    assert field_path_exists(payload, "evidence_records[0].verified_quote")
-    assert payload["disease_relation"] == unresolved_value("is_model_of", identity_keys=("name",))
-    assert payload["disease_annotation_subject"] == unresolved_value(
-        "kcnj2",
-        identity_keys=("subject_identifier", "subject_label"),
-        subject_type="gene",
-    )
+    assert validate_pending_disease_envelope(envelope) == ()
+    assert envelope.domain_pack_id == DISEASE_DOMAIN_PACK_ID
+    assert envelope.schema_ref.schema_id == DISEASE_LINKML_SCHEMA_ID
+    annotation = envelope.extracted_objects[0]
+    assert annotation.status is CuratableObjectStatus.PENDING
+    assert annotation.metadata[OBJECT_ROLE_METADATA_KEY] == "curatable_unit"
+    # Every value is staged unvalidated: only a validator fills its identity (ALL-1283).
+    assert annotation.payload["disease_annotation_object"]["curie"] is None
+    assert annotation.payload["disease_annotation_object"]["lookup_outcome"] == "not_validated"
+    assert field_path_exists(annotation.payload, "evidence_records[0].verified_quote")
 
 
-def test_converted_disease_envelope_omits_legacy_semantic_stores():
-    raw_fixture = _load_raw_disease_fixture()
-    converted_envelope = tool_verified_disease_output_to_pending_envelope(raw_fixture)
-
+def test_the_disease_pack_fixture_omits_legacy_semantic_stores():
     observed_keys = set(
-        _iter_mapping_keys(converted_envelope.model_dump(mode="python"))
+        _iter_mapping_keys(_pack_fixture_envelope().model_dump(mode="python"))
     )
     assert FORBIDDEN_LEGACY_COLLECTIONS.isdisjoint(observed_keys)
 
 
 def test_pending_disease_validator_rejects_legacy_semantic_store():
-    raw_fixture = _load_raw_disease_fixture()
-    converted_envelope = tool_verified_disease_output_to_pending_envelope(raw_fixture)
-    legacy_envelope = converted_envelope.model_copy(
-        update={"metadata": {**converted_envelope.metadata, "diseases": []}},
+    envelope = _pack_fixture_envelope()
+    legacy_envelope = envelope.model_copy(
+        update={"metadata": {**envelope.metadata, "diseases": []}},
     )
 
     findings = validate_pending_disease_envelope(legacy_envelope)
     assert [finding.code for finding in findings] == [
         "alliance.disease.legacy_semantic_store_present"
     ]
-
-
-def test_tool_verified_disease_fixture_rejects_malformed_required_data():
-    raw_fixture = _load_raw_disease_fixture()
-
-    missing_assertions = copy.deepcopy(raw_fixture)
-    missing_assertions.pop("disease_assertions")
-    with pytest.raises(ValidationError, match="disease_assertions"):
-        tool_verified_disease_output_to_pending_envelope(missing_assertions)
-
-    blank_note = copy.deepcopy(raw_fixture)
-    blank_note["normalization_notes"].append("  ")
-    with pytest.raises(ValidationError, match="normalization_notes"):
-        tool_verified_disease_output_to_pending_envelope(blank_note)
-
-    unknown_evidence = copy.deepcopy(raw_fixture)
-    unknown_evidence["disease_assertions"][0]["evidence_record_ids"].append("missing")
-    with pytest.raises(ValidationError, match="unknown evidence_record_ids"):
-        tool_verified_disease_output_to_pending_envelope(unknown_evidence)
-
-    missing_subject_type = copy.deepcopy(raw_fixture)
-    missing_subject_type["disease_assertions"][0]["subject"].pop("subject_type")
-    with pytest.raises(ValidationError, match="subject_type"):
-        tool_verified_disease_output_to_pending_envelope(missing_subject_type)
-
-    # A subject is named by its paper wording; an identifier alone is not a subject.
-    missing_subject_wording = copy.deepcopy(raw_fixture)
-    missing_subject_wording["disease_assertions"][0]["subject"] = {
-        "subject_type": "gene",
-        "subject_identifier": "ZFIN:ZDB-GENE-000000-1",
-    }
-    with pytest.raises(ValidationError, match="subject_label"):
-        tool_verified_disease_output_to_pending_envelope(missing_subject_wording)
 
 
 def test_disease_evidence_code_lookup_validates_every_staged_element():
@@ -1692,9 +1622,9 @@ def _previous_format_payload() -> dict[str, Any]:
 
 def test_previous_format_disease_values_display_as_legacy_paper_wording_only():
     from agr_ai_curation_alliance.domain_packs.disease.legacy import (
-        is_previous_format,
-        previous_format_display_payload,
-    )
+    is_previous_format,
+    previous_format_display_payload,
+)
 
     from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, effective_payload
 
@@ -1742,9 +1672,9 @@ def _annotation_payload_from_builder() -> dict[str, Any]:
 
 def test_previous_format_disease_record_gets_one_revalidation_finding():
     from agr_ai_curation_alliance.domain_packs.disease.legacy import (
-        PREVIOUS_FORMAT_MESSAGE,
-        validate_disease_envelope,
-    )
+    PREVIOUS_FORMAT_MESSAGE,
+    validate_disease_envelope,
+)
 
     envelope = DomainEnvelope(
         envelope_id="disease-previous-format-env",
@@ -1802,9 +1732,9 @@ def test_old_disease_record_gets_exactly_the_one_previous_format_finding():
     validator dispatch skip it, so the curator sees only that one finding."""
 
     from agr_ai_curation_alliance.domain_packs.disease.legacy import (
-        PREVIOUS_FORMAT_FINDING_CODE,
-        validate_disease_envelope,
-    )
+    PREVIOUS_FORMAT_FINDING_CODE,
+    validate_disease_envelope,
+)
     from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
 
     envelope = DomainEnvelope(
@@ -1855,9 +1785,9 @@ def test_a_curator_edit_never_makes_a_current_record_the_previous_format():
     """Review #7: only a record with no contract state at all is the previous format."""
 
     from agr_ai_curation_alliance.domain_packs.disease.legacy import (
-        is_previous_format,
-        validate_disease_envelope,
-    )
+    is_previous_format,
+    validate_disease_envelope,
+)
 
     edited = {
         **_annotation_payload_from_builder(),
@@ -1943,10 +1873,10 @@ def _override_envelope() -> DomainEnvelope:
 
 def _curator_patch(envelope: DomainEnvelope, field_path: str, value: Any, *, before: Any, identity: bool = False):
     from src.lib.domain_envelopes.patches import (
-        EnvelopeFieldPatch,
-        EnvelopeFieldPatchOperation,
-        apply_curator_field_patch,
-    )
+    EnvelopeFieldPatch,
+    EnvelopeFieldPatchOperation,
+    apply_curator_field_patch,
+)
 
     operation = (
         EnvelopeFieldPatchOperation.REPLACE_IDENTITY if identity else EnvelopeFieldPatchOperation.REPLACE
@@ -2205,8 +2135,10 @@ def test_a_curator_removes_the_lone_disease_evidence_code():
     """W2-B1: removing the only evidence code is accepted; the envelope still validates."""
 
     from src.lib.domain_envelopes.patches import (
-        EnvelopeFieldPatch, EnvelopeFieldPatchOperation, apply_curator_field_patch,
-    )
+    EnvelopeFieldPatch,
+    EnvelopeFieldPatchOperation,
+    apply_curator_field_patch,
+)
 
     envelope = _override_envelope()
     envelope.extracted_objects[0].payload["evidence_code_curies"] = _staged_list(["IMP"], ("curie",))

@@ -297,18 +297,13 @@ def _subject_payload(staged_fields: Mapping[str, Any]) -> dict[str, Any] | None:
     )
 
 
-def _disease_term_payload(
-    *,
-    mention: str,
-    curie: str | None,
-    name: str | None,
-) -> dict[str, Any]:
-    """The staged disease term: paper wording, the extractor's proposed DOID/name, no identity."""
+def _disease_term_payload(*, mention: str, curie: str | None) -> dict[str, Any]:
+    """The staged disease term: paper wording plus a DOID the paper prints, no identity."""
 
     return staged_value(
         mention,
         identity_keys=ONTOLOGY_TERM_IDENTITY_KEYS,
-        proposals={"curie": curie, "name": name},
+        proposals={"curie": curie},
     )
 
 
@@ -701,7 +696,6 @@ def materialize_disease_builder_state(
         term_payload = _disease_term_payload(
             mention=mention,
             curie=_clean_text(staged_fields.get("disease_curie")),
-            name=_clean_text(staged_fields.get("disease_name")),
         )
         # D4: the source reference is not staged from the paper, so single_reference is absent
         # from the annotation; the pending Reference object records why.

@@ -130,7 +130,6 @@ fixtures:
         mention: Alzheimer's disease
         disease_annotation_object:
           proposed_curie: DOID:10652
-          proposed_name: Alzheimer's disease
           curie: null
           name: null
           mention: Alzheimer's disease
