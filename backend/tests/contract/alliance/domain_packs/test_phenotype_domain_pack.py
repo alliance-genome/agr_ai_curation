@@ -1506,7 +1506,10 @@ def test_a_curator_can_override_each_phenotype_term_and_condition_part():
                          {"curie": "ZECO:0000160", "name": "temperature exposure"})
     assert condition.status is EnvelopeFieldPatchStatus.ACCEPTED, condition.errors
 
-    relation_type = identity("condition_relations[0].condition_relation_type.name", {"name": "has_condition"})
+    relation_type = identity(
+        "condition_relations[0].condition_relation_type.name",
+        {"name": "has_condition", "vocabulary": "Condition Relation Type", "id": None},
+    )
     assert relation_type.status is EnvelopeFieldPatchStatus.ACCEPTED, relation_type.errors
 
     single = patch("phenotype_terms[0].curie", "WBPhenotype:0000059")

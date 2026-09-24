@@ -1993,7 +1993,11 @@ def _resolved_gene_subject_envelope() -> DomainEnvelope:
         {"subject_identifier": "MGI:97491", "subject_label": "Pax7"},
         "disease_annotation_subject",
     ),
-    ("disease_relation.name", {"name": "is_implicated_in"}, "disease_relation"),
+    (
+        "disease_relation.name",
+        {"name": "is_implicated_in", "vocabulary": "Disease Relation", "id": "4011"},
+        "disease_relation",
+    ),
     ("evidence_code_curies[1].curie", {"curie": "ECO:0000315"}, "evidence_code_curies[1]"),
     (
         "condition_relations[0].conditions[1].condition_class.curie",
@@ -2002,7 +2006,8 @@ def _resolved_gene_subject_envelope() -> DomainEnvelope:
     ),
     (
         "condition_relations[0].condition_relation_type.name",
-        {"name": "has_condition"},
+        # A validated key may be entered empty, but it must be named.
+        {"name": "has_condition", "vocabulary": "Condition Relation Type", "id": None},
         "condition_relations[0].condition_relation_type",
     ),
 ])
@@ -2031,7 +2036,7 @@ def test_a_curator_can_override_any_disease_identity(field_path, identity, value
     assert (event["value_path"], event["field_path"]) == (value_path, field_path)
 
 
-def test_a_first_disease_term_override_needs_both_the_identifier_and_the_name():
+def test_a_first_disease_override_names_every_identity_key():
     from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
 
     envelope = _override_envelope()
@@ -2040,6 +2045,14 @@ def test_a_first_disease_term_override_needs_both_the_identifier_and_the_name():
     assert single.status is EnvelopeFieldPatchStatus.REJECTED
     assert single.errors == ("Enter both the identifier and the name for a curator override.",)
     assert single.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
+
+    # A vocabulary lookup writes the term's vocabulary and internal ID too, so they are
+    # part of the identity a first override names.
+    name_only = _curator_patch(
+        envelope, "disease_relation.name", {"name": "is_implicated_in"},
+        before={"name": None}, identity=True,
+    )
+    assert name_only.errors == ("Enter the vocabulary and the id for a curator override.",)
 
 
 @pytest.mark.parametrize(("field_path", "value", "before"), [

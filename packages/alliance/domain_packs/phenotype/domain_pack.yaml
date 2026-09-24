@@ -218,6 +218,9 @@ model_definitions:
       display:
         label: name
         mention: mention
+        validated:
+          - vocabulary
+          - id
 object_definitions:
   - object_type: PhenotypeAnnotation
     display_name: Phenotype annotation
@@ -870,18 +873,20 @@ object_definitions:
         field_type: string
         display_name: Condition relation type vocabulary
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.id
         field_type: string
         display_name: Condition relation type internal ID
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.name
         field_type: string
         display_name: Condition relation type name
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: phenotype_condition_relation_lookup
           validator_state: active
