@@ -668,6 +668,23 @@ def test_bundled_alliance_first_pass_extractors_still_register_domain_envelope_s
         assert "metadata" in discovered_schema.model_fields
 
 
+def test_packaged_identity_lookup_tools_are_declared_in_their_bindings(monkeypatch):
+    """Every Alliance tool that searches a database for an identity says so (ALL-1276)."""
+    from src.lib.packages import tool_roles
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    tool_roles.reset_cache()
+    try:
+        assert tool_roles.identity_lookup_tool_names() == frozenset({
+            "agr_curation_query", "agr_literature_reference_lookup", "alliance_api_call",
+            "chebi_api_call", "curation_db_sql", "go_api_call", "inspect_ontology_term",
+            "quickgo_api_call", "resolve_domain_field_term", "resolve_gene_product",
+            "search_domain_field_terms",
+        })
+    finally:
+        tool_roles.reset_cache()
+
+
 def test_no_packaged_extraction_agent_carries_identity_lookup_tools(monkeypatch):
     """Extraction reads the paper; validators do every database search (ALL-1276).
 

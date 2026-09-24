@@ -1260,6 +1260,7 @@
       ],
       "summary": "Runs a direct database query to find Disease Ontology terms (DOID, the standard set of disease term IDs) and the relationships between them."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Curation Database SQL",
     "package_backed": true,

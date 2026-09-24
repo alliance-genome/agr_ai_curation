@@ -2566,6 +2566,9 @@ tools:
     description: Run a direct query against the Alliance Curation Database to look up Disease Ontology terms and how they relate to one another.
     source_file: python/src/agr_ai_curation_alliance/tools/sql.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       namespace: reference_data_lookup
       name: Curation Database SQL
       category: Database
