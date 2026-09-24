@@ -2144,3 +2144,45 @@ def test_a_condition_component_override_clears_its_blocker_through_revalidation_
     assert any(finding.code == "domain_pack.curator_override" for finding in revalidated.appended_findings)
     value = _value_at(revalidated.envelope.extracted_objects[0].payload, component)
     assert (value["curie"], value["lookup_outcome"]) == ("ZECO:0000160", "curator_override")
+
+
+def test_demoting_a_disease_subject_keeps_its_routing_subject_type():
+    """Contract review S1: subject_type is routing context, not identity, so a decisive
+    demotion of a resolved subject never clears it."""
+
+    envelope = DomainEnvelope(
+        envelope_id="disease-subject-demotion-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        extracted_objects=[CuratableObjectEnvelope(
+            object_type="GeneDiseaseAnnotation", pending_ref_id="gene-disease-1",
+            payload={
+                "mention": "Appl",
+                "disease_annotation_subject": unresolved_value(
+                    "Appl", identity_keys=("subject_identifier", "subject_label"),
+                    subject_type="gene", proposed_subject_identifier="FB:FBgn0000108",
+                ),
+                "source_mentions": ["Appl"],
+            },
+        )],
+    )
+
+    def resolve(request):
+        return _validator_result(
+            request, status="resolved", outcome="success",
+            resolved_values={"subject_identifier": "FB:FBgn0000108", "subject_label": "Appl",
+                             "subject_type": "gene"},
+        )
+
+    envelope.extracted_objects[0].payload.update(_materialize(envelope, "disease_subject_materialization", resolve))
+    assert envelope.extracted_objects[0].payload["disease_annotation_subject"]["resolution_state"] == "resolved"
+
+    def demote(request):
+        return _validator_result(request, status="unresolved", resolved_values={}, outcome="not_found")
+
+    subject = _materialize(envelope, "disease_subject_materialization", demote)["disease_annotation_subject"]
+
+    assert (subject["resolution_state"], subject["lookup_outcome"]) == ("unresolved", "not_found")
+    assert (subject["subject_identifier"], subject["subject_label"]) == (None, None)
+    assert subject["overruled_subject_identifier"] == "FB:FBgn0000108"
+    assert subject["subject_type"] == "gene"
+    assert "overruled_subject_type" not in subject

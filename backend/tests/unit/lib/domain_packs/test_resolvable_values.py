@@ -773,9 +773,15 @@ def test_old_containers_revalidate_resolved_and_unresolved_without_raising(old, 
 
     metadata = _legacy_metadata(label_key)
     if label_key == "label":
+        # The value declares the label key it actually holds.
         metadata = metadata.model_copy(update={"object_definitions": [
             metadata.object_definitions[0].model_copy(update={"fields": [
-                *metadata.object_definitions[0].fields,
+                *(
+                    field.model_copy(update={"metadata": {**field.metadata,
+                                                          "display": {**_SITE_DISPLAY, "label": "label"}}})
+                    if field.field_path == "site" else field
+                    for field in metadata.object_definitions[0].fields
+                ),
                 DomainPackFieldDefinition(field_path="site.label", field_type=DomainPackFieldType.STRING),
             ]})
         ]})
