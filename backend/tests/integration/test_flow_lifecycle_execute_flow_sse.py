@@ -219,8 +219,9 @@ def _sample_pdf_gene_envelope() -> dict:
         "domain_pack_id": "gene",
         "extracted_objects": [
             {
-                # The gene pack's object type: its declared label is the
-                # model display label (gene_symbol), not the paper mention.
+                # The gene pack's object type, as the gene validator resolved
+                # it: its declared label is the model display label
+                # (gene_symbol), not the paper mention.
                 "object_type": "gene_mention_evidence",
                 "pending_ref_id": "gene-crumb",
                 "status": "candidate",
@@ -228,6 +229,10 @@ def _sample_pdf_gene_envelope() -> dict:
                     "mention": "crumbs",
                     "gene_symbol": "crumb",
                     "primary_external_id": "FlyBase:FBgn0259211",
+                    "taxon": "NCBITaxon:7227",
+                    "resolution_state": "resolved",
+                    "lookup_outcome": "matched",
+                    "validator_explanation": None,
                 },
                 "evidence_record_ids": ["sample-pdf-ev-1"],
                 "evidence_records": [

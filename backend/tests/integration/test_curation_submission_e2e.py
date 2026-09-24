@@ -928,12 +928,16 @@ def test_submission_workflow_e2e_with_retry_and_history(
     )
     candidate_id = candidate["candidate_id"]
     draft = candidate["draft"]
-    string_field = next(
-        field
-        for field in draft["fields"]
-        if isinstance(field.get("value"), str) and not field.get("read_only", False)
-    )
-    edited_value = f"{string_field['value']} (reviewed)"
+    # A gene's editable fields are its validated identity, so a curator edit
+    # is a validation override naming every identity key: the identifier,
+    # the symbol and the validated taxon the gene export requires.
+    fields_by_key = {field["field_key"]: field for field in draft["fields"]}
+    edited_values = {
+        "primary_external_id": "FB:FBgn0000490",
+        "gene_symbol": "dpp",
+        "taxon": "NCBITaxon:7227",
+    }
+    assert all(not fields_by_key[key]["read_only"] for key in edited_values)
 
     draft_response = client.patch(
         (
@@ -946,20 +950,16 @@ def test_submission_workflow_e2e_with_retry_and_history(
             "draft_id": draft["draft_id"],
             "expected_version": draft["version"],
             "field_changes": [
-                {
-                    "field_key": string_field["field_key"],
-                    "value": edited_value,
-                }
+                {"field_key": key, "value": value}
+                for key, value in edited_values.items()
             ],
             "autosave": True,
         },
     )
     assert draft_response.status_code == 200, draft_response.text
     draft_payload = draft_response.json()
-    assert any(
-        field["field_key"] == string_field["field_key"] and field["value"] == edited_value
-        for field in draft_payload["draft"]["fields"]
-    )
+    saved_values = {field["field_key"]: field["value"] for field in draft_payload["draft"]["fields"]}
+    assert {key: saved_values[key] for key in edited_values} == edited_values
     assert draft_payload["action_log_entry"]["action_type"] == "candidate_updated"
 
     decision_response = client.post(
