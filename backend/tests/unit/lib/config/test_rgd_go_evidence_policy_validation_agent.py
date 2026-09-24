@@ -910,3 +910,32 @@ def test_policy_reads_with_from_entries_as_validation_leaves_them(monkeypatch, e
 
     assert result.proposed_with_from[0].curie == "RGD:621255"
     assert result.policy_violations == []
+
+
+def test_a_dumped_and_revalidated_policy_result_still_copies_its_entries(monkeypatch):
+    """Regression (TLC #3 eval): the compact path re-validates the assembled result from its
+    JSON dump, which states every entry key as null; a table-mapped qualifier never had them."""
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)[
+        "RGDGOEvidencePolicyValidationResult"
+    ]
+    canonical_result = _result_payload(
+        proposed_qualifiers=[_qualifier_entry("located_in")],
+        proposed_aspect="cellular_component",
+        proposed_go_term_curie="GO:0005739",
+    )
+    request = DomainValidationRequest(
+        request_id=canonical_result["request_id"],
+        validator_binding_id=canonical_result["validator_binding_id"],
+        validator_agent=canonical_result["validator_agent"],
+        target=canonical_result["target"],
+        selected_inputs=_selected_inputs_for_result(canonical_result),
+    )
+    first = schema.model_validate(canonical_result, context={"domain_validation_request": request})
+
+    feedback = _validator_result_finalization_feedback(
+        first.model_dump(mode="json"), request=request, result_schema=schema,
+    )
+
+    assert feedback.accepted_result is not None, feedback.message

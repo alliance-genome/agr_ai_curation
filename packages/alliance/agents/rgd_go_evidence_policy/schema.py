@@ -134,6 +134,24 @@ class RGDGOQualifierEntry(DomainValidatorBaseModel):
     )
 
 
+def _without_empty_entry_keys(field_name: str, value: object) -> object:
+    """List entries compared without their null keys.
+
+    A stored entry omits keys it never had (a table-mapped qualifier carries no
+    validator message), while a dumped-and-revalidated copy states them as null;
+    both say the same thing.
+    """
+
+    if field_name not in ("proposed_with_from", "proposed_qualifiers") or not isinstance(value, list):
+        return value
+    return [
+        {key: item for key, item in entry.items() if item is not None}
+        if isinstance(entry, Mapping)
+        else entry
+        for entry in value
+    ]
+
+
 COMPACT_VALIDATOR_RUNTIME = ("agr.alliance", "agr_ai_curation_alliance.compact_adapter:build_compact_validator_runtime")
 
 
@@ -427,7 +445,8 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
         drifted = [
             field_name
             for field_name, expected in expected_values.items()
-            if self._canonical_copy(field_name) != expected
+            if _without_empty_entry_keys(field_name, self._canonical_copy(field_name))
+            != _without_empty_entry_keys(field_name, expected)
         ]
         if drifted:
             raise ValueError(
