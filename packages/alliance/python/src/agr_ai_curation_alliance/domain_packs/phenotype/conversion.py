@@ -6,12 +6,10 @@ builder-workspace candidates and emit the shared extraction-output payload
 ``domain_envelope_from_extraction_result`` turns that payload into a DomainEnvelope, nesting
 ``metadata`` under ``metadata.extraction_metadata``.
 
-POSTURE (preserve the existing pack — runbook §3): the migration changes the EXTRACTION
-MECHANISM, not the curation target. This materializer emits the SAME object graph the existing
-envelope converter (``__init__.build_pending_phenotype_envelope_from_tool_verified_fixture``)
-produced — one ``PhenotypeAnnotation`` curatable_unit per candidate, plus pending
-``PhenotypeSubject`` / ``PhenotypeTerm`` / ``Reference`` / ``EvidenceQuote`` objects — with the
-SAME blocked export/write metadata. No new ontology/provider pairs are activated.
+POSTURE (preserve the existing pack — runbook §3): this materializer emits one
+``PhenotypeAnnotation`` curatable_unit per candidate, plus pending ``PhenotypeSubject`` /
+``PhenotypeTerm`` / ``Reference`` / ``EvidenceQuote`` objects, with blocked export/write
+metadata. No new ontology/provider pairs are activated.
 
 EXTRACTED VS VALIDATED (ALL-1283): every term, subject and data provider is staged as one
 resolvable value (``_resolvable_payloads.staged_value``): the paper wording in ``mention``,

@@ -154,12 +154,13 @@ def _alliance_gate_case(case_key: str):
         from agr_ai_curation_alliance.domain_packs.disease import (
             DISEASE_EXPORT_TARGET_ID,
             DISEASE_OBJECT_TYPE,
-            tool_verified_disease_output_to_pending_envelope,
         )
+        from src.lib.domain_packs.loader import load_domain_fixture_pack
 
-        envelope = tool_verified_disease_output_to_pending_envelope(
-            _fixture_yaml("disease", "tool_verified_disease_output.yaml")
-        )
+        # The disease pack's declared fixture: a pending, unvalidated disease annotation.
+        envelope = load_domain_fixture_pack(
+            REPO_ROOT / "packages" / "alliance" / "domain_packs" / "disease" / "fixtures" / "tool_verified.yaml"
+        ).fixtures[0].envelope
         return {
             "adapter_key": "disease",
             "envelope": _retag_envelope(
@@ -179,13 +180,12 @@ def _alliance_gate_case(case_key: str):
         from agr_ai_curation_alliance.domain_packs.phenotype import (
             PHENOTYPE_EXPORT_TARGET_ID,
             PHENOTYPE_OBJECT_TYPE,
-            build_pending_phenotype_envelope_from_tool_verified_fixture,
         )
-        from tests.fixtures.evidence.harness import load_evidence_fixture
+        from src.schemas.domain_envelope import DomainEnvelope
 
-        envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(
-            load_evidence_fixture("tool_verified_phenotype_paper"),
-            envelope_id="phenotype-alliance-e2e-envelope",
+        # A pending, unvalidated phenotype annotation with its term and subject.
+        envelope = DomainEnvelope.model_validate(
+            _fixture_yaml("phenotype", "tool_verified_pending_envelope.yaml")["envelope"]
         )
         return {
             "adapter_key": "phenotype",
