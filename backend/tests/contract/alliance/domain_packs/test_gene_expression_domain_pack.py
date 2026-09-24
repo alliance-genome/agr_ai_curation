@@ -4164,3 +4164,89 @@ def test_previous_format_stage_slims_display_as_legacy_vocabulary_terms_and_are_
         envelope, envelope_revision=1
     )
     assert len(rows) == 1
+
+
+# --- Fix wave: full-identity overrides export (B2) and the stage name follows (S2) ----------
+
+_SLIM = "expression_pattern.when_expressed.stage_uberon_slim_terms"
+_STAGE = "expression_pattern.when_expressed.developmental_stage_start"
+
+
+def _override_blockers(payload_edit, field_path, identity):
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    payload_edit(payload)
+    result = _curator_patch(
+        _with_payload(envelope, payload), field_path, identity,
+        before={key: None for key in identity}, identity=True,
+    )
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    annotation = result.envelope.extracted_objects[0]
+    return annotation, {blocker.field_path for blocker in gene_expression_export_blockers(_export_candidate(annotation))}
+
+
+def test_a_full_identity_override_of_the_relation_exports_its_vocabulary_term():
+    def stage(payload):
+        payload["relation"] = staged_value("relation", "expression was detected")
+
+    annotation, blockers = _override_blockers(
+        stage, "relation.name",
+        {"name": "is_expressed_in", "vocabulary": "Expression Relation", "id": 12345},
+    )
+    relation = annotation.payload["relation"]
+    assert (relation["name"], relation["vocabulary"], relation["id"]) == (
+        "is_expressed_in", "Expression Relation", 12345)
+    assert not any(path.startswith("relation") for path in blockers)
+
+
+def test_a_full_identity_override_of_a_stage_slim_term_exports_it():
+    def stage(payload):
+        payload["expression_pattern"]["when_expressed"]["stage_uberon_slim_terms"] = [
+            staged_value(_SLIM, "embryo")]
+
+    annotation, blockers = _override_blockers(
+        stage, f"{_SLIM}[0].name",
+        {"name": "embryo stage", "vocabulary": _STAGE_SLIM_VOCABULARY, "id": 7},
+    )
+    [term] = annotation.payload["expression_pattern"]["when_expressed"]["stage_uberon_slim_terms"]
+    assert (term["name"], term["vocabulary"], term["lookup_outcome"]) == (
+        "embryo stage", _STAGE_SLIM_VOCABULARY, "curator_override")
+    assert not any(path.startswith(_SLIM) for path in blockers)
+
+
+def test_a_full_identity_override_of_the_reference_keeps_its_curie():
+    def stage(payload):
+        payload["single_reference"] = staged_value("single_reference", "PMID:1")
+
+    annotation, _blockers = _override_blockers(
+        stage, "single_reference.reference_id",
+        {"reference_id": "12345", "title": "A paper", "curie": "PMID:1"},
+    )
+    reference = annotation.payload["single_reference"]
+    assert (reference["reference_id"], reference["title"], reference["curie"]) == ("12345", "A paper", "PMID:1")
+
+
+def test_a_first_override_that_leaves_out_a_validated_key_names_it():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    payload["relation"] = staged_value("relation", "expression was detected")
+    result = _curator_patch(_with_payload(envelope, payload), "relation.name", {"name": "is_expressed_in"},
+                            before={"name": None}, identity=True)
+    assert result.status is EnvelopeFieldPatchStatus.REJECTED
+    assert result.errors == ("Enter the vocabulary and the id for a curator override.",)
+
+
+def test_a_stage_override_updates_the_exported_stage_name():
+    def stage(payload):
+        payload["expression_pattern"]["when_expressed"]["developmental_stage_start"] = staged_value(
+            _STAGE, "E14.5")
+        payload["when_expressed_stage_name"] = None
+
+    annotation, _blockers = _override_blockers(
+        stage, f"{_STAGE}.curie", {"curie": "MmusDv:0000031", "name": "Theiler stage 22"},
+    )
+    assert annotation.payload["when_expressed_stage_name"] == "Theiler stage 22"

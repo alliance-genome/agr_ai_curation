@@ -1558,3 +1558,26 @@ def test_a_header_keeps_the_label_of_a_value_already_read_through_effective_payl
     # A stored unresolved value's paper wording is still labelled as such.
     stored = {"site": unresolved_value("skin", identity_keys=TERM_KEYS, outcome=OUTCOME_NOT_FOUND)}
     assert unresolved_header_text(stored, "site.name", resolvable_fields=declared) == "skin (paper wording)"
+
+
+def test_an_override_settles_a_binding_whose_other_written_value_is_absent():
+    """B3: writes into a declared value the payload does not hold do not keep a blocker open."""
+
+    from src.lib.domain_packs.resolvable_values import apply_curator_identity
+
+    expected = {"curie": "site.curie", "name": "site.name", "copy_curie": "copy.curie"}
+    metadata = _metadata(expected=expected)
+    site = unresolved_value("skin", identity_keys=TERM_KEYS)
+    apply_curator_identity(site, {"curie": "ONT:9", "name": "skin"}, identity_keys=TERM_KEYS, id_key="curie",
+                           label_key="name", actor_id="curator-1", at="2026-09-24T00:00:00+00:00")
+
+    def codes(payload):
+        envelope = _envelope(payload)
+        result = materialize_validator_results_into_envelope(
+            envelope, metadata, [_item(metadata, envelope, status="unresolved", outcome="not_found")])
+        return {finding.code for finding in result.appended_findings}
+
+    assert "domain_pack.validator_unresolved" not in codes({"site": dict(site)})
+    assert "domain_pack.curator_override" in codes({"site": dict(site)})
+    assert "domain_pack.validator_unresolved" in codes(
+        {"site": dict(site), "copy": unresolved_value("skin", identity_keys=TERM_KEYS)})
