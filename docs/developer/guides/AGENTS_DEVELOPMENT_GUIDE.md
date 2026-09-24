@@ -151,7 +151,7 @@ The `agents` table (`backend/src/models/sql/agent.py`) stores all agent records:
 | `agent_key` | String(100) | Unique identifier, used as lookup key |
 | `name` | String(255) | Display name |
 | `instructions` | Text | Full prompt text |
-| `model_id` | String(100) | Registered LLM model identifier (e.g., `gpt-5.6-terra`) |
+| `model_id` | String(100) | Registered LLM model identifier (e.g., `gpt-6-sol`) |
 | `model_temperature` | Float | Temperature setting |
 | `model_reasoning` | String(20) | Reasoning effort level |
 | `tool_ids` | JSONB | List of tool IDs (e.g., `["agr_curation_query"]`) |
@@ -416,9 +416,9 @@ Providers are defined in `config/providers.yaml` and loaded by `backend/src/lib/
 Set environment variables to override an agent's default model:
 
 ```bash
-AGENT_GENE_MODEL=gpt-5.6-terra
-AGENT_SUPERVISOR_MODEL=gpt-5.6-sol
-AGENT_PDF_MODEL=gpt-5.6-sol
+AGENT_GENE_MODEL=gpt-6-sol
+AGENT_SUPERVISOR_MODEL=gpt-6-astra
+AGENT_PDF_MODEL=gpt-6-sol
 ```
 
 ---
@@ -469,7 +469,7 @@ The Flow Builder palette, trace badges, and Tool Inspector all derive from regis
 ### Per-Agent Overrides
 
 ```bash
-AGENT_MY_AGENT_MODEL=gpt-5.6-terra
+AGENT_MY_AGENT_MODEL=gpt-6-sol
 AGENT_MY_AGENT_REASONING=low
 AGENT_MY_AGENT_TEMPERATURE=0.2
 ```

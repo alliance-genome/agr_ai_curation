@@ -24,7 +24,7 @@ target:
   id: gene
 routes:
   - provider: openai
-    model: gpt-5.6-sol
+    model: gpt-6-sol
 cases:
   - case_id: case-1
     fixture: cases/case-1/input.json

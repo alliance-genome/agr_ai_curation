@@ -207,7 +207,7 @@ def test_format_abstract_for_prompt_trims_and_formats_text():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-5.6-sol"])
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6-sol"])
 async def test_extract_abstract_with_llm_uses_catalog_reasoning_without_temperature(monkeypatch, model):
     captured = {}
 

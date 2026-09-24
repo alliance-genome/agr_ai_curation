@@ -307,7 +307,7 @@ def test_close_owned_openai_resources_finishes_inside_short_lived_batch_loop():
 @pytest.mark.asyncio
 async def test_non_streaming_owned_runner_closes_resources_after_success(monkeypatch):
     calls = []
-    agent = SimpleNamespace(model="gpt-5.6-terra")
+    agent = SimpleNamespace(model="gpt-6-sol")
 
     class Client:
         async def close(self):
@@ -370,7 +370,7 @@ async def test_non_streaming_owned_runner_uses_owned_provider_for_default_model(
 
 @pytest.mark.asyncio
 async def test_non_streaming_owned_runner_preserves_parent_run_metadata(monkeypatch):
-    agent = SimpleNamespace(model="gpt-5.6-terra")
+    agent = SimpleNamespace(model="gpt-6-sol")
     resources = runner.OwnedOpenAIResources(client=AsyncMock(), provider=object())
     monkeypatch.setattr(runner, "_build_owned_openai_resources", lambda: resources)
     parent_run_config = runner.RunConfig(
@@ -401,7 +401,7 @@ async def test_non_streaming_owned_runner_preserves_parent_run_metadata(monkeypa
 @pytest.mark.asyncio
 async def test_non_streaming_owned_runner_closes_resources_after_failure(monkeypatch):
     calls = []
-    agent = SimpleNamespace(model="gpt-5.6-terra")
+    agent = SimpleNamespace(model="gpt-6-sol")
 
     class Client:
         async def close(self):
@@ -434,7 +434,7 @@ async def test_non_streaming_owned_runner_closes_resources_after_failure(monkeyp
 
 def test_sync_owned_runner_closes_resources_before_event_loop_shutdown(monkeypatch):
     calls = []
-    agent = SimpleNamespace(model="gpt-5.6-terra")
+    agent = SimpleNamespace(model="gpt-6-sol")
 
     class Client:
         async def close(self):

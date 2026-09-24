@@ -38,7 +38,7 @@ def test_default_runtime_catalog_rejects_unknown_and_mismatched_routes(
     with pytest.raises(BenchmarkCatalogError, match="Unknown model_id"):
         catalog.validate_route("made-up-model", "not-real")
     with pytest.raises(BenchmarkCatalogError, match="belongs to provider 'openai'"):
-        catalog.validate_route("gpt-5.6-sol", "openrouter")
+        catalog.validate_route("gpt-6-sol", "openrouter")
 
 
 def test_default_runtime_catalog_rejects_invalid_checked_in_route(
@@ -49,7 +49,7 @@ def test_default_runtime_catalog_rejects_invalid_checked_in_route(
     profile = benchmark_root / "profiles" / "isolated-gene-agent-v1.yaml"
     profile.write_text(
         profile.read_text(encoding="utf-8").replace(
-            "model: gpt-5.6-sol", "model: made-up-model", 1
+            "model: gpt-6-sol", "model: made-up-model", 1
         ),
         encoding="utf-8",
     )

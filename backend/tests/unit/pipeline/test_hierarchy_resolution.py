@@ -46,7 +46,7 @@ async def test_resolve_document_hierarchy_applies_classification_and_metadata(mo
         )
 
     monkeypatch.setattr(hierarchy, "_call_llm_for_hierarchy", _fake_llm)
-    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-6-sol")
 
     elements = [
         {"metadata": {"section_title": "Intro"}, "text": "Overview"},
@@ -68,7 +68,7 @@ async def test_resolve_document_hierarchy_applies_classification_and_metadata(mo
     assert metadata.top_level_sections == ["Introduction"]
     assert metadata.abstract_section_title == "Intro"
     assert metadata.llm_raw_response == {"model": "stub"}
-    assert metadata.model_used == "gpt-5.4-mini"
+    assert metadata.model_used == "gpt-6-sol"
 
 
 @pytest.mark.asyncio
@@ -107,7 +107,7 @@ async def test_resolve_document_hierarchy_handles_provider_figure_metadata_deter
         )
 
     monkeypatch.setattr(hierarchy, "_call_llm_for_hierarchy", _fake_llm)
-    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-6-sol")
 
     elements = [
         {"metadata": {"section_title": "Results"}, "text": "Native result"},
@@ -268,7 +268,7 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
 
     monkeypatch.setattr(hierarchy, "gen_ai_invoke_agent_span", _fake_sentry_span)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-6-sol")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "medium")
     monkeypatch.setenv("HIERARCHY_RESOLUTION_MAX_TURNS", "6")
 
@@ -296,8 +296,8 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_hierarchy_prompt_cache_key_does_not_require_a_catalogued_model(monkeypatch):
-    """The string model always runs on native OpenAI, catalogued or not."""
+async def test_hierarchy_rejects_an_uncatalogued_model_before_any_request(monkeypatch):
+    """Request shape comes from the catalog, never from a model-name prefix."""
     output = hierarchy.HierarchyOutput(
         sections=[hierarchy.SectionClassification(idx=0, is_top_level=True)],
         abstract_idx=0,
@@ -310,19 +310,42 @@ async def test_hierarchy_prompt_cache_key_does_not_require_a_catalogued_model(mo
     monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5-uncatalogued-test")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "medium")
 
-    sections, _, _ = await hierarchy._call_llm_for_hierarchy(
+    result = await hierarchy._call_llm_for_hierarchy(
         [{"title": "Intro", "preview": "overview"}]
     )
 
-    assert len(sections) == 1
-    assert captured["extra_args"]["prompt_cache_key"].startswith("hierarchy_classifier:")
+    assert result == ([], None, None)
+    assert "user_prompt" not in captured
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_rejects_a_reasoning_effort_the_model_does_not_accept(monkeypatch):
+    output = hierarchy.HierarchyOutput(
+        sections=[hierarchy.SectionClassification(idx=0, is_top_level=True)],
+        abstract_idx=0,
+    )
+    captured, _ = _install_fake_agent_modules(monkeypatch, final_output=output)
+    monkeypatch.setattr(
+        hierarchy, "gen_ai_invoke_agent_span", lambda **_kwargs: _FakeContextManager(None)
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-6-sol")
+    # GPT-6 Sol rejects "minimal" (live-verified 2026-09-24).
+    monkeypatch.setenv("HIERARCHY_LLM_REASONING", "minimal")
+
+    result = await hierarchy._call_llm_for_hierarchy(
+        [{"title": "Intro", "preview": "overview"}]
+    )
+
+    assert result == ([], None, None)
+    assert "user_prompt" not in captured
 
 
 @pytest.mark.asyncio
 async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
     captured, _ = _install_fake_agent_modules(monkeypatch, final_output=None)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-6-sol")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "low")
 
     sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
@@ -332,7 +355,7 @@ async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
     assert sections == []
     assert abstract_title is None
     assert raw is not None
-    assert raw["model"] == "gpt-5.6-terra"
+    assert raw["model"] == "gpt-6-sol"
     assert captured["temperature"] is None
 
 
@@ -453,7 +476,7 @@ def _sentry_recorder(monkeypatch):
 @pytest.fixture
 def hierarchy_env(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-6-sol")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "low")
     monkeypatch.setenv("HIERARCHY_RESOLUTION_CONTRACT_RETRIES", "1")
 

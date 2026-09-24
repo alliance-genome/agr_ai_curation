@@ -79,7 +79,7 @@ def test_rejects_duplicate_profile_and_route(benchmark_root):
     content = source.read_text(encoding="utf-8")
     content = content.replace(
         "cases:\n",
-        "  - provider: openai\n    model: gpt-5.6-sol\ncases:\n",
+        "  - provider: openai\n    model: gpt-6-sol\ncases:\n",
     )
     source.write_text(content, encoding="utf-8")
     with pytest.raises(

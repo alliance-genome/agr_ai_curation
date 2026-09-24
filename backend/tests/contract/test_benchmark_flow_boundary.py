@@ -26,11 +26,11 @@ async def test_canary_invokes_execute_flow_and_consumes_terminal_result(monkeypa
     result = await benchmark_runtime.execute_flow_case(
         "Gene Curation",
         {"user_query": "synthetic canary"},
-        BenchmarkRoute(provider="openai", model="gpt-5.6-sol"),
+        BenchmarkRoute(provider="openai", model="gpt-6-sol"),
         "benchmark-run",
     )
 
     assert captured["flow"] is flow
-    assert captured["model_id_override"] == "gpt-5.6-sol"
+    assert captured["model_id_override"] == "gpt-6-sol"
     assert captured["model_provider_override"] == "openai"
     assert result.output["status"] == "completed"

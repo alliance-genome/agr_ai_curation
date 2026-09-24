@@ -7,17 +7,17 @@ describe('OpenAI model preflight', () => {
   it('performs an authenticated metadata lookup without inference', async () => {
     const result = await openAiModelPreflight({
       baseUrl: 'https://api.openai.test/v1',
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6-sol',
       apiKey: 'test-project-key',
       timeoutMs: 1_000,
     }, async (input, init) => {
-      assert.equal(String(input), 'https://api.openai.test/v1/models/gpt-5.6-sol')
+      assert.equal(String(input), 'https://api.openai.test/v1/models/gpt-6-sol')
       assert.equal(init?.method, 'GET')
       assert.deepEqual(init?.headers, { Authorization: 'Bearer test-project-key' })
       assert.equal('body' in (init ?? {}), false)
-      return Response.json({ id: 'gpt-5.6-sol', object: 'model' })
+      return Response.json({ id: 'gpt-6-sol', object: 'model' })
     })
-    assert.deepEqual(result, { id: 'gpt-5.6-sol' })
+    assert.deepEqual(result, { id: 'gpt-6-sol' })
   })
 
   it('reports only status and model when lookup fails', async () => {

@@ -669,8 +669,9 @@ class TestAgentWorkshopSystemPrompt:
         assert playbook["complete"] is True
         assert "distilled OpenAI-style prompt playbook" in playbook["content"]
         assert "put core instructions first, then separate context/examples with clear delimiters" in playbook["content"]
-        assert "gpt-5.6-sol" in system_prompt
-        assert "gpt-5.6-terra" in system_prompt
+        assert "gpt-6-sol" in system_prompt
+        assert "gpt-5.6-sol" not in system_prompt
+        assert "gpt-5.6-terra" not in system_prompt
         assert "authoritative recommendation source" in system_prompt
         assert "gpt-5.5" not in system_prompt
         assert "gpt-5.4-mini" not in system_prompt
