@@ -494,7 +494,7 @@ def _overridden_site() -> dict:
         identity_keys=TERM_KEYS,
         id_key="curie",
         label_key="name",
-        actor_id="curator-1",
+        actor_id="curator-1", actor_display_name="Curator One",
         at=OVERRIDE_AT,
     )
     return site
@@ -523,6 +523,7 @@ def test_a_curator_override_reads_resolved_with_who_and_when():
     assert value.lookup_result == "Curator override"
     assert value.mention == "gut lining"
     assert value.curator_override.actor_id == "curator-1"
+    assert value.curator_override.actor_display_name == "Curator One"
     assert value.curator_override.at == OVERRIDE_AT
     assert value.override_disagreements == []
     assert value.identity_field_paths == ["site.curie", "site.name"]
@@ -558,7 +559,7 @@ def test_an_object_root_override_takes_object_level_disagreements():
         identity_keys=("symbol", "identifier", "taxon"),
         id_key="identifier",
         label_key="symbol",
-        actor_id="curator-2",
+        actor_id="curator-2", actor_display_name="curator-2",
         at=OVERRIDE_AT,
     )
     message = "Validator disagrees with the curator override: it resolved identifier 'GENE:8'."
@@ -577,7 +578,7 @@ def test_clearing_an_override_reads_unresolved_again():
     site = _overridden_site()
     apply_curator_identity(
         site, {"curie": None, "name": None}, identity_keys=TERM_KEYS, id_key="curie", label_key="name",
-        actor_id="curator-1", at=OVERRIDE_AT,
+        actor_id="curator-1", actor_display_name="curator-1", at=OVERRIDE_AT,
     )
     row = _row({"site": site})
 
@@ -607,14 +608,19 @@ def test_a_protected_value_field_is_flagged_as_blocking_overrides():
     assert (protected_value.container_protected, protected_value.overridable) == (True, False)
 
 
-def test_only_profile_attribute_values_carry_their_stored_value():
+def test_profile_values_and_list_elements_carry_their_stored_value():
     gene = unresolved_value("abc one", identity_keys=TERM_KEYS, outcome="not_found")
-    row = _row({"site": _overridden_site(), "attributes": {"gene": gene}})
+    codes = [unresolved_value("IMP", identity_keys=("curie",)), unresolved_value("IDA", identity_keys=("curie",))]
+    row = _row({"site": _overridden_site(), "attributes": {"gene": gene}, "codes": codes})
 
     [attribute_value] = _summary_field(row, "attributes.gene").resolution.values
     [site_value] = _workspace_field(row, "site.curie").resolution.values
-    # A profile value takes a whole-value replace, whose `before` is the value as stored.
+    code_values = _workspace_field(row, "codes").resolution.values
+    # A profile value takes a whole-value replace, and a list element a removal,
+    # whose `before` is the value as stored.
     assert attribute_value.stored_value == gene
+    assert [value.stored_value for value in code_values] == codes
+    assert [value.value_path for value in code_values] == ["codes[0]", "codes[1]"]
     assert site_value.stored_value is None
 
 

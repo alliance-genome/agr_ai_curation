@@ -836,7 +836,7 @@ def test_a_curator_identity_edit_on_a_profile_value_is_a_curator_override(resolv
     staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16", "role": "subject"}]})
     edited, audit = resolvable_profile.apply_curator_edit(
         staged, "attributes.genes[0]", {**staged["genes"][0], "gene_id": "EX:9", "symbol": "daf-16"},
-        actor_id="curator-1", at="2026-09-23T20:00:00+00:00",
+        actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:00:00+00:00",
     )
     gene = edited["genes"][0]
     assert (gene["gene_id"], gene["symbol"], gene["resolution_state"], gene["lookup_outcome"]) == (
@@ -847,13 +847,13 @@ def test_a_curator_identity_edit_on_a_profile_value_is_a_curator_override(resolv
     resolvable_profile.require_attributes(edited)
 
     other, audit = resolvable_profile.apply_curator_edit(
-        edited, "attributes.genes[0].role", "object", actor_id="curator-1", at="2026-09-23T20:01:00+00:00",
+        edited, "attributes.genes[0].role", "object", actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:01:00+00:00",
     )
     assert audit is None and other["genes"][0]["role"] == "object"
     for path, value in [("attributes.genes[0].mention", "other wording"),
                         ("attributes.genes[0].lookup_outcome", "matched")]:
         with pytest.raises(ProfileConformanceError):
-            resolvable_profile.apply_curator_edit(edited, path, value, actor_id="curator-1", at="2026-09-23T20:02:00+00:00")
+            resolvable_profile.apply_curator_edit(edited, path, value, actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:02:00+00:00")
 
 
 def test_a_curator_can_never_write_an_overruled_identity(resolvable_profile):
@@ -863,14 +863,14 @@ def test_a_curator_can_never_write_an_overruled_identity(resolvable_profile):
     whole = {**staged["genes"][0], "gene_id": "EX:9", "overruled_gene_id": "EX:0"}
     with pytest.raises(ProfileConformanceError):
         resolvable_profile.apply_curator_edit(
-            staged, "attributes.genes[0]", whole, actor_id="curator-1", at="2026-09-23T20:00:00+00:00")
+            staged, "attributes.genes[0]", whole, actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:00:00+00:00")
     with pytest.raises(ProfileConformanceError):
         resolvable_profile.apply_curator_edit(
-            staged, "attributes.genes[0].overruled_gene_id", "EX:0", actor_id="curator-1",
+            staged, "attributes.genes[0].overruled_gene_id", "EX:0", actor_id="curator-1", actor_display_name="curator-1",
             at="2026-09-23T20:00:00+00:00")
     edited, audit = resolvable_profile.apply_curator_edit(
         staged, "attributes.genes[0]", {**staged["genes"][0], "gene_id": "EX:9", "symbol": "daf-16"},
-        actor_id="curator-1", at="2026-09-23T20:00:00+00:00")
+        actor_id="curator-1", actor_display_name="curator-1", at="2026-09-23T20:00:00+00:00")
     assert audit is not None and "overruled_gene_id" not in edited["genes"][0]
 
 
@@ -882,16 +882,16 @@ def test_a_profile_curator_override_needs_both_the_identifier_and_the_name(resol
     for path, value in [("attributes.genes[0].gene_id", "EX:9"),
                         ("attributes.genes[0]", {**staged["genes"][0], "gene_id": "EX:9"})]:
         with pytest.raises(ProfileConformanceError) as rejected:
-            resolvable_profile.apply_curator_edit(staged, path, value, actor_id="curator-1", at=at)
+            resolvable_profile.apply_curator_edit(staged, path, value, actor_id="curator-1", actor_display_name="curator-1", at=at)
         assert "Enter both the identifier and the name" in rejected.value.issues[0]["message"]
 
     edited, audit = resolvable_profile.apply_curator_edit(
         staged, "attributes.genes[0]", {**staged["genes"][0], "gene_id": "EX:9", "symbol": "daf-16"},
-        actor_id="curator-1", at=at)
+        actor_id="curator-1", actor_display_name="curator-1", at=at)
     assert audit is not None and edited["genes"][0]["lookup_outcome"] == "curator_override"
     # A later single-key edit keeps the name the first override carried.
     again, _ = resolvable_profile.apply_curator_edit(
-        edited, "attributes.genes[0].gene_id", "EX:10", actor_id="curator-1", at=at)
+        edited, "attributes.genes[0].gene_id", "EX:10", actor_id="curator-1", actor_display_name="curator-1", at=at)
     assert (again["genes"][0]["gene_id"], again["genes"][0]["symbol"]) == ("EX:10", "daf-16")
 
 
@@ -905,10 +905,10 @@ def test_a_whole_value_override_changes_only_the_identity(resolvable_profile):
                     {"overruled_gene_id": "EX:0"}):
         with pytest.raises(ProfileConformanceError) as rejected:
             resolvable_profile.apply_curator_edit(
-                staged, "attributes.genes[0]", {**full, **changed}, actor_id="curator-1", at=at)
+                staged, "attributes.genes[0]", {**full, **changed}, actor_id="curator-1", actor_display_name="curator-1", at=at)
         assert "Only the identifier and name can be changed" in rejected.value.issues[0]["message"]
     edited, audit = resolvable_profile.apply_curator_edit(
-        staged, "attributes.genes[0]", full, actor_id="curator-1", at=at)
+        staged, "attributes.genes[0]", full, actor_id="curator-1", actor_display_name="curator-1", at=at)
     assert audit is not None and edited["genes"][0]["role"] == "subject"
 
 
@@ -920,7 +920,8 @@ def test_a_list_parent_or_attributes_replace_cannot_forge_a_values_identity_or_s
     forged = {**staged["genes"][0], "gene_id": "EX:FAKE", "symbol": "daf-16",
               "resolution_state": "resolved", "lookup_outcome": "matched"}
     someone_else = {**forged, "lookup_outcome": "curator_override",
-                    "curator_override": {"actor_id": "someone-else", "at": at, "previous": {}}}
+                    "curator_override": {"actor_id": "someone-else", "actor_display_name": "Someone Else",
+                                         "at": at, "previous": {}}}
     for path, value in (
         ("attributes.genes", [forged]),
         ("attributes.genes", [someone_else]),
@@ -929,7 +930,7 @@ def test_a_list_parent_or_attributes_replace_cannot_forge_a_values_identity_or_s
         ("attributes.genes", [{**staged["genes"][0], "mention": "other wording"}]),
     ):
         with pytest.raises(ProfileConformanceError) as rejected:
-            resolvable_profile.apply_curator_edit(staged, path, value, actor_id="curator-1", at=at)
+            resolvable_profile.apply_curator_edit(staged, path, value, actor_id="curator-1", actor_display_name="curator-1", at=at)
         assert "cannot change" in rejected.value.issues[0]["message"]
 
 
@@ -939,7 +940,7 @@ def test_a_list_replace_stages_new_values_unresolved_and_keeps_stored_ones(resol
 
     edited, audit = resolvable_profile.apply_curator_edit(
         staged, "attributes.genes", [{**staged["genes"][0], "role": "object"}, {"mention": "unc-54"}],
-        actor_id="curator-1", at=at)
+        actor_id="curator-1", actor_display_name="curator-1", at=at)
 
     assert audit is None
     kept, added = edited["genes"]
@@ -949,7 +950,7 @@ def test_a_list_replace_stages_new_values_unresolved_and_keeps_stored_ones(resol
     with pytest.raises(ProfileConformanceError) as carried:
         resolvable_profile.apply_curator_edit(
             staged, "attributes.genes", [staged["genes"][0], {"mention": "unc-54", "gene_id": "EX:2"}],
-            actor_id="curator-1", at=at)
+            actor_id="curator-1", actor_display_name="curator-1", at=at)
     assert "A new value cannot carry gene_id" in carried.value.issues[0]["message"]
 
 
@@ -959,7 +960,7 @@ def test_a_curator_removes_one_profile_list_element(resolvable_profile):
     staged = resolvable_profile.unresolved_attributes({"genes": [{"mention": "daf-16"}, {"mention": "unc-54"}]})
     at = "2026-09-24T00:00:00+00:00"
 
-    edited, audit = resolvable_profile.remove_curator_element(staged, "attributes.genes[0]", actor_id="c", at=at)
+    edited, audit = resolvable_profile.remove_curator_element(staged, "attributes.genes[0]", actor_id="c", actor_display_name="c", at=at)
 
     assert [gene["mention"] for gene in edited["genes"]] == ["unc-54"]
     assert (audit["action"], audit["value_path"], audit["previous"]) == ("removed", "attributes.genes[0]",
@@ -967,5 +968,5 @@ def test_a_curator_removes_one_profile_list_element(resolvable_profile):
     for path, message in (("attributes.genes[5]", "Edit an existing value."),
                           ("attributes.note", "Only an element of a list of resolvable values")):
         with pytest.raises(ProfileConformanceError) as rejected:
-            resolvable_profile.remove_curator_element(staged, path, actor_id="c", at=at)
+            resolvable_profile.remove_curator_element(staged, path, actor_id="c", actor_display_name="c", at=at)
         assert message in rejected.value.issues[0]["message"]

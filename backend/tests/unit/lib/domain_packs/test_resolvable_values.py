@@ -1569,7 +1569,7 @@ def test_an_override_settles_a_binding_whose_other_written_value_is_absent():
     metadata = _metadata(expected=expected)
     site = unresolved_value("skin", identity_keys=TERM_KEYS)
     apply_curator_identity(site, {"curie": "ONT:9", "name": "skin"}, identity_keys=TERM_KEYS, id_key="curie",
-                           label_key="name", actor_id="curator-1", at="2026-09-24T00:00:00+00:00")
+                           label_key="name", actor_id="curator-1", actor_display_name="curator-1", at="2026-09-24T00:00:00+00:00")
 
     def codes(payload):
         envelope = _envelope(payload)

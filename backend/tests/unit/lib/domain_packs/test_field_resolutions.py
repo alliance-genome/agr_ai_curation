@@ -324,7 +324,7 @@ def test_a_composite_result_is_settled_when_its_unresolved_values_are_overridden
     envelope = _envelope()
     setting = envelope.extracted_objects[0].payload["setting"]
     apply_curator_identity(setting["kind"], {"curie": "ONT:9", "name": "heat"}, identity_keys=TERM_KEYS,
-                           id_key="curie", label_key="name", actor_id="curator-1", at="2026-09-24T00:00:00+00:00")
+                           id_key="curie", label_key="name", actor_id="curator-1", actor_display_name="curator-1", at="2026-09-24T00:00:00+00:00")
     del setting["host"]
     decisions = {
         "setting.kind": {"status": "unresolved", "lookup_outcome": "not_found", "explanation": "No class."},

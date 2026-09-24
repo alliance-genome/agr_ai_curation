@@ -3690,7 +3690,9 @@ def _read_review_value(
             issue=_UNREADABLE_ISSUE if broken else None,
             curator_override=(
                 DomainEnvelopeReviewCuratorOverride(
-                    actor_id=str(override["actor_id"]), at=str(override["at"]),
+                    actor_id=str(override["actor_id"]),
+                    actor_display_name=str(override["actor_display_name"]),
+                    at=str(override["at"]),
                 )
                 if override is not None
                 else None
@@ -3707,11 +3709,14 @@ def _read_review_value(
                 key: copy.deepcopy(raw.get(key)) if isinstance(raw, Mapping) else None
                 for key in spec.identity_keys
             },
-            # A saved profile's attribute values take a whole-value replace
-            # (not replace_identity), whose `before` is the value as stored.
+            # The value as stored, for the edits whose `before` is the whole value: a
+            # saved profile's attribute value (a whole-value replace) and a list
+            # element (a removal).
             stored_value=(
                 copy.deepcopy(dict(raw))
-                if path_text and is_generic_attribute_path(path_text) and isinstance(raw, Mapping)
+                if isinstance(raw, Mapping)
+                and path_text
+                and (is_generic_attribute_path(path_text) or isinstance(value_path[-1], int))
                 else None
             ),
             **curator_override_allowed(field_definitions, path_text, spec),

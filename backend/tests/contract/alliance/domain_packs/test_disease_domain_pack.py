@@ -1959,7 +1959,7 @@ def _curator_patch(envelope: DomainEnvelope, field_path: str, value: Any, *, bef
             field_path=field_path, before=before, value=value, operation=operation,
         ),
         current_revision=1,
-        actor_id="curator-7",
+        actor_id="curator-7", actor_display_name="curator-7",
     )
 
 
