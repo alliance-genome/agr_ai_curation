@@ -345,3 +345,145 @@ def test_route_selectors_are_checked_against_the_target_object(tmp_path: Path):
 
     with pytest.raises(ValidationRegistryError, match="routes.gadget.label"):
         DomainPackValidationRegistry.from_domain_pack(pack)
+
+
+# --- A curator override on a routed value -----------------------------------------------
+
+_OVERRIDE_KEYS = ("curie", "name")
+
+
+def _override_pack() -> LoadedDomainPack:
+    from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOMES
+    from src.schemas.domain_pack_metadata import (
+        DomainPackEnumDefinition,
+        DomainPackFieldDefinition,
+        DomainPackFieldType,
+        DomainPackMetadata,
+        DomainPackObjectDefinition,
+    )
+
+    def route(agent_id: str, prefix: str) -> dict[str, Any]:
+        return {
+            "validator_agent": {"package_id": "fixture.validators", "agent_id": agent_id},
+            "input_fields": {"mention": {"source": "payload", "path": "site.mention"}},
+            "expected_result_fields": {f"{prefix}_id": "site.curie", f"{prefix}_name": "site.name"},
+        }
+
+    metadata = DomainPackMetadata(
+        pack_id="fixture.routed_override",
+        display_name="Fixture Routed Override",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        enum_definitions=[DomainPackEnumDefinition(
+            enum_id="LookupOutcome", display_name="Lookup outcome",
+            values=[{"value": value} for value in LOOKUP_OUTCOMES],
+        )],
+        metadata={"validator_bindings": {"active": [{
+            "binding_id": "fixture.site_lookup",
+            "display_name": "Site lookup",
+            "applies_to": {"domain_pack_id": "fixture.routed_override", "object_types": ["Observation"]},
+            "route_by": {"source": "payload", "path": "site.kind"},
+            "routes": {"widget": route("widget_validator", "widget"), "gadget": route("gadget_validator", "gadget")},
+            "required": True,
+            "blocking": True,
+            "curator_override": {"allowed": True},
+        }], "under_development": []}},
+        object_definitions=[DomainPackObjectDefinition(
+            object_type="Observation", display_name="Observation", metadata={"object_role": "curatable_unit"},
+            fields=[
+                DomainPackFieldDefinition(field_path="site", field_type=DomainPackFieldType.OBJECT,
+                                          metadata={"display": {"label": "name", "id": "curie", "mention": "mention"}}),
+                DomainPackFieldDefinition(field_path="site.curie", field_type=DomainPackFieldType.STRING,
+                                          metadata={"editable": True}),
+                DomainPackFieldDefinition(field_path="site.name", field_type=DomainPackFieldType.STRING,
+                                          metadata={"editable": True}),
+                DomainPackFieldDefinition(field_path="site.mention", field_type=DomainPackFieldType.STRING),
+                DomainPackFieldDefinition(field_path="site.kind", field_type=DomainPackFieldType.STRING),
+                DomainPackFieldDefinition(field_path="site.lookup_outcome", field_type=DomainPackFieldType.ENUM,
+                                          enum_ref="LookupOutcome"),
+            ],
+        )],
+    )
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    )
+
+
+def _overridden_site_envelope(kind: str) -> DomainEnvelope:
+    from src.lib.domain_packs.resolvable_values import apply_curator_identity, unresolved_value
+
+    site = unresolved_value("blue thing", identity_keys=_OVERRIDE_KEYS, kind="widget")
+    apply_curator_identity(site, {"curie": "W:1", "name": "Blue widget"}, identity_keys=_OVERRIDE_KEYS,
+                           id_key="curie", label_key="name", actor_id="curator-7",
+                           actor_display_name="curator-7", at="2026-09-24T12:00:00+00:00")
+    # The routing value changes after the override (e.g. a re-extraction reads it differently).
+    site["kind"] = kind
+    return DomainEnvelope(
+        envelope_id="routed-override-env", domain_pack_id="fixture.routed_override",
+        extracted_objects=[CuratableObjectEnvelope(object_type="Observation", object_id="obs-1",
+                                                   payload={"site": site})],
+    )
+
+
+@pytest.mark.parametrize(
+    ("values", "status", "outcome", "disagrees"),
+    [
+        ({"gadget_id": "G:9", "gadget_name": "Gizmo"}, "resolved", "success", True),
+        ({}, "unresolved", "not_found", True),
+        ({"gadget_id": "W:1", "gadget_name": "Blue widget"}, "resolved", "success", False),
+    ],
+)
+def test_an_override_on_a_routed_value_sticks_when_a_later_run_takes_another_route(
+    values: dict[str, Any], status: str, outcome: str, disagrees: bool
+):
+    from src.lib.domain_packs.materialization import (
+        ValidatorResultMaterializationInput,
+        materialize_validator_results_into_envelope,
+    )
+    from src.lib.domain_packs.resolvable_values import is_curator_override
+    from src.schemas.domain_validator import DomainValidatorResultBase
+
+    pack = _override_pack()
+    envelope = _overridden_site_envelope("gadget")
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    (match,) = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
+    request = build_domain_validation_request(match).request
+    assert request.validator_agent.agent_id == "gadget_validator"
+    result = DomainValidatorResultBase.model_validate({
+        "status": status, "request_id": request.request_id,
+        "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
+        "target": request.target, "resolved_values": values, "resolved_objects": [],
+        "missing_expected_fields": [], "candidates": [],
+        "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 1, "outcome": outcome}],
+        "curator_message": None, "explanation": "Validator words.",
+    })
+
+    materialized = materialize_validator_results_into_envelope(
+        envelope, pack.metadata,
+        [ValidatorResultMaterializationInput(match=match, request=request, result=result)],
+    )
+
+    site = materialized.envelope.extracted_objects[0].payload["site"]
+    assert site == envelope.extracted_objects[0].payload["site"]
+    assert is_curator_override(site)
+    assert (site["curie"], site["name"], site["kind"]) == ("W:1", "Blue widget", "gadget")
+    disagreements = [
+        finding for finding in materialized.appended_findings
+        if finding.code == "domain_pack.validator_disagrees_with_curator_override"
+    ]
+    assert bool(disagreements) is disagrees
+
+
+def test_an_override_on_a_value_that_no_longer_routes_stays_and_runs_nothing():
+    pack = _override_pack()
+    envelope = _overridden_site_envelope("unknown")
+    calls = []
+
+    result = dispatch_active_validator_bindings(
+        envelope, pack, runner=lambda request, *, binding: calls.append(request),
+    )
+
+    assert calls == []
+    assert result.envelope.extracted_objects[0].payload["site"] == envelope.extracted_objects[0].payload["site"]
+    assert [finding.code for finding in result.appended_findings] == ["selector_unrouted"]

@@ -6295,6 +6295,10 @@ metadata:
               subject_label:
                 source: payload
                 path: disease_annotation_subject.mention
+              data_provider_hint:
+                source: payload
+                path: data_provider.mention
+                required: false
               source_mentions:
                 source: payload
                 path: source_mentions
