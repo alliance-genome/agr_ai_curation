@@ -412,6 +412,21 @@ def test_finalization_guidance_names_the_shared_field_list(schemas):
     assert "same tool response (page)" in instruction
 
 
+def test_request_scope_argument_is_named_only_when_lookups_accept_it(schemas):
+    """A single-request lookup rejects validator_request_ids, so its guidance never names it."""
+    from src.lib.domain_packs.compact_runtime import compact_finalization_instruction
+    single = _runtime(schemas, [_request("allele-1", "H2-Ab1")])
+    many = _runtime(schemas, [_request("allele-1", "H2-Ab1"), _request("allele-2", "Cre")])
+
+    assert "validator_request_ids" not in single.wrap_lookup_tool(_lookup_tool({})).params_json_schema["properties"]
+    for batch in (False, True):
+        assert "validator_request_ids" not in compact_finalization_instruction(
+            single, tool_name="finalize_validator_result", batch=batch)
+    assert "validator_request_ids" in many.wrap_lookup_tool(_lookup_tool({})).params_json_schema["properties"]
+    assert "validator_request_ids" in compact_finalization_instruction(
+        many, tool_name="finalize_validator_batch_results", batch=True)
+
+
 @pytest.mark.asyncio
 async def test_provider_payload_cannot_supply_the_shared_field_list(schemas):
     runtime = _runtime(schemas, [_request("allele-1", "H2-Ab1")])
