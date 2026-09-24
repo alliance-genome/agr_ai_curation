@@ -501,8 +501,8 @@ def _mirror_pass_through(
     )
     source_fields = {field.field_path: field for field in (source_definition.fields if source_definition else [])}
     source_paths = {}
-    for identity_key, field in mirrored.items():
-        raw_path = binding.expected_result_fields.get(str(field.metadata["validation_result_field"]))
+    for identity_key, mirror_field in mirrored.items():
+        raw_path = binding.expected_result_fields.get(str(mirror_field.metadata["validation_result_field"]))
         source_path = (
             _materialized_field_path(raw_path, declared_fields=source_fields) if isinstance(raw_path, str) else None
         )
