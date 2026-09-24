@@ -377,6 +377,9 @@ class CurationEnvelopeFieldPatchOperation(str, Enum):
     # names one identity field of the value, value and before map its identity
     # keys to the new and current values.
     REPLACE_IDENTITY = "replace_identity"
+    # Remove one element of a list of resolvable values: field_path names the
+    # element, before is the stored element, value is null.
+    REMOVE = "remove"
 
 
 class CurationEvidenceSource(str, Enum):
@@ -1064,6 +1067,13 @@ class DomainEnvelopeReviewResolvedValue(CurationWorkspaceBaseModel):
     container_protected: bool = Field(
         default=False,
         description="The value's own field is protected, which blocks a curator override",
+    )
+    overridable: bool = Field(
+        default=False,
+        description=(
+            "A curator may override this value: its own field is not protected and every "
+            "identity field is declared editable"
+        ),
     )
 
     @model_validator(mode="after")

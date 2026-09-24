@@ -22,6 +22,7 @@ from src.lib.domain_envelopes.patches import (
     set_payload_value,
     is_generic_attribute_path,
     resolvable_identity_field,
+    resolvable_identity_keys,
 )
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
@@ -80,6 +81,7 @@ from src.lib.curation_workspace.session_validation_service import (
     _validator_runtime_context_for_candidate,
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.resolvable_values import is_curator_override
 from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
@@ -830,11 +832,22 @@ def _materialize_candidate_draft_changes_into_envelope(
             operation = EnvelopeFieldPatchOperation.REPLACE
         else:
             # The edited identity fields of one resolvable value: one atomic curator override.
-            value = {key: copy.deepcopy(materialized_values[field_key]) for field_key, key in step}
-            before = {
-                key: _current_field_value(current_object.payload, field_paths[field_key])
-                for field_key, key in step
+            # A first override names every identity key; the unchanged ones keep their stored value.
+            value_path, _ = resolvable_identity_field(domain_pack, domain_object.object_type, field_paths[first_key])
+            stored_value = (
+                _current_field_value(current_object.payload, value_path) if value_path else current_object.payload
+            )
+            stored_value = stored_value if isinstance(stored_value, Mapping) else {}
+            named = [key for _, key in step]
+            if not is_curator_override(stored_value):
+                named += [
+                    key for key in resolvable_identity_keys(domain_pack, domain_object.object_type, value_path)
+                    if key not in named
+                ]
+            value = {key: copy.deepcopy(stored_value.get(key)) for key in named} | {
+                key: copy.deepcopy(materialized_values[field_key]) for field_key, key in step
             }
+            before = {key: copy.deepcopy(stored_value.get(key)) for key in value}
             operation = EnvelopeFieldPatchOperation.REPLACE_IDENTITY
         patch_result = apply_curator_field_patch(
             working_envelope,

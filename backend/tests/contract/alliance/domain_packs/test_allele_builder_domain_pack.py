@@ -1263,7 +1263,10 @@ def test_the_association_identity_takes_no_edit_of_its_own():
         envelope, "allele-mention-1", "allele.allele_symbol", "e190", before=None
     )
     assert single_leaf.status is EnvelopeFieldPatchStatus.REJECTED
-    assert any("Enter both the identifier and the name" in error for error in single_leaf.errors)
+    # A first override names every identity key, the validated taxon included.
+    assert any(
+        error.startswith("Enter the identifier, the name and the taxon") for error in single_leaf.errors
+    ), single_leaf.errors
 
 
 def test_a_curator_allele_without_a_database_record_blocks_submission_in_plain_words():
