@@ -14,8 +14,9 @@ name: "Gene Expression Extractor"
 
 description: >
   Extracts gene expression patterns and experimental data from PDFs by recording
-  evidence, resolving controlled selectors, staging builder observations, and
-  triggering backend-owned GeneExpressionEnvelope materialization.
+  evidence, staging builder observations with the paper's wording for every value,
+  and triggering backend-owned GeneExpressionEnvelope materialization. Validators
+  look every value up afterwards.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -28,7 +29,7 @@ supervisor_routing:
   enabled: true
   description: >
     Extract gene expression data from the paper through the builder workflow.
-    Records evidence, resolves selectors, stages observations, finalizes the
+    Records evidence, stages observations in the paper's wording, finalizes the
     backend-owned GeneExpressionEnvelope, and returns a compact status.
     Use the CSV/TSV/JSON formatter specialists to save results as files.
   batchable: false  # Document-based agent, processes one document at a time
@@ -50,9 +51,6 @@ tools:
   - update_recorded_evidence_metadata
   - get_agent_contract
   - agr_species_context_lookup
-  - search_domain_field_terms
-  - inspect_ontology_term
-  - resolve_domain_field_term
   - stage_gene_expression_observation
   - patch_gene_expression_observation
   - discard_gene_expression_observation

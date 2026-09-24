@@ -3903,7 +3903,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording and are looked up again; a standard-term field takes its paper wording plus the selected term, or no term to keep it UNRESOLVED. A `rationale` update must be non-empty; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording; a standard-term field takes its paper wording plus, only when the paper prints one, the term's ID. Every corrected value stays UNRESOLVED until a specialist looks it up. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5534,7 +5534,7 @@
           "type": "string"
         },
         {
-          "description": "The Alliance member database for the paper's organism, by its abbreviation (such as ZFIN or WB). It is checked against the Alliance provider list; one that does not match stays UNRESOLVED for the data-provider specialist.",
+          "description": "The Alliance member database for the paper's organism, by its abbreviation (such as ZFIN or WB). The data-provider specialist checks it against the Alliance provider list.",
           "name": "data_provider",
           "required": true,
           "type": "string"
@@ -5552,7 +5552,7 @@
           "type": "any"
         },
         {
-          "description": "The standard-term choices for this observation (such as the anatomy and developmental-stage terms). Each carries the paper's own wording and, when a term matched, the value the agent selected; one with no match is kept as UNRESOLVED with its wording. A term specialist confirms these.",
+          "description": "The standard-term choices for this observation (such as the anatomy and developmental-stage terms). Each carries the paper's own wording and, only when the paper itself prints one, the term's ID as a proposal. Each stays UNRESOLVED until a term specialist looks it up.",
           "name": "controlled_fields",
           "required": true,
           "type": "array"
@@ -5564,7 +5564,7 @@
           "type": "any"
         }
       ],
-      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value keeps the paper's own wording; a term the agent could not match is kept as UNRESOLVED with that wording instead of being dropped. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage."
+      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value is the paper's own wording and stays UNRESOLVED until a specialist looks it up; the agent never searches the database itself. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage."
     },
     "methods": null,
     "name": "Stage Gene Expression Observation",

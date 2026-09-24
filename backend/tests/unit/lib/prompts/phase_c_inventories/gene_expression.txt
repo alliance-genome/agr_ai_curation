@@ -115,24 +115,20 @@ Do not `record_evidence` for every expression-related phrase; record only for ge
 # exclusion/discard REASONING; they are not written into a metadata.exclusions[] array.
 Exclude with canonical reason_code when applicable:
 
-# GEX-34 validator binding is the authority for the controlled fields
-Active validator bindings declared by the gene-expression domain pack are the authority for the final normalized fields covered by validation
+# GEX-34 validator bindings are the only source of a value's identity; extraction never searches
+Active validator bindings declared by the gene-expression domain pack are the only source of a value's identity
+You never search a database for an identity.
 
-# GEX-35 three-step resolver workflow
-use the three-step domain-field resolver workflow declared by the domain pack
-`resolve_domain_field_term` before writing any final controlled selector.
+# GEX-36 site slot chosen from the paper's wording
+pick the slot the paper's wording supports rather than dropping the site.
 
-# GEX-36 search/inspect are staging evidence only; resolve owns selectors; slot_hint routing
-Only `resolve_domain_field_term` output may justify setting a controlled selector
-Use `slot_hint` values to decide whether a site label belongs under `anatomical_structure` or `cellular_component`.
+# GEX-37 every value staged as paper wording, UNRESOLVED; a paper-stated ID only as a proposal; no invention
+Every staged value stays UNRESOLVED until its validator looks it up
+When the paper itself prints an ontology ID for a value (for example "WBbt:0005733"), also pass it as `proposed_curie`; otherwise pass null.
+Never recall, guess, or look up an ID.
 
-# GEX-37 no resolver option -> keep paper label, record unresolved path, no invention
-stage the field anyway with its `mention` and `selected_value` null: it is kept UNRESOLVED with the paper wording and its validator looks it up.
-Do not invent ontology IDs, vocabulary terms, or enumerated values from memory.
-
-# GEX-38 extraction-time lookup limited to agr_species_context_lookup; no broad lookup
-Keep extraction-time lookup limited to narrow organism/provider/taxon context through `agr_species_context_lookup`.
-broad expression ontology lookup
+# GEX-38 extraction-time lookup limited to agr_species_context_lookup
+Your only lookup is `agr_species_context_lookup`, for organism/provider/taxon context.
 
 # GEX-40 read_chunk -> select spans -> record_evidence; reuse existing record
 call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`.
@@ -179,7 +175,7 @@ Use `has_condition` unless the paper clearly states an inducing/ameliorating/exa
 
 # GEX-52 condition fields grounded to ZECO/ChEBI, no guessing
 the ZECO class naming the experimental-variable TYPE
-do NOT guess ZECO identifiers from memory.
+do NOT guess ZECO, ChEBI, or NCBITaxon identifiers from memory.
 
 # GEX-53 conditions carry no quote text
 conditions carry NO quote text.
@@ -194,12 +190,8 @@ Do not include the materialized envelope in the final assistant message.
 # GEX-56 required staged values include resolver calls
 relation, assay, and anatomy or cellular-component controlled fields
 
-# GEX-57 relation.name resolved before staging
-call `resolve_domain_field_term` for `relation.name` before staging
-call `resolve_domain_field_term` for `relation.name` before staging and use only its returned resolved value as `selected_value`.
-
-# GEX-58 backend records helper_selections; do not author them
-The backend records resolver outputs into `metadata.provenance.helper_selections[]`; do not author `helper_selections` yourself.
+# GEX-57 relation.name is a fixed choice staged by its term name
+stage `is_expressed_in` as its `mention`
 
 # GEX-59 data_provider.abbreviation selector
 Pass `data_provider` as the Alliance member abbreviation for the paper's organism
@@ -213,7 +205,7 @@ cellular-component-only sites such as nucleus or cytoplasm are valid when helper
 Put the stage in the `expression_pattern.when_expressed.developmental_stage_start` controlled field: the paper's stage wording is its `mention`
 
 # GEX-62 assay context under expression_assay_used
-Put the assay in the `expression_experiment.expression_assay_used` controlled field: the resolved MMO term, or the paper's assay wording with `selected_value` null. Never invent a CURIE.
+Put the assay in the `expression_experiment.expression_assay_used` controlled field: the paper's assay wording is its `mention`. Never invent a CURIE.
 
 # GEX-65 stage conditions via condition_relations, not field metadata
 Stage experimental conditions via the `condition_relations` parameter of `stage_gene_expression_observation`
