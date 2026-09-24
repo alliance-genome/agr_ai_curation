@@ -21,8 +21,11 @@ import {
   horizontalGridIdentityKeyLabel,
   horizontalGridIdentityKeyRequired,
   horizontalGridIdentityKeys,
+  horizontalGridOverrideChanged,
   horizontalGridOverrideIdentity,
   horizontalGridOverrideProblem,
+  horizontalGridOverrideTargetName,
+  horizontalGridOverrideTargetSummary,
   horizontalGridRemovableElement,
   type HorizontalGridOverrideIdentity,
 } from './horizontalGridOverride'
@@ -30,6 +33,8 @@ import {
 export interface HorizontalGridOverrideEditorDialogProps {
   // A rejected save (the backend's own words), shown inline; the editor stays open.
   error: string | null
+  // The cell's own field path; values below it are named from their path.
+  fieldPath: string
   fieldLabel: string
   isSaving: boolean
   onClose: () => void
@@ -44,8 +49,9 @@ export interface HorizontalGridOverrideEditorDialogProps {
   targets: readonly DomainEnvelopeReviewResolvedValue[]
 }
 
-function targetLabel(value: DomainEnvelopeReviewResolvedValue, index: number): string {
-  return `${index + 1}. ${value.mention ?? value.display_text} (${value.lookup_result})`
+function targetLabel(fieldPath: string, fieldLabel: string, value: DomainEnvelopeReviewResolvedValue): string {
+  const name = horizontalGridOverrideTargetName(fieldPath, value) ?? fieldLabel
+  return `${name}: ${horizontalGridOverrideTargetSummary(value)}`
 }
 
 /**
@@ -57,6 +63,7 @@ function targetLabel(value: DomainEnvelopeReviewResolvedValue, index: number): s
  */
 export default function HorizontalGridOverrideEditorDialog({
   error,
+  fieldPath,
   fieldLabel,
   isSaving,
   onClose,
@@ -131,9 +138,9 @@ export default function HorizontalGridOverrideEditorDialog({
                 size="small"
                 value={value.value_path}
               >
-                {targets.map((target, index) => (
+                {targets.map((target) => (
                   <MenuItem key={target.value_path} value={target.value_path}>
-                    {targetLabel(target, index)}
+                    {targetLabel(fieldPath, fieldLabel, target)}
                   </MenuItem>
                 ))}
               </TextField>
@@ -218,7 +225,8 @@ export default function HorizontalGridOverrideEditorDialog({
           Cancel
         </Button>
         <Button
-          disabled={isSaving || !value}
+          // Nothing to save until an identity key differs from its stored value.
+          disabled={isSaving || !value || !horizontalGridOverrideChanged(value, identity)}
           onClick={() => {
             if (!value) {
               return

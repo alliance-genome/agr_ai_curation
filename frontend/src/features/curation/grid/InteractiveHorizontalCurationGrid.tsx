@@ -481,6 +481,7 @@ export default function InteractiveHorizontalCurationGrid({
         <HorizontalGridOverrideEditorDialog
           error={overrideError}
           fieldLabel={overrideTarget.fieldLabel}
+          fieldPath={overrideTarget.fieldPath}
           isSaving={overrideSaving}
           key={`${overrideTarget.candidateId}:${overrideTarget.fieldPath}:${overrideTarget.openedAt}`}
           onClose={() => {

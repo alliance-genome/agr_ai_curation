@@ -177,10 +177,11 @@ function upsertPendingEnvelope(
   pendingEnvelopes.set(pendingEnvelope.candidateId, pendingEnvelope)
 }
 
-// The backend rejected an edit (e.g. a resolvable value edited as plain data):
-// retrying the same edit can never succeed.
+// The backend rejected an edit (e.g. a resolvable value edited as plain data,
+// 400, or a saved profile's conformance rule, 422): retrying the same edit can
+// never succeed.
 function isRejectedEdit(error: unknown): error is Error & { status: number } {
-  return error instanceof Error && 'status' in error && error.status === 400
+  return error instanceof Error && 'status' in error && (error.status === 400 || error.status === 422)
 }
 
 function isVersionConflict(error: unknown): boolean {
@@ -1213,12 +1214,26 @@ export function useAutosave(
           }
           // An accepted edit also resolves findings on the value and can reach
           // other objects (a value followed from a linked object): reload the
-          // workspace so every row and its warnings read the new revision.
-          await refreshWorkspace(session.session_id)
+          // workspace so every row and its warnings read the new revision. The
+          // edit is saved either way, so a failed reload is only a warning.
+          try {
+            await refreshWorkspace(session.session_id)
+          } catch {
+            if (mountedRef.current) {
+              setWarning(
+                'Your change was saved, but the latest review could not be loaded. Reload the page to see it.',
+              )
+            }
+          }
         } catch (error) {
           if (isRejectedEdit(error) || isVersionConflict(error)) {
-            // A rejected edit also moves the envelope to a new revision.
-            await refreshWorkspace(session.session_id)
+            // A rejected edit also moves the envelope to a new revision. The
+            // rejection is what the curator needs to see, even if this fails.
+            try {
+              await refreshWorkspace(session.session_id)
+            } catch {
+              // The rejection below is reported; a later save reloads again.
+            }
           }
           throw error
         } finally {

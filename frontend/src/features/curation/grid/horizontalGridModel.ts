@@ -550,14 +550,11 @@ function overriddenValues(
   return resolution.values.filter((value) => value.curator_override)
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 // A curator overrides one value, the object itself included, from a cell that
-// is that value, one of its identity keys, or the list holding it (each
-// element is its own value). The backend says which values take an override
-// (overridable: an open value field and editable identity fields).
+// is that value, one of its identity keys, or a list or record holding it at
+// any depth (a list element, or e.g. one component of a condition). The
+// backend says which values take an override (overridable: an open value
+// field and editable identity fields).
 function overrideTargets(
   fieldPath: string,
   resolution: DomainEnvelopeReviewFieldResolution | null,
@@ -566,7 +563,6 @@ function overrideTargets(
   if (readOnly || !resolution || resolution.leaf_key) {
     return []
   }
-  const listElement = new RegExp(`^${escapeRegExp(fieldPath)}\\[\\d+\\]$`)
   return resolution.values.filter((value) => (
     value.overridable
     && !value.issue
@@ -574,7 +570,8 @@ function overrideTargets(
     && (
       fieldPath === value.value_path
       || value.identity_field_paths.includes(fieldPath)
-      || listElement.test(value.value_path)
+      || value.value_path.startsWith(`${fieldPath}[`)
+      || value.value_path.startsWith(`${fieldPath}.`)
     )
   ))
 }

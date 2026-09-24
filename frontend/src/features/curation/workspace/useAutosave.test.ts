@@ -1725,4 +1725,61 @@ describe('useAutosave', () => {
     })
     expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledWith('session-1')
   })
+
+  it('drops a profile edit its conformance rule rejects (422) instead of retrying it', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(Object.assign(
+      new Error('Only an element of a list of resolvable values can be removed.'),
+      { status: 422 },
+    ))
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(envelopeWorkspace)
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      { wrapper: createWrapper(envelopeWorkspace) },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({ field_key: 'gene_symbol', value: 'BRCA2' })
+    })
+    await act(async () => {
+      expect(await result.current.flush()).toBe(false)
+    })
+    expect(result.current.warning).toBe(
+      'This change was not saved: Only an element of a list of resolvable values can be removed.',
+    )
+    await act(async () => {
+      expect(await result.current.flush()).toBe(true)
+    })
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a saved direct edit as saved when only the reload after it fails', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValue(buildEnvelopePatchResponse({
+      workspace: envelopeWorkspace,
+      value: 'GENE:2',
+      before: 'BRCA1',
+      previousRevision: 7,
+      envelopeRevision: 8,
+    }))
+    serviceMocks.fetchCurationWorkspace.mockRejectedValue(new Error('network down'))
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      { wrapper: createWrapper(envelopeWorkspace) },
+    )
+
+    await act(async () => {
+      await expect(result.current.submitEnvelopeEdit(envelopeWorkspace.candidates[0]!.candidate_id, {
+        fieldPath: 'subject.curie',
+        operation: 'replace_identity',
+        before: { curie: null, name: null },
+        value: { curie: 'GENE:2', name: 'abc-2' },
+      })).resolves.toBeUndefined()
+    })
+    expect(result.current.warning).toBe(
+      'Your change was saved, but the latest review could not be loaded. Reload the page to see it.',
+    )
+  })
 })

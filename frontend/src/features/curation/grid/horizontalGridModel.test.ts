@@ -1329,9 +1329,43 @@ describe('buildHorizontalGridModel', () => {
 
     const [codesCell, conditionsCell] = model.rows[0]!.cells
     expect(codesCell).toMatchObject({ readOnly: false, overrideTargets: codes })
-    // Validated values nested deeper than a list element have no override
-    // here, so the cell is read-only rather than a plain whole-list edit.
-    expect(conditionsCell).toMatchObject({ readOnly: true, overrideTargets: [] })
+    // A value nested deeper (a condition's component) is a target too.
+    expect(conditionsCell).toMatchObject({ readOnly: false, overrideTargets: [nested] })
+  })
+
+  it.each([
+    ['disease', ['condition_class', 'condition_chemical']],
+    ['phenotype', ['condition_class', 'condition_taxon']],
+    ['gene expression', ['condition_class', 'condition_id']],
+  ])('lets a curator override %s condition parts and the relation type from the condition cell', (_domain, parts) => {
+    const conditionValues = [
+      resolvedValue({
+        value_path: 'condition_relations[0].condition_relation_type',
+        identity_field_paths: ['condition_relations[0].condition_relation_type.name'],
+        id_key: null,
+        label_key: 'name',
+        validated_keys: ['vocabulary', 'id'],
+      }),
+      ...parts.map((part, index) => resolvedValue({
+        value_path: `condition_relations[0].conditions[${index}].${part}`,
+        identity_field_paths: [`condition_relations[0].conditions[${index}].${part}.curie`],
+        display_text: 'UNRESOLVED',
+        resolution_state: 'unresolved',
+        lookup_outcome: 'not_found',
+        lookup_result: 'Not found',
+      })),
+    ]
+    const fields = [draftField({ fieldKey: 'conditions', fieldPath: 'condition_relations', label: 'Conditions', order: 0, value: [] })]
+    const row = reviewRowWithFields('object-conditions', [
+      { path: 'condition_relations', resolution: { display_text: 'UNRESOLVED', values: conditionValues } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: candidate({ id: 'candidate-conditions', objectId: 'object-conditions', order: 0, fields }),
+      row,
+    })])
+
+    expect(model.rows[0]!.cells[0]).toMatchObject({ readOnly: false, overrideTargets: conditionValues })
   })
 
   it('closes a cell whose value takes no override (e.g. a protected value field)', () => {

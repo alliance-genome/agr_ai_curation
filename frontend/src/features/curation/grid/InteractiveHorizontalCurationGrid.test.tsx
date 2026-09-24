@@ -1133,12 +1133,10 @@ describe('InteractiveHorizontalCurationGrid', () => {
     // The validated key is prefilled from the stored value and editable.
     expect(within(editor).getByRole('textbox', { name: /^Taxon/ })).toHaveValue('NCBITaxon:6239')
 
+    // Nothing to save until an identity key differs from its stored value.
+    expect(within(editor).getByRole('button', { name: 'Save override' })).toBeDisabled()
     // An incomplete identity is refused before anything is sent, in the
     // backend's words, and the editor stays open.
-    await user.click(within(editor).getByRole('button', { name: 'Save override' }))
-    expect(within(editor).getByTestId('horizontal-grid-override-error')).toHaveTextContent(
-      'Enter both the identifier and the name for a curator override.',
-    )
     await user.type(within(editor).getByRole('textbox', { name: /^Identifier/ }), 'GENE:2')
     await user.click(within(editor).getByRole('button', { name: 'Save override' }))
     expect(within(editor).getByTestId('horizontal-grid-override-error')).toHaveTextContent(
@@ -1203,7 +1201,10 @@ describe('InteractiveHorizontalCurationGrid', () => {
     await user.click(screen.getByRole('button', { name: /^Edit Subject ID: UNRESOLVED/ }))
     const editor = screen.getByRole('dialog', { name: 'Set Subject ID by curator override' })
     await user.click(within(editor).getByRole('combobox', { name: 'Value to override' }))
-    await user.click(screen.getByRole('option', { name: '2. IGI (Not found)' }))
+    // Each element is named by its own list position and labels its paper wording.
+    expect(screen.getByRole('option', { name: 'Evidence code 1: "IMP" (paper wording), Not found' }))
+      .toBeInTheDocument()
+    await user.click(screen.getByRole('option', { name: 'Evidence code 2: "IGI" (paper wording), Not found' }))
     await user.type(within(editor).getByRole('textbox', { name: /^Identifier/ }), 'ECO:0000316')
     await user.click(within(editor).getByRole('button', { name: 'Save override' }))
 
