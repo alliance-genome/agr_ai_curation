@@ -135,6 +135,8 @@ model_definitions:
         label: title
         id: reference_id
         mention: mention
+        validated:
+          - curie
   - model_id: OrganizationSnapshotPayload
     display_name: Organization snapshot payload
     description: Embedded data provider identity for the annotation.
@@ -800,14 +802,6 @@ object_definitions:
         required: true
         model_ref: ReferenceSnapshotPayload
         metadata:
-          # The experiment's copy holds only the reference id; the annotation's reference also
-          # keeps the curie its validator returns.
-          display:
-            label: title
-            id: reference_id
-            mention: mention
-            validated:
-              - curie
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
@@ -879,6 +873,8 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          materializes_to_field_paths:
+            - expression_experiment.single_reference.curie
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
@@ -897,6 +893,8 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: "Curator override: typing an ID marks this value as a curator override."
+          materializes_to_field_paths:
+            - expression_experiment.single_reference.title
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
@@ -1186,6 +1184,26 @@ object_definitions:
               range: integer
               db_table: reference
               db_column: id
+      - field_path: expression_experiment.single_reference.curie
+        field_type: string
+        display_name: Experiment reference CURIE
+        metadata:
+          derived_from_field_path: single_reference.curie
+          projection_role: derived_read_only
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
+          source_of_truth: single_reference.curie
+      - field_path: expression_experiment.single_reference.title
+        field_type: string
+        display_name: Experiment reference title
+        metadata:
+          derived_from_field_path: single_reference.title
+          projection_role: derived_read_only
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
+          source_of_truth: single_reference.title
       - field_path: expression_experiment.entity_assayed
         field_type: object
         display_name: Entity assayed
@@ -1494,6 +1512,7 @@ object_definitions:
         metadata:
           # The extractor's proposed CURIE is its mention until a validator writes the identity.
           display:
+            label: name
             id: curie
             mention: mention
       - field_path: condition_relations.conditions.condition_class.mention
@@ -1503,6 +1522,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: condition_relations.conditions.condition_class.proposed_curie
+        field_type: string
+        display_name: Condition class (proposed ID)
+        description: The extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: condition_relations.conditions.condition_class.resolution_state
         field_type: enum
         display_name: Condition class (status)
@@ -1566,12 +1592,20 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_class.name
+        field_type: string
+        display_name: Condition class name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
       - field_path: condition_relations.conditions.condition_id
         field_type: object
         display_name: Condition term
         metadata:
           # The extractor's proposed CURIE is its mention until a validator writes the identity.
           display:
+            label: name
             id: curie
             mention: mention
       - field_path: condition_relations.conditions.condition_id.mention
@@ -1581,6 +1615,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: condition_relations.conditions.condition_id.proposed_curie
+        field_type: string
+        display_name: Condition term (proposed ID)
+        description: The extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: condition_relations.conditions.condition_id.resolution_state
         field_type: enum
         display_name: Condition term (status)
@@ -1644,12 +1685,20 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_id.name
+        field_type: string
+        display_name: Condition term name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
       - field_path: condition_relations.conditions.condition_chemical
         field_type: object
         display_name: Chemical
         metadata:
           # The extractor's proposed CURIE is its mention until a validator writes the identity.
           display:
+            label: name
             id: curie
             mention: mention
       - field_path: condition_relations.conditions.condition_chemical.mention
@@ -1659,6 +1708,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: condition_relations.conditions.condition_chemical.proposed_curie
+        field_type: string
+        display_name: Chemical (proposed ID)
+        description: The extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: condition_relations.conditions.condition_chemical.resolution_state
         field_type: enum
         display_name: Chemical (status)
@@ -1700,12 +1756,20 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_chemical.name
+        field_type: string
+        display_name: Chemical name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
       - field_path: condition_relations.conditions.condition_taxon
         field_type: object
         display_name: Taxon
         metadata:
           # The extractor's proposed CURIE is its mention until a validator writes the identity.
           display:
+            label: name
             id: curie
             mention: mention
       - field_path: condition_relations.conditions.condition_taxon.mention
@@ -1715,6 +1779,13 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written once by the extraction agent; validation never changes it.
+      - field_path: condition_relations.conditions.condition_taxon.proposed_curie
+        field_type: string
+        display_name: Taxon (proposed ID)
+        description: The extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: condition_relations.conditions.condition_taxon.resolution_state
         field_type: enum
         display_name: Taxon (status)
@@ -1754,6 +1825,13 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_taxon.name
+        field_type: string
+        display_name: Taxon name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          editable: true
+          curator_action_note: "Curator override: typing an ID marks this value as a curator override."
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
@@ -3429,21 +3507,35 @@ metadata:
             source: payload
             path: condition_relations.conditions
             required: false
+          # Each component's paper wording (mention) and the CURIE the extractor proposed for it;
+          # the validated CURIE and name are only ever written back by this validator.
           condition_class_curie:
+            source: payload
+            path: condition_relations.conditions.condition_class.proposed_curie
+            required: false
+          condition_class_name:
             source: payload
             path: condition_relations.conditions.condition_class.mention
             required: false
           condition_id_curie:
             source: payload
+            path: condition_relations.conditions.condition_id.proposed_curie
+            required: false
+          condition_id_name:
+            source: payload
             path: condition_relations.conditions.condition_id.mention
             required: false
           condition_chemical_curie:
+            source: payload
+            path: condition_relations.conditions.condition_chemical.proposed_curie
+            required: false
+          condition_chemical_name:
             source: payload
             path: condition_relations.conditions.condition_chemical.mention
             required: false
           condition_taxon_curie:
             source: payload
-            path: condition_relations.conditions.condition_taxon.mention
+            path: condition_relations.conditions.condition_taxon.proposed_curie
             required: false
           condition_free_text:
             source: payload
@@ -3463,12 +3555,20 @@ metadata:
             allow_multiple: true
             required: false
             context_only: true
-        # The composite resolves on the always-present condition_class (the experimental-variable
-        # TYPE every condition carries); condition_id (a more specific ZECO term) is OPTIONAL and
-        # absent in ~74% of curated conditions, so requiring it would false-negative the majority.
-        # The agent still reports unresolved if any PRESENT component (class/chemical/...) fails.
+        # Every component the paper states is decided on its own (field_resolutions, ALL-1283):
+        # its CURIE and name are written back, or it records why it stays unresolved. A component
+        # the paper does not state (condition_id is absent in ~74% of curated conditions) is
+        # never required and never written. The condition as a whole stays unresolved if any
+        # PRESENT component fails.
         expected_result_fields:
           condition_class_curie: condition_relations.conditions.condition_class.curie
+          condition_class_name: condition_relations.conditions.condition_class.name
+          condition_id_curie: condition_relations.conditions.condition_id.curie
+          condition_id_name: condition_relations.conditions.condition_id.name
+          condition_chemical_curie: condition_relations.conditions.condition_chemical.curie
+          condition_chemical_name: condition_relations.conditions.condition_chemical.name
+          condition_taxon_curie: condition_relations.conditions.condition_taxon.curie
+          condition_taxon_name: condition_relations.conditions.condition_taxon.name
         required: true
         blocking: false
         allow_opt_out: true

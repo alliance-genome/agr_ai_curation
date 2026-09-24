@@ -18,6 +18,7 @@ record in the current format.
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -44,6 +45,8 @@ PREVIOUS_FORMAT_MESSAGE = (
     "Recorded in the previous stage-slim format; re-run extraction to validate."
 )
 STAGE_SLIM_VOCABULARY = "Stage Uberon Slim Terms"
+NON_CURIE_STAGE_SLIM_TERM = "post embryonic, pre-adult"
+_CURIE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*:\S+")
 _STAGE_SLIM_PATH = ("expression_pattern", "when_expressed", "stage_uberon_slim_terms")
 
 
@@ -76,9 +79,23 @@ def _vocabulary_term(value: Any) -> Any:
 
     if not _is_previous_format_slim(value):
         return value
-    # The vocabulary names its UBERON terms by their CURIE.
-    name = value if isinstance(value, str) else value.get("curie") or value.get("name")
-    return {"name": name, "vocabulary": STAGE_SLIM_VOCABULARY}
+    return {"name": _stage_slim_term_name(value), "vocabulary": STAGE_SLIM_VOCABULARY}
+
+
+def _stage_slim_term_name(value: Any) -> str | None:
+    """The vocabulary term a previous-format slim names, or None when it names none.
+
+    The vocabulary names its UBERON terms by their CURIE; only one term is not
+    a CURIE ("post embryonic, pre-adult").
+    """
+
+    curie = value if isinstance(value, str) else value.get("curie")
+    if isinstance(curie, str) and _CURIE.fullmatch(curie.strip()):
+        return curie.strip()
+    label = value if isinstance(value, str) else value.get("name")
+    if label == NON_CURIE_STAGE_SLIM_TERM:
+        return label
+    return None
 
 
 def previous_format_display_payload(payload: Mapping[str, Any]) -> dict[str, Any]:

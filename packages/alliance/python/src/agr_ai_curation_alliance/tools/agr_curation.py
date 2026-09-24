@@ -83,6 +83,10 @@ from .search_helpers import (
     enrich_with_match_context,
 )
 from agr_ai_curation_alliance.domain_packs.paths import get_alliance_domain_packs_dir
+from agr_ai_curation_alliance.domain_packs._resolvable_payloads import (
+    CONDITION_TERM_COMPONENTS,
+    CONDITION_TEXT_FIELDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -199,13 +203,14 @@ class _StrictToolModel(BaseModel):
 
 
 class ExperimentalConditionInput(_StrictToolModel):
-    """One grounded ExperimentalCondition the extractor read from the paper.
+    """One experimental condition the extractor read from the paper.
 
-    All ontology/chemical/taxon CURIEs are GROUNDED by the extractor via the term-helper lookup
-    tools before staging (do not guess ZECO/ChEBI from memory). Every field is sparse — stage only
-    what the paper explicitly states. The condition carries no quote text: the validator reads the
-    annotation's evidence_record_ids (the spans the condition was read from) per the evidence
-    contract.
+    Each condition part (class, specific condition, chemical, taxon) is staged with its paper
+    wording in ``<part>_mention``; a CURIE found with the term-helper lookup tools goes in
+    ``<part>_curie`` as a proposal the condition validator checks. A part with a CURIE but no
+    paper wording is rejected. Every field is sparse — stage only what the paper explicitly
+    states. The condition carries no quote text: the validator reads the annotation's
+    evidence_record_ids (the spans the condition was read from) per the evidence contract.
 
     The gene_expression builder tools dispatch under strict tool schemas, which require every
     property to be present (required-but-nullable). So each component is ``Optional[...]`` with NO
@@ -213,12 +218,43 @@ class ExperimentalConditionInput(_StrictToolModel):
     drops the empty leaves.
     """
 
-    condition_class_curie: Optional[StrictStr]
-    condition_id_curie: Optional[StrictStr]
-    condition_chemical_curie: Optional[StrictStr]
-    condition_taxon_curie: Optional[StrictStr]
+    condition_class_mention: Optional[StrictStr] = Field(
+        description="The kind of experimental variable as the paper words it (for example 'chemical treatment').",
+    )
+    condition_class_curie: Optional[StrictStr] = Field(
+        description="Proposed ZECO class ID for that wording, from the term lookup tools; a validator confirms it.",
+    )
+    condition_id_mention: Optional[StrictStr] = Field(
+        description="The specific condition as the paper words it, when stated.",
+    )
+    condition_id_curie: Optional[StrictStr] = Field(
+        description="Proposed ZECO/XCO ID for the specific condition; a validator confirms it.",
+    )
+    condition_chemical_mention: Optional[StrictStr] = Field(
+        description="The chemical as the paper names it, when a chemical treatment is stated.",
+    )
+    condition_chemical_curie: Optional[StrictStr] = Field(
+        description="Proposed ChEBI ID for the chemical; a validator confirms it.",
+    )
+    condition_taxon_mention: Optional[StrictStr] = Field(
+        description="The organism as the paper names it, only when the condition involves a distinct organism.",
+    )
+    condition_taxon_curie: Optional[StrictStr] = Field(
+        description="Proposed NCBITaxon ID for that organism; a validator confirms it.",
+    )
     condition_free_text: Optional[StrictStr]
     condition_summary: Optional[StrictStr]
+
+    @model_validator(mode="after")
+    def _curie_needs_paper_wording(self) -> "ExperimentalConditionInput":
+        for component in CONDITION_TERM_COMPONENTS:
+            curie = getattr(self, f"{component}_curie")
+            mention = getattr(self, f"{component}_mention")
+            if curie is not None and curie.strip() and not (mention and mention.strip()):
+                raise ValueError(
+                    f"{component}_curie needs {component}_mention, the paper's wording for it"
+                )
+        return self
 
 
 class ConditionRelationInput(_StrictToolModel):
@@ -4574,6 +4610,7 @@ def search_domain_field_terms(
                 "object_type": object_type,
                 "field_path": candidates[0].get("slot_hint") or field_path,
                 "curie": candidates[0].get("curie"),
+                "source_phrase": normalized_query,
                 "data_provider": data_provider,
                 "include_parents": True,
                 "include_children": True,
@@ -4820,6 +4857,7 @@ def inspect_ontology_term(
     object_type: str,
     field_path: str,
     curie: str,
+    source_phrase: str,
     data_provider: Optional[str] = None,
     include_parents: bool = True,
     include_children: bool = True,
@@ -4827,9 +4865,18 @@ def inspect_ontology_term(
     max_depth: int = 1,
     limit: Optional[int] = None,
 ) -> AgrQueryResult:
-    """Inspect one authoritative ontology term and bounded graph context."""
+    """Inspect one authoritative ontology term and bounded graph context.
+
+    Args:
+        source_phrase: The paper's wording for this value, exactly as it will be staged (never
+            the term's name or CURIE); the follow-up resolve call uses the same wording.
+    """
 
     normalized_curie = curie.strip() if isinstance(curie, str) and curie.strip() else None
+    # The paper's wording this term is checked for, exactly as the value will be staged.
+    normalized_phrase = (
+        source_phrase.strip() if isinstance(source_phrase, str) and source_phrase.strip() else None
+    )
     limit_value = _term_lookup_limit(limit, 25)
     attempted_query = _attempt_query(
         "inspect_ontology_term",
@@ -4837,6 +4884,7 @@ def inspect_ontology_term(
         object_type=object_type,
         field_path=field_path,
         curie=normalized_curie,
+        source_phrase=normalized_phrase,
         data_provider=data_provider,
         include_parents=include_parents,
         include_children=include_children,
@@ -4847,6 +4895,13 @@ def inspect_ontology_term(
     if not normalized_curie:
         return _err(
             "inspect_ontology_term requires a CURIE.",
+            method="inspect_ontology_term",
+            attempted_query=attempted_query,
+        )
+    if not normalized_phrase:
+        return _err(
+            "inspect_ontology_term requires source_phrase: the paper's wording for this value, "
+            "exactly as it will be staged.",
             method="inspect_ontology_term",
             attempted_query=attempted_query,
         )
@@ -4889,14 +4944,14 @@ def inspect_ontology_term(
                 "instructions": _resolver_instruction(
                     resolution_status="unresolved",
                     field_path=field_path,
-                    source_phrase=normalized_curie,
+                    source_phrase=normalized_phrase,
                     resolver=_resolver_metadata(policy),
                 ),
                 "diagnostic_summary": _resolver_diagnostic_summary(
                     stage="inspect",
                     status=LOOKUP_STATUS_NOT_FOUND,
                     field_path=field_path,
-                    source_phrase=normalized_curie,
+                    source_phrase=normalized_phrase,
                     candidate_count=0,
                 ),
                 "debug": _resolver_debug_payload(
@@ -5030,7 +5085,7 @@ def inspect_ontology_term(
             else _resolver_instruction(
                 resolution_status="unresolved",
                 field_path=field_path,
-                source_phrase=normalized_curie,
+                source_phrase=normalized_phrase,
                 resolver=resolver,
                 candidate=term,
             )
@@ -5041,7 +5096,7 @@ def inspect_ontology_term(
                 "domain_pack_id": domain_pack_id,
                 "object_type": object_type,
                 "field_path": field_path,
-                "source_phrase": term.get("name") or normalized_curie,
+                "source_phrase": normalized_phrase,
                 "candidate_curie": normalized_curie,
                 "data_provider": data_provider,
             },
@@ -5052,7 +5107,7 @@ def inspect_ontology_term(
             stage="inspect",
             status=inspect_status,
             field_path=field_path,
-            source_phrase=term.get("name") or normalized_curie,
+            source_phrase=normalized_phrase,
             candidate_count=1,
             selected_candidate=term,
             policy_blocker=policy_blocker,
@@ -5784,8 +5839,8 @@ def _staged_condition_relations(
 
     Drops empty leaves so a condition carries only the components the paper stated. A relation with
     no resolvable conditions is dropped entirely. The structure mirrors the disease builder's staged
-    shape (condition_relation_type + conditions[].condition_*_curie/text); the gene_expression
-    materializer re-reads these into the concrete nested annotation payload.
+    shape (condition_relation_type + conditions[].<part>_mention/<part>_curie/text); the
+    gene_expression materializer re-reads these into the concrete nested annotation payload.
     """
 
     staged: List[Dict[str, Any]] = []
@@ -5795,12 +5850,12 @@ def _staged_condition_relations(
         for condition in relation.conditions:
             component: Dict[str, Any] = {}
             for field_name in (
-                "condition_class_curie",
-                "condition_id_curie",
-                "condition_chemical_curie",
-                "condition_taxon_curie",
-                "condition_free_text",
-                "condition_summary",
+                *(
+                    f"{part}_{key}"
+                    for part in CONDITION_TERM_COMPONENTS
+                    for key in ("mention", "curie")
+                ),
+                *CONDITION_TEXT_FIELDS,
             ):
                 value = getattr(condition, field_name)
                 if value is not None and value.strip():
