@@ -570,6 +570,30 @@ def _validate_binding_routes(binding: Any) -> None:
             "routed validator_bindings entries declare "
             f"{', '.join(shared)} on each route, not on the binding"
         )
+    # The value that chose the route is never a validator result: a write-back
+    # there would send the next run to another validator.
+    route_path = _unindexed_path(binding.route_by.path)
+    written = [
+        (f"routes.{route_value}.expected_result_fields.{result_field}", field_path)
+        for route_value, route in binding.routes.items()
+        for result_field, field_path in route.expected_result_fields.items()
+    ] + [
+        (f"optional_result_fields.{result_field}", field_path)
+        for result_field, field_path in (getattr(binding, "optional_result_fields", None) or {}).items()
+    ]
+    for location, field_path in written:
+        if not isinstance(field_path, str):
+            continue
+        target = _unindexed_path(field_path)
+        if target == route_path or target.startswith(f"{route_path}."):
+            raise ValueError(
+                f"validator_bindings {location} writes '{field_path}', the route_by "
+                f"path '{binding.route_by.path}'; the routing value is never a validator result"
+            )
+
+
+def _unindexed_path(field_path: str) -> str:
+    return re.sub(r"\[\d+\]", "", field_path.strip())
 
 
 class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
