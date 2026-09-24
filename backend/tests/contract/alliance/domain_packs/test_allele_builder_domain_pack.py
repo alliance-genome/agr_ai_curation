@@ -102,14 +102,12 @@ def _materialize_one_candidate() -> Any:
         staged_fields=_staged_fields(),
         pending_ref_ids=["allele-mention-1"],
         evidence_record_ids=["evidence-unc54-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     return materialize_allele_builder_state(
         workspace=workspace,
         candidate_ids=["allele-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
 
@@ -138,7 +136,7 @@ def test_h2_ab1_guidance_survives_stage_materialization_request_and_review(monke
     assert any((event.get("output_summary") or {}).get("candidate", {}).get("staged_fields", {}).get("validation_guidance") == guidance for event in events)
     records = _evidence_records()
     records[0]["verified_quote"] = "Fixture: H2-Ab1 f/f mice were obtained from Cyagen."
-    result = materialize_allele_builder_state(workspace=workspace, candidate_ids=[staged.data["candidate_id"]], evidence_records=records, resolver_entry_lookup=None)
+    result = materialize_allele_builder_state(workspace=workspace, candidate_ids=[staged.data["candidate_id"]], evidence_records=records)
     assert result.ok, result.summary()
     objects = result.payload["curatable_objects"]
     assert [obj["object_type"] for obj in objects if obj.get("validation_guidance")] == [ALLELE_MENTION_OBJECT_TYPE]
@@ -231,7 +229,6 @@ def test_allele_builder_shares_one_reference_across_candidates():
         staged_fields=_staged_fields(),
         pending_ref_ids=["allele-mention-1"],
         evidence_record_ids=["evidence-unc54-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     second = {
@@ -246,7 +243,6 @@ def test_allele_builder_shares_one_reference_across_candidates():
         staged_fields=second,
         pending_ref_ids=["allele-mention-2"],
         evidence_record_ids=["evidence-daf2-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     evidence = _evidence_records() + [
@@ -264,7 +260,6 @@ def test_allele_builder_shares_one_reference_across_candidates():
         workspace=workspace,
         candidate_ids=["allele-candidate-1", "allele-candidate-2"],
         evidence_records=evidence,
-        resolver_entry_lookup=None,
     )
     assert result.ok, result.summary()
     objects = result.payload["curatable_objects"]
@@ -319,14 +314,12 @@ def test_allele_builder_rejects_evidence_record_not_in_metadata():
         staged_fields=_staged_fields(),
         pending_ref_ids=["allele-mention-1"],
         evidence_record_ids=["evidence-MISSING"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_allele_builder_state(
         workspace=workspace,
         candidate_ids=["allele-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -347,14 +340,12 @@ def test_allele_builder_rejects_missing_mention():
         staged_fields=staged,
         pending_ref_ids=["allele-mention-1"],
         evidence_record_ids=["evidence-unc54-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_allele_builder_state(
         workspace=workspace,
         candidate_ids=["allele-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -432,11 +423,11 @@ def test_attached_field_only_evidence_survives_allele_materialization():
     workspace.upsert_candidate(
         candidate_id='allele-candidate-1', staged_fields=_staged_fields(),
         pending_ref_ids=['allele-mention-1'], evidence_record_ids=['evidence-unc54-1'],
-        resolver_selection_refs=[], status=CANDIDATE_STATUS_VALID,
+        status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_allele_builder_state(
         workspace=workspace, candidate_ids=['allele-candidate-1'],
-        evidence_records=records, resolver_entry_lookup=None,
+        evidence_records=records,
     )
     assert result.ok, result.summary()
     assert result.payload is not None
@@ -534,14 +525,12 @@ def test_allele_builder_rejects_missing_rationale():
         staged_fields=staged,
         pending_ref_ids=["allele-mention-1"],
         evidence_record_ids=["evidence-unc54-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_allele_builder_state(
         workspace=workspace,
         candidate_ids=["allele-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -753,7 +742,6 @@ def test_allele_builder_requires_source_mentions_without_falling_back_to_the_men
         staged_fields={**_staged_fields(), "source_mentions": []},
         pending_ref_ids=["allele-mention-1"],
         evidence_record_ids=["evidence-unc54-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
 

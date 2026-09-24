@@ -106,7 +106,6 @@ def _generic_workspace(staged_fields: Mapping[str, Any]) -> ExtractionBuilderWor
         staged_fields=dict(staged_fields),
         pending_ref_ids=["generic-object-1"],
         evidence_record_ids=["evidence-generic-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     return workspace
@@ -392,7 +391,6 @@ def test_generic_builder_materializer_requires_explicit_class_key_and_label():
         workspace=missing_class_workspace,
         candidate_ids=["generic-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not missing_class_result.ok
     assert any(
@@ -411,7 +409,6 @@ def test_generic_builder_materializer_requires_explicit_class_key_and_label():
         workspace=missing_label_workspace,
         candidate_ids=["generic-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not missing_label_result.ok
     assert any(issue["reason"] == "missing_label" for issue in missing_label_result.issues)
@@ -435,7 +432,6 @@ def test_explicit_generic_object_class_materializes_without_fallback():
         workspace=workspace,
         candidate_ids=["generic-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert result.ok, result.summary()
     assert result.payload is not None
@@ -468,7 +464,6 @@ def test_generic_materializer_rejects_new_candidate_without_rationale(rationale)
         workspace=_generic_workspace(staged_fields),
         candidate_ids=["generic-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
     assert not result.ok
@@ -691,7 +686,6 @@ def test_generic_materializer_rejects_invalid_semantic_attributes():
         workspace=workspace,
         candidate_ids=["generic-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
     assert not result.ok
@@ -714,7 +708,6 @@ def test_generic_materializer_enforces_required_class_payload_fields():
         workspace=workspace,
         candidate_ids=["generic-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
     assert not result.ok
@@ -739,7 +732,6 @@ def test_generic_materializer_rejects_payload_keys_outside_selected_class():
         workspace=workspace,
         candidate_ids=["generic-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
     assert not result.ok
@@ -761,7 +753,6 @@ def test_generic_materializer_allows_empty_no_result_extraction():
         workspace=workspace,
         candidate_ids=[],
         evidence_records=[],
-        resolver_entry_lookup=None,
     )
 
     assert result.ok, result.summary()
@@ -816,7 +807,6 @@ def test_generic_builder_finalization_projects_to_object_tsv_rows():
             },
             pending_ref_ids=[f"generic-object-{index}"],
             evidence_record_ids=[evidence_id],
-            resolver_selection_refs=[],
             status=CANDIDATE_STATUS_VALID,
         )
 
@@ -825,10 +815,8 @@ def test_generic_builder_finalization_projects_to_object_tsv_rows():
         candidate_ids=["generic-candidate-1", "generic-candidate-2"],
         materialize=materialize_generic_builder_state,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="generic-envelope",
         require_evidence_record_ids=True,
-        require_resolver_selections=False,
     )
 
     assert outcome.ok, outcome.issues
@@ -899,7 +887,6 @@ def test_generic_proxy_materializer_hydrates_required_evidence_fields_and_schema
                 "chunk_id": "chunk-daf16-1",
             }
         ],
-        resolver_entry_lookup=None,
     )
 
     assert result.ok, result.summary()
@@ -942,7 +929,6 @@ def test_unknown_generic_class_key_is_rejected_not_silently_fallbacked():
         workspace=workspace,
         candidate_ids=["generic-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(issue["reason"] == "invalid_class_key" for issue in result.issues)
@@ -1014,7 +1000,6 @@ def test_generic_materializer_rejects_unknown_evidence_record_id():
         workspace=workspace,
         candidate_ids=["generic-candidate-1"],
         evidence_records=[],
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -1075,7 +1060,6 @@ def _materialize(staged_fields: Mapping[str, Any], evidence=None):
         workspace=_generic_workspace(staged_fields),
         candidate_ids=["generic-candidate-1"],
         evidence_records=_DAF16_EVIDENCE if evidence is None else evidence,
-        resolver_entry_lookup=None,
     )
 
 
@@ -1267,7 +1251,6 @@ def test_generic_staged_paper_wording_materializes_unresolved_not_validated(
         workspace=active_generic_builder_workspace,
         candidate_ids=[stage.data["candidate_id"]],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
     assert result.ok, result.summary()

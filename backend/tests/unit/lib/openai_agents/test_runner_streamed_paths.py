@@ -1534,10 +1534,8 @@ def _staged_probe_impl() -> str:
     from src.lib.openai_agents.extraction_builder_workspace import (
         get_active_extraction_builder_workspace,
     )
-    from src.lib.openai_agents.resolver_call_ledger import get_active_resolver_call_ledger
 
     workspace = get_active_extraction_builder_workspace()
-    get_active_resolver_call_ledger()
     return f"staged run={workspace.run_id}"
 
 

@@ -5921,7 +5921,6 @@ def _builder_finalization_summary(summary: Optional[Mapping[str, Any]]) -> Optio
         "candidate_ids": list(summary.get("candidate_ids") or []),
         "source_candidate_count": len(summary.get("source_candidate_ids") or []),
         "evidence_record_count": len(summary.get("evidence_record_ids") or []),
-        "resolver_selection_count": summary.get("resolver_selection_count"),
         "validation_errors": list(summary.get("validation_errors") or []),
     }
 
@@ -5934,9 +5933,8 @@ def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict
     candidates, and echoing them on every mutation made acknowledgments grow
     without bound (a single ``patch_*_observation`` return once reached ~240K
     chars). The authoritative staged state stays in the backend workspace and
-    in trace events. Candidate ids and each candidate's pending refs, evidence
-    ids and resolver selections are paged by the ``list_staged_*`` and
-    ``find_staged_*`` tools.
+    in trace events. Candidate ids and each candidate's pending refs and
+    evidence ids are paged by the ``list_staged_*`` and ``find_staged_*`` tools.
     """
     snapshot = workspace.snapshot(redact_payload=True)
     all_candidates = snapshot["candidates"]
@@ -5950,11 +5948,10 @@ def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict
         "discarded_candidate_count": len(discarded),
         "pending_ref_count": len(snapshot["pending_ref_ids"]),
         "evidence_record_count": len(snapshot["evidence_record_ids"]),
-        "resolver_selection_ref_count": len(snapshot["resolver_selection_refs"]),
         "finalization": _builder_finalization_summary(snapshot.get("finalization")),
         "reference_access": (
-            "Page candidate ids and each candidate's pending refs, evidence ids and "
-            "resolver selections with this builder's list_staged_* or find_staged_* tool."
+            "Page candidate ids and each candidate's pending refs and evidence ids "
+            "with this builder's list_staged_* or find_staged_* tool."
         ),
     }
 
@@ -5969,7 +5966,6 @@ def _oversized_builder_candidate(candidate: Mapping[str, Any]) -> Dict[str, Any]
         "summary_bytes": serialized_size(candidate),
         "pending_ref_count": len(candidate.get("pending_ref_ids") or []),
         "evidence_record_count": len(candidate.get("evidence_record_ids") or []),
-        "resolver_selection_ref_count": len(candidate.get("resolver_selection_refs") or []),
         "validation_error_count": len(candidate.get("validation_errors") or []),
         "staged_field_count": (
             staged_fields.get("field_count") if isinstance(staged_fields, Mapping) else None
@@ -6299,7 +6295,6 @@ def _stage_gene_expression_observation_impl(
         staged_fields=payload,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -6307,7 +6302,6 @@ def _stage_gene_expression_observation_impl(
         "status": candidate.status,
         "pending_ref_ids": candidate.pending_ref_ids,
         "evidence_record_ids": candidate.evidence_record_ids,
-        "resolver_selection_refs": candidate.resolver_selection_refs,
         "builder": _builder_summary(workspace),
     }
     _emit_gene_expression_builder_event(
@@ -6444,7 +6438,6 @@ def _patch_gene_expression_observation_impl(
         staged_fields=payload,
         pending_ref_ids=candidate.pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -6638,12 +6631,8 @@ def _materialize_gene_expression_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     """Domain materializer wrapper that emits gene-expression builder events.
-
-    ``resolver_entry_lookup`` is part of the shared finalize contract; gene
-    expression stages no resolver selections, so it is not used.
 
     This is the only gene-expression-specific step the generic builder-finalize
     orchestration calls. It wraps ``materialize_gene_expression_builder_state``
@@ -6750,9 +6739,7 @@ def _finalize_gene_expression_extraction_impl(
         candidate_ids=candidate_ids,
         materialize=_materialize_gene_expression_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="gene-expression-envelope",
-        require_resolver_selections=False,
     )
 
     if not outcome.ok:
@@ -6855,7 +6842,7 @@ def create_groq_agr_curation_query_tool():
 # Public, LLM-facing FunctionTools for the run-state builder/resolver tools.
 #
 # The raw ``_*_impl`` functions above are plain sync functions that read run-scoped state
-# (builder workspace / resolver ledger / evidence records) via the agr_ai_curation_runtime
+# (builder workspace / evidence records) via the agr_ai_curation_runtime
 # ``get_active_*`` shims. The OpenAI Agents SDK runs sync function tools on worker threads,
 # where event-loop contextvars do not reliably appear -- so the core rebuilds each of these
 # per run with a closure that binds the run state inside the worker thread (see

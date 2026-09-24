@@ -438,7 +438,6 @@ async def test_run_specialist_resets_evidence_workspace_after_stream_error(monke
 
 @pytest.mark.asyncio
 async def test_run_specialist_resets_run_state_when_the_tool_surface_fails(monkeypatch):
-    from src.lib.openai_agents import resolver_call_ledger
     from src.lib.openai_agents.tool_surface import ToolSurfaceError
 
     def _fail(*_args, **_kwargs):
@@ -468,8 +467,6 @@ async def test_run_specialist_resets_run_state_when_the_tool_surface_fails(monke
         evidence_workspace._workspace_records()
     with pytest.raises(RuntimeError, match="No active extraction builder workspace"):
         builder.get_active_extraction_builder_workspace()
-    with pytest.raises(RuntimeError, match="No active resolver call ledger"):
-        resolver_call_ledger.get_active_resolver_call_ledger()
 
 
 @pytest.mark.asyncio

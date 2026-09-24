@@ -78,14 +78,12 @@ def test_stage_and_finalize_extraction_payload_returns_canonical_payload_with_ev
         workspace=workspace,
         candidate_id="candidate-1",
         evidence_records=[evidence_record],
-        resolver_selection_refs=["resolver:gene:crumb"],
     )
     finalization = workspace.finalize(candidate_ids=["candidate-1"])
 
     assert finalization.payload["evidence_records"] == [evidence_record]
     assert finalization.summary()["finalized_candidate_count"] == 1
     assert finalization.summary()["evidence_record_ids"] == ["evidence-live"]
-    assert finalization.summary()["resolver_selection_count"] == 1
     assert captured_events[-1]["event_type"] == "extraction_builder.finalization_decision"
 
 
@@ -407,7 +405,6 @@ class _BuilderFinalizingRunResult:
             },
             pending_ref_ids=["gene-expression-annotation-pef-1"],
             evidence_record_ids=["evidence-67598e5688f123c8"],
-            resolver_selection_refs=["call_relation"],
             status=builder.CANDIDATE_STATUS_VALID,
         )
         workspace.finalize(candidate_ids=["gex-candidate-1"])
@@ -539,7 +536,6 @@ class _BuilderFinalizingRunResultWithRecordedEvidence:
             },
             pending_ref_ids=["gene-expression-annotation-pef-1"],
             evidence_record_ids=[self.evidence_record["evidence_record_id"]],
-            resolver_selection_refs=["call_relation"],
             status=builder.CANDIDATE_STATUS_VALID,
         )
         workspace.finalize(candidate_ids=["gex-candidate-1"])

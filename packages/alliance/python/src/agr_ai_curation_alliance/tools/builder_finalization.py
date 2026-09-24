@@ -55,7 +55,7 @@ class BuilderMaterializationResult(Protocol):
     def summary(self) -> Mapping[str, Any]: ...
 
 
-# (workspace, candidate_ids, evidence_records, resolver_entry_lookup) -> result
+# (workspace, candidate_ids, evidence_records) -> result
 DomainMaterializer = Callable[..., BuilderMaterializationResult]
 
 
@@ -130,16 +130,14 @@ def finalize_builder_extraction(
     candidate_ids: Sequence[str],
     materialize: DomainMaterializer,
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Callable[[str], Any]],
     materialized_candidate_prefix: str,
     require_evidence_record_ids: bool = True,
-    require_resolver_selections: bool = True,
 ) -> BuilderFinalizationOutcome:
     """Run the shared builder finalize control flow for one domain.
 
     ``materialize`` is the only domain-specific dependency; it must accept the
-    keyword arguments ``workspace``, ``candidate_ids``, ``evidence_records`` and
-    ``resolver_entry_lookup`` and return a :class:`BuilderMaterializationResult`.
+    keyword arguments ``workspace``, ``candidate_ids`` and ``evidence_records``
+    and return a :class:`BuilderMaterializationResult`.
 
     All structural/provenance/idempotency/finalize handling is shared. The caller
     translates the returned :class:`BuilderFinalizationOutcome` into its own
@@ -219,15 +217,6 @@ def finalize_builder_extraction(
                     "candidate_id": candidate_id,
                 }
             )
-        if require_resolver_selections and not candidate.resolver_selection_refs:
-            provenance_issues.append(
-                {
-                    "field_path": "controlled_fields",
-                    "reason": "missing_resolver_selection",
-                    "message": "Finalized builder candidates require validated resolver selections.",
-                    "candidate_id": candidate_id,
-                }
-            )
     if provenance_issues:
         workspace.record_validation_failure(
             errors=provenance_issues, candidate_ids=normalized_candidate_ids
@@ -243,7 +232,6 @@ def finalize_builder_extraction(
         workspace=workspace,
         candidate_ids=normalized_candidate_ids,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     if not materialization.ok or materialization.payload is None:
         issue_list = [dict(issue) for issue in materialization.issues]
@@ -270,11 +258,6 @@ def finalize_builder_extraction(
             for pending_ref in workspace.get_candidate(candidate_id).pending_ref_ids
         ],
         evidence_record_ids=list(materialization.evidence_record_ids),
-        resolver_selection_refs=[
-            resolver_ref
-            for candidate_id in normalized_candidate_ids
-            for resolver_ref in workspace.get_candidate(candidate_id).resolver_selection_refs
-        ],
         status=CANDIDATE_STATUS_VALID,
     )
 

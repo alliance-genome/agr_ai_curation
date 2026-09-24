@@ -9,7 +9,6 @@ import pytest
 
 from agr_ai_curation_alliance.tools import agr_curation
 from src.lib.openai_agents import extraction_builder_workspace as builder
-from src.lib.openai_agents import resolver_call_ledger
 from src.lib.openai_agents.tools import evidence_workspace
 
 
@@ -24,38 +23,6 @@ def _workspace() -> builder.ExtractionBuilderWorkspace:
         domain_pack_id=agr_curation.GENE_EXPRESSION_DOMAIN_PACK_ID,
         agent_id="gene_expression_extraction",
     )
-
-
-def _resolved_output(
-    *,
-    field_path: str = "relation.name",
-    selected_value: str = "is_expressed_in",
-    source_phrase: str = "expressed in",
-) -> dict[str, Any]:
-    """A recorded resolve call, for the shared resolver-call ledger tests."""
-
-    return {
-        "status": "resolved",
-        "data": {
-            "domain_pack_id": agr_curation.GENE_EXPRESSION_DOMAIN_PACK_ID,
-            "object_type": agr_curation.GENE_EXPRESSION_OBJECT_TYPE,
-            "field_path": field_path,
-            "source_phrase": source_phrase,
-            "payload_field_instructions": {
-                "set": [{"field_path": field_path, "value": selected_value}]
-            },
-            "helper_selection": {
-                "field_path": field_path,
-                "source_tool": "resolve_domain_field_term",
-                "authority": "selector_evidence",
-                "lookup_status": "success",
-                "source_phrase": source_phrase,
-                "term_source": {"kind": "controlled_vocabulary", "vocabulary": "Expression Relation"},
-                "selected_value": selected_value,
-                "selected_name": selected_value,
-            },
-        },
-    }
 
 
 def _no_database_lookup(**kwargs: Any):
@@ -135,17 +102,6 @@ def active_builder_context(monkeypatch):
         builder.reset_active_extraction_builder_workspace(builder_token)
 
 
-@pytest.fixture
-def ledger_context(monkeypatch):
-    events: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        resolver_call_ledger,
-        "write_extraction_trace_event",
-        lambda **event: events.append(event) or event,
-    )
-    return resolver_call_ledger.ResolverCallLedger(trace_id="trace-gex"), events
-
-
 def _stage(**overrides: Any):
     arguments = {
         "pending_ref_id": "gene-expression-annotation-pef-1",
@@ -218,7 +174,6 @@ def _restage(workspace: builder.ExtractionBuilderWorkspace, staged_fields: dict[
         staged_fields=staged_fields,
         pending_ref_ids=candidate.pending_ref_ids,
         evidence_record_ids=changes.get("evidence_record_ids", candidate.evidence_record_ids),
-        resolver_selection_refs=[],
         status=builder.CANDIDATE_STATUS_VALID,
     )
 
@@ -269,71 +224,6 @@ def _defs_schema(schema: Mapping[str, Any], name: str) -> Mapping[str, Any]:
     return defs[name]
 
 
-def test_resolver_call_ledger_records_only_valid_resolved_outputs(ledger_context):
-    ledger, events = ledger_context
-
-    rejected = ledger.record_tool_output(
-        tool_call_id="call_search",
-        tool_name="search_domain_field_terms",
-        output=_resolved_output(),
-    )
-    recorded = ledger.record_tool_output(
-        tool_call_id="call_relation",
-        tool_name="resolve_domain_field_term",
-        output=_resolved_output(),
-    )
-
-    assert rejected is None
-    assert recorded is not None
-    assert ledger.get("call_relation").provenance_selection()["resolver_call_id"] == "call_relation"
-    assert any(event["event_type"] == "resolver_call_ledger.recorded" for event in events)
-
-
-def test_resolver_call_ledger_retains_structured_authoritative_tool_outputs(ledger_context):
-    ledger, _events = ledger_context
-    ledger.record_tool_output(
-        tool_call_id="call-quickgo",
-        tool_name="quickgo_api_call",
-        output={"results": [{"id": "GO:0005515", "name": "protein binding"}]},
-    )
-
-    entry = ledger.find_tool_output_containing(
-        tool_names={"quickgo_api_call"},
-        value={"id": "GO:0005515", "name": "protein binding"},
-    )
-
-    assert entry is not None
-    assert entry.tool_call_id == "call-quickgo"
-    assert ledger.get_tool_output("call-quickgo").contains("GO:0005515")
-
-
-def test_resolver_call_ledger_limits_missing_id_rejections_to_resolver_outputs(ledger_context):
-    ledger, events = ledger_context
-    generic_output = {"content": "full document text must not enter rejection traces"}
-
-    assert (
-        ledger.record_tool_output(
-            tool_call_id=None,
-            tool_name="read_section",
-            output=generic_output,
-        )
-        is None
-    )
-    assert events == []
-
-    assert (
-        ledger.record_tool_output(
-            tool_call_id=None,
-            tool_name="resolve_domain_field_term",
-            output=_resolved_output(),
-        )
-        is None
-    )
-    assert len(events) == 1
-    assert events[0]["event_type"] == "resolver_call_ledger.rejected"
-    assert events[0]["validation"]["reason"] == "missing_tool_call_id"
-
-
 # ---------------------------------------------------------------------------------------
 # Extraction never searches: every value is staged in the paper's wording, not validated.
 # ---------------------------------------------------------------------------------------
@@ -347,7 +237,6 @@ def test_stage_records_every_value_as_paper_wording_not_yet_validated(active_bui
     assert result.status == "ok"
     candidate = workspace.candidates["gex-candidate-1"]
     assert candidate.evidence_record_ids == ["evidence-67598e5688f123c8"]
-    assert candidate.resolver_selection_refs == []
     staged = candidate.staged_fields
     assert "metadata" not in staged
     assert staged["relation"] == {
@@ -493,7 +382,6 @@ def test_patch_updates_reference_and_controlled_field_as_paper_wording(active_bu
         None,
     )
     assert anatomy["lookup_outcome"] == "not_validated"
-    assert candidate.resolver_selection_refs == []
 
 
 def test_patch_restages_a_controlled_field_unresolved_with_its_wording(active_builder_context):
@@ -530,7 +418,6 @@ def test_finalize_returns_compact_builder_summary(active_builder_context):
     assert "evidence_record_ids" not in finalization
     assert workspace.finalization.source_candidate_ids == ("gex-candidate-1",)
     assert workspace.finalization.evidence_record_ids == ("evidence-67598e5688f123c8",)
-    assert finalization["resolver_selection_count"] == 0
     assert "GeneExpressionEnvelope" not in result.data
     payload = workspace.finalization.payload
     assert payload["curatable_objects"][0]["object_type"] == "GeneExpressionAnnotation"
@@ -569,7 +456,6 @@ def test_finalize_preserves_multi_observation_source_candidate_identity(active_b
         staged_fields=second_payload,
         pending_ref_ids=["gene-expression-annotation-pef-2"],
         evidence_record_ids=first.evidence_record_ids,
-        resolver_selection_refs=[],
         status=builder.CANDIDATE_STATUS_VALID,
     )
 
@@ -602,7 +488,6 @@ def test_duplicate_finalize_conflicts_when_source_candidates_change(active_build
         staged_fields=second_payload,
         pending_ref_ids=["gene-expression-annotation-pef-2"],
         evidence_record_ids=first_candidate.evidence_record_ids,
-        resolver_selection_refs=[],
         status=builder.CANDIDATE_STATUS_VALID,
     )
 

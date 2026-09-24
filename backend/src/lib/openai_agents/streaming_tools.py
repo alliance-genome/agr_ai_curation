@@ -109,11 +109,6 @@ from .tool_result_bounds import (
     serialized_size,
     tool_result_budget,
 )
-from .resolver_call_ledger import (
-    ResolverCallLedger,
-    reset_active_resolver_call_ledger,
-    set_active_resolver_call_ledger,
-)
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
     required_package_tool_names_from_metadata,
@@ -3319,8 +3314,8 @@ def _active_builder_workspace_or_none() -> ExtractionBuilderWorkspace | None:
         return None
 
 
-# Package tools that need the run-scoped extraction state (builder workspace + resolver
-# ledger + evidence records). Maps the LLM-facing tool name to the import path of the raw
+# Package tools that need the run-scoped extraction state (builder workspace + evidence
+# records). Maps the LLM-facing tool name to the import path of the raw
 # (undecorated) implementation. These tools run as sync function tools, which the Agents
 # SDK dispatches on worker threads via asyncio.to_thread; contextvars set on the event
 # loop do not reliably appear there, but a per-run CLOSURE does (it rides in the function
@@ -3335,7 +3330,7 @@ _BUILDER_RUN_STATE_METADATA_KEY = "builder_run_state"
 def _run_state_tool_impls() -> Dict[str, str]:
     """Return the registry-derived map of run-state tool name -> raw impl import path.
 
-    A tool is a run-state builder/resolver tool when its package tool-binding metadata declares
+    A tool is a run-state builder tool when its package tool-binding metadata declares
     ``builder_run_state: true``. The raw impl path follows the ``_<tool_id>_impl`` convention in
     the same module as the tool's public ``callable`` binding. Deriving this from binding metadata
     (rather than a hardcoded per-type literal) keeps run-state binding a domain-pack/registry
@@ -3363,7 +3358,6 @@ def _build_run_state_bound_tool(
     existing_tool: Any,
     *,
     builder_workspace: ExtractionBuilderWorkspace,
-    resolver_ledger: ResolverCallLedger,
     evidence_records: List[Dict[str, Any]],
 ) -> Any:
     """Rebuild a package tool so the run-scoped state is bound INSIDE the tool's worker
@@ -3372,7 +3366,7 @@ def _build_run_state_bound_tool(
     The OpenAI Agents SDK runs sync function tools on worker threads (asyncio.to_thread).
     Contextvars set on the event loop do not reliably appear in that thread, but a closure
     does -- it is captured in the function object -- which is exactly why the async
-    ``record_evidence`` factory works. We capture the run's workspace/ledger/evidence in a
+    ``record_evidence`` factory works. We capture the run's workspace/evidence in a
     closure and bind them into the contextvars at the top of the call (running in-thread),
     where the unchanged tool body's ``get_active_*`` shims then resolve. ``functools.wraps``
     preserves the original signature so the LLM-facing JSON schema is identical, and the
@@ -3394,11 +3388,9 @@ def _build_run_state_bound_tool(
     def _run_state_bound(*args: Any, **kwargs: Any) -> Any:
         ev_token = set_active_evidence_records(evidence_records)
         bw_token = set_active_extraction_builder_workspace(builder_workspace)
-        rl_token = set_active_resolver_call_ledger(resolver_ledger)
         try:
             result = raw_func(*args, **kwargs)
         finally:
-            reset_active_resolver_call_ledger(rl_token)
             reset_active_extraction_builder_workspace(bw_token)
             reset_active_evidence_records(ev_token)
         return _enforce_run_state_tool_result_budget(tool_name, result)
@@ -3407,12 +3399,6 @@ def _build_run_state_bound_tool(
         from src.lib.agent_studio.profile_tools import preserve_profile_tool_contract
         return preserve_profile_tool_contract(_run_state_bound, existing_tool)
     return _run_state_bound
-
-
-# Run-state tools whose results feed the resolver ledger: their complete
-# output is application input, so an oversized result is observed and reported
-# but not replaced (recorded as a blocker in TOOL_RESULT_BOUNDS_INVENTORY.md).
-_RUN_STATE_OBSERVE_ONLY_TOOLS = frozenset({"resolve_domain_field_term"})
 
 
 def _enforce_run_state_tool_result_budget(tool_name: str, result: Any) -> Any:
@@ -3435,16 +3421,13 @@ def _enforce_run_state_tool_result_budget(tool_name: str, result: Any) -> Any:
     measured = serialized_size(result)
     if measured <= budget:
         return result
-    enforced = canonical_tool_name(tool_name) not in _RUN_STATE_OBSERVE_ONLY_TOOLS
     report_tool_result_budget_escape(
         tool_name=tool_name,
         measured=measured,
         limit=budget,
         component="builder_tool_adapter",
-        enforced=enforced,
+        enforced=True,
     )
-    if not enforced:
-        return result
     plain = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
     failure = budget_failure(tool_name=tool_name, measured=measured, limit=budget)
     failure["result_bounds"]["reported"] = True
@@ -3464,7 +3447,6 @@ def _bind_run_state_into_tools(
     *,
     evidence_records: List[Dict[str, Any]],
     builder_workspace: ExtractionBuilderWorkspace,
-    resolver_ledger: ResolverCallLedger,
 ) -> Agent:
     """Replace each run-state package tool on the agent with a closure-bound rebuild for
     this run. Non-run-state tools are left untouched. Mirrors
@@ -3484,7 +3466,6 @@ def _bind_run_state_into_tools(
                 raw_func,
                 tool,
                 builder_workspace=builder_workspace,
-                resolver_ledger=resolver_ledger,
                 evidence_records=evidence_records,
             )
         )
@@ -4596,7 +4577,6 @@ def _builder_finalization_diagnostics(
             "status": candidate.status,
             "evidenceRecordCount": len(candidate.evidence_record_ids),
             "pendingRefCount": len(candidate.pending_ref_ids),
-            "resolverSelectionCount": len(candidate.resolver_selection_refs),
         }
         for candidate_id, candidate in builder_workspace.candidates.items()
     ]
@@ -5000,8 +4980,8 @@ async def run_specialist_with_events(
 
     effective_config = _run_config_with_full_trace_payloads(run_config)
 
-    # Bind the run-scoped extraction context (evidence records, builder workspace,
-    # resolver ledger) BEFORE starting the streamed run. Runner.run_streamed() snapshots
+    # Bind the run-scoped extraction context (evidence records, builder workspace)
+    # BEFORE starting the streamed run. Runner.run_streamed() snapshots
     # the current context for the SDK's background execution task, so any contextvar bound
     # AFTER it is invisible to the specialist's tools (record_evidence / stage /
     # attach_evidence / finalize), which manifests as "No active extraction builder
@@ -5028,8 +5008,6 @@ async def run_specialist_with_events(
         execution_receipt=getattr(runtime_agent, "execution_receipt", None),
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
-    resolver_call_ledger = ResolverCallLedger(trace_id=builder_workspace.run_id)
-    resolver_call_ledger_token = set_active_resolver_call_ledger(resolver_call_ledger)
     logger.info(
         "%s bound extraction builder workspace before run start (run_id=%s, "
         "document_id=%s, domain_pack_id=%s, trace_run_present=%s)",
@@ -5045,7 +5023,7 @@ async def run_specialist_with_events(
         },
     )
 
-    # Rebuild the run-state package tools so the builder workspace + resolver ledger +
+    # Rebuild the run-state package tools so the builder workspace and
     # evidence records are bound INSIDE each tool's worker thread via a per-run closure.
     # The SDK runs sync function tools on worker threads (asyncio.to_thread) where the
     # contextvars set above do not reliably appear; a closure does (it rides in the
@@ -5061,7 +5039,6 @@ async def run_specialist_with_events(
             runtime_agent,
             evidence_records=live_evidence_records,
             builder_workspace=builder_workspace,
-            resolver_ledger=resolver_call_ledger,
         )
 
         # Validate the actual post-adapter, post-rebinding schema sent to the SDK.
@@ -5101,7 +5078,6 @@ async def run_specialist_with_events(
                 },
             })
         reset_active_evidence_records(evidence_workspace_token)
-        reset_active_resolver_call_ledger(resolver_call_ledger_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
         raise
 
@@ -5251,7 +5227,6 @@ async def run_specialist_with_events(
             sentry_span_context_manager.__exit__(None, None, None)
             conversation_context_manager.__exit__(None, None, None)
             reset_active_evidence_records(evidence_workspace_token)
-            reset_active_resolver_call_ledger(resolver_call_ledger_token)
             reset_active_extraction_builder_workspace(builder_workspace_token)
         raise
     phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
@@ -5644,12 +5619,6 @@ async def run_specialist_with_events(
                                 live_evidence_records, evidence_record
                             )
 
-                        resolver_call_ledger.record_tool_output(
-                            tool_call_id=str(completed_tool.get("tool_id") or "") or None,
-                            tool_name=current_tool_name,
-                            output=output,
-                        )
-
                         # Extract chunk provenance from PDF tool outputs for highlighting
                         if current_tool_name in ("search_document", "read_section"):
                             _emit_chunk_provenance_from_output(current_tool_name, output)
@@ -5830,7 +5799,6 @@ async def run_specialist_with_events(
         sentry_span_context_manager.__exit__(None, None, None)
         conversation_context_manager.__exit__(None, None, None)
         reset_active_evidence_records(evidence_workspace_token)
-        reset_active_resolver_call_ledger(resolver_call_ledger_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
 
     stream_duration = datetime.now(timezone.utc) - start_time

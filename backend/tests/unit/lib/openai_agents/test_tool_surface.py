@@ -298,7 +298,6 @@ def test_deferral_survives_run_state_rebinding_when_compiled_last(monkeypatch):
         agent,
         evidence_records=[],
         builder_workspace=SimpleNamespace(run_id="run-1"),
-        resolver_ledger=None,
     )
     assert agent.tools[0] is not search_document  # rebuilt per run
 

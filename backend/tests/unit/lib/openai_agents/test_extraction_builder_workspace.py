@@ -47,14 +47,12 @@ def test_upsert_is_idempotent_for_retry_and_tracks_state(captured_events):
         staged_fields={"items": [{"label": "crumb"}]},
         pending_ref_ids=["pending-1", "pending-1"],
         evidence_record_ids=["evidence-1"],
-        resolver_selection_refs=["resolver:gene:1"],
     )
     second = workspace.upsert_candidate(
         candidate_id="candidate-1",
         staged_fields={"items": [{"label": "crumb"}]},
         pending_ref_ids=["pending-1"],
         evidence_record_ids=["evidence-1"],
-        resolver_selection_refs=["resolver:gene:1"],
     )
 
     assert first is second
@@ -74,7 +72,6 @@ def test_finalize_rejects_late_mutation_and_duplicate_identical_finalize_is_idem
         candidate_id="candidate-1",
         staged_fields={"items": [{"label": "crumb"}]},
         evidence_record_ids=["evidence-1"],
-        resolver_selection_refs=["resolver:gene:1", "resolver:gene:2"],
     )
 
     finalization = workspace.finalize(candidate_ids=["candidate-1"])
@@ -86,7 +83,6 @@ def test_finalize_rejects_late_mutation_and_duplicate_identical_finalize_is_idem
         "finalized_candidate_count": 1,
         "validation_errors": [],
         "evidence_record_ids": ["evidence-1"],
-        "resolver_selection_count": 2,
         "builder_run_id": "trace-1",
         "builder_invocation_id": workspace.builder_invocation_id,
         "candidate_ids": ["candidate-1"],

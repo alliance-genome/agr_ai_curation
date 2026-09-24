@@ -142,14 +142,12 @@ def _materialize_one_candidate(
         staged_fields=_staged_fields(subject_type=subject_type, subject_identifier=subject_identifier),
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     return materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
 
@@ -279,14 +277,12 @@ def test_disease_builder_unknown_subject_falls_back_to_abstract():
         staged_fields=staged,
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert result.ok, result.summary()
     by_type = {obj["object_type"] for obj in result.payload["curatable_objects"]}
@@ -322,7 +318,7 @@ def test_disease_builder_output_validates_against_object_contract():
 def test_empty_disease_materialization_is_explicit_but_orphan_objects_are_invalid():
     empty = materialize_disease_builder_state(
         workspace=ExtractionBuilderWorkspace(run_id="empty-disease"),
-        candidate_ids=[], evidence_records=[], resolver_entry_lookup=None,
+        candidate_ids=[], evidence_records=[],
     )
     assert empty.ok, empty.summary()
     assert empty.payload["curatable_objects"] == []
@@ -350,14 +346,12 @@ def test_disease_builder_rejects_evidence_record_not_in_metadata():
         staged_fields=_staged_fields(),
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-MISSING"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -378,14 +372,12 @@ def test_disease_builder_rejects_missing_mention():
         staged_fields=staged,
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -451,14 +443,12 @@ def test_disease_annotation_type_constant_is_always_materialized():
         staged_fields=staged,
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert result.ok, result.summary()
     annotation = next(
@@ -639,14 +629,12 @@ def test_disease_builder_materializes_staged_condition_relations():
         staged_fields=_staged_fields_with_conditions(validation_guidance="Check the explicitly described experimental conditions."),
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert result.ok, result.summary()
 
@@ -822,14 +810,12 @@ def test_disease_builder_rejects_new_candidate_without_rationale():
         staged_fields=staged,
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -898,14 +884,12 @@ def _materialize_staged(staged: dict[str, Any]) -> Any:
         staged_fields=staged,
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     return materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
 

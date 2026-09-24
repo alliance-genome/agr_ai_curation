@@ -7,8 +7,8 @@ to the phenotype ``PhenotypeAnnotation`` curatable_unit target:
   * The candidate stages a free-text phenotype statement, the phenotype term as the paper words it
     (plus any term ID/name the extractor proposes), the subject as the paper names it (plus a
     proposed identifier), source mentions, and evidence_record_ids.
-  * NO resolver-backed controlled fields: the active ``phenotype_term_ontology_validator`` resolves
-    the staged term inline (``require_resolver_selections=False``). A value that does not match is
+  * NO controlled fields resolved at extraction: the active ``phenotype_term_ontology_validator``
+    resolves the staged term. A value that does not match is
     still staged, unresolved, for the validators to decide (ALL-1283).
   * NO mirror/projection fields (the subject IS the canonical subject; no
     ``materializes_to_field_paths``).
@@ -626,7 +626,6 @@ def _stage_phenotype_observation_impl(
         staged_fields=payload,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -787,7 +786,6 @@ def _patch_phenotype_observation_impl(
         staged_fields=payload,
         pending_ref_ids=candidate.pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -965,7 +963,6 @@ def _materialize_phenotype_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     """Domain materializer wrapper emitting phenotype builder events.
 
@@ -983,7 +980,6 @@ def _materialize_phenotype_with_events(
         workspace=workspace,
         candidate_ids=candidate_id_list,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     if not materialization.ok or materialization.payload is None:
         _emit_phenotype_builder_event(
@@ -1010,9 +1006,8 @@ def _finalize_phenotype_extraction_impl(candidate_ids: List[str]) -> AgrQueryRes
     """Finalize staged phenotype candidates through the builder handoff contract.
 
     Thin domain adapter: input validation + result shape live here; all structural
-    staging/finalize control flow is delegated to ``finalize_builder_extraction``. Phenotype has no
-    resolver-backed controlled fields (the active ontology validator resolves the staged term
-    inline), so ``require_resolver_selections=False``.
+    staging/finalize control flow is delegated to ``finalize_builder_extraction``. The active
+    ontology validator resolves the staged term.
     """
 
     attempted_query = _attempt_query("finalize_phenotype_extraction", candidate_ids=candidate_ids)
@@ -1040,9 +1035,7 @@ def _finalize_phenotype_extraction_impl(candidate_ids: List[str]) -> AgrQueryRes
         candidate_ids=candidate_ids,
         materialize=_materialize_phenotype_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="phenotype-annotation-envelope",
-        require_resolver_selections=False,
     )
 
     if not outcome.ok:
