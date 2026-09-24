@@ -1148,10 +1148,13 @@ def _scoped_fields(request: _Request, pack_ids: Sequence[str]) -> list[_Target]:
 
 
 def _binding_targets_agent(request: _Request, binding: ValidatorBinding) -> bool:
-    return binding.validator_agent is not None and _validator_agent_matches(
-        binding.validator_agent.to_dict(),
-        agent_id=request.binding_agent_id,
-        package_id=request.package_id,
+    return any(
+        _validator_agent_matches(
+            ref.to_dict(),
+            agent_id=request.binding_agent_id,
+            package_id=request.package_id,
+        )
+        for ref in binding.validator_agents()
     )
 
 
@@ -1202,11 +1205,13 @@ def _validator_domain_pack_ids(
     pack_ids: list[str] = []
     for pack_id, registry in sorted(registries.items()):
         for binding in registry.bindings:
-            details = binding.identity_details()
-            if _validator_agent_matches(
-                details.get("validator_agent"),
-                agent_id=agent_id,
-                package_id=package_id,
+            if any(
+                _validator_agent_matches(
+                    ref.to_dict(),
+                    agent_id=agent_id,
+                    package_id=package_id,
+                )
+                for ref in binding.validator_agents()
             ):
                 pack_ids.append(pack_id)
                 break

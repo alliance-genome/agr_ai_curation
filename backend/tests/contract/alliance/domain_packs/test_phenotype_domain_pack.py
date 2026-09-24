@@ -327,38 +327,27 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
     ]
 
     subject_binding = under_development_bindings[0]
-    assert subject_binding["validator_agent"] == {
-        "package_id": "agr.alliance",
-        "agent_id": "subject_entity_validation",
-    }
-    assert subject_binding["input_fields"] == {
-        "subject_type": {
-            "source": "payload",
-            "path": "subject_type",
-            "required": True,
-        },
-        "subject_identifier": {
+    assert "validator_agent" not in subject_binding
+    assert subject_binding["route_by"] == {"source": "payload", "path": "subject_type"}
+    assert {
+        value: route["validator_agent"]["agent_id"]
+        for value, route in subject_binding["routes"].items()
+    } == {"gene": "gene_validation", "allele": "allele_validation", "agm": "agm_validation"}
+    assert subject_binding["routes"]["gene"]["input_fields"] == {
+        "mention": {"source": "payload", "path": "mention", "required": True},
+        "proposed_gene_id": {
             "source": "payload",
             "path": "proposed_subject_identifier",
-            "required": True,
-        },
-        "subject_label": {
-            "source": "payload",
-            "path": "mention",
             "required": False,
         },
-        "taxon": {
+        "proposed_taxon": {
             "source": "payload",
             "path": "proposed_taxon",
             "required": False,
         },
     }
-    assert subject_binding["expected_result_fields"] == {
-        "subject_identifier": "subject_identifier",
-        "subject_type": "subject_type",
-        "subject_label": "subject_label",
-        "taxon": "taxon",
-    }
+    for route in subject_binding["routes"].values():
+        assert "subject_type" not in route["expected_result_fields"]
 
     reference_binding = under_development_bindings[1]
     assert reference_binding["binding_id"] == "phenotype_reference_validator"

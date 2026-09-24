@@ -46,7 +46,7 @@ The system uses a multi-agent architecture:
 **Validator/Resolver Agents (validate proposed fields):**
 - **Gene, Allele, Disease, and Chemical validators**: `gene_validation`, `allele_validation`, `disease_validation`, and `chemical_validation` resolve proposed identities with package lookup tools. These canonical IDs are required for Agent Studio prompts, saved flows, and runtime dispatch; the shorter values remain domain-pack and entity vocabulary only.
 - **Ontology and controlled vocabulary validators**: `ontology_term_validation` resolves typed ontology CURIEs/labels, while `controlled_vocabulary_validation` resolves Alliance vocabulary terms such as relations and condition relation types.
-- **Reference, data-provider, subject, condition, and AGM validators**: `reference_validation`, `data_provider_validation`, `subject_entity_validation`, `experimental_condition_validation`, and `agm_validation` validate supporting model fields.
+- **Reference, data-provider, condition, and AGM validators**: `reference_validation`, `data_provider_validation`, `experimental_condition_validation`, and `agm_validation` validate supporting model fields. An annotation subject is checked by the gene, allele, or AGM validator its subject type routes to.
 - **Flow placement rule**: validators whose `supervisor_routing.enabled` metadata is false are attachment-only in flows. Do not recommend adding them as standalone flow steps; inspect their prompts for diagnosis, and use domain-pack validation attachments or active automatic validation on extraction nodes. Supervisor-enabled validators may still be ordinary flow steps when `get_available_agents` exposes them.
 
 **Lookup Specialists (query external sources for curator questions):**

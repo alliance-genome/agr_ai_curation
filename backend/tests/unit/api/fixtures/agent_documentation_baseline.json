@@ -2,7 +2,6 @@
   "agm": {
     "avoid_when": [
       "For gene or allele subjects; use the Gene Validation Agent or the Allele Validation Agent.",
-      "When the subject type is not yet known; use the Subject Entity Validation Agent to route it.",
       "To pull model names out of a paper; run an extractor first and validate its output here."
     ],
     "capabilities": [
@@ -53,7 +52,7 @@
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "note": "Models in disease records are confirmed automatically by the subject entity check. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically on every disease record whose subject is a model. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
     "use_when": [
       "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record.",
@@ -64,7 +63,6 @@
   "agm_validation": {
     "avoid_when": [
       "For gene or allele subjects; use the Gene Validation Agent or the Allele Validation Agent.",
-      "When the subject type is not yet known; use the Subject Entity Validation Agent to route it.",
       "To pull model names out of a paper; run an extractor first and validate its output here."
     ],
     "capabilities": [
@@ -115,7 +113,7 @@
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "note": "Models in disease records are confirmed automatically by the subject entity check. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically on every disease record whose subject is a model. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
     "use_when": [
       "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record.",
@@ -241,7 +239,7 @@
       "Allele symbols written with angle brackets are matched to their superscript form automatically \u2014 you don't need to reformat them.",
       "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."
     ],
-    "note": "Validation runs automatically. This check runs on every allele an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on every allele an extractor produces, including the allele a disease record is about, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association.",
     "use_when": [
       "When you want a custom allele check: a changed prompt, different tools, or a stricter or looser match than the automatic check.",
@@ -1995,134 +1993,6 @@
     "use_when": [
       "When you are an RGD curator with a paper open and want evidence-backed GO recommendations from it.",
       "When you want a paper's findings compared against the GO annotations already recorded for its genes."
-    ]
-  },
-  "subject_entity": {
-    "avoid_when": [
-      "To get the subject of a disease record validated; the domain pack already runs this check automatically.",
-      "When the subject type is not stated; the agent does not guess it.",
-      "For references, ontology terms, controlled vocabulary, or experimental conditions; use the matching validation agent.",
-      "When you already know the subject is a gene, allele, or model; use that validation agent directly."
-    ],
-    "capabilities": [
-      {
-        "description": "Uses the submitted subject_type to choose the correct validation path for gene, allele, or AGM subjects.\n",
-        "example_query": "Validate this phenotype subject with subject_type allele and ID WB:WBVar0001",
-        "example_result": "Returns the selected validator route and the type-specific validation result.\n",
-        "name": "Subject type routing"
-      },
-      {
-        "description": "Keeps the submitted identifier, label, taxon, and field path together while validating the subject entity.\n",
-        "example_query": "Check subject label daf-16 with gene subject type for WormBase",
-        "example_result": "Returns matched gene evidence or unresolved notes tied to the original subject field.\n",
-        "name": "Identifier and label preservation"
-      },
-      {
-        "description": "Reports one validation outcome per submitted subject so mixed subject batches remain auditable.\n",
-        "example_query": "Validate these phenotype and disease annotation subjects",
-        "example_result": "Returns accepted, ambiguous, or unresolved subject results with selected validator metadata.\n",
-        "name": "Per-subject review decisions"
-      }
-    ],
-    "data_sources": [
-      {
-        "data_types": [
-          "genes",
-          "alleles",
-          "affected genomic models",
-          "entity labels",
-          "taxon context"
-        ],
-        "description": "Alliance entity records used by gene, allele, and affected genomic model validation routes.\n",
-        "name": "Alliance Curation Database",
-        "species_supported": [
-          "C. elegans (WB)",
-          "D. melanogaster (FB)",
-          "D. rerio (ZFIN)",
-          "M. musculus (MGI)",
-          "R. norvegicus (RGD)",
-          "S. cerevisiae (SGD)",
-          "X. laevis (XB)",
-          "H. sapiens (HGNC)"
-        ]
-      }
-    ],
-    "limitations": [
-      "Requires an explicit subject_type; it does not guess whether a value is a gene, allele, or AGM.",
-      "Ambiguous or missing type-specific lookup results still require curator review.",
-      "Cannot create missing subject records or assign new entity identifiers.",
-      "Only routes among the supported subject validation paths exposed by the package."
-    ],
-    "note": "Validation runs automatically. This check runs on the subject of every disease record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
-    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n",
-    "use_when": [
-      "When you want a custom subject check: a changed prompt, different routing, or a stricter or looser match for gene, allele, or model subjects.",
-      "When you want to review how an annotation's subject is sent to the gene, allele, or model check and keeps the identifier and label it arrived with.",
-      "When you clone it in the Agent Workshop to build a custom version for a check the domain pack does not include."
-    ]
-  },
-  "subject_entity_validation": {
-    "avoid_when": [
-      "To get the subject of a disease record validated; the domain pack already runs this check automatically.",
-      "When the subject type is not stated; the agent does not guess it.",
-      "For references, ontology terms, controlled vocabulary, or experimental conditions; use the matching validation agent.",
-      "When you already know the subject is a gene, allele, or model; use that validation agent directly."
-    ],
-    "capabilities": [
-      {
-        "description": "Uses the submitted subject_type to choose the correct validation path for gene, allele, or AGM subjects.\n",
-        "example_query": "Validate this phenotype subject with subject_type allele and ID WB:WBVar0001",
-        "example_result": "Returns the selected validator route and the type-specific validation result.\n",
-        "name": "Subject type routing"
-      },
-      {
-        "description": "Keeps the submitted identifier, label, taxon, and field path together while validating the subject entity.\n",
-        "example_query": "Check subject label daf-16 with gene subject type for WormBase",
-        "example_result": "Returns matched gene evidence or unresolved notes tied to the original subject field.\n",
-        "name": "Identifier and label preservation"
-      },
-      {
-        "description": "Reports one validation outcome per submitted subject so mixed subject batches remain auditable.\n",
-        "example_query": "Validate these phenotype and disease annotation subjects",
-        "example_result": "Returns accepted, ambiguous, or unresolved subject results with selected validator metadata.\n",
-        "name": "Per-subject review decisions"
-      }
-    ],
-    "data_sources": [
-      {
-        "data_types": [
-          "genes",
-          "alleles",
-          "affected genomic models",
-          "entity labels",
-          "taxon context"
-        ],
-        "description": "Alliance entity records used by gene, allele, and affected genomic model validation routes.\n",
-        "name": "Alliance Curation Database",
-        "species_supported": [
-          "C. elegans (WB)",
-          "D. melanogaster (FB)",
-          "D. rerio (ZFIN)",
-          "M. musculus (MGI)",
-          "R. norvegicus (RGD)",
-          "S. cerevisiae (SGD)",
-          "X. laevis (XB)",
-          "H. sapiens (HGNC)"
-        ]
-      }
-    ],
-    "limitations": [
-      "Requires an explicit subject_type; it does not guess whether a value is a gene, allele, or AGM.",
-      "Ambiguous or missing type-specific lookup results still require curator review.",
-      "Cannot create missing subject records or assign new entity identifiers.",
-      "Only routes among the supported subject validation paths exposed by the package."
-    ],
-    "note": "Validation runs automatically. This check runs on the subject of every disease record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
-    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n",
-    "use_when": [
-      "When you want a custom subject check: a changed prompt, different routing, or a stricter or looser match for gene, allele, or model subjects.",
-      "When you want to review how an annotation's subject is sent to the gene, allele, or model check and keeps the identifier and label it arrived with.",
-      "When you clone it in the Agent Workshop to build a custom version for a check the domain pack does not include."
     ]
   },
   "supervisor": {

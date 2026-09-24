@@ -184,19 +184,22 @@ def test_active_disease_and_chemical_bindings_resolve_to_package_validators(monk
         domain_pack = _load_yaml(case["domain_pack"])
         active_bindings = domain_pack["metadata"]["validator_bindings"]["active"]
         expected_binding_agent_ids = case.get("active_binding_agent_ids", set())
-        active_agent_ids = {
-            binding.get("validator_agent", {}).get("agent_id")
+        # A routed binding names its validator on each route.
+        targets = [
+            target
             for binding in active_bindings
-        }
+            for target in binding.get("routes", {"": binding}).values()
+        ]
+        active_agent_ids = {target["validator_agent"]["agent_id"] for target in targets}
 
         assert expected_binding_agent_ids <= active_agent_ids
-        for binding in active_bindings:
-            agent_id = binding["validator_agent"]["agent_id"]
+        for target in targets:
+            agent_id = target["validator_agent"]["agent_id"]
             agent = agents[agent_id]
             schema = schemas[agent.output_schema]
             assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
-            assert binding["validator_agent"]["package_id"] == "agr.alliance"
-            assert isinstance(binding.get("expected_result_fields"), dict)
+            assert target["validator_agent"]["package_id"] == "agr.alliance"
+            assert isinstance(target.get("expected_result_fields"), dict)
 
 
 def test_active_disease_bindings_do_not_use_direct_sql_specialist():

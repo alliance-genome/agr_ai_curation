@@ -1965,10 +1965,7 @@ metadata:
     under_development:
       - binding_id: phenotype_subject_entity_validator
         display_name: Phenotype subject lookup
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: subject_entity_validation
-        state_explanation: Subject entity lookup routes explicit subject_type values to gene, allele, or AGM validation paths; binding remains under development until validator dispatch is reviewed end to end.
+        state_explanation: The subject routes by its subject type to the gene, allele, or AGM validator, searching the paper's wording; the binding remains under development until phenotype subject materialization is reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.phenotype
           object_types:
@@ -1976,26 +1973,71 @@ metadata:
           field_paths:
             - subject_identifier
             - subject_type
-        input_fields:
-          subject_type:
-            source: payload
-            path: subject_type
-          subject_identifier:
-            source: payload
-            path: proposed_subject_identifier
-          subject_label:
-            source: payload
-            path: mention
-            required: false
-          taxon:
-            source: payload
-            path: proposed_taxon
-            required: false
-        expected_result_fields:
-          subject_identifier: subject_identifier
-          subject_type: subject_type
-          subject_label: subject_label
-          taxon: taxon
+        route_by:
+          source: payload
+          path: subject_type
+        routes:
+          gene:
+            validator_agent:
+              package_id: agr.alliance
+              agent_id: gene_validation
+            input_fields:
+              mention:
+                source: payload
+                path: mention
+              proposed_gene_id:
+                source: payload
+                path: proposed_subject_identifier
+                required: false
+              proposed_taxon:
+                source: payload
+                path: proposed_taxon
+                required: false
+            expected_result_fields:
+              curie: subject_identifier
+              symbol: subject_label
+              taxon: taxon
+          allele:
+            validator_agent:
+              package_id: agr.alliance
+              agent_id: allele_validation
+            max_tool_calls: ${ALLELE_MENTION_REFERENCE_VALIDATOR_MAX_TOOL_CALLS:-16}
+            input_fields:
+              mention:
+                source: payload
+                path: mention
+              normalized_hint:
+                source: payload
+                path: proposed_subject_identifier
+                required: false
+              taxon:
+                source: payload
+                path: proposed_taxon
+                required: false
+            expected_result_fields:
+              curie: subject_identifier
+              symbol: subject_label
+              taxon: taxon
+          agm:
+            validator_agent:
+              package_id: agr.alliance
+              agent_id: agm_validation
+            input_fields:
+              subject_identifier:
+                source: payload
+                path: proposed_subject_identifier
+                required: false
+              subject_label:
+                source: payload
+                path: mention
+              taxon:
+                source: payload
+                path: proposed_taxon
+                required: false
+            expected_result_fields:
+              agm_id: subject_identifier
+              label: subject_label
+              taxon: taxon
         definition_state: in_development
       - binding_id: phenotype_reference_validator
         display_name: Reference lookup

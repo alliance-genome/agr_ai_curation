@@ -375,18 +375,6 @@ tools:
             - map_entity_curies_to_info
             - map_entity_names_to_curies
           description: The Affected Genomic Model (AGM) specialist confirms which modified organism a finding refers to, using its ID, name, and species.
-        subject_entity_validation:
-          agent_name: Subject Entity Validation Agent
-          methods:
-            - get_gene_by_id
-            - search_genes
-            - get_gene_by_exact_symbol
-            - get_allele_by_id
-            - search_alleles
-            - get_allele_by_exact_symbol
-            - map_entity_curies_to_info
-            - map_entity_names_to_curies
-          description: The Subject specialist confirms the affected entity — sending it to the gene, allele, or modified-organism path depending on what it is.
         gene_validation:
           agent_name: Gene Validation Agent
           methods: [search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id]
@@ -1963,7 +1951,7 @@ tools:
   # ---------------------------------------------------------------------------------------
   # Disease extractor builder tools (Phase 2 envelope -> builder migration, FULL LinkML alignment).
   # Per-domain module disease_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace.
-  # The active disease_ontology_term_lookup / subject_entity_validation / disease_relation_cv_lookup /
+  # The active disease_ontology_term_lookup / disease_subject_materialization / disease_relation_cv_lookup /
   # disease_evidence_code_lookup / disease_data_provider_lookup bindings resolve the staged inputs
   # inline, so there are NO resolver-backed controlled fields here.
   # ---------------------------------------------------------------------------------------

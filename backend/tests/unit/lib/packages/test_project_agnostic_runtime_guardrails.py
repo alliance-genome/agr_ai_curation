@@ -161,7 +161,6 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/integration/persistence/test_validator_agent_identity_migration.py"),
     Path("backend/tests/unit/test_config_loaders.py"),
     Path("backend/tests/unit/test_gene_allele_validator_result_contract.py"),
-    Path("backend/tests/unit/test_subject_entity_validator_result_contract.py"),
     Path("backend/tests/unit/test_disease_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_domain_envelope_repair_prompt_contract.py"),
     Path("backend/tests/unit/test_gene_extractor_domain_envelope_contract.py"),

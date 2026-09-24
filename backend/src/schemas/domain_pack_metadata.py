@@ -503,6 +503,75 @@ class DomainPackValidatorGroupScope(DomainPackMetadataBaseModel):
         return self
 
 
+class DomainPackValidatorRouteSelector(DomainPackMetadataBaseModel):
+    """The one target payload value whose text chooses a binding's route."""
+
+    source: Literal["payload"]
+    path: str
+
+    @field_validator("path")
+    @classmethod
+    def _validate_path(cls, value: str) -> str:
+        return validate_field_path_syntax(value)
+
+
+class DomainPackValidatorRoute(DomainPackMetadataBaseModel):
+    """The validator and its input/result mapping for one routing value."""
+
+    validator_agent: DomainPackValidatorAgentRef
+    input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
+    expected_result_fields: dict[str, Any] = Field(default_factory=dict)
+    max_tool_calls: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("max_tool_calls", mode="before")
+    @classmethod
+    def _validate_max_tool_calls(cls, value: Any) -> Any:
+        return _resolve_env_backed_int(value, "validator_bindings.routes.max_tool_calls")
+
+    @model_validator(mode="after")
+    def _validate_dispatch_contract(self) -> "DomainPackValidatorRoute":
+        if not self.input_fields or not self.expected_result_fields:
+            raise ValueError(
+                "validator_bindings.routes entries must declare input_fields and "
+                "expected_result_fields"
+            )
+        return self
+
+
+def _validate_binding_routes(binding: Any) -> None:
+    """A routed binding chooses its validator and mappings per routing value.
+
+    The validator, inputs and results then live only on the routes, and an
+    unrouted value never falls back to another route.
+    """
+
+    if (binding.route_by is None) != (binding.routes is None):
+        raise ValueError(
+            "validator_bindings entries must declare route_by and routes together"
+        )
+    if binding.routes is None:
+        return
+    if not binding.routes:
+        raise ValueError("validator_bindings.routes must not be empty")
+    for route_value in binding.routes:
+        if not route_value.strip() or route_value != route_value.strip():
+            raise ValueError(
+                "validator_bindings.routes keys must be non-empty and carry no "
+                "surrounding whitespace"
+            )
+    shared = sorted(
+        name
+        for name in ("validator_agent", "input_fields", "expected_result_fields",
+                     "max_tool_calls", "custom_profile_reuse")
+        if name in binding.model_fields_set
+    )
+    if shared:
+        raise ValueError(
+            "routed validator_bindings entries declare "
+            f"{', '.join(shared)} on each route, not on the binding"
+        )
+
+
 class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     """Executable package-scoped validator binding metadata."""
 
@@ -525,10 +594,12 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         ),
     )
     definition_notes: list[str] = Field(default_factory=list)
-    validator_agent: DomainPackValidatorAgentRef
+    validator_agent: Optional[DomainPackValidatorAgentRef] = None
     applies_to: DomainPackValidatorAppliesTo
     input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
+    route_by: Optional[DomainPackValidatorRouteSelector] = None
+    routes: Optional[dict[str, DomainPackValidatorRoute]] = None
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
     preflight_policy: Optional[
         Literal["provider_taxon_mapping_required"]
@@ -583,6 +654,18 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         return value
 
     @model_validator(mode="after")
+    def validate_routes(self) -> "DomainPackActiveValidatorBinding":
+        """An active binding runs one validator, either its own or its routes'."""
+
+        _validate_binding_routes(self)
+        if self.routes is None and self.validator_agent is None:
+            raise ValueError(
+                "validator_bindings.active entries must declare validator_agent "
+                "or route_by with routes"
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_blocking_policy(self) -> "DomainPackActiveValidatorBinding":
         """Require blocking validator policy to also be required."""
 
@@ -617,9 +700,16 @@ class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
     applies_to: Optional[DomainPackValidatorAppliesTo] = None
     input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
+    route_by: Optional[DomainPackValidatorRouteSelector] = None
+    routes: Optional[dict[str, DomainPackValidatorRoute]] = None
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
     group_scope: Optional[DomainPackValidatorGroupScope] = None
     definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT
+
+    @model_validator(mode="after")
+    def validate_routes(self) -> "DomainPackUnderDevelopmentValidatorBinding":
+        _validate_binding_routes(self)
+        return self
 
     @field_validator("max_tool_calls", mode="before")
     @classmethod

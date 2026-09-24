@@ -28,7 +28,7 @@ def build_compact_validator_runtime(requests, *, result_schema, profile_request_
     if standalone:
         owners = {
             "GeneResultEnvelope": "gene_validation", "AlleleResultEnvelope": "allele_validation",
-            "AgmValidationResult": "agm_validation", "SubjectEntityValidationResult": "subject_entity_validation",
+            "AgmValidationResult": "agm_validation",
             "OntologyTermValidationResult": "ontology_term_validation", "ControlledVocabularyValidationResult": "controlled_vocabulary_validation",
             "DataProviderValidationResult": "data_provider_validation", "GOTermResultEnvelope": "gene_ontology_lookup",
             "GOAnnotationsResult": "go_annotations_lookup", "ReferenceValidationResult": "reference_validation",
@@ -142,7 +142,7 @@ def capture_lookup(contract, tool_name, arguments, payload):
             role = "query_gene"
     records = []
     for path, record in entries:
-        canonical = canonical_record(record, schema, request=contract.request, record_role=role)
+        canonical = canonical_record(record, schema, record_role=role)
         canonical = replace(canonical, source_path=path)
         if component:
             canonical = replace(canonical, result_rows={})
