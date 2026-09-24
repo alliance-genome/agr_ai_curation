@@ -3131,6 +3131,10 @@ metadata:
           label:
             source: payload
             path: expression_pattern.when_expressed.developmental_stage_start.mention
+          curie:
+            source: payload
+            path: expression_pattern.when_expressed.developmental_stage_start.proposed_curie
+            required: false
           data_provider:
             source: payload
             path: data_provider.mention
