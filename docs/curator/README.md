@@ -10,6 +10,7 @@ Use AI Curation to read papers, extract information for review, and look up biol
 | Decide what to ask and assess the results | [Best practices](BEST_PRACTICES.md) |
 | See which extractors and lookup agents are available | [Available agents](AVAILABLE_AGENTS.md) |
 | Create or edit an agent, or get help from AI Chat | [Agent Studio](AGENT_STUDIO.md) |
+| Understand checked values, list columns and saved-flow changes | [Workshop results and outputs](WORKSHOP_OUTPUT_GUIDE.md) |
 | Extract my own set of details, such as stocks or reagents | [Custom output structures](CUSTOM_OUTPUT_STRUCTURES.md) |
 | Save a sequence of extraction, validation, and output steps | [Curation flows](CURATION_FLOWS.md) |
 | Run a saved flow on several papers | [Batch processing](BATCH_PROCESSING.md) |

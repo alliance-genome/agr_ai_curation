@@ -116,8 +116,9 @@ optional context for this lookup; you do not need to add a quote field.
 The validator searches Alliance allele records. An identifier may identify a
 single record directly. A description such as “Ccr2 knockout” can match several
 alleles, so it remains unresolved unless the available information distinguishes
-one. Unresolved results require curator review and block readiness/export under
-this validator's policy. Attaching it is optional.
+one. Unresolved results require curator review and block the applicable
+readiness/submission export under this validator's policy. This is separate from
+downloading a CSV, TSV or JSON report for review. Attaching it is optional.
 
 A confirmed identity does not establish that the allele should be curated from
 the paper or that a custom record is ready for Alliance submission. Extraction

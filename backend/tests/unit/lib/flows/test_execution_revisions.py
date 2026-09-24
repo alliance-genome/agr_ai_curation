@@ -722,6 +722,94 @@ def test_packaged_field_catalog_is_available_without_custom_agents_or_runtime_ro
     assert packaged_field_value({"object_type": "another_type", "payload": {"gene_symbol": "wrong"}}, symbol) is None
 
 
+@pytest.mark.parametrize("packaged", [False, True])
+@pytest.mark.parametrize("output_format,split,message", [
+    ("json", {}, "JSON keeps lists lossless"),
+    ("tsv", {"header_template": "Term", "headers": []}, "must contain {n}"),
+    ("tsv", {"header_template": "Term {n}", "headers": ["First"]}, "not both"),
+    ("tsv", {"headers": ["Same", "Same"]}, "must be distinct"),
+    ("tsv", {"headers": [""]}, "cannot be blank"),
+    ("tsv", {"max_columns": 0}, "must be between"),
+    ("tsv", {"max_columns": 1, "headers": ["One", "Two"]}, "more headers"),
+])
+def test_workshop_split_options_fail_at_authoring_not_only_export(monkeypatch, packaged, output_format, split, message):
+    from src.lib.flows.profile_authoring import profile_projection_findings
+
+    pin, db = profile_receipt_and_db()
+    install_resolver(monkeypatch, [pin])
+    definition = projection_flow(pin)
+    plan = definition.nodes[-1].data.projection_plan
+    plan["format"] = output_format
+    plan["columns"][0]["split_list"] = split
+    if packaged:
+        definition.nodes[1].data.agent_id = "gene_extractor"
+        findings = profile_projection_findings(None, definition, {})
+    else:
+        findings = module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[]).findings
+    assert any(f.code == "invalid_profile_projection" and message in f.message for f in findings)
+
+
+@pytest.mark.parametrize("split", [{"header_template": "Count {n}"}, {"headers": ["First count", "Second count"]}])
+def test_workshop_discovers_fields_and_proposes_named_split_without_changing_draft(monkeypatch, split):
+    """Mocked curator request -> real catalog/proposal validation, no paid model."""
+    import json
+    from contextlib import nullcontext
+    from copy import deepcopy
+    from src.lib.agent_studio import flow_tools
+    from src.models.sql import database
+
+    pin, db = profile_receipt_and_db()
+    install_resolver(monkeypatch, [pin])
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(db))
+    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
+    monkeypatch.setattr(flow_tools, "get_current_active_group_ids", lambda: [])
+    monkeypatch.setattr(flow_tools, "_accessible_flow_agents", lambda: {})
+    original = projection_flow(pin)
+    context = {**original.model_dump(mode="json"), "flow_draft_fingerprint": "split-base", "flow_name": "Counts"}
+    monkeypatch.setattr(flow_tools, "resolve_live_flow_agent", lambda agent_id, _auth: {
+        "agent_id": agent_id, "name": "TSV Formatter", "category": "Output", "tools": [],
+    } if agent_id == "tsv_formatter" else None)
+    before = deepcopy(context)
+    monkeypatch.setattr(flow_tools, "get_current_flow_context", lambda: context)
+    inspect = flow_tools._get_current_flow_projection_plan_handler()
+    args = {"node_id": "output", "view": "source_fields", "limit": 300}
+    chunks = []
+    while True:
+        response = inspect(**args)
+        assert response["success"], response
+        chunks.append(response["content"])
+        if response["complete"]:
+            break
+        args = response["next_call"]["arguments"]
+    source = json.loads("".join(chunks))["sources"]["node_0"]
+    field = next(f for f in source["fields"] if f["ref"] == "object.attribute.count")
+    assert field["array_depth"] == 0  # Single-valued fields can also be split.
+    plan = {"format": "tsv", "selection_mode": "selected_fields", "row_source": "object",
+            "row_strategy": "wide_union", "missing_value": "",
+            "selected_sources": [{"node_id": "node_0", "schema_fingerprint": source["schema_fingerprint"]}],
+            "columns": [{"key": "count", "field_ref": field["ref"], "source_node_id": "node_0", "split_list": split}]}
+    token = flow_tools._current_flow_proposal.set({})
+    try:
+        propose = flow_tools._propose_flow_draft_update_handler()
+        result = propose(base_draft_fingerprint="split-base", operations=[
+            {"operation": "update_step", "node_id": "output", "projection_plan": plan}],
+            change_summary="Put counts into named columns")
+        assert result["valid"], result.get("findings")
+        assert result["pending_user_approval"]
+        candidate = FlowDefinition.model_validate(result["candidate"]["flow_definition"])
+        assert candidate.nodes[-1].data.projection_plan["columns"][0]["split_list"] == split
+        assert candidate.nodes[-1].data.export_execution_mode == original.nodes[-1].data.export_execution_mode
+        plan["columns"][0]["split_list"] = {"header_template": "Missing number"}
+        rejected = propose(base_draft_fingerprint="split-base", operations=[
+            {"operation": "update_step", "node_id": "output", "projection_plan": plan}],
+            change_summary="Invalid split")
+        assert not rejected["valid"] and not rejected["pending_user_approval"]
+        assert any("must contain {n}" in f["message"] for f in rejected["findings"])
+        assert context == before  # Apply/Save never implied by a proposal.
+    finally:
+        flow_tools._current_flow_proposal.reset(token)
+
+
 def test_packaged_export_catalog_resolves_public_system_key():
     from src.lib.flows.export_fields import packaged_export_fields
 

@@ -16,7 +16,7 @@ installed AI curation packages.
 </operating_contract>
 
 <inspection_workflow>
-When answering questions about an installed agent:
+When answering questions about an installed built-in agent:
 1. Start with `get_prompt(agent_id, group_id, view="summary")`, then retrieve
    each required `view="effective_prompt"` or selected `view="layer"` text by
    following `next_cursor` until `complete=true`.
@@ -27,6 +27,10 @@ When answering questions about an installed agent:
 3. Use trace tools when a question concerns a specific run; separate tool
    inputs, outputs, errors, and final behavior.
 4. State which conclusions are directly supported by the inspected data.
+
+For a custom ca_ agent, inspect_saved_studio_resource reads the exact authorized
+saved revision's prompt_manifest, tools, settings and output_profile. Do not pass
+custom IDs to built-in-only get_prompt/get_tool_inventory or substitute a template.
 
 When answering questions about a flow:
 1. Call `get_current_flow()` first and treat `current_flow_manifest_v1` as

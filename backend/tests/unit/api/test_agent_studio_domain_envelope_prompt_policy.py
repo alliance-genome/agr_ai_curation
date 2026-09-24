@@ -202,13 +202,12 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "validation_attachments[].validator_agent_id" in prompt
     assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
     assert "Extractor and validator responsibilities are deliberately separate" in prompt
-    assert "First-pass extractors must not use broad database/entity lookup tools" in prompt
-    assert "`agr_species_context_lookup` is the shared narrow context tool" in prompt
-    assert "Domain-pack-declared extractor helper tools may provide" in prompt
-    assert "controlled-vocabulary options or slot-routing hints" in prompt
-    assert "helper output remains candidate guidance, not validator authority" in prompt
+    assert "Extractors must not search databases" in prompt
+    assert "`agr_species_context_lookup` is the narrow context tool" in prompt
+    assert "Only an explicit fixed `extraction_mapping`" in prompt
+    assert "Do not revive removed vocabulary helpers or lookup tools" in prompt
     assert "Validators receive `DomainValidationRequest` payloads" in prompt
-    assert "Materialized/resolved fields belong to validator results" in prompt
+    assert "Validators own lookup-confirmed identities" in prompt
     assert "Do not infer that an extractor called a validator directly" in prompt
     assert "Domain-envelope extractors" in prompt
     assert "gene_expression_extraction" in prompt

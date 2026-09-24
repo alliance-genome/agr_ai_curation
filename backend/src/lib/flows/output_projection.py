@@ -2745,10 +2745,9 @@ def _override_errors(
     return errors
 
 
-def _split_list_errors(
+def split_list_errors(
     plan: FlowOutputProjectionPlan,
     column: FlowOutputColumnSpec,
-    rows: Sequence[Mapping[str, Any]],
 ) -> list[str]:
     """Static checks for a split_list column; data-sized checks run at render."""
 
@@ -2973,7 +2972,7 @@ def validate_projection_plan(
             errors.append(f"Duplicate output column key '{column.key}'.")
         seen_keys.add(column.key)
         if column.split_list is not None:
-            errors.extend(_split_list_errors(plan, column, rows))
+            errors.extend(split_list_errors(plan, column))
         if column.transform is None:
             _validate_ref(
                 field_ref=column.field_ref,
