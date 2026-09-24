@@ -4,7 +4,9 @@
 openai-agents
 pydantic>=2.0
 requests>=2.0
-SQLAlchemy>=2.0
+# Match backend/requirements.lock.txt: SQLAlchemy 2.1 changes plain PostgreSQL
+# URLs to psycopg (v3), while our runtime currently installs psycopg2.
+SQLAlchemy==2.0.50
 psycopg2-binary
 # Public runtime Weaviate helpers import the official client directly.
 weaviate-client>=4.0
