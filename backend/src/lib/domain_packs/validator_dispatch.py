@@ -11,6 +11,7 @@ import asyncio
 import concurrent.futures
 import contextvars
 import copy
+import dataclasses
 import json
 import logging
 import time
@@ -65,6 +66,7 @@ from .validation_registry import (
     ValidationBindingState,
     ValidatorBinding,
     ValidatorBindingMatch,
+    validator_dispatch_waves,
 )
 from .validator_result_classification import (
     lookup_status_for_validator_outcome,
@@ -341,9 +343,11 @@ def dispatch_validator_jobs(
         item.request.request_id: item for item in executed_items
     }
     materialization_inputs = tuple(
-        executed_items_by_request_id[unit.request.request_id]
-        if isinstance(unit, ValidatorDispatchJob)
-        else unit
+        _with_returned_optional_fields(
+            executed_items_by_request_id[unit.request.request_id]
+            if isinstance(unit, ValidatorDispatchJob)
+            else unit
+        )
         for unit in ordered_units
     )
     return ValidatorJobDispatchResult(
@@ -352,6 +356,33 @@ def dispatch_validator_jobs(
         validator_agent_run_count=int(run_metadata["validator_agent_run_count"]),
         batch_validator_run_count=int(run_metadata["batch_validator_run_count"]),
         validator_batch_groups=tuple(run_metadata["validator_batch_groups"]),
+    )
+
+
+def _with_returned_optional_fields(
+    item: ValidatorResultMaterializationInput,
+) -> ValidatorResultMaterializationInput:
+    """Write the optional result fields a resolved result returned, like its expected ones.
+
+    An optional field the validator left out is not written and never makes the
+    result unresolved; a resolvable value's other identity keys are cleared as usual.
+    """
+
+    optional = item.request.optional_result_fields
+    if not optional or item.result.status != "resolved":
+        return item
+    returned = {
+        result_field: field_path
+        for result_field, field_path in optional.items()
+        if not missing_resolved_value(item.result.resolved_values.get(result_field))
+    }
+    if not returned:
+        return item
+    return dataclasses.replace(
+        item,
+        request=item.request.model_copy(
+            update={"expected_result_fields": {**item.request.expected_result_fields, **returned}}
+        ),
     )
 
 
@@ -403,104 +434,135 @@ def dispatch_active_validator_bindings(
                 list(_ordered_matches(matches)), authenticated_groups=authenticated_groups,
             )
         )
-    selector_findings: list[ValidationFinding] = list(eligibility_findings)
-    jobs: list[ValidatorDispatchJob] = []
     dispatch_context = group_dispatch_context(authenticated_groups)
     flow_selections = current_flow_validator_selections()
     suppressed_bindings = []
     not_validatable = not_validatable_object_keys(envelope)
-    for match in eligible_matches:
-        if is_not_validatable(match.object_envelope, not_validatable):
-            # A package validator's one "not validatable" finding speaks for the object.
-            continue
-        selection = flow_selections.get(match.binding.binding_id)
-        if selection is not None:
-            suppressed_bindings.append({
-                "validator_binding_id": match.binding.binding_id,
-                "target": match.target_details(),
-                **selection,
-                "reason": "flow_skip" if selection["state"] == "skipped" else "custom_replacement",
-            })
-            continue
-        if not _binding_has_dispatch_contract(match.binding):
-            LOGGER.info(
-                "Skipping active validator binding %s because it declares no "
-                "input_fields or expected_result_fields",
-                match.binding.binding_id,
-            )
-            continue
-        selector_result = build_domain_validation_request(match)
-        if selector_result.findings:
-            if profile_context is not None:
-                from .profile_validation import profile_policy_finding
-                mapping_id = match.binding.raw["profile_validation"]["mapping"]["mapping_id"]
-                mapping = next(m for m in profile_context.profile.contract.validator_mappings if m.mapping_id == mapping_id)
-                selector_findings.extend(profile_policy_finding(profile_context, mapping,
-                    code=finding.code, message=finding.message, object_ref=finding.object_ref,
-                    details=finding.details) for finding in selector_result.findings)
-            else:
-                selector_findings.extend(selector_result.findings)
-            continue
-        if selector_result.request is None:
-            continue
 
-        jobs.append(
-            ValidatorDispatchJob(
-                match=match,
-                request=selector_result.request,
-                dispatch_context=(
-                    dispatch_context
-                    if match.binding.required_any_active_group
-                    else None
-                ),
-            )
-        )
+    def wave_jobs(
+        wave_matches: list[ValidatorBindingMatch],
+    ) -> tuple[list[ValidatorDispatchJob], list[ValidationFinding]]:
+        jobs: list[ValidatorDispatchJob] = []
+        findings: list[ValidationFinding] = []
+        for match in wave_matches:
+            if is_not_validatable(match.object_envelope, not_validatable):
+                # A package validator's one "not validatable" finding speaks for the object.
+                continue
+            selection = flow_selections.get(match.binding.binding_id)
+            if selection is not None:
+                suppressed_bindings.append({
+                    "validator_binding_id": match.binding.binding_id,
+                    "target": match.target_details(),
+                    **selection,
+                    "reason": "flow_skip" if selection["state"] == "skipped" else "custom_replacement",
+                })
+                continue
+            if not _binding_has_dispatch_contract(match.binding):
+                LOGGER.info(
+                    "Skipping active validator binding %s because it declares no "
+                    "input_fields or expected_result_fields",
+                    match.binding.binding_id,
+                )
+                continue
+            selector_result = build_domain_validation_request(match)
+            if selector_result.findings:
+                if profile_context is not None:
+                    from .profile_validation import profile_policy_finding
+                    mapping_id = match.binding.raw["profile_validation"]["mapping"]["mapping_id"]
+                    mapping = next(m for m in profile_context.profile.contract.validator_mappings if m.mapping_id == mapping_id)
+                    findings.extend(profile_policy_finding(profile_context, mapping,
+                        code=finding.code, message=finding.message, object_ref=finding.object_ref,
+                        details=finding.details) for finding in selector_result.findings)
+                else:
+                    findings.extend(selector_result.findings)
+                continue
+            if selector_result.request is None:
+                continue
 
-    job_dispatch = dispatch_validator_jobs(
-        jobs,
-        runner=runner,
-        batch_runner=batch_runner,
-        event_emitter=event_emitter,
-        max_parallel_validators=max_parallel_validators,
-        runtime_context=runtime_context,
-    )
-    materialization_items = list(job_dispatch.materialization_inputs)
+            jobs.append(
+                ValidatorDispatchJob(
+                    match=match,
+                    request=selector_result.request,
+                    dispatch_context=(
+                        dispatch_context
+                        if match.binding.required_any_active_group
+                        else None
+                    ),
+                )
+            )
+        return jobs, findings
 
     updated_envelope = envelope
     appended_findings: list[ValidationFinding] = []
-    if selector_findings:
-        updated_envelope, selector_appended_findings = (
-            append_validation_findings_to_envelope(
-                updated_envelope,
-                selector_findings,
-                actor_id=actor_id,
+    pending_findings: list[ValidationFinding] = list(eligibility_findings)
+    validator_results: list[DomainValidatorResultBase] = []
+    validator_agent_run_count = 0
+    batch_validator_run_count = 0
+    validator_batch_groups: list[Any] = []
+    # A binding that runs_after others dispatches in a later wave, against the
+    # envelope its prerequisites' results were written into.
+    for wave_index, wave in enumerate(
+        validator_dispatch_waves({match.binding.binding_id: match.binding for match in eligible_matches}.values())
+    ):
+        wave_matches = [match for match in eligible_matches if match.binding.binding_id in wave]
+        if wave_index:
+            wave_matches = [_match_on_envelope(match, updated_envelope) for match in wave_matches]
+        jobs, selector_findings = wave_jobs(wave_matches)
+        pending_findings.extend(selector_findings)
+        job_dispatch = dispatch_validator_jobs(
+            jobs,
+            runner=runner,
+            batch_runner=batch_runner,
+            event_emitter=event_emitter,
+            max_parallel_validators=max_parallel_validators,
+            runtime_context=runtime_context,
+        )
+        validator_results.extend(job_dispatch.validator_results)
+        validator_agent_run_count += job_dispatch.validator_agent_run_count
+        batch_validator_run_count += job_dispatch.batch_validator_run_count
+        validator_batch_groups.extend(job_dispatch.validator_batch_groups)
+        materialization_items = list(job_dispatch.materialization_inputs)
+
+        if pending_findings:
+            updated_envelope, selector_appended_findings = (
+                append_validation_findings_to_envelope(
+                    updated_envelope,
+                    pending_findings,
+                    actor_id=actor_id,
+                )
             )
+            appended_findings.extend(selector_appended_findings)
+            pending_findings = []
+        if materialization_items:
+            updated_envelope = _apply_validator_evidence_updates_to_envelope(
+                updated_envelope,
+                materialization_items,
+            )
+            materialization_started_at = time.monotonic()
+            if profile_context is not None:
+                from .profile_materialization import materialize_profile_validator_results
+                materialization_result = materialize_profile_validator_results(
+                    updated_envelope, profile_context, materialization_items,
+                    actor_id=actor_id, source_envelope_revision=source_envelope_revision,
+                )
+            else:
+                materialization_result = materialize_validator_results_into_envelope(
+                    updated_envelope, domain_pack.metadata, materialization_items,
+                    actor_id=actor_id, source_envelope_revision=source_envelope_revision,
+                )
+            LOGGER.info(
+                "Materialized %s active validator result(s) in %.3fs",
+                len(materialization_items),
+                time.monotonic() - materialization_started_at,
+            )
+            updated_envelope = materialization_result.envelope
+            appended_findings.extend(materialization_result.appended_findings)
+
+    if pending_findings:
+        updated_envelope, selector_appended_findings = append_validation_findings_to_envelope(
+            updated_envelope, pending_findings, actor_id=actor_id,
         )
         appended_findings.extend(selector_appended_findings)
-    if materialization_items:
-        updated_envelope = _apply_validator_evidence_updates_to_envelope(
-            updated_envelope,
-            materialization_items,
-        )
-        materialization_started_at = time.monotonic()
-        if profile_context is not None:
-            from .profile_materialization import materialize_profile_validator_results
-            materialization_result = materialize_profile_validator_results(
-                updated_envelope, profile_context, materialization_items,
-                actor_id=actor_id, source_envelope_revision=source_envelope_revision,
-            )
-        else:
-            materialization_result = materialize_validator_results_into_envelope(
-                updated_envelope, domain_pack.metadata, materialization_items,
-                actor_id=actor_id, source_envelope_revision=source_envelope_revision,
-            )
-        LOGGER.info(
-            "Materialized %s active validator result(s) in %.3fs",
-            len(materialization_items),
-            time.monotonic() - materialization_started_at,
-        )
-        updated_envelope = materialization_result.envelope
-        appended_findings.extend(materialization_result.appended_findings)
 
     if suppressed_bindings:
         updated_envelope = updated_envelope.model_copy(update={"metadata": {
@@ -519,10 +581,10 @@ def dispatch_active_validator_bindings(
         registry=validation_registry,
         matched_bindings=tuple(eligible_matches),
         appended_findings=tuple(appended_findings),
-        validator_results=job_dispatch.validator_results,
-        validator_agent_run_count=job_dispatch.validator_agent_run_count,
-        batch_validator_run_count=job_dispatch.batch_validator_run_count,
-        validator_batch_groups=job_dispatch.validator_batch_groups,
+        validator_results=tuple(validator_results),
+        validator_agent_run_count=validator_agent_run_count,
+        batch_validator_run_count=batch_validator_run_count,
+        validator_batch_groups=tuple(validator_batch_groups),
         binding_audit=binding_audit,
     )
 
@@ -703,6 +765,20 @@ def _scoped_matches_by_target(
         if match.binding.required_any_active_group:
             grouped.setdefault(_match_target_key(match), []).append(match)
     return grouped
+
+
+def _match_on_envelope(match: ValidatorBindingMatch, envelope: DomainEnvelope) -> ValidatorBindingMatch:
+    """The same binding target read from ``envelope``, the one earlier waves wrote into."""
+
+    if match.object_envelope is None:
+        return dataclasses.replace(match, envelope=envelope)
+    keys = set(match.object_envelope.ref_keys())
+    current = next(
+        domain_object
+        for domain_object in envelope.extracted_objects
+        if keys.intersection(domain_object.ref_keys())
+    )
+    return dataclasses.replace(match, envelope=envelope, object_envelope=current)
 
 
 def _match_target_key(match: ValidatorBindingMatch) -> str:
@@ -1295,6 +1371,11 @@ def _validator_request_dedupe_key(request: DomainValidationRequest) -> str:
             "validation_guidance": request.validation_guidance,
             "evidence_context": evidence_context,
             "expected_result_fields": request.expected_result_fields,
+            **(
+                {"optional_result_fields": request.optional_result_fields}
+                if request.optional_result_fields
+                else {}
+            ),
         },
         sort_keys=True,
         default=str,

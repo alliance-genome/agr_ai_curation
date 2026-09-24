@@ -116,6 +116,11 @@ def build_domain_validation_request(
     expected_result_fields = _element_expected_result_fields(
         match, binding.expected_result_fields
     )
+    optional_result_fields = (
+        _element_expected_result_fields(match, binding.optional_result_fields)
+        if binding.optional_result_fields
+        else None
+    )
     target = _validation_target(match, selected_inputs)
     validation_guidance = (
         match.object_envelope.validation_guidance
@@ -129,6 +134,8 @@ def build_domain_validation_request(
         "selected_inputs": selected_inputs,
         "expected_result_fields": expected_result_fields,
     }
+    if optional_result_fields is not None:
+        request_payload["optional_result_fields"] = optional_result_fields
     if validation_guidance is not None:
         request_payload["validation_guidance"] = validation_guidance
     request_id = (
@@ -151,6 +158,7 @@ def build_domain_validation_request(
             input_selectors=selectors,
             evidence=_evidence_records_for_target(match),
             expected_result_fields=expected_result_fields,
+            optional_result_fields=optional_result_fields,
         ),
         findings=(),
         selected_inputs=selected_inputs,
@@ -809,6 +817,7 @@ def _validation_target(
         object_role=details.get("object_role"),
         field_path=match.field_path,
         expected_fields=list(match.binding.expected_result_fields),
+        optional_fields=list(match.binding.optional_result_fields) or None,
         input_values=selected_inputs,
     )
 

@@ -529,6 +529,20 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     applies_to: DomainPackValidatorAppliesTo
     input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
+    optional_result_fields: Optional[dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Result fields the validator fills only when its lookup confirms them "
+            "(result field -> payload path); a missing one never demotes the result"
+        ),
+    )
+    runs_after: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Binding IDs in the same pack whose results this binding reads; it runs "
+            "once their results are written"
+        ),
+    )
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
     preflight_policy: Optional[
         Literal["provider_taxon_mapping_required"]
@@ -581,6 +595,45 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
                     "empty entries"
                 )
         return value
+
+    @field_validator("runs_after")
+    @classmethod
+    def _validate_runs_after(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("validator_bindings.runs_after must list at least one binding_id")
+        for binding_id in value:
+            _validate_symbolic_name(binding_id, "validator_bindings.runs_after")
+        _require_unique(value, "validator_bindings.runs_after")
+        return value
+
+    @field_validator("optional_result_fields")
+    @classmethod
+    def _validate_optional_result_fields(
+        cls, value: Optional[dict[str, str]],
+    ) -> Optional[dict[str, str]]:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("validator_bindings.optional_result_fields must name at least one field")
+        for result_field, field_path in value.items():
+            if not str(result_field).strip() or not str(field_path).strip():
+                raise ValueError(
+                    "validator_bindings.optional_result_fields maps non-empty result fields "
+                    "to non-empty field paths"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def validate_optional_result_fields_are_not_expected(self) -> "DomainPackActiveValidatorBinding":
+        overlap = sorted(set(self.optional_result_fields or {}) & set(self.expected_result_fields))
+        if overlap:
+            raise ValueError(
+                "validator_bindings.optional_result_fields cannot repeat expected_result_fields: "
+                + ", ".join(overlap)
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_blocking_policy(self) -> "DomainPackActiveValidatorBinding":

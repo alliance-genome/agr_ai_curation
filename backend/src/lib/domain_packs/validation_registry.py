@@ -147,6 +147,10 @@ class ValidatorBinding:
     field_types: tuple[DomainPackFieldType, ...] = ()
     input_fields: dict[str, DomainPackInputSelector] = field(default_factory=dict)
     expected_result_fields: dict[str, Any] = field(default_factory=dict)
+    # Result fields written only when the validator confirms them; never required.
+    optional_result_fields: dict[str, Any] = field(default_factory=dict)
+    # Bindings whose written results this binding reads; it dispatches after them.
+    runs_after: tuple[str, ...] = ()
     raw: dict[str, Any] = field(default_factory=dict)
     custom_profile_reuse: CustomProfileValidatorReuse | None = None
 
@@ -586,6 +590,7 @@ class DomainPackValidationRegistry:
             )
         )
         _validate_active_binding_selectors(domain_pack, normalized_bindings)
+        _validate_runs_after(domain_pack, normalized_bindings)
         return cls(
             domain_pack=domain_pack,
             validator_metadata=tuple(
@@ -1130,6 +1135,13 @@ def _collect_validator_bindings(
                         "expected_result_fields",
                     )
                 ),
+                optional_result_fields=dict(
+                    _optional_mapping(
+                        raw_item.get("optional_result_fields"),
+                        "optional_result_fields",
+                    )
+                ),
+                runs_after=_coerce_string_tuple(raw_item.get("runs_after")),
                 max_tool_calls=_optional_int(raw_item.get("max_tool_calls")),
                 preflight_policy=_optional_string(raw_item.get("preflight_policy")),
                 batch_enabled=active and _optional_bool(batch_config.get("enabled")),
@@ -1519,6 +1531,113 @@ def _binding_targets_policy_field(
     if binding.field_types and field_definition.field_type not in binding.field_types:
         return False
     return _binding_has_field_constraints(binding)
+
+
+def _validate_runs_after(
+    domain_pack: LoadedDomainPack,
+    bindings: tuple[ValidatorBinding, ...],
+) -> None:
+    """Each ``runs_after`` names another active binding of this pack on a shared object type, acyclically."""
+
+    object_definitions = {
+        object_definition.object_type: object_definition
+        for object_definition in domain_pack.metadata.object_definitions
+    }
+    active = {
+        binding.binding_id: binding
+        for binding in bindings
+        if binding.state is ValidationBindingState.ACTIVE
+    }
+    errors: list[str] = []
+    for binding in bindings:
+        if not binding.runs_after:
+            continue
+        if binding.state is not ValidationBindingState.ACTIVE:
+            errors.append(f"validator binding {binding.binding_id!r} declares runs_after but is not active")
+            continue
+        own_types = {
+            definition.object_type
+            for definition in _binding_target_object_definitions(binding, object_definitions)
+        }
+        for prerequisite_id in binding.runs_after:
+            prerequisite = active.get(prerequisite_id)
+            if prerequisite_id == binding.binding_id:
+                errors.append(f"validator binding {binding.binding_id!r} cannot run after itself")
+            elif prerequisite is None:
+                errors.append(
+                    f"validator binding {binding.binding_id!r} runs after unknown or inactive "
+                    f"binding {prerequisite_id!r} in pack {domain_pack.pack_id!r}"
+                )
+            elif not own_types & {
+                definition.object_type
+                for definition in _binding_target_object_definitions(prerequisite, object_definitions)
+            }:
+                errors.append(
+                    f"validator binding {binding.binding_id!r} runs after {prerequisite_id!r}, "
+                    "which targets none of its object types"
+                )
+    if not errors:
+        cycle = _runs_after_cycle(active)
+        if cycle:
+            errors.append("validator bindings runs_after form a cycle: " + " -> ".join(cycle))
+    if errors:
+        raise ValidationRegistryError("; ".join(errors))
+
+
+def _runs_after_cycle(bindings: Mapping[str, ValidatorBinding]) -> list[str]:
+    """One runs_after cycle as a path of binding IDs, or an empty list."""
+
+    visiting: list[str] = []
+    done: set[str] = set()
+
+    def visit(binding_id: str) -> list[str]:
+        if binding_id in visiting:
+            return [*visiting[visiting.index(binding_id):], binding_id]
+        if binding_id in done:
+            return []
+        visiting.append(binding_id)
+        for prerequisite_id in bindings[binding_id].runs_after:
+            cycle = visit(prerequisite_id)
+            if cycle:
+                return cycle
+        visiting.pop()
+        done.add(binding_id)
+        return []
+
+    for binding_id in sorted(bindings):
+        cycle = visit(binding_id)
+        if cycle:
+            return cycle
+    return []
+
+
+def validator_dispatch_waves(bindings: Iterable[ValidatorBinding]) -> tuple[frozenset[str], ...]:
+    """Binding IDs grouped into dispatch waves: each binding after every binding it runs after.
+
+    The registry has already rejected unknown prerequisites and cycles; a
+    prerequisite outside ``bindings`` (not matched this run) orders nothing.
+    """
+
+    by_id = {binding.binding_id: binding for binding in bindings}
+    waves: list[frozenset[str]] = []
+    placed: set[str] = set()
+    while len(placed) < len(by_id):
+        wave = frozenset(
+            binding_id
+            for binding_id, binding in by_id.items()
+            if binding_id not in placed
+            and all(
+                prerequisite in placed or prerequisite not in by_id
+                for prerequisite in binding.runs_after
+            )
+        )
+        if not wave:
+            raise ValidationRegistryError(
+                "validator bindings runs_after form a cycle: " + ", ".join(sorted(set(by_id) - placed))
+            )
+        waves.append(wave)
+        placed |= wave
+    return tuple(waves)
 
 
 def _validate_active_binding_selectors(
@@ -2348,4 +2467,5 @@ __all__ = [
     "ValidatorBindingMatch",
     "ValidatorMetadataEntry",
     "validate_active_validator_agent_references",
+    "validator_dispatch_waves",
 ]

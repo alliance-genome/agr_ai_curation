@@ -88,6 +88,10 @@ class ValidationTarget(DomainValidatorBaseModel):
         default_factory=list,
         description="Result fields the binding expected the validator to resolve",
     )
+    optional_fields: Optional[list[StrictStr]] = Field(
+        default=None,
+        description="Result fields to fill only when the lookup confirms them; never required",
+    )
     input_values: dict[str, Any] = Field(
         default_factory=dict,
         description="Binding input values supplied to the validator",
@@ -124,6 +128,10 @@ class DomainValidationRequest(DomainValidatorBaseModel):
     expected_result_fields: dict[str, Any] = Field(
         default_factory=dict,
         description="Domain-pack result fields expected from the validator",
+    )
+    optional_result_fields: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Domain-pack result fields written only when the validator returns them",
     )
 
 
