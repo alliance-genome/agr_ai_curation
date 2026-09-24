@@ -36,6 +36,59 @@ export function horizontalGridIdentityKeyLabel(
   return phrase.charAt(0).toUpperCase() + phrase.slice(1)
 }
 
+function spaced(key: string): string {
+  return key.split('_').filter(Boolean).map((word) => KEY_WORDS[word] ?? word).join(' ')
+}
+
+function singular(key: string): string {
+  return key.endsWith('s') && !key.endsWith('ss') ? key.slice(0, -1) : key
+}
+
+/**
+ * A readable name for one value inside a cell's list or record, from its path
+ * below the cell, numbered by its list indexes: e.g. "Condition relation 1,
+ * condition 2, chemical" or "Evidence code curie 2". Null for the cell's own value.
+ */
+export function horizontalGridOverrideTargetName(
+  cellFieldPath: string,
+  value: DomainEnvelopeReviewResolvedValue,
+): string | null {
+  if (!value.value_path.startsWith(`${cellFieldPath}[`) && !value.value_path.startsWith(`${cellFieldPath}.`)) {
+    return null
+  }
+  const tokens = [...value.value_path.slice(cellFieldPath.length).matchAll(/\.?([A-Za-z_][\w-]*)|\[(\d+)\]/g)]
+    .map((match) => (match[2] !== undefined ? Number(match[2]) : match[1]!))
+  let listKey = cellFieldPath.replace(/\[\d+\]/g, '').split('.').at(-1) ?? ''
+  const parts: string[] = []
+  tokens.forEach((token, index) => {
+    if (typeof token === 'number') {
+      parts.push(`${spaced(singular(listKey))} ${token + 1}`)
+      return
+    }
+    if (typeof tokens[index + 1] === 'number') {
+      listKey = token
+      return
+    }
+    // A key under a list reads without the list's leading word
+    // ("condition_chemical" under conditions reads "chemical").
+    const leading = `${singular(listKey).split('_')[0]}_`
+    parts.push(spaced(token.startsWith(leading) ? token.slice(leading.length) : token))
+  })
+  const name = parts.join(', ')
+  return name.charAt(0).toUpperCase() + name.slice(1)
+}
+
+/**
+ * How a value reads in the override editor's picker: its validated value when
+ * resolved, else its paper wording labelled as such, then its lookup result.
+ */
+export function horizontalGridOverrideTargetSummary(value: DomainEnvelopeReviewResolvedValue): string {
+  const reading = value.resolution_state === 'resolved' || !value.mention
+    ? value.display_text
+    : `"${value.mention}" (paper wording)`
+  return `${reading}, ${value.lookup_result}`
+}
+
 /** Each identity key's current text, for the override editor's inputs. */
 export function horizontalGridOverrideIdentity(
   value: DomainEnvelopeReviewResolvedValue,
@@ -123,12 +176,46 @@ function overrideEdit(
   }
 }
 
+/** Whether the curator changed any identity key from its stored value. */
+export function horizontalGridOverrideChanged(
+  value: DomainEnvelopeReviewResolvedValue,
+  identity: HorizontalGridOverrideIdentity,
+): boolean {
+  return horizontalGridIdentityKeys(value).some(
+    (key) => (identity[key] ?? '') !== text(value.stored_identity[key]),
+  )
+}
+
+// One identity key as sent: its stored value, type included, when the curator
+// left it as it was; otherwise what they entered (empty is null), as a number
+// when the stored value was a number.
+function enteredIdentityValue(
+  value: DomainEnvelopeReviewResolvedValue,
+  key: string,
+  identity: HorizontalGridOverrideIdentity,
+): unknown {
+  const stored = value.stored_identity[key] ?? null
+  const input = identity[key] ?? ''
+  if (input === text(stored)) {
+    return stored
+  }
+  const entered = input.trim()
+  if (entered === '') {
+    return null
+  }
+  if (typeof stored === 'number' && Number.isFinite(Number(entered))) {
+    return Number(entered)
+  }
+  return entered
+}
+
 /**
  * A curator override as one atomic edit of every identity key of the value
  * (identifier, name and validated keys such as a taxon): a
  * ``replace_identity`` naming only identity keys, or for a saved profile's
  * attribute value a whole-value ``replace``. Either way the paper wording,
- * validation state and proposals stay as they are.
+ * validation state and proposals stay as they are, and every key keeps its
+ * stored type unless the curator changed it.
  */
 export function horizontalGridOverridePatch(
   value: DomainEnvelopeReviewResolvedValue,
@@ -136,11 +223,10 @@ export function horizontalGridOverridePatch(
 ): HorizontalGridOverridePatch {
   return overrideEdit(
     value,
-    Object.fromEntries(horizontalGridIdentityKeys(value).map((key) => {
-      const entered = (identity[key] ?? '').trim()
-      // Every identity key is sent; an empty validated key is sent as null.
-      return [key, entered === '' && !horizontalGridIdentityKeyRequired(value, key) ? null : entered]
-    })),
+    Object.fromEntries(horizontalGridIdentityKeys(value).map((key) => [
+      key,
+      enteredIdentityValue(value, key, identity),
+    ])),
   )
 }
 

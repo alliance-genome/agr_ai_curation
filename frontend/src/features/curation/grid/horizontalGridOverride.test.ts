@@ -4,9 +4,12 @@ import type { DomainEnvelopeReviewResolvedValue } from '@/features/curation/type
 import {
   horizontalGridIdentityKeyLabel,
   horizontalGridIdentityKeys,
+  horizontalGridOverrideChanged,
   horizontalGridOverrideIdentity,
   horizontalGridOverridePatch,
   horizontalGridOverrideProblem,
+  horizontalGridOverrideTargetName,
+  horizontalGridOverrideTargetSummary,
   horizontalGridRemovableElement,
   horizontalGridRemoveElementPatch,
   horizontalGridRemoveOverridePatch,
@@ -162,5 +165,52 @@ describe('curator override patches', () => {
     // Only a list element with its stored value can be removed.
     expect(horizontalGridRemovableElement(value())).toBe(false)
     expect(horizontalGridRemovableElement({ ...element, stored_value: null })).toBe(false)
+  })
+
+  it('keeps each identity key\'s stored type unless the curator changed it', () => {
+    // A validator-resolved GE stage slim stores an integer id.
+    const slim = value({
+      value_path: 'stage_uberon_slim_terms[0]',
+      id_key: 'id',
+      label_key: 'name',
+      validated_keys: ['vocabulary'],
+      stored_identity: { id: 200006300, name: 'embryo stage', vocabulary: 'stage_uberon_slim_terms' },
+    })
+    const untouched = horizontalGridOverrideIdentity(slim)
+
+    expect(horizontalGridOverrideChanged(slim, untouched)).toBe(false)
+    expect(horizontalGridOverridePatch(slim, { ...untouched, name: 'late embryo stage' }).value).toEqual({
+      id: 200006300,
+      name: 'late embryo stage',
+      vocabulary: 'stage_uberon_slim_terms',
+    })
+    // An edited key that stored a number is sent as a number.
+    expect(horizontalGridOverridePatch(slim, { ...untouched, id: ' 200006400 ' }).value)
+      .toMatchObject({ id: 200006400 })
+    expect(horizontalGridOverrideChanged(slim, { ...untouched, id: '200006400' })).toBe(true)
+  })
+
+  it('names each value below a cell by its own path and list positions', () => {
+    const at = (path: string) => value({ value_path: path })
+    expect(horizontalGridOverrideTargetName(
+      'condition_relations', at('condition_relations[0].conditions[1].condition_chemical'),
+    )).toBe('Condition relation 1, condition 2, chemical')
+    expect(horizontalGridOverrideTargetName(
+      'condition_relations', at('condition_relations[1].condition_relation_type'),
+    )).toBe('Condition relation 2, relation type')
+    expect(horizontalGridOverrideTargetName('evidence_code_curies', at('evidence_code_curies[2]')))
+      .toBe('Evidence code CURIE 3')
+    expect(horizontalGridOverrideTargetName('subject.curie', at('subject'))).toBeNull()
+  })
+
+  it('reads a picker entry as the validated value, or the paper wording labelled as such', () => {
+    expect(horizontalGridOverrideTargetSummary(value({ mention: 'rapamycin' })))
+      .toBe('"rapamycin" (paper wording), Not found')
+    expect(horizontalGridOverrideTargetSummary(value({
+      display_text: 'sirolimus (CHEBI:9168)',
+      resolution_state: 'resolved',
+      lookup_outcome: 'matched',
+      lookup_result: 'Matched',
+    }))).toBe('sirolimus (CHEBI:9168), Matched')
   })
 })
