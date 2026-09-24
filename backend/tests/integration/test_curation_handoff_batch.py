@@ -377,6 +377,18 @@ def _extraction_record(
         else "tool_verified_gene_paper"
     )
     payload = build_domain_envelope_extraction_payload(load_evidence_fixture(fixture_name))
+    # A new flow extraction stages each declared value unvalidated (core review S2).
+    for curatable_object in payload.get("curatable_objects") or []:
+        if curatable_object["object_type"] == "gene_mention_evidence":
+            curatable_object["payload"].update({
+                "mention": curatable_object["payload"]["entity_name"],
+                "gene_symbol": None,
+                "primary_external_id": None,
+                "taxon": None,
+                "resolution_state": "unresolved",
+                "lookup_outcome": "not_validated",
+                "validator_explanation": "Not validated yet.",
+            })
     candidate_count = len(payload.get("curatable_objects") or [])
     extraction_result_id = f"{flow_run_id}:{adapter_key}:source"
     return CurationExtractionResultRecord(

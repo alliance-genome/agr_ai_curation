@@ -358,7 +358,7 @@ def test_a_routing_value_inside_a_list_element_fails_at_load(tmp_path: Path):
     metadata_path.write_text(
         _pack_text().replace(
             "    fields:\n      - field_path: subject.kind",
-            "    fields:\n      - field_path: subject\n        field_type: object\n        multivalued: true\n"
+            "    fields:\n      - field_path: subject\n        field_type: object\n        metadata:\n          multivalued: true\n"
             "      - field_path: subject.kind",
             1,
         ),
