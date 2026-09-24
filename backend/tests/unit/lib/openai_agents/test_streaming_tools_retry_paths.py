@@ -399,6 +399,77 @@ async def test_run_specialist_marks_builder_cancelled_on_stream_cancellation(mon
     )
 
 
+class ResponseTextDoneEvent:
+    def __init__(self, text):
+        self.text = text
+
+
+async def _run_with_closing_text(monkeypatch, caplog, agent):
+    raw_event = SimpleNamespace(
+        type="raw_response_event",
+        data=ResponseTextDoneEvent("Finished; the extraction is finalized."),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_bind_run_state_into_tools",
+        lambda runtime_agent, **_kwargs: runtime_agent,
+    )
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FailingStreamRunResult(
+            events=[raw_event],
+            error=RuntimeError("stream ended"),
+        ),
+    )
+    with caplog.at_level("WARNING", logger=streaming_tools.logger.name):
+        with pytest.raises(RuntimeError, match="stream ended"):
+            await streaming_tools.run_specialist_with_events(
+                agent=agent,
+                input_text="extract",
+                specialist_name=agent.name,
+                max_turns=3,
+                tool_name=None,
+            )
+    return [
+        record
+        for record in caplog.records
+        if "GENERATED TEXT INSTEAD OF STRUCTURED OUTPUT" in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_builder_closing_text_is_not_reported_as_missing_structured_output(
+    monkeypatch, caplog
+):
+    agent = SimpleNamespace(
+        name="Gene Extractor",
+        tools=[SimpleNamespace(name="finalize_gene_extraction")],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    assert await _run_with_closing_text(monkeypatch, caplog, agent) == []
+
+
+@pytest.mark.asyncio
+async def test_structured_specialist_text_is_reported_as_missing_structured_output(
+    monkeypatch, caplog
+):
+    agent = SimpleNamespace(
+        name="Structured Specialist",
+        tools=[],
+        output_type=_Envelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    assert len(await _run_with_closing_text(monkeypatch, caplog, agent)) == 1
+
+
 @pytest.mark.asyncio
 async def test_run_specialist_resets_evidence_workspace_after_stream_error(monkeypatch):
     class _WorkspaceInspectingRunResult(_FakeRunResult):
