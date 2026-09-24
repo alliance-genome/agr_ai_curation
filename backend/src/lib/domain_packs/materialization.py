@@ -92,8 +92,6 @@ from src.lib.domain_packs.resolvable_values import (
     declared_resolvable_fields,
     declared_spec_for,
     effective_payload,
-    _legacy_text_value,
-    effective_value,
     has_resolution_state,
     is_curator_override,
     lookup_outcome_for_failure,
@@ -102,7 +100,6 @@ from src.lib.domain_packs.resolvable_values import (
     stored_state_problem,
     unresolved_header_text,
     validator_event_covers,
-    value_covered_by_validator,
 )
 from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.lib.openai_agents.config import (
@@ -251,6 +248,12 @@ class DomainPackMetadataReviewRowMaterializer:
             if self.profile_context is not None:
                 display_config = object_definition.metadata.get("workspace_display", {}) if object_definition else {}
             resolvable_fields = declared_resolvable_fields(self.metadata, domain_object.object_type)
+            if resolvable_fields:
+                # The one read-time pass of the legacy rule: every surface of the
+                # row (values, readings, labels) reads this copy.
+                domain_object = domain_object.model_copy(update={"payload": dict(effective_payload(
+                    domain_object.payload, resolvable_fields, object_metadata=domain_object.metadata,
+                ))})
             value_reader = _review_value_reader(
                 domain_object,
                 stored_objects[object_index].payload,
@@ -3553,9 +3556,8 @@ def _review_value_reader(
 ) -> _ReviewValueReader | None:
     if not specs:
         return None
-    payload = effective_payload(
-        domain_object.payload, specs, object_metadata=domain_object.metadata,
-    )
+    # The row's read-time copy (effective_payload already applied).
+    payload = domain_object.payload
     readings: dict[tuple[str | int, ...], tuple[int, _ValueReading]] = {}
     declared = list(specs.items())
     # The most specific declaration reads a value declared both as a list and
@@ -3569,7 +3571,10 @@ def _review_value_reader(
         except ValueError:
             continue
         for value_path in _concrete_value_paths(payload, tokens, ()):
-            if value_path in readings:
+            if value_path in readings or not has_resolution_state(
+                _payload_container(payload, _format_field_path(value_path))
+            ):
+                # An empty value (nothing the legacy rule reads) has no reading.
                 continue
             readings[value_path] = (
                 order,
@@ -3619,27 +3624,17 @@ def _read_review_value(
     from src.lib.flows.value_display import display_text
 
     path_text = _format_field_path(value_path)
-    # Read the stored value as effective_payload does; the read-time copy
-    # already carries a legacy state and must not be read a second time. A
-    # value stored before the contract as plain text reads as legacy text.
-    stored = _payload_container(domain_object.payload, path_text)
-    value = (
-        effective_value(
-            stored,
-            spec,
-            covered_by_validator=value_covered_by_validator(domain_object.metadata, path_text, spec),
-        )
-        if isinstance(stored, Mapping)
-        else _legacy_text_value(stored, spec)
-    )
+    # The value as the row's read-time copy holds it: the legacy rule already
+    # read it once (a plain-text value became legacy text), never again here.
+    value = _payload_container(domain_object.payload, path_text)
     raw = _payload_container(stored_payload, path_text)
+    # The legacy rule read a broken stored record as an invalid-record reading;
+    # validator words that are not text are broken too.
     problem = (
-        stored_state_problem(stored, identity_keys=spec.identity_keys)
-        if has_resolution_state(stored)
-        else None
-    )
-    if problem is None:
-        problem = next(
+        (stored_state_problem(raw, identity_keys=spec.identity_keys) if has_resolution_state(raw) else None)
+        or "the stored validation record is invalid"
+        if value.get(VALIDATOR_EXPLANATION_KEY) == INVALID_RECORD_EXPLANATION
+        else next(
             (
                 f"{text_key} must be text or null"
                 for text_key in (VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY)
@@ -3647,12 +3642,8 @@ def _read_review_value(
             ),
             None,
         )
-    # A value re-read under the legacy rule (an old container a validator left
-    # unresolved) is not a broken record; only one read as invalid is.
-    broken = problem is not None and (
-        value.get(VALIDATOR_EXPLANATION_KEY) == INVALID_RECORD_EXPLANATION
-        or not has_resolution_state(stored)
     )
+    broken = problem is not None
     if broken:
         logger.warning(
             "Review row reads an unreadable resolvable value as unresolved: "
@@ -3690,7 +3681,9 @@ def _read_review_value(
             issue=_UNREADABLE_ISSUE if broken else None,
             curator_override=(
                 DomainEnvelopeReviewCuratorOverride(
-                    actor_id=str(override["actor_id"]), at=str(override["at"]),
+                    actor_id=str(override["actor_id"]),
+                    actor_display_name=str(override["actor_display_name"]),
+                    at=str(override["at"]),
                 )
                 if override is not None
                 else None
@@ -3707,11 +3700,14 @@ def _read_review_value(
                 key: copy.deepcopy(raw.get(key)) if isinstance(raw, Mapping) else None
                 for key in spec.identity_keys
             },
-            # A saved profile's attribute values take a whole-value replace
-            # (not replace_identity), whose `before` is the value as stored.
+            # The value as stored, for the edits whose `before` is the whole value: a
+            # saved profile's attribute value (a whole-value replace) and a list
+            # element (a removal).
             stored_value=(
                 copy.deepcopy(dict(raw))
-                if path_text and is_generic_attribute_path(path_text) and isinstance(raw, Mapping)
+                if isinstance(raw, Mapping)
+                and path_text
+                and (is_generic_attribute_path(path_text) or isinstance(value_path[-1], int))
                 else None
             ),
             **curator_override_allowed(field_definitions, path_text, spec),
