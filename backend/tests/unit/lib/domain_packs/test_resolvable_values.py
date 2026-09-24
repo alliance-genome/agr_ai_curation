@@ -124,7 +124,8 @@ def _classify(outcomes):
 def test_all_lookups_succeeding_without_a_fit_is_rejected_candidates():
     assert _classify(["success"]) == "rejected_candidates"
     assert _classify(["success", "success"]) == "rejected_candidates"
-    assert _classify(["success", "not_found"]) == "not_found"
+    # A lookup found something the validator rejected, even where another found nothing.
+    assert _classify(["success", "not_found"]) == "rejected_candidates"
     assert lookup_outcome_for_failure("rejected_candidates") == "rejected_candidates"
     with pytest.raises(ValueError, match="Unable to classify"):
         _classify([])
@@ -485,7 +486,10 @@ def test_resolved_result_writes_identity_and_state_keeping_the_mention():
     ("outcome", "missing", "reason"),
     [("not_found", (), "not_found"), ("ambiguous", (), "ambiguous"), ("error", (), "transient"),
      ("success", (), "rejected_candidates"),
-     ("not_found", ("curie", "name"), "missing_expected_result_field")],
+     # An unresolved result that filled nothing names every field as missing whatever the
+     # reason: the lookups decide (see test_validator_result_classification for the matrix).
+     ("not_found", ("curie", "name"), "not_found"),
+     ("success", ("curie", "name"), "rejected_candidates")],
 )
 def test_unresolved_state_agrees_with_the_finding_classification(outcome, missing, reason):
     metadata = _metadata()

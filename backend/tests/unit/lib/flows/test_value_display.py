@@ -1064,3 +1064,93 @@ def test_vocabulary_leaves_read_in_plain_words():
     assert display_text("ambiguous", spec) == "Several matches"
     assert display_text(None, spec) == ""
     assert display_text("something else", spec) == "Invalid value (something else)"
+
+
+def test_open_findings_never_relabel_a_resolvable_values_cells():
+    """ALL-1283 contract section 3: a resolvable value's cells read its own state; an open
+    (non-decisive) finding on a resolved stage, or on an unresolved value's paper wording,
+    adds no "(unresolved)" marker. A plain field keeps its finding marker."""
+
+    stage_ref = "object.pack.GeneExpressionAnnotation.expression_pattern.when_expressed.developmental_stage_start"
+    annotation = {
+        "object_type": "GeneExpressionAnnotation", "pending_ref_id": "gene-expression-annotation-1",
+        "payload": {
+            "expression_pattern": {"when_expressed": {"developmental_stage_start": _validated_value(
+                "end of gastrulation", curie="WBls:0000814", name="gastrulation stage")}},
+            "where_expressed_statement": "AWC neurons",
+        },
+    }
+    findings = [
+        _open_finding(path, pending_ref_id="gene-expression-annotation-1", object_type="GeneExpressionAnnotation")
+        for path in (
+            "expression_pattern.when_expressed.developmental_stage_start",
+            "expression_pattern.when_expressed.developmental_stage_start.curie",
+            "where_expressed_statement",
+        )
+    ]
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("gene_expression", "agr.alliance.gene_expression", [annotation], findings)],
+        flow_name="P", output_format="csv",
+    )
+    [row] = apply_projection_plan(bundle, _object_plan("csv", [
+        ("stage", stage_ref),
+        ("stage_curie", f"{stage_ref}.curie"),
+        ("stage_wording", f"{stage_ref}.mention"),
+        ("statement", "object.pack.GeneExpressionAnnotation.where_expressed_statement"),
+    ])).rows
+
+    assert row == {
+        "stage": "gastrulation stage (WBls:0000814)",
+        "stage_curie": "WBls:0000814",
+        "stage_wording": "end of gastrulation",
+        "statement": "AWC neurons (unresolved)",
+    }
+
+
+def test_ancestor_and_whole_list_findings_never_relabel_resolvable_cells():
+    """Fix4 N3: a finding on a parent object or on a whole list of values (no index) is no
+    marker on a resolvable value's cells either."""
+
+    base = "object.pack.GeneExpressionAnnotation.expression_pattern.when_expressed"
+    annotation = {
+        "object_type": "GeneExpressionAnnotation", "pending_ref_id": "gene-expression-annotation-1",
+        "payload": {"expression_pattern": {"when_expressed": {
+            "developmental_stage_start": _validated_value("end of gastrulation", curie="WBls:1", name="stage one"),
+            "stage_uberon_slim_terms": [_validated_value("embryo", name="embryo stage", vocabulary="V", id=1)],
+        }}},
+    }
+    findings = [
+        _open_finding(path, pending_ref_id="gene-expression-annotation-1", object_type="GeneExpressionAnnotation")
+        for path in ("expression_pattern.when_expressed",
+                     "expression_pattern.when_expressed.stage_uberon_slim_terms")
+    ]
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("gene_expression", "agr.alliance.gene_expression", [annotation], findings)],
+        flow_name="P", output_format="csv",
+    )
+    [row] = apply_projection_plan(bundle, _object_plan("csv", [
+        ("stage_curie", f"{base}.developmental_stage_start.curie"),
+        ("stage_wording", f"{base}.developmental_stage_start.mention"),
+        ("slim_name", f"{base}.stage_uberon_slim_terms.name"),
+    ])).rows
+
+    assert row == {"stage_curie": "WBls:1", "stage_wording": "end of gastrulation", "slim_name": "embryo stage"}
+
+
+def test_a_referenced_objects_resolvable_value_finding_flags_no_referencing_cell():
+    """Fix4 N3: an object_ref cell carries its referenced object's findings on plain fields
+    only; the referenced term's own resolvable identity reads its state."""
+
+    from src.lib.flows.output_projection import _open_finding_paths
+
+    objects = _phenotype_objects()
+    term = next(obj for obj in objects if obj["object_type"] == "PhenotypeTerm")
+    term["payload"] = _validated_value("term 0", curie="WBPhenotype:0", label="term 0")
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("phenotype", PHENOTYPE_PACK, objects,
+                                        [_open_finding("curie", pending_ref_id="term-0", object_type="PhenotypeTerm")])],
+        flow_name="P", output_format="csv",
+    )
+    annotation_row = next(row for row in bundle.rows_for_source("object")
+                          if row["object.object_type"] == "PhenotypeAnnotation")
+    assert _open_finding_paths(bundle).get(id(annotation_row), []) == []

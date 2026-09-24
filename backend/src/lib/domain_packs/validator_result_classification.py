@@ -58,7 +58,21 @@ def validator_failure_classification(
     """Classify unresolved validator results for validation finding details.
 
     Every value maps to a resolvable value's lookup outcome through
-    ``resolvable_values.lookup_outcome_for_failure``.
+    ``resolvable_values.lookup_outcome_for_failure``. The order matters,
+    because a decisive outcome (not_found, ambiguous, conflict,
+    rejected_candidates) overrules a value that reads as resolved:
+
+    1. A lookup that could not run (an ``error`` or ``blocked`` outcome)
+       makes the whole result non-decisive (transient, blocked): an outage
+       never overrules a value, whatever the other lookups found.
+    2. A result that filled some expected fields but not others is
+       incomplete (missing_expected_result_field). An unresolved result that
+       filled none lists every expected field as missing whatever the
+       reason, so that list alone does not decide.
+    3. Otherwise what the lookups found decides: several matches
+       (ambiguous), a conflict, nothing anywhere (not_found), or lookups that
+       found something the validator judged does not fit
+       (rejected_candidates).
     """
 
     methods = {attempt.method for attempt in result.lookup_attempts}
@@ -66,21 +80,22 @@ def validator_failure_classification(
         return "invalid_schema"
     if "validator_agent_error" in methods:
         return "transient"
-    if result.missing_expected_fields:
-        return "missing_expected_result_field"
     outcomes = {attempt.outcome for attempt in result.lookup_attempts}
-    if "ambiguous" in outcomes:
-        return "ambiguous"
-    if "not_found" in outcomes:
-        return "not_found"
-    if "conflict" in outcomes:
-        return "conflict"
-    if "blocked" in outcomes:
-        return "blocked"
     if "error" in outcomes:
         return "transient"
-    if outcomes == {"success"}:
-        # Every lookup succeeded, and the validator judged no candidate fits.
+    if "blocked" in outcomes:
+        return "blocked"
+    if result.missing_expected_fields and (result.resolved_values or not outcomes):
+        # Some expected fields filled and others not, or nothing looked up: incomplete.
+        return "missing_expected_result_field"
+    if "ambiguous" in outcomes:
+        return "ambiguous"
+    if "conflict" in outcomes:
+        return "conflict"
+    if outcomes == {"not_found"}:
+        return "not_found"
+    if "success" in outcomes:
+        # A lookup found something, and the validator judged no candidate fits.
         return "rejected_candidates"
     raise error_type(
         "Unable to classify unresolved validator result "
