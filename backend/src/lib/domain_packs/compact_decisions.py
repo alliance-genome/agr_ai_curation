@@ -223,7 +223,8 @@ class ValidatorDecisionWorkspace:
                 rows.setdefault(result_field, []).append(deepcopy(row))
         values = {}
         for slot, selection in decision.slots.items():
-            if slot not in request.expected_result_fields:
+            # Optional slots are filled only when the record confirms them; never required.
+            if slot not in request.expected_result_fields and slot not in (request.optional_result_fields or {}):
                 raise ValueError(f"Unexpected result slot: {slot}")
             if isinstance(selection, RecordValue):
                 _, record = self._record(request.request_id, selection.record_ref)

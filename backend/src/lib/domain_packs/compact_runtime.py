@@ -313,6 +313,7 @@ def compact_finalization_schema(tool, runtime, *, batch=False):
 def compact_finalization_instruction(runtime, *, tool_name, batch=False):
     contracts = [{"request_id": identifier,
                   "expected_slots": list(contract.request.expected_result_fields),
+                  "optional_slots": list(contract.request.optional_result_fields or {}),
                   "record_slot_fields": dict(contract.record_slot_fields),
                   "scientific_slots": list(contract.scientific_slots),
                   "domain_contract": deepcopy(dict(contract.domain_contract))}

@@ -425,3 +425,22 @@ def test_live_literature_es_smoke_when_environment_is_available(monkeypatch):
     assert pmid_result.resolved_reference["curie"] == "AGRKB:101000000924191"
     assert fuzzy_result.status == "ok"
     assert fuzzy_result.count >= 1
+
+
+@pytest.mark.parametrize(
+    ("cross_references", "pmid", "doi"),
+    [
+        (["PMID:24069394", "DOI:10.1371/journal.pone.0075194", "PMCID:PMC3775776"],
+         "PMID:24069394", "DOI:10.1371/journal.pone.0075194"),
+        (["PMID:24069394"], "PMID:24069394", None),
+        (["PMID:1", "PMID:2", "doi:10.1/x"], None, "doi:10.1/x"),
+    ],
+)
+def test_a_reference_candidate_states_its_own_pmid_and_doi(cross_references, pmid, doi):
+    """The record's one PMID and DOI cross-reference, for validators to report; none when several."""
+
+    candidate = literature_references._as_reference_candidate(
+        _reference(cross_references=cross_references), "anything"
+    )
+
+    assert (candidate["pmid"], candidate["doi"]) == (pmid, doi)
