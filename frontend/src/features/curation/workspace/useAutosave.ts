@@ -4,7 +4,9 @@ import type {
   CurationCandidate,
   CurationDraftField,
   CurationDraftFieldChange,
+  CurationEnvelopeFieldPatchOperation,
   CurationEnvelopeFieldPatchRequest,
+  CurationWorkspace,
 } from '@/features/curation/types'
 import {
   autosaveCurationCandidateDraft,
@@ -75,6 +77,14 @@ interface PendingEnvelopeAutosave {
   fieldPatches: Map<string, PendingEnvelopeFieldPatch>
 }
 
+/** One envelope field edit sent as is (e.g. a curator override), outside the draft queue. */
+export interface EnvelopeFieldEdit {
+  fieldPath: string
+  operation: CurationEnvelopeFieldPatchOperation
+  before: unknown
+  value: unknown
+}
+
 interface FlushOptions {
   keepalive?: boolean
   updateState?: boolean
@@ -93,6 +103,11 @@ export interface UseAutosaveReturn {
   queueFieldChange: (fieldChange: CurationDraftFieldChange) => void
   queueFieldChanges: (fieldChanges: CurationDraftFieldChange[]) => void
   flush: () => Promise<boolean>
+  // Saves pending edits, then sends one envelope field edit at the envelope's
+  // latest known revision, and reloads the workspace. A rejection (its
+  // message) or a revision conflict also reloads it and throws, so a retry
+  // starts from the stored state.
+  submitEnvelopeEdit: (candidateId: string, edit: EnvelopeFieldEdit) => Promise<void>
   clearWarning: () => void
 }
 
@@ -160,6 +175,12 @@ function upsertPendingEnvelope(
   pendingEnvelope: PendingEnvelopeAutosave,
 ): void {
   pendingEnvelopes.set(pendingEnvelope.candidateId, pendingEnvelope)
+}
+
+// The backend rejected an edit (e.g. a resolvable value edited as plain data):
+// retrying the same edit can never succeed.
+function isRejectedEdit(error: unknown): error is Error & { status: number } {
+  return error instanceof Error && 'status' in error && error.status === 400
 }
 
 function isVersionConflict(error: unknown): boolean {
@@ -280,16 +301,23 @@ export function useAutosave(
     const nextDraftVersions = new Map(
       workspace.candidates.map((candidate) => [candidate.candidate_id, candidate.draft.version]),
     )
-    const nextEnvelopeRevisions = new Map(
-      workspace.candidates
-        .map((candidate) => candidate.projection_ref)
-        .filter((projectionRef): projectionRef is NonNullable<typeof projectionRef> =>
-          projectionRef !== null && projectionRef !== undefined)
-        .map((projectionRef) => [
-          projectionRef.envelope_id,
+    // Several candidates can project one envelope and carry different
+    // revisions; an envelope's revision only grows, so keep the newest known.
+    const nextEnvelopeRevisions = new Map<string, number>()
+    for (const candidate of workspace.candidates) {
+      const projectionRef = candidate.projection_ref
+      if (!projectionRef) {
+        continue
+      }
+      nextEnvelopeRevisions.set(
+        projectionRef.envelope_id,
+        Math.max(
           projectionRef.envelope_revision,
-        ]),
-    )
+          nextEnvelopeRevisions.get(projectionRef.envelope_id) ?? 0,
+          previousEnvelopeRevisions.get(projectionRef.envelope_id) ?? 0,
+        ),
+      )
+    }
     draftVersionsRef.current = nextDraftVersions
     envelopeRevisionsRef.current = nextEnvelopeRevisions
 
@@ -817,6 +845,25 @@ export function useAutosave(
           return false
         }
 
+        if (isRejectedEdit(error)) {
+          // Drop the rejected edit instead of retrying it; the workspace is
+          // refreshed so the field shows its stored value again.
+          await refreshAndRebaseEnvelope(
+            candidateId,
+            {
+              ...envelopeToRequeue,
+              fieldPatches: new Map(
+                remainingFieldPatches.slice(1).map((fieldPatch) => [fieldPatch.fieldPath, fieldPatch]),
+              ),
+            },
+            options,
+          )
+          if (options?.updateState !== false && mountedRef.current) {
+            setWarning(`This change was not saved: ${error.message}`)
+          }
+          return false
+        }
+
         if (nextPendingEnvelope) {
           upsertPendingEnvelope(
             pendingEnvelopesRef.current,
@@ -1107,6 +1154,85 @@ export function useAutosave(
     return flushAllPendingChanges()
   }, [flushAllPendingChanges])
 
+  const refreshWorkspace = useCallback(async (sessionId: string): Promise<CurationWorkspace> => {
+    const authoritativeWorkspace = await fetchCurationWorkspace(sessionId)
+    let refreshedWorkspace = authoritativeWorkspace
+    for (const pendingEnvelope of pendingEnvelopesRef.current.values()) {
+      refreshedWorkspace = applyDraftFieldChangesToWorkspace(
+        refreshedWorkspace,
+        pendingEnvelope.candidateId,
+        envelopePatchesToDraftFieldChanges(Array.from(pendingEnvelope.fieldPatches.values())),
+      )
+    }
+    for (const pendingDraft of pendingDraftsRef.current.values()) {
+      refreshedWorkspace = applyDraftFieldChangesToWorkspace(
+        refreshedWorkspace,
+        pendingDraft.candidateId,
+        Array.from(pendingDraft.fieldChanges.values()),
+      )
+    }
+    if (mountedRef.current) {
+      setWorkspace(refreshedWorkspace)
+    }
+    return refreshedWorkspace
+  }, [setWorkspace])
+
+  const submitEnvelopeEdit = useCallback(
+    async (candidateId: string, edit: EnvelopeFieldEdit): Promise<void> => {
+      if (!(await flushAllPendingChanges())) {
+        throw new Error('Save or discard the pending edits of this record first, then try again.')
+      }
+      const candidate = workspace.candidates.find((item) => item.candidate_id === candidateId)
+      const projectionRef = candidate?.projection_ref
+      if (!projectionRef) {
+        throw new Error(`Candidate '${candidateId}' has no envelope projection to edit`)
+      }
+
+      const submission = saveSequenceRef.current.then(async () => {
+        if (mountedRef.current) {
+          setIsSaving(true)
+        }
+        try {
+          const response = await patchCurationEnvelopeField({
+            session_id: session.session_id,
+            envelope_id: projectionRef.envelope_id,
+            expected_revision:
+              envelopeRevisionsRef.current.get(projectionRef.envelope_id)
+              ?? projectionRef.envelope_revision,
+            object_id: projectionRef.object_id,
+            field_path: edit.fieldPath,
+            operation: edit.operation,
+            before: edit.before ?? null,
+            value: edit.value ?? null,
+          })
+          envelopeRevisionsRef.current.set(response.envelope_id, response.envelope_revision)
+          if (mountedRef.current) {
+            setWorkspace((currentWorkspace) =>
+              mergeEnvelopeFieldPatchIntoWorkspace(currentWorkspace, response))
+            setWarning(null)
+          }
+          // An accepted edit also resolves findings on the value and can reach
+          // other objects (a value followed from a linked object): reload the
+          // workspace so every row and its warnings read the new revision.
+          await refreshWorkspace(session.session_id)
+        } catch (error) {
+          if (isRejectedEdit(error) || isVersionConflict(error)) {
+            // A rejected edit also moves the envelope to a new revision.
+            await refreshWorkspace(session.session_id)
+          }
+          throw error
+        } finally {
+          if (mountedRef.current) {
+            setIsSaving(false)
+          }
+        }
+      })
+      saveSequenceRef.current = submission.then(() => true, () => false)
+      return submission
+    },
+    [flushAllPendingChanges, refreshWorkspace, session.session_id, setWorkspace, workspace.candidates],
+  )
+
   const clearWarning = useCallback(() => {
     setWarning(null)
   }, [])
@@ -1164,6 +1290,7 @@ export function useAutosave(
     queueFieldChange,
     queueFieldChanges,
     flush,
+    submitEnvelopeEdit,
     clearWarning,
   }
 }

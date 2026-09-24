@@ -257,6 +257,7 @@ function resolvedValue(
     validated_keys: [],
     stored_identity: {},
     container_protected: false,
+    overridable: true,
     ...overrides,
   }
 }
@@ -1140,6 +1141,35 @@ describe('buildHorizontalGridModel', () => {
     expect(model.rows[0]!.cells[0]!.resolution?.values[0]?.mention).toBe('abc-1 (legacy, unverified)')
   })
 
+  it('reads a legacy id seeded as null (the read-time value) as UNRESOLVED with its paper wording', () => {
+    // The review row's value is the read-time value, so an unverified legacy
+    // id is seeded as null; stored_identity keeps the raw id for an override.
+    const legacyValue = resolvedValue({
+      display_text: 'UNRESOLVED',
+      mention: 'gut (ONT:0000101) (legacy, unverified)',
+      resolution_state: 'unresolved',
+      lookup_outcome: 'legacy_unverified',
+      lookup_result: 'Legacy, unverified',
+      validator_explanation: 'Recorded before validation tracking; not verified.',
+      stored_identity: { curie: 'ONT:0000101', name: 'gut' },
+    })
+    const legacyCandidate = candidate({
+      id: 'candidate-legacy-null',
+      objectId: 'object-legacy-null',
+      order: 0,
+      fields: [draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: null })],
+    })
+    const row = reviewRowWithFields('object-legacy-null', [
+      { path: 'site.curie', resolution: { display_text: 'UNRESOLVED', values: [legacyValue] } },
+    ])
+
+    const model = modelForRows([workspaceRow({ candidate: legacyCandidate, row })])
+
+    const [cell] = model.rows[0]!.cells
+    expect(cell).toMatchObject({ value: null, displayText: 'UNRESOLVED', overrideTargets: [legacyValue] })
+    expect(cell!.resolutionDetails[0]?.mention).toBe('gut (ONT:0000101) (legacy, unverified)')
+  })
+
   it('reads a saved curator edit from the regenerated review row, as a curator override', () => {
     const overridden = resolvedValue({
       display_text: 'midgut (ONT:0000555)',
@@ -1181,7 +1211,7 @@ describe('buildHorizontalGridModel', () => {
       curatorOverride: true,
       overrideDisagreements: [],
       readOnly: false,
-      overrideTarget: overridden,
+      overrideTargets: [overridden],
     })
     expect(idCell!.resolutionDetails).toEqual([overridden])
     expect(nameCell).toMatchObject({ curatorOverride: true, resolutionDetails: [] })
@@ -1202,6 +1232,8 @@ describe('buildHorizontalGridModel', () => {
       validated_keys: [],
       stored_identity: {},
       container_protected: false,
+      // The backend marks it not overridable: its identifier is not editable.
+      overridable: false,
     })
     const fields = [
       draftField({ fieldKey: 'symbol', label: 'Symbol', order: 0, value: 'abc-2' }),
@@ -1232,10 +1264,12 @@ describe('buildHorizontalGridModel', () => {
       curatorOverride: true,
       overrideDisagreements: [message],
       extractorComparison: { outcome: 'overridden', value: 'abc-1' },
-      // An identity field of the value is read-only, so no override is offered.
-      overrideTarget: null,
+      // A value that takes no override offers none, and a cell with validated
+      // values but nothing to override is read-only.
+      overrideTargets: [],
+      readOnly: true,
     })
-    expect(model.rows[0]!.cells[1]).toMatchObject({ readOnly: true, overrideTarget: null })
+    expect(model.rows[0]!.cells[1]).toMatchObject({ readOnly: true, overrideTargets: [] })
   })
 
   it('offers an override on a value that is the object itself when its identity fields are editable', () => {
@@ -1263,11 +1297,45 @@ describe('buildHorizontalGridModel', () => {
       row,
     })])
 
-    expect(model.rows[0]!.cells.map((cell) => cell.overrideTarget)).toEqual([rootValue, rootValue])
+    expect(model.rows[0]!.cells.map((cell) => cell.overrideTargets)).toEqual([[rootValue], [rootValue]])
   })
 
-  it('offers no override on a value whose own field is protected', () => {
-    const protectedValue = resolvedValue({ container_protected: true })
+  it('gives each element of a list cell its own override target', () => {
+    const codes = ['IMP', 'IGI'].map((mention, index) => resolvedValue({
+      value_path: `evidence_codes[${index}]`,
+      display_text: 'UNRESOLVED',
+      mention,
+      resolution_state: 'unresolved',
+      lookup_outcome: 'not_found',
+      lookup_result: 'Not found',
+      identity_field_paths: [`evidence_codes[${index}].curie`],
+      id_key: 'curie',
+      label_key: null,
+    }))
+    const nested = resolvedValue({ value_path: 'conditions[0].component' })
+    const fields = [
+      draftField({ fieldKey: 'codes', fieldPath: 'evidence_codes', label: 'Evidence codes', order: 0, value: [] }),
+      draftField({ fieldKey: 'conditions', label: 'Conditions', order: 1, value: [] }),
+    ]
+    const row = reviewRowWithFields('object-list', [
+      { path: 'evidence_codes', resolution: { display_text: 'UNRESOLVED | UNRESOLVED', values: codes } },
+      { path: 'conditions', resolution: { display_text: 'component: gut (ONT:0000101)', values: [nested] } },
+    ])
+
+    const model = modelForRows([workspaceRow({
+      candidate: candidate({ id: 'candidate-list', objectId: 'object-list', order: 0, fields }),
+      row,
+    })])
+
+    const [codesCell, conditionsCell] = model.rows[0]!.cells
+    expect(codesCell).toMatchObject({ readOnly: false, overrideTargets: codes })
+    // Validated values nested deeper than a list element have no override
+    // here, so the cell is read-only rather than a plain whole-list edit.
+    expect(conditionsCell).toMatchObject({ readOnly: true, overrideTargets: [] })
+  })
+
+  it('closes a cell whose value takes no override (e.g. a protected value field)', () => {
+    const protectedValue = resolvedValue({ container_protected: true, overridable: false })
     const fields = [draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: null })]
     const row = reviewRowWithFields('object-protected', [
       { path: 'site.curie', resolution: { display_text: 'UNRESOLVED', values: [protectedValue] } },
@@ -1278,7 +1346,8 @@ describe('buildHorizontalGridModel', () => {
       row,
     })])
 
-    expect(model.rows[0]!.cells[0]).toMatchObject({ readOnly: false, overrideTarget: null })
+    // A value the backend marks not overridable closes the cell: no override, no plain edit.
+    expect(model.rows[0]!.cells[0]).toMatchObject({ readOnly: true, overrideTargets: [] })
   })
 
   it('shows each value\'s details once, on its first cell, and hides leaves that cell covers', () => {

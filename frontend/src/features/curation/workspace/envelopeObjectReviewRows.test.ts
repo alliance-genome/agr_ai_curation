@@ -184,6 +184,7 @@ describe('workspace envelope object review rows', () => {
               validated_keys: [],
               stored_identity: {},
               container_protected: false,
+              overridable: true,
             },
           ],
         },

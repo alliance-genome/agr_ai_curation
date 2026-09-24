@@ -96,7 +96,7 @@ function fieldCell(
     readOnly: hasField ? false : null,
     curatorOverride: false,
     overrideDisagreements: [],
-    overrideTarget: null,
+    overrideTargets: [],
     staleValidation: hasField ? false : null,
     state: hasField ? state : null,
     fieldValidation: null,
@@ -209,6 +209,7 @@ describe('HorizontalCurationGrid', () => {
           validated_keys: [],
           stored_identity: {},
           container_protected: false,
+          overridable: true,
         }],
       },
     }
@@ -252,6 +253,7 @@ describe('HorizontalCurationGrid', () => {
       validated_keys: [],
       stored_identity: {},
       container_protected: false,
+      overridable: true,
     }
     gridRow.cells[0] = {
       ...fieldCell('field:alpha', 'alpha', 'ONT:1', true, 'needs-review'),

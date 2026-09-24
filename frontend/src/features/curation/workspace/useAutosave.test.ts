@@ -1600,4 +1600,129 @@ describe('useAutosave', () => {
     expect(result.current.warning).toBeNull()
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 25)
   })
+
+  it('drops an edit the backend rejects instead of retrying it, and shows the backend\'s words', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(Object.assign(
+      new Error("field_path 'gene' is a resolvable value; send its identity keys"),
+      { status: 400 },
+    ))
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue({
+      ...envelopeWorkspace,
+      candidates: [{
+        ...envelopeWorkspace.candidates[0],
+        projection_ref: { envelope_id: 'envelope-1', object_id: 'object-1', envelope_revision: 8 },
+      }],
+    })
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 60_000 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      { wrapper: createWrapper(envelopeWorkspace) },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({ field_key: 'gene_symbol', value: 'BRCA2' })
+    })
+    await act(async () => {
+      expect(await result.current.autosave.flush()).toBe(false)
+    })
+
+    expect(result.current.autosave.warning).toBe(
+      "This change was not saved: field_path 'gene' is a resolvable value; send its identity keys",
+    )
+    // The workspace is refreshed: the rejected edit also moved the revision.
+    expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledWith('session-1')
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.draft.fields[0].value).toBe('BRCA1')
+    })
+
+    await act(async () => {
+      expect(await result.current.autosave.flush()).toBe(true)
+    })
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends a direct envelope edit at the newest revision any candidate of the envelope carries', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    const [first] = envelopeWorkspace.candidates
+    const second = {
+      ...first!,
+      candidate_id: 'candidate-2',
+      projection_ref: { envelope_id: 'envelope-1', object_id: 'object-2', envelope_revision: 7 },
+    }
+    const workspace = { ...envelopeWorkspace, candidates: [first!, second] }
+    serviceMocks.patchCurationEnvelopeField
+      .mockResolvedValueOnce(buildEnvelopePatchResponse({
+        workspace,
+        value: 'GENE:2',
+        before: 'BRCA1',
+        previousRevision: 7,
+        envelopeRevision: 8,
+      }))
+      .mockResolvedValueOnce({
+        ...buildEnvelopePatchResponse({
+          workspace,
+          value: 'GENE:3',
+          before: 'BRCA1',
+          previousRevision: 8,
+          envelopeRevision: 9,
+        }),
+        candidate: null,
+      })
+    // The reload after each accepted edit still shows candidate 2 at revision 7.
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      { wrapper: createWrapper(workspace) },
+    )
+
+    const edit = {
+      fieldPath: 'subject.curie',
+      operation: 'replace_identity' as const,
+      before: { curie: null, name: null },
+      value: { curie: 'GENE:2', name: 'abc-2' },
+    }
+    await act(async () => {
+      await result.current.submitEnvelopeEdit('candidate-1', edit)
+    })
+    await act(async () => {
+      await result.current.submitEnvelopeEdit('candidate-2', edit)
+    })
+
+    expect(serviceMocks.patchCurationEnvelopeField.mock.calls.map(([request]) => request)).toEqual([
+      expect.objectContaining({ object_id: 'object-1', expected_revision: 7, operation: 'replace_identity' }),
+      // Candidate 2 still carries revision 7; the envelope is at 8 after the first edit.
+      expect.objectContaining({ object_id: 'object-2', expected_revision: 8, field_path: 'subject.curie' }),
+    ])
+    // Each accepted edit reloads the workspace, so rows and their warnings update.
+    expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshes after a refused direct envelope edit and passes the backend\'s words on', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(Object.assign(
+      new Error('Enter the name for a curator override.'),
+      { status: 400 },
+    ))
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(envelopeWorkspace)
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      { wrapper: createWrapper(envelopeWorkspace) },
+    )
+
+    await act(async () => {
+      await expect(result.current.submitEnvelopeEdit(envelopeWorkspace.candidates[0]!.candidate_id, {
+        fieldPath: 'subject.curie',
+        operation: 'replace_identity',
+        before: { curie: null },
+        value: { curie: 'GENE:2' },
+      })).rejects.toThrow('Enter the name for a curator override.')
+    })
+    expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledWith('session-1')
+  })
 })
