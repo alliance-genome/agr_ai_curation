@@ -199,7 +199,7 @@ zebrafish / Danio rerio => `ZFIN`
 
 # GEX-60 spatial context under where_expressed; CC-only valid
 Put spatial context in the `expression_pattern.where_expressed.anatomical_structure` and/or `expression_pattern.where_expressed.cellular_component` controlled fields.
-cellular-component-only sites such as nucleus or cytoplasm are valid when helper routing points to the GO cellular-component slot.
+cellular-component-only sites such as nucleus or cytoplasm are valid: stage the paper's wording in the `cellular_component` field, and its validator resolves the GO term.
 
 # GEX-61 temporal context under when_expressed_stage_name
 Put the stage in the `expression_pattern.when_expressed.developmental_stage_start` controlled field: the paper's stage wording is its `mention`

@@ -144,6 +144,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "helper_selections" not in content
     assert "slot_hint" not in content
     assert "cellular-component-only sites such as nucleus or cytoplasm are valid" in content
+    assert "helper routing" not in content
     assert "Pass `data_provider` as the Alliance member abbreviation" in content
     assert "zebrafish / Danio rerio => `ZFIN`" in content
     assert "Your only lookup is `agr_species_context_lookup`" in content
