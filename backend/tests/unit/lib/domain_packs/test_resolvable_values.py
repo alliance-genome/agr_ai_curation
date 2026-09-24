@@ -485,7 +485,10 @@ def test_resolved_result_writes_identity_and_state_keeping_the_mention():
     ("outcome", "missing", "reason"),
     [("not_found", (), "not_found"), ("ambiguous", (), "ambiguous"), ("error", (), "transient"),
      ("success", (), "rejected_candidates"),
-     ("not_found", ("curie", "name"), "missing_expected_result_field")],
+     # An unresolved result names the fields it could not fill whatever the reason:
+     # the lookup outcome decides, and missing fields alone mean an incomplete result.
+     ("not_found", ("curie", "name"), "not_found"),
+     ("success", ("curie", "name"), "missing_expected_result_field")],
 )
 def test_unresolved_state_agrees_with_the_finding_classification(outcome, missing, reason):
     metadata = _metadata()

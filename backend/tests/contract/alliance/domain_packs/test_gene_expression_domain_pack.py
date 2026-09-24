@@ -1162,9 +1162,18 @@ def test_gene_expression_assay_unresolved_outcomes_stay_field_addressed(
     )
 
     assert result.materialized_objects == ()
-    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
+    # A decisive lookup outcome overrules the builder's pre-filled assay; nothing else changes.
+    payload = copy.deepcopy(result.envelope.extracted_objects[0].payload)
+    assay = payload["expression_experiment"].pop("expression_assay_used")
+    assert (assay["resolution_state"], assay["lookup_outcome"], assay["curie"], assay["overruled_curie"]) == (
+        "unresolved", expected_status, None, "MMO:0000655",
+    )
+    original = copy.deepcopy(envelope.extracted_objects[0].payload)
+    original["expression_experiment"].pop("expression_assay_used")
+    assert payload == original
     finding = result.appended_findings[0]
     assert finding.code == "domain_pack.validator_unresolved"
+    assert finding.details["failure_classification"] == expected_status
     assert finding.field_ref is not None
     assert finding.field_ref.field_path == (
         "expression_experiment.expression_assay_used"

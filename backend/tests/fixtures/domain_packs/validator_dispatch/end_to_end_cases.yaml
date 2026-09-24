@@ -244,7 +244,7 @@ cases:
     expected_projection:
       finding_code: domain_pack.validator_unresolved
       finding_status: open
-      failure_classification: missing_expected_result_field
+      failure_classification: not_found
     readiness_outcome:
       ready: false
       blockers:
@@ -393,7 +393,7 @@ cases:
     expected_projection:
       finding_code: domain_pack.validator_unresolved
       finding_status: open
-      failure_classification: missing_expected_result_field
+      failure_classification: not_found
       missing_expected_fields:
         - identifier
         - symbol

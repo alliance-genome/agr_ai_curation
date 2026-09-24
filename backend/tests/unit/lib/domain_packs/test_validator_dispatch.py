@@ -1322,7 +1322,8 @@ def test_dispatch_active_binding_returns_unresolved_validator_result(
     assert finding.status.value == "open"
     assert finding.severity.value == "blocker"
     assert finding.code == "domain_pack.validator_unresolved"
-    assert finding.details["failure_classification"] == "missing_expected_result_field"
+    # The lookup outcome says why the fields are missing.
+    assert finding.details["failure_classification"] == "not_found"
     assert finding.details["lookup_attempts"][0]["lookup_status"] == "not_found"
     assert result.validator_results[0].status == "unresolved"
 
@@ -2056,13 +2057,19 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
         "gene_symbol": None,
         "mention": "Tmem67",
         "resolution_state": "unresolved",
-        "lookup_outcome": "missing_expected_result_field",
+        "lookup_outcome": "ambiguous",
         "validator_explanation": "Multiple provider candidates matched.",
         "validator_curator_message": "Subject gene lookup is ambiguous.",
     }
+    # The lookup found no reference (decisive): the stored, unverified title is set aside.
     assert annotation.payload["single_reference"] == {
         "pmid": "PMID:203506",
-        "title": "Paper supplied title",
+        "title": None,
+        "overruled_title": "Paper supplied title",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_found",
+        "validator_explanation": "The API-backed lookup found no source reference.",
+        "validator_curator_message": "No unambiguous reference match found.",
     }
     open_findings = [
         finding
@@ -2091,12 +2098,8 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
         for finding in open_findings
         if finding.field_ref is not None
     }
-    assert classifications["expression_annotation_subject.primary_external_id"] == (
-        "missing_expected_result_field"
-    )
-    assert classifications["single_reference.reference_id"] == (
-        "missing_expected_result_field"
-    )
+    assert classifications["expression_annotation_subject.primary_external_id"] == "ambiguous"
+    assert classifications["single_reference.reference_id"] == "not_found"
     gene_finding = next(
         finding
         for finding in open_findings

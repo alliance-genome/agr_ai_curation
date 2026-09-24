@@ -397,6 +397,10 @@ class FlowOutputArtifact(BaseModel):
     # object's object_refs order, so a cell carries its referenced objects'
     # open findings.
     object_ref_links: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
+    # Per object key: the payload paths a declared resolvable value covers (a
+    # field value's path; each identity and contract key of an object-root
+    # value). Its cells read the value's own state, never a finding marker.
+    resolvable_value_paths: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class FlowOutputArtifactBundle(BaseModel):
@@ -582,6 +586,42 @@ def _scalar_payload_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
         for key, value in without_overruled(payload).items()
         if isinstance(value, (str, int, float, bool)) or value is None
     }
+
+
+def _resolvable_value_paths(payload: Mapping[str, Any], resolvable_fields: Mapping[str, Any]) -> list[str]:
+    """The payload paths the object's declared resolvable values cover.
+
+    A field value covers its own path (list elements each theirs); an
+    object-root value covers its identity and contract keys.
+    """
+
+    from src.lib.domain_packs.resolvable_values import CONTRACT_KEYS
+
+    covered: list[str] = []
+    for declared, spec in resolvable_fields.items():
+        if not declared:
+            covered.extend((*spec.identity_keys, *CONTRACT_KEYS))
+            continue
+        tokens = path_tokens(declared)
+        if tokens is not None:
+            covered.extend(_concrete_paths(payload, tokens, ""))
+    return list(dict.fromkeys(covered))
+
+
+def _concrete_paths(node: Any, tokens: Sequence[Any], walked: str) -> list[str]:
+    """Concrete paths of a declared path in one payload; an unindexed list fans out."""
+
+    if isinstance(node, list):
+        if tokens and isinstance(tokens[0], int):
+            index = tokens[0]
+            return _concrete_paths(node[index], tokens[1:], f"{walked}[{index}]") if index < len(node) else []
+        return [path for index, item in enumerate(node) for path in _concrete_paths(item, tokens, f"{walked}[{index}]")]
+    if not tokens:
+        return [walked] if isinstance(node, Mapping) else []
+    if not isinstance(node, Mapping) or tokens[0] not in node:
+        return []
+    key = str(tokens[0])
+    return _concrete_paths(node[key], tokens[1:], f"{walked}.{key}" if walked else key)
 
 
 def _read_payload_refs_effectively(
@@ -1723,6 +1763,7 @@ def _build_artifact_from_step(
     default_object_refs: list[str] = []
     default_object_types: list[str] = []
     object_ref_links: dict[str, dict[str, list[str]]] = {}
+    resolvable_value_paths: dict[str, list[str]] = {}
     # Object labels are the declared label only (Chris, Sep 22). The legacy
     # label stays on the rows until here so record matching is unchanged.
     declared_labels: list[Any] = [_declared_payload_label(item) for item in object_items]
@@ -1771,6 +1812,11 @@ def _build_artifact_from_step(
         for row, item in zip(rows_by_source["object"], object_items):
             effective = source.effective_item(item) if source is not None else item
             if source is not None:
+                value_paths = _resolvable_value_paths(
+                    _object_payload(effective), source.resolvable_fields.get(str(item.get("object_type") or ""), {}),
+                )
+                if value_paths:
+                    resolvable_value_paths.update({key: value_paths for key in _object_keys(row)})
                 _read_payload_refs_effectively(
                     row, effective, source.resolvable_fields.get(str(item.get("object_type") or ""), {}),
                 )
@@ -1830,6 +1876,7 @@ def _build_artifact_from_step(
         default_object_refs=default_object_refs,
         default_object_types=default_object_types,
         object_ref_links=object_ref_links,
+        resolvable_value_paths=resolvable_value_paths,
     )
 
 
@@ -3262,7 +3309,16 @@ def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[int, list[tupl
         for row in artifact.rows_by_source.get("object") or []:
             paths: list[tuple[Any, ...]] = []
             for key in _object_keys(row):
-                paths.extend(direct.get(key, []))
+                # A declared resolvable value reads its own state (ALL-1283 contract
+                # section 3): no finding relabels its cells.
+                covered = [
+                    tokens for path in artifact.resolvable_value_paths.get(key, [])
+                    if (tokens := path_tokens(path)) is not None
+                ]
+                paths.extend(
+                    finding for finding in direct.get(key, [])
+                    if not any(tuple(finding[: len(value)]) == tuple(value) for value in covered)
+                )
                 for field_path, ref_keys in artifact.object_ref_links.get(key, {}).items():
                     tokens = path_tokens(field_path)
                     flagged = [position for position, ref in enumerate(ref_keys) if direct.get(ref)]

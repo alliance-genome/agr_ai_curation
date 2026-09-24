@@ -58,7 +58,10 @@ def validator_failure_classification(
     """Classify unresolved validator results for validation finding details.
 
     Every value maps to a resolvable value's lookup outcome through
-    ``resolvable_values.lookup_outcome_for_failure``.
+    ``resolvable_values.lookup_outcome_for_failure``. What the lookups found
+    decides first: an unresolved result names the fields it could not fill
+    (``missing_expected_fields``) whatever the reason, so that alone means
+    the result is incomplete only when no lookup outcome says why.
     """
 
     methods = {attempt.method for attempt in result.lookup_attempts}
@@ -66,8 +69,6 @@ def validator_failure_classification(
         return "invalid_schema"
     if "validator_agent_error" in methods:
         return "transient"
-    if result.missing_expected_fields:
-        return "missing_expected_result_field"
     outcomes = {attempt.outcome for attempt in result.lookup_attempts}
     if "ambiguous" in outcomes:
         return "ambiguous"
@@ -79,6 +80,8 @@ def validator_failure_classification(
         return "blocked"
     if "error" in outcomes:
         return "transient"
+    if result.missing_expected_fields:
+        return "missing_expected_result_field"
     if outcomes == {"success"}:
         # Every lookup succeeded, and the validator judged no candidate fits.
         return "rejected_candidates"
