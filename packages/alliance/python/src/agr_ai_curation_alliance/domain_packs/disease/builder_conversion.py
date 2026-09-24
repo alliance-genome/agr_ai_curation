@@ -63,6 +63,7 @@ from .._resolvable_payloads import (
     ONTOLOGY_TERM_IDENTITY_KEYS,
     VOCABULARY_TERM_IDENTITY_KEYS,
     condition_relations_payload,
+    staged_item_list,
     staged_list,
     staged_value,
 )
@@ -179,14 +180,12 @@ def _linkml_uri(source_file: str) -> str:
 def _subtype_for_subject(subject_type: str | None) -> tuple[str, str, str]:
     """Select the concrete (object_type, schema_id, class_name) for a staged subject kind (D1).
 
-    Unknown/missing subject kinds fall back to the abstract DiseaseAnnotation; the active subject
-    validator then surfaces a validator_unresolved (non-structural) finding.
+    The stage tool accepts only gene, allele or agm, the same values the subject check routes on;
+    with no subject kind the abstract DiseaseAnnotation is written.
     """
-    normalized = (subject_type or "").strip().lower()
-    return DISEASE_SUBJECT_SUBTYPES.get(
-        normalized,
-        (DISEASE_OBJECT_TYPE, DISEASE_LINKML_SCHEMA_ID, "DiseaseAnnotation"),
-    )
+    if subject_type is None:
+        return (DISEASE_OBJECT_TYPE, DISEASE_LINKML_SCHEMA_ID, "DiseaseAnnotation")
+    return DISEASE_SUBJECT_SUBTYPES[subject_type]
 
 
 def _annotation_schema_ref(schema_id: str, class_name: str) -> SchemaRef:
@@ -672,16 +671,20 @@ def materialize_disease_builder_state(
         # Every optional value is staged only when the extractor supplied it; lists stage each
         # proposed entry as its own value, validated per element.
         disease_relation = _optional_vocabulary_value(staged_fields, "disease_relation_name")
-        evidence_code_curies = staged_list(
-            staged_fields.get("evidence_code_curies"), identity_keys=EVIDENCE_CODE_IDENTITY_KEYS
+        evidence_code_curies = staged_item_list(
+            staged_fields.get("evidence_code_curies"),
+            identity_keys=EVIDENCE_CODE_IDENTITY_KEYS,
+            proposal_keys={"curie": "curie"},
         )
         genetic_sex = _optional_vocabulary_value(staged_fields, "genetic_sex_name")
         disease_qualifier_names = staged_list(
             staged_fields.get("disease_qualifier_names"),
             identity_keys=VOCABULARY_TERM_IDENTITY_KEYS,
         )
-        with_gene_identifiers = staged_list(
-            staged_fields.get("with_gene_identifiers"), identity_keys=WITH_GENE_IDENTITY_KEYS
+        with_gene_identifiers = staged_item_list(
+            staged_fields.get("with_gene_identifiers"),
+            identity_keys=WITH_GENE_IDENTITY_KEYS,
+            proposal_keys={"gene_id": "primary_external_id"},
         )
         condition_relations = condition_relations_payload(staged_fields.get("condition_relations"))
         subject_payload = _subject_payload(staged_fields)

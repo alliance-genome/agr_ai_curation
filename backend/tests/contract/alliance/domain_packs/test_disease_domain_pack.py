@@ -263,11 +263,8 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "path": "disease_annotation_object.mention",
         "required": True,
     }
-    assert disease_term_binding["input_fields"]["name"] == {
-        "source": "payload",
-        "path": "disease_annotation_object.proposed_name",
-        "required": False,
-    }
+    # Extraction never proposes a term name; the paper wording is the search input.
+    assert "name" not in disease_term_binding["input_fields"]
     assert disease_term_binding["input_fields"]["source_mentions"] == {
         "source": "payload",
         "path": "source_mentions",
@@ -297,9 +294,15 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         for binding in validator_bindings["active"]
         if binding["binding_id"] == "disease_evidence_code_lookup"
     )
-    assert evidence_code_binding["input_fields"]["curie"] == {
+    # The evidence as the paper states it is searched; an ECO ID only when the paper prints it.
+    assert evidence_code_binding["input_fields"]["label"] == {
         "source": "payload",
         "path": "evidence_code_curies.mention",
+        "required": True,
+    }
+    assert evidence_code_binding["input_fields"]["curie"] == {
+        "source": "payload",
+        "path": "evidence_code_curies.proposed_curie",
         "required": False,
     }
     assert evidence_code_binding["input_fields"]["ontology_term_type"]["source"] == (
@@ -649,7 +652,9 @@ def test_disease_evidence_code_lookup_validates_every_staged_element():
 
     pack = _disease_pack()
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
-    evidence_code_curies = ["ECO:0000315", "ECO:0000316", "ECO:0000501"]
+    evidence = ["IMP", "genetic interaction", "ECO:0000501"]
+    staged = _staged_list(evidence, ("curie",))
+    staged[2]["proposed_curie"] = "ECO:0000501"  # the paper printed this one's ID
     envelope = DomainEnvelope(
         envelope_id="disease-multivalued-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
@@ -657,7 +662,7 @@ def test_disease_evidence_code_lookup_validates_every_staged_element():
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
-                payload={"evidence_code_curies": _staged_list(evidence_code_curies, ("curie",))},
+                payload={"evidence_code_curies": staged},
             )
         ],
     )
@@ -684,7 +689,8 @@ def test_disease_evidence_code_lookup_validates_every_staged_element():
     requests = [
         build_domain_validation_request(match).request for match in evidence_matches
     ]
-    assert [request.selected_inputs["curie"] for request in requests] == evidence_code_curies
+    assert [request.selected_inputs["label"] for request in requests] == evidence
+    assert [request.selected_inputs.get("curie") for request in requests] == [None, None, "ECO:0000501"]
     assert [
         request.expected_result_fields["curie"] for request in requests
     ] == [
@@ -971,7 +977,9 @@ def test_disease_with_gene_validation_validates_every_staged_element():
 
     pack = _disease_pack()
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
-    gene_identifiers = ["FB:FBgn0000001", "FB:FBgn0000002", "FB:FBgn0000003"]
+    gene_wordings = ["Appl", "Psn", "FBgn0000003"]
+    staged = _staged_list(gene_wordings, ("primary_external_id",))
+    staged[2]["proposed_primary_external_id"] = "FB:FBgn0000003"  # the paper printed this ID
     envelope = DomainEnvelope(
         envelope_id="disease-with-gene-multivalued-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
@@ -979,7 +987,7 @@ def test_disease_with_gene_validation_validates_every_staged_element():
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
-                payload={"with_gene_identifiers": _staged_list(gene_identifiers, ("primary_external_id",))},
+                payload={"with_gene_identifiers": staged},
             )
         ],
     )
@@ -1002,13 +1010,14 @@ def test_disease_with_gene_validation_validates_every_staged_element():
         "with_gene_identifiers[2]",
     ]
 
-    # Each element resolves its own gene_id into the validator request and write-back.
+    # Each element sends its own paper wording (and any printed ID) and gets its own write-back.
     requests = [
         build_domain_validation_request(match).request for match in with_gene_matches
     ]
-    assert [
-        request.selected_inputs["gene_id"] for request in requests
-    ] == gene_identifiers
+    assert [request.selected_inputs["mention"] for request in requests] == gene_wordings
+    assert [request.selected_inputs.get("proposed_gene_id") for request in requests] == [
+        None, None, "FB:FBgn0000003",
+    ]
     assert [
         request.expected_result_fields["primary_external_id"] for request in requests
     ] == [
@@ -1101,6 +1110,9 @@ def test_evidence_code_multivalued_field_groups_into_one_batch():
 
     pack = _disease_pack()
     evidence_code_curies = ["ECO:0000315", "ECO:0000316"]
+    staged = _staged_list(["IMP", "IGI"], ("curie",))
+    for value, curie in zip(staged, evidence_code_curies):
+        value["proposed_curie"] = curie  # the paper printed each ECO ID
     envelope = DomainEnvelope(
         envelope_id="disease-evidence-batch-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
@@ -1108,7 +1120,7 @@ def test_evidence_code_multivalued_field_groups_into_one_batch():
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-batch-1",
-                payload={"evidence_code_curies": _staged_list(evidence_code_curies, ("curie",))},
+                payload={"evidence_code_curies": staged},
             )
         ],
     )
@@ -1496,13 +1508,13 @@ def test_each_evidence_code_records_its_own_validator_result():
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
-                payload={"evidence_code_curies": _staged_list(["ECO:0000315", "IMP"], ("curie",))},
+                payload={"evidence_code_curies": _staged_list(["mutant phenotype", "IGI"], ("curie",))},
             )
         ],
     )
 
     def decide(request):
-        if request.selected_inputs["curie"] == "ECO:0000315":
+        if request.selected_inputs["label"] == "mutant phenotype":
             return _validator_result(
                 request, status="resolved", resolved_values={"curie": "ECO:0000315"}, outcome="success"
             )
@@ -1514,14 +1526,14 @@ def test_each_evidence_code_records_its_own_validator_result():
     assert (resolved["curie"], resolved["resolution_state"], resolved["mention"]) == (
         "ECO:0000315",
         RESOLVED,
-        "ECO:0000315",
+        "mutant phenotype",
     )
     assert (unresolved["curie"], unresolved["resolution_state"], unresolved["lookup_outcome"]) == (
         None,
         "unresolved",
         "not_found",
     )
-    assert unresolved["mention"] == "IMP"
+    assert unresolved["mention"] == "IGI"
 
 
 def test_each_condition_component_records_its_own_composite_decision():

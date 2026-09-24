@@ -161,7 +161,7 @@ fixtures:
           validator_explanation: Not validated yet.
         evidence_code_curies:
         - curie: null
-          mention: ECO:0000315
+          mention: IMP
           resolution_state: unresolved
           lookup_outcome: not_validated
           validator_explanation: Not validated yet.
@@ -178,7 +178,8 @@ fixtures:
           lookup_outcome: not_validated
           validator_explanation: Not validated yet.
         with_gene_identifiers:
-        - primary_external_id: null
+        - proposed_primary_external_id: FB:FBgn0000108
+          primary_external_id: null
           mention: FB:FBgn0000108
           resolution_state: unresolved
           lookup_outcome: not_validated

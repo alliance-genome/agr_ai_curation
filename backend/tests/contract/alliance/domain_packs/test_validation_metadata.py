@@ -1153,8 +1153,8 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "disease",
                 "accepted_prefixes": ["DOID"],
-                # The paper wording (label) is required; the proposals are optional.
-                "optional_inputs": ["curie", "name"],
+                # The paper wording (label) is required; a printed DOID is optional.
+                "optional_inputs": ["curie"],
                 "expected_result_fields": {
                     "curie": "disease_annotation_object.curie",
                     "label": "disease_annotation_object.name",

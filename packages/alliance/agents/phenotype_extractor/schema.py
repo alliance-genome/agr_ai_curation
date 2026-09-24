@@ -402,10 +402,6 @@ class PhenotypeTermPayload(_ResolvablePayload):
         default=None,
         description="Ontology CURIE the extractor proposed for validation",
     )
-    proposed_label: StrictStr | None = Field(
-        default=None,
-        description="Ontology label the extractor proposed for validation",
-    )
     overruled_curie: StrictStr | None = Field(
         default=None, description="An ontology CURIE a validator overruled; informational only, never the value",
     )

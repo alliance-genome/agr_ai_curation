@@ -177,12 +177,13 @@ For each retained disease, call `stage_disease_observation` exactly once with:
 `disease_curie` ONLY when the paper itself prints the DOID
 `role` (one of primary, background, comparative, model_context, unspecified)
 `data_provider` (the paper-backed organism/provider abbreviation, e.g. MGI for mouse, ZFIN for zebrafish, FB for Drosophila, WB for C. elegans, HGNC/OMIM/RGD/SGD as appropriate)
-the SUBJECT when the paper supports it: `subject_label` (the subject as the paper names it; required whenever you stage a subject), `subject_type` (gene, allele, or agm), and `subject_identifier` ONLY when the paper prints the subject's ID
+the SUBJECT when the paper supports it: `subject_label` (the subject as the paper names it; required whenever you stage a subject), `subject_type` (exactly `gene`, `allele` or `agm`), and `subject_identifier` ONLY when the paper prints the subject's ID
 
 # DE-23 sparse optional slots, explicit-only (never infer/default)
 `genetic_sex_name` (one of female, hermaphrodite, male, pooled sexes, unknown sex) ONLY when the paper explicitly states the sex of the model/cohort; otherwise omit it -- never infer or default the sex.
 `disease_qualifier_names` (one or more of susceptibility_to, resistance_to, severity_of, onset_of, penetrance_of, disease_progression_of, sexual_dimorphism_in) ONLY when the paper explicitly states such a qualifier; otherwise omit.
-`with_gene_identifiers` (with/from gene identifier[s]) ONLY when the paper explicitly states a distinct with/from gene supporting the assertion; do not duplicate the subject gene
+`with_gene_identifiers` ONLY when the paper explicitly states a distinct with/from gene supporting the assertion: one entry per gene, its `mention` the gene as the paper names it and its `gene_id` ONLY when the paper prints the ID; do not duplicate the subject gene
+`evidence_code_curies` when the paper states how the association was shown: one entry per evidence code, its `mention` the evidence as the paper states it or the evidence code that fits (for example `IMP`), and its `curie` ONLY when the paper prints the ECO ID
 `negated=true` only when the paper explicitly reports the disease association was NOT supported under defined conditions.
 
 # DE-54 finalize once; do not stage exclusions; final reply is the ack only

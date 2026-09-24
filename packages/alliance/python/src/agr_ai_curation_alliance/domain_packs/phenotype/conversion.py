@@ -89,8 +89,7 @@ _TERM_EXPORT_BLOCKED = "blocked_pending_ontology_resolution"
 _TERM_WRITE_BLOCKED_REASON = "phenotype term CURIE unresolved"
 _REFERENCE_PENDING_STATE = "pending_reference_resolution"
 
-# A phenotype term's validated identity; everything the extractor proposed for it
-# stays under proposed_curie / proposed_label.
+# A phenotype term's validated identity; a term ID the paper prints stays under proposed_curie.
 PHENOTYPE_TERM_IDENTITY_KEYS = ("curie", "label")
 PHENOTYPE_SUBJECT_IDENTITY_KEYS = ("subject_identifier", "subject_label", "taxon")
 DATA_PROVIDER_IDENTITY_KEYS = ("abbreviation",)

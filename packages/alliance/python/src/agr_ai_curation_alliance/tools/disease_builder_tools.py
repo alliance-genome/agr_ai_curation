@@ -68,6 +68,7 @@ from .agr_curation import (
 )
 from .builder_finalization import finalize_builder_extraction
 from .builder_rationale import document_rationale_arg, normalize_rationale
+from .builder_subject_type import SUBJECT_TYPE_DESCRIPTION, SubjectType, subject_type_issue
 
 
 # Patch field paths that map staging-input names to disease candidate staged-field names.
@@ -182,6 +183,74 @@ class ConditionRelationInput(_StrictToolModel):
         return cleaned
 
 
+class EvidenceCodeInput(_StrictToolModel):
+    """One evidence code: the evidence as the paper states it, plus an ECO ID only when printed."""
+
+    mention: StrictStr = Field(
+        description=(
+            "The evidence as the paper states it, or the evidence code that fits the reported "
+            "experiment (for example 'IMP' or 'mutant phenotype'). The evidence code validator "
+            "searches the Evidence and Conclusion Ontology for it."
+        ),
+    )
+    curie: Optional[StrictStr] = Field(
+        default=None,
+        description="The ECO ID, only when the paper itself prints it; a validator checks it.",
+    )
+
+    @field_validator("mention")
+    @classmethod
+    def _non_empty_mention(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("mention must be non-empty: the evidence as the paper states it")
+        return cleaned
+
+
+class WithGeneInput(_StrictToolModel):
+    """One with/from gene: the gene as the paper names it, plus its ID only when printed."""
+
+    mention: StrictStr = Field(
+        description="The with/from gene as the paper names it; the gene validator searches for it.",
+    )
+    gene_id: Optional[StrictStr] = Field(
+        default=None,
+        description="The gene's identifier, only when the paper itself prints it; the gene validator checks it.",
+    )
+
+    @field_validator("mention")
+    @classmethod
+    def _non_empty_mention(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("mention must be non-empty: the gene as the paper names it")
+        return cleaned
+
+
+# The entry shape each structured list takes, named in the error a model gets for a bare string.
+_STRUCTURED_LIST_SHAPES = {
+    "evidence_code_curies": (
+        '{"mention": "<the evidence as the paper states it, or the code that fits, e.g. IMP>", '
+        '"curie": "<the ECO ID, only when the paper prints it>"}'
+    ),
+    "with_gene_identifiers": (
+        '{"mention": "<the gene as the paper names it>", '
+        '"gene_id": "<its ID, only when the paper prints it>"}'
+    ),
+}
+
+
+def _structured_list_issue(field_name: str, value: Any) -> Optional[str]:
+    """Why a structured list holds bare strings instead of entry objects, or None."""
+
+    if isinstance(value, list) and any(isinstance(item, str) for item in value):
+        return (
+            f"{field_name} entries are objects, not strings; send each entry as "
+            f"{_STRUCTURED_LIST_SHAPES[field_name]}"
+        )
+    return None
+
+
 class DiseaseStageInput(_StrictToolModel):
     validation_guidance: Optional[StrictStr] = Field(
         default=None,
@@ -218,7 +287,7 @@ class DiseaseStageInput(_StrictToolModel):
         default=None,
         description="The DOID, only when the paper itself prints it for this disease; a validator checks it.",
     )
-    subject_type: Optional[StrictStr] = None
+    subject_type: Optional[SubjectType] = Field(default=None, description=SUBJECT_TYPE_DESCRIPTION)
     subject_identifier: Optional[StrictStr] = Field(
         default=None,
         description="The subject's identifier, only when the paper itself prints it; the subject validator checks it.",
@@ -234,16 +303,23 @@ class DiseaseStageInput(_StrictToolModel):
         default=None,
         description="The Disease Relation term you choose; the relation validator confirms it.",
     )
-    evidence_code_curies: List[StrictStr] = Field(
+    evidence_code_curies: List[EvidenceCodeInput] = Field(
         default_factory=list,
         max_length=20,
-        description="ECO IDs you propose; each is confirmed separately by the evidence code validator.",
+        description=(
+            "The evidence for this annotation, one entry per evidence code; each is checked "
+            "separately by the evidence code validator."
+        ),
     )
     # R4 optional slots. genetic_sex_name is a single Genetic Sex CV term; disease_qualifier_names
     # and with_gene_identifiers are multivalued (validated/snapshotted at [0], full list carried).
     genetic_sex_name: Optional[StrictStr] = None
     disease_qualifier_names: List[StrictStr] = Field(default_factory=list, max_length=20)
-    with_gene_identifiers: List[StrictStr] = Field(default_factory=list, max_length=20)
+    with_gene_identifiers: List[WithGeneInput] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Additional with/from genes the paper names as supporting the assertion.",
+    )
     # Nested experimental conditions. Each ConditionRelation carries a relation type plus
     # its grounded ExperimentalCondition components; the engine fans out per condition and the
     # composite validator decides each one. Optional + sparse — staged only when the paper
@@ -252,6 +328,14 @@ class DiseaseStageInput(_StrictToolModel):
         default_factory=list, max_length=20
     )
     negated: Optional[StrictBool] = None
+
+    @field_validator("evidence_code_curies", "with_gene_identifiers", mode="before")
+    @classmethod
+    def _entries_are_objects(cls, value: Any, info: Any) -> Any:
+        issue = _structured_list_issue(info.field_name, value)
+        if issue is not None:
+            raise ValueError(issue)
+        return value
 
     @field_validator("pending_ref_id", "mention", "role", "confidence", "data_provider")
     @classmethod
@@ -301,6 +385,12 @@ def _subject_wording_issue(fields: Mapping[str, Any]) -> Optional[str]:
     return f"{', '.join(staged)} need subject_label, the subject as the paper names it"
 
 
+_STRUCTURED_LIST_PATCH_VALUES = {
+    "evidence_code_curies": "evidence_codes_value",
+    "with_gene_identifiers": "with_genes_value",
+}
+
+
 class DiseasePatchUpdateInput(_StrictToolModel):
     field_path: StrictStr
     string_value: Optional[StrictStr] = None
@@ -310,6 +400,19 @@ class DiseasePatchUpdateInput(_StrictToolModel):
     condition_relations_value: Optional[List[ConditionRelationInput]] = Field(
         default=None, max_length=20
     )
+    # Structured list payloads (only used when field_path is evidence_code_curies or
+    # with_gene_identifiers).
+    evidence_codes_value: Optional[List[EvidenceCodeInput]] = Field(default=None, max_length=20)
+    with_genes_value: Optional[List[WithGeneInput]] = Field(default=None, max_length=20)
+
+    @field_validator("evidence_codes_value", "with_genes_value", mode="before")
+    @classmethod
+    def _entries_are_objects(cls, value: Any, info: Any) -> Any:
+        field_name = {v: k for k, v in _STRUCTURED_LIST_PATCH_VALUES.items()}[info.field_name]
+        issue = _structured_list_issue(field_name, value)
+        if issue is not None:
+            raise ValueError(issue)
+        return value
 
     @field_validator("field_path")
     @classmethod
@@ -318,6 +421,19 @@ class DiseasePatchUpdateInput(_StrictToolModel):
         if cleaned not in _DISEASE_PATCH_FIELD_PATHS:
             raise ValueError(f"field_path must be one of {sorted(_DISEASE_PATCH_FIELD_PATHS)}")
         return cleaned
+
+    @model_validator(mode="after")
+    def _value_fits_the_field(self) -> "DiseasePatchUpdateInput":
+        if self.field_path == "subject_type":
+            issue = subject_type_issue(self.string_value)
+            if issue is not None:
+                raise ValueError(issue)
+        if self.field_path in _STRUCTURED_LIST_PATCH_VALUES and self.string_list_value is not None:
+            raise ValueError(
+                f"{self.field_path} takes {_STRUCTURED_LIST_PATCH_VALUES[self.field_path]}, a list "
+                f"of entries shaped {_STRUCTURED_LIST_SHAPES[self.field_path]}"
+            )
+        return self
 
 
 class DiseasePatchInput(_StrictToolModel):
@@ -467,6 +583,15 @@ def _staged_condition_relations(
     return staged
 
 
+def _staged_items(items: Sequence[BaseModel]) -> list[dict[str, Any]]:
+    """Structured list entries as staged fields: each item's paper wording plus any printed ID."""
+
+    return [
+        {key: value.strip() for key, value in item.model_dump(exclude_none=True).items() if value.strip()}
+        for item in items
+    ]
+
+
 def _stage_payload_from_disease_input(stage_input: DiseaseStageInput) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "domain_pack_id": DISEASE_DOMAIN_PACK_ID,
@@ -481,11 +606,11 @@ def _stage_payload_from_disease_input(stage_input: DiseaseStageInput) -> dict[st
         "negated": bool(stage_input.negated),
     }
     if stage_input.evidence_code_curies:
-        payload["evidence_code_curies"] = list(stage_input.evidence_code_curies)
+        payload["evidence_code_curies"] = _staged_items(stage_input.evidence_code_curies)
     if stage_input.disease_qualifier_names:
         payload["disease_qualifier_names"] = list(stage_input.disease_qualifier_names)
     if stage_input.with_gene_identifiers:
-        payload["with_gene_identifiers"] = list(stage_input.with_gene_identifiers)
+        payload["with_gene_identifiers"] = _staged_items(stage_input.with_gene_identifiers)
     staged_condition_relations = _staged_condition_relations(stage_input.condition_relations)
     if staged_condition_relations:
         payload["condition_relations"] = staged_condition_relations
@@ -515,14 +640,14 @@ def _stage_disease_observation_impl(
     source_mentions: List[str],
     rationale: str,
     disease_curie: Optional[str] = None,
-    subject_type: Optional[str] = None,
+    subject_type: Optional[SubjectType] = None,
     subject_identifier: Optional[str] = None,
     subject_label: Optional[str] = None,
     disease_relation_name: Optional[str] = None,
-    evidence_code_curies: Optional[List[str]] = None,
+    evidence_code_curies: Optional[List[Mapping[str, Any]]] = None,
     genetic_sex_name: Optional[str] = None,
     disease_qualifier_names: Optional[List[str]] = None,
-    with_gene_identifiers: Optional[List[str]] = None,
+    with_gene_identifiers: Optional[List[Mapping[str, Any]]] = None,
     condition_relations: Optional[List[Mapping[str, Any]]] = None,
     negated: Optional[bool] = None,
     validation_guidance: Optional[str] = None,
@@ -538,6 +663,14 @@ def _stage_disease_observation_impl(
             subject validator checks it.
         subject_label: The subject (gene, allele, or model) as the paper names it. Required
             whenever subject_type or subject_identifier is staged.
+        subject_type: What the subject is: exactly gene, allele or agm (a genetic model such as
+            a strain or line). It picks the annotation type and which validator checks the
+            subject.
+        evidence_code_curies: The evidence, one entry per evidence code: ``mention`` is the
+            evidence as the paper states it or the evidence code that fits (for example IMP),
+            and ``curie`` is the ECO ID only when the paper prints it.
+        with_gene_identifiers: Additional with/from genes: ``mention`` is the gene as the paper
+            names it, and ``gene_id`` its identifier only when the paper prints it.
         validation_guidance: Optional short sentence forwarding relevant rules from your
             configured prompt and case-specific paper context to this finding's validators.
             Distinguish domain rules from paper facts. Do not copy whole prompts, quote
@@ -698,14 +831,14 @@ def _patch_disease_observation_impl(
                 )
             payload["source_mentions"] = new_mentions
             continue
-        if update.field_path == "evidence_code_curies":
-            new_codes = [str(item).strip() for item in (update.string_list_value or []) if str(item).strip()]
-            if new_codes:
-                payload["evidence_code_curies"] = new_codes
+        if update.field_path in _STRUCTURED_LIST_PATCH_VALUES:
+            items = getattr(update, _STRUCTURED_LIST_PATCH_VALUES[update.field_path]) or []
+            if items:
+                payload[update.field_path] = _staged_items(items)
             else:
-                payload.pop("evidence_code_curies", None)
+                payload.pop(update.field_path, None)
             continue
-        if update.field_path in {"disease_qualifier_names", "with_gene_identifiers"}:
+        if update.field_path == "disease_qualifier_names":
             new_values = [str(item).strip() for item in (update.string_list_value or []) if str(item).strip()]
             if new_values:
                 payload[update.field_path] = new_values

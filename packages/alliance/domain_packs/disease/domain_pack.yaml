@@ -544,13 +544,6 @@ object_definitions:
         metadata:
           protected: true
           exported: false
-      - field_path: disease_annotation_object.proposed_name
-        field_type: string
-        display_name: Disease term proposed name
-        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
-        metadata:
-          protected: true
-          exported: false
       - field_path: disease_annotation_object.resolution_state
         field_type: enum
         display_name: Disease term status
@@ -855,6 +848,13 @@ object_definitions:
           validated value.
         metadata:
           protected: true
+      - field_path: evidence_code_curies.proposed_curie
+        field_type: string
+        display_name: Evidence code proposed ID
+        description: An ECO ID the paper prints for this evidence, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: evidence_code_curies.resolution_state
         field_type: enum
         display_name: Evidence code status
@@ -1137,6 +1137,13 @@ object_definitions:
           validated value.
         metadata:
           protected: true
+      - field_path: with_gene_identifiers.proposed_primary_external_id
+        field_type: string
+        display_name: With/from gene proposed ID
+        description: A gene ID the paper prints for this with/from gene, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: with_gene_identifiers.resolution_state
         field_type: enum
         display_name: With/from gene status
@@ -1916,13 +1923,6 @@ object_definitions:
         metadata:
           protected: true
           exported: false
-      - field_path: disease_annotation_object.proposed_name
-        field_type: string
-        display_name: Disease term proposed name
-        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
-        metadata:
-          protected: true
-          exported: false
       - field_path: disease_annotation_object.resolution_state
         field_type: enum
         display_name: Disease term status
@@ -2221,6 +2221,13 @@ object_definitions:
           validated value.
         metadata:
           protected: true
+      - field_path: evidence_code_curies.proposed_curie
+        field_type: string
+        display_name: Evidence code proposed ID
+        description: An ECO ID the paper prints for this evidence, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: evidence_code_curies.resolution_state
         field_type: enum
         display_name: Evidence code status
@@ -2503,6 +2510,13 @@ object_definitions:
           validated value.
         metadata:
           protected: true
+      - field_path: with_gene_identifiers.proposed_primary_external_id
+        field_type: string
+        display_name: With/from gene proposed ID
+        description: A gene ID the paper prints for this with/from gene, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: with_gene_identifiers.resolution_state
         field_type: enum
         display_name: With/from gene status
@@ -3276,13 +3290,6 @@ object_definitions:
         metadata:
           protected: true
           exported: false
-      - field_path: disease_annotation_object.proposed_name
-        field_type: string
-        display_name: Disease term proposed name
-        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
-        metadata:
-          protected: true
-          exported: false
       - field_path: disease_annotation_object.resolution_state
         field_type: enum
         display_name: Disease term status
@@ -3578,6 +3585,13 @@ object_definitions:
           validated value.
         metadata:
           protected: true
+      - field_path: evidence_code_curies.proposed_curie
+        field_type: string
+        display_name: Evidence code proposed ID
+        description: An ECO ID the paper prints for this evidence, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: evidence_code_curies.resolution_state
         field_type: enum
         display_name: Evidence code status
@@ -3860,6 +3874,13 @@ object_definitions:
           validated value.
         metadata:
           protected: true
+      - field_path: with_gene_identifiers.proposed_primary_external_id
+        field_type: string
+        display_name: With/from gene proposed ID
+        description: A gene ID the paper prints for this with/from gene, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: with_gene_identifiers.resolution_state
         field_type: enum
         display_name: With/from gene status
@@ -4633,13 +4654,6 @@ object_definitions:
         metadata:
           protected: true
           exported: false
-      - field_path: disease_annotation_object.proposed_name
-        field_type: string
-        display_name: Disease term proposed name
-        description: Extractor's proposed name, not validated. It is a validator input only, never shown or exported as the value.
-        metadata:
-          protected: true
-          exported: false
       - field_path: disease_annotation_object.resolution_state
         field_type: enum
         display_name: Disease term status
@@ -4937,6 +4951,13 @@ object_definitions:
           validated value.
         metadata:
           protected: true
+      - field_path: evidence_code_curies.proposed_curie
+        field_type: string
+        display_name: Evidence code proposed ID
+        description: An ECO ID the paper prints for this evidence, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: evidence_code_curies.resolution_state
         field_type: enum
         display_name: Evidence code status
@@ -5219,6 +5240,13 @@ object_definitions:
           validated value.
         metadata:
           protected: true
+      - field_path: with_gene_identifiers.proposed_primary_external_id
+        field_type: string
+        display_name: With/from gene proposed ID
+        description: A gene ID the paper prints for this with/from gene, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: with_gene_identifiers.resolution_state
         field_type: enum
         display_name: With/from gene status
@@ -6002,8 +6030,8 @@ metadata:
           field_paths:
             - disease_annotation_object.curie
             - disease_annotation_object.name
-        # Extracted vs validated (ALL-1283): the paper wording and the extractor's proposed
-        # DOID/name are the inputs; only the validator result writes curie/name.
+        # Extracted vs validated (ALL-1283): the paper wording and a DOID the paper prints are the
+        # inputs; only the validator result writes curie/name.
         input_fields:
           curie:
             source: payload
@@ -6012,10 +6040,6 @@ metadata:
           label:
             source: payload
             path: disease_annotation_object.mention
-          name:
-            source: payload
-            path: disease_annotation_object.proposed_name
-            required: false
           source_mentions:
             source: payload
             path: source_mentions
@@ -6347,11 +6371,16 @@ metadata:
             - AGMDiseaseAnnotation
           field_paths:
             - evidence_code_curies
+        # The evidence as the paper states it is searched; an ECO ID is checked only when the paper
+        # prints one (extraction never looks identities up).
         input_fields:
           curie:
             source: payload
-            path: evidence_code_curies.mention
+            path: evidence_code_curies.proposed_curie
             required: false
+          label:
+            source: payload
+            path: evidence_code_curies.mention
           ontology_family:
             source: literal
             value: evidence
@@ -6531,10 +6560,14 @@ metadata:
             - AGMDiseaseAnnotation
           field_paths:
             - with_gene_identifiers
+        # The gene as the paper names it is searched; an ID is checked only when the paper prints one.
         input_fields:
-          gene_id:
+          mention:
             source: payload
             path: with_gene_identifiers.mention
+          proposed_gene_id:
+            source: payload
+            path: with_gene_identifiers.proposed_primary_external_id
             required: false
           data_provider:
             source: payload

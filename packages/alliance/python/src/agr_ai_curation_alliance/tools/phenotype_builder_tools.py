@@ -66,6 +66,7 @@ from .agr_curation import (
 )
 from .builder_finalization import finalize_builder_extraction
 from .builder_rationale import document_rationale_arg, normalize_rationale
+from .builder_subject_type import SUBJECT_TYPE_DESCRIPTION, SubjectType, subject_type_issue
 
 
 # Patch field paths that map staging-input names to phenotype candidate staged-field names.
@@ -261,7 +262,7 @@ class PhenotypeStageInput(_StrictToolModel):
             "any subject detail is staged."
         ),
     )
-    subject_type: Optional[StrictStr] = None
+    subject_type: Optional[SubjectType] = Field(default=None, description=SUBJECT_TYPE_DESCRIPTION)
     subject_taxon: Optional[StrictStr] = Field(
         default=None,
         description=_SPECIES_CONTEXT_FIELD_DESCRIPTIONS["subject_taxon"],
@@ -359,6 +360,14 @@ class PhenotypePatchUpdateInput(_StrictToolModel):
         if cleaned not in _PHENOTYPE_PATCH_FIELD_PATHS:
             raise ValueError(f"field_path must be one of {sorted(_PHENOTYPE_PATCH_FIELD_PATHS)}")
         return cleaned
+
+    @model_validator(mode="after")
+    def _subject_type_is_a_route(self) -> "PhenotypePatchUpdateInput":
+        if self.field_path == "subject_type":
+            issue = subject_type_issue(self.string_value)
+            if issue is not None:
+                raise ValueError(issue)
+        return self
 
 
 class PhenotypePatchInput(_StrictToolModel):
@@ -548,7 +557,7 @@ def _stage_phenotype_observation_impl(
     term_mention: str,
     subject_identifier: Optional[str] = None,
     subject_label: Optional[str] = None,
-    subject_type: Optional[str] = None,
+    subject_type: Optional[SubjectType] = None,
     subject_taxon: Optional[str] = None,
     term_curie: Optional[str] = None,
     data_provider: Optional[str] = None,
@@ -576,6 +585,8 @@ def _stage_phenotype_observation_impl(
             species name. Staged with data_provider and term_taxon_id.
         subject_label: The subject (gene, allele, or model) as the paper names it. Required
             whenever a subject identifier, type, or taxon is staged.
+        subject_type: What the subject is: exactly gene, allele or agm (a genetic model such as
+            a strain or line). It picks which validator checks the subject.
         validation_guidance: Optional short sentence forwarding relevant rules from your
             configured prompt and case-specific paper context to this finding's validators.
             Distinguish domain rules from paper facts. Do not copy whole prompts, quote
