@@ -8,6 +8,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     StrictStr,
     field_validator,
     model_validator,
@@ -232,6 +233,11 @@ class ValidatorFieldResolution(DomainValidatorBaseModel):
 
 class DomainValidatorResultBase(DomainValidatorBaseModel):
     """Dispatcher-required base shape for agent-backed domain validators."""
+
+    # Set only by the program-owned compact assembler, never accepted from JSON.
+    # Composite completeness concerns the values actually decided, not absent
+    # components whose possible destination fields also appear in the binding.
+    _assembled_field_completeness: bool = PrivateAttr(default=False)
 
     status: DomainValidatorStatus = Field(
         description="Validator decision for the target; active validators only return resolved or unresolved",

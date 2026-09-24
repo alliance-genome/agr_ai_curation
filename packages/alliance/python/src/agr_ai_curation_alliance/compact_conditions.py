@@ -238,6 +238,13 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                 if resolution is not None:
                     key, decided, _fields = resolution
                     field_resolutions[key] = decided
+                    if judgment.status == "resolved" and decided["status"] != "resolved":
+                        # The authoritative record can be incomplete even when
+                        # the model selected it confidently. Preserve the other
+                        # components, but do not advertise this one as resolved.
+                        validation["status"] = decided["status"]
+                        validation["resolved_values"] = {}
+                        values = {}
             if values:
                 normalized.append({
                     "component_type": component.component_type, "field_path": component.field_path,
@@ -245,9 +252,10 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                     "source_inputs": deepcopy(component.source_inputs), "validator_agent": owner,
                 })
             if component.required and judgment.status != "resolved":
+                if decision.status == "resolved":
+                    raise ValueError("An unresolved required component keeps the condition unresolved")
+            if component.required and validation["status"] != "resolved":
                 unresolved.append(component.component_type)
-        if decision.status == "resolved" and unresolved:
-            raise ValueError("An unresolved required component keeps the condition unresolved")
         values = deepcopy(payload["resolved_values"])
         for component_type in _TERM_COMPONENTS:
             if component_type in components:
@@ -275,6 +283,8 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
         assembled = {"resolved_values": values, "normalized_components": normalized,
                      "component_validations": validations, "unresolved_components": unresolved,
                      "condition_id": values.get("condition_id")}
+        if unresolved:
+            assembled["status"] = "unresolved"
         if field_resolutions:
             # Each stored component carries its own complete decision (ALL-1283; an incomplete
             # resolved one is recorded as unresolved); values without one are not written, so

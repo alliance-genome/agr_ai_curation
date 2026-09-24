@@ -2514,6 +2514,31 @@ def test_resolved_array_validator_result_accepts_allowed_term_curies():
     assert result.missing_expected_fields == []
 
 
+@pytest.mark.parametrize("violation", ["cardinality", "allowed_term"])
+def test_assembled_completeness_does_not_bypass_array_or_policy_checks(violation):
+    from src.lib.domain_packs.validator_dispatch import _enforce_expected_result_fields
+    from src.schemas.domain_validator import ValidatorFieldResolution
+
+    request = _array_terms_validation_request()
+    terms = [{"curie": "GO:0031981", "name": "nuclear lumen"}]
+    if violation == "allowed_term":
+        terms.append({"curie": "GO:0005654", "name": "nucleoplasm"})
+        request = request.model_copy(update={"selected_inputs": {
+            **request.selected_inputs, "allowed_term_curies": ["GO:0031981"],
+        }})
+    result = DomainValidatorResultBase.model_validate(
+        _result_payload(request, resolved_values={"terms": terms}))
+    result._assembled_field_completeness = True
+    result.field_resolutions = {"terms": ValidatorFieldResolution(
+        status="resolved", lookup_outcome="matched", resolved_values={"terms": terms},
+        explanation="Program-assembled fixture.")}
+    checked = _enforce_expected_result_fields(result, request=request)
+    assert checked.status == "unresolved"
+    assert checked.missing_expected_fields == ["terms"]
+    expected = "one resolved value per selected array item" if violation == "cardinality" else "outside the field-specific allowed term list"
+    assert expected in checked.explanation
+
+
 def test_resolved_array_validator_result_rejects_out_of_allowlist_term_curie():
     base_request = _array_terms_validation_request()
     request = base_request.model_copy(

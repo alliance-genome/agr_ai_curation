@@ -286,4 +286,7 @@ class ValidatorDecisionWorkspace:
             ]
         if payload["status"] == "resolved" and (payload["missing_expected_fields"] or decision.unresolved_questions):
             raise ValueError("Resolved decision still has missing fields or unresolved questions")
-        return contract.result_schema.model_validate(payload, context={"domain_validation_request": request})
+        result = contract.result_schema.model_validate(payload, context={"domain_validation_request": request})
+        if contract.assemble_domain is not None and result.field_resolutions:
+            result._assembled_field_completeness = True
+        return result

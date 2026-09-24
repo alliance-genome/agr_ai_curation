@@ -539,6 +539,64 @@ def test_stored_condition_resolves_without_its_absent_components(schemas):
     assert result.missing_expected_fields == []
 
 
+@pytest.mark.parametrize("batch", [False, True])
+def test_stored_condition_finalization_preserves_component_completeness(schemas, batch):
+    """The dispatcher must not demand absent taxon/chemical/ID slots after assembly."""
+    from src.lib.domain_packs.compact_runtime import CompactValidatorRuntime
+    from src.lib.domain_packs.validator_dispatch import (
+        _ValidatorAgentRunOutput, _ValidatorBatchAgentRunOutput, _ValidatorFinalizationState,
+        _build_finalize_validator_batch_results_tool, _build_finalize_validator_result_tool,
+        _remap_validator_result_for_request, _validated_results_from_agent_batch_output,
+        validator_result_from_agent_output,
+    )
+
+    contract, workspace, decision = _stored_condition_workspace(schemas, with_chemical=False)
+    runtime = CompactValidatorRuntime([contract], adapter=lambda *args: None)
+    runtime.workspace = workspace
+    state = _ValidatorFinalizationState()
+    kwargs = {"finalization_state": state, "compact_runtime": runtime,
+              "function_tool_factory": lambda **kwargs: lambda function: function}
+    if batch:
+        tool = _build_finalize_validator_batch_results_tool([], **kwargs)
+        response = tool([decision])
+        assert response["status"] == "accepted", response
+        [result] = _validated_results_from_agent_batch_output(
+            _ValidatorBatchAgentRunOutput(None, state.accepted_results), jobs=[])
+    else:
+        tool = _build_finalize_validator_result_tool(
+            contract.request, result_schema=contract.result_schema, **kwargs)
+        response = tool(decision)
+        assert response["status"] == "accepted", response
+        result = state.accepted_result
+    result = validator_result_from_agent_output(
+        _ValidatorAgentRunOutput(None, result), request=contract.request)
+    result = _remap_validator_result_for_request(
+        result, contract.request.model_copy(update={"request_id": "remapped-condition"}))
+    assert result.status == "resolved"
+    assert result.request_id == "remapped-condition"
+    assert result.missing_expected_fields == []
+    assert set(result.field_resolutions) == {"condition_class_curie"}
+    assert not any(key.startswith("condition_taxon_") for key in result.resolved_values)
+
+
+def test_raw_composite_result_cannot_bypass_expected_field_enforcement(schemas):
+    from src.lib.domain_packs.validator_dispatch import _validator_result_finalization_feedback
+
+    contract, workspace, decision = _stored_condition_workspace(schemas, with_chemical=False)
+    result = workspace.assemble(contract.decision_schema.model_validate(decision))
+    raw = result.model_dump(mode="json")
+    feedback = _validator_result_finalization_feedback(
+        raw, request=contract.request, result_schema=contract.result_schema)
+    assert feedback.accepted_result is None
+    assert "omitted expected resolved field" in feedback.message
+    assert "_assembled_field_completeness" not in raw
+    raw["_assembled_field_completeness"] = True
+    feedback = _validator_result_finalization_feedback(
+        raw, request=contract.request, result_schema=contract.result_schema)
+    assert feedback.accepted_result is None
+    assert "schema" in feedback.message
+
+
 @pytest.mark.parametrize("root_key,record_field", [("condition_taxon_curie", "curie"), ("condition_taxon_name", "name")])
 def test_condition_rejects_root_identity_for_an_absent_component(schemas, root_key, record_field):
     """Cross-domain dev trace 7a029a7d: a real taxon lookup is not a taxon decision."""
@@ -587,9 +645,13 @@ def test_resolved_component_without_a_record_name_stays_unresolved_alone(schemas
     that component alone is recorded as missing_expected_result_field."""
 
     from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord
+    from src.lib.domain_packs.compact_runtime import CompactValidatorRuntime
+    from src.lib.domain_packs.validator_dispatch import (
+        _ValidatorFinalizationState, _build_finalize_validator_result_tool,
+    )
     from src.schemas.domain_validator import ValidatorCandidate, ValidatorLookupAttempt
 
-    contract, workspace, decision = _stored_condition_workspace(schemas, with_chemical=False)
+    contract, workspace, decision = _stored_condition_workspace(schemas)
     ref = workspace.record_lookup("stored-condition", call_id="bare-lookup", attempt=ValidatorLookupAttempt(
         provider="agr_curation_query", method="get_ontology_terms", query={"terms": ["ZECO:0000111"]},
         result_count=1, outcome="success",
@@ -600,14 +662,41 @@ def test_resolved_component_without_a_record_name_stays_unresolved_alone(schemas
     decision["slots"] = {"condition_class_curie": selection}
     decision["components"][0].update(candidates=[_assessment(ref)], slots={"curie": selection},
                                      lookup_refs=["bare-lookup"])
+    chemical_ref = workspace.record_lookup("stored-condition", call_id="chemical-match", attempt=ValidatorLookupAttempt(
+        provider="agr_curation_query", method="get_ontology_terms", query={"terms": ["CHEBI:9168"]},
+        result_count=1, outcome="success",
+    ), records=[CanonicalValidatorRecord(candidate=ValidatorCandidate(value="CHEBI:9168", label="rapamycin"),
+                                          values={"curie": "CHEBI:9168", "name": "rapamycin"})])[0]
+    chemical_selection = {"kind": "record", "record_ref": chemical_ref, "field": "curie"}
+    decision["candidates"].append(_assessment(chemical_ref))
+    decision["components"][1].update(status="resolved", candidates=[_assessment(chemical_ref)],
+                                     slots={"curie": chemical_selection}, lookup_refs=["chemical-match"],
+                                     explanation="Chemical matches.", curator_message=None)
+    decision["status"] = "resolved"
 
-    result = workspace.assemble(contract.decision_schema.model_validate(decision))
+    runtime = CompactValidatorRuntime([contract], adapter=lambda *args: None)
+    runtime.workspace = workspace
+    state = _ValidatorFinalizationState()
+    tool = _build_finalize_validator_result_tool(
+        contract.request, result_schema=contract.result_schema, compact_runtime=runtime,
+        finalization_state=state, function_tool_factory=lambda **kwargs: lambda function: function)
+    response = tool(decision)
+    assert response["status"] == "accepted", response
+    result = state.accepted_result
 
     decided = result.field_resolutions["condition_class_curie"]
     assert (decided.status, decided.lookup_outcome, decided.resolved_values) == (
         "unresolved", "missing_expected_result_field", {},
     )
     assert result.missing_expected_fields == []
+    assert result.status == "unresolved"
+    assert result.unresolved_components == ["condition_class"]
+    assert result.component_validations[0].status == "unresolved"
+    assert result.component_validations[0].resolved_values == {}
+    assert result.field_resolutions["condition_chemical_curie"].status == "resolved"
+    assert result.field_resolutions["condition_chemical_curie"].resolved_values == {
+        "condition_chemical_curie": "CHEBI:9168", "condition_chemical_name": "rapamycin",
+    }
 
 
 @pytest.mark.parametrize(("outcomes", "expected"), [

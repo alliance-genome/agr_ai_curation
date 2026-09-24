@@ -2526,7 +2526,7 @@ def _build_finalize_validator_result_tool(
 
         if compact_runtime is not None:
             try:
-                result = compact_runtime.assemble(result).model_dump(mode="json")
+                result = compact_runtime.assemble(result)
             except (ValueError, TypeError, KeyError) as exc:
                 finalization_state.accepted_result = None
                 return {"status": "rejected", "message": str(exc)}
@@ -2577,7 +2577,7 @@ def _build_finalize_validator_batch_results_tool(
             for result in assembled:
                 contract = compact_runtime.contracts[result.request_id]
                 feedback = _validator_result_finalization_feedback(
-                    result.model_dump(mode="json"), request=contract.request,
+                    result, request=contract.request,
                     result_schema=contract.result_schema, profile_mapped=contract.profile_mapped,
                 )
                 if feedback.accepted_result is None:
@@ -2610,7 +2610,9 @@ def _validator_result_finalization_feedback(
     profile_mapped: bool = False,
 ) -> _ValidatorFinalizationFeedback:
     try:
-        payload = _extract_structured_output(raw_result)
+        # Keep the assembler's private completeness provenance on typed results;
+        # raw model-authored dictionaries still undergo ordinary schema validation.
+        payload = raw_result if type(raw_result) is result_schema else _extract_structured_output(raw_result)
         result = result_schema.model_validate(
             payload,
             context={"domain_validation_request": request},
@@ -3252,7 +3254,9 @@ def _enforce_expected_result_fields(
     if result.status != "resolved":
         return result
 
-    missing_fields = [
+    missing_fields = list(result.missing_expected_fields) if (
+        result._assembled_field_completeness and result.field_resolutions
+    ) else [
         field_name
         for field_name in request.expected_result_fields
         if missing_resolved_value(result.resolved_values.get(field_name))
