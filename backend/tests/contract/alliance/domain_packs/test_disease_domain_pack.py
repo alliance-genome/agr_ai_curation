@@ -2115,7 +2115,7 @@ def test_demoting_a_disease_subject_keeps_its_routing_subject_type():
         assert request.validator_agent.agent_id == "gene_validation"
         return _validator_result(
             request, status="resolved", outcome="success",
-            resolved_values={"curie": "FB:FBgn0000108", "symbol": "Appl"},
+            resolved_values={"primary_external_id": "FB:FBgn0000108", "symbol": "Appl"},
         )
 
     envelope.extracted_objects[0].payload.update(_materialize(envelope, "disease_subject_materialization", resolve))

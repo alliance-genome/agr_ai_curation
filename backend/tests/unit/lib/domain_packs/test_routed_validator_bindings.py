@@ -340,6 +340,30 @@ def test_invalid_route_declarations_fail_at_load(tmp_path: Path, body: str, mess
         _loaded_pack(tmp_path, body)
 
 
+@pytest.mark.parametrize(
+    ("body", "location"),
+    [
+        (
+            _ROUTES_YAML.replace("gadget_id: subject.identifier", "gadget_id: subject.kind", 1),
+            "routes.gadget.expected_result_fields.gadget_id",
+        ),
+        (
+            _ROUTES_YAML.replace("widget_name: subject.label", "widget_name: subject.kind.label", 1),
+            "routes.widget.expected_result_fields.widget_name",
+        ),
+        (
+            _ROUTES_YAML + """        optional_result_fields:
+          kind: subject.kind
+""",
+            "optional_result_fields.kind",
+        ),
+    ],
+)
+def test_a_route_never_writes_its_routing_value(tmp_path: Path, body: str, location: str):
+    with pytest.raises(Exception, match=f"{location}.*routing value is never a validator result"):
+        _loaded_pack(tmp_path, body)
+
+
 def test_route_selectors_are_checked_against_the_target_object(tmp_path: Path):
     pack = _loaded_pack(tmp_path, _ROUTES_YAML.replace("path: subject.wording\n            expected", "path: subject.missing\n            expected", 1))
 
