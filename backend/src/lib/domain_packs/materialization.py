@@ -1806,8 +1806,10 @@ def _container_identity_keys(
     declared_fields: Mapping[str, DomainPackFieldDefinition],
     resolvable_fields: Mapping[str, ResolvableSpec] | None,
 ) -> tuple[str, ...]:
-    """Every key a validator supplies for one value: its declared identity plus the
-    keys this binding writes into it (so an overruled identity is fully cleared)."""
+    """The keys that make up one value's identity. A declared value's identity is its display
+    id, label and ``validated`` keys only; other keys a binding writes (routing context such
+    as a subject type) are never cleared or overruled. An undeclared container's keys are
+    the ones this binding writes into it."""
 
     keys: list[str] = []
     try:
@@ -1816,7 +1818,7 @@ def _container_identity_keys(
         container_tokens = ()
     spec = declared_spec_for(resolvable_fields, container_tokens) if resolvable_fields else None
     if spec is not None:
-        keys.extend(spec.identity_keys)
+        return spec.identity_keys
     for raw_field_path in item.request.expected_result_fields.values():
         if not isinstance(raw_field_path, str) or not raw_field_path.strip():
             continue
