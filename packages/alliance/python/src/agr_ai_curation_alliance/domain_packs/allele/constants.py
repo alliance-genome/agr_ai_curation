@@ -37,8 +37,10 @@ ALLELE_IDENTITY_KEYS = ("primary_external_id", "allele_symbol", "taxon")
 # The association is itself a resolvable value: ``mention`` is the paper wording, and the
 # validated allele reaches allele_identifier/allele_label through the declared write-back
 # (fields naming the binding in ``validation_result_binding_id``).
-ALLELE_ASSOCIATION_IDENTITY_KEYS = ("allele_identifier", "allele_label")
-ALLELE_ASSOCIATION_SPEC = ResolvableSpec(id_key="allele_identifier", label_key="allele_label")
+ALLELE_ASSOCIATION_IDENTITY_KEYS = ("allele_identifier", "allele_label", "allele_taxon")
+ALLELE_ASSOCIATION_SPEC = ResolvableSpec(
+    id_key="allele_identifier", label_key="allele_label", validated_keys=("allele_taxon",)
+)
 
 # LinkML grounding (pinned commit). The abstract AlleleAssociation class is used only for
 # pending-envelope metadata; writes/exports stay blocked.

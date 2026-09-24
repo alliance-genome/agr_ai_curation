@@ -1033,19 +1033,14 @@ def _with_curated(envelope, object_type, path, edits):
     for obj in envelope.extracted_objects:
         if obj.object_type == object_type:
             payload = copy.deepcopy(obj.payload)
-            value = payload[path] if path else payload
-            keys, id_key, label_key = (
-                (("primary_external_id", "allele_symbol", "taxon"), "primary_external_id", "allele_symbol")
-                if path
-                else (("allele_identifier", "allele_label"), "allele_identifier", "allele_label")
-            )
             apply_curator_identity(
-                value,
+                payload[path],
                 edits,
-                identity_keys=keys,
-                id_key=id_key,
-                label_key=label_key,
-                actor_id="curator-1", actor_display_name="curator-1",
+                identity_keys=("primary_external_id", "allele_symbol", "taxon"),
+                id_key="primary_external_id",
+                label_key="allele_symbol",
+                actor_id="curator-1",
+                actor_display_name="curator-1",
                 at="2026-09-23T20:00:00Z",
             )
             obj = obj.model_copy(update={"payload": payload})
@@ -1111,32 +1106,6 @@ def test_a_curator_overridden_allele_survives_an_unresolved_result_on_the_associ
     assert association.payload["allele_identifier"] == "WB:WBVar00000999"
     assert association.payload["lookup_outcome"] == "curator_override"
     assert "alliance.allele.allele_unresolved" not in _blocker_codes(result.envelope)
-
-
-def test_a_curator_override_on_the_association_is_never_changed_by_the_validator():
-    staged = _with_curated(
-        _staged_allele_envelope(),
-        ALLELE_ASSOCIATION_OBJECT_TYPE,
-        "",
-        {"allele_identifier": "WB:WBVar00000999", "allele_label": "e999"},
-    )
-    before = _association(staged)
-
-    result = _validate_allele_mention(
-        staged,
-        status="resolved",
-        resolved_values={
-            "curie": "WB:WBVar00000190",
-            "symbol": "e190",
-            "taxon": "NCBITaxon:6239",
-        },
-        explanation="Exact symbol match in WB.",
-        curator_message="Resolved unc-54(e190).",
-    )
-    association = _association(result.envelope)
-
-    assert association.payload == before.payload
-    assert association.object_refs == before.object_refs
 
 
 def test_every_staged_contract_value_is_a_declared_resolvable_value():
@@ -1210,7 +1179,11 @@ def _staged_allele_envelope_with_ids():
 
 
 _ASSOCIATION_ID = "allele-paper-evidence-association-1"
-_ASSOCIATION_IDENTITY = {"allele_identifier": "WB:WBVar00000190", "allele_label": "e190"}
+_ASSOCIATION_IDENTITY = {
+    "allele_identifier": "WB:WBVar00000190",
+    "allele_label": "e190",
+    "allele_taxon": "NCBITaxon:6239",
+}
 _ALLELE_IDENTITY = {
     "primary_external_id": "WB:WBVar00000190",
     "allele_symbol": "e190",
@@ -1218,34 +1191,56 @@ _ALLELE_IDENTITY = {
 }
 
 
-def test_curators_override_the_association_root_and_the_mention_allele_in_one_edit():
+def test_an_association_override_is_applied_to_the_mention_allele_and_carried_back():
     from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
 
-    envelope = _staged_allele_envelope_with_ids()
-    for object_id, field_path, identity in (
-        (_ASSOCIATION_ID, "allele_identifier", _ASSOCIATION_IDENTITY),
-        ("allele-mention-1", "allele.primary_external_id", _ALLELE_IDENTITY),
-    ):
-        result = _allele_curator_patch(
-            envelope,
-            object_id,
-            field_path,
-            identity,
-            before={key: None for key in identity},
-            identity=True,
-        )
-        assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, (field_path, result.errors)
-        obj = next(item for item in result.envelope.extracted_objects if item.object_id == object_id)
-        value_node = obj.payload["allele"] if field_path.startswith("allele.") else obj.payload
-        assert {key: value_node[key] for key in identity} == identity
-        assert value_node["resolution_state"] == "resolved"
-        assert value_node["lookup_outcome"] == "curator_override"
-        assert value_node["mention"] == "unc-54(e190)"
-        [event] = obj.metadata["curator_resolution_overrides"]
-        assert event["action"] == "override"
+    result = _allele_curator_patch(
+        _staged_allele_envelope_with_ids(),
+        _ASSOCIATION_ID,
+        "allele_identifier",
+        _ASSOCIATION_IDENTITY,
+        before={key: None for key in _ASSOCIATION_IDENTITY},
+        identity=True,
+    )
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    mention = _object(result.envelope, ALLELE_MENTION_OBJECT_TYPE)
+    allele = mention.payload["allele"]
+    assert {key: allele[key] for key in _ALLELE_IDENTITY} == _ALLELE_IDENTITY
+    assert allele["lookup_outcome"] == "curator_override"
+    assert allele["mention"] == "unc-54(e190)"
+    [event] = mention.metadata["curator_resolution_overrides"]
+    assert event["action"] == "override"
+    assert (event["via_object_id"], event["via_object_type"], event["via_field_path"]) == (
+        _ASSOCIATION_ID, ALLELE_ASSOCIATION_OBJECT_TYPE, "allele_identifier",
+    )
+    # The association follows at once: no unresolved-allele blocker until revalidation.
+    association = _association(result.envelope)
+    assert {key: association.payload[key] for key in _ASSOCIATION_IDENTITY} == _ASSOCIATION_IDENTITY
+    assert association.payload["lookup_outcome"] == "curator_override"
+    assert association.payload["curator_override"] == allele["curator_override"]
+    assert association.payload["mention"] == "unc-54(e190)"
+    assert "alliance.allele.allele_unresolved" not in _blocker_codes(result.envelope)
+    assert _association_label(result.envelope) == "e190"
 
 
-def test_an_allele_override_cannot_change_other_keys_or_start_from_one_leaf():
+def test_the_mention_allele_takes_its_own_override_in_one_edit():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    result = _allele_curator_patch(
+        _staged_allele_envelope_with_ids(),
+        "allele-mention-1",
+        "allele.primary_external_id",
+        _ALLELE_IDENTITY,
+        before={key: None for key in _ALLELE_IDENTITY},
+        identity=True,
+    )
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    assert _association(result.envelope).payload["allele_taxon"] == "NCBITaxon:6239"
+
+
+def test_the_association_identity_takes_no_edit_of_its_own():
     from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
 
     envelope = _staged_allele_envelope_with_ids()
@@ -1254,24 +1249,50 @@ def test_an_allele_override_cannot_change_other_keys_or_start_from_one_leaf():
         _ASSOCIATION_ID,
         "allele_identifier",
         {**_ASSOCIATION_IDENTITY, "association_kind": "other"},
-        before={"allele_identifier": None, "allele_label": None, "association_kind": ALLELE_ASSOCIATION_KIND},
+        before={**{key: None for key in _ASSOCIATION_IDENTITY}, "association_kind": ALLELE_ASSOCIATION_KIND},
         identity=True,
     )
     assert other_key.status is EnvelopeFieldPatchStatus.REJECTED
-    assert any("cannot change" in error for error in other_key.errors)
+    assert any("cannot change association_kind" in error for error in other_key.errors)
 
-    for object_id, field_path, value in (
-        (_ASSOCIATION_ID, "allele_label", "e190"),
-        ("allele-mention-1", "allele.allele_symbol", "e190"),
-    ):
-        single_leaf = _allele_curator_patch(envelope, object_id, field_path, value, before=None)
-        assert single_leaf.status is EnvelopeFieldPatchStatus.REJECTED, field_path
-        # The mention's allele also declares a validated taxon, which a first override names too.
-        assert any(
-            error.startswith(("Enter both the identifier and the name",
-                              "Enter the identifier, the name and the taxon"))
-            for error in single_leaf.errors
-        ), single_leaf.errors
+    for field_path in ("allele_identifier", "allele_label", "allele_taxon"):
+        leaf = _allele_curator_patch(envelope, _ASSOCIATION_ID, field_path, "x", before=None)
+        assert leaf.status is EnvelopeFieldPatchStatus.REJECTED, field_path
+        assert any("follows a value validated on a linked object" in error for error in leaf.errors)
+
+    single_leaf = _allele_curator_patch(
+        envelope, "allele-mention-1", "allele.allele_symbol", "e190", before=None
+    )
+    assert single_leaf.status is EnvelopeFieldPatchStatus.REJECTED
+    # A first override names every identity key, the validated taxon included.
+    assert any(
+        error.startswith("Enter the identifier, the name and the taxon") for error in single_leaf.errors
+    ), single_leaf.errors
+
+
+def test_a_curator_allele_without_a_database_record_blocks_submission_in_plain_words():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    from agr_ai_curation_alliance.domain_packs.allele import (
+        build_allele_association_submission_plan,
+    )
+
+    result = _allele_curator_patch(
+        _staged_allele_envelope_with_ids(),
+        _ASSOCIATION_ID,
+        "allele_identifier",
+        _ASSOCIATION_IDENTITY,
+        before={key: None for key in _ASSOCIATION_IDENTITY},
+        identity=True,
+    )
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+
+    plan = build_allele_association_submission_plan(result.envelope)
+    blockers = {blocker["code"]: blocker for blocker in plan["blockers"]}
+    assert plan["status"] == "blocked"
+    missing = blockers["alliance.allele.association_refs_missing"]["message"]
+    assert "entered by a curator" in missing
+    assert "no Alliance allele record" in missing
 
 
 def test_the_association_follows_a_curator_edited_mention_allele():
@@ -1335,3 +1356,63 @@ def test_editable_identity_metadata_does_not_change_the_export_fingerprint():
     with_editable = _pack_export_fields(pack)
     without_editable = _pack_export_fields(type(pack)(**{**pack.__dict__, "metadata": stripped}))
     assert with_editable == without_editable
+
+
+def test_withdrawing_the_override_is_carried_back_to_the_association():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    overridden = _allele_curator_patch(
+        _staged_allele_envelope_with_ids(),
+        _ASSOCIATION_ID,
+        "allele_identifier",
+        _ASSOCIATION_IDENTITY,
+        before={key: None for key in _ASSOCIATION_IDENTITY},
+        identity=True,
+    )
+    assert overridden.status is EnvelopeFieldPatchStatus.ACCEPTED, overridden.errors
+
+    cleared = _allele_curator_patch(
+        overridden.envelope,
+        _ASSOCIATION_ID,
+        "allele_identifier",
+        {key: None for key in _ASSOCIATION_IDENTITY},
+        before=_ASSOCIATION_IDENTITY,
+        identity=True,
+    )
+    assert cleared.status is EnvelopeFieldPatchStatus.ACCEPTED, cleared.errors
+
+    allele = _object(cleared.envelope, ALLELE_MENTION_OBJECT_TYPE).payload["allele"]
+    association = _association(cleared.envelope)
+    assert allele["resolution_state"] == "unresolved"
+    assert "curator_override" not in allele
+    # The withdrawn override does not stick on the association.
+    assert association.payload["resolution_state"] == "unresolved"
+    assert association.payload["lookup_outcome"] == allele["lookup_outcome"]
+    assert "curator_override" not in association.payload
+    for key in _ASSOCIATION_IDENTITY:
+        assert association.payload[key] is None
+    assert _association_label(cleared.envelope) == "unc-54(e190) (paper wording)"
+    assert "alliance.allele.allele_unresolved" in _blocker_codes(cleared.envelope)
+
+
+def test_the_association_row_offers_the_full_allele_identity_for_an_override():
+    from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    rows = DomainPackMetadataReviewRowMaterializer(pack.metadata).materialize(
+        _staged_allele_envelope(), envelope_revision=1
+    )
+    row = next(row for row in rows if row.object_type == ALLELE_ASSOCIATION_OBJECT_TYPE)
+    field = next(field for field in row.summary_fields if field.field_path == "allele_identifier")
+    [value] = field.resolution.values
+
+    assert value.value_path == ""
+    assert (value.id_key, value.label_key, value.validated_keys) == (
+        "allele_identifier", "allele_label", ["allele_taxon"],
+    )
+    assert value.stored_identity == {
+        "allele_identifier": None,
+        "allele_label": None,
+        "allele_taxon": None,
+    }
+    assert value.container_protected is False

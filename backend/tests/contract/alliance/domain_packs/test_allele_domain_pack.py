@@ -93,6 +93,7 @@ def _resolved_allele_association_envelope():
             # What the allele validator's write-back leaves on the association.
             payload["allele_identifier"] = "WB:WBVar00000001"
             payload["allele_label"] = "daf-2(m41)"
+            payload["allele_taxon"] = "NCBITaxon:6239"
             payload["resolution_state"] = "resolved"
             payload["lookup_outcome"] = "matched"
             object_refs = [allele_ref, *object_refs]

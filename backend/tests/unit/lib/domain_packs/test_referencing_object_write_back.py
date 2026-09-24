@@ -359,7 +359,7 @@ def test_a_later_unresolved_result_overrules_the_referencing_value():
     assert any(obj.object_type == "Maker" for obj in result.envelope.extracted_objects)
 
 
-def test_a_curator_override_on_the_referencing_value_is_never_changed():
+def test_a_stale_copied_override_on_the_referencing_value_follows_its_source():
     import copy
 
     from src.lib.domain_packs.resolvable_values import apply_curator_identity
@@ -382,23 +382,139 @@ def test_a_curator_override_on_the_referencing_value_is_never_changed():
         objects.append(obj)
     curated = envelope.model_copy(update={"extracted_objects": objects})
 
-    for result_fields in (
-        _RESOLVED,
-        {
-            "status": "unresolved",
-            "lookup_attempts": [
-                {
-                    "provider": "fixture_lookup",
-                    "method": "maker_search",
-                    "query": {"mention": "the Delft workshop"},
-                    "result_count": 0,
-                    "outcome": "not_found",
-                }
-            ],
-        },
-    ):
-        result = _materialize(curated, _metadata(), **result_fields)
-        assert _by_ref(result.envelope, "acquisition-1") == _by_ref(curated, "acquisition-1")
+    result = _materialize(curated, _metadata(), **_RESOLVED)
+    acquisition = _by_ref(result.envelope, "acquisition-1")
+
+    # The referencing value only mirrors its source: it takes the validated identity.
+    assert acquisition.payload["maker_id"] == "GAL:M0042"
+    assert acquisition.payload["maker_name"] == "De Grieksche A"
+    assert acquisition.payload["lookup_outcome"] == "matched"
+    assert "curator_override" not in acquisition.payload
+
+
+# --- A mirroring value is a pass-through edit surface ------------------------------------------
+
+
+def _mirrored_metadata() -> DomainPackMetadata:
+    """The maker mention holds a declared resolvable maker value the acquisition mirrors."""
+
+    metadata = _metadata()
+    objects = []
+    for obj in metadata.object_definitions:
+        if obj.object_type == "MakerMention":
+            obj = obj.model_copy(update={"fields": [
+                *obj.fields,
+                _field("maker", DomainPackFieldType.OBJECT, metadata={"display": {
+                    "label": "maker_name", "id": "primary_external_id", "mention": "mention",
+                }}),
+                _field("maker.mention"),
+                _field("maker.primary_external_id", metadata={"editable": True}),
+                _field("maker.maker_name", metadata={"editable": True}),
+            ]})
+        elif obj.object_type == "Acquisition":
+            obj = obj.model_copy(update={"fields": [
+                field.model_copy(update={"metadata": {**field.metadata, "editable": True}})
+                if field.field_path in {"maker_id", "maker_name"}
+                else field
+                for field in obj.fields
+            ]})
+        objects.append(obj)
+    return metadata.model_copy(update={"object_definitions": objects})
+
+
+def _mirrored_envelope() -> DomainEnvelope:
+    envelope = _envelope()
+    objects = []
+    for obj in envelope.extracted_objects:
+        if obj.object_type == "MakerMention":
+            obj = obj.model_copy(update={
+                "object_id": "maker-mention-1",
+                "payload": {
+                    **obj.payload,
+                    "maker": unresolved_value(
+                        "the Delft workshop", identity_keys=("primary_external_id", "maker_name")
+                    ),
+                },
+            })
+        elif obj.pending_ref_id == "acquisition-1":
+            obj = obj.model_copy(update={
+                "object_id": "acquisition-1",
+                "object_refs": [ObjectRef(object_id="maker-mention-1", object_type="MakerMention")],
+            })
+        else:
+            continue
+        objects.append(obj)
+    return envelope.model_copy(update={"extracted_objects": objects})
+
+
+def _loaded(metadata: DomainPackMetadata) -> LoadedDomainPack:
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=Path("."), metadata_path=Path("."), metadata=metadata,
+    )
+
+
+def _curator_patch(envelope, object_id, field_path, value, *, before, identity=True):
+    from src.lib.domain_envelopes.patches import (
+        EnvelopeFieldPatch,
+        EnvelopeFieldPatchOperation,
+        apply_curator_field_patch,
+    )
+
+    return apply_curator_field_patch(
+        envelope,
+        _loaded(_mirrored_metadata()),
+        EnvelopeFieldPatch(
+            envelope_id=envelope.envelope_id, expected_revision=1, object_id=object_id,
+            field_path=field_path, before=before, value=value,
+            operation=(
+                EnvelopeFieldPatchOperation.REPLACE_IDENTITY if identity
+                else EnvelopeFieldPatchOperation.REPLACE
+            ),
+        ),
+        current_revision=1, actor_id="curator-7", actor_display_name="Curator Seven",
+    )
+
+
+def test_an_override_on_the_mirroring_value_is_applied_to_the_value_it_follows():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    identity = {"maker_id": "GAL:M0007", "maker_name": "De Porceleyne Fles"}
+    result = _curator_patch(
+        _mirrored_envelope(), "acquisition-1", "maker_id", identity,
+        before={"maker_id": None, "maker_name": None},
+    )
+
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    mention = _by_ref(result.envelope, "maker-mention-1")
+    acquisition = _by_ref(result.envelope, "acquisition-1")
+    assert mention.payload["maker"]["primary_external_id"] == "GAL:M0007"
+    assert mention.payload["maker"]["maker_name"] == "De Porceleyne Fles"
+    assert mention.payload["maker"]["lookup_outcome"] == "curator_override"
+    # The mirroring value follows straight away, with the same override record.
+    assert {key: acquisition.payload[key] for key in identity} == identity
+    assert acquisition.payload["lookup_outcome"] == "curator_override"
+    assert acquisition.payload["curator_override"] == mention.payload["maker"]["curator_override"]
+    assert mention.payload["maker"]["curator_override"]["actor_display_name"] == "Curator Seven"
+    [event] = mention.metadata["curator_resolution_overrides"]
+    assert (event["via_object_id"], event["via_field_path"]) == ("acquisition-1", "maker_id")
+
+
+def test_a_mirroring_value_takes_no_edit_of_its_own():
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _mirrored_envelope()
+    leaf = _curator_patch(envelope, "acquisition-1", "maker_id", "GAL:M0007", before=None, identity=False)
+    extra = _curator_patch(
+        envelope, "acquisition-1", "maker_id",
+        {"maker_id": "GAL:M0007", "maker_name": "De Porceleyne Fles", "year": 1703},
+        before={"maker_id": None, "maker_name": None, "year": 1702},
+    )
+
+    assert leaf.status is EnvelopeFieldPatchStatus.REJECTED
+    assert "follows a value validated on a linked object" in leaf.errors[0]
+    assert extra.status is EnvelopeFieldPatchStatus.REJECTED
+    assert "cannot change year" in extra.errors[0]
 
 
 def test_no_validated_reference_is_added_for_a_value_a_curator_override_sets():

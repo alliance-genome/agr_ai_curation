@@ -115,8 +115,13 @@ def apply_curator_field_patch(
     actor_display_name: str,
     registry: DomainPackValidationRegistry | None = None,
     profile: ResolvedGenericProfile | None = None,
+    via: Mapping[str, Any] | None = None,
 ) -> EnvelopeFieldPatchResult:
     """Validate and apply one curator field edit to a domain envelope.
+
+    A value that mirrors another object's validated value is a pass-through
+    (``_mirror_pass_through``): its override is applied to the value it
+    mirrors, and ``via`` names the object it came through in the audit.
 
     The patch is accepted only when the expected revision matches, the object
     exists, the field path is editable under the domain pack or bound profile,
@@ -156,6 +161,27 @@ def apply_curator_field_patch(
     object_ref = domain_object.to_object_ref() if domain_object is not None else None
     current_before: Any = None
     object_type = domain_object.object_type if domain_object is not None else None
+
+    mirrored = (
+        _mirror_pass_through(envelope, domain_object, patch, domain_pack, validation_registry)
+        if domain_object is not None
+        else None
+    )
+    if isinstance(mirrored, tuple):
+        target_patch, target_via = mirrored
+        return apply_curator_field_patch(
+            envelope,
+            domain_pack,
+            target_patch,
+            current_revision=current_revision,
+            actor_id=actor_id,
+            actor_display_name=actor_display_name,
+            registry=validation_registry,
+            profile=profile,
+            via=target_via,
+        )
+    if isinstance(mirrored, str):
+        errors.append(mirrored)
 
     try:
         validate_field_path_syntax(patch.field_path)
@@ -310,7 +336,7 @@ def apply_curator_field_patch(
         # Audit trail of curator validation overrides: who, when, what was there before.
         object_metadata[CURATOR_OVERRIDE_METADATA_KEY] = [
             *object_metadata.get(CURATOR_OVERRIDE_METADATA_KEY, []),
-            {**override_audit, "field_path": patch.field_path, "patch_id": patch.patch_id},
+            {**override_audit, "field_path": patch.field_path, "patch_id": patch.patch_id, **(via or {})},
         ]
     updated_object = domain_object.model_copy(
         update={"payload": staged_payload, "metadata": object_metadata}
@@ -327,6 +353,9 @@ def apply_curator_field_patch(
             registry=validation_registry,
             actor_id=actor_id,
         )
+        # Objects that mirror this value (fields naming a binding that validates it)
+        # follow the curator's identity now, as the next validator run would.
+        settled_envelope = _follow_mirrors(settled_envelope, updated_object, domain_pack, validation_registry)
 
     field_ref = FieldRef(
         object_ref=updated_object.to_object_ref(),
@@ -377,6 +406,139 @@ def apply_curator_field_patch(
             field_event.event_id or "",
             accepted_event.event_id or "",
         ),
+    )
+
+
+def _follow_mirrors(
+    envelope: DomainEnvelope,
+    source: CuratableObjectEnvelope,
+    domain_pack: LoadedDomainPack,
+    registry: DomainPackValidationRegistry,
+) -> DomainEnvelope:
+    """Carry an override, clear or restore of ``source``'s value to the objects mirroring it."""
+
+    from src.lib.domain_packs.materialization import follow_referenced_value
+
+    return follow_referenced_value(
+        envelope,
+        source,
+        metadata=domain_pack.metadata,
+        expected_result_fields_by_binding={
+            binding.binding_id: binding.expected_result_fields
+            for binding in registry.bindings
+            if source.object_type in binding.object_types
+        },
+    )
+
+
+def _mirror_pass_through(
+    envelope: DomainEnvelope,
+    domain_object: CuratableObjectEnvelope,
+    patch: EnvelopeFieldPatch,
+    domain_pack: LoadedDomainPack,
+    registry: DomainPackValidationRegistry,
+) -> tuple[EnvelopeFieldPatch, dict[str, Any]] | str | None:
+    """Redirect an override of a mirroring value to the value it mirrors.
+
+    A declared resolvable value whose identity fields all name one binding
+    (``validation_result_binding_id`` + ``validation_result_field``) follows
+    that binding's value on the object it references (the validator
+    write-back and ``follow_referenced_value`` keep it in step). It is an edit
+    surface only: a whole-identity override (``replace_identity``) is mapped
+    onto the mirrored value's keys and applied there, then carried back to
+    every object that mirrors it. Any other edit of its identity is rejected,
+    so the two never drift. Returns the redirected patch and its audit
+    ``via``, a rejection message, or None for an ordinary value.
+    """
+
+    from src.lib.domain_packs.materialization import _materialized_field_path, stable_object_id
+
+    target = _resolvable_target(
+        patch.field_path, declared_resolvable_fields(domain_pack.metadata, domain_object.object_type)
+    )
+    if target is None:
+        return None
+    value_path, spec, key = target
+    if key is not None and key not in spec.identity_keys:
+        return None
+    object_definition = next(
+        (obj for obj in domain_pack.metadata.object_definitions if obj.object_type == domain_object.object_type),
+        None,
+    )
+    fields = {field.field_path: field for field in (object_definition.fields if object_definition else [])}
+    prefix = f"{value_path}." if value_path else ""
+    mirrored = {
+        identity_key: fields.get(f"{prefix}{identity_key}") for identity_key in spec.identity_keys
+    }
+    binding_ids = {
+        field.metadata.get("validation_result_binding_id") if field is not None else None
+        for field in mirrored.values()
+    }
+    if len(binding_ids) != 1 or None in binding_ids or not all(
+        field is not None and field.metadata.get("validation_result_field") for field in mirrored.values()
+    ):
+        return None
+    binding_id = next(iter(binding_ids))
+    if patch.operation is not EnvelopeFieldPatchOperation.REPLACE_IDENTITY:
+        return (
+            f"field_path '{patch.field_path}' follows a value validated on a linked object; "
+            "override its identifier and name together (replace_identity)"
+        )
+    binding = next((item for item in registry.bindings if item.binding_id == binding_id), None)
+    objects_by_ref = {ref_key: obj for obj in envelope.extracted_objects for ref_key in obj.ref_keys()}
+    sources = [
+        objects_by_ref[ref.ref_key()]
+        for ref in domain_object.object_refs
+        if ref.ref_key() in objects_by_ref
+        and binding is not None
+        and objects_by_ref[ref.ref_key()].object_type in binding.object_types
+    ]
+    if binding is None or len(sources) != 1:
+        return f"field_path '{patch.field_path}' does not link exactly one value it follows"
+    source = sources[0]
+    source_definition = next(
+        (obj for obj in domain_pack.metadata.object_definitions if obj.object_type == source.object_type), None,
+    )
+    source_fields = {field.field_path: field for field in (source_definition.fields if source_definition else [])}
+    source_paths = {}
+    for identity_key, field in mirrored.items():
+        raw_path = binding.expected_result_fields.get(str(field.metadata["validation_result_field"]))
+        source_path = (
+            _materialized_field_path(raw_path, declared_fields=source_fields) if isinstance(raw_path, str) else None
+        )
+        if source_path is None:
+            return f"field_path '{patch.field_path}' does not map onto the value it follows"
+        source_paths[identity_key] = source_path
+    if not isinstance(patch.value, Mapping) or not isinstance(patch.before, Mapping):
+        return "a curator override sends the whole identity as value and before"
+    unknown = sorted((set(patch.value) | set(patch.before)) - set(source_paths))
+    if unknown:
+        return (
+            f"cannot change {', '.join(unknown)}; only the identifier and name can be changed "
+            "in a curator override"
+        )
+
+    def mapped(identity: Mapping[str, Any]) -> dict[str, Any]:
+        return {source_paths[k].rpartition(".")[2]: v for k, v in identity.items()}
+
+    id_path = source_paths[spec.id_key] if spec.id_key else next(iter(source_paths.values()))
+    return (
+        EnvelopeFieldPatch(
+            envelope_id=patch.envelope_id,
+            expected_revision=patch.expected_revision,
+            object_id=stable_object_id(source),
+            field_path=id_path,
+            before=mapped(patch.before),
+            value=mapped(patch.value),
+            operation=EnvelopeFieldPatchOperation.REPLACE_IDENTITY,
+            reason=patch.reason,
+            patch_id=patch.patch_id,
+        ),
+        {
+            "via_object_id": patch.object_id,
+            "via_object_type": domain_object.object_type,
+            "via_field_path": patch.field_path,
+        },
     )
 
 

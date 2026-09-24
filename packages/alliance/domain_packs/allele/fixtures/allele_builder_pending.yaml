@@ -105,6 +105,7 @@ fixtures:
         association_kind: allele_paper_evidence
         allele_identifier: null
         allele_label: null
+        allele_taxon: null
         mention: unc-54(e190)
         resolution_state: unresolved
         lookup_outcome: not_validated
