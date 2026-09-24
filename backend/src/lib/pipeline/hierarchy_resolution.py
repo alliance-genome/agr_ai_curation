@@ -26,7 +26,7 @@ from src.lib.document_sources.figure_metadata import (
     is_provider_figure_metadata_section,
     is_provider_figure_subsection,
 )
-from src.lib.config.env import require_env, require_env_choice
+from src.lib.config.env import require_env
 from src.lib.observability.cost_context import current_cost_context
 from src.lib.observability.payload_contracts import (
     PayloadContractViolation,
@@ -40,7 +40,6 @@ from src.lib.observability.sentry import (
 logger = logging.getLogger(__name__)
 
 # Allowed reasoning effort levels (must come from .env; no code fallback).
-_REASONING_LEVELS = ("minimal", "low", "medium", "high")
 
 # Element types never used as a section preview: headings repeat their own
 # title, and tables arrive as markdown pipe rows rather than prose.
@@ -422,19 +421,22 @@ Common abstract locations when not explicitly labeled:
     user_prompt = f"Classify these numbered section titles from a scientific paper. Each entry shows the section number and title, followed by a preview of its opening body text when it has any:\n\n{sections_text}"
 
     try:
+        from src.lib.openai_agents.config import (
+            require_model_reasoning_effort,
+            supports_temperature,
+        )
+
         model_name = require_env("HIERARCHY_LLM_MODEL")
-        reasoning_effort = require_env_choice("HIERARCHY_LLM_REASONING", _REASONING_LEVELS)
+        # The catalog decides the request shape: the effort must be one the
+        # model accepts, and reasoning models reject a temperature parameter.
+        reasoning_effort = require_model_reasoning_effort(
+            model_name, require_env("HIERARCHY_LLM_REASONING")
+        )
         logger.info('[HIERARCHY] Calling %s (reasoning=%s) for hierarchy resolution...', model_name, reasoning_effort)
 
-        # Build model settings with reasoning for GPT-5 models
-        is_gpt5 = model_name.startswith("gpt-5")
-        reasoning = None
-        if reasoning_effort and is_gpt5:
-            reasoning = Reasoning(effort=reasoning_effort)
-
         model_settings = ModelSettings(
-            temperature=None if is_gpt5 else 0.0,
-            reasoning=reasoning,
+            temperature=0.0 if supports_temperature(model_name) else None,
+            reasoning=Reasoning(effort=reasoning_effort),
             # A string model always runs on the native OpenAI client (owned
             # resources), catalogued or not, so the provider is fixed here.
             extra_args=prompt_cache_extra_args(
@@ -594,7 +596,7 @@ Common abstract locations when not explicitly labeled:
         # Store raw response for debugging
         raw_response = {
             "model": model_name,
-            "reasoning_effort": reasoning_effort if is_gpt5 else None,
+            "reasoning_effort": reasoning_effort,
             "contract_retries": attempt,
         }
 

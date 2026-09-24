@@ -20,22 +20,22 @@ interface UsageLocation {
   value: JsonRecord
 }
 
-export const GPT_5_6_SOL_PRICING = {
-  model: 'gpt-5.6-sol',
-  asOf: '2026-08-30',
-  source: 'https://developers.openai.com/api/docs/models/gpt-5.6-sol',
+export const GPT_6_SOL_PRICING = {
+  model: 'gpt-6-sol',
+  asOf: '2026-09-24',
+  source: 'https://developers.openai.com/api/docs/models/gpt-6-sol',
   longContextThresholdInputTokens: 272_000,
   shortContextUsdPerMillion: {
+    input: 2,
+    cachedInput: 0.2,
+    cacheWriteInput: 2.5,
+    output: 10,
+  },
+  longContextUsdPerMillion: {
     input: 4,
     cachedInput: 0.4,
     cacheWriteInput: 5,
-    output: 20,
-  },
-  longContextUsdPerMillion: {
-    input: 8,
-    cachedInput: 0.8,
-    cacheWriteInput: 10,
-    output: 30,
+    output: 15,
   },
 } as const
 
@@ -117,10 +117,10 @@ async function executionFiles(root: string): Promise<string[]> {
 }
 
 function requestCostRange(usage: UsageRecord): { lower: number; upper: number } | undefined {
-  if (usage.model !== GPT_5_6_SOL_PRICING.model) return undefined
-  const rates = usage.inputTokens > GPT_5_6_SOL_PRICING.longContextThresholdInputTokens
-    ? GPT_5_6_SOL_PRICING.longContextUsdPerMillion
-    : GPT_5_6_SOL_PRICING.shortContextUsdPerMillion
+  if (usage.model !== GPT_6_SOL_PRICING.model) return undefined
+  const rates = usage.inputTokens > GPT_6_SOL_PRICING.longContextThresholdInputTokens
+    ? GPT_6_SOL_PRICING.longContextUsdPerMillion
+    : GPT_6_SOL_PRICING.shortContextUsdPerMillion
   const knownCacheWrite = usage.cacheWriteInputTokens
   const nonCachedInput = Math.max(0, usage.inputTokens - usage.cachedInputTokens)
   const regularInput = knownCacheWrite === null
@@ -150,7 +150,7 @@ export interface ModelUsageSummary {
   total_tokens: number
   max_input_tokens_per_request: number
   requests_by_model: Record<string, number>
-  pricing: typeof GPT_5_6_SOL_PRICING
+  pricing: typeof GPT_6_SOL_PRICING
   priced_requests: number
   unpriced_requests: number
   estimated_openai_api_cost_usd: number | null
@@ -261,7 +261,7 @@ export async function summarizeModelUsage(
     total_tokens: sum((usage) => usage.totalTokens),
     max_input_tokens_per_request: values.reduce((maximum, usage) => Math.max(maximum, usage.inputTokens), 0),
     requests_by_model: requestsByModel,
-    pricing: GPT_5_6_SOL_PRICING,
+    pricing: GPT_6_SOL_PRICING,
     priced_requests: pricedRequests,
     unpriced_requests: values.length - pricedRequests,
     estimated_openai_api_cost_usd: costEstimateComplete ? roundedLowerCost : null,

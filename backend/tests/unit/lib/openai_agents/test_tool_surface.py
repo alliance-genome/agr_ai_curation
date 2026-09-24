@@ -396,7 +396,7 @@ def test_request_measurement_counts_namespace_headers_and_loaded_names():
         provider="openai",
         api="responses",
         transport="http",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         instructions="x",
         input_value=[
             {"type": "tool_search_call", "call_id": "s1", "execution": "server"},
@@ -436,7 +436,7 @@ def test_prompt_cache_key_binds_to_the_compiled_visible_and_deferred_surface():
 
     key = build_prompt_cache_key(
         PromptCacheIdentity(agent_key="gene_extractor", static_prompt="Extract."),
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
     )
     settings = ModelSettings(extra_args={PROMPT_CACHE_KEY_FIELD: key})
     tools = [_tool("search_document"), _tool("read_chunk"), _tool("record_evidence")]
@@ -958,7 +958,7 @@ def _packaged_extractors():
     )
 
 
-def _extractor_agent(definition, *, model="gpt-5.6-sol"):
+def _extractor_agent(definition, *, model="gpt-6-sol"):
     agent = Agent(
         name=definition.name,
         instructions="Extract curatable objects.",
@@ -1093,7 +1093,7 @@ def test_custom_extractor_uses_the_extractor_policy():
     agent = Agent(
         name="Custom extractor",
         instructions="Extract.",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         tools=[_tool("read_chunk"), _tool("patch_gene_mention_evidence"), _tool("finalize_gene_extraction")],
     )
     agent.agent_key = "ca_custom_extractor"
@@ -1112,7 +1112,7 @@ def test_named_tool_choice_stays_eager():
     agent = Agent(
         name="Custom extractor",
         instructions="Extract.",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         model_settings=ModelSettings(tool_choice="patch_gene_mention_evidence"),
         tools=[_tool("read_chunk"), _tool("patch_gene_mention_evidence"), _tool("find_staged_gene_mention_evidence")],
     )

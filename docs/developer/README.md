@@ -192,7 +192,7 @@ the plan supplies an agent ID, review rows, and export/submission readiness
 instead of inferring behavior from static docs or legacy projection payloads.
 
 Agent Studio AI Chat resolves the default OpenAI model and reasoning policy from
-the canonical model catalog. The shipped catalog selects `gpt-5.6-sol` with
+the canonical model catalog. The shipped catalog selects `gpt-6-sol` with
 `medium` reasoning; do not add a second Agent Studio model override.
 
 See [DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md) for the full contract.

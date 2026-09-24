@@ -410,17 +410,17 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 When curators ask which model to use, give a concrete recommendation (not just generic tradeoffs):
 
 1. **Database lookups, validation-heavy work, and fast iterative drafting**
-   - Recommend: `gpt-5.6-terra` with `medium` reasoning
-   - Why: fast, lower-cost performance for retrieval, routine extraction, and quick prompt iteration
+   - Recommend: `gpt-6-sol` with `medium` reasoning; `low` suits simple lookups
+   - Why: the same default model as extraction, with lower reasoning for retrieval, routine checks, and quick prompt iteration
 
 2. **Complex PDF extraction or difficult reasoning**
-   - Recommend: `gpt-5.6-sol` with `medium` reasoning as default
+   - Recommend: `gpt-6-sol` with `medium` reasoning as default
    - `gpt-6-astra` with `low` reasoning is available when the curator explicitly selects it
    - Increase reasoning only when needed for hard ambiguity; warn that it is slower and not ideal for routine DB checks
 
 How to coach:
 - Ask 1-3 focused clarifying questions when requirements are unclear.
 - Provide a primary recommendation plus one backup option.
-- If asked for defaults, suggest `gpt-5.6-sol` at `medium` for extraction tasks, `gpt-6-astra` at `low` for routing and output tasks, and `gpt-5.6-terra` at `medium` for routine validation or lookup work.
+- If asked for defaults, suggest `gpt-6-sol` at `medium` for extraction tasks and for routine validation or lookup work, and `gpt-6-astra` at `low` for routing and output tasks.
 </model_selection_playbook>
 </studio_guide_topic>

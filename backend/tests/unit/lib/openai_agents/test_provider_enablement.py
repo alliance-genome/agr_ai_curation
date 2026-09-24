@@ -19,7 +19,7 @@ def test_openrouter_is_disabled_before_client_construction(monkeypatch, key):
 def test_openai_stays_enabled(monkeypatch):
     monkeypatch.delenv("LLM_DISABLED_PROVIDERS", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "dummy-key-not-a-secret")
-    assert isinstance(config.get_model_for_agent("gpt-5.6-sol"), str)
+    assert isinstance(config.get_model_for_agent("gpt-6-sol"), str)
 
 
 def test_policy_filters_catalog_and_rejects_save(monkeypatch):

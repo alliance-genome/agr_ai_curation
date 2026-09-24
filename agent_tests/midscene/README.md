@@ -30,7 +30,7 @@ valid login. It never falls back to an OpenAI API key:
 
 ```text
 MIDSCENE_MODEL_BASE_URL=codex://app-server
-MIDSCENE_MODEL_NAME=gpt-5.6-sol
+MIDSCENE_MODEL_NAME=gpt-6-sol
 MIDSCENE_MODEL_FAMILY=gpt-5
 MIDSCENE_MODEL_REASONING_ENABLED=true
 MIDSCENE_MODEL_REASONING_EFFORT=low
@@ -38,7 +38,7 @@ MIDSCENE_MODEL_TEMPERATURE=1
 ```
 
 The explicit temperature avoids Midscene 1.12.2's package default of `0`,
-which GPT-5.6 Sol rejects; `1` is the model's supported API default.
+which GPT-6 Sol rejects; `1` is the model's supported API default.
 The wrapper also clears inherited `MIDSCENE_PLANNING_MODEL_*` and
 `MIDSCENE_INSIGHT_MODEL_*` overrides so every intent uses this one validated
 provider/model slot and the verdict describes the provider that actually ran.
@@ -71,7 +71,7 @@ scripts/testing/agent_ui_smoke.sh --provider openai --case create --cost-warning
 Start with one focused case and inspect `model_usage` in `verdict.json` before
 running another. The verdict deduplicates Midscene usage by provider request ID,
 records input/cached-input/cache-write/output tokens, and estimates direct API
-cost using the versioned GPT-5.6 Sol pricing reference embedded in the report.
+cost using the versioned GPT-6 Sol pricing reference embedded in the report.
 The direct OpenAI usage shape is read from `prompt_tokens_details`; if cache-write
 detail alone is absent, the verdict emits a conservative cost range and applies
 the warning threshold to its upper bound. An unknown model or incomplete,
@@ -80,7 +80,7 @@ explicitly unavailable rather than presenting a misleading finite bound.
 For Codex runs, the same number is an API-equivalent estimate—not a subscription
 charge. For OpenAI runs, it is an estimate and may differ from the provider's
 final invoice. `--cost-warning-usd` is an after-run warning, not a hard cap.
-See the official [GPT-5.6 Sol model and pricing reference](https://developers.openai.com/api/docs/models/gpt-5.6-sol).
+See the official [GPT-6 Sol model and pricing reference](https://developers.openai.com/api/docs/models/gpt-6-sol).
 
 No provider fallback exists. Cookie authentication is retained for testing a
 local cookie-auth stack; the application URL remains loopback-only:
@@ -163,7 +163,7 @@ failure fails the case. `--retain-resources` is a debugging mode and produces a
 partial verdict.
 
 `verdict.json` and `verdict.md` include the runner Git SHA/hostname, per-run
-token totals, and the current GPT-5.6 Sol API-cost estimate or conservative
+token totals, and the current GPT-6 Sol API-cost estimate or conservative
 range. Usage objects without a stable request identity, conflicting duplicates,
 parse failures, and requests for models without a known pricing table are
 surfaced rather than silently priced.

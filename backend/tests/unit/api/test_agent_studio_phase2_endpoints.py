@@ -64,10 +64,10 @@ def test_disabled_provider_models_are_not_returned_to_workshop(monkeypatch):
     monkeypatch.delenv("LLM_DISABLED_PROVIDERS", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "dummy-not-a-secret")
     monkeypatch.setattr(api_module, "list_model_definitions", lambda: [
-        get_model("gpt-5.6-sol"), get_model("deepseek/deepseek-v4-pro-0813"),
+        get_model("gpt-6-sol"), get_model("deepseek/deepseek-v4-pro-0813"),
     ])
     response = asyncio.run(api_module.get_models_endpoint(user={"sub": "test"}))
-    assert [model.model_id for model in response.models] == ["gpt-5.6-sol"]
+    assert [model.model_id for model in response.models] == ["gpt-6-sol"]
 
 
 def test_get_tool_library_endpoint_returns_curator_visible_policy_rows(monkeypatch):

@@ -102,7 +102,7 @@ treat it as release evidence unless the project explicitly promotes it later.
 Artifacts live under `file_outputs/temp/agent_ui_smoke/<run-id>/` and are ignored
 by Git. `--retain-resources` is debugging-only and cannot produce a passing
 verdict. Each verdict includes deduplicated provider token usage and a versioned
-GPT-5.6 Sol API-cost estimate. The estimate warning is not a hard provider cap;
+GPT-6 Sol API-cost estimate. The estimate warning is not a hard provider cap;
 run focused direct-OpenAI cases serially and inspect each verdict.
 
 The runner enforces a loopback application origin. It scopes browser API-key
@@ -133,13 +133,13 @@ bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests \
 ```
 
 The offline tests use deterministic structured classifier outputs and require
-no provider credentials. To evaluate the configured live Terra classifier
+no provider credentials. To evaluate the configured live GPT-6 Sol classifier
 against the same semantic expectations, run:
 
 ```bash
 bash scripts/testing/docker-test-compose.sh run --rm \
   -e OPENAI_API_KEY \
-  -e FIGURE_LOCATOR_LLM_MODEL=gpt-5.6-terra \
+  -e FIGURE_LOCATOR_LLM_MODEL=gpt-6-sol \
   -e FIGURE_LOCATOR_LLM_REASONING=low \
   backend-integration-tests \
   bash -lc "cd /app && python scripts/testing/evaluate_figure_locator_classifier.py"

@@ -43,7 +43,7 @@ def test_benchmark_operational_defaults(monkeypatch):
     assert config.get_benchmark_preview_max_chars() == 1000
     assert config.get_benchmark_inline_max_bytes() == 20000
     assert config.get_benchmark_adjudication_enabled() is False
-    assert config.get_benchmark_adjudication_model() == "gpt-5.6-sol"
+    assert config.get_benchmark_adjudication_model() == "gpt-6-sol"
     assert config.get_benchmark_adjudication_case_limit() == 2
     assert config.get_benchmark_adjudication_turn_limit() == 1
     assert config.get_benchmark_adjudication_tool_call_limit() == 0

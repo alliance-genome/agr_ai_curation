@@ -75,7 +75,7 @@ def test_pre_backfill_snapshot_keeps_newly_designated_helpers(execution_db, subm
     groups = list(get_valid_group_ids())
     head = db.get(Agent, agent_id)
     head.template_source = "gene_extractor"
-    head.model_id = "gpt-5.6-sol"
+    head.model_id = "gpt-6-sol"
     head.model_reasoning = "medium"
     head.tool_ids = list(definition.tools)
     head.allowed_group_ids = list(definition.access.allowed_group_ids)
@@ -120,7 +120,7 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
     groups = list(get_valid_group_ids())
     template = Agent(
         id=uuid4(), agent_key=template_key, name=definition.name,
-        instructions="Extract paper-supported records.", model_id="gpt-5.6-sol",
+        instructions="Extract paper-supported records.", model_id="gpt-6-sol",
         model_temperature=0.1, model_reasoning="medium", visibility="system",
         tool_ids=list(definition.tools), allowed_group_ids=list(definition.access.allowed_group_ids),
         group_rules_enabled=False,

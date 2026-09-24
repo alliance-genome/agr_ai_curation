@@ -40,7 +40,7 @@ def _score(*, ambiguous=True, malformed=False, provider_failure=False):
 def _adjudicator(executor, **overrides):
     values = {
         "enabled": True,
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6-sol",
         "timeout_seconds": 0.1,
         "retries": 0,
         "turn_limit": 1,
@@ -88,14 +88,14 @@ async def test_completed_adjudication_preserves_structured_provenance():
     assert result.outcome == "supports_expected"
     assert result.confidence == Decimal("0.8")
     assert result.prompt_id == ADJUDICATION_PROMPT_ID
-    assert result.model == "gpt-5.6-sol"
+    assert result.model == "gpt-6-sol"
     assert result.input_tokens == 100
     assert result.output_tokens == 20
     assert len(result.attempts) == 1
     assert result.attempts[0].status == "completed"
     assert result.attempts[0].turn == 1
     assert result.attempts[0].attempt == 1
-    assert calls[0][0] == "gpt-5.6-sol"
+    assert calls[0][0] == "gpt-6-sol"
 
 
 @pytest.mark.parametrize(
@@ -318,7 +318,7 @@ async def test_failure_after_paid_turn_preserves_usage_and_attempts(monkeypatch)
     assert metadata["operation"] == "provider_call_failed"
     assert metadata["context"] == {
         "attempt": 2,
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6-sol",
         "retry": 0,
         "turn": 2,
     }

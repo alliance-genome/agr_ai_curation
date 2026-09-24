@@ -135,7 +135,7 @@ applicable pricing tiers. Never apply a default model's prices to another model.
 # active config/models.yaml entry. Output.models is the supported API export.
 python -m src.services.model_prices_cli --at 2026-09-15T00:00:00Z \
   --definitions /private/reviewed-langfuse-models.json \
-  --model gpt-6-astra --model gpt-5.6-sol --model gpt-5.6-terra \
+  --model gpt-6-astra --model gpt-6-sol \
   --model deepseek/deepseek-v4-pro-0813
 # Only after production release authorization: same command plus --apply.
 ```
@@ -153,6 +153,12 @@ DeepSeek V4 route. Leave that route unpriced unless a supported verified definit
 is supplied; provider routing usage records may separately report credits, which
 this USD generation report does not silently convert. This is a documented
 pricing dependency, not permission to upgrade the observability stack.
+
+September 24: GPT-6 Sol replaced GPT-5.6 Sol and GPT-5.6 Terra. Run the same
+read-only coverage check for `gpt-6-sol` before release; its calls stay unpriced
+until a reviewed definition matches it. OpenAI's model page lists $2 input,
+$0.20 cached input, $2.50 cache write and $10 output per million tokens, with
+2x input/cache and 1.5x output above 272K input tokens.
 
 No production pricing is changed during code preparation. At release, review and
 apply the missing Astra definition separately, then run a bounded read-only report
