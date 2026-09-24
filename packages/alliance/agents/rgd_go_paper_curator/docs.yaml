@@ -8,30 +8,17 @@ capabilities:
       produces review-only GO recommendations with exact document evidence.
     example_query: "Review Cttn and discover any additional GO-curatable genes in this paper."
     example_result: >
-      Returns typed GOCuratableObject recommendations with gene-product identity,
-      GO term, evidence/ECO, rationale, reference, With/From, and evidence anchors.
-  - name: Identity and annotation comparison
-    description: >
-      Resolves RGD gene or mature-RNA identity and compares each proposal with
-      current typed GO annotations while preserving ambiguity and source status.
-    example_query: "Check whether miR-124-3p has an unambiguous RGD product identity."
-    example_result: >
-      Preserves all resolver candidates and a blocking unresolved state instead
-      of guessing a precursor-gene CURIE.
+      Returns typed GOCuratableObject recommendations with the paper's wording for
+      the gene product, GO term, evidence code, reference, and With/From, any
+      identifiers the paper prints, a rationale, and evidence anchors. Validation
+      confirms each identity afterwards.
 data_sources:
   - name: Active paper evidence
     description: Verified PDF chunks and backend-owned evidence anchors from the active document.
     species_supported: ["R. norvegicus (RGD)"]
     data_types: ["Results", "Methods", "Figure legends", "Tables"]
-  - name: Alliance and GO read-only sources
-    description: >
-      Alliance gene-product resolution, GO Consortium existing annotations, and
-      QuickGO term and hierarchy endpoints with retained provenance.
-    species_supported: ["R. norvegicus (RGD)"]
-    data_types: ["Gene-product identity", "Existing GO annotations", "GO terms", "GO hierarchy"]
 use_when:
   - "When you are an RGD curator with a paper open and want evidence-backed GO recommendations from it."
-  - "When you want a paper's findings compared against the GO annotations already recorded for its genes."
 avoid_when:
   - "To check recommendations against the RGD evidence policy; that check runs automatically on everything this agent produces."
   - "For curators outside RGD; the agent works only in the RGD group."
@@ -40,3 +27,4 @@ avoid_when:
 limitations:
   - "Introduction and Discussion are excluded as sole recommendation evidence."
   - "Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE."
+  - "It never looks identities up; it records the paper's wording and any identifiers the paper prints, and validation confirms them."

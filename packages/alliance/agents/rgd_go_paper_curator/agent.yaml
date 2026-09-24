@@ -3,8 +3,8 @@ agent_id: rgd_go_paper_curator
 name: "RGD GO Paper Curator"
 
 description: >
-  Reads one active paper for RGD GO curation, resolves rat gene-product identity,
-  compares current GO annotations, and returns evidence-backed review candidates.
+  Reads one active paper for RGD GO curation and returns evidence-backed review
+  candidates with the paper's wording; validation confirms their identities.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -42,25 +42,12 @@ tools:
   - discard_recorded_evidence
   - update_recorded_evidence_metadata
   - get_agent_contract
-  - agr_literature_reference_lookup
-  - quickgo_api_call
   - stage_go_recommendation
   - patch_go_recommendation
   - discard_go_recommendation
   - list_staged_go_recommendations
   - find_staged_go_recommendations
   - finalize_go_extraction
-
-group_tool_policy:
-  rules:
-    - tool_id: resolve_gene_product
-      allowed_group_ids: [RGD]
-      field_paths:
-        - gene_product
-    - tool_id: go_api_call
-      allowed_group_ids: [RGD]
-      field_paths:
-        - provider_context.existing_annotation_context
 
 output_schema: null
 

@@ -609,6 +609,7 @@ def test_a_go_whole_value_override_may_not_change_other_keys():
         ("go_term.resolution_state", "resolved"),
         ("evidence_code.lookup_outcome", "matched"),
         ("gene_product.entity_type", "gene"),
+        ("gene_product.proposed_curie", "RGD:2325"),
     ],
 )
 def test_go_paper_wording_and_validation_state_are_not_curator_editable(field_path, value):
@@ -644,6 +645,25 @@ def test_go_identity_leaves_are_the_editable_fields_and_the_catalog_ignores_it()
     }
     pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
     assert all("editable" not in str(entry) for entry in _pack_export_fields(pack))
+
+
+def test_go_paper_stated_identifiers_are_declared_for_validators_only():
+    """Extraction never searches: a paper-stated ID is validator input, never a column or an identity."""
+
+    from src.lib.flows.export_fields import _pack_export_fields
+    from agr_ai_curation_alliance.domain_packs.go.values import PROPOSAL_FIELDS
+
+    metadata, _ = _contracts()
+    fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
+    proposals = {path for path in fields if path.endswith(".proposed_curie")}
+    assert proposals == {f"{value_path}.proposed_curie" for value_path in PROPOSAL_FIELDS}
+    for path in proposals:
+        assert fields[path].metadata.get("exported") is False
+        assert fields[path].metadata.get("protected") is True
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    assert not [
+        entry for entry in _pack_export_fields(pack) if entry["payload_path"].endswith("proposed_curie")
+    ]
 
 
 def test_previous_format_go_records_export_through_the_registered_mapper():

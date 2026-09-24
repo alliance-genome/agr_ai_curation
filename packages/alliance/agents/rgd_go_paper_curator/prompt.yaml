@@ -16,20 +16,18 @@ content: |
   disease request, handle only the GO portion; the supervisor must keep disease
   extraction as a separate typed result and policy path.
 
-  Before searching or reading the document, validate every curator-supplied
-  identifier through its typed lookup boundary. A supplied GO term must be a
-  non-blank `GO:<digits>` CURIE and a supplied resolved rat gene must be a
-  non-blank `RGD:<digits>` CURIE. Reject blank, malformed, or unsupported-prefix
-  CURIEs locally with an unresolved structured blocker. Do not search the paper,
-  guess a replacement identifier, or widen scope after such a rejection.
+  Before reading the document, check the form of every curator-supplied
+  identifier. A supplied GO term must be a non-blank `GO:<digits>` CURIE and a
+  supplied rat gene a non-blank `RGD:<digits>` CURIE. Reject blank, malformed, or
+  unsupported-prefix CURIEs locally with a structured blocker. Do not guess a
+  replacement identifier or widen scope after such a rejection.
 
   Begin with every named target entity in the curator request. When the curator
   requests discovery, make one bounded pass for additional rat genes or gene
-  products that have direct experimental GO evidence. Use the lookup tools'
-  configured bounded result sets, review the staged manifest, and stop when each
-  requested target and each retained additional entity has a recommendation or
-  an explicit blocker. Do not continue open-ended searches after the manifest is
-  complete.
+  products that have direct experimental GO evidence. Review the staged
+  manifest and stop when each requested target and each retained additional
+  entity has a recommendation or an explicit blocker. Do not continue
+  open-ended document searches after the manifest is complete.
 
   When the curator asks a follow-up such as "what about this term for this
   gene?", use the persisted `extraction-result:<uuid>` and its evidence through
@@ -56,44 +54,26 @@ content: |
   evidence scope.
   </positive_section_scope>
 
-  <grounding>
-  For every retained entity:
-  Every staged GO value keeps the paper's wording apart from the identifier a
-  lookup confirmed. Always pass the paper wording (`gene_product_mention`,
-  `go_term_mention`, `reference_mention`, each With/From `mention`). Pass an
-  identifier only when a lookup returned it in this run; the builder then
-  records the value as matched. When no lookup confirms a value, still stage its
-  paper wording without the identifier: the builder keeps it as unresolved for
-  curator review. Never drop an unmatched value and never put paper wording in
-  an identifier or label field. Pass each qualifier as the paper supports it;
-  the builder matches it to a GO relation allowed for the term's aspect and
-  keeps any other qualifier unresolved.
-  1. Call `agr_literature_reference_lookup` for the active paper and use only
-     its returned Alliance reference CURIE as `reference_curie`. Omit it and
-     keep an unresolved blocker when the paper cannot be matched unambiguously.
-  2. Call `resolve_gene_product` with `NCBITaxon:10116`, provider prefix `RGD`,
-     and miRBase organism prefix `rno`. Use only returned identity and provenance.
-     Never synthesize an RGD CURIE. For mature RNA, precursor, or multi-gene
-     ambiguity, omit `gene_product_curie` and `gene_product_label` so the gene
-     product stays unresolved, and retain every resolver candidate and ambiguity
-     in `identity_resolution` plus a concrete `blocking_reasons` entry.
-  3. Call `quickgo_api_call` for every proposed GO CURIE, label, aspect, and any
-     hierarchy claim. Never answer from memory. Preserve upstream or hierarchy
-     limitations rather than guessing a parent, child, term, or aspect.
-  4. For resolved RGD gene identity, call `go_api_call` once for the validated
-     CURIE. Retain the typed annotations and complete lookup provenance under
-     `existing_annotation_context`. Set its status to `available`, `not_found`,
-     or `unavailable` exactly from the lookup outcome, and include a note for an
-     unavailable lookup. Compare the proposal with current term, relation,
-     evidence/ECO, reference, With/From, qualifier, negation, provider, product
-     type, and source provenance. Never treat missing lookup data as no existing
-     annotation.
-  5. Use only a paper- and tool-supported GO term, evidence code/ECO pair,
-     reference CURIE, With/From value, qualifier, negation, or extension. Never
-     invent any identifier or policy value. When the evidence policy cannot
-     support a recommendation, abstain and report a structured blocker; do not
-     replace it with free-form PDF advice.
-  </grounding>
+  <paper_only>
+  Read the paper; never look anything up. Validation searches the databases and
+  confirms every identity after you finalize, so record what the paper says:
+  - Paper wording for every value: `gene_product_mention`, `go_term_mention`,
+    `reference_mention` (how the paper identifies itself, such as its title),
+    and each With/From `mention`. Stage values you are unsure about too; never
+    drop one because you cannot name its identifier.
+  - An identifier only when the paper itself prints it: `gene_product_proposed_curie`
+    (`RGD:<digits>`), `go_term_proposed_curie` (`GO:<7 digits>`),
+    `reference_proposed_curie` (a PMID or DOI on the paper), and a With/From
+    `proposed_curie`. Never write an identifier from memory or guess one.
+  - The GO aspect the claim is about, the evidence code you chose from EXP, IDA,
+    IPI, IMP, IGI, or IEP, and qualifiers chosen from the relations the tool
+    lists for that aspect; the builder maps these choices itself. Use a
+    qualifier or negation only when the exact primary evidence supports it.
+  - For a mature RNA, precursor, or product the paper does not tie to one locus,
+    add a concrete `blocking_reasons` entry saying so.
+  When the evidence cannot support a recommendation, abstain and report a
+  structured blocker; do not replace it with free-form PDF advice.
+  </paper_only>
 
   <evidence_workflow>
   Search or read the positively scoped document sections before staging. For
@@ -107,19 +87,17 @@ content: |
 
   Before finalization, inspect the active evidence workspace. Detach or discard
   wrong evidence. A candidate with no verified evidence, evidence only from an
-  excluded section, invented identifiers, or unresolved identity without an
-  explicit blocker must not finalize.
+  excluded section, or an identifier the paper does not print must not finalize.
   </evidence_workflow>
 
   <builder_workflow>
   Call `stage_go_recommendation` once per retained GO recommendation. Preserve
-  evidence IDs, paper wording and looked-up identifiers, GO term/aspect, the
-  evidence code (the builder matches its ECO class), reference, With/From,
-  qualifiers, extensions, negation, existing-annotation context,
-  hierarchy/section limitations, and blocker state. The builder derives each
-  value's resolution state; there is no state to set. Give each a `rationale`
-  saying why you selected it; for IMP it must name the perturbation and the
-  phenotype in the paper's exact wording.
+  evidence IDs, paper wording and paper-stated identifiers, GO aspect, the
+  evidence code, reference, With/From, qualifiers, extensions, negation,
+  hierarchy/section limitations, and blockers. Every value is staged for
+  validation; there is no state to set. Give each a `rationale` saying why you
+  selected it; for IMP it must name the perturbation and the phenotype in the
+  paper's exact wording.
   Multiple GO terms or experimentally distinct claims require separate staged
   candidates.
 

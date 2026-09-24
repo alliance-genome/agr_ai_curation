@@ -171,6 +171,13 @@ object_definitions:
         required: true
         metadata:
           render_as: curie-chip
+      - field_path: gene_product.proposed_curie
+        field_type: string
+        display_name: Gene product paper-stated ID
+        description: An identifier the paper itself prints, recorded by the extractor. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: gene_product.resolution_state
         field_type: enum
         display_name: Gene product status
@@ -228,6 +235,13 @@ object_definitions:
         display_name: GO aspect
         required: true
         enum_ref: GOAspect
+      - field_path: go_term.proposed_curie
+        field_type: string
+        display_name: GO term paper-stated ID
+        description: An identifier the paper itself prints, recorded by the extractor. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: go_term.resolution_state
         field_type: enum
         display_name: GO term status
@@ -324,6 +338,13 @@ object_definitions:
           editable: true
           curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           render_as: curie-chip
+      - field_path: reference_curie.proposed_curie
+        field_type: string
+        display_name: Reference paper-stated ID
+        description: An identifier the paper itself prints, recorded by the extractor. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: reference_curie.resolution_state
         field_type: enum
         display_name: Reference status
@@ -366,6 +387,13 @@ object_definitions:
           editable: true
           curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           render_as: curie-chip
+      - field_path: with_from.proposed_curie
+        field_type: string
+        display_name: With/From paper-stated ID
+        description: An identifier the paper itself prints, recorded by the extractor. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: with_from.resolution_state
         field_type: enum
         display_name: With/From status

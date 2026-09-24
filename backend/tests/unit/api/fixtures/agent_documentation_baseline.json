@@ -1946,14 +1946,8 @@
       {
         "description": "Reads Results, Methods, figures, and tables for named rat gene products and produces review-only GO recommendations with exact document evidence.\n",
         "example_query": "Review Cttn and discover any additional GO-curatable genes in this paper.",
-        "example_result": "Returns typed GOCuratableObject recommendations with gene-product identity, GO term, evidence/ECO, rationale, reference, With/From, and evidence anchors.\n",
+        "example_result": "Returns typed GOCuratableObject recommendations with the paper's wording for the gene product, GO term, evidence code, reference, and With/From, any identifiers the paper prints, a rationale, and evidence anchors. Validation confirms each identity afterwards.\n",
         "name": "Evidence-backed GO paper review"
-      },
-      {
-        "description": "Resolves RGD gene or mature-RNA identity and compares each proposal with current typed GO annotations while preserving ambiguity and source status.\n",
-        "example_query": "Check whether miR-124-3p has an unambiguous RGD product identity.",
-        "example_result": "Preserves all resolver candidates and a blocking unresolved state instead of guessing a precursor-gene CURIE.\n",
-        "name": "Identity and annotation comparison"
       }
     ],
     "data_sources": [
@@ -1969,30 +1963,17 @@
         "species_supported": [
           "R. norvegicus (RGD)"
         ]
-      },
-      {
-        "data_types": [
-          "Gene-product identity",
-          "Existing GO annotations",
-          "GO terms",
-          "GO hierarchy"
-        ],
-        "description": "Alliance gene-product resolution, GO Consortium existing annotations, and QuickGO term and hierarchy endpoints with retained provenance.\n",
-        "name": "Alliance and GO read-only sources",
-        "species_supported": [
-          "R. norvegicus (RGD)"
-        ]
       }
     ],
     "limitations": [
       "Introduction and Discussion are excluded as sole recommendation evidence.",
-      "Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE."
+      "Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE.",
+      "It never looks identities up; it records the paper's wording and any identifiers the paper prints, and validation confirms them."
     ],
     "note": "",
     "summary": "Authenticated RGD-only extraction specialist for evidence-backed GO recommendations from one active paper.\n",
     "use_when": [
-      "When you are an RGD curator with a paper open and want evidence-backed GO recommendations from it.",
-      "When you want a paper's findings compared against the GO annotations already recorded for its genes."
+      "When you are an RGD curator with a paper open and want evidence-backed GO recommendations from it."
     ]
   },
   "subject_entity": {

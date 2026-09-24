@@ -4020,7 +4020,7 @@
           "type": "string"
         },
         {
-          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nqualifiers takes the qualifiers as the paper supports them; the builder\nlooks each one up again against the GO term's aspect.\nA GO value (gene_product, go_term, reference_curie, each with_from entry) takes the\nsame shape as staging: the paper wording as `mention` plus the identifier only\nwhen a lookup returned it; evidence_code takes the code. The builder works out\nagain whether each value is matched or unresolved.\nA `rationale` update must be non-empty; it cannot be cleared.",
+          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA GO value (gene_product, go_term, reference_curie, each with_from entry) takes the\nsame shape as staging: the paper wording as `mention`, plus `proposed_curie`\nonly when the paper prints the identifier, and is staged unresolved again for\nvalidation. evidence_code takes the chosen code and qualifiers the list of\nchosen relations; the builder maps them with its own tables.\nA `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5819,19 +5819,19 @@
           "type": "string"
         },
         {
-          "description": "The GO aspect: molecular_function, biological_process, or\ncellular_component.",
+          "description": "The GO aspect the claim is about: molecular_function,\nbiological_process, or cellular_component.",
           "name": "go_term_aspect",
           "required": true,
           "type": "string"
         },
         {
-          "description": "The GO experimental evidence code for the experiment, for\nexample IDA, IPI, IMP, IGI, IEP, or EXP. Its ECO class is looked up for you.",
+          "description": "The GO experimental evidence code you chose for the experiment:\nEXP, IDA, IPI, IMP, IGI, or IEP. The builder maps it to its ECO class.",
           "name": "evidence_code",
           "required": true,
           "type": "string"
         },
         {
-          "description": "How you identified the paper for the reference lookup, for\nexample its PMID or title.",
+          "description": "How the paper identifies itself, for example its title or a\nPMID or DOI printed on it.",
           "name": "reference_mention",
           "required": true,
           "type": "string"
@@ -5843,12 +5843,6 @@
           "type": "string"
         },
         {
-          "description": "Whether the existing-annotation lookup returned\nannotations (available), returned none (not_found), or could not run\n(unavailable).",
-          "name": "existing_annotation_status",
-          "required": true,
-          "type": "string"
-        },
-        {
           "description": "Verified evidence record IDs supporting this recommendation.",
           "name": "evidence_record_ids",
           "required": true,
@@ -5856,49 +5850,35 @@
         },
         {
           "default": null,
-          "description": "The RGD CURIE exactly as resolve_gene_product returned it;\nleave it out when the identity is unresolved or ambiguous.",
-          "name": "gene_product_curie",
+          "description": "An RGD identifier (RGD:<digits>) only when the paper\nitself prints it for this gene product; leave it out otherwise.",
+          "name": "gene_product_proposed_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The gene-product symbol resolve_gene_product returned with\nthat CURIE; leave it out without a CURIE.",
-          "name": "gene_product_label",
+          "description": "A GO identifier (GO:<7 digits>) only when the paper itself\nprints it; leave it out otherwise.",
+          "name": "go_term_proposed_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The GO term CURIE exactly as quickgo_api_call returned it; leave\nit out when no term was confirmed.",
-          "name": "go_term_curie",
+          "description": "A PMID or DOI only when the paper itself prints it, for\nexample PMID:12345678; leave it out otherwise.",
+          "name": "reference_proposed_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The GO term name quickgo_api_call returned with that CURIE.",
-          "name": "go_term_label",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "description": "The reference CURIE exactly as agr_literature_reference_lookup\nreturned it; leave it out when the paper could not be matched.",
-          "name": "reference_curie",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "description": "With/From entries, each with the paper's wording and, when a lookup\nreturned one, its identifier.",
+          "description": "With/From entries, each with the paper's wording and, only when the\npaper prints one, its identifier.",
           "name": "with_from",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "GO relation qualifiers as the paper supports them, for example\nenables, involved_in, located_in, colocalizes_with, or contributes_to.\nEach is looked up in the GO relation vocabulary for the term's aspect; one\nthat does not fit stays unresolved. Negation is its own field.",
+          "description": "GO relation qualifiers the evidence supports, chosen from the\nrelations allowed for the aspect: enables or contributes_to (molecular\nfunction); involved_in, acts_upstream_of, acts_upstream_of_positive_effect,\nacts_upstream_of_negative_effect, acts_upstream_of_or_within,\nacts_upstream_of_or_within_positive_effect or\nacts_upstream_of_or_within_negative_effect (biological process); part_of,\ncolocalizes_with, is_active_in or located_in (cellular component). Negation is\nits own field.",
           "name": "qualifiers",
           "required": false,
           "type": "any"
@@ -5917,32 +5897,8 @@
         },
         {
           "default": null,
-          "description": "Concrete reasons a curator must resolve before acceptance;\nrequired when the gene product has no confirmed CURIE.",
+          "description": "Concrete reasons a curator must settle before acceptance, for\nexample a mature-RNA product the paper does not tie to one locus.",
           "name": "blocking_reasons",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "name": "existing_annotations",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "name": "existing_annotation_provenance",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "name": "existing_annotation_note",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "name": "identity_resolution",
           "required": false,
           "type": "any"
         },
@@ -5966,7 +5922,7 @@
           "type": "any"
         }
       ],
-      "summary": "Stages one typed GOCuratableObject recommendation with verified evidence, the paper's wording for each GO value next to any identifier a lookup confirmed (unconfirmed values stay unresolved), current-annotation context, and curator-visible limitations."
+      "summary": "Stages one typed GOCuratableObject recommendation with verified evidence, the paper's wording for each GO value, any identifier the paper itself prints (as a proposal for validation), and curator-visible limitations. It never looks anything up. The gene product, GO term, reference and With/From stay unresolved until validation confirms them, and the evidence code and qualifiers are mapped from fixed tables."
     },
     "methods": null,
     "name": "Stage GO Recommendation",
