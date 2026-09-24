@@ -5376,13 +5376,16 @@ async def run_specialist_with_events(
                         full_text = getattr(data, "text", "")
                         if full_text:
                             result._final_text_output = full_text
-                            logger.warning(
-                                "%s GENERATED TEXT INSTEAD OF STRUCTURED OUTPUT! Length: %s chars. First 500: %s...",
-                                specialist_name,
-                                len(full_text),
-                                full_text[:500],
-                                extra={"specialist_name": specialist_name},
-                            )
+                            # Builders have no output_type (finalization is their
+                            # output), so their closing text is expected.
+                            if expected_output_type is not None:
+                                logger.warning(
+                                    "%s GENERATED TEXT INSTEAD OF STRUCTURED OUTPUT! Length: %s chars. First 500: %s...",
+                                    specialist_name,
+                                    len(full_text),
+                                    full_text[:500],
+                                    extra={"specialist_name": specialist_name},
+                                )
                     elif response_type not in ("ResponseFunctionCallArgumentsDeltaEvent",):
                         # Log other response types (but not the spammy argument deltas)
                         logger.debug("%s raw_response: type=%s", specialist_name, response_type)
