@@ -3475,7 +3475,7 @@ def _ordered_matches(
 
 
 def _binding_has_dispatch_contract(binding: ValidatorBinding) -> bool:
-    return bool(binding.input_fields or binding.expected_result_fields)
+    return binding.has_dispatch_contract
 
 
 __all__ = [

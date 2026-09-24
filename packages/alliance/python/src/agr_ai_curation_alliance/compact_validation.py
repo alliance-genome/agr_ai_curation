@@ -23,7 +23,6 @@ _IDENTITY_KEYS = {
     "GeneResultEnvelope": (*_ENTITY_IDS, "gene_id"),
     "AlleleResultEnvelope": _ENTITY_IDS,
     "AgmValidationResult": _ENTITY_IDS,
-    "SubjectEntityValidationResult": _ENTITY_IDS,
     "OntologyTermValidationResult": ("curie",),
     # Vocabulary terms are identified by their curation-database term id.
     "ControlledVocabularyValidationResult": ("internal_id", "id"),
@@ -49,7 +48,6 @@ _LABEL_KEYS = {
     "ChemicalValidationResult": ("name",),
     "DiseaseValidationResult": ("name",),
 }
-_SUBJECT_LABEL_KEYS = {"gene": ("symbol",), "allele": ("symbol",), "agm": ("name",)}
 # Keys that mark a single provider record (rather than a collection) in a lookup payload.
 _RECORD_IDENTITY_KEYS = frozenset(key for keys in _IDENTITY_KEYS.values() for key in keys) | {"chebi_accession"}
 _ROWS = {
@@ -58,7 +56,6 @@ _ROWS = {
     "AgmValidationResult": ("agm_candidates", "AffectedGenomicModel", {
         "agm_id": _ENTITY_IDS, "label": _LABEL_KEYS["AgmValidationResult"],
     }),
-    "SubjectEntityValidationResult": ("subject_candidates", "Subject", {}),
     "OntologyTermValidationResult": ("ontology_term_candidates", "OntologyTerm", {
         "curie": _IDENTITY_KEYS["OntologyTermValidationResult"],
         "label": _LABEL_KEYS["OntologyTermValidationResult"],
@@ -87,7 +84,7 @@ def _first(record: Mapping[str, Any], keys: tuple[str, ...]) -> Any:
     return None
 
 
-def canonical_record(record: Mapping[str, Any], result_schema: type, *, request=None, record_role=None) -> CanonicalValidatorRecord:
+def canonical_record(record: Mapping[str, Any], result_schema: type, *, record_role=None) -> CanonicalValidatorRecord:
     """Build factual views once; selection and candidate assessment come later."""
     name = result_schema.__name__
     if name not in _ROWS:
@@ -119,19 +116,7 @@ def canonical_record(record: Mapping[str, Any], result_schema: type, *, request=
                     record[field] = deepcopy(structure[source])
     elif name == "OrthologsResult" and "geneToGeneOrthologyGenerated" in record:
         record = _ortholog_record(record)
-    elif name == "SubjectEntityValidationResult":
-        subject_type = normalized_subject_type(request)
-        if subject_type is None:
-            raise ValueError("A subject record requires an explicit supported subject type")
-        object_type = {"gene": "Gene", "allele": "Allele", "agm": "AffectedGenomicModel"}[subject_type]
-        record = {**record, "subject_type": subject_type,
-                  "subject_identifier": _first(record, _ENTITY_IDS),
-                  "subject_label": _first(record, _SUBJECT_LABEL_KEYS[subject_type])}
-    label_keys = (
-        _SUBJECT_LABEL_KEYS[record["subject_type"]]
-        if name == "SubjectEntityValidationResult"
-        else _LABEL_KEYS.get(name, ())
-    )
+    label_keys = _LABEL_KEYS.get(name, ())
     identity = _first(record, _IDENTITY_KEYS.get(name, ()))
     if name == "GOAnnotationsResult":
         provenance = record.get("provenance")
@@ -222,19 +207,6 @@ def _gene_record(gene: Mapping[str, Any]) -> dict[str, Any]:
         result["symbol"] = symbol.get("displayText")
     # Do not infer organism or provider from identifiers or query context.
     return result
-
-
-def normalized_subject_type(request) -> str | None:
-    if request is None:
-        return None
-    value = request.selected_inputs.get("subject_type", request.target.input_values.get("subject_type"))
-    if not isinstance(value, str):
-        return None
-    return {
-        "gene": "gene", "Gene": "gene", "GENE": "gene",
-        "allele": "allele", "Allele": "allele", "ALLELE": "allele",
-        "agm": "agm", "AGM": "agm", "affected_genomic_model": "agm", "Affected Genomic Model": "agm",
-    }.get(value)
 
 
 def source_records(tool_name: str, payload: Mapping[str, Any]) -> list[dict[str, Any]]:

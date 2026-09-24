@@ -9,7 +9,6 @@ TARGET_VALIDATION_AGENT_ICONS = {
     "experimental_condition_validation": "🧪",
     "ontology_term_validation": "🔎",
     "reference_validation": "📚",
-    "subject_entity_validation": "🎯",
 }
 
 

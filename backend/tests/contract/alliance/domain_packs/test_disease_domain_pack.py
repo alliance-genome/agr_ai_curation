@@ -2180,10 +2180,12 @@ def test_demoting_a_disease_subject_keeps_its_routing_subject_type():
     )
 
     def resolve(request):
+        # The gene subject routes to the gene validator, whose results never carry the
+        # routing subject_type.
+        assert request.validator_agent.agent_id == "gene_validation"
         return _validator_result(
             request, status="resolved", outcome="success",
-            resolved_values={"subject_identifier": "FB:FBgn0000108", "subject_label": "Appl",
-                             "subject_type": "gene"},
+            resolved_values={"curie": "FB:FBgn0000108", "symbol": "Appl"},
         )
 
     envelope.extracted_objects[0].payload.update(_materialize(envelope, "disease_subject_materialization", resolve))

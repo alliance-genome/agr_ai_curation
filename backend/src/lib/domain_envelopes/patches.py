@@ -431,7 +431,7 @@ def _follow_mirrors(
         source,
         metadata=domain_pack.metadata,
         expected_result_fields_by_binding={
-            binding.binding_id: binding.expected_result_fields
+            binding.binding_id: binding.for_payload(source.payload).expected_result_fields
             for binding in registry.bindings
             if source.object_type in binding.object_types
         },
@@ -503,6 +503,7 @@ def _mirror_pass_through(
     if binding is None or len(sources) != 1:
         return f"field_path '{patch.field_path}' does not link exactly one value it follows"
     source = sources[0]
+    binding = binding.for_payload(source.payload)
     source_definition = next(
         (obj for obj in domain_pack.metadata.object_definitions if obj.object_type == source.object_type), None,
     )

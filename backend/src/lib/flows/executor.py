@@ -1427,7 +1427,7 @@ def _validation_matches_by_binding(
 
 
 def _validation_binding_has_dispatch_contract(match: ValidatorBindingMatch) -> bool:
-    return bool(match.binding.input_fields or match.binding.expected_result_fields)
+    return match.binding.has_dispatch_contract
 
 
 async def _run_custom_flow_validator_agent(

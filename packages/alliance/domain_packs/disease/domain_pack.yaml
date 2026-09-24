@@ -685,7 +685,7 @@ object_definitions:
         model_ref: DiseaseSubjectSnapshotPayload
         definition_notes:
         - The subject biological entity selects the concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation,
-          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active subject_entity_validation
+          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active disease_subject_materialization
           binding.
         metadata:
           validatable: true
@@ -693,7 +693,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           editable: true
-          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the subject check set it.'
+          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the paper states it.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -712,7 +712,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           protected: true
-          curator_action_note: The subject check sets the subject type, and it decides how the annotation is exported; it cannot be edited.
+          curator_action_note: The subject type comes from the paper; it decides which check confirms the subject and how the annotation is exported, and it cannot be edited.
       - field_path: disease_annotation_subject.subject_label
         field_type: string
         display_name: Subject label
@@ -2051,7 +2051,7 @@ object_definitions:
         model_ref: DiseaseSubjectSnapshotPayload
         definition_notes:
         - The subject biological entity selects the concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation,
-          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active subject_entity_validation
+          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active disease_subject_materialization
           binding.
         metadata:
           validatable: true
@@ -2059,7 +2059,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           editable: true
-          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the subject check set it.'
+          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the paper states it.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2078,7 +2078,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           protected: true
-          curator_action_note: The subject check sets the subject type, and it decides how the annotation is exported; it cannot be edited.
+          curator_action_note: The subject type comes from the paper; it decides which check confirms the subject and how the annotation is exported, and it cannot be edited.
       - field_path: disease_annotation_subject.subject_label
         field_type: string
         display_name: Subject label
@@ -3408,7 +3408,7 @@ object_definitions:
         model_ref: DiseaseSubjectSnapshotPayload
         definition_notes:
         - The subject biological entity selects the concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation,
-          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active subject_entity_validation
+          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active disease_subject_materialization
           binding.
         metadata:
           validatable: true
@@ -3416,7 +3416,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           editable: true
-          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the subject check set it.'
+          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the paper states it.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -3435,7 +3435,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           protected: true
-          curator_action_note: The subject check sets the subject type, and it decides how the annotation is exported; it cannot be edited.
+          curator_action_note: The subject type comes from the paper; it decides which check confirms the subject and how the annotation is exported, and it cannot be edited.
       - field_path: disease_annotation_subject.subject_label
         field_type: string
         display_name: Subject label
@@ -4767,7 +4767,7 @@ object_definitions:
         model_ref: DiseaseSubjectSnapshotPayload
         definition_notes:
         - The subject biological entity selects the concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation,
-          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active subject_entity_validation
+          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active disease_subject_materialization
           binding.
         metadata:
           validatable: true
@@ -4775,7 +4775,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           editable: true
-          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the subject check set it.'
+          curator_action_note: 'Curator override: enter the identifier and the name together; typing them marks this value as a curator override. The subject type stays as the paper states it.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -4794,7 +4794,7 @@ object_definitions:
           validator_state: active
           definition_state_category: complete
           protected: true
-          curator_action_note: The subject check sets the subject type, and it decides how the annotation is exported; it cannot be edited.
+          curator_action_note: The subject type comes from the paper; it decides which check confirms the subject and how the annotation is exported, and it cannot be edited.
       - field_path: disease_annotation_subject.subject_label
         field_type: string
         display_name: Subject label
@@ -5934,9 +5934,10 @@ metadata:
       - validator_id: disease_subject_materialization
         display_name: Disease subject lookup
         curator_label: Confirm the subject gene, allele, or model in the Alliance records
-        description: Checks that the gene, allele, or genetic model the annotation is about matches an Alliance record and fills in its identifier and type. An annotation cannot be submitted until the subject is confirmed or a curator waives the check.
+        description: Checks that the gene, allele, or genetic model the annotation is about matches an Alliance record and fills in its identifier and name. An annotation cannot be submitted until the subject is confirmed or a curator waives the check.
         definition_notes:
-          - Runs through the subject-entity package validator binding, resolving the staged disease_annotation_subject to concrete Gene, Allele, or AGM identity (D2 full LinkML alignment).
+          - Routes by the staged subject type (D2 full LinkML alignment) - genes run through the gene validator, alleles through the allele validator, and affected genomic models through the AGM validator, each searching the paper's wording with the annotation's data provider as species context.
+          - A subject type with no route, such as unknown, stays unresolved.
           - Blocking and required; curators may waive it through curator_override.
       - validator_id: disease_evidence_code_lookup
         display_name: Evidence code lookup
@@ -6192,20 +6193,19 @@ metadata:
         allow_opt_out: true
         curator_override:
           allowed: false
-      # FULL LinkML alignment (D2): subject_entity_validation activated. The staged subject
-      # (subject_type + subject_identifier) is resolved to concrete Gene/Allele/AGM identity, and
-      # selects the concrete DiseaseAnnotation subtype materialized by the builder.
+      # FULL LinkML alignment (D2): the staged subject_type routes the subject to the validator
+      # that owns that identity. The paper's wording is the search input; a paper-stated
+      # identifier is optional. A subject type with no route (e.g. unknown) stays unresolved and
+      # blocks submission until a curator resolves or waives it.
       - binding_id: disease_subject_materialization
         display_name: Disease subject lookup
         curator_label: Confirm the subject gene, allele, or model in the Alliance records
-        description: Checks that the gene, allele, or genetic model the annotation is about matches an Alliance record and fills in its identifier and type. An annotation cannot be submitted until the subject is confirmed or a curator waives the check.
+        description: Checks that the gene, allele, or genetic model the annotation is about matches an Alliance record and fills in its identifier and name. An annotation cannot be submitted until the subject is confirmed or a curator waives the check.
         when_off: The subject stays as the extractor wrote it, review rows show it unconfirmed, and the annotation cannot be submitted until a curator confirms or waives it.
         definition_notes:
-          - Runs through the subject-entity package validator binding, resolving the staged disease_annotation_subject to concrete Gene, Allele, or AGM identity (D2 full LinkML alignment).
+          - Routes by the staged subject type (D2 full LinkML alignment) - genes run through the gene validator, alleles through the allele validator, and affected genomic models through the AGM validator, each searching the paper's wording with the annotation's data provider as species context.
+          - A subject type with no route, such as unknown, stays unresolved.
           - Blocking and required; curators may waive it through curator_override.
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: subject_entity_validation
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
@@ -6216,32 +6216,99 @@ metadata:
           field_paths:
             - disease_annotation_subject.subject_identifier
             - disease_annotation_subject.subject_type
-        input_fields:
-          subject_type:
-            source: payload
-            path: disease_annotation_subject.subject_type
-          subject_identifier:
-            source: payload
-            path: disease_annotation_subject.proposed_subject_identifier
-          subject_label:
-            source: payload
-            path: disease_annotation_subject.mention
-            required: false
-          source_mentions:
-            source: payload
-            path: source_mentions
-            required: false
-            allow_multiple: true
-            context_only: true
-        expected_result_fields:
-          subject_identifier: disease_annotation_subject.subject_identifier
-          subject_type: disease_annotation_subject.subject_type
-          subject_label: disease_annotation_subject.subject_label
-        # R3: a disease annotation cannot be curated without a subject, so a missing required
-        # subject input (e.g. a paper naming a genotype/AGM with no MOD identifier) must force the
-        # curator to resolve it at the submission-review step. blocking+required makes the
-        # selector_missing finding gate submission readiness; curator_override.allowed makes it
-        # WAIVABLE — the curator can override when a genotype legitimately has no durable ID yet.
+        route_by:
+          source: payload
+          path: disease_annotation_subject.subject_type
+        routes:
+          gene:
+            validator_agent:
+              package_id: agr.alliance
+              agent_id: gene_validation
+            input_fields:
+              mention:
+                source: payload
+                path: disease_annotation_subject.mention
+              proposed_gene_id:
+                source: payload
+                path: disease_annotation_subject.proposed_subject_identifier
+                required: false
+              data_provider_hint:
+                source: payload
+                path: data_provider.mention
+                required: false
+              source_mentions:
+                source: payload
+                path: source_mentions
+                required: false
+                allow_multiple: true
+                context_only: true
+              evidence_quotes:
+                source: evidence_record
+                output: quote_bundle
+                allow_multiple: true
+                required: false
+                context_only: true
+            expected_result_fields:
+              curie: disease_annotation_subject.subject_identifier
+              symbol: disease_annotation_subject.subject_label
+          allele:
+            validator_agent:
+              package_id: agr.alliance
+              agent_id: allele_validation
+            max_tool_calls: ${ALLELE_MENTION_REFERENCE_VALIDATOR_MAX_TOOL_CALLS:-16}
+            input_fields:
+              mention:
+                source: payload
+                path: disease_annotation_subject.mention
+              normalized_hint:
+                source: payload
+                path: disease_annotation_subject.proposed_subject_identifier
+                required: false
+              data_provider_hint:
+                source: payload
+                path: data_provider.mention
+                required: false
+              source_mentions:
+                source: payload
+                path: source_mentions
+                required: false
+                allow_multiple: true
+                context_only: true
+              evidence_quotes:
+                source: evidence_record
+                output: quote_bundle
+                allow_multiple: true
+                required: false
+                context_only: true
+            expected_result_fields:
+              curie: disease_annotation_subject.subject_identifier
+              symbol: disease_annotation_subject.subject_label
+          agm:
+            validator_agent:
+              package_id: agr.alliance
+              agent_id: agm_validation
+            input_fields:
+              subject_identifier:
+                source: payload
+                path: disease_annotation_subject.proposed_subject_identifier
+                required: false
+              subject_label:
+                source: payload
+                path: disease_annotation_subject.mention
+              source_mentions:
+                source: payload
+                path: source_mentions
+                required: false
+                allow_multiple: true
+                context_only: true
+            expected_result_fields:
+              agm_id: disease_annotation_subject.subject_identifier
+              label: disease_annotation_subject.subject_label
+        # R3: a disease annotation cannot be curated without a subject, so a subject the
+        # validator cannot confirm (or a subject type with no route) must force the curator to
+        # resolve it at the submission-review step. blocking+required gates submission
+        # readiness; curator_override.allowed makes it WAIVABLE — the curator can override when a
+        # genotype legitimately has no durable ID yet.
         required: true
         blocking: true
         allow_opt_out: true

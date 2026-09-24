@@ -87,20 +87,6 @@
           "search_go_terms",
           "map_curies_to_names"
         ]
-      },
-      "subject_entity_validation": {
-        "agent_name": "Subject Entity Validation Agent",
-        "description": "The Subject specialist confirms the affected entity \u2014 sending it to the gene, allele, or modified-organism path depending on what it is.",
-        "methods": [
-          "get_gene_by_id",
-          "search_genes",
-          "get_gene_by_exact_symbol",
-          "get_allele_by_id",
-          "search_alleles",
-          "get_allele_by_exact_symbol",
-          "map_entity_curies_to_info",
-          "map_entity_names_to_curies"
-        ]
       }
     },
     "agent_studio": {

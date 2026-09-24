@@ -13,7 +13,6 @@ _SCIENTIFIC = {
     "AgmValidationResult": ("unresolved_explanations",),
     "DataProviderValidationResult": ("mismatch_explanations",),
     "GOTermResultEnvelope": ("query_summary",),
-    "SubjectEntityValidationResult": ("unresolved_explanations",),
 }
 
 _SLOT_FIELDS = {
@@ -50,8 +49,6 @@ def simple_decision_contract(request, result_schema, *, profile_mapped=False, sc
     if fields:
         scientific_fields: dict[str, Any] = {field: (result_schema.model_fields[field].annotation,
                                      deepcopy(result_schema.model_fields[field])) for field in fields}
-        if name == "SubjectEntityValidationResult":
-            scientific_fields["route_reason"] = (StrictStr, ...)
         if name == "GOTermResultEnvelope":
             scientific_fields["not_found_inputs"] = (list[StrictStr], Field(default_factory=list,
                 description="JSON pointers into selected_inputs for inputs left unresolved by lookup; do not copy their values."))
@@ -85,38 +82,7 @@ def simple_decision_contract(request, result_schema, *, profile_mapped=False, sc
                 values["terms"] = [{"curie": record.candidate.value,
                                     "name": record.values.get("name")} for record in selected]
             additions["resolved_values"] = values
-        if name == "SubjectEntityValidationResult":
-            from .compact_validation import normalized_subject_type
-            subject_type = normalized_subject_type(request)
-            reason = additions.pop("route_reason")
-            if subject_type is None:
-                if decision.status == "resolved" or decision.candidates:
-                    raise ValueError("Unsupported subject type cannot produce resolved subject facts")
-                return additions
-            owner, allowed = {
-                "gene": ("gene_validation", {"get_gene_by_id", "search_genes", "get_gene_by_exact_symbol"}),
-                "allele": ("allele_validation", {"get_allele_by_id", "search_alleles", "get_allele_by_exact_symbol"}),
-                "agm": ("agm_validation", {"map_entity_curies_to_info", "map_entity_names_to_curies"}),
-            }[subject_type]
-            if any(attempt.method not in allowed for attempt in attempts):
-                raise ValueError("Subject lookup used a method outside its explicit subject route")
-            route = {"subject_type": subject_type, "validator_agent": {
-                "package_id": "agr.alliance", "agent_id": owner},
-                "tool_methods": list(dict.fromkeys(attempt.method for attempt in attempts)),
-                "route_reason": reason,
-            }
-            additions["selected_validator"] = route
-            additions["subject_candidates"] = [
-                {**row, "selected_validator": deepcopy(route)} for row in payload.get("subject_candidates", [])
-            ]
-            if decision.status == "resolved" and len(selected) != 1:
-                raise ValueError("Resolved subject requires exactly one selected record")
-            if len(selected) == 1:
-                row = selected[0].result_rows["subject_candidates"]
-                additions.update({"normalized_subject_identifier": row["subject_identifier"],
-                                  "normalized_subject_type": row["subject_type"],
-                                  "normalized_subject_label": row["subject_label"], "taxon": row["taxon"]})
-        elif name == "ReferenceValidationResult":
+        if name == "ReferenceValidationResult":
             if len(selected) > 1 and decision.status == "resolved":
                 raise ValueError("A reference decision must select exactly one reference")
             if len(selected) == 1:
