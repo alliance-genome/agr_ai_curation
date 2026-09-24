@@ -1697,4 +1697,34 @@ def test_extraction_stages_every_declared_value_unvalidated():
         for field in definition.fields
     ]})]})
     assert extraction_value_problems(searched, mapped, "Observation") == []
-    assert extraction_value_problems(claimed, mapped, "Observation")
+
+
+@pytest.mark.parametrize(("outcome", "mapped_ok", "unmapped_ok"), [
+    (OUTCOME_NOT_VALIDATED, True, True),
+    # The fixed table's own outcomes: a miss, or an entry that does not apply here.
+    (OUTCOME_NOT_FOUND, True, False),
+    ("conflict", True, False),
+    # What no table decides.
+    ("ambiguous", False, False),
+    ("transient", False, False),
+    ("blocked", False, False),
+    ("rejected_candidates", False, False),
+])
+def test_a_fixed_mapping_field_takes_the_tables_own_outcomes(outcome, mapped_ok, unmapped_ok):
+    from src.lib.domain_packs.resolvable_values import EXTRACTION_MAPPING_KEY, extraction_value_problems
+
+    metadata = _metadata()
+    definition = metadata.object_definitions[0]
+    mapped = metadata.model_copy(update={"object_definitions": [definition.model_copy(update={"fields": [
+        field.model_copy(update={"metadata": {**field.metadata, EXTRACTION_MAPPING_KEY: True}})
+        if field.field_path == "site" else field
+        for field in definition.fields
+    ]})]})
+    value = {"site": unresolved_value("TAS", identity_keys=TERM_KEYS, outcome=outcome)}
+    assert (extraction_value_problems(value, mapped, "Observation") == []) is mapped_ok
+    assert (extraction_value_problems(value, metadata, "Observation") == []) is unmapped_ok
+    # A resolved value is matched, and only on a mapping field.
+    overridden = {"site": {**resolved_value("IMP", {"curie": "ECO:1", "name": "x"}),
+                           "lookup_outcome": "curator_override",
+                           "curator_override": {"actor_id": "a", "actor_display_name": "A", "at": "t", "previous": {}}}}
+    assert extraction_value_problems(overridden, mapped, "Observation")
