@@ -6021,6 +6021,14 @@ metadata:
             required: false
             allow_multiple: true
             context_only: true
+          # The validator judges search candidates (and any closest fit) against the
+          # annotation's verified paper quotes.
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            allow_multiple: true
+            required: false
+            context_only: true
           ontology_family:
             source: literal
             value: disease
