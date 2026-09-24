@@ -151,7 +151,9 @@ class DiseaseReviewRowMaterializer(DomainPackMetadataReviewRowMaterializer):
         envelope_revision: int,
     ) -> list[DomainEnvelopeReviewRow]:
         return super().materialize(
-            _display_envelope(envelope, self.metadata), envelope_revision=envelope_revision
+            _display_envelope(envelope, self.metadata),
+            envelope_revision=envelope_revision,
+            stored_envelope=envelope,
         )
 
 

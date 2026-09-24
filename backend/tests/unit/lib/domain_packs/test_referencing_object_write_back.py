@@ -399,3 +399,39 @@ def test_a_curator_override_on_the_referencing_value_is_never_changed():
     ):
         result = _materialize(curated, _metadata(), **result_fields)
         assert _by_ref(result.envelope, "acquisition-1") == _by_ref(curated, "acquisition-1")
+
+
+def test_no_validated_reference_is_added_for_a_value_a_curator_override_sets():
+    """A resolved result for an overridden value appends and links no validated reference object."""
+
+    from src.lib.domain_packs.resolvable_values import apply_curator_identity
+
+    metadata = _metadata()
+    mention_definition = metadata.object_definitions[0].model_copy(update={"fields": [
+        _field("mention.text"),
+        _field("maker", DomainPackFieldType.OBJECT,
+               metadata={"display": {"label": "maker_name", "id": "primary_external_id", "mention": "mention"}}),
+        _field("maker.primary_external_id"),
+        _field("maker.maker_name"),
+    ]})
+    metadata = metadata.model_copy(update={
+        "object_definitions": [mention_definition, *metadata.object_definitions[1:]],
+    })
+
+    def envelope_with(maker):
+        base = _envelope()
+        mention = base.extracted_objects[0].model_copy(update={"payload": {
+            "mention": {"text": "the Delft workshop"}, "maker": maker}})
+        return base.model_copy(update={"extracted_objects": [mention, *base.extracted_objects[1:]]})
+
+    staged = unresolved_value("the Delft workshop", identity_keys=("primary_external_id", "maker_name"))
+    validated = _materialize(envelope_with(staged), metadata, **_RESOLVED)
+    assert any(obj.object_type == "Maker" for obj in validated.envelope.extracted_objects)
+
+    overridden = unresolved_value("the Delft workshop", identity_keys=("primary_external_id", "maker_name"))
+    apply_curator_identity(overridden, {"primary_external_id": "GAL:M0007", "maker_name": "De Porceleyne Fles"},
+                           identity_keys=("primary_external_id", "maker_name"), id_key="primary_external_id",
+                           label_key="maker_name", actor_id="curator-1", at="2026-09-24T00:00:00Z")
+    result = _materialize(envelope_with(overridden), metadata, **_RESOLVED)
+    assert not any(obj.object_type == "Maker" for obj in result.envelope.extracted_objects)
+    assert result.envelope.extracted_objects[0].payload["maker"]["primary_external_id"] == "GAL:M0007"
