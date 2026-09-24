@@ -126,14 +126,13 @@ def _alliance_gate_case(case_key: str):
     elif case_key == "allele":
         from agr_ai_curation_alliance.domain_packs.allele import (
             ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
-            build_pending_allele_envelope_from_tool_verified_fixture,
         )
-        from tests.fixtures.evidence.harness import load_evidence_fixture
+        from src.lib.domain_packs.loader import load_domain_fixture_pack
 
-        envelope = build_pending_allele_envelope_from_tool_verified_fixture(
-            load_evidence_fixture("tool_verified_allele_paper"),
-            envelope_id="allele-alliance-e2e-envelope",
-        )
+        # The allele pack's declared fixture: a pending, unvalidated allele association.
+        envelope = load_domain_fixture_pack(
+            REPO_ROOT / "packages" / "alliance" / "domain_packs" / "allele" / "fixtures" / "tool_verified.yaml"
+        ).fixtures[0].envelope
         return {
             "adapter_key": "allele",
             "envelope": _retag_envelope(
