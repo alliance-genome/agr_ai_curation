@@ -1133,11 +1133,16 @@ describe('InteractiveHorizontalCurationGrid', () => {
     // The validated key is prefilled from the stored value and editable.
     expect(within(editor).getByRole('textbox', { name: /^Taxon/ })).toHaveValue('NCBITaxon:6239')
 
-    // Half an identity is refused before anything is sent, and the editor stays open.
-    await user.type(within(editor).getByRole('textbox', { name: /^Identifier/ }), 'GENE:2')
+    // An incomplete identity is refused before anything is sent, in the
+    // backend's words, and the editor stays open.
     await user.click(within(editor).getByRole('button', { name: 'Save override' }))
     expect(within(editor).getByTestId('horizontal-grid-override-error')).toHaveTextContent(
       'Enter both the identifier and the name for a curator override.',
+    )
+    await user.type(within(editor).getByRole('textbox', { name: /^Identifier/ }), 'GENE:2')
+    await user.click(within(editor).getByRole('button', { name: 'Save override' }))
+    expect(within(editor).getByTestId('horizontal-grid-override-error')).toHaveTextContent(
+      'Enter the name for a curator override.',
     )
     expect(autosave.submitEnvelopeEdit).not.toHaveBeenCalled()
     await user.type(within(editor).getByRole('textbox', { name: /^Name/ }), 'abc-2')
