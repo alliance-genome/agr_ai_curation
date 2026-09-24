@@ -148,7 +148,8 @@ def resolve_flow_execution_revisions(
                         fingerprint=row.fingerprint, output_contract=saved.output_contract,
                     )
                 node.data.execution_receipt = receipt
-                if get_model(saved.model_id) is None:
+                model = get_model(saved.model_id)
+                if model is None:
                     # A pinned revision whose model left the catalog cannot run; say so
                     # before the flow starts, not when the step does.
                     findings.append(AuthoringValidationFinding(
@@ -156,6 +157,16 @@ def resolve_flow_execution_revisions(
                         path=f"flow_definition.nodes.{node.id}.data.agent_revision_id",
                         message="This step uses a model that is no longer available; re-save the agent.",
                         fix_hint="Open the agent, choose an available model, save it, and select the new revision here.",
+                    ))
+                    continue
+                from src.lib.openai_agents.config import unsupported_reasoning_effort
+
+                if unsupported_reasoning_effort(model, saved.model_reasoning) is not None:
+                    findings.append(AuthoringValidationFinding(
+                        code="unsupported_reasoning_effort", severity="error", node_id=node.id,
+                        path=f"flow_definition.nodes.{node.id}.data.agent_revision_id",
+                        message="This step uses a reasoning level its model no longer offers; re-save the agent.",
+                        fix_hint="Open the agent, choose one of the model's reasoning levels, save it, and select the new revision here.",
                     ))
                     continue
                 # Group-scoped tools count for every group, as in the startup report.

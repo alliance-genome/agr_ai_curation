@@ -314,6 +314,17 @@ async def lifespan(app: FastAPI):
         logger.error("FATAL: Unexpected provider validation error: %s", e)
         raise
 
+    # Deployment model settings (.env) must name catalog models and levels,
+    # like the unknown-model gate for active agents below.
+    try:
+        from src.lib.config.model_env_validation import validate_model_env
+
+        validate_model_env()
+        logger.info("Model environment settings validated against the model catalog")
+    except RuntimeError as e:
+        logger.error("FATAL: %s", e)
+        raise
+
     # Validate hosted tool-search namespaces and loading policies (ALL-1280).
     try:
         from src.lib.openai_agents.tool_surface import validate_tool_surface_configuration

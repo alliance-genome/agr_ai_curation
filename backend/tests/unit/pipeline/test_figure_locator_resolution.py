@@ -1022,7 +1022,7 @@ def test_provider_reference_does_not_cross_final_subsection_boundary(
 
 
 @pytest.mark.asyncio
-async def test_terra_xhigh_reasoning_is_accepted_from_catalog(monkeypatch) -> None:
+async def test_gpt6_sol_xhigh_reasoning_is_accepted_from_catalog(monkeypatch) -> None:
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "xhigh")
     classifier = AsyncMock(
         return_value=locator.FigureLocatorBatchOutput(
@@ -1046,7 +1046,7 @@ async def test_terra_xhigh_reasoning_is_accepted_from_catalog(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_terra_minimal_reasoning_is_rejected_from_catalog(monkeypatch) -> None:
+async def test_gpt6_sol_minimal_reasoning_is_rejected_from_catalog(monkeypatch) -> None:
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "minimal")
     classifier = AsyncMock()
     monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)

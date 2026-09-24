@@ -4,7 +4,7 @@ description: Validates neutral demo records for package-agnostic runtime tests.
 category: Demo
 subcategory: Validation
 model_config:
-  # Removed retired gpt-5.5 fixture default; the core catalog moved to GPT-5.6 in PR #579.
+  # Fixture default follows the current core catalog default model.
   model: "${AGENT_DEMO_MODEL:-gpt-6-sol}"
   reasoning: medium
 supervisor_routing:

@@ -39,8 +39,6 @@ from src.lib.observability.sentry import (
 
 logger = logging.getLogger(__name__)
 
-# Allowed reasoning effort levels (must come from .env; no code fallback).
-
 # Element types never used as a section preview: headings repeat their own
 # title, and tables arrive as markdown pipe rows rather than prose.
 _NON_PREVIEW_ELEMENT_TYPES = frozenset({"Title", "Table"})
