@@ -176,6 +176,25 @@ def test_phenotype_annotation_declares_protected_data_provider_fields():
     }
 
 
+@pytest.mark.parametrize("has_subject", [True, False])
+def test_fresh_phenotype_builder_output_passes_normalization_and_persistence(has_subject):
+    from tests.fixtures.fresh_extraction_output import assert_fresh_output_records_every_state
+
+    staged = _staged_fields()
+    if not has_subject:
+        for key in ("subject_identifier", "subject_label", "subject_type", "subject_taxon"):
+            staged.pop(key)
+    result = _materialize_one_candidate(staged_fields=staged)
+    assert result.ok, result.summary()
+    objects = {item["object_type"]: item["payload"] for item in result.payload["curatable_objects"]}
+    assert objects["Reference"] == {}
+    if not has_subject:
+        assert set(objects[PHENOTYPE_SUBJECT_OBJECT_TYPE]) == {"resolution_note"}
+    assert_fresh_output_records_every_state(
+        result.payload, adapter_key="phenotype", agent_key="phenotype_extractor",
+    )
+
+
 def test_phenotype_builder_materializer_produces_clean_extraction_output():
     result = _materialize_one_candidate()
     assert result.ok, result.summary()

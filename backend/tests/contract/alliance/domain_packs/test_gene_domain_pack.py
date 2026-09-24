@@ -150,6 +150,14 @@ def test_gene_guidance_survives_materialization_and_shared_binding():
     assert request.validation_guidance == guidance
 
 
+def test_fresh_gene_builder_output_passes_normalization_and_persistence():
+    from tests.fixtures.fresh_extraction_output import assert_fresh_output_records_every_state
+
+    result = _materialize_one_candidate()
+    assert result.ok, result.summary()
+    assert_fresh_output_records_every_state(result.payload, adapter_key="gene", agent_key="gene_extractor")
+
+
 def test_gene_builder_materializer_produces_clean_extraction_output():
     result = _materialize_one_candidate()
     assert result.ok, result.summary()

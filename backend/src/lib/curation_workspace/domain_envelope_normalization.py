@@ -132,8 +132,13 @@ def require_recorded_resolution_states(payload: Any, *, adapter_key: str | None)
 
     if not isinstance(payload, Mapping) or adapter_key is None:
         return
-    objects = payload.get("extracted_objects", payload.get("curatable_objects"))
-    if not isinstance(objects, list):
+    objects = [
+        item
+        for key in ("extracted_objects", "curatable_objects")
+        if isinstance(payload.get(key), list)
+        for item in payload[key]
+    ]
+    if not objects:
         return
     domain_pack = load_curation_adapter_registry().get_domain_pack(adapter_key)
     if domain_pack is None:

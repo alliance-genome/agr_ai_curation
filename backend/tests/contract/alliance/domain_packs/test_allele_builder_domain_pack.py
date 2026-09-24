@@ -166,6 +166,14 @@ def test_allele_pack_loads_with_builder_fixture():
     assert ALLELE_ASSOCIATION_OBJECT_TYPE in fixture_ref.object_types
 
 
+def test_fresh_allele_builder_output_passes_normalization_and_persistence():
+    from tests.fixtures.fresh_extraction_output import assert_fresh_output_records_every_state
+
+    result = _materialize_one_candidate()
+    assert result.ok, result.summary()
+    assert_fresh_output_records_every_state(result.payload, adapter_key="allele", agent_key="allele_extractor")
+
+
 def test_allele_builder_materializer_produces_clean_extraction_output():
     result = _materialize_one_candidate()
     assert result.ok, result.summary()

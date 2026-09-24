@@ -677,6 +677,14 @@ def test_go_stage_tool_schema_carries_the_shared_rationale_description():
 # --- Projection -------------------------------------------------------------------
 
 
+def test_fresh_go_builder_output_passes_normalization_and_persistence():
+    from tests.fixtures.fresh_extraction_output import assert_fresh_output_records_every_state
+
+    result = _materialize(_candidate())
+    assert result.ok, result.issues
+    assert_fresh_output_records_every_state(result.payload, adapter_key="go", agent_key="rgd_go_paper_curator")
+
+
 def test_evidence_anchor_survives_result_reference_envelope_and_workspace_projection():
     result = _materialize(_candidate())
     assert result.ok, result.issues

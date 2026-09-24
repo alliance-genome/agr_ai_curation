@@ -164,6 +164,15 @@ def test_disease_pack_loads_with_builder_fixture():
     assert DISEASE_GENE_OBJECT_TYPE in fixture_ref.object_types
 
 
+@pytest.mark.parametrize("subject_type", ["gene", "allele", "agm"])
+def test_fresh_disease_builder_output_passes_normalization_and_persistence(subject_type):
+    from tests.fixtures.fresh_extraction_output import assert_fresh_output_records_every_state
+
+    result = _materialize_one_candidate(subject_type=subject_type)
+    assert result.ok, result.summary()
+    assert_fresh_output_records_every_state(result.payload, adapter_key="disease", agent_key="disease_extractor")
+
+
 def test_disease_builder_materializes_concrete_gene_subtype():
     result = _materialize_one_candidate(subject_type="gene")
     assert result.ok, result.summary()

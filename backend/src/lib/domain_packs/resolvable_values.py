@@ -1386,17 +1386,34 @@ def unrecorded_state_problems(payload: Mapping[str, Any], metadata: Any, object_
     ``lookup_outcome``; it reads as legacy ("Recorded before validation
     tracking"). New output records the state on every declared value it
     carries, so a stateless one (a bare identity or plain text) never passes
-    as legacy. Returns one message per offending value; empty when the object
-    conforms.
+    as legacy. A mapping that records nothing of the value (no paper wording,
+    identity or proposal, e.g. ``{}`` or only a note) is absent, like null.
+    Returns one message per offending value; empty when the object conforms.
     """
 
     return [
         f"{object_type}.{_format_path(path) or '<object root>'} records no resolution state; "
         "new output records every value's state, and only a value stored before "
         "validation tracking may lack one"
-        for _declared, _spec, path, value in _each_declared_value(payload, metadata, object_type)
+        for _declared, spec, path, value in _each_declared_value(payload, metadata, object_type)
         if not (isinstance(value, Mapping) and has_resolution_state(value))
+        and not _records_nothing(value, spec)
     ]
+
+
+def _records_nothing(value: Any, spec: ResolvableSpec) -> bool:
+    """A stateless mapping holding no paper wording, identity or extractor proposal."""
+
+    return (
+        isinstance(value, Mapping)
+        and _is_empty(value.get(spec.mention_key))
+        and all(_is_empty(value.get(key)) for key in spec.identity_keys)
+        and all(
+            _is_empty(item)
+            for key, item in value.items()
+            if isinstance(key, str) and key.startswith(EXTRACTOR_PROPOSAL_PREFIX)
+        )
+    )
 
 
 def extraction_value_problems(

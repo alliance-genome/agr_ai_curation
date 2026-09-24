@@ -3126,6 +3126,18 @@ def test_gene_expression_builder_rejects_object_level_only_evidence():
     )
 
 
+def test_fresh_gene_expression_builder_output_passes_normalization_and_persistence():
+    from tests.fixtures.fresh_extraction_output import assert_fresh_output_records_every_state
+
+    result = _materialize_gene_expression_candidate(_gene_expression_builder_staged_fields(
+        condition_relations=_staged_gene_expression_condition_relations(),
+    ))
+    assert result.ok, result.summary()
+    assert_fresh_output_records_every_state(
+        result.payload, adapter_key="gene_expression", agent_key="gene_expression_extraction",
+    )
+
+
 def test_gene_expression_builder_materializes_staged_condition_relations():
     """Staged condition_relations land on the GeneExpressionAnnotation in validator shape.
 

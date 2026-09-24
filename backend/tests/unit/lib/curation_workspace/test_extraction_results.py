@@ -771,6 +771,25 @@ def test_a_new_extraction_row_may_not_carry_values_without_resolution_state():
     assert session.flush_calls == 0
 
 
+@pytest.mark.parametrize("canonical_objects", [None, []])
+def test_empty_canonical_list_cannot_hide_stateless_extractor_objects(canonical_objects):
+    session = _FakeSession()
+    payload = _sample_persisted_domain_envelope_payload()
+    objects = payload["extracted_objects"]
+    for key in ("resolution_state", "lookup_outcome", "validator_explanation"):
+        objects[0]["payload"].pop(key)
+    payload["curatable_objects"] = objects
+    payload["extracted_objects"] = canonical_objects
+    request = CurationExtractionPersistenceRequest(
+        document_id=str(uuid4()), adapter_key="gene", agent_key="gene",
+        source_kind=CurationExtractionSourceKind.CHAT, payload_json=payload,
+    )
+    with pytest.raises(ValueError, match="records no resolution state"):
+        persist_extraction_result(request, db=session)
+    assert session.added is None
+    assert session.flush_calls == 0
+
+
 def test_persist_inline_validated_extraction_result_creates_idempotent_row():
     session = _FakeSession()
     builder_finalization = SimpleNamespace(

@@ -1672,6 +1672,28 @@ def test_a_numeric_identity_entry_is_parsed_as_its_declared_type():
 # --- Extraction never searches (2026-09-24) -------------------------------------------
 
 
+@pytest.mark.parametrize("value", [
+    {}, {"resolution_note": "Not mentioned in the paper."},
+    {"mention": " ", "curie": None, "name": "", "proposed_curie": None},
+])
+def test_absent_mapping_needs_no_recorded_resolution_state(value):
+    from src.lib.domain_packs.resolvable_values import extraction_value_problems
+
+    assert extraction_value_problems({"site": value}, _metadata(), "Observation", stored=False) == []
+
+
+@pytest.mark.parametrize("value", [
+    {"mention": "skin"}, {"curie": "ONT:1"}, {"name": "skin"},
+    {"proposed_curie": "ONT:1"}, {"proposed_name": "skin"},
+    {"proposed_internal_id": 0}, "skin",
+])
+def test_recorded_wording_identity_or_proposal_still_requires_state(value):
+    from src.lib.domain_packs.resolvable_values import extraction_value_problems
+
+    assert any("records no resolution state" in problem for problem in
+               extraction_value_problems({"site": value}, _metadata(), "Observation", stored=False))
+
+
 def test_extraction_stages_every_declared_value_unvalidated():
     """Extraction reads the paper: a declared value it stages is unresolved/not_validated,
     except one its pack declares filled from a fixed in-code mapping table."""
