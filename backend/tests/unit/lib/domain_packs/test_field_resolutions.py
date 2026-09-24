@@ -341,3 +341,51 @@ def test_a_composite_result_is_settled_when_its_unresolved_values_are_overridden
     open_result = materialize_validator_results_into_envelope(envelope, metadata, [
         _item(metadata, envelope, status="unresolved", field_resolutions=decisions)])
     assert _binding_finding(open_result).code == "domain_pack.validator_unresolved"
+
+
+def test_an_override_settles_a_composite_blocker_at_patch_time():
+    """Fix wave S2: the patch resolves the binding finding by the rule the materializer uses."""
+
+    from src.lib.domain_envelopes.patches import (
+        EnvelopeFieldPatch, EnvelopeFieldPatchOperation, apply_curator_field_patch,
+    )
+    from src.schemas.domain_envelope import ValidationFindingStatus
+
+    metadata = _metadata()
+    definition = metadata.object_definitions[0]
+    editable = {"setting.kind.curie", "setting.kind.name"}
+    metadata = metadata.model_copy(update={"object_definitions": [definition.model_copy(update={"fields": [
+        field.model_copy(update={"metadata": {**field.metadata, "editable": True}})
+        if field.field_path in editable else field
+        for field in definition.fields
+    ]})]})
+    envelope = _envelope()
+    decisions = {
+        "setting.kind": {"status": "unresolved", "lookup_outcome": "not_found", "explanation": "No class."},
+        "setting.agent": {"status": "resolved", "lookup_outcome": "matched",
+                          "resolved_values": {"agent_curie": "CHEM:1"}, "explanation": "Found."},
+        "setting.host": {"status": "resolved", "lookup_outcome": "matched",
+                         "resolved_values": {"host_curie": "H:1"}, "explanation": "Found."},
+    }
+    validated = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, status="unresolved", field_resolutions=decisions)],
+    ).envelope
+
+    def binding_status(envelope):
+        [finding] = [f for f in envelope.validation_findings if f.code == "domain_pack.validator_unresolved"
+                     and (f.field_ref is None or f.field_ref.field_path == "setting")]
+        return finding.status
+
+    assert binding_status(validated) is ValidationFindingStatus.OPEN
+    pack = LoadedDomainPack(pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+                            pack_path=Path("."), metadata_path=Path("."), metadata=metadata)
+    patched = apply_curator_field_patch(
+        validated, pack,
+        EnvelopeFieldPatch(envelope_id=validated.envelope_id, expected_revision=1, object_id="observation-1",
+                           field_path="setting.kind.curie", before={"curie": None, "name": None},
+                           value={"curie": "ONT:9", "name": "heat"},
+                           operation=EnvelopeFieldPatchOperation.REPLACE_IDENTITY),
+        current_revision=1, actor_id="curator-1", actor_display_name="Curator One",
+    )
+    assert patched.accepted, patched.errors
+    assert binding_status(patched.envelope) is ValidationFindingStatus.RESOLVED

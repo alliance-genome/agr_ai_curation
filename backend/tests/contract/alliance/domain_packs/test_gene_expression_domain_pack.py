@@ -4243,3 +4243,35 @@ def test_a_stage_override_updates_the_exported_stage_name():
         stage, f"{_STAGE}.curie", {"curie": "MmusDv:0000031", "name": "Theiler stage 22"},
     )
     assert annotation.payload["when_expressed_stage_name"] == "Theiler stage 22"
+
+
+def test_a_demoted_stage_leaves_no_stale_stage_name():
+    """Fix wave S3: the exported stage name follows the stage term through a decisive demotion."""
+
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    payload["expression_pattern"]["when_expressed"]["developmental_stage_start"] = staged_value(_STAGE, "TS9")
+    payload["when_expressed_stage_name"] = None
+    envelope = _with_payload(envelope, payload)
+
+    def run(envelope, **result):
+        match = _active_binding_match(envelope, "expression_stage_ontology_validation")
+        request = build_domain_validation_request(match).request
+        return materialize_validator_results_into_envelope(
+            envelope, _gene_expression_pack().metadata,
+            [ValidatorResultMaterializationInput(match=match, request=request,
+                                                 result=_validator_result(request, **result))],
+        ).envelope
+
+    match = _active_binding_match(envelope, "expression_stage_ontology_validation")
+    fields = build_domain_validation_request(match).request.expected_result_fields
+    by_leaf = {path.rpartition(".")[2]: slot for slot, path in fields.items()}
+    resolved = run(envelope, status="resolved",
+                   resolved_values={by_leaf["curie"]: "MmusDv:0000009", by_leaf["name"]: "TS9"})
+    assert resolved.extracted_objects[0].payload["when_expressed_stage_name"] == "TS9"
+
+    demoted = run(resolved, status="unresolved", lookup_outcome="not_found",
+                  missing_expected_fields=[]).extracted_objects[0].payload
+    stage = demoted["expression_pattern"]["when_expressed"]["developmental_stage_start"]
+    assert (stage["resolution_state"], stage["name"]) == ("unresolved", None)
+    assert demoted["when_expressed_stage_name"] is None

@@ -1604,3 +1604,44 @@ def test_an_events_original_values_count_only_for_events_before_written_paths_we
     spec = ResolvableSpec(id_key="curie", label_key="name")
     unwritten = effective_payload({"copy": {"curie": "ONT:9", "name": "old"}}, {"copy": spec}, object_metadata=current)
     assert unwritten["copy"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+
+
+def test_a_plain_mirror_follows_its_value_through_resolution_and_demotion():
+    """Fix wave S3: a name kept beside its term never keeps a rejected term's name."""
+
+    metadata = _metadata()
+    definition = metadata.object_definitions[0]
+    fields = [
+        field.model_copy(update={"metadata": {**field.metadata, "materializes_to_field_paths": ["site_name"]}})
+        if field.field_path == "site.name" else field
+        for field in definition.fields
+    ] + [DomainPackFieldDefinition(field_path="site_name", field_type=DomainPackFieldType.STRING)]
+    metadata = metadata.model_copy(update={"object_definitions": [definition.model_copy(update={"fields": fields})]})
+    envelope = _envelope({"site": unresolved_value("skin", identity_keys=TERM_KEYS), "site_name": None})
+
+    resolved = materialize_validator_results_into_envelope(
+        envelope, metadata, [_item(metadata, envelope, values={"curie": "ONT:1", "name": "epidermis"})],
+    ).envelope
+    assert resolved.extracted_objects[0].payload["site_name"] == "epidermis"
+
+    outage = materialize_validator_results_into_envelope(
+        resolved, metadata, [_item(metadata, resolved, status="unresolved", outcome="error")],
+    ).envelope
+    assert outage.extracted_objects[0].payload["site_name"] == "epidermis"
+
+    demoted = materialize_validator_results_into_envelope(
+        resolved, metadata, [_item(metadata, resolved, status="unresolved", outcome="not_found")],
+    ).envelope.extracted_objects[0].payload
+    assert (demoted["site"]["name"], demoted["site"]["overruled_name"]) == (None, "epidermis")
+    assert demoted["site_name"] is None
+
+
+def test_only_a_reading_counts_as_already_read():
+    """Fix wave nit: a stored value claiming legacy_unverified while resolved is a broken record."""
+
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    claimed = {"mention": "x", "curie": "DOID:1", "name": "d", "resolution_state": RESOLVED,
+               "lookup_outcome": OUTCOME_LEGACY_UNVERIFIED, "validator_explanation": None}
+    assert effective_value(claimed, spec, covered_by_validator=False)["lookup_outcome"] == "invalid_schema"
+    reading = effective_payload({"site": {"curie": "DOID:1", "name": "d"}}, {"site": spec}, object_metadata=None)["site"]
+    assert effective_value(reading, spec, covered_by_validator=False) == reading

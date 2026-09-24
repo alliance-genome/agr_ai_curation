@@ -980,11 +980,17 @@ def _settle_findings(
     def settled_binding(finding: ValidationFinding) -> bool:
         request = finding.details.get("validation_request")
         expected = request.get("expected_result_fields") if isinstance(request, Mapping) else None
+        result = finding.details.get("validation_result")
+        statuses = result.get("field_resolution_statuses", {}) if isinstance(result, Mapping) else {}
         return (
             isinstance(expected, Mapping)
+            and isinstance(statuses, Mapping)
+            # A truncated record of composite decisions cannot settle the binding.
+            and "__truncated_keys__" not in statuses
             and object_definition is not None
             and expected_writes_settled_by_overrides(
                 domain_object.payload, expected,
+                field_resolution_statuses=statuses,
                 object_definition=object_definition, resolvable_fields=resolvable_fields,
             )
         )

@@ -1037,7 +1037,7 @@ def effective_value(
         return value
     if has_resolution_state(value):
         problem = stored_state_problem(value, identity_keys=spec.identity_keys)
-        if problem is None or _is_read_time_marked(value):
+        if problem is None or _is_read_time_marked(value, spec.identity_keys):
             # A value already read here (a legacy or invalid-record reading) reads as it is.
             return value
         if _is_revalidated_legacy_leftover(value, spec):
@@ -1337,9 +1337,17 @@ def declared_spec_for(
     return declared.get(_format_path(tokens)) or declared.get(_bare_path(tokens))
 
 
-def _is_read_time_marked(value: Mapping[str, Any]) -> bool:
-    """A legacy or invalid-record reading whose mention already carries its label."""
+def _is_read_time_marked(value: Mapping[str, Any], identity_keys: Sequence[str]) -> bool:
+    """A legacy or invalid-record reading whose mention already carries its label.
 
+    Only a reading counts: unresolved, with an empty identity. A stored value
+    merely claiming a read-time outcome is a broken record.
+    """
+
+    if value.get(RESOLUTION_STATE_KEY) != UNRESOLVED or any(
+        not _is_empty(value.get(key)) for key in identity_keys
+    ):
+        return False
     outcome = value.get(LOOKUP_OUTCOME_KEY)
     return outcome == OUTCOME_LEGACY_UNVERIFIED or (
         outcome == OUTCOME_INVALID_SCHEMA and value.get(VALIDATOR_EXPLANATION_KEY) == INVALID_RECORD_EXPLANATION
@@ -1396,7 +1404,7 @@ def unresolved_header_text(
     if has_resolution_state(target):
         if is_resolved(target, identity_keys=spec.identity_keys if spec is not None else ()):
             return None
-        if mention and _is_read_time_marked(target):
+        if mention and _is_read_time_marked(target, spec.identity_keys if spec is not None else ()):
             # A read-time reading (effective_payload) already labels its text.
             return mention
         if mention:
