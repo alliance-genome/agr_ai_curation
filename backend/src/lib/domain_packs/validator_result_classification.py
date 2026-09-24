@@ -11,6 +11,7 @@ from src.lib.lookup_status import (
     LOOKUP_STATUS_SUCCESS,
     LOOKUP_STATUS_TRANSIENT,
 )
+from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.schemas.domain_validator import DomainValidatorResultBase
 
 
@@ -85,7 +86,8 @@ def validator_failure_classification(
         return "transient"
     if "blocked" in outcomes:
         return "blocked"
-    if result.missing_expected_fields and (result.resolved_values or not outcomes):
+    filled = any(not missing_resolved_value(value) for value in result.resolved_values.values())
+    if result.missing_expected_fields and (filled or not outcomes):
         # Some expected fields filled and others not, or nothing looked up: incomplete.
         return "missing_expected_result_field"
     if "ambiguous" in outcomes:
