@@ -267,11 +267,16 @@ def _project_phenotype_candidate(
         else None
     )
     target = _SUBJECT_TARGETS.get(subject_type or "")
-    if subject_type and target is None:
+    # A present subject always gets an export target or a blocker; it is never dropped silently.
+    if subject is not None and target is None:
         blockers.append(
             adapter_blocker(
                 candidate=candidate,
-                code="alliance.phenotype.export.unsupported_subject_type",
+                code=(
+                    "alliance.phenotype.export.unsupported_subject_type"
+                    if subject_type
+                    else "alliance.phenotype.export.missing_subject_type"
+                ),
                 field_path="phenotype_annotation_subject.subject_type",
                 message=(
                     "Phenotype annotation subject must resolve to gene, allele, "

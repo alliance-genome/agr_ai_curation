@@ -325,7 +325,8 @@ def test_phenotype_builder_taxon_hints_read_one_staged_key_each():
         obj for obj in result.payload["curatable_objects"] if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
     )
     assert "taxon_id" not in annotation["payload"]["phenotype_terms"][0]["ontology_lookup_hint"]
-    assert "taxon" not in annotation["payload"]["phenotype_annotation_subject"]
+    subject = annotation["payload"]["phenotype_annotation_subject"]
+    assert (subject["taxon"], "proposed_taxon" in subject) == (None, False)
 
     staged_fields = _staged_fields()
     del staged_fields["term_taxon_id"]
@@ -335,7 +336,9 @@ def test_phenotype_builder_taxon_hints_read_one_staged_key_each():
     )
     # The subject's taxon never stands in for the term lookup taxon.
     assert "taxon_id" not in annotation["payload"]["phenotype_terms"][0]["ontology_lookup_hint"]
-    assert annotation["payload"]["phenotype_annotation_subject"]["taxon"] == "NCBITaxon:6239"
+    # The extractor's species is a validator input; the validated taxon stays empty (ALL-1283).
+    subject = annotation["payload"]["phenotype_annotation_subject"]
+    assert (subject["proposed_taxon"], subject["taxon"]) == ("NCBITaxon:6239", None)
 
 
 def test_phenotype_builder_stages_subject_with_proposed_identifier():
@@ -346,7 +349,8 @@ def test_phenotype_builder_stages_subject_with_proposed_identifier():
     subject = annotation["payload"]["phenotype_annotation_subject"]
     assert subject == {
         "subject_type": "gene",
-        "taxon": "NCBITaxon:6239",
+        "proposed_taxon": "NCBITaxon:6239",
+        "taxon": None,
         "proposed_subject_identifier": "WB:WBGene00000111",
         "subject_identifier": None,
         "subject_label": None,

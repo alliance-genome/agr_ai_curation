@@ -94,7 +94,7 @@ _REFERENCE_PENDING_STATE = "pending_reference_resolution"
 # A phenotype term's validated identity; everything the extractor proposed for it
 # stays under proposed_curie / proposed_label.
 PHENOTYPE_TERM_IDENTITY_KEYS = ("curie", "label")
-PHENOTYPE_SUBJECT_IDENTITY_KEYS = ("subject_identifier", "subject_label")
+PHENOTYPE_SUBJECT_IDENTITY_KEYS = ("subject_identifier", "subject_label", "taxon")
 DATA_PROVIDER_IDENTITY_KEYS = ("abbreviation",)
 
 
@@ -354,8 +354,9 @@ def _subject_payload(staged_fields: Mapping[str, Any]) -> dict[str, Any] | None:
     """The staged subject value, or None when the extractor staged no subject.
 
     ``subject_label`` is the subject as the paper names it (the value's paper
-    wording); a staged ``subject_identifier`` is the extractor's proposal and
-    stays under ``proposed_subject_identifier`` until a validator resolves it.
+    wording); a staged ``subject_identifier`` or ``subject_taxon`` is the extractor's
+    proposal and stays under ``proposed_subject_identifier`` / ``proposed_taxon`` until a
+    validator resolves it.
     """
 
     mention = clean_text(staged_fields.get("subject_label"))
@@ -365,13 +366,13 @@ def _subject_payload(staged_fields: Mapping[str, Any]) -> dict[str, Any] | None:
     subject_type = clean_text(staged_fields.get("subject_type"))
     if subject_type is not None:
         extra["subject_type"] = subject_type
-    taxon = clean_text(staged_fields.get("subject_taxon"))
-    if taxon is not None:
-        extra["taxon"] = taxon
     return staged_value(
         mention,
         identity_keys=PHENOTYPE_SUBJECT_IDENTITY_KEYS,
-        proposals={"subject_identifier": staged_fields.get("subject_identifier")},
+        proposals={
+            "subject_identifier": staged_fields.get("subject_identifier"),
+            "taxon": staged_fields.get("subject_taxon"),
+        },
         **extra,
     )
 

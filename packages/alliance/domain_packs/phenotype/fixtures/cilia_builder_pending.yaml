@@ -35,7 +35,8 @@ fixtures:
       definition_state: in_development
       payload:
         subject_type: gene
-        taxon: NCBITaxon:6239
+        proposed_taxon: NCBITaxon:6239
+        taxon: null
         proposed_subject_identifier: WB:WBGene00000111
         subject_identifier: null
         subject_label: null
@@ -140,7 +141,8 @@ fixtures:
         phenotype_annotation_object: abnormal sensory cilia morphology
         phenotype_annotation_subject:
           subject_type: gene
-          taxon: NCBITaxon:6239
+          proposed_taxon: NCBITaxon:6239
+          taxon: null
           proposed_subject_identifier: WB:WBGene00000111
           subject_identifier: null
           subject_label: null

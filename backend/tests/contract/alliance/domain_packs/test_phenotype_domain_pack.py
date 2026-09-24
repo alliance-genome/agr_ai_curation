@@ -324,7 +324,7 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
         },
         "taxon": {
             "source": "payload",
-            "path": "taxon",
+            "path": "proposed_taxon",
             "required": False,
         },
     }
@@ -544,10 +544,10 @@ def test_tool_verified_phenotype_fixture_preserves_subject_taxon_context():
     annotation = next(
         obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
     )
-    assert subject.payload["taxon"] == "NCBITaxon:6239"
-    assert (
-        annotation.payload["phenotype_annotation_subject"]["taxon"] == "NCBITaxon:6239"
-    )
+    # The paper's species is the validator's input; only a validator or an override sets taxon.
+    assert (subject.payload["proposed_taxon"], subject.payload["taxon"]) == ("NCBITaxon:6239", None)
+    assert annotation.payload["phenotype_annotation_subject"]["proposed_taxon"] == "NCBITaxon:6239"
+    assert annotation.payload["phenotype_annotation_subject"]["taxon"] is None
 
 
 def test_pending_phenotype_term_without_curie_dispatches_with_context():
@@ -1506,7 +1506,10 @@ def test_a_curator_can_override_each_phenotype_term_and_condition_part():
                          {"curie": "ZECO:0000160", "name": "temperature exposure"})
     assert condition.status is EnvelopeFieldPatchStatus.ACCEPTED, condition.errors
 
-    relation_type = identity("condition_relations[0].condition_relation_type.name", {"name": "has_condition"})
+    relation_type = identity(
+        "condition_relations[0].condition_relation_type.name",
+        {"name": "has_condition", "vocabulary": "Condition Relation Type", "id": None},
+    )
     assert relation_type.status is EnvelopeFieldPatchStatus.ACCEPTED, relation_type.errors
 
     single = patch("phenotype_terms[0].curie", "WBPhenotype:0000059")

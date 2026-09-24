@@ -1044,7 +1044,7 @@ def test_subject_entity_selectors_reject_ambiguous_optional_taxon_context():
                 payload={
                     "proposed_subject_identifier": "WB:WBGene00000001",
                     "subject_type": "gene",
-                    "taxon": ["NCBITaxon:6239", "NCBITaxon:10090"],
+                    "proposed_taxon": ["NCBITaxon:6239", "NCBITaxon:10090"],
                 },
             )
         ],

@@ -194,6 +194,31 @@ model_definitions:
       display:
         label: name
         mention: mention
+  # A vocabulary term a controlled-vocabulary lookup resolves: it writes the term name, its
+  # vocabulary and its internal ID, so all three are the value's identity (ALL-1283).
+  - model_id: CheckedVocabularyTermPayload
+    display_name: Checked vocabulary term payload
+    description: Embedded controlled vocabulary term whose name, vocabulary and internal ID a vocabulary lookup confirms.
+    schema_ref:
+      schema_id: alliance.linkml.VocabularyTerm
+      provider: alliance_linkml
+      name: VocabularyTerm
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/controlledVocabulary.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/controlledVocabulary.yaml
+            class: VocabularyTerm
+    metadata:
+      display:
+        label: name
+        mention: mention
+        validated:
+          - vocabulary
+          - id
   - model_id: EvidenceCodeSnapshotPayload
     display_name: Evidence code snapshot payload
     description: One ECO evidence code the extractor proposed; the ontology validator confirms its identity.
@@ -569,7 +594,7 @@ object_definitions:
         field_type: object
         display_name: Disease relation
         description: Disease Relation vocabulary term, validated against the subject-type subset (D5).
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
@@ -592,7 +617,7 @@ object_definitions:
         description: Disease Relation vocabulary term name the validator confirmed; empty until then.
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
           validator_state: active
@@ -614,13 +639,15 @@ object_definitions:
         display_name: Disease relation vocabulary
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: disease_relation.id
         field_type: string
         display_name: Disease relation internal ID
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: disease_relation.mention
         field_type: string
         display_name: Disease relation paper wording
@@ -857,7 +884,7 @@ object_definitions:
         display_name: Annotation type
         description: Curation-method vocabulary term; fixed to manually_curated by the backend (not an extractor
           edit target).
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           validatable: true
           validator_binding_id: disease_annotation_type_cv_lookup
@@ -934,7 +961,7 @@ object_definitions:
         field_type: object
         display_name: Genetic sex
         description: Genetic Sex vocabulary term; staged only when the paper states the model/cohort sex.
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           hide_when_empty: true
           validatable: true
@@ -958,7 +985,7 @@ object_definitions:
         description: Genetic Sex vocabulary term name the validator confirmed; empty until then.
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -968,13 +995,15 @@ object_definitions:
         display_name: Genetic sex vocabulary
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: genetic_sex.id
         field_type: string
         display_name: Genetic sex internal id
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: genetic_sex.mention
         field_type: string
         display_name: Genetic sex paper wording
@@ -1295,7 +1324,7 @@ object_definitions:
       - field_path: condition_relations.condition_relation_type
         field_type: object
         display_name: Condition relation type
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           definition_state_category: complete
       - field_path: condition_relations.condition_relation_type.mention
@@ -1332,18 +1361,20 @@ object_definitions:
         field_type: string
         display_name: Condition relation type vocabulary
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.id
         field_type: string
         display_name: Condition relation type internal ID
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.name
         field_type: string
         display_name: Condition relation type name
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_condition_relation_lookup
           validator_state: active
@@ -1935,7 +1966,7 @@ object_definitions:
         field_type: object
         display_name: Disease relation
         description: Disease Relation vocabulary term, validated against the subject-type subset (D5).
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
@@ -1958,7 +1989,7 @@ object_definitions:
         description: Disease Relation vocabulary term name the validator confirmed; empty until then.
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
           validator_state: active
@@ -1974,13 +2005,15 @@ object_definitions:
         display_name: Disease relation vocabulary
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: disease_relation.id
         field_type: string
         display_name: Disease relation internal ID
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: disease_relation.mention
         field_type: string
         display_name: Disease relation paper wording
@@ -2217,7 +2250,7 @@ object_definitions:
         display_name: Annotation type
         description: Curation-method vocabulary term; fixed to manually_curated by the backend (not an extractor
           edit target).
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           validatable: true
           validator_binding_id: disease_annotation_type_cv_lookup
@@ -2294,7 +2327,7 @@ object_definitions:
         field_type: object
         display_name: Genetic sex
         description: Genetic Sex vocabulary term; staged only when the paper states the model/cohort sex.
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           hide_when_empty: true
           validatable: true
@@ -2318,7 +2351,7 @@ object_definitions:
         description: Genetic Sex vocabulary term name the validator confirmed; empty until then.
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -2328,13 +2361,15 @@ object_definitions:
         display_name: Genetic sex vocabulary
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: genetic_sex.id
         field_type: string
         display_name: Genetic sex internal id
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: genetic_sex.mention
         field_type: string
         display_name: Genetic sex paper wording
@@ -2655,7 +2690,7 @@ object_definitions:
       - field_path: condition_relations.condition_relation_type
         field_type: object
         display_name: Condition relation type
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           definition_state_category: complete
       - field_path: condition_relations.condition_relation_type.mention
@@ -2692,18 +2727,20 @@ object_definitions:
         field_type: string
         display_name: Condition relation type vocabulary
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.id
         field_type: string
         display_name: Condition relation type internal ID
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.name
         field_type: string
         display_name: Condition relation type name
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_condition_relation_lookup
           validator_state: active
@@ -3289,7 +3326,7 @@ object_definitions:
         field_type: object
         display_name: Disease relation
         description: Disease Relation vocabulary term, validated against the subject-type subset (D5).
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
@@ -3312,7 +3349,7 @@ object_definitions:
         description: Disease Relation vocabulary term name the validator confirmed; empty until then.
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
           validator_state: active
@@ -3325,13 +3362,15 @@ object_definitions:
         display_name: Disease relation vocabulary
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: disease_relation.id
         field_type: string
         display_name: Disease relation internal ID
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: disease_relation.mention
         field_type: string
         display_name: Disease relation paper wording
@@ -3568,7 +3607,7 @@ object_definitions:
         display_name: Annotation type
         description: Curation-method vocabulary term; fixed to manually_curated by the backend (not an extractor
           edit target).
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           validatable: true
           validator_binding_id: disease_annotation_type_cv_lookup
@@ -3645,7 +3684,7 @@ object_definitions:
         field_type: object
         display_name: Genetic sex
         description: Genetic Sex vocabulary term; staged only when the paper states the model/cohort sex.
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           hide_when_empty: true
           validatable: true
@@ -3669,7 +3708,7 @@ object_definitions:
         description: Genetic Sex vocabulary term name the validator confirmed; empty until then.
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -3679,13 +3718,15 @@ object_definitions:
         display_name: Genetic sex vocabulary
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: genetic_sex.id
         field_type: string
         display_name: Genetic sex internal id
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: genetic_sex.mention
         field_type: string
         display_name: Genetic sex paper wording
@@ -4006,7 +4047,7 @@ object_definitions:
       - field_path: condition_relations.condition_relation_type
         field_type: object
         display_name: Condition relation type
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           definition_state_category: complete
       - field_path: condition_relations.condition_relation_type.mention
@@ -4043,18 +4084,20 @@ object_definitions:
         field_type: string
         display_name: Condition relation type vocabulary
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.id
         field_type: string
         display_name: Condition relation type internal ID
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.name
         field_type: string
         display_name: Condition relation type name
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_condition_relation_lookup
           validator_state: active
@@ -4640,7 +4683,7 @@ object_definitions:
         field_type: object
         display_name: Disease relation
         description: Disease Relation vocabulary term, validated against the subject-type subset (D5).
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
@@ -4663,7 +4706,7 @@ object_definitions:
         description: Disease Relation vocabulary term name the validator confirmed; empty until then.
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
           validator_state: active
@@ -4678,13 +4721,15 @@ object_definitions:
         display_name: Disease relation vocabulary
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: disease_relation.id
         field_type: string
         display_name: Disease relation internal ID
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: disease_relation.mention
         field_type: string
         display_name: Disease relation paper wording
@@ -4921,7 +4966,7 @@ object_definitions:
         display_name: Annotation type
         description: Curation-method vocabulary term; fixed to manually_curated by the backend (not an extractor
           edit target).
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           validatable: true
           validator_binding_id: disease_annotation_type_cv_lookup
@@ -4998,7 +5043,7 @@ object_definitions:
         field_type: object
         display_name: Genetic sex
         description: Genetic Sex vocabulary term; staged only when the paper states the model/cohort sex.
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           hide_when_empty: true
           validatable: true
@@ -5022,7 +5067,7 @@ object_definitions:
         description: Genetic Sex vocabulary term name the validator confirmed; empty until then.
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -5032,13 +5077,15 @@ object_definitions:
         display_name: Genetic sex vocabulary
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: genetic_sex.id
         field_type: string
         display_name: Genetic sex internal id
         metadata:
           definition_state_category: complete
-          editable: false
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: genetic_sex.mention
         field_type: string
         display_name: Genetic sex paper wording
@@ -5359,7 +5406,7 @@ object_definitions:
       - field_path: condition_relations.condition_relation_type
         field_type: object
         display_name: Condition relation type
-        model_ref: VocabularyTermSnapshotPayload
+        model_ref: CheckedVocabularyTermPayload
         metadata:
           definition_state_category: complete
       - field_path: condition_relations.condition_relation_type.mention
@@ -5396,18 +5443,20 @@ object_definitions:
         field_type: string
         display_name: Condition relation type vocabulary
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.id
         field_type: string
         display_name: Condition relation type internal ID
         metadata:
-          protected: true
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.name
         field_type: string
         display_name: Condition relation type name
         metadata:
           editable: true
-          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: disease_condition_relation_lookup
           validator_state: active
@@ -5788,16 +5837,16 @@ object_definitions:
     display_name: Disease annotation subject
     description: Subject reference whose concrete Gene, Allele, or AGM identity is resolved by the active subject validator.
     definition_state: stable
-    # Its payload is the staged value itself (ALL-1283), declared through the value's model.
-    model_ref: DiseaseSubjectSnapshotPayload
+    # A structural reference holding only the paper wording; the validated value lives on the
+    # annotation (ALL-1283), so this object is not a resolvable value.
     metadata:
       object_role: validated_reference
   - object_type: DOTerm
     display_name: Disease ontology term
     description: Disease Ontology term reference resolved by the active ontology validator.
     definition_state: stable
-    # Its payload is the staged value itself (ALL-1283), declared through the value's model.
-    model_ref: DiseaseOntologyTermSnapshotPayload
+    # A structural reference holding only the paper wording; the validated value lives on the
+    # annotation (ALL-1283), so this object is not a resolvable value.
     metadata:
       object_role: validated_reference
   - object_type: Reference
