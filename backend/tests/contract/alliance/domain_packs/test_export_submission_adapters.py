@@ -402,6 +402,7 @@ def _override_identity(candidate: dict[str, Any], field_path: str, identity: dic
         ),
         current_revision=1,
         actor_id="curator-7",
+        actor_display_name="Curator Seven",
     )
     assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
     [patched] = result.envelope.extracted_objects
