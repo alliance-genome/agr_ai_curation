@@ -82,6 +82,12 @@ Do not invent a query term that the request context does not support, and do not
 mouse, M. musculus, Mus, murine | MGI
 worm, C. elegans, nematode | WB
 If no species is mentioned, omit `data_provider` and search all species.
+# A species is never assumed: resolve only within a species the request establishes.
+Resolve only within a species the request establishes
+never assume the species of the surrounding annotation
+# A protein named by its gene resolves to that gene; only a mature miRNA or an untied product stays unresolved.
+A protein or transcript named by its gene's symbol or name resolves to the gene that encodes it.
+Only a mature miRNA, or another product the paper does not tie to one gene, stays unresolved
 
 # GV-05/GV-19 symbol handling: clean notation only when flagged; DB drives decision
 Clean genotype or zygosity notation only after the tool flags it
