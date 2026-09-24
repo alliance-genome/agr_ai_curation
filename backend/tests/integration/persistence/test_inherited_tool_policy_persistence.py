@@ -229,3 +229,87 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
             db, head, description="Must not bypass revocation",
             expected_revision_id=head.execution_revision_id, active_group_ids=groups,
         )
+
+
+RESOLVER_HELPERS = ("search_domain_field_terms", "inspect_ontology_term", "resolve_domain_field_term")
+
+
+def resolver_inheritance_migration():
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "alembic/versions/s6t7u8v9w0x1_stop_inheriting_extraction_resolver_helpers.py"
+    )
+    spec = spec_from_file_location("resolver_inheritance_persistence", path)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("migrated", [False, True])
+@pytest.mark.parametrize("submit", ["visible", "saved_without_lookups"])
+def test_resaving_a_gene_expression_extractor_leaves_out_inherited_identity_lookups(
+    policy_db, migrated, submit,
+):
+    """ALL-1276: a custom extractor saved from the gene expression template while it
+    inherited the term resolver helpers re-saves without any identity lookup tool."""
+    from src.lib.agent_studio.domain_output_contract import initial_agent_output_contract
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.lib.config import get_valid_group_ids
+    from src.lib.config.agent_loader import get_agent_definition
+    from src.lib.packages.tool_roles import identity_lookup_tool_names
+
+    db = policy_db
+    # Before s6t7u8v9w0x1 the resolver helpers were designated for inheritance.
+    for tool_key in RESOLVER_HELPERS:
+        policy = db.get(ToolPolicy, tool_key)
+        policy.config = {**policy.config, "system_managed_inheritance": True}
+    db.flush()
+    get_tool_policy_cache().refresh(db)
+
+    definition = get_agent_definition("gene_expression_extraction")
+    assert definition is not None
+    groups = list(get_valid_group_ids())
+    head = Agent(
+        id=uuid4(), agent_key=f"ca_{uuid4().hex}", user_id=1, name="Saved expression extractor",
+        instructions="Extract paper-supported records.", model_id="gpt-5.6-sol",
+        model_temperature=0.1, model_reasoning="medium", visibility="private",
+        template_source="gene_expression_extraction",
+        tool_ids=list(dict.fromkeys([*definition.tools, *RESOLVER_HELPERS])),
+        allowed_group_ids=list(definition.access.allowed_group_ids), group_rules_enabled=False,
+    )
+    db.add(head)
+    db.flush()
+    snapshot = capture_execution_snapshot(
+        db, head, initial_agent_output_contract(head), active_group_ids=groups,
+    )
+    # The saved revision carries the helpers as inherited, like the ones in production.
+    assert set(RESOLVER_HELPERS) <= set(snapshot.system_managed_tool_ids)
+    saved = append_execution_revision(db, head, snapshot, user_id=1, expected_revision_id=None)
+
+    if migrated:
+        with Operations.context(MigrationContext.configure(db.connection())):
+            resolver_inheritance_migration().upgrade()
+        get_tool_policy_cache().refresh(db)
+
+    lookups = identity_lookup_tool_names()
+    if submit == "visible":
+        tool_ids = [p.tool_key for p in db.query(ToolPolicy)
+                    if p.allow_attach and p.tool_key in snapshot.tool_ids]
+    else:
+        tool_ids = [tool_id for tool_id in snapshot.tool_ids if tool_id not in lookups]
+    service.update_custom_agent(
+        db, head, description="Re-save without database lookups", tool_ids=tool_ids,
+        expected_revision_id=saved.id, active_group_ids=groups,
+    )
+
+    _, updated = get_execution_revision(
+        db, head.id, head.execution_revision_id, 1, active_group_ids=groups,
+    )
+    assert head.execution_revision_id != saved.id
+    assert not lookups & set(head.tool_ids)
+    assert not lookups & set(updated.tool_ids)
+    assert not lookups & set(updated.system_managed_tool_ids)
+    assert "finalize_gene_expression_extraction" in updated.tool_ids
+    assert "agr_species_context_lookup" in updated.tool_ids
