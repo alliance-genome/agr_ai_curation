@@ -182,7 +182,8 @@ def build_agent_runtime_report(
 
     try:
         load_models()
-        known_model_ids = {model.model_id for model in list_models()}
+        models_by_id = {model.model_id: model for model in list_models()}
+        known_model_ids = set(models_by_id)
     except Exception as exc:
         return {
             "status": "unhealthy",
@@ -313,10 +314,20 @@ def build_agent_runtime_report(
 
         reasoning = getattr(row, "model_reasoning", None)
         if isinstance(reasoning, str) and reasoning.strip():
-            from src.lib.openai_agents.config import normalize_reasoning_effort
+            from src.lib.openai_agents.config import (
+                normalize_reasoning_effort,
+                unsupported_reasoning_effort,
+            )
 
             if normalize_reasoning_effort(reasoning) is None:
                 row_warnings.append(f"Invalid model_reasoning '{reasoning}'")
+            elif model_id in models_by_id:
+                unsupported = unsupported_reasoning_effort(models_by_id[model_id], reasoning)
+                if unsupported is not None:
+                    row_errors.append(
+                        f"model_reasoning '{unsupported}' is not supported by model "
+                        f"'{model_id}'"
+                    )
 
         visibility = str(getattr(row, "visibility", "") or "").strip()
         user_id = getattr(row, "user_id", None)

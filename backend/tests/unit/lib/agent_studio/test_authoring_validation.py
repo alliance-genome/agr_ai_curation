@@ -357,6 +357,8 @@ def test_an_extraction_agent_cannot_carry_identity_lookup_tools(phase):
     [
         ({"model_id": "retired"}, "unavailable_model", "custom_agent.model_id"),
         ({"model_reasoning": "max"}, "unsupported_reasoning_effort", "custom_agent.model_reasoning"),
+        # A valid effort the model's catalog entry does not offer (GPT-6 Sol rejects minimal).
+        ({"model_reasoning": "minimal"}, "unsupported_reasoning_effort", "custom_agent.model_reasoning"),
         ({"tool_ids": ["retired"]}, "unavailable_tool", "custom_agent.tool_ids.0"),
         ({"allowed_group_ids": ["TEAM_B"]}, "unavailable_group", "custom_agent.allowed_group_ids"),
         ({"allowed_group_ids": []}, "widened_inherited_access", "custom_agent.allowed_group_ids"),

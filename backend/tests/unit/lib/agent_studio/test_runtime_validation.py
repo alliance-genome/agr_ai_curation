@@ -628,3 +628,47 @@ def test_custom_extraction_agent_with_identity_lookup_warns_unless_strict(monkey
 
     assert any("database lookup tools" in msg for msg in relaxed["warnings"])
     assert any("database lookup tools" in msg for msg in strict["errors"])
+
+
+def _report_for_reasoning(monkeypatch, reasoning):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
+        _agent(agent_key="ca_reasoning", model_id="gpt-6-sol", model_reasoning=reasoning)
+    ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(
+        model_id="gpt-6-sol", supports_reasoning=True,
+        reasoning_options=["low", "medium", "high", "xhigh"],
+    )])
+    monkeypatch.setattr(module, "_load_runtime_policy", lambda: {
+        "tool_bindings": {},
+        "canonicalize_tool_id": lambda tool_id: tool_id,
+        "document_tool_ids": set(),
+        "package_required_tool_ids": set(),
+    })
+    return module.build_agent_runtime_report(strict_mode=False)
+
+
+def test_startup_rejects_a_reasoning_level_the_catalog_model_does_not_offer(monkeypatch):
+    report = _report_for_reasoning(monkeypatch, "minimal")
+
+    assert report["status"] == "unhealthy"
+    assert report["errors"] == [
+        "ca_reasoning: model_reasoning 'minimal' is not supported by model 'gpt-6-sol'"
+    ]
+
+
+@pytest.mark.parametrize("reasoning", ["medium", "XHIGH", None])
+def test_startup_accepts_a_reasoning_level_the_catalog_model_offers(monkeypatch, reasoning):
+    report = _report_for_reasoning(monkeypatch, reasoning)
+
+    assert report["errors"] == []
+
+
+def test_startup_only_warns_for_a_reasoning_value_that_is_never_sent(monkeypatch):
+    report = _report_for_reasoning(monkeypatch, "disabled")
+
+    assert report["errors"] == []
+    assert any("Invalid model_reasoning 'disabled'" in msg for msg in report["warnings"])

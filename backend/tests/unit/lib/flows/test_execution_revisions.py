@@ -72,10 +72,13 @@ def receipt(mode):
 RETIRED_MODEL = "retired-model"
 
 
-def install_resolver(monkeypatch, receipts, *, model_id="catalog-model"):
+CATALOG_MODEL = SimpleNamespace(supports_reasoning=True, reasoning_options=("low", "medium", "high", "xhigh"))
+
+
+def install_resolver(monkeypatch, receipts, *, model_id="catalog-model", model_reasoning="medium"):
     by_id = {item.agent_revision_id: item for item in receipts}
     # The model catalog: every model but the retired one.
-    monkeypatch.setattr(module, "get_model", lambda requested: None if requested == RETIRED_MODEL else object())
+    monkeypatch.setattr(module, "get_model", lambda requested: None if requested == RETIRED_MODEL else CATALOG_MODEL)
     authorize = Mock(side_effect=lambda db, payload, user_id, **kw:
                      AgentExecutionReceipt.model_validate(payload))
     def read(db, agent_id, revision_id, user_id, **kwargs):
@@ -84,7 +87,7 @@ def install_resolver(monkeypatch, receipts, *, model_id="catalog-model"):
                                fingerprint=item.fingerprint), SimpleNamespace(
             output_contract=item.output_contract, tool_ids=[], curation=None,
             template_source=None, default_export_execution_mode=None,
-            structured_finalization=None, model_id=model_id,
+            structured_finalization=None, model_id=model_id, model_reasoning=model_reasoning,
         )
     lookup = Mock(side_effect=read)
     monkeypatch.setattr(module, "authorize_execution_receipt", authorize)
@@ -775,3 +778,25 @@ def test_a_pinned_revision_on_a_model_no_longer_in_the_catalog_blocks_before_the
     assert (finding.code, finding.severity, finding.node_id) == ("unavailable_model", "error", "node_0")
     assert finding.message == "This step uses a model that is no longer available; re-save the agent."
     assert resolved.entries_by_node == {"node_0": None}
+
+
+def test_a_pinned_reasoning_level_the_model_no_longer_offers_blocks_before_the_run(monkeypatch):
+    pin = receipt("domain")
+    install_resolver(monkeypatch, [pin], model_reasoning="minimal")
+
+    resolved = module.resolve_flow_execution_revisions(Mock(), flow(pin), user_id=7, active_group_ids=[])
+
+    [finding] = resolved.findings
+    assert (finding.code, finding.severity, finding.node_id) == ("unsupported_reasoning_effort", "error", "node_0")
+    assert finding.message == "This step uses a reasoning level its model no longer offers; re-save the agent."
+    assert resolved.entries_by_node == {"node_0": None}
+
+
+@pytest.mark.parametrize("reasoning", ["disabled", None, "high"])
+def test_a_pinned_reasoning_level_that_is_never_sent_or_offered_does_not_block(monkeypatch, reasoning):
+    pin = receipt("domain")
+    install_resolver(monkeypatch, [pin], model_reasoning=reasoning)
+
+    resolved = module.resolve_flow_execution_revisions(Mock(), flow(pin), user_id=7, active_group_ids=[])
+
+    assert not [f for f in resolved.findings if f.code == "unsupported_reasoning_effort"]

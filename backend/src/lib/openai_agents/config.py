@@ -550,6 +550,22 @@ def require_model_reasoning_effort(
     return normalized  # type: ignore[return-value]
 
 
+def unsupported_reasoning_effort(model_def: object, value: object) -> Optional[ReasoningEffort]:
+    """Return the effort that would be sent but the catalog model does not accept.
+
+    Values that normalize to "no reasoning" are never sent, so they are not
+    reported here; only a real effort outside the model's options is.
+    """
+    effort = normalize_reasoning_effort(value)
+    if effort is None:
+        return None
+    if getattr(model_def, "supports_reasoning", False) and effort in tuple(
+        getattr(model_def, "reasoning_options", ()) or ()
+    ):
+        return None
+    return effort
+
+
 ReasoningSummaryStatus = Literal["present", "not_requested", "not_supported", "unavailable"]
 
 
