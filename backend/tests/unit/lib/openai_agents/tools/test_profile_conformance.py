@@ -970,3 +970,34 @@ def test_a_curator_removes_one_profile_list_element(resolvable_profile):
         with pytest.raises(ProfileConformanceError) as rejected:
             resolvable_profile.remove_curator_element(staged, path, actor_id="c", actor_display_name="c", at=at)
         assert message in rejected.value.issues[0]["message"]
+
+
+def test_a_numeric_profile_identity_entry_is_stored_as_a_number():
+    """Fix wave 3 S1 (profiles): a typed entry for an integer identity key is parsed, or rejected."""
+
+    contract = GenericProfileContract.model_validate({
+        "name": "Refs", "semantic_class": "reference_mention",
+        "fields": [{"key": "ref", "required": True, "value_schema": {"kind": "object", "fields": [
+            {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+            {"key": "reference_id", "value_schema": {"kind": "integer"}},
+            {"key": "title", "value_schema": {"kind": "string"}},
+        ]}}],
+        "validator_mappings": [{**_MAPPING, "inputs": {"mention": {"field_path": "attributes.ref.mention"}},
+                                "outputs": {"identifier": "attributes.ref.reference_id",
+                                            "label": "attributes.ref.title"}}],
+    })
+    pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1,
+                            fingerprint=contract.fingerprint())
+    profile = ResolvedGenericProfile(pin, contract)
+    staged = profile.unresolved_attributes({"ref": {"mention": "Smith 2020"}})
+    at = "2026-09-24T00:00:00+00:00"
+
+    edited, _ = profile.apply_curator_edit(
+        staged, "attributes.ref", {**staged["ref"], "reference_id": "42", "title": "A paper"},
+        actor_id="c", actor_display_name="C", at=at)
+    assert edited["ref"]["reference_id"] == 42
+    with pytest.raises(ProfileConformanceError) as rejected:
+        profile.apply_curator_edit(
+            staged, "attributes.ref", {**staged["ref"], "reference_id": "forty-two", "title": "A paper"},
+            actor_id="c", actor_display_name="C", at=at)
+    assert rejected.value.issues[0]["message"] == "Enter a whole number for the reference id."

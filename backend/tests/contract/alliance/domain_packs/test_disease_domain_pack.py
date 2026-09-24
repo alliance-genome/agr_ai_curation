@@ -2199,3 +2199,27 @@ def test_demoting_a_disease_subject_keeps_its_routing_subject_type():
     assert subject["overruled_subject_identifier"] == "FB:FBgn0000108"
     assert subject["subject_type"] == "gene"
     assert "overruled_subject_type" not in subject
+
+
+def test_a_curator_removes_the_lone_disease_evidence_code():
+    """W2-B1: removing the only evidence code is accepted; the envelope still validates."""
+
+    from src.lib.domain_envelopes.patches import (
+        EnvelopeFieldPatch, EnvelopeFieldPatchOperation, apply_curator_field_patch,
+    )
+
+    envelope = _override_envelope()
+    envelope.extracted_objects[0].payload["evidence_code_curies"] = _staged_list(["IMP"], ("curie",))
+    [element] = envelope.extracted_objects[0].payload["evidence_code_curies"]
+
+    result = apply_curator_field_patch(
+        envelope, _disease_pack(),
+        EnvelopeFieldPatch(envelope_id=envelope.envelope_id, expected_revision=1, object_id="gda-1",
+                           field_path="evidence_code_curies[0]", before=element, value=None,
+                           operation=EnvelopeFieldPatchOperation.REMOVE),
+        current_revision=1, actor_id="curator-7", actor_display_name="Curator Seven",
+    )
+
+    assert result.accepted, result.errors
+    assert result.envelope.extracted_objects[0].payload["evidence_code_curies"] == []
+    DomainEnvelope.model_validate(result.envelope.model_dump(mode="json"))

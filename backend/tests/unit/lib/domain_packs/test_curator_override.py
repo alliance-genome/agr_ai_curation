@@ -751,7 +751,8 @@ def test_a_curator_removes_one_list_element_and_its_findings_follow():
     [audit] = obj.metadata[CURATOR_OVERRIDE_METADATA_KEY]
     assert (audit["action"], audit["value_path"], audit["previous"]) == ("removed", "sites[0]", first)
     assert [(f.field_ref.field_path, f.status.value) for f in result.envelope.validation_findings] == [
-        ("sites[0].curie", "resolved"), ("sites[0].curie", "open")]
+        ("sites", "resolved"), ("sites[0].curie", "open")]
+    assert result.envelope.validation_findings[0].details["removed_value_path"] == "sites[0].curie"
     assert result.envelope.validation_findings[1].message.endswith("sites[1].curie")
 
     for field_path, value, before, error in (
@@ -869,3 +870,30 @@ def test_an_override_records_the_curators_display_name():
     with pytest.raises(ResolvableValueError, match="records who"):
         check_resolvable_value({**obj.payload["site"], "curator_override": {**record, "actor_display_name": ""}},
                                identity_keys=KEYS)
+
+
+@pytest.mark.parametrize(("stored", "index"), [(2, 1), (1, 0)])
+def test_removing_the_last_or_only_element_validates_and_keeps_its_history(stored, index):
+    """W2-B1: the removal's history points at the list, and earlier events on the gone
+    element stay valid history."""
+
+    elements = [unresolved_value(f"code {n}", identity_keys=KEYS) for n in range(stored)]
+    envelope = _envelope_with({"sites": elements}, findings=[_finding(f"sites[{index}].curie")])
+    pack = _list_pack()
+    overridden = _patch(envelope, f"sites[{index}].curie", {"curie": "ONT:1", "name": "one"},
+                        before={"curie": None, "name": None}, operation=IDENTITY, pack=pack)
+    assert overridden.accepted, overridden.errors
+    element = overridden.envelope.extracted_objects[0].payload["sites"][index]
+
+    removed = _patch(overridden.envelope, f"sites[{index}]", None, before=element,
+                     operation=EnvelopeFieldPatchOperation.REMOVE, pack=pack)
+
+    assert removed.accepted, removed.errors
+    obj = removed.envelope.extracted_objects[0]
+    assert len(obj.payload["sites"]) == stored - 1
+    for removal in removed.envelope.history[-2:]:
+        assert removal.field_ref.field_path == "sites"
+        assert removal.details["field_path"] == f"sites[{index}]"
+    assert {f.field_ref.field_path for f in removed.envelope.validation_findings} == {"sites"}
+    # The envelope, with history naming the gone element, validates as stored.
+    DomainEnvelope.model_validate(removed.envelope.model_dump(mode="json"))

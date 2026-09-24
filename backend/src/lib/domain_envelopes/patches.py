@@ -26,6 +26,7 @@ from src.lib.domain_packs.resolvable_values import (
     declared_resolvable_fields,
     declared_spec_for,
     has_resolution_state,
+    typed_identity_input,
 )
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 from src.schemas.domain_envelope import (
@@ -306,6 +307,7 @@ def apply_curator_field_patch(
                 object_type=domain_object.object_type,
                 actor_id=actor_id,
                 actor_display_name=actor_display_name,
+                registry=validation_registry,
             )
             if not handled:
                 set_payload_value(staged_payload, patch.field_path, patch.value)
@@ -359,7 +361,12 @@ def apply_curator_field_patch(
 
     field_ref = FieldRef(
         object_ref=updated_object.to_object_ref(),
-        field_path=patch.field_path,
+        # A removal changed the list; the removed element's path stays in the details.
+        field_path=(
+            _format_path(parse_field_path(patch.field_path)[:-1])
+            if patch.operation is EnvelopeFieldPatchOperation.REMOVE
+            else patch.field_path
+        ),
     )
     details = {
         "patch_id": patch.patch_id,
@@ -780,12 +787,15 @@ def _apply_resolvable_edit(
     object_type: str,
     actor_id: str,
     actor_display_name: str,
+    registry: DomainPackValidationRegistry,
 ) -> tuple[bool, dict[str, Any] | None]:
     """Apply a curator's edit of a declared resolvable value's identity as a validation override.
 
     Returns (handled, override audit record). Not handled means an ordinary
     field edit the caller sets; handled without a record means a whole-value
-    edit that changed nothing. Declared mirror copies follow an override.
+    edit that changed nothing. Declared mirror copies follow an override. An
+    identity field declared as a number takes the curator's entry as that
+    number (``typed_identity_input``).
     """
 
     resolvable_fields = declared_resolvable_fields(domain_pack.metadata, object_type)
@@ -802,13 +812,25 @@ def _apply_resolvable_edit(
         text = str(container).strip() if isinstance(container, (str, int, float)) else ""
         set_payload_value(payload, value_path, {spec.mention_key: text} if text else {})
         container = _payload_value(payload, value_path)
+    def typed(identity_key: str, value: Any) -> Any:
+        definition = _field_definition_for(
+            registry, object_type, f"{value_path}.{identity_key}" if value_path else identity_key,
+        )
+        if definition is None:
+            return copy.deepcopy(value)
+        return typed_identity_input(
+            copy.deepcopy(value),
+            value_type=definition.field_type.value,
+            label=definition.display_name or identity_key,
+        )
+
     if not whole:
-        edits = {key: copy.deepcopy(patch.value)}
+        edits = {key: typed(key, patch.value)}
     else:
         # Other keys cannot change (_override_errors); only the identity is applied.
         new_value = dict(patch.value)
         edits = {
-            identity_key: copy.deepcopy(new_value[identity_key])
+            identity_key: typed(identity_key, new_value[identity_key])
             for identity_key in spec.identity_keys
             if identity_key in new_value
         }
@@ -999,18 +1021,21 @@ def _settle_findings(
     events: list[HistoryEvent] = []
     for finding in envelope.validation_findings:
         target = finding.field_ref.object_ref if finding.field_ref is not None else finding.object_ref
-        if (
-            finding.status is not ValidationFindingStatus.OPEN
-            or target is None
-            or target.ref_key() not in ref_keys
-        ):
+        if target is None or target.ref_key() not in ref_keys:
             findings.append(finding)
             continue
         on = on_value(finding)
+        if action == "removed" and finding.field_ref is not None:
+            # Every finding of the list, open or not, keeps a path that still exists: the
+            # removed element's point at its list, later elements' follow their new index.
+            finding = _removed_element_finding(finding, value_path) if on else _shifted_after_removal(
+                finding, value_path,
+            )
+        if finding.status is not ValidationFindingStatus.OPEN:
+            findings.append(finding)
+            continue
         if action == "removed":
             resolve = on
-            if not on and finding.field_ref is not None:
-                finding = _shifted_after_removal(finding, value_path)
         elif action == "override":
             resolve = on or settled_binding(finding)
         else:
@@ -1020,6 +1045,18 @@ def _settle_findings(
             events.append(_history_event_for_resolved_finding(envelope=envelope, finding=finding, actor_id=actor_id))
         findings.append(finding)
     return envelope.model_copy(update={"validation_findings": findings, "history": [*envelope.history, *events]})
+
+
+def _removed_element_finding(finding: ValidationFinding, removed_path: str) -> ValidationFinding:
+    """A finding on a removed element points at its list; its own path stays in the details."""
+
+    assert finding.field_ref is not None
+    return finding.model_copy(update={
+        "field_ref": finding.field_ref.model_copy(
+            update={"field_path": _format_path(parse_field_path(removed_path)[:-1])}
+        ),
+        "details": {**finding.details, "removed_value_path": finding.field_ref.field_path},
+    })
 
 
 def _shifted_after_removal(finding: ValidationFinding, removed_path: str) -> ValidationFinding:

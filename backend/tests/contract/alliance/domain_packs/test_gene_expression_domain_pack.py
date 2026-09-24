@@ -4218,7 +4218,8 @@ def test_a_full_identity_override_of_the_reference_keeps_its_curie():
         {"reference_id": "12345", "title": "A paper", "curie": "PMID:1"},
     )
     reference = annotation.payload["single_reference"]
-    assert (reference["reference_id"], reference["title"], reference["curie"]) == ("12345", "A paper", "PMID:1")
+    # reference_id is declared an integer: the entry is stored as one.
+    assert (reference["reference_id"], reference["title"], reference["curie"]) == (12345, "A paper", "PMID:1")
 
 
 def test_a_first_override_that_leaves_out_a_validated_key_names_it():
@@ -4275,3 +4276,29 @@ def test_a_demoted_stage_leaves_no_stale_stage_name():
     stage = demoted["expression_pattern"]["when_expressed"]["developmental_stage_start"]
     assert (stage["resolution_state"], stage["name"]) == ("unresolved", None)
     assert demoted["when_expressed_stage_name"] is None
+
+
+def test_a_numeric_identity_entry_is_stored_as_a_number():
+    """Fix wave 3 S1: the grid sends what the curator typed; an integer identity field stores an integer."""
+
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatchStatus
+
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    payload["single_reference"] = staged_value("single_reference", "PMID:1")
+    envelope = _with_payload(envelope, payload)
+    identity = {"reference_id": " 203506 ", "title": "A paper", "curie": "PMID:1"}
+
+    result = _curator_patch(envelope, "single_reference.reference_id", identity,
+                            before={key: None for key in identity}, identity=True)
+    assert result.status is EnvelopeFieldPatchStatus.ACCEPTED, result.errors
+    reference = result.envelope.extracted_objects[0].payload["single_reference"]
+    assert reference["reference_id"] == 203506 and isinstance(reference["reference_id"], int)
+
+    refined = _curator_patch(result.envelope, "single_reference.reference_id", "203507", before=203506)
+    assert refined.envelope.extracted_objects[0].payload["single_reference"]["reference_id"] == 203507
+
+    rejected = _curator_patch(envelope, "single_reference.reference_id", {**identity, "reference_id": "20350x"},
+                              before={key: None for key in identity}, identity=True)
+    assert rejected.status is EnvelopeFieldPatchStatus.REJECTED
+    assert rejected.errors == ("Enter a whole number for the reference ID.",)

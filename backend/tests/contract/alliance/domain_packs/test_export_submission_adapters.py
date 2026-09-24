@@ -686,3 +686,17 @@ def test_submission_adapters_return_explicit_non_writing_blockers(
     assert result.submission_state["write_behavior"]["status"] == "blocked"
     assert result.submission_state["candidate_ids"] == [candidate["candidate_id"]]
     assert result.target_result_history[0]["status"] == "blocked"
+
+
+def test_disease_export_blocks_an_emptied_evidence_code_list():
+    """W2-B1: a curator who removed every evidence code gets a curator-facing blocker."""
+
+    candidate = deepcopy(_fixtures()["disease"]["candidate"])
+    candidate["payload"]["evidence_code_curies"] = []
+
+    payload = build_disease_annotation_export_payload(domain_envelope_candidates=[candidate])
+
+    assert payload["payload_status"] == "blocked"
+    assert [(blocker["code"], blocker["field_path"]) for blocker in payload["adapter_blockers"]] == [
+        ("alliance.disease.export.required_context_missing", "evidence_code_curies"),
+    ]
