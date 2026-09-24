@@ -60,7 +60,7 @@ def test_saved_profile_allows_declared_nested_edit_without_global_pack_path(prof
     profile, pack, envelope = profiled_patch_context
     before = deepcopy(envelope)
     result = apply_curator_field_patch(envelope, pack, _patch("attributes.sources[0].name", before="A", value="B"),
-                                      current_revision=1, actor_id="curator-1", profile=profile)
+                                      current_revision=1, actor_id="curator-1", actor_display_name="curator-1", profile=profile)
     assert result.accepted
     assert result.envelope.extracted_objects[0].payload["attributes"]["sources"] == [{"name": "B"}]
     assert envelope == before
@@ -80,7 +80,7 @@ def test_profile_patch_rejects_invalid_nested_values_before_mutation(profiled_pa
     original = deepcopy(envelope)
     with pytest.raises(ProfileConformanceError):
         apply_curator_field_patch(envelope, pack, _patch(path, before=before, value=value),
-                                  current_revision=1, actor_id="curator-1", profile=profile)
+                                  current_revision=1, actor_id="curator-1", actor_display_name="curator-1", profile=profile)
     assert envelope == original
     assert not envelope.history
 
@@ -90,7 +90,7 @@ def test_profile_patch_rejects_mismatched_object_pin(profiled_patch_context):
     envelope.extracted_objects[0].metadata["generic_profile_ref"]["profile_revision_id"] = str(uuid4())
     with pytest.raises(ProfileIdentityError):
         apply_curator_field_patch(envelope, pack, _patch("attributes.details.count", before=1, value=2),
-                                  current_revision=1, actor_id="curator-1", profile=profile)
+                                  current_revision=1, actor_id="curator-1", actor_display_name="curator-1", profile=profile)
 
 
 def test_profile_identity_edit_goes_through_the_curator_override_path(tmp_path):
@@ -131,7 +131,7 @@ def test_profile_identity_edit_goes_through_the_curator_override_path(tmp_path):
     ])
 
     result = apply_curator_field_patch(envelope, pack, _patch("attributes.gene.gene_id", before=None, value="EX:9"),
-                                      current_revision=1, actor_id="curator-1", profile=profile)
+                                      current_revision=1, actor_id="curator-1", actor_display_name="curator-1", profile=profile)
 
     assert result.accepted
     edited = result.envelope.extracted_objects[0]
@@ -185,7 +185,7 @@ def test_profile_two_key_override_is_a_whole_value_replace_and_rejects_replace_i
     whole = apply_curator_field_patch(
         envelope, pack,
         _patch("attributes.gene", before=gene, value={**gene, "gene_id": "EX:9", "symbol": "daf-16"}),
-        current_revision=1, actor_id="curator-1", profile=profile,
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1", profile=profile,
     )
     assert whole.accepted
     edited = whole.envelope.extracted_objects[0].payload["attributes"]["gene"]
@@ -199,7 +199,7 @@ def test_profile_two_key_override_is_a_whole_value_replace_and_rejects_replace_i
         reason="Curator override.",
     )
     rejected = apply_curator_field_patch(envelope, pack, identity_patch, current_revision=1,
-                                         actor_id="curator-1", profile=profile)
+                                         actor_id="curator-1", actor_display_name="curator-1", profile=profile)
     assert not rejected.accepted
     assert "not supported for profile fields" in rejected.errors[0]
 
@@ -285,7 +285,7 @@ def test_apply_curator_field_patch_accepts_editable_field_and_records_history(tm
         _loaded_pack(tmp_path),
         _patch("gene.symbol", before="abc-1", value="abc-2"),
         current_revision=1,
-        actor_id="curator-1",
+        actor_id="curator-1", actor_display_name="curator-1",
     )
 
     assert result.accepted is True
@@ -306,7 +306,7 @@ def test_apply_curator_field_patch_allows_editable_field_fill(tmp_path: Path):
         _loaded_pack(tmp_path),
         _patch("gene.identifier", before=None, value="AGR:0000001"),
         current_revision=1,
-        actor_id="curator-1",
+        actor_id="curator-1", actor_display_name="curator-1",
     )
 
     assert result.accepted is True
@@ -319,7 +319,7 @@ def test_apply_curator_field_patch_rejects_stale_revision_without_history(tmp_pa
         _loaded_pack(tmp_path),
         _patch("gene.symbol", before="abc-1", value="abc-2"),
         current_revision=2,
-        actor_id="curator-1",
+        actor_id="curator-1", actor_display_name="curator-1",
     )
 
     assert result.status is EnvelopeFieldPatchStatus.STALE_REVISION
@@ -335,7 +335,7 @@ def test_apply_curator_field_patch_rejects_before_mismatch_and_records_rejection
         _loaded_pack(tmp_path),
         _patch("gene.symbol", before="stale", value="abc-2"),
         current_revision=1,
-        actor_id="curator-1",
+        actor_id="curator-1", actor_display_name="curator-1",
     )
 
     assert result.status is EnvelopeFieldPatchStatus.REJECTED
@@ -354,21 +354,21 @@ def test_apply_curator_field_patch_rejects_protected_and_undeclared_paths(
         _loaded_pack(tmp_path),
         _patch("protected_note", before="do not edit", value="new"),
         current_revision=1,
-        actor_id="curator-1",
+        actor_id="curator-1", actor_display_name="curator-1",
     )
     undeclared = apply_curator_field_patch(
         _envelope(),
         _loaded_pack(tmp_path),
         _patch("missing.path", before=None, value="new"),
         current_revision=1,
-        actor_id="curator-1",
+        actor_id="curator-1", actor_display_name="curator-1",
     )
     stable = apply_curator_field_patch(
         _envelope(),
         _loaded_pack(tmp_path),
         _patch("stable_note", before="fixed", value="new"),
         current_revision=1,
-        actor_id="curator-1",
+        actor_id="curator-1", actor_display_name="curator-1",
     )
 
     assert protected.status is EnvelopeFieldPatchStatus.REJECTED

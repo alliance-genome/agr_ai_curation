@@ -514,7 +514,8 @@ class ResolvedGenericProfile:
             raise ProfileConformanceError(issues[:get_generic_profile_max_issues()])
 
     def apply_curator_edit(self, attributes: dict[str, Any], field_path: str, value: Any, *,
-                           actor_id: str, at: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+                           actor_id: str, actor_display_name: str,
+                           at: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
         """One curator edit of a profile record; an identity edit is a validation override.
 
         Editing a resolvable value's identity (one identity key, or the whole
@@ -565,7 +566,7 @@ class ResolvedGenericProfile:
             try:
                 audit = apply_curator_identity(
                     container, edits, identity_keys=identity, id_key=spec.id_key, label_key=spec.label_key,
-                    actor_id=actor_id, at=at,
+                    actor_id=actor_id, actor_display_name=actor_display_name, at=at,
                 )
             except ResolvableValueError as exc:
                 raise ProfileConformanceError([_patch_issue(None, field_path, str(exc))]) from exc
@@ -573,8 +574,8 @@ class ResolvedGenericProfile:
         self.require_attributes(result)
         return result, audit
 
-    def remove_curator_element(self, attributes: dict[str, Any], field_path: str, *,
-                               actor_id: str, at: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    def remove_curator_element(self, attributes: dict[str, Any], field_path: str, *, actor_id: str,
+                               actor_display_name: str, at: str) -> tuple[dict[str, Any], dict[str, Any]]:
         """Remove one element of a list of resolvable values; returns the record and the audit."""
         if not re.search(r"\[[0-9]+\]$", field_path) or declared_value_path(field_path) not in self.resolvable_objects():
             raise ProfileConformanceError([_patch_issue(
@@ -586,7 +587,8 @@ class ResolvedGenericProfile:
             raise ProfileConformanceError([_patch_issue(None, field_path, "Edit an existing value.")])
         removed = items.pop(int(index))
         self.require_attributes(result)
-        return result, {"action": "removed", "actor_id": actor_id, "at": at, "previous": removed,
+        return result, {"action": "removed", "actor_id": actor_id, "actor_display_name": actor_display_name,
+                        "at": at, "previous": removed,
                         "identity": None, "value_path": field_path}
 
     def _with_guarded_values(self, before: dict[str, Any], after: dict[str, Any], field_path: str) -> dict[str, Any]:

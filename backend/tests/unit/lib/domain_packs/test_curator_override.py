@@ -63,7 +63,7 @@ AT = "2026-09-23T20:00:00+00:00"
 
 def _override(value, **edits):
     return apply_curator_identity(value, edits, identity_keys=KEYS, id_key="curie", label_key="name",
-                                  actor_id="curator-7", at=AT)
+                                  actor_id="curator-7", actor_display_name="curator-7", at=AT)
 
 
 # --- The vocabulary ----------------------------------------------------------------
@@ -158,33 +158,33 @@ def test_a_first_override_names_every_identity_key_validated_ones_included():
     snapshot = dict(value)
     with pytest.raises(ResolvableValueError, match="^Enter the taxon for a curator override.$"):
         apply_curator_identity(value, {"curie": "ONT:2", "name": "dermis"}, identity_keys=(*KEYS, "taxon"),
-                               id_key="curie", label_key="name", actor_id="curator-7", at=AT)
+                               id_key="curie", label_key="name", actor_id="curator-7", actor_display_name="curator-7", at=AT)
     with pytest.raises(ResolvableValueError,
                        match="^Enter the identifier, the name and the taxon for a curator override.$"):
         apply_curator_identity(value, {"curie": "ONT:2"}, identity_keys=(*KEYS, "taxon"),
-                               id_key="curie", label_key="name", actor_id="curator-7", at=AT)
+                               id_key="curie", label_key="name", actor_id="curator-7", actor_display_name="curator-7", at=AT)
     assert value == snapshot
     apply_curator_identity(value, {"curie": "ONT:2", "name": "dermis", "taxon": "T:9"},
                            identity_keys=(*KEYS, "taxon"), id_key="curie", label_key="name",
-                           actor_id="curator-7", at=AT)
+                           actor_id="curator-7", actor_display_name="curator-7", at=AT)
     assert (value["curie"], value["taxon"], value["overruled_taxon"]) == ("ONT:2", "T:9", "T:9")
     # Refining the override may name a subset.
     apply_curator_identity(value, {"name": "skin layer"}, identity_keys=(*KEYS, "taxon"),
-                           id_key="curie", label_key="name", actor_id="curator-7", at=AT)
+                           id_key="curie", label_key="name", actor_id="curator-7", actor_display_name="curator-7", at=AT)
     assert (value["name"], value["taxon"]) == ("skin layer", "T:9")
     unknown_taxon = unresolved_value("skin", identity_keys=(*KEYS, "taxon"))
     apply_curator_identity(unknown_taxon, {"curie": "ONT:1", "name": "epidermis", "taxon": None},
                            identity_keys=(*KEYS, "taxon"), id_key="curie", label_key="name",
-                           actor_id="curator-7", at=AT)
+                           actor_id="curator-7", actor_display_name="curator-7", at=AT)
     assert (unknown_taxon["resolution_state"], unknown_taxon["taxon"]) == (RESOLVED, None)
     # A validated key alone is no override: the declared label stays required.
     only_label = unresolved_value("skin", identity_keys=("name", "taxon"))
     with pytest.raises(ResolvableValueError, match="^Enter the name for a curator override.$"):
         apply_curator_identity(only_label, {"taxon": "T:1"}, identity_keys=("name", "taxon"), id_key=None,
-                               label_key="name", actor_id="curator-7", at=AT)
+                               label_key="name", actor_id="curator-7", actor_display_name="curator-7", at=AT)
     with pytest.raises(ResolvableValueError, match="declared id or label key"):
         apply_curator_identity(value, {"curie": "ONT:2"}, identity_keys=KEYS, id_key=None, label_key=None,
-                               actor_id="curator-7", at=AT)
+                               actor_id="curator-7", actor_display_name="curator-7", at=AT)
 
 
 def test_entering_the_previous_identity_restores_the_previous_state():
@@ -338,7 +338,7 @@ def _patch(envelope, field_path, value, *, before, display=DISPLAY, name_editabl
         envelope, pack or _pack(display, name_editable),
         EnvelopeFieldPatch(envelope_id=envelope.envelope_id, expected_revision=1, object_id="obs-1",
                            field_path=field_path, before=before, value=value, operation=operation),
-        current_revision=1, actor_id="curator-7",
+        current_revision=1, actor_id="curator-7", actor_display_name="curator-7",
     )
 
 
@@ -827,7 +827,7 @@ def test_no_disagreement_for_a_key_the_override_holds_empty():
     site = unresolved_value("skin", identity_keys=(*KEYS, "taxon"))
     apply_curator_identity(site, {"curie": "ONT:1", "name": "epidermis", "taxon": None},
                            identity_keys=(*KEYS, "taxon"), id_key="curie", label_key="name",
-                           actor_id="curator-7", at=AT)
+                           actor_id="curator-7", actor_display_name="curator-7", at=AT)
     envelope = _envelope_with({"site": site})
     from src.lib.domain_packs.materialization import _CuratorOverrides, _curator_override_disagreements
 
@@ -848,3 +848,24 @@ def test_no_disagreement_for_a_key_the_override_holds_empty():
     )
     item = ValidatorResultMaterializationInput(match=match, request=request, result=result)
     assert _curator_override_disagreements(item, overrides, source_envelope_revision=None) == []
+
+
+def test_an_override_records_the_curators_display_name():
+    """N2: the override record and its audit carry who by id and by display name."""
+
+    envelope = _staged_envelope()
+    result = apply_curator_field_patch(
+        envelope, _pack(),
+        EnvelopeFieldPatch(envelope_id=envelope.envelope_id, expected_revision=1, object_id="obs-1",
+                           field_path="site.curie", before={"curie": None, "name": None},
+                           value={"curie": "ONT:1", "name": "epidermis"}, operation=IDENTITY),
+        current_revision=1, actor_id="0f3c-sub", actor_display_name="Dana Curator",
+    )
+    obj = result.envelope.extracted_objects[0]
+    record = obj.payload["site"]["curator_override"]
+    assert (record["actor_id"], record["actor_display_name"]) == ("0f3c-sub", "Dana Curator")
+    [audit] = obj.metadata[CURATOR_OVERRIDE_METADATA_KEY]
+    assert audit["actor_display_name"] == "Dana Curator"
+    with pytest.raises(ResolvableValueError, match="records who"):
+        check_resolvable_value({**obj.payload["site"], "curator_override": {**record, "actor_display_name": ""}},
+                               identity_keys=KEYS)

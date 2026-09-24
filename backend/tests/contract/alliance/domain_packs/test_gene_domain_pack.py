@@ -902,7 +902,7 @@ def _curator_patch(envelope, field_path, value, *, before, identity=False):
             ),
         ),
         current_revision=1,
-        actor_id="curator-7",
+        actor_id="curator-7", actor_display_name="curator-7",
     )
 
 
