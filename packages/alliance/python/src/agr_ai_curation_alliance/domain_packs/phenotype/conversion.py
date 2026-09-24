@@ -397,16 +397,15 @@ def _phenotype_term_payload(
     *,
     term_mention: str,
     term_curie: str | None,
-    term_label: str | None,
     source_mentions: Sequence[str],
     ontology_lookup_hint: Mapping[str, str],
 ) -> dict[str, Any]:
-    """The staged phenotype term: paper wording, extractor proposals, no validated identity."""
+    """The staged phenotype term: paper wording, a term ID the paper prints, no validated identity."""
 
     return staged_value(
         term_mention,
         identity_keys=PHENOTYPE_TERM_IDENTITY_KEYS,
-        proposals={"curie": term_curie, "label": term_label},
+        proposals={"curie": term_curie},
         source_mentions=list(source_mentions),
         ontology_lookup_hint=dict(ontology_lookup_hint),
     )
@@ -886,7 +885,6 @@ def materialize_phenotype_builder_state(
         term_payload = _phenotype_term_payload(
             term_mention=term_mention,
             term_curie=_clean_text(staged_fields.get("term_curie")),
-            term_label=_clean_text(staged_fields.get("term_label")),
             source_mentions=source_mentions,
             ontology_lookup_hint=ontology_lookup_hint,
         )

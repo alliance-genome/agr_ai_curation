@@ -64,5 +64,33 @@
     "reason": "PE-21. The template flags a '~1500-char' search-context size claim as a deletion; the pre-rewrite phenotype prompt contains NO such size claim. Recorded as a deleted no-op entry for parity with the worked examples so the deletion ledger is explicit; nothing was actually present to remove.",
     "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<search_context>",
     "new_home": ""
+  },
+  {
+    "phrase": "Do not call broad curation lookup tools to resolve phenotype terms or subject entities",
+    "category": "deleted",
+    "reason": "PE-29. Extraction never searches a database for an identity (Chris, 2026-09-24): the lookup tools were removed from the extractor and the validators do all identity search. The extractor has no lookup tools left, so the narrower no-broad-lookup rule is replaced by the no-search rule in <validator_handoff>.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<validator_handoff>",
+    "new_home": ""
+  },
+  {
+    "phrase": "The ONE exception is experimental-condition grounding",
+    "category": "deleted",
+    "reason": "PE-30. Extraction never searches a database for an identity (Chris, 2026-09-24): the lookup tools were removed from the extractor and the validators do all identity search. There is no condition-grounding exception any more; condition parts are staged as paper wording (plus an ID only when the paper prints it) and the condition validator searches.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<validator_handoff>",
+    "new_home": ""
+  },
+  {
+    "phrase": "GROUND the CURIE with the lookup tools",
+    "category": "deleted",
+    "reason": "PE-52. Extraction never searches a database for an identity (Chris, 2026-09-24): the lookup tools were removed from the extractor and the validators do all identity search. The ZECO grounding instruction and its no-guessing caveat go; the paper-printed-ID rule replaces them.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<experimental_condition_rules>",
+    "new_home": ""
+  },
+  {
+    "phrase": "the phenotype-term proposals when the paper supports them: `term_label`",
+    "category": "deleted",
+    "reason": "PE-24. Extraction never searches a database for an identity (Chris, 2026-09-24): the lookup tools were removed from the extractor and the validators do all identity search. A proposed phenotype term name is not paper data, so the term_label staging input was removed; the phenotype ontology validator searches with the paper wording.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<output_and_handoff_contract>",
+    "new_home": ""
   }
 ]

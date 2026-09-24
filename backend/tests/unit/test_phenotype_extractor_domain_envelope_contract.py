@@ -494,9 +494,6 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
         "update_recorded_evidence_metadata",
         "get_agent_contract",
         "agr_species_context_lookup",
-        "search_domain_field_terms",
-        "inspect_ontology_term",
-        "resolve_domain_field_term",
         "stage_phenotype_observation",
         "patch_phenotype_observation",
         "discard_phenotype_observation",
@@ -513,7 +510,9 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
     assert "agr_species_context_lookup" in prompt_content
     assert "active validator bindings own" in prompt_content
     assert "agr_curation_query" not in agent_data["tools"]
-    assert "broad curation lookup tools" in prompt_content
+    # Extraction never searches a database for an identity (2026-09-24); validators do.
+    assert "you never search a database for an identity" in prompt_content
+    assert "search_domain_field_terms" not in prompt_content
     # The core_generated runtime contract was slimmed (Phase A) to action-relevant
     # lines only. The envelope-object dump, schema/provider refs, and the
     # ``->{binding_id}`` suffix on validator-bound fields are no longer inlined --

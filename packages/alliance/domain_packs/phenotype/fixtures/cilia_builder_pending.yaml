@@ -72,7 +72,6 @@ fixtures:
           data_provider: WB
           taxon_id: NCBITaxon:6239
           evidence_record_id: evidence-cilia-1
-        proposed_label: abnormal sensory cilium morphology
         curie: null
         label: null
         mention: truncated sensory cilia
@@ -157,7 +156,6 @@ fixtures:
             data_provider: WB
             taxon_id: NCBITaxon:6239
             evidence_record_id: evidence-cilia-1
-          proposed_label: abnormal sensory cilium morphology
           curie: null
           label: null
           mention: truncated sensory cilia

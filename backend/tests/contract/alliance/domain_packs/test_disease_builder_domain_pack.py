@@ -23,6 +23,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
@@ -38,6 +39,8 @@ from src.lib.openai_agents.extraction_builder_workspace import (
 from src.schemas.domain_envelope import field_path_exists
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
+# Identity lookups belong to validators; extraction never searches a database (2026-09-24).
+_IDENTITY_LOOKUP_TOOLS = {"search_domain_field_terms", "inspect_ontology_term", "resolve_domain_field_term"}
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
 if str(ALLIANCE_PYTHON_SRC) not in sys.path:
     sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
@@ -78,7 +81,6 @@ def _staged_fields(subject_type: str = "gene", subject_identifier: str = "FB:FBg
         "object_type": DISEASE_OBJECT_TYPE,
         "pending_ref_id": "disease-annotation-1",
         "mention": "Alzheimer's disease",
-        "disease_name": "Alzheimer's disease",
         "disease_curie": "DOID:10652",
         "role": "model_context",
         "confidence": "high",
@@ -205,7 +207,6 @@ def test_disease_builder_materializes_concrete_gene_subtype():
     assert payload_obj["disease_annotation_object"] == _staged(
         "Alzheimer's disease",
         proposed_curie="DOID:10652",
-        proposed_name="Alzheimer's disease",
         curie=None,
         name=None,
     )
@@ -593,12 +594,10 @@ def test_disease_extractor_agent_has_no_output_schema_and_builder_tools():
     tools = set(agent["tools"])
     assert "stage_disease_observation" in tools
     assert "finalize_disease_extraction" in tools
-    # Experimental-condition grounding tools (same as gene_expression's extractor).
-    assert {
-        "search_domain_field_terms",
-        "inspect_ontology_term",
-        "resolve_domain_field_term",
-    } <= tools
+    # Extraction never searches a database for an identity (2026-09-24); only species
+    # context lookup stays.
+    assert _IDENTITY_LOOKUP_TOOLS.isdisjoint(tools)
+    assert "agr_species_context_lookup" in tools
     assert "DiseaseExtractionResultEnvelope" not in str(agent.get("output_schema"))
 
 
@@ -712,7 +711,6 @@ def _stage_kwargs(**overrides: Any) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "pending_ref_id": "disease-annotation-1",
         "mention": "Alzheimer's disease",
-        "disease_name": "Alzheimer's disease",
         "role": "model_context",
         "confidence": "high",
         "data_provider": "FB",
@@ -922,7 +920,6 @@ def test_disease_term_name_is_never_filled_from_the_paper_mention():
     name stays empty; the paper mention never becomes the term name."""
 
     staged = _staged_fields()
-    staged.pop("disease_name")
     staged.pop("disease_curie")
 
     result = _materialize_staged(staged)
@@ -1054,7 +1051,10 @@ def test_stage_disease_tool_documents_paper_wording_for_every_resolvable_input()
     properties = stage_disease_observation.params_json_schema["properties"]
     assert "as the paper words it" in properties["mention"]["description"]
     assert "as the paper names it" in properties["subject_label"]["description"]
-    assert "propose" in properties["disease_name"]["description"]
+    # Extraction never proposes a term name; an ID is recorded only when the paper prints it.
+    assert "disease_name" not in properties
+    assert "paper itself prints" in properties["disease_curie"]["description"]
+    assert "paper itself prints" in properties["subject_identifier"]["description"]
 
 
 def _staged_contract_value_paths(node: Any, path: str = "") -> list[str]:
@@ -1113,3 +1113,36 @@ def test_structural_subject_and_term_references_are_not_resolvable_values():
         assert declared_resolvable_fields(metadata, object_type) == {}
         assert not has_resolution_state(by_type[object_type]["payload"])
     assert by_type[DISEASE_SUBJECT_OBJECT_TYPE]["payload"] == {"mention": "Appl"}
+
+
+# --- Extraction never searches a database (2026-09-24) -------------------------------------------
+
+
+def test_disease_staging_takes_no_proposed_term_name_or_identity(monkeypatch):
+    """Extraction records paper wording plus IDs the paper prints; it never stages a proposed
+    term name or a validated identity key."""
+
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    for extra in ({"disease_name": "Alzheimer's disease"}, {"curie": "DOID:10652"}):
+        with pytest.raises(TypeError):
+            tools._stage_disease_observation_impl(**_stage_kwargs(**extra))
+    candidate_id = tools._stage_disease_observation_impl(
+        **_stage_kwargs(disease_curie="DOID:10652")
+    ).data["candidate_id"]
+
+    patched = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[{"field_path": "disease_name", "string_value": "Alzheimer's disease"}],
+    )
+    assert patched.status == "error"
+    staged = workspace.candidates[candidate_id].staged_fields
+    assert "disease_name" not in staged
+
+    term = next(
+        obj["payload"]["disease_annotation_object"]
+        for obj in _materialize_staged(dict(staged)).payload["curatable_objects"]
+        if "disease_annotation_object" in obj["payload"]
+    )
+    assert (term["proposed_curie"], term["curie"], term["name"]) == ("DOID:10652", None, None)
+    assert (term["resolution_state"], term["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_VALIDATED)

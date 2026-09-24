@@ -738,7 +738,8 @@
     "limitations": [
       "Requires an uploaded PDF document \u2014 cannot extract diseases from chat text alone",
       "Distinguishes diseases from phenotypes \u2014 observable traits in model organisms are phenotypes, not diseases",
-      "Diseases mentioned only in introduction/background without new experimental findings are excluded"
+      "Diseases mentioned only in introduction/background without new experimental findings are excluded",
+      "Does not look anything up in the Alliance database: it records the paper's wording, plus an ID only when the paper prints one, and the validators find the official term and subject"
     ],
     "note": "",
     "summary": "Extracts experimentally supported disease associations from uploaded PDFs, classifying disease roles and gene-disease relationship types for Alliance curation.",
@@ -1731,7 +1732,8 @@
     ],
     "limitations": [
       "Requires an uploaded PDF document \u2014 cannot extract phenotypes from chat text alone",
-      "Wild-type/control observations are baselines, not phenotype assertions"
+      "Wild-type/control observations are baselines, not phenotype assertions",
+      "Does not look anything up in the Alliance database: it records the paper's wording, plus an ID only when the paper prints one, and the validators find the official term and subject"
     ],
     "note": "",
     "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence.",

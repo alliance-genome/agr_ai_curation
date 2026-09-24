@@ -35,3 +35,4 @@ limitations:
   - "Requires an uploaded PDF document — cannot extract diseases from chat text alone"
   - "Distinguishes diseases from phenotypes — observable traits in model organisms are phenotypes, not diseases"
   - "Diseases mentioned only in introduction/background without new experimental findings are excluded"
+  - "Does not look anything up in the Alliance database: it records the paper's wording, plus an ID only when the paper prints one, and the validators find the official term and subject"
