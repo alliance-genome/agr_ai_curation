@@ -595,12 +595,15 @@ def _resolvable_value_paths(payload: Mapping[str, Any], resolvable_fields: Mappi
     object-root value covers its identity and contract keys.
     """
 
-    from src.lib.domain_packs.resolvable_values import CONTRACT_KEYS
+    from src.lib.domain_packs.resolvable_values import CONTRACT_KEYS, MENTION_KEY
 
     covered: list[str] = []
     for declared, spec in resolvable_fields.items():
         if not declared:
-            covered.extend((*spec.identity_keys, *CONTRACT_KEYS))
+            # The value's own paper-wording key, whatever the pack names it.
+            covered.extend((
+                *spec.identity_keys, spec.mention_key, *(key for key in CONTRACT_KEYS if key != MENTION_KEY),
+            ))
             continue
         tokens = path_tokens(declared)
         if tokens is not None:
@@ -3306,22 +3309,22 @@ def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[int, list[tupl
                 continue
             for key in _object_keys(row):
                 direct[key].append(tokens)
+        # A referenced object flags a referencing cell only by findings on its plain
+        # fields; its resolvable values read their own state (ALL-1283 contract section 3).
+        plain = {
+            key: [
+                finding for finding in findings
+                if not _covered_relatives((finding,), _covered_paths(artifact, key), ())
+            ]
+            for key, findings in direct.items()
+        }
         for row in artifact.rows_by_source.get("object") or []:
             paths: list[tuple[Any, ...]] = []
             for key in _object_keys(row):
-                # A declared resolvable value reads its own state (ALL-1283 contract
-                # section 3): no finding relabels its cells.
-                covered = [
-                    tokens for path in artifact.resolvable_value_paths.get(key, [])
-                    if (tokens := path_tokens(path)) is not None
-                ]
-                paths.extend(
-                    finding for finding in direct.get(key, [])
-                    if not any(tuple(finding[: len(value)]) == tuple(value) for value in covered)
-                )
+                paths.extend(direct.get(key, []))
                 for field_path, ref_keys in artifact.object_ref_links.get(key, {}).items():
                     tokens = path_tokens(field_path)
-                    flagged = [position for position, ref in enumerate(ref_keys) if direct.get(ref)]
+                    flagged = [position for position, ref in enumerate(ref_keys) if plain.get(ref)]
                     if tokens is None or not flagged:
                         continue
                     if isinstance(tokens[-1], int):
@@ -3337,31 +3340,77 @@ def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[int, list[tupl
     return by_row
 
 
+def _resolvable_paths_by_row(bundle: FlowOutputArtifactBundle) -> dict[int, list[tuple[Any, ...]]]:
+    """Payload paths each object row's declared resolvable values cover (keyed by ``id(row)``)."""
+
+    by_row: dict[int, list[tuple[Any, ...]]] = {}
+    for artifact in bundle.artifacts:
+        for row in artifact.rows_by_source.get("object") or []:
+            covered = [path for key in _object_keys(row) for path in _covered_paths(artifact, key)]
+            if covered:
+                by_row[id(row)] = covered
+    return by_row
+
+
+def _covered_paths(artifact: FlowOutputArtifact, object_key: str) -> list[tuple[Any, ...]]:
+    return [
+        tokens for path in artifact.resolvable_value_paths.get(object_key, [])
+        if (tokens := path_tokens(path)) is not None
+    ]
+
+
+def _covered_relatives(
+    finding_paths: Sequence[tuple[Any, ...]], covered: Sequence[tuple[Any, ...]], target: tuple[Any, ...],
+) -> list[tuple[Any, ...]]:
+    """The finding paths (relative to ``target``) that touch a declared resolvable value.
+
+    A finding touches a value when it names the value, a part of it, or an
+    ancestor (a whole list of values, a parent object).
+    """
+
+    covered_relative = [
+        relative for path in covered if (relative := relative_finding_path(path, target)) is not None
+    ]
+    touched = []
+    for finding in finding_paths:
+        relative = relative_finding_path(finding, target)
+        if relative is not None and any(
+            relative[: len(value)] == value or value[: len(relative)] == relative for value in covered_relative
+        ):
+            touched.append(relative)
+    return touched
+
+
 def _unresolved_for(
     finding_paths: Sequence[tuple[Any, ...]], payload_path: str | None,
+    covered: Sequence[tuple[Any, ...]] = (),
 ) -> frozenset[tuple[Any, ...]]:
     """Open finding paths relative to the value a column reads.
 
     Indexed findings map onto fanned-out columns by position, so the marker
-    lands on the unresolved element.
+    lands on the unresolved element. A finding touching a declared resolvable
+    value (``covered``) marks none of its cells: the value reads its own
+    state (ALL-1283 contract section 3).
     """
 
     target = path_tokens(payload_path) if payload_path else None
     if target is None:
         return frozenset()
+    touched = set(_covered_relatives(finding_paths, covered, target))
     return frozenset(
         relative
         for finding in finding_paths
-        if (relative := relative_finding_path(finding, target)) is not None
+        if (relative := relative_finding_path(finding, target)) is not None and relative not in touched
     )
 
 
 def _display_renderer(
     specs: Mapping[str, Any],
     finding_paths: Sequence[tuple[Any, ...]],
+    covered: Sequence[tuple[Any, ...]] = (),
 ) -> ValueRenderer:
     def render(field_ref: str, value: Any, index: int | None, *, nested: bool = False) -> str:
-        unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref))
+        unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref), covered)
         if index is not None:
             # One split_list item: the findings on that position, or on every position.
             unresolved = frozenset(
@@ -3457,6 +3506,7 @@ def apply_projection_plan(
         return display_text(value, specs.get(field_ref), marked=False, nested=nested)
 
     open_paths = _open_finding_paths(bundle) if display and plan.row_source == "object" else {}
+    covered_paths = _resolvable_paths_by_row(bundle) if open_paths else {}
     # Split lists are sized by the longest list across all filtered rows.
     output_columns, split_items = (
         _expand_split_columns(columns, rows)
@@ -3467,7 +3517,11 @@ def apply_projection_plan(
     preserve_empty = plan.selection_mode == "selected_fields"
     projected_rows = []
     for row in limited_rows:
-        render = _display_renderer(specs, open_paths.get(id(row), [])) if display else None
+        render = (
+            _display_renderer(specs, open_paths.get(id(row), []), covered_paths.get(id(row), []))
+            if display
+            else None
+        )
         base = _project_row(
             row,
             base_columns,

@@ -1471,8 +1471,8 @@ def test_validator_result_materialization_is_deterministic_for_existing_referenc
 @pytest.mark.parametrize(("lookup_outcome", "classification"), [
     # The lookup outcome says why the fields are missing; it decides.
     ("not_found", "not_found"),
-    # Lookups that succeeded but left fields unfilled: an incomplete result.
-    ("success", "missing_expected_result_field"),
+    # Lookups that found something the validator rejected, filling nothing.
+    ("success", "rejected_candidates"),
 ])
 def test_unresolved_validator_result_materializes_missing_field_finding(lookup_outcome, classification):
     metadata = _validator_metadata()
