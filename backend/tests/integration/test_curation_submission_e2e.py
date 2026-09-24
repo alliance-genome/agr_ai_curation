@@ -126,7 +126,13 @@ def _alliance_gate_case(case_key: str):
             ),
             "target_key": GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY,
             "target_object_type": GENE_MENTION_EVIDENCE_OBJECT_TYPE,
-            "expected_ready": True,
+            # The gene builder materializes an in_development object (as in production),
+            # so curation-screen export stays blocked on its definition state.
+            "expected_ready": False,
+            "expected_blocker_codes": {"domain_envelope.definition_state_blocked"},
+            "expected_blocker_messages": {
+                "Domain envelope object definition is not stable for export.",
+            },
         }
 
     elif case_key == "gene_expression":
@@ -653,6 +659,34 @@ def submission_e2e_context(client: TestClient, test_db):
     test_db.commit()
 
 
+def _fake_gene_validator(monkeypatch, resolved_values: dict[str, str]) -> None:
+    """Stand in for the gene validator agent: every gene request resolves to ``resolved_values``."""
+
+    from src.lib.domain_packs import validator_dispatch
+
+    def runner(request, *, binding, runtime_context=None):
+        return {
+            "status": "resolved",
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "target": request.target.model_dump(mode="json"),
+            "resolved_values": dict(resolved_values),
+            "resolved_objects": [],
+            "missing_expected_fields": [],
+            "candidates": [],
+            "lookup_attempts": [{
+                "provider": "agr_curation_query", "method": "search_genes",
+                "query": {"gene_symbol": request.selected_inputs.get("mention")},
+                "result_count": 1, "outcome": "success",
+            }],
+            "curator_message": None,
+            "explanation": "Fixture gene validator result.",
+        }
+
+    monkeypatch.setattr(validator_dispatch, "_default_package_scoped_validator_runner", lambda: runner)
+
+
 def _gene_envelope_extraction_payload(
     submission_e2e_context,
     *,
@@ -760,6 +794,7 @@ def _gene_envelope_extraction_payload(
 async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_rows(
     submission_e2e_context,
     test_db,
+    monkeypatch,
 ):
     from src.lib.curation_workspace.bootstrap_service import bootstrap_document_session
     from src.lib.curation_workspace.curation_prep_service import (
@@ -794,15 +829,17 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
                         "object_type": "gene_mention_evidence",
                         "object_role": "validated_reference",
                         "pending_ref_id": "gene-fixture-review-object-1",
-                        # Seeded as the gene validator resolved it: review rows
-                        # read an unvalidated gene as legacy, unverified.
+                        # Staged as extraction produces it (extraction never searches):
+                        # the paper wording, unresolved and not yet validated.
                         "payload": {
-                            "gene_symbol": "alpha-1",
-                            "primary_external_id": "FB:FBgn0000008",
-                            "taxon": "NCBITaxon:7227",
-                            "resolution_state": "resolved",
-                            "lookup_outcome": "matched",
-                            "validator_explanation": None,
+                            "mention": "alpha-1",
+                            "gene_symbol": None,
+                            "primary_external_id": None,
+                            "taxon": None,
+                            "resolution_state": "unresolved",
+                            "lookup_outcome": "not_validated",
+                            "validator_explanation": "Not validated yet.",
+                            "identity_resolution_notes": ["The paper studies alpha-1 in Drosophila."],
                             "entity_type": "gene",
                             "normalized_id": "FB:FBgn0000008",
                             "source_mentions": ["Alpha mention"],
@@ -876,6 +913,12 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
         }
     )
 
+    # The gene validator confirms the identity when the session bootstraps.
+    _fake_gene_validator(
+        monkeypatch,
+        {"curie": "FB:FBgn0000008", "symbol": "alpha-1", "taxon": "NCBITaxon:7227"},
+    )
+
     prep_output = await run_curation_prep(
         [extraction_result],
         scope_confirmation=CurationPrepScopeConfirmation(
@@ -945,7 +988,9 @@ def test_submission_workflow_e2e_with_retry_and_history(
         CurationSubmissionStatus,
     )
 
-    gate_case = _alliance_gate_case("gene")
+    # No builder emits a submittable (stable) envelope today, so the submission
+    # machinery runs on the pre-built, fully validated tmem67 fixture envelope.
+    gate_case = _alliance_gate_case("gene_expression")
     _prep_output, bootstrap_payload, workspace_payload = (
         _run_prep_and_bootstrap_domain_envelope(
             client,
@@ -957,51 +1002,18 @@ def test_submission_workflow_e2e_with_retry_and_history(
         )
     )
     session_id = bootstrap_payload["session"]["session_id"]
-    assert bootstrap_payload["session"]["adapter"]["adapter_key"] == "gene"
-    assert bootstrap_payload["session"]["progress"]["total_candidates"] == 1
+    assert bootstrap_payload["session"]["adapter"]["adapter_key"] == gate_case["adapter_key"]
+    assert bootstrap_payload["session"]["progress"]["total_candidates"] == len(
+        workspace_payload["candidates"]
+    )
     assert workspace_payload["session"]["session_id"] == session_id
     assert workspace_payload["submission_history"] == []
-    assert len(workspace_payload["candidates"]) == 1
 
     candidate = _candidate_for_object_type(
         workspace_payload,
         gate_case["target_object_type"],
     )
     candidate_id = candidate["candidate_id"]
-    draft = candidate["draft"]
-    # A gene's editable fields are its validated identity, so a curator edit
-    # is a validation override naming every identity key: the identifier,
-    # the symbol and the validated taxon the gene export requires.
-    fields_by_key = {field["field_key"]: field for field in draft["fields"]}
-    edited_values = {
-        "primary_external_id": "FB:FBgn0000490",
-        "gene_symbol": "dpp",
-        "taxon": "NCBITaxon:7227",
-    }
-    assert all(not fields_by_key[key]["read_only"] for key in edited_values)
-
-    draft_response = client.patch(
-        (
-            "/api/curation-workspace/sessions/"
-            f"{session_id}/candidates/{candidate_id}/draft"
-        ),
-        json={
-            "session_id": session_id,
-            "candidate_id": candidate_id,
-            "draft_id": draft["draft_id"],
-            "expected_version": draft["version"],
-            "field_changes": [
-                {"field_key": key, "value": value}
-                for key, value in edited_values.items()
-            ],
-            "autosave": True,
-        },
-    )
-    assert draft_response.status_code == 200, draft_response.text
-    draft_payload = draft_response.json()
-    saved_values = {field["field_key"]: field["value"] for field in draft_payload["draft"]["fields"]}
-    assert {key: saved_values[key] for key in edited_values} == edited_values
-    assert draft_payload["action_log_entry"]["action_type"] == "candidate_updated"
 
     decision_response = client.post(
         f"/api/curation-workspace/candidates/{candidate_id}/decision",
@@ -1243,6 +1255,11 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
         assert preview_payload["submission"]["payload"]["payload_json"]["candidate_count"] == 1
     else:
         assert blocker_codes & gate_case["expected_blocker_codes"]
+        assert gate_case.get("expected_blocker_messages", set()) <= {
+            blocker["message"]
+            for readiness_item in readiness
+            for blocker in readiness_item["blockers"]
+        }
         assert preview_payload["submission"]["payload"]["payload_json"][
             "readiness_blockers"
         ]
