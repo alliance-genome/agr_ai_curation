@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -72,8 +73,6 @@ from agr_ai_curation_alliance.domain_packs.gene_expression.export import (  # no
 )
 from agr_ai_curation_alliance.domain_packs.gene_expression.resolvable import (  # noqa: E402
     GENE_EXPRESSION_RESOLVABLE_VALUES,
-    data_provider_value,
-    resolver_selected_value,
     staged_value,
 )
 
@@ -812,7 +811,8 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
     assert stage_request.target.field_path == (
         "expression_pattern.when_expressed.developmental_stage_start"
     )
-    # The validator looks up the paper wording, not the stage statement column.
+    # The validator looks up the paper wording, not the stage statement column. Its species
+    # context is the extractor's data provider, before the data-provider validator runs.
     assert stage_request.selected_inputs == {
         "label": "TS26 embryos",
         "data_provider": "MGI",
@@ -834,8 +834,8 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
     assert anatomy_request.target.field_path == (
         "expression_pattern.where_expressed.anatomical_structure"
     )
+    # No ID in the paper for the anatomy: the validator searches with the wording alone.
     assert anatomy_request.selected_inputs == {
-        "curie": "EMAPA:17373",
         "label": "metanephros",
         "data_provider": "MGI",
         "ontology_family": "anatomy",
@@ -1018,10 +1018,10 @@ def test_gene_expression_relation_identity_materializes_from_validator_result():
     match = _active_binding_match(envelope, "relation_vocabulary_validation")
     request = build_domain_validation_request(match).request
     assert request is not None
-    # The vocabulary lookup reads the extractor's wording, not a pre-filled term name.
+    # The vocabulary lookup reads the extractor's chosen term name (its mention).
     assert request.selected_inputs == {
         "vocabulary": "Expression Relation",
-        "term_name": "expression was detected",
+        "term_name": "is_expressed_in",
     }
     assert request.expected_result_fields == {
         "term_name": "relation.name",
@@ -1051,7 +1051,7 @@ def test_gene_expression_relation_identity_materializes_from_validator_result():
 
     relation = result.envelope.extracted_objects[0].payload["relation"]
     assert relation == _validated(
-        "expression was detected",
+        "is_expressed_in",
         name="is_expressed_in",
         vocabulary="Expression Relation",
         id=12345,
@@ -1162,15 +1162,22 @@ def test_gene_expression_assay_unresolved_outcomes_stay_field_addressed(
     )
 
     assert result.materialized_objects == ()
-    # A decisive lookup outcome overrules the builder's pre-filled assay; nothing else changes.
-    payload = copy.deepcopy(result.envelope.extracted_objects[0].payload)
-    assay = payload["expression_experiment"].pop("expression_assay_used")
-    assert (assay["resolution_state"], assay["lookup_outcome"], assay["curie"], assay["overruled_curie"]) == (
-        "unresolved", expected_status, None, "MMO:0000655",
+    # The staged assay records the validator's outcome; its paper wording and every other
+    # value are untouched.
+    before = envelope.extracted_objects[0].payload
+    after = result.envelope.extracted_objects[0].payload
+    assay = after["expression_experiment"]["expression_assay_used"]
+    assert (assay["curie"], assay["name"], assay["resolution_state"], assay["lookup_outcome"]) == (
+        None, None, "unresolved", expected_status,
     )
-    original = copy.deepcopy(envelope.extracted_objects[0].payload)
-    original["expression_experiment"].pop("expression_assay_used")
-    assert payload == original
+    assert "overruled_curie" not in assay
+    assert assay["mention"] == "reverse transcription polymerase chain reaction assay"
+    assert assay["validator_curator_message"] == "Assay label requires curator review."
+    unchanged = copy.deepcopy(after)
+    unchanged["expression_experiment"]["expression_assay_used"] = before["expression_experiment"][
+        "expression_assay_used"
+    ]
+    assert unchanged == before
     finding = result.appended_findings[0]
     assert finding.code == "domain_pack.validator_unresolved"
     assert finding.details["failure_classification"] == expected_status
@@ -1621,7 +1628,13 @@ def test_gene_expression_context_ontology_unresolved_outcomes_stay_field_address
     lookup_outcome: str,
     expected_status: str,
 ):
+    # An anatomy term an earlier validation resolved, validated again.
     envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    payload["expression_pattern"]["where_expressed"]["anatomical_structure"] = _validated(
+        "metanephros", curie="EMAPA:17373", name="metanephros"
+    )
+    envelope = _with_payload(envelope, payload)
     match = _active_binding_match(
         envelope,
         "expression_anatomical_structure_validation",
@@ -1657,8 +1670,8 @@ def test_gene_expression_context_ontology_unresolved_outcomes_stay_field_address
     )
 
     assert result.materialized_objects == ()
-    # The validator overrules the builder's resolved anatomy term: the identity is kept only
-    # as overruled_* hints, the paper wording is untouched and nothing else changes.
+    # A decisive outcome overrules the earlier resolution: the identity is kept only as
+    # overruled_* hints, the paper wording is untouched and nothing else changes.
     before = envelope.extracted_objects[0].payload
     after = result.envelope.extracted_objects[0].payload
     site_before = before["expression_pattern"]["where_expressed"]["anatomical_structure"]
@@ -2155,8 +2168,11 @@ def test_gene_expression_linkml_validator_reports_relation_missing_and_invalid()
     assert missing_finding.details["expected_vocabulary"] == "Expression Relation"
     assert missing_finding.details["expected_values"] == ["is_expressed_in"]
 
+    # A relation a validator resolved to a term outside the Expression Relation options.
     invalid_payload = copy.deepcopy(envelope.extracted_objects[0].payload)
-    invalid_payload["relation"]["name"] = "expressed_in"
+    invalid_payload["relation"] = _validated(
+        "is_expressed_in", name="expressed_in", vocabulary="Expression Relation", id=1
+    )
 
     invalid_finding = _finding_by_code(
         validate_pending_gene_expression_envelope(
@@ -2171,10 +2187,13 @@ def test_gene_expression_linkml_validator_reports_relation_missing_and_invalid()
 
 def test_gene_expression_linkml_validator_reports_invalid_and_ambiguous_assay():
     envelope = _converted_tmem67_envelope()
+    # An assay a validator resolved to something that is not a CURIE.
     invalid_payload = copy.deepcopy(envelope.extracted_objects[0].payload)
-    invalid_payload["expression_experiment"]["expression_assay_used"][
-        "curie"
-    ] = "not-a-curie"
+    invalid_payload["expression_experiment"]["expression_assay_used"] = _validated(
+        "reverse transcription polymerase chain reaction assay",
+        curie="not-a-curie",
+        name="reverse transcription polymerase chain reaction assay",
+    )
 
     invalid_finding = _finding_by_code(
         validate_pending_gene_expression_envelope(
@@ -2666,118 +2685,45 @@ def _gene_expression_builder_evidence_records() -> list[dict[str, Any]]:
     ]
 
 
-def _resolver_helper_selection(
-    *,
-    field_path: str,
-    source_phrase: str,
-    selected_value: str,
-    term_source: dict[str, Any],
-    selected_name: str | None = None,
-    selected_curie: str | None = None,
-) -> dict[str, Any]:
-    """A resolve_domain_field_term provenance entry in the shape staging copies into staged state.
-
-    Mirrors ``agr_curation._resolver_helper_selection`` so the materializer's resolver-provenance
-    guard (``_has_helper_selection``) accepts the grounded controlled fields.
-    """
-
-    selection = {
-        "field_path": field_path,
-        "source_tool": "resolve_domain_field_term",
-        "authority": "selector_evidence",
-        "lookup_status": "success",
-        "source_phrase": source_phrase,
-        "term_source": term_source,
-        "selected_value": selected_value,
-        "selected_name": selected_name or selected_value,
-    }
-    if selected_curie:
-        selection["selected_curie"] = selected_curie
-    return selection
-
-
 def _gene_expression_builder_staged_fields(**overrides: Any) -> dict[str, Any]:
-    """Grounded staged-field shape the gene_expression builder writes after staging.
+    """The staged-field shape the gene_expression builder writes after staging.
 
-    Mirrors what ``_stage_payload_from_gene_expression_input`` produces: the subject and reference as
-    paper wording (UNRESOLVED until their validators run), the looked-up data provider, the
-    resolver-backed controlled fields (relation / assay / stage / anatomy) and the matching
-    ``metadata.provenance.helper_selections[]`` evidence the materializer's resolver-provenance guard
-    requires. Tests append the flat staged ``condition_relations`` via overrides; the materializer
-    rewrites those into the concrete nested annotation payload the active bindings read.
+    Mirrors what ``_stage_payload_from_gene_expression_input`` produces: every value is the
+    paper's wording, not yet validated (extraction never searches); validators supply each
+    identity later. Tests append the flat staged ``condition_relations`` via overrides; the
+    materializer rewrites those into the concrete nested annotation payload the active bindings
+    read.
     """
 
-    selections = {
-        "relation": _resolver_helper_selection(
-            field_path="relation.name",
-            source_phrase="expressed in",
-            selected_value="is_expressed_in",
-            term_source={
-                "kind": "controlled_vocabulary",
-                "vocabulary": "Expression Relation",
-            },
-        ),
-        "assay": _resolver_helper_selection(
-            field_path="expression_experiment.expression_assay_used",
-            source_phrase="GFP reporter assay",
-            selected_value="MMO:0000655",
-            selected_name="GFP reporter assay",
-            selected_curie="MMO:0000655",
-            term_source={"kind": "ontology", "ontology_family": "assay"},
-        ),
-        "stage": _resolver_helper_selection(
-            field_path="expression_pattern.when_expressed.developmental_stage_start",
-            source_phrase="L2 larva",
-            selected_value="WBls:0000024",
-            selected_name="L2 larva",
-            selected_curie="WBls:0000024",
-            term_source={"kind": "ontology", "ontology_family": "life_stage"},
-        ),
-        "anatomy": _resolver_helper_selection(
-            field_path="expression_pattern.where_expressed.anatomical_structure",
-            source_phrase="cilium",
-            selected_value="WBbt:0001234",
-            selected_name="cilium",
-            selected_curie="WBbt:0001234",
-            term_source={"kind": "ontology", "ontology_family": "anatomy"},
-        ),
-    }
     staged: dict[str, Any] = {
         "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
         "object_type": GENE_EXPRESSION_OBJECT_TYPE,
         "pending_ref_id": "gene-expression-annotation-pef-1",
         "where_expressed_statement": "PEF-1::GFP expression in the cilium",
         "rationale": "Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
-        "data_provider": data_provider_value("WB", "WB"),
-        "relation": resolver_selected_value("relation", "expressed in", selections["relation"]),
+        "data_provider": staged_value("data_provider", "WB"),
+        "relation": staged_value("relation", "is_expressed_in"),
         "expression_annotation_subject": staged_value("expression_annotation_subject", "pef-1"),
         "single_reference": staged_value(
             "single_reference", "PMID 39550471", pmid="PMID:39550471"
         ),
         "expression_experiment": {
-            "expression_assay_used": resolver_selected_value(
-                "expression_experiment.expression_assay_used",
-                "GFP reporter",
-                selections["assay"],
+            "expression_assay_used": staged_value(
+                "expression_experiment.expression_assay_used", "GFP reporter"
             ),
         },
         "expression_pattern": {
             "when_expressed": {
-                "developmental_stage_start": resolver_selected_value(
-                    "expression_pattern.when_expressed.developmental_stage_start",
-                    "L2 larvae",
-                    selections["stage"],
+                "developmental_stage_start": staged_value(
+                    "expression_pattern.when_expressed.developmental_stage_start", "L2 larvae"
                 ),
             },
             "where_expressed": {
-                "anatomical_structure": resolver_selected_value(
-                    "expression_pattern.where_expressed.anatomical_structure",
-                    "cilia",
-                    selections["anatomy"],
+                "anatomical_structure": staged_value(
+                    "expression_pattern.where_expressed.anatomical_structure", "cilia"
                 ),
             },
         },
-        "metadata": {"provenance": {"helper_selections": list(selections.values())}},
     }
     staged.update(overrides)
     return staged
@@ -2823,7 +2769,6 @@ def _materialize_gene_expression_candidate(staged_fields: dict[str, Any]) -> Any
         workspace=workspace,
         candidate_ids=["gex-candidate-1"],
         evidence_records=_gene_expression_builder_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
 
@@ -2842,10 +2787,6 @@ def test_builder_preserves_unresolved_selectors_as_pending_blocked_observation(s
         )
     else:
         staged["expression_pattern"].pop("where_expressed")
-    staged["metadata"]["provenance"]["helper_selections"] = [
-        selection for selection in staged["metadata"]["provenance"]["helper_selections"]
-        if selection["field_path"] != anatomy_path
-    ]
     result = _materialize_gene_expression_candidate(staged)
     assert result.ok, result.issues
     envelope = gene_expression_extraction_output_to_pending_envelope(
@@ -2913,10 +2854,6 @@ def test_builder_preserves_missing_stage_with_submission_blocker():
     staged = _gene_expression_builder_staged_fields()
     staged["expression_pattern"].pop("when_expressed")
     staged["where_expressed_statement"] += " Stage hint: long-pec."
-    staged["metadata"]["provenance"]["helper_selections"] = [
-        selection for selection in staged["metadata"]["provenance"]["helper_selections"]
-        if selection["field_path"] != "expression_pattern.when_expressed.developmental_stage_start"
-    ]
     result = _materialize_gene_expression_candidate(staged)
     assert result.ok, result.issues
     envelope = gene_expression_extraction_output_to_pending_envelope(
@@ -3038,10 +2975,88 @@ def test_stated_stage_that_stays_unresolved_blocks_export():
     }
 
 
+def test_a_demoted_stage_blocks_export_instead_of_exporting_a_blank_stage_name():
+    """Review S2: a stage the validator demotes empties the stage name (LinkML requires it).
+
+    The export stops with curator-facing blockers on both; it never writes a row with an
+    empty or stale stageName.
+    """
+
+    from agr_ai_curation_alliance.domain_packs.gene_expression import (
+        GENE_EXPRESSION_TARGET_KEY,
+        GeneExpressionExportAdapter,
+        GeneExpressionExportValidationError,
+    )
+    from src.schemas.curation_workspace import SubmissionMode
+
+    stage_path = "expression_pattern.when_expressed.developmental_stage_start"
+    envelope = _with_staged_stage(_converted_tmem67_envelope(), "TS26 embryos")
+
+    def validate(envelope: Any, **result: Any):
+        match = _active_binding_match(envelope, "expression_stage_ontology_validation")
+        request = build_domain_validation_request(match).request
+        assert request is not None
+        return materialize_validator_results_into_envelope(
+            envelope,
+            _gene_expression_pack().metadata,
+            [
+                ValidatorResultMaterializationInput(
+                    match=match, request=request, result=_validator_result(request, **result)
+                )
+            ],
+        ).envelope
+
+    confirmed = validate(
+        envelope,
+        status="resolved",
+        resolved_values={"curie": "FIXTURE_STAGE:00026", "name": "Theiler stage 26"},
+    )
+    assert confirmed.extracted_objects[0].payload["when_expressed_stage_name"] == "Theiler stage 26"
+
+    demoted = validate(
+        confirmed,
+        status="unresolved",
+        missing_expected_fields=[],
+        lookup_outcome="not_found",
+        candidates=[],
+        curator_message="No stage term matches the paper's wording.",
+    )
+    payload = demoted.extracted_objects[0].payload
+    stage = payload["expression_pattern"]["when_expressed"]["developmental_stage_start"]
+    assert (stage["resolution_state"], stage["lookup_outcome"]) == ("unresolved", "not_found")
+    assert payload["when_expressed_stage_name"] is None
+
+    candidate = _exportable_candidate(stage, payload["when_expressed_stage_name"])
+    blockers = {blocker.field_path: blocker for blocker in gene_expression_export_blockers(candidate)}
+    assert {path: blocker.code for path, blocker in blockers.items()} == {
+        stage_path: "alliance.gene_expression.value_unresolved",
+        "when_expressed_stage_name": "alliance.gene_expression.required_field_missing",
+    }
+    assert blockers["when_expressed_stage_name"].message == (
+        "The stage name is empty. It is filled in when the stage term is confirmed; if the "
+        "stage term stays unconfirmed, or the paper states no stage, enter the stage name."
+    )
+    with pytest.raises(GeneExpressionExportValidationError):
+        GeneExpressionExportAdapter().build_submission_payload(
+            mode=SubmissionMode.EXPORT,
+            target_key=GENE_EXPRESSION_TARGET_KEY,
+            payload_context={
+                "session_id": "session-gene-expression",
+                "candidate_ids": [candidate["candidate_id"]],
+                "candidate_count": 1,
+                "candidates": [],
+                "domain_envelope_candidates": [candidate],
+                "domain_envelopes": [],
+                "readiness_blockers": [],
+                "warnings": [],
+            },
+        )
+
+
 @pytest.mark.parametrize(
     ("field_path", "value"),
     [
-        # A resolved value needs the resolver call that matched it.
+        # Extraction never supplies an identity: a value staged resolved is rejected.
         (
             "expression_pattern.where_expressed.anatomical_structure",
             {
@@ -3102,7 +3117,6 @@ def test_gene_expression_builder_rejects_object_level_only_evidence():
         workspace=workspace,
         candidate_ids=["gex-candidate-1"],
         evidence_records=object_level_evidence,
-        resolver_entry_lookup=None,
     )
 
     assert not result.ok
@@ -3808,7 +3822,7 @@ def test_a_stage_override_is_the_exported_stage_name():
         (f"{_ANATOMY}.mention", "residual body", _RESIDUAL_BODY),
         (f"{_ANATOMY}.lookup_outcome", "matched", "not_validated"),
         (f"{_ANATOMY}.resolution_state", "resolved", "unresolved"),
-        ("data_provider.abbreviation", "ZFIN", "MGI"),
+        ("data_provider.abbreviation", "ZFIN", None),
     ],
 )
 def test_curators_cannot_edit_the_paper_wording_the_validation_state_or_the_data_provider(
@@ -3856,10 +3870,38 @@ def test_non_pinned_bindings_read_the_paper_wording_and_pinned_bindings_are_unch
     assert bindings["subject_gene_validation"]["input_fields"]["gene_symbol"]["path"] == (
         "expression_annotation_subject.mention"
     )
-    # Hash-pinned and unchanged: it reads its pmid/doi lookup inputs.
-    assert bindings["source_reference_validation"]["input_fields"]["pmid"]["path"] == (
-        "single_reference.pmid"
+    # Extraction never searches: a validator checks only an ID the paper states.
+    for binding_id, value_path in (
+        ("expression_assay_ontology_validation", "expression_experiment.expression_assay_used"),
+        ("expression_anatomical_structure_validation", _ANATOMY),
+        (
+            "expression_anatomical_uberon_slim_validation",
+            "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        ),
+        ("expression_cellular_component_validation", "expression_pattern.where_expressed.cellular_component"),
+        (
+            "expression_cellular_component_qualifier_validation",
+            "expression_pattern.where_expressed.cellular_component_qualifiers",
+        ),
+    ):
+        assert bindings[binding_id]["input_fields"]["curie"]["path"] == f"{value_path}.proposed_curie"
+    assert bindings["subject_gene_validation"]["input_fields"]["gene_id"]["path"] == (
+        "expression_annotation_subject.proposed_primary_external_id"
     )
+    # Species context is the extractor's data provider (from the paper or the species lookup).
+    for binding_id, input_name in (
+        ("subject_gene_validation", "data_provider"),
+        ("expression_stage_ontology_validation", "data_provider"),
+        ("expression_anatomical_structure_validation", "data_provider"),
+        ("experimental_condition_validation", "data_provider_abbreviation"),
+    ):
+        assert bindings[binding_id]["input_fields"][input_name]["path"] == "data_provider.mention"
+    # Hash-pinned and byte-identical: saved profile mappings pin sha256(binding.raw).
+    from src.schemas.generic_extraction_profile import canonical_json
+
+    assert hashlib.sha256(
+        canonical_json(bindings["source_reference_validation"]).encode()
+    ).hexdigest() == "3f1fe77b42cf5ddd8fb7121c56bd3f66b9473a8aeb14efc359c7a90528742e11"
     # No flat top-level scalar is a validator write target.
     expected_paths = [
         path
@@ -4010,8 +4052,10 @@ def _revalidate(envelope: Any, results: Mapping[str, Mapping[str, Any]]):
 def test_legacy_tmem67_record_exports_those_values_a_matching_revalidation_verified():
     """Core (i): a matching re-validation verifies a legacy record's values, mirrors included.
 
-    Values whose binding reads only the paper wording (relation, data provider, stage)
-    cannot be looked up again on a record stored without it, so they stay legacy.
+    Validators read the paper wording and any ID the paper states. A record stored before
+    the contract has neither for its subject, terms, relation and data provider, so those
+    cannot be looked up again and stay legacy until the paper is extracted again. The
+    reference binding also reads the stored reference ID, so the references re-validate.
     """
 
     envelope = _legacy_tmem67_envelope()
@@ -4019,37 +4063,16 @@ def test_legacy_tmem67_record_exports_those_values_a_matching_revalidation_verif
         blocker.field_path
         for blocker in gene_expression_export_blockers(_export_candidate(envelope.extracted_objects[0]))
     }
-    verified_paths = {
-        "expression_annotation_subject",
-        "expression_experiment.entity_assayed",
-        "single_reference",
-        "expression_experiment.single_reference",
-        "expression_pattern.where_expressed.anatomical_structure_uberon_terms[0]",
-        "expression_experiment.expression_assay_used",
-        "expression_pattern.where_expressed.anatomical_structure",
-    }
+    verified_paths = {"single_reference", "expression_experiment.single_reference"}
     assert verified_paths <= before
 
     result = _revalidate(
         envelope,
         {
-            "subject_gene_validation": {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"},
             "source_reference_validation": {
                 "reference_id": 203506,
                 "curie": "AGRKB:101000000232912",
                 "title": "Tmem67 expression",
-            },
-            "expression_anatomical_uberon_slim_validation": {
-                "curie": "UBERON:0001008",
-                "name": "renal system",
-            },
-            "expression_assay_ontology_validation": {
-                "curie": "MMO:0000655",
-                "name": "reverse transcription polymerase chain reaction assay",
-            },
-            "expression_anatomical_structure_validation": {
-                "curie": "EMAPA:17373",
-                "name": "metanephros",
             },
         },
     )
@@ -4061,20 +4084,30 @@ def test_legacy_tmem67_record_exports_those_values_a_matching_revalidation_verif
         )
     }
     assert verified_paths.isdisjoint(after)
-    assert after == {
-        "data_provider": "alliance.gene_expression.value_unresolved",
-        "relation": "alliance.gene_expression.value_unresolved",
+    unverifiable = {
+        "expression_annotation_subject": "subject_gene_validation",
+        "data_provider": "data_provider_validation",
+        "relation": "relation_vocabulary_validation",
         "expression_pattern.when_expressed.developmental_stage_start": (
-            "alliance.gene_expression.value_unresolved"
+            "expression_stage_ontology_validation"
+        ),
+        "expression_experiment.expression_assay_used": "expression_assay_ontology_validation",
+        "expression_pattern.where_expressed.anatomical_structure": (
+            "expression_anatomical_structure_validation"
+        ),
+        "expression_pattern.where_expressed.anatomical_structure_uberon_terms[0]": (
+            "expression_anatomical_uberon_slim_validation"
         ),
     }
-    # Their bindings read the paper wording, which a legacy record never stored.
+    assert after == {
+        **{path: "alliance.gene_expression.value_unresolved" for path in unverifiable},
+        # The experiment's copy of the subject follows the subject.
+        "expression_experiment.entity_assayed": "alliance.gene_expression.value_unresolved",
+    }
+    # Their bindings read the paper wording (and a paper-stated ID), which a legacy record
+    # never stored.
     registry = _gene_expression_validation_registry()
-    for binding_id in (
-        "data_provider_validation",
-        "relation_vocabulary_validation",
-        "expression_stage_ontology_validation",
-    ):
+    for binding_id in unverifiable.values():
         assert all(
             build_domain_validation_request(match).request is None
             for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])

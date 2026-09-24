@@ -229,9 +229,9 @@ def _tmem67_gene_expression_envelope(*, envelope_id: str):
 def _with_tmem67_validator_results(envelope):
     """The extracted values as their validators resolve them (ALL-1283).
 
-    The extractor stages the subject gene, the reference, the stage and the
-    UBERON slim term as paper wording; export needs each one resolved, as the
-    gene, reference and ontology validators do in a real run.
+    The extractor stages every value as paper wording (extraction never searches);
+    export needs each one resolved, as the data-provider, gene, reference,
+    vocabulary and ontology validators do in a real run.
     """
 
     from src.lib.domain_packs.resolvable_values import mark_resolved
@@ -240,6 +240,16 @@ def _with_tmem67_validator_results(envelope):
     payload = copy.deepcopy(annotation.payload)
     experiment = payload["expression_experiment"]
     resolved = [
+        (payload["data_provider"], {"abbreviation": "MGI"}),
+        (payload["relation"], {"name": "is_expressed_in", "vocabulary": "Expression Relation", "id": 200000200}),
+        (
+            experiment["expression_assay_used"],
+            {"curie": "MMO:0000655", "name": "reverse transcription polymerase chain reaction assay"},
+        ),
+        (
+            payload["expression_pattern"]["where_expressed"]["anatomical_structure"],
+            {"curie": "EMAPA:17373", "name": "metanephros"},
+        ),
         (payload["expression_annotation_subject"], {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"}),
         (experiment["entity_assayed"], {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"}),
         (payload["single_reference"], {"reference_id": 203506}),

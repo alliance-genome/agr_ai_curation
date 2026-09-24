@@ -82,5 +82,54 @@
     "reason": "ALL-1283 (extracted vs validated values). The builder now stores every controlled value as the paper's wording (`mention`) beside its validated identity; an unmatched term is staged UNRESOLVED with selected_value null instead of being parked in metadata/provenance, the data provider and stage wording are stage parameters, and subject/reference are passed as paper wording only. The old phrase described the removed behavior; its replacement phrase is in gene_expression.txt.",
     "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
     "new_home": ""
+  },
+  {
+    "phrase": "use the three-step domain-field resolver workflow declared by the domain pack",
+    "category": "deleted",
+    "reason": "Chris, 2026-09-24 (extraction never searches): extraction agents read the paper and never search a database; validators do all identity search. The gene-expression extractor no longer has the search/inspect/resolve tools, so this resolver-workflow rule has no subject.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "`resolve_domain_field_term` before writing any final controlled selector.",
+    "category": "deleted",
+    "reason": "Chris, 2026-09-24 (extraction never searches): extraction agents read the paper and never search a database; validators do all identity search. The gene-expression extractor no longer has the search/inspect/resolve tools, so this resolver-workflow rule has no subject.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "Only `resolve_domain_field_term` output may justify setting a controlled selector",
+    "category": "deleted",
+    "reason": "Chris, 2026-09-24 (extraction never searches): extraction agents read the paper and never search a database; validators do all identity search. The gene-expression extractor no longer has the search/inspect/resolve tools, so this resolver-workflow rule has no subject.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "Use `slot_hint` values to decide whether a site label belongs under `anatomical_structure` or `cellular_component`.",
+    "category": "deleted",
+    "reason": "Chris, 2026-09-24 (extraction never searches): extraction agents read the paper and never search a database; validators do all identity search. The gene-expression extractor no longer has the search/inspect/resolve tools, so this resolver-workflow rule has no subject.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "call `resolve_domain_field_term` for `relation.name` before staging and use only its returned resolved value as `selected_value`.",
+    "category": "deleted",
+    "reason": "Chris, 2026-09-24 (extraction never searches): extraction agents read the paper and never search a database; validators do all identity search. The gene-expression extractor no longer has the search/inspect/resolve tools, so this resolver-workflow rule has no subject.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "The backend records resolver outputs into `metadata.provenance.helper_selections[]`; do not author `helper_selections` yourself.",
+    "category": "deleted",
+    "reason": "Chris, 2026-09-24 (extraction never searches): extraction agents read the paper and never search a database; validators do all identity search. The gene-expression extractor no longer has the search/inspect/resolve tools, so this resolver-workflow rule has no subject.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
+  },
+  {
+    "phrase": "run the resolver loop: `search_domain_field_terms` for candidates",
+    "category": "deleted",
+    "reason": "Chris, 2026-09-24 (extraction never searches): extraction agents read the paper and never search a database; validators do all identity search. The gene-expression extractor no longer has the search/inspect/resolve tools, so this resolver-workflow rule has no subject.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml",
+    "new_home": ""
   }
 ]

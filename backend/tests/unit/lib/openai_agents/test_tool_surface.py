@@ -1040,18 +1040,16 @@ def test_gene_expression_extractor_visible_surface_golden():
     assert surface.eager_names == (
         "search_document", "read_chunk", "read_section", "read_subsection",
         "record_evidence", "list_recorded_evidence", "get_agent_contract",
-        "search_domain_field_terms", "resolve_domain_field_term",
         "stage_gene_expression_observation", "list_staged_gene_expression_observations",
         "finalize_gene_expression_extraction",
     )
     assert surface.namespace_names == (
-        "evidence_maintenance", "reference_data_lookup",
-        "ontology_term_lookup", "staged_object_corrections",
+        "evidence_maintenance", "reference_data_lookup", "staged_object_corrections",
     )
     assert surface.deferred_names == (
         "get_recorded_evidence", "attach_evidence_to_object", "detach_evidence_from_object",
         "discard_recorded_evidence", "update_recorded_evidence_metadata",
-        "agr_species_context_lookup", "inspect_ontology_term",
+        "agr_species_context_lookup",
         "patch_gene_expression_observation", "discard_gene_expression_observation",
         "find_staged_gene_expression_observations",
     )

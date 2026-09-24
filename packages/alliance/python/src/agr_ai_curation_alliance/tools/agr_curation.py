@@ -53,17 +53,11 @@ from agr_ai_curation_runtime.extraction_builder import (
 )
 from agr_ai_curation_runtime.evidence_workspace import get_active_evidence_records_snapshot
 from agr_ai_curation_runtime.extraction_trace_events import write_extraction_trace_event
-from agr_ai_curation_runtime.resolver_call_ledger import (
-    ResolverCallLedgerEntry,
-    get_active_resolver_call_ledger,
-)
 from agr_ai_curation_alliance.domain_packs.gene_expression import (
     GENE_EXPRESSION_MATERIALIZER_ID,
     materialize_gene_expression_builder_state,
 )
 from agr_ai_curation_alliance.domain_packs.gene_expression.resolvable import (
-    data_provider_value as gene_expression_data_provider_value,
-    resolver_selected_value as resolver_selected_gene_expression_value,
     staged_value as staged_gene_expression_value,
 )
 from agr_ai_curation_runtime.tool_result_bounds import (
@@ -177,6 +171,24 @@ _GENE_EXPRESSION_CONTROLLED_TARGETS: Dict[str, Tuple[str, bool]] = {
         True,
     ),
 }
+# Controlled fields that name an ontology term; only these may carry a CURIE the paper states.
+# The others (relation, stage slim terms) are fixed choices named by their term name.
+_GENE_EXPRESSION_ONTOLOGY_CONTROLLED_FIELD_PATHS = frozenset(
+    {
+        "expression_experiment.expression_assay_used",
+        "expression_pattern.when_expressed.developmental_stage_start",
+        "expression_pattern.where_expressed.anatomical_structure",
+        "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        "expression_pattern.where_expressed.cellular_component",
+        "expression_pattern.where_expressed.cellular_component_qualifiers",
+    }
+)
+_PROPOSED_CURIE_DESCRIPTION = (
+    "An ontology ID the paper itself prints for this value (for example 'WBbt:0005733'); "
+    "null unless the paper states it. Only for ontology fields (assay, stage, anatomy, "
+    "cellular component), never for the relation or a stage slim term. It is a proposal "
+    "the validator checks, never the validated value; do not look one up or recall one."
+)
 # The values a patch update replaces as a whole, by the paper wording it carries.
 _GENE_EXPRESSION_MENTION_PATCH_TARGETS = {
     "subject": "expression_annotation_subject",
@@ -206,8 +218,8 @@ class ExperimentalConditionInput(_StrictToolModel):
     """One experimental condition the extractor read from the paper.
 
     Each condition part (class, specific condition, chemical, taxon) is staged with its paper
-    wording in ``<part>_mention``; a CURIE found with the term-helper lookup tools goes in
-    ``<part>_curie`` as a proposal the condition validator checks. A part with a CURIE but no
+    wording in ``<part>_mention``; a CURIE the paper itself prints goes in ``<part>_curie`` as a
+    proposal the condition validator checks (never look one up). A part with a CURIE but no
     paper wording is rejected. Every field is sparse — stage only what the paper explicitly
     states. The condition carries no quote text: the validator reads the annotation's
     evidence_record_ids (the spans the condition was read from) per the evidence contract.
@@ -222,25 +234,25 @@ class ExperimentalConditionInput(_StrictToolModel):
         description="The kind of experimental variable as the paper words it (for example 'chemical treatment').",
     )
     condition_class_curie: Optional[StrictStr] = Field(
-        description="Proposed ZECO class ID for that wording, from the term lookup tools; a validator confirms it.",
+        description="A ZECO class ID the paper itself prints for that wording, or null; a validator checks it.",
     )
     condition_id_mention: Optional[StrictStr] = Field(
         description="The specific condition as the paper words it, when stated.",
     )
     condition_id_curie: Optional[StrictStr] = Field(
-        description="Proposed ZECO/XCO ID for the specific condition; a validator confirms it.",
+        description="A ZECO/XCO ID the paper itself prints for the specific condition, or null; a validator checks it.",
     )
     condition_chemical_mention: Optional[StrictStr] = Field(
         description="The chemical as the paper names it, when a chemical treatment is stated.",
     )
     condition_chemical_curie: Optional[StrictStr] = Field(
-        description="Proposed ChEBI ID for the chemical; a validator confirms it.",
+        description="A ChEBI ID the paper itself prints for the chemical, or null; a validator checks it.",
     )
     condition_taxon_mention: Optional[StrictStr] = Field(
         description="The organism as the paper names it, only when the condition involves a distinct organism.",
     )
     condition_taxon_curie: Optional[StrictStr] = Field(
-        description="Proposed NCBITaxon ID for that organism; a validator confirms it.",
+        description="An NCBITaxon ID the paper itself prints for that organism, or null; a validator checks it.",
     )
     condition_free_text: Optional[StrictStr]
     condition_summary: Optional[StrictStr]
@@ -284,7 +296,14 @@ class GeneExpressionSubjectInput(_StrictToolModel):
         description=(
             "The gene whose expression was observed, written as the paper names it "
             "(for example 'pef-1'). The subject-gene validator looks it up; do not "
-            "supply a gene ID or a normalized symbol of your own."
+            "supply a normalized symbol of your own."
+        )
+    )
+    proposed_primary_external_id: Optional[StrictStr] = Field(
+        description=(
+            "A gene ID the paper itself prints for this gene (for example 'WBGene00003914'); "
+            "null unless the paper states it. It is a proposal the validator checks, never the "
+            "validated gene; do not look one up or recall one."
         )
     )
 
@@ -316,38 +335,43 @@ class GeneExpressionControlledFieldInput(_StrictToolModel):
     mention: StrictStr = Field(
         description=(
             "The paper's own wording for this value (for example 'structures associated "
-            "with the residual body'); for a fixed-choice field such as a stage slim term, "
-            "the term name you chose. Always required, whether or not a term matched."
+            "with the residual body'); for a fixed-choice field (the relation or a stage slim "
+            "term), the allowed term name you chose. Always required. The value stays "
+            "UNRESOLVED until its validator looks it up."
         )
     )
-    selected_value: Optional[StrictStr] = Field(
-        description=(
-            "The resolved value returned by resolve_domain_field_term for this field_path "
-            "(a CURIE such as 'WBbt:0005733', or a vocabulary term such as 'is_expressed_in'), "
-            "from a resolve call whose source_phrase was this same mention. "
-            "Pass null when no term matched: the value is kept as UNRESOLVED with its paper "
-            "wording, and its validator looks it up."
-        )
-    )
+    proposed_curie: Optional[StrictStr] = Field(description=_PROPOSED_CURIE_DESCRIPTION)
 
     @field_validator("mention")
     @classmethod
     def _non_empty_mention(cls, value: str) -> str:
         return _non_empty_text(value)
 
+    @model_validator(mode="after")
+    def _curie_only_on_ontology_fields(self) -> "GeneExpressionControlledFieldInput":
+        _check_proposed_curie(self.field_path, self.proposed_curie)
+        return self
+
+
+def _check_proposed_curie(field_path: str, proposed_curie: Optional[str]) -> None:
+    if _clean_string(proposed_curie) and field_path not in _GENE_EXPRESSION_ONTOLOGY_CONTROLLED_FIELD_PATHS:
+        raise ValueError(
+            f"{field_path} is a fixed choice named by its term name; pass proposed_curie null"
+        )
+
 
 class GeneExpressionPatchUpdateInput(_StrictToolModel):
     field_path: GeneExpressionPatchFieldPath
     string_value: Optional[StrictStr] = Field(
         description=(
-            "The new text. For subject, reference and data_provider it is the paper wording; "
-            "for a controlled field it is the resolved value from resolve_domain_field_term, "
-            "or null to keep the value UNRESOLVED."
+            "The new text for a plain field. For subject, reference and data_provider it is "
+            "the paper wording; null for a controlled field."
         )
     )
     mention: Optional[StrictStr] = Field(
         description="The paper's own wording, required for a controlled field; null otherwise."
     )
+    proposed_curie: Optional[StrictStr] = Field(description=_PROPOSED_CURIE_DESCRIPTION)
     evidence_record_ids: Optional[List[StrictStr]] = Field(min_length=1, max_length=20)
 
     @model_validator(mode="after")
@@ -357,7 +381,15 @@ class GeneExpressionPatchUpdateInput(_StrictToolModel):
                 raise ValueError(
                     "controlled field patches require the paper wording in mention"
                 )
+            if _clean_string(self.string_value):
+                raise ValueError(
+                    "controlled field patches carry the paper wording in mention; "
+                    "pass string_value null"
+                )
+            _check_proposed_curie(self.field_path, self.proposed_curie)
             return self
+        if _clean_string(self.proposed_curie):
+            raise ValueError(f"{self.field_path} takes no proposed_curie; pass null")
         if self.field_path == "evidence_record_ids":
             if not self.evidence_record_ids:
                 raise ValueError("evidence_record_ids patch requires evidence_record_ids")
@@ -5634,110 +5666,23 @@ def _model_validation_issues(exc: ValidationError) -> List[Dict[str, Any]]:
     ]
 
 
-def _resolver_entry_for_controlled_field(
-    *,
-    field_path: str,
-    selected_value: str,
-    mention: str,
-) -> Tuple[Optional[ResolverCallLedgerEntry], Optional[Dict[str, Any]]]:
-    """Verify provenance for a controlled field staged as resolved.
-
-    The agent stages ``selected_value`` -- the resolved value returned by
-    ``resolve_domain_field_term`` (e.g. ``WBbt:0006816``, ``is_expressed_in``) -- with the
-    paper wording it resolved. We look the matching resolver-call-ledger entry up by
-    (field_path, selected_value, wording) rather than asking the agent to thread the resolve
-    call's opaque runtime tool_call_id. A value claimed as resolved with no matching resolve
-    call for that wording has no provenance and is rejected (anti-hallucination); a value no
-    term matched is staged with ``selected_value`` null.
-    """
-    try:
-        ledger = get_active_resolver_call_ledger()
-    except RuntimeError as exc:
-        issue = {
-            "field_path": field_path,
-            "reason": "resolver_ledger_unavailable",
-            "message": str(exc),
-            "selected_value": selected_value,
-        }
-        return None, issue
-
-    entry = ledger.find_validated_selection(
-        field_path=field_path,
-        selected_value=selected_value,
-        source_phrase=mention,
-    )
-    if entry is None:
-        issue = {
-            "field_path": field_path,
-            "reason": "unresolved_selected_value",
-            "message": (
-                f"No resolve_domain_field_term call validated '{selected_value}' for {field_path} "
-                f"from the wording {mention!r}. Resolve with the same paper wording as "
-                "source_phrase that you stage as mention, or stage it with selected_value null "
-                "to keep it UNRESOLVED with its paper wording."
-            ),
-            "selected_value": selected_value,
-            "mention": mention,
-        }
-        _emit_gene_expression_builder_event(
-            "gene_expression_builder.missing_provenance_rejected",
-            action="resolver_lookup",
-            input_summary={"field_path": field_path, "selected_value": selected_value, "mention": mention},
-            output_summary=issue,
-            validation={"status": "failed", "issue": issue},
-        )
-        return None, issue
-
-    if entry.domain_pack_id != GENE_EXPRESSION_DOMAIN_PACK_ID or entry.object_type != GENE_EXPRESSION_OBJECT_TYPE:
-        issue = {
-            "field_path": field_path,
-            "reason": "resolver_scope_mismatch",
-            "message": "selected_value was not resolved for Alliance gene-expression annotations.",
-            "selected_value": selected_value,
-        }
-        return None, issue
-    return entry, None
-
-
 def _gene_expression_controlled_value(
     *,
     field_path: str,
     mention: str,
-    selected_value: Optional[str],
-) -> Tuple[Optional[Dict[str, Any]], Optional[ResolverCallLedgerEntry], Optional[Dict[str, Any]]]:
-    """Build one controlled field's stored value: (value, resolver entry, issue).
+    proposed_curie: Optional[str],
+) -> Dict[str, Any]:
+    """One controlled field's stored value: the paper wording, UNRESOLVED for its validator.
 
-    A value with a resolver selection is resolved from that selection; a value
-    no term matched is staged UNRESOLVED with its paper wording, for its
-    validator to look up. Either way the paper wording is kept.
+    A CURIE the paper itself states is kept as ``proposed_curie``, a validator
+    input only; extraction never supplies a validated identity.
     """
 
     target_path, _ = _GENE_EXPRESSION_CONTROLLED_TARGETS[field_path]
-    cleaned_value = _clean_string(selected_value)
-    if cleaned_value is None:
-        return staged_gene_expression_value(target_path, mention), None, None
-    entry, issue = _resolver_entry_for_controlled_field(
-        field_path=field_path,
-        selected_value=cleaned_value,
-        mention=mention,
-    )
-    if issue:
-        return None, None, issue
-    assert entry is not None
-    try:
-        value = resolver_selected_gene_expression_value(
-            target_path,
-            mention,
-            entry.helper_selection,
-        )
-    except ValueError as exc:
-        return None, None, {
-            "field_path": field_path,
-            "reason": "unusable_resolver_selection",
-            "message": str(exc),
-            "selected_value": cleaned_value,
-        }
-    return value, entry, None
+    cleaned_curie = _clean_string(proposed_curie)
+    if cleaned_curie is None:
+        return staged_gene_expression_value(target_path, mention)
+    return staged_gene_expression_value(target_path, mention, proposed_curie=cleaned_curie)
 
 
 def _place_gene_expression_controlled_value(
@@ -5751,27 +5696,6 @@ def _place_gene_expression_controlled_value(
         _append_dotted_payload_value(payload, target_path, value)
     else:
         _set_dotted_payload_value(payload, target_path, value)
-
-
-def _gene_expression_data_provider_value(mention: str) -> Dict[str, Any]:
-    """The extractor's data provider, resolved only by an exact Alliance provider match.
-
-    This is the same exact provider-list lookup the data-provider validator
-    starts from; anything short of one exact match stays UNRESOLVED for it.
-    """
-
-    result = _AGR_QUERY_CALLABLE(method="get_data_provider", abbreviation=mention)
-    matches = (
-        result.data.get("matches")
-        if result.status == "ok" and isinstance(result.data, Mapping)
-        else None
-    )
-    matched = (
-        matches[0].get("abbreviation")
-        if isinstance(matches, list) and len(matches) == 1 and isinstance(matches[0], Mapping)
-        else None
-    )
-    return gene_expression_data_provider_value(mention, matched)
 
 
 _PMID_REFERENCE_PATTERN = re.compile(r"PMID\s*:?\s*(\d+)", flags=re.IGNORECASE)
@@ -5798,9 +5722,20 @@ def _gene_expression_reference_value(mention: str) -> Dict[str, Any]:
     return staged_gene_expression_value("single_reference", mention, **lookup_inputs)
 
 
+def _gene_expression_subject_value(subject: GeneExpressionSubjectInput) -> Dict[str, Any]:
+    """The staged subject gene: its paper wording, plus a gene ID only when the paper prints one."""
+
+    proposed_id = _clean_string(subject.proposed_primary_external_id)
+    if proposed_id is None:
+        return staged_gene_expression_value("expression_annotation_subject", subject.mention)
+    return staged_gene_expression_value(
+        "expression_annotation_subject",
+        subject.mention,
+        proposed_primary_external_id=proposed_id,
+    )
+
+
 def _gene_expression_mention_value(target_path: str, mention: str) -> Dict[str, Any]:
-    if target_path == "data_provider":
-        return _gene_expression_data_provider_value(mention)
     if target_path == "single_reference":
         return _gene_expression_reference_value(mention)
     return staged_gene_expression_value(target_path, mention)
@@ -5875,7 +5810,6 @@ def _staged_condition_relations(
 def _stage_payload_from_gene_expression_input(
     stage_input: GeneExpressionStageInput,
     controlled_values: Sequence[Tuple[str, Dict[str, Any]]],
-    resolver_entries: List[ResolverCallLedgerEntry],
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
@@ -5883,19 +5817,9 @@ def _stage_payload_from_gene_expression_input(
         "pending_ref_id": stage_input.pending_ref_id,
         "where_expressed_statement": stage_input.where_expressed_statement,
         "rationale": stage_input.rationale,
-        "data_provider": _gene_expression_data_provider_value(stage_input.data_provider),
-        "expression_annotation_subject": staged_gene_expression_value(
-            "expression_annotation_subject",
-            stage_input.subject.mention,
-        ),
+        "data_provider": staged_gene_expression_value("data_provider", stage_input.data_provider),
+        "expression_annotation_subject": _gene_expression_subject_value(stage_input.subject),
         "single_reference": _gene_expression_reference_value(stage_input.reference.mention),
-        "metadata": {
-            "provenance": {
-                "helper_selections": [
-                    entry.provenance_selection() for entry in resolver_entries
-                ]
-            }
-        },
     }
     for field_path, value in controlled_values:
         _place_gene_expression_controlled_value(payload, field_path=field_path, value=value)
@@ -6214,22 +6138,22 @@ def _stage_gene_expression_observation_impl(
 ) -> AgrQueryResult:
     """Stage one gene-expression observation candidate through the builder workspace.
 
-    Every value keeps the paper's own wording. A controlled field whose term matched is
-    staged with the resolved value from ``resolve_domain_field_term``; one that no term
-    matched is still staged, with ``selected_value`` null, and is kept UNRESOLVED with its
-    paper wording for its validator to look up. Never drop a supported finding because a
-    term did not match. The stage is the developmental_stage_start controlled field: its
-    mention is the paper's stage wording; leave it out when the paper states no stage.
+    Every value is staged in the paper's own wording and stays UNRESOLVED until its
+    validator looks it up; extraction never looks up or supplies a validated identity. A
+    controlled field carries its wording as ``mention`` (for the relation or a stage slim
+    term, the allowed term name you chose) and, only when the paper itself prints one, the
+    ontology ID as ``proposed_curie``. The stage is the developmental_stage_start controlled
+    field: its mention is the paper's stage wording; leave it out when the paper states no
+    stage.
 
     ``condition_relations`` is required-but-nullable under the strict tool schema: pass ``null`` (or
-    ``[]``) when the paper states no experimental conditions; otherwise pass the grounded nested
+    ``[]``) when the paper states no experimental conditions; otherwise pass the nested
     ConditionRelation list (see ``<experimental_condition_rules>`` in the extractor prompt).
 
     Args:
         data_provider: The Alliance member database for the paper's organism, as its
-            abbreviation (for example ZFIN, MGI, FB, WB). It is confirmed against the Alliance
-            provider list; a value that does not match stays UNRESOLVED for the data-provider
-            validator.
+            abbreviation (for example ZFIN, MGI, FB, WB). The data-provider validator
+            confirms it against the Alliance provider list.
     """
 
     attempted_query = _attempt_query(
@@ -6276,7 +6200,6 @@ def _stage_gene_expression_observation_impl(
     if reference_issue:
         issues.append(reference_issue)
 
-    resolver_entries: List[ResolverCallLedgerEntry] = []
     controlled_values: List[Tuple[str, Dict[str, Any]]] = []
     single_valued_paths: set[str] = set()
     for controlled_field in stage_input.controlled_fields:
@@ -6292,18 +6215,16 @@ def _stage_gene_expression_observation_impl(
                 )
                 continue
             single_valued_paths.add(field_path)
-        value, entry, issue = _gene_expression_controlled_value(
-            field_path=field_path,
-            mention=controlled_field.mention,
-            selected_value=controlled_field.selected_value,
+        controlled_values.append(
+            (
+                field_path,
+                _gene_expression_controlled_value(
+                    field_path=field_path,
+                    mention=controlled_field.mention,
+                    proposed_curie=controlled_field.proposed_curie,
+                ),
+            )
         )
-        if issue:
-            issues.append(issue)
-            continue
-        assert value is not None
-        controlled_values.append((field_path, value))
-        if entry is not None:
-            resolver_entries.append(entry)
     if issues:
         return _gene_expression_validation_result(
             message="stage_gene_expression_observation rejected invalid builder input.",
@@ -6314,17 +6235,13 @@ def _stage_gene_expression_observation_impl(
 
     workspace = get_active_extraction_builder_workspace()
     candidate_id = _gene_expression_candidate_id(workspace, stage_input.pending_ref_id)
-    payload = _stage_payload_from_gene_expression_input(
-        stage_input,
-        controlled_values,
-        resolver_entries,
-    )
+    payload = _stage_payload_from_gene_expression_input(stage_input, controlled_values)
     candidate = workspace.upsert_candidate(
         candidate_id=candidate_id,
         staged_fields=payload,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
-        resolver_selection_refs=[entry.tool_call_id for entry in resolver_entries],
+        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -6352,12 +6269,13 @@ def _patch_gene_expression_observation_impl(
     """Patch enumerated fields on one staged gene-expression observation.
 
     Args:
-        updates: Field updates, each a field_path with its string_value, mention or
-            evidence_record_ids. subject, reference and data_provider take the new paper
-            wording in string_value and are looked up again. A controlled field takes its paper
-            wording in mention and the resolved value from resolve_domain_field_term in
-            string_value, or null to keep it UNRESOLVED; a list field gains one more value.
-            A `rationale` update must be non-empty; it cannot be cleared.
+        updates: Field updates, each a field_path with its string_value, mention,
+            proposed_curie or evidence_record_ids. subject, reference and data_provider take the
+            new paper wording in string_value. A controlled field takes its paper wording in
+            mention and, only when the paper prints one, its ontology ID in proposed_curie; a
+            list field gains one more value. Every patched value stays UNRESOLVED until its
+            validator looks it up. A `rationale` update must be non-empty; it cannot be
+            cleared.
     """
 
     attempted_query = _attempt_query(
@@ -6420,31 +6338,18 @@ def _patch_gene_expression_observation_impl(
 
     issues: List[Dict[str, Any]] = []
     payload = deepcopy(candidate.staged_fields)
-    resolver_refs = list(candidate.resolver_selection_refs)
     evidence_ids = list(candidate.evidence_record_ids)
-    helper_selections = (
-        payload.setdefault("metadata", {})
-        .setdefault("provenance", {})
-        .setdefault("helper_selections", [])
-    )
     for update in patch_input.updates:
         if update.field_path in _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS:
-            value, entry, issue = _gene_expression_controlled_value(
-                field_path=update.field_path,
-                mention=update.mention or "",
-                selected_value=update.string_value,
-            )
-            if issue:
-                issues.append(issue)
-                continue
-            assert value is not None
             _place_gene_expression_controlled_value(
-                payload, field_path=update.field_path, value=value
+                payload,
+                field_path=update.field_path,
+                value=_gene_expression_controlled_value(
+                    field_path=update.field_path,
+                    mention=update.mention or "",
+                    proposed_curie=update.proposed_curie,
+                ),
             )
-            if entry is not None:
-                helper_selections.append(entry.provenance_selection())
-                if entry.tool_call_id not in resolver_refs:
-                    resolver_refs.append(entry.tool_call_id)
             continue
         if update.field_path in _GENE_EXPRESSION_MENTION_PATCH_TARGETS:
             mention = update.string_value or ""
@@ -6481,7 +6386,7 @@ def _patch_gene_expression_observation_impl(
         staged_fields=payload,
         pending_ref_ids=candidate.pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=resolver_refs,
+        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -6679,6 +6584,9 @@ def _materialize_gene_expression_with_events(
 ) -> Any:
     """Domain materializer wrapper that emits gene-expression builder events.
 
+    ``resolver_entry_lookup`` is part of the shared finalize contract; gene
+    expression stages no resolver selections, so it is not used.
+
     This is the only gene-expression-specific step the generic builder-finalize
     orchestration calls. It wraps ``materialize_gene_expression_builder_state``
     with the pack's started/placeholder/validation/completed trace events so the
@@ -6698,7 +6606,6 @@ def _materialize_gene_expression_with_events(
         workspace=workspace,
         candidate_ids=candidate_id_list,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     for issue in materialization.issues:
         if issue.get("reason") != "placeholder_reference":
@@ -6778,20 +6685,16 @@ def _finalize_gene_expression_extraction_impl(
         # Missing run-scoped context is not recoverable; empty inputs become
         # explicit materialization validation issues downstream.
         evidence_records = []
-    try:
-        resolver_ledger = get_active_resolver_call_ledger()
-    except RuntimeError:
-        # Missing resolver ledger context surfaces as resolver provenance
-        # validation failures rather than a successful finalization.
-        resolver_ledger = None
 
+    # Extraction records the paper's wording only; validators look every value up.
     outcome = finalize_builder_extraction(
         workspace=workspace,
         candidate_ids=candidate_ids,
         materialize=_materialize_gene_expression_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_ledger.get if resolver_ledger is not None else None,
+        resolver_entry_lookup=None,
         materialized_candidate_prefix="gene-expression-envelope",
+        require_resolver_selections=False,
     )
 
     if not outcome.ok:

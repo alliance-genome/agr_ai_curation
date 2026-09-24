@@ -248,6 +248,13 @@ def build_gene_expression_export_payload(
     return _canonicalize(payload)
 
 
+# The stage name is filled from a confirmed stage term; without one a curator enters it.
+_STAGE_NAME_MISSING_MESSAGE = (
+    "The stage name is empty. It is filled in when the stage term is confirmed; if the "
+    "stage term stays unconfirmed, or the paper states no stage, enter the stage name."
+)
+
+
 def gene_expression_export_blockers(
     candidate: Mapping[str, Any],
 ) -> tuple[GeneExpressionExportBlocker, ...]:
@@ -354,7 +361,9 @@ def gene_expression_export_blockers(
                 blocker(
                     field_path,
                     "alliance.gene_expression.required_field_missing",
-                    f"Required gene-expression export field is missing: {field_path}.",
+                    _STAGE_NAME_MISSING_MESSAGE
+                    if field_path == "when_expressed_stage_name"
+                    else f"Required gene-expression export field is missing: {field_path}.",
                 )
             )
 
