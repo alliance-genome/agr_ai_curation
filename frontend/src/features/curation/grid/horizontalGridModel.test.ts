@@ -1141,6 +1141,35 @@ describe('buildHorizontalGridModel', () => {
     expect(model.rows[0]!.cells[0]!.resolution?.values[0]?.mention).toBe('abc-1 (legacy, unverified)')
   })
 
+  it('reads a legacy id seeded as null (the read-time value) as UNRESOLVED with its paper wording', () => {
+    // The review row's value is the read-time value, so an unverified legacy
+    // id is seeded as null; stored_identity keeps the raw id for an override.
+    const legacyValue = resolvedValue({
+      display_text: 'UNRESOLVED',
+      mention: 'gut (ONT:0000101) (legacy, unverified)',
+      resolution_state: 'unresolved',
+      lookup_outcome: 'legacy_unverified',
+      lookup_result: 'Legacy, unverified',
+      validator_explanation: 'Recorded before validation tracking; not verified.',
+      stored_identity: { curie: 'ONT:0000101', name: 'gut' },
+    })
+    const legacyCandidate = candidate({
+      id: 'candidate-legacy-null',
+      objectId: 'object-legacy-null',
+      order: 0,
+      fields: [draftField({ fieldKey: 'site-id', fieldPath: 'site.curie', label: 'Site ID', order: 0, value: null })],
+    })
+    const row = reviewRowWithFields('object-legacy-null', [
+      { path: 'site.curie', resolution: { display_text: 'UNRESOLVED', values: [legacyValue] } },
+    ])
+
+    const model = modelForRows([workspaceRow({ candidate: legacyCandidate, row })])
+
+    const [cell] = model.rows[0]!.cells
+    expect(cell).toMatchObject({ value: null, displayText: 'UNRESOLVED', overrideTargets: [legacyValue] })
+    expect(cell!.resolutionDetails[0]?.mention).toBe('gut (ONT:0000101) (legacy, unverified)')
+  })
+
   it('reads a saved curator edit from the regenerated review row, as a curator override', () => {
     const overridden = resolvedValue({
       display_text: 'midgut (ONT:0000555)',
