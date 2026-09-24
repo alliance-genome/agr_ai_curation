@@ -685,8 +685,8 @@ object_definitions:
         model_ref: DiseaseSubjectSnapshotPayload
         definition_notes:
         - The subject biological entity selects the concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation,
-          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active disease_subject_materialization
-          binding.
+          or AGMDiseaseAnnotation subtype (D1/D2). For concrete identity, the subject check routes the subject to the gene,
+          allele or AGM validator by subject type.
         metadata:
           validatable: true
           validator_binding_id: disease_subject_materialization
@@ -2051,8 +2051,8 @@ object_definitions:
         model_ref: DiseaseSubjectSnapshotPayload
         definition_notes:
         - The subject biological entity selects the concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation,
-          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active disease_subject_materialization
-          binding.
+          or AGMDiseaseAnnotation subtype (D1/D2). For concrete identity, the subject check routes the subject to the gene,
+          allele or AGM validator by subject type.
         metadata:
           validatable: true
           validator_binding_id: disease_subject_materialization
@@ -3408,8 +3408,8 @@ object_definitions:
         model_ref: DiseaseSubjectSnapshotPayload
         definition_notes:
         - The subject biological entity selects the concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation,
-          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active disease_subject_materialization
-          binding.
+          or AGMDiseaseAnnotation subtype (D1/D2). For concrete identity, the subject check routes the subject to the gene,
+          allele or AGM validator by subject type.
         metadata:
           validatable: true
           validator_binding_id: disease_subject_materialization
@@ -4767,8 +4767,8 @@ object_definitions:
         model_ref: DiseaseSubjectSnapshotPayload
         definition_notes:
         - The subject biological entity selects the concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation,
-          or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active disease_subject_materialization
-          binding.
+          or AGMDiseaseAnnotation subtype (D1/D2). For concrete identity, the subject check routes the subject to the gene,
+          allele or AGM validator by subject type.
         metadata:
           validatable: true
           validator_binding_id: disease_subject_materialization
