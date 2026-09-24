@@ -16,7 +16,7 @@ from src.lib.domain_packs.resolvable_values import (
     CONTRACT_KEYS, LOOKUP_OUTCOME_KEY, LOOKUP_OUTCOMES, MENTION_KEY, RESOLUTION_STATE_KEY,
     RESOLUTION_STATES, VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY,
     OVERRULED_KEY_PREFIX, ResolvableSpec, ResolvableValueError, apply_curator_identity,
-    check_resolvable_value, has_resolution_state, overruled_key, unresolved_value,
+    check_resolvable_value, has_resolution_state, overruled_key, typed_identity_input, unresolved_value,
 )
 from src.lib.openai_agents.config import (
     get_generic_profile_max_issues,
@@ -555,11 +555,12 @@ class ResolvedGenericProfile:
                 raise ProfileConformanceError([_patch_issue(
                     None, field_path, "Only the identifier and name can be changed in a curator override.")])
             # Every identity key the value carries goes to the override, as for pack values.
-            edits = {item_key: deepcopy(value[item_key]) for item_key in identity if item_key in value}
+            edits = {item_key: self._typed_identity(value_path, item_key, value[item_key], field_path)
+                     for item_key in identity if item_key in value}
             if all(item == container.get(item_key) for item_key, item in edits.items()):
                 edits = {}
         else:
-            edits = {key: deepcopy(value)}
+            edits = {key: self._typed_identity(value_path, key, value, field_path)}
         audit = None
         if edits:
             spec = self.resolvable_specs()[declared_value_path(value_path)]
@@ -573,6 +574,15 @@ class ResolvedGenericProfile:
             audit = {**audit, "value_path": value_path}
         self.require_attributes(result)
         return result, audit
+
+    def _typed_identity(self, value_path: str, key: str, value: Any, field_path: str) -> Any:
+        """A curator's entry for a numeric identity field, as that number (``typed_identity_input``)."""
+        schema = _declared_schema(self.contract.fields, f"{declared_value_path(value_path)}.{key}")
+        try:
+            return typed_identity_input(deepcopy(value), value_type=schema.kind if schema is not None else "",
+                                        label=key.replace("_", " "))
+        except ResolvableValueError as exc:
+            raise ProfileConformanceError([_patch_issue(None, field_path, str(exc))]) from exc
 
     def remove_curator_element(self, attributes: dict[str, Any], field_path: str, *, actor_id: str,
                                actor_display_name: str, at: str) -> tuple[dict[str, Any], dict[str, Any]]:

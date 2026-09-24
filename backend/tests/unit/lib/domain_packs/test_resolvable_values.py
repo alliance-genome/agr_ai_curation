@@ -1645,3 +1645,21 @@ def test_only_a_reading_counts_as_already_read():
     assert effective_value(claimed, spec, covered_by_validator=False)["lookup_outcome"] == "invalid_schema"
     reading = effective_payload({"site": {"curie": "DOID:1", "name": "d"}}, {"site": spec}, object_metadata=None)["site"]
     assert effective_value(reading, spec, covered_by_validator=False) == reading
+
+
+def test_a_numeric_identity_entry_is_parsed_as_its_declared_type():
+    from src.lib.domain_packs.resolvable_values import typed_identity_input
+
+    assert typed_identity_input(" 12 ", value_type="integer", label="Relation internal ID") == 12
+    assert typed_identity_input(12, value_type="integer", label="x") == 12
+    assert typed_identity_input("2.5", value_type="number", label="x") == 2.5
+    assert typed_identity_input("", value_type="integer", label="x") is None
+    assert typed_identity_input("ONT:1", value_type="string", label="x") == "ONT:1"
+    for value, value_type, message in (
+        ("12a", "integer", "Enter a whole number for the relation internal ID."),
+        ("2.5", "integer", "Enter a whole number for the relation internal ID."),
+        (True, "integer", "Enter a whole number for the relation internal ID."),
+        ("nan", "number", "Enter a number for the relation internal ID."),
+    ):
+        with pytest.raises(ResolvableValueError, match=f"^{message}$"):
+            typed_identity_input(value, value_type=value_type, label="Relation internal ID")

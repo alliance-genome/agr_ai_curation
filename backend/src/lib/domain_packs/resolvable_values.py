@@ -40,6 +40,8 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
+import re
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -673,6 +675,47 @@ def _resolution_snapshot(value: Mapping[str, Any], identity_keys: Sequence[str])
         if isinstance(key, str) and key.startswith(OVERRULED_KEY_PREFIX)
     )
     return snapshot
+
+
+_INTEGER_TEXT = re.compile(r"[+-]?[0-9]+")
+_NUMBER_TEXT = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def typed_identity_input(value: Any, *, value_type: str, label: str) -> Any:
+    """A curator's entry for a numeric identity field (``integer``/``number``), as that number.
+
+    Text is parsed (the review screen sends what the curator typed); empty
+    text is no value. Anything else that is not such a number is rejected
+    with a curator-facing message naming the field (``label``). Other value
+    types pass through unchanged.
+    """
+
+    if value_type not in ("integer", "number") or value is None:
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if value_type == "integer" and _INTEGER_TEXT.fullmatch(text):
+            return int(text)
+        if value_type == "number" and _NUMBER_TEXT.fullmatch(text):
+            number = float(text)
+            return int(number) if number.is_integer() and _INTEGER_TEXT.fullmatch(text) else number
+    elif not isinstance(value, bool) and (
+        isinstance(value, int) or (value_type == "number" and isinstance(value, float) and math.isfinite(value))
+    ):
+        return value
+    kind = "a whole number" if value_type == "integer" else "a number"
+    raise ResolvableValueError(f"Enter {kind} for the {_curator_label(label)}.")
+
+
+def _curator_label(label: str) -> str:
+    """A field's display name in running text: "Reference ID" -> "reference ID"."""
+
+    text = label.strip()
+    if len(text) > 1 and text[0].isupper() and not text[1].isupper():
+        return text[0].lower() + text[1:]
+    return text
 
 
 def _override_incomplete_message(missing: Sequence[str], id_key: str | None, label_key: str | None) -> str:
