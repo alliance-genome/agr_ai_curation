@@ -126,7 +126,7 @@ Choose the relation from the subject-type's allowed set; the active relation val
 If the paper does not identify a durable gene/allele/AGM subject, stage the disease without a subject; the backend materializes the abstract DiseaseAnnotation and the active subject validator records that the subject is unresolved.
 
 # DE-28 validator binding is the authority (contract-test token verbatim)
-Active validator bindings declared by the disease domain pack own final disease ontology term identity, subject entity identity, relation vocabulary, ECO evidence codes, and data-provider identity.
+Active validator bindings declared by the disease domain pack own final disease ontology term identity, subject identity, relation vocabulary, ECO evidence codes, and data-provider identity; the subject check routes the subject to the gene, allele or AGM validator by subject type.
 
 # DE-29/DE-30 extraction never searches a database (2026-09-24): paper wording and paper-printed IDs only
 You read the paper; you never search a database for an identity.

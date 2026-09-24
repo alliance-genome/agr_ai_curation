@@ -36,7 +36,8 @@ DISEASE_LINKML_SCHEMA_URI = (
 #         AGMDiseaseAnnotation subtype chosen by the staged subject kind (the abstract
 #         DiseaseAnnotation is emitted ONLY when the subject kind is unknown -> validator_unresolved,
 #         which is NOT a structural finding).
-#   * D2: stage + resolve the subject (subject_entity_validation activated).
+#   * D2: stage + resolve the subject (the subject check routes it to the gene, allele or AGM
+#     validator by subject type).
 #   * D3: stage ECO evidence_code_curies[] (disease_evidence_code_lookup activated).
 #   * D5: per-subtype relation CV subsets.
 # D4 (bind single_reference from the loaded workspace document) is BLOCKED: there is no durable

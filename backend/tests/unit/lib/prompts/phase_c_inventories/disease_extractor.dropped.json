@@ -72,5 +72,12 @@
     "reason": "DE-22. Extraction never searches a database for an identity (Chris, 2026-09-24): the lookup tools were removed from the extractor and the validators do all identity search. A proposed Disease Ontology name is not paper data, so the disease_name staging input was removed; the disease ontology validator searches with the paper wording.",
     "old_source": "packages/alliance/agents/disease_extractor/prompt.yaml:<output_and_handoff_contract>",
     "new_home": ""
+  },
+  {
+    "phrase": "subject entity identity",
+    "category": "deleted",
+    "reason": "DE-28. The subject_entity_validation validator was retired (2026-09-24): the subject check routes the subject to the gene, allele or AGM validator by subject type. The handoff sentence now names subject identity and that routing; the retired validator's wording has no home.",
+    "old_source": "packages/alliance/agents/disease_extractor/prompt.yaml:<validator_handoff>",
+    "new_home": ""
   }
 ]
