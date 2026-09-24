@@ -2762,7 +2762,6 @@ def _materialize_gene_expression_candidate(staged_fields: dict[str, Any]) -> Any
         staged_fields=staged_fields,
         pending_ref_ids=["gene-expression-annotation-pef-1"],
         evidence_record_ids=["evidence-67598e5688f123c8"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     return materialize_gene_expression_builder_state(
@@ -3102,7 +3101,6 @@ def test_gene_expression_builder_rejects_object_level_only_evidence():
         staged_fields=staged_fields,
         pending_ref_ids=["gene-expression-annotation-pef-1"],
         evidence_record_ids=["evidence-67598e5688f123c8"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     object_level_evidence = [

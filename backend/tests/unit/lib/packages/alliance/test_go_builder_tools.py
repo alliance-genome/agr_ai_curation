@@ -112,7 +112,6 @@ def _candidate(*, mature_rna: bool = False, evidence_ids=None):
         },
         pending_ref_ids=["go-recommendation-1"],
         evidence_record_ids=retained_evidence_ids,
-        resolver_selection_refs=[],
     )
 
 
@@ -137,7 +136,6 @@ def _materialize(candidate, *, evidence_records=None):
         workspace=_Workspace({candidate.candidate_id: candidate}),
         candidate_ids=[candidate.candidate_id],
         evidence_records=[_evidence()] if evidence_records is None else evidence_records,
-        resolver_entry_lookup=None,
     )
 
 
@@ -405,7 +403,6 @@ def test_go_builder_emits_complete_decision_lifecycle_events(active_go_builder_c
         staged_fields=copy.deepcopy(candidate.staged_fields),
         pending_ref_ids=["go-recommendation-discard"],
         evidence_record_ids=list(candidate.evidence_record_ids),
-        resolver_selection_refs=[],
         status=candidate.status,
     )
     go_builder_tools._discard_go_recommendation_impl("go-candidate-discard", "Not retained")

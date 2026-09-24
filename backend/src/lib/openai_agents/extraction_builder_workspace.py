@@ -65,7 +65,6 @@ class ExtractionBuilderCandidate:
     staged_fields: dict[str, Any] = field(default_factory=dict)
     pending_ref_ids: list[str] = field(default_factory=list)
     evidence_record_ids: list[str] = field(default_factory=list)
-    resolver_selection_refs: list[str] = field(default_factory=list)
     validation_errors: list[dict[str, Any]] = field(default_factory=list)
     status: str = CANDIDATE_STATUS_DRAFT
     created_at: str = field(default_factory=lambda: _now_iso())
@@ -77,7 +76,6 @@ class ExtractionBuilderCandidate:
             "status": self.status,
             "pending_ref_ids": list(self.pending_ref_ids),
             "evidence_record_ids": list(self.evidence_record_ids),
-            "resolver_selection_refs": list(self.resolver_selection_refs),
             "validation_errors": deepcopy(self.validation_errors),
             "staged_fields": deepcopy(self.staged_fields),
             "created_at": self.created_at,
@@ -95,7 +93,6 @@ class ExtractionBuilderFinalization:
     finalized_candidate_count: int
     validation_errors: tuple[dict[str, Any], ...]
     evidence_record_ids: tuple[str, ...]
-    resolver_selection_count: int
     builder_run_id: str
     builder_invocation_id: str
     source_candidate_ids: tuple[str, ...] = ()
@@ -106,7 +103,6 @@ class ExtractionBuilderFinalization:
             "finalized_candidate_count": self.finalized_candidate_count,
             "validation_errors": [dict(error) for error in self.validation_errors],
             "evidence_record_ids": list(self.evidence_record_ids),
-            "resolver_selection_count": self.resolver_selection_count,
             "builder_run_id": self.builder_run_id,
             "builder_invocation_id": self.builder_invocation_id,
             "candidate_ids": list(self.candidate_ids),
@@ -152,7 +148,6 @@ class ExtractionBuilderWorkspace:
         staged_fields: Mapping[str, Any],
         pending_ref_ids: Iterable[Any] | None = None,
         evidence_record_ids: Iterable[Any] | None = None,
-        resolver_selection_refs: Iterable[Any] | None = None,
         status: str = CANDIDATE_STATUS_DRAFT,
     ) -> ExtractionBuilderCandidate:
         self._ensure_mutable()
@@ -171,7 +166,6 @@ class ExtractionBuilderWorkspace:
         candidate.staged_fields = deepcopy(dict(staged_fields))
         candidate.pending_ref_ids = _string_list(pending_ref_ids)
         candidate.evidence_record_ids = _string_list(evidence_record_ids)
-        candidate.resolver_selection_refs = _string_list(resolver_selection_refs)
         candidate.status = status
         candidate.updated_at = now
         self.updated_at = now
@@ -338,11 +332,6 @@ class ExtractionBuilderWorkspace:
             for candidate in selected
             for evidence_id in candidate.evidence_record_ids
         )
-        resolver_selection_refs = _unique_strings(
-            ref
-            for candidate in selected
-            for ref in candidate.resolver_selection_refs
-        )
         for candidate in selected:
             candidate.status = CANDIDATE_STATUS_FINALIZED
             candidate.updated_at = _now_iso()
@@ -358,7 +347,6 @@ class ExtractionBuilderWorkspace:
             finalized_candidate_count=len(selected),
             validation_errors=(),
             evidence_record_ids=tuple(evidence_record_ids),
-            resolver_selection_count=len(resolver_selection_refs),
             builder_run_id=self.run_id,
             builder_invocation_id=self.builder_invocation_id,
         )
@@ -374,7 +362,6 @@ class ExtractionBuilderWorkspace:
                 "candidate_ids": list(normalized_candidate_ids),
                 "source_candidate_ids": list(normalized_source_candidate_ids),
                 "evidence_record_ids": list(evidence_record_ids),
-                "resolver_selection_count": len(resolver_selection_refs),
                 "payload_top_level_keys": sorted(payload.keys()),
                 "operation": "extraction_builder_finalized",
             },
@@ -417,11 +404,6 @@ class ExtractionBuilderWorkspace:
                 evidence_id
                 for candidate in self.candidates.values()
                 for evidence_id in candidate.evidence_record_ids
-            ),
-            "resolver_selection_refs": _unique_strings(
-                ref
-                for candidate in self.candidates.values()
-                for ref in candidate.resolver_selection_refs
             ),
             "validation_errors": deepcopy(self.validation_errors),
             "candidates": candidates,
@@ -530,7 +512,6 @@ def stage_extraction_payload(
     workspace: ExtractionBuilderWorkspace,
     candidate_id: str,
     evidence_records: Iterable[Mapping[str, Any]] | None = None,
-    resolver_selection_refs: Iterable[Any] | None = None,
 ) -> dict[str, Any]:
     """Stage one canonical payload candidate without finalizing the workspace."""
 
@@ -552,7 +533,6 @@ def stage_extraction_payload(
         candidate_id=candidate_id,
         staged_fields=canonical_payload,
         evidence_record_ids=evidence_record_ids,
-        resolver_selection_refs=resolver_selection_refs,
         status=CANDIDATE_STATUS_VALID,
     )
     return canonical_payload

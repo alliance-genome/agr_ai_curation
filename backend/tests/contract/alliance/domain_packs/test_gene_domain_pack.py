@@ -115,14 +115,12 @@ def _materialize_one_candidate(validation_guidance=None) -> Any:
         staged_fields={**_staged_fields(), "validation_guidance": validation_guidance},
         pending_ref_ids=["gene-mention-evidence-1"],
         evidence_record_ids=["evidence-daf16-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     return materialize_gene_builder_state(
         workspace=workspace,
         candidate_ids=["gene-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
 
@@ -317,14 +315,12 @@ def test_gene_builder_rejects_evidence_record_not_in_metadata():
         staged_fields=_staged_fields(),
         pending_ref_ids=["gene-mention-evidence-1"],
         evidence_record_ids=["evidence-MISSING"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_gene_builder_state(
         workspace=workspace,
         candidate_ids=["gene-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -402,14 +398,12 @@ def test_gene_rationale_is_copied_onto_every_evidence_object():
         staged_fields=_staged_fields(),
         pending_ref_ids=["gene-mention-evidence-1"],
         evidence_record_ids=["evidence-daf16-1", "evidence-daf16-2"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_gene_builder_state(
         workspace=workspace,
         candidate_ids=["gene-candidate-1"],
         evidence_records=records,
-        resolver_entry_lookup=None,
     )
     assert result.ok, result.summary()
     objects = result.payload["curatable_objects"]
@@ -430,14 +424,12 @@ def test_gene_builder_rejects_missing_rationale():
         staged_fields=staged,
         pending_ref_ids=["gene-mention-evidence-1"],
         evidence_record_ids=["evidence-daf16-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_gene_builder_state(
         workspace=workspace,
         candidate_ids=["gene-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -681,7 +673,6 @@ def test_gene_builder_requires_the_paper_wording_without_fallback():
         staged_fields=staged,
         pending_ref_ids=["gene-mention-evidence-1"],
         evidence_record_ids=["evidence-daf16-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
 

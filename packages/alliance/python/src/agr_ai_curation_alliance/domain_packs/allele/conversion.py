@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from pydantic import ValidationError, model_validator
 
@@ -559,7 +559,6 @@ def materialize_allele_builder_state(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]] | None = None,
-    resolver_entry_lookup: Callable[[str], Any] | None = None,
     produced_by: str = "allele_extractor",
 ) -> AlleleMaterializationResult:
     """Build canonical AlleleExtractionResultEnvelope output from finalized builder state.

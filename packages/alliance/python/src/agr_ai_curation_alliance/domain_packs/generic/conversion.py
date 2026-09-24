@@ -72,12 +72,10 @@ def materialize_generic_builder_state(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]] | None = None,
-    resolver_entry_lookup: Any = None,
     produced_by: str = "pdf_extraction",
 ) -> GenericMaterializationResult:
     """Build canonical generic DomainEnvelopeExtractionResult output from builder state."""
 
-    del resolver_entry_lookup
     profile = getattr(workspace, "generic_profile", None)
     if profile is not None:
         produced_by = workspace.agent_id

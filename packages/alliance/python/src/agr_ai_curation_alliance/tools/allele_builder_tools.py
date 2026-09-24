@@ -9,9 +9,8 @@ target (Reference + AlleleMention + EvidenceQuote(s) + AllelePaperEvidenceAssoci
     selector context (normalized_hint / associated_gene / taxon) and source mentions; the active
     ``allele_mention_reference_validation`` binding resolves allele identity at validation time.
     The extractor NEVER stages an allele identifier or an Allele object.
-  * NO resolver-backed controlled fields (the allele validator owns identity, mutation-type SO
-    terms, and all CVs), so staging requires evidence but NOT resolver selections
-    (``require_resolver_selections=False``) — same posture as gene.
+  * NO controlled fields resolved at extraction (the allele validator owns identity,
+    mutation-type SO terms, and all CVs); staging requires evidence — same posture as gene.
   * NO mirror/projection fields (allele declares no ``materializes_to_field_paths``).
 
 Tool names match the allele extractor prompt/agent: ``stage_allele_observation``,
@@ -341,7 +340,6 @@ def _stage_allele_observation_impl(
         staged_fields=payload,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -464,7 +462,6 @@ def _patch_allele_observation_impl(
         staged_fields=payload,
         pending_ref_ids=candidate.pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -642,7 +639,6 @@ def _materialize_allele_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     """Domain materializer wrapper emitting allele builder events.
 
@@ -660,7 +656,6 @@ def _materialize_allele_with_events(
         workspace=workspace,
         candidate_ids=candidate_id_list,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     if not materialization.ok or materialization.payload is None:
         _emit_allele_builder_event(
@@ -688,8 +683,7 @@ def _finalize_allele_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult
 
     Thin domain adapter: input validation + result shape live here; all structural
     staging/finalize control flow is delegated to ``finalize_builder_extraction``. Allele is
-    mention-only with the validator owning identity, so there are no resolver-backed controlled
-    fields and ``require_resolver_selections=False`` (same posture as gene).
+    mention-only with the validator owning identity (same posture as gene).
     """
 
     attempted_query = _attempt_query("finalize_allele_extraction", candidate_ids=candidate_ids)
@@ -717,9 +711,7 @@ def _finalize_allele_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult
         candidate_ids=candidate_ids,
         materialize=_materialize_allele_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="allele-paper-evidence-association",
-        require_resolver_selections=False,
     )
 
     if not outcome.ok:

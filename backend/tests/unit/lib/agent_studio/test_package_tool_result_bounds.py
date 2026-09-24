@@ -387,7 +387,6 @@ def test_self_reported_failure_is_not_captured_twice(reported):
 
 def _bound_tool(name, raw):
     from src.lib.openai_agents import extraction_builder_workspace as builder
-    from src.lib.openai_agents import resolver_call_ledger
     from src.lib.openai_agents.streaming_tools import _build_run_state_bound_tool
 
     raw.__name__ = f"_{name}_impl"
@@ -396,7 +395,6 @@ def _bound_tool(name, raw):
         raw,
         existing,
         builder_workspace=builder.ExtractionBuilderWorkspace(run_id="r", document_id="doc-1"),
-        resolver_ledger=resolver_call_ledger.ResolverCallLedger(trace_id="r"),
         evidence_records=[],
     )
 
@@ -419,7 +417,9 @@ async def test_oversized_builder_result_becomes_reported_compact_failure(reporte
 
 
 @pytest.mark.asyncio
-async def test_resolver_ledger_tool_is_observed_not_replaced(reported):
+async def test_an_oversized_resolver_result_is_replaced_like_any_run_state_result(reported):
+    """No resolver ledger reads a run-state tool's full output any more, so none is exempt."""
+
     def resolve(field_path: str) -> dict:
         return {"status": "resolved", "data": {"options": ["z" * 100] * (BUDGET // 50)}}
 
@@ -429,8 +429,8 @@ async def test_resolver_ledger_tool_is_observed_not_replaced(reported):
         json.dumps({"field_path": "anatomy"}),
     )
 
-    assert "tool_result_budget_unmet" not in str(result)
-    assert len(reported) == 1 and reported[0][1]["correlation"]["enforced"] is False
+    assert "tool_result_budget_unmet" in str(result)
+    assert len(reported) == 1 and reported[0][1]["correlation"]["enforced"] is True
 
 
 def test_write_requests_are_never_paged_by_repetition(reported):

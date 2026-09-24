@@ -422,7 +422,6 @@ async def test_final_profile_tool_schema_and_callable_survive_run_state_rebindin
     from src.lib.agent_studio.profile_tools import profile_bound_tool, assert_profile_tool_contract
     from src.lib.openai_agents import extraction_builder_workspace as builder
     from src.lib.openai_agents import streaming_tools as streaming
-    from src.lib.openai_agents.resolver_call_ledger import ResolverCallLedger
 
     monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_: None)
     monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **_: None)
@@ -434,8 +433,7 @@ async def test_final_profile_tool_schema_and_callable_survive_run_state_rebindin
         "stage_generic_object": "must.not.import:static_stage",
         "patch_generic_object": "must.not.import:static_patch",
     })
-    streaming._bind_run_state_into_tools(agent, evidence_records=[], builder_workspace=workspace,
-                                        resolver_ledger=ResolverCallLedger(trace_id="bound"))
+    streaming._bind_run_state_into_tools(agent, evidence_records=[], builder_workspace=workspace)
     final = agent.tools[0]
     assert_profile_tool_contract(final)
     assert final.params_json_schema == stage.params_json_schema
@@ -563,7 +561,6 @@ def test_configured_provider_serialization_preserves_final_profile_schema(profil
     from src.lib.agent_studio.profile_tools import profile_bound_tool, assert_profile_tool_contract
     from src.lib.openai_agents import config, streaming_tools as streaming
     from src.lib.openai_agents.extraction_builder_workspace import ExtractionBuilderWorkspace
-    from src.lib.openai_agents.resolver_call_ledger import ResolverCallLedger
 
     monkeypatch.setenv(provider.upper() + "_API_KEY", "test-only-not-a-credential")
     # Adapter serialization support is retained for every provider; the deployment
@@ -581,8 +578,7 @@ def test_configured_provider_serialization_preserves_final_profile_schema(profil
         assert not streaming._should_use_groq_tool_json_compat(agent)
         agent.tools = streaming._adapt_tools_for_groq_schema_constraints(agent.tools)
     streaming._bind_run_state_into_tools(agent, evidence_records=[],
-        builder_workspace=ExtractionBuilderWorkspace(run_id="provider", generic_profile=profile),
-        resolver_ledger=ResolverCallLedger(trace_id="provider"))
+        builder_workspace=ExtractionBuilderWorkspace(run_id="provider", generic_profile=profile))
     for tool in agent.tools:
         assert_profile_tool_contract(tool)
     if provider == "openai":

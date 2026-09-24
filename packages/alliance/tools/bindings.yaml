@@ -746,8 +746,8 @@ tools:
       identity_lookup: true
       name: Resolve Domain Field Term
       category: Database
-      # Run-state builder/resolver tool: platform closure-binds the active resolver ledger +
-      # builder workspace into this tool per run (streaming_tools._bind_run_state_into_tools).
+      # Run-state tool: platform closure-binds the builder workspace and evidence records
+      # into this tool per run (streaming_tools._bind_run_state_into_tools).
       builder_run_state: true
       audit:
         display_name: Resolve Domain Field Term

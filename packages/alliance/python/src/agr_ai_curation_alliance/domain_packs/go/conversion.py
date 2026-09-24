@@ -149,7 +149,6 @@ def materialize_go_builder_state(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]] | None = None,
-    resolver_entry_lookup: Any = None,
     produced_by: str = "rgd_go_paper_curator",
 ) -> GOMaterializationResult:
     """Build canonical ``DomainEnvelopeExtractionResult`` data from GO drafts."""

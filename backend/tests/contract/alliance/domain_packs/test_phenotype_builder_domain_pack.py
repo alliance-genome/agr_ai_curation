@@ -111,14 +111,12 @@ def _materialize_one_candidate(
         staged_fields=candidate_fields,
         pending_ref_ids=["phenotype-annotation-1"],
         evidence_record_ids=["evidence-cilia-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     return materialize_phenotype_builder_state(
         workspace=workspace,
         candidate_ids=["phenotype-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
 
@@ -411,14 +409,12 @@ def test_phenotype_builder_rejects_evidence_record_not_in_metadata():
         staged_fields=_staged_fields(),
         pending_ref_ids=["phenotype-annotation-1"],
         evidence_record_ids=["evidence-MISSING"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_phenotype_builder_state(
         workspace=workspace,
         candidate_ids=["phenotype-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -439,14 +435,12 @@ def test_phenotype_builder_rejects_missing_phenotype_statement():
         staged_fields=staged,
         pending_ref_ids=["phenotype-annotation-1"],
         evidence_record_ids=["evidence-cilia-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_phenotype_builder_state(
         workspace=workspace,
         candidate_ids=["phenotype-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -556,14 +550,12 @@ def test_phenotype_builder_materializes_staged_condition_relations():
         staged_fields=_staged_fields_with_conditions(validation_guidance="Check the explicitly described experimental conditions."),
         pending_ref_ids=["phenotype-annotation-1"],
         evidence_record_ids=["evidence-cilia-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_phenotype_builder_state(
         workspace=workspace,
         candidate_ids=["phenotype-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert result.ok, result.summary()
 
