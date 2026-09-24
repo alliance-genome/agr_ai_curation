@@ -1528,3 +1528,87 @@ async def test_deferred_agent_run_commits_the_prompt_it_sends_and_recovers_bare_
     assert used_run.assembly.layer_manifest["layers"][-1]["content"] == note
     assert captured["run_config"].tool_not_found_behavior == "return_error_to_model"
     assert captured["run_config"].tool_error_formatter is not None
+
+
+def _staged_probe_impl() -> str:
+    from src.lib.openai_agents.extraction_builder_workspace import (
+        get_active_extraction_builder_workspace,
+    )
+    from src.lib.openai_agents.resolver_call_ledger import get_active_resolver_call_ledger
+
+    workspace = get_active_extraction_builder_workspace()
+    get_active_resolver_call_ledger()
+    return f"staged run={workspace.run_id}"
+
+
+class _RunStateToolCallingRunResult:
+    final_output = "done"
+
+    def __init__(self, agent, captured):
+        self._agent = agent
+        self._captured = captured
+
+    async def stream_events(self):
+        tool = next(t for t in self._agent.tools if t.name == "stage_probe_observation")
+        self._captured["tool_output"] = await tool.on_invoke_tool(
+            SimpleNamespace(tool_name=tool.name, run_config=None), "{}"
+        )
+        if False:
+            yield None
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "stage"}]
+
+
+@pytest.mark.asyncio
+async def test_provided_builder_agent_without_profile_binds_run_state_tools(monkeypatch):
+    """Direct runs (Agent Studio Test, benchmarks) bind builder run state for every agent."""
+    import contextvars
+
+    from agents import function_tool
+
+    from src.lib.openai_agents import streaming_tools
+
+    @function_tool(name_override="stage_probe_observation")
+    def _package_stage_probe() -> str:
+        """Stage one probe observation."""
+        # Unbound package tools execute in the package subprocess, where none of
+        # the run's context exists.
+        return contextvars.Context().run(_staged_probe_impl)
+
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+    monkeypatch.setattr(runner, "get_max_turns", lambda: 4)
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
+    monkeypatch.setattr(
+        streaming_tools,
+        "_run_state_tool_impls",
+        lambda: {"stage_probe_observation": "probe.module:_stage_probe_observation_impl"},
+    )
+    monkeypatch.setattr(streaming_tools, "_import_callable", lambda _path: _staged_probe_impl)
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda agent, **_kwargs: _RunStateToolCallingRunResult(agent, captured),
+    )
+
+    events = await _collect_events(
+        runner.run_agent_streamed(
+            context_messages=[{"role": "user", "content": "stage one observation"}],
+            user_id="user-1",
+            session_id="custom-test-1",
+            agent=SimpleNamespace(
+                name="Domain Builder", model="gpt-4o", tools=[_package_stage_probe]
+            ),
+        )
+    )
+
+    assert events[-1]["type"] == "RUN_FINISHED"
+    output = str(captured["tool_output"])
+    assert output.startswith("staged run="), output

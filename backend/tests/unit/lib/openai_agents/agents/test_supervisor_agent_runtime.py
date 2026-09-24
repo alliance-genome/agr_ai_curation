@@ -1069,6 +1069,31 @@ def test_fetch_document_hierarchy_sync_returns_none_on_exception(monkeypatch, re
     assert "user-1" not in json.dumps(context)
 
 
+def test_fetch_document_hierarchy_sync_reports_worker_runtime_error_under_running_loop(monkeypatch):
+    import asyncio
+
+    async def _worker_failure(_document_id, _user_id):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(
+        "src.lib.weaviate_client.chunks.get_document_sections_hierarchical",
+        _worker_failure,
+    )
+    captured = []
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda exc, **_kwargs: captured.append(exc),
+    )
+
+    async def _from_running_loop():
+        return supervisor_agent.fetch_document_hierarchy_sync("doc-1", "user-1")
+
+    # The worker's own failure is reported; it is never retried with asyncio.run()
+    # on the running loop.
+    assert asyncio.run(_from_running_loop()) is None
+    assert [str(exc) for exc in captured] == ["can't start new thread"]
+
+
 @pytest.mark.parametrize("result", [None, {"sections": [], "top_level_sections": []}])
 def test_fetch_document_hierarchy_empty_is_not_an_incident(monkeypatch, result):
     async def fetch(*_args):
