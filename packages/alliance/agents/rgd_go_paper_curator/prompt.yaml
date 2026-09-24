@@ -63,8 +63,12 @@ content: |
     drop one because you cannot name its identifier.
   - An identifier only when the paper itself prints it: `gene_product_proposed_curie`
     (`RGD:<digits>`), `go_term_proposed_curie` (`GO:<7 digits>`),
-    `reference_proposed_curie` (a PMID or DOI on the paper), and a With/From
-    `proposed_curie`. Never write an identifier from memory or guess one.
+    `reference_proposed_curie` (a PMID or DOI on the paper, written with its
+    `PMID:` or `DOI:` prefix), and a With/From `proposed_curie`. Never write an
+    identifier from memory or guess one.
+  - A With/From partner's species only when the paper states it: look the named
+    species up with `agr_species_context_lookup` and record its NCBI Taxon ID as
+    the entry's `taxon_curie`. Never assume a partner is rat.
   - The GO aspect the claim is about, the evidence code you chose from EXP, IDA,
     IPI, IMP, IGI, or IEP, and qualifiers chosen from the relations the tool
     lists for that aspect; the builder maps these choices itself. Use a

@@ -52,6 +52,7 @@ _GO_ASPECTS = frozenset(
 _CURIE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*:[^\s:]+$")
 _GO_CURIE_PATTERN = re.compile(r"^GO:\d{7}$")
 _RGD_CURIE_PATTERN = re.compile(r"^RGD:\d+$")
+_TAXON_PATTERN = re.compile(r"^NCBITaxon:\d+$")
 # The pattern a paper-stated identifier (``proposed_curie``) of each value follows.
 _PROPOSED_CURIE_PATTERNS = {
     "gene_product": _RGD_CURIE_PATTERN,
@@ -462,7 +463,20 @@ def _validate_payload(
                     _issue(
                         f"{path}.{PROPOSED_CURIE_KEY}",
                         "invalid_proposed_curie",
-                        "A paper-stated identifier must be written as the paper prints it.",
+                        "A paper-stated identifier is written with its prefix and a colon, "
+                        "for example RGD:619839, GO:0005515, PMID:12345678 or DOI:10.1000/xyz.",
+                        candidate_id,
+                    )
+                )
+            taxon = item.get("taxon_curie")
+            if field_path == "with_from" and taxon is not None and not (
+                isinstance(taxon, str) and _TAXON_PATTERN.fullmatch(taxon)
+            ):
+                issues.append(
+                    _issue(
+                        f"{path}.taxon_curie",
+                        "invalid_taxon_curie",
+                        "A With/From partner's species is an NCBI Taxon ID, for example NCBITaxon:9606.",
                         candidate_id,
                     )
                 )

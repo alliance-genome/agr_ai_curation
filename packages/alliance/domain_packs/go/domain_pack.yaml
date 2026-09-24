@@ -422,6 +422,13 @@ object_definitions:
         metadata:
           protected: true
           exported: false
+      - field_path: with_from.taxon_curie
+        field_type: string
+        display_name: With/From paper-stated species
+        description: The partner's species as an NCBI Taxon ID, recorded by the extractor only when the paper states it. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: with_from.resolution_state
         field_type: enum
         display_name: With/From status
@@ -710,15 +717,16 @@ metadata:
         required: true
         blocking: false
         allow_opt_out: true
-        when_off: The reference stays as the paper words it, and review rows show it unconfirmed.
+        when_off: If you turn this check off, the reference stays unconfirmed, and the RGD evidence policy check (which cannot be turned off) keeps the annotation in curator review until a curator sets the reference.
         curator_override:
           allowed: false
       - binding_id: go_with_from_gene_validation
         display_name: GO With/From gene validation
         curator_label: Confirm each With/From gene in the Alliance gene records
-        description: Finds the gene each With/From entry names, from the paper's wording and any ID the paper prints. An entry that is not a gene, such as a protein, GO term or chemical, stays unresolved.
+        description: Finds the gene each With/From entry names, from the paper's wording, any ID the paper prints, and the partner's species as the paper states it. An entry that is not a gene, such as a protein, GO term or chemical, or whose species the paper does not state, stays unresolved.
         definition_notes:
-          - Reuses the packaged gene validator in batches, scoped to RGD.
+          - Reuses the packaged gene validator in batches, for RGD curators.
+          - A partner's species comes only from the paper (a prefixed ID it prints, the species it names, or the evidence); it is never assumed to be rat.
         validator_agent:
           package_id: agr.alliance
           agent_id: gene_validation
@@ -743,9 +751,18 @@ metadata:
             source: payload
             path: with_from.proposed_curie
             required: false
-          data_provider:
-            source: literal
-            value: RGD
+          taxon_hint:
+            source: payload
+            path: with_from.taxon_curie
+            required: false
+            context_only: true
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: with_from
+            allow_multiple: true
+            required: false
+            context_only: true
         expected_result_fields:
           primary_external_id: with_from.curie
         batch:
@@ -755,7 +772,7 @@ metadata:
         required: true
         blocking: false
         allow_opt_out: true
-        when_off: With/From entries stay as the paper words them, and review rows show them unconfirmed.
+        when_off: If you turn this check off, With/From entries stay unconfirmed, and the RGD evidence policy check (which cannot be turned off) keeps the annotation in curator review until a curator sets each entry.
         curator_override:
           allowed: false
       - binding_id: rgd_go_evidence_policy_validation
@@ -777,6 +794,7 @@ metadata:
           - go_gene_product_validation
           - go_term_validation
           - go_reference_validation
+          - go_with_from_gene_validation
         group_scope:
           required_any_active_group:
             - RGD

@@ -273,6 +273,38 @@ def test_a_paper_stated_identifier_must_be_written_as_the_paper_prints_it(
     assert any(field in issue["field_path"] for issue in result.data["validation_issues"])
 
 
+def test_a_bare_doi_is_rejected_with_the_prefix_rule_in_plain_words(active_go_builder_context):
+    result = _stage(reference_proposed_curie="10.1371/journal.pone.0075194")
+
+    assert result.status == "error"
+    message = " ".join(issue["message"] for issue in result.data["validation_issues"])
+    assert "DOI:10.1000/xyz" in message
+    assert "add the prefix when the paper prints a bare PMID or DOI" in message
+    assert "^" not in message
+
+
+def test_a_with_from_partner_carries_its_species_only_as_the_paper_states_it(active_go_builder_context):
+    workspace, _events = active_go_builder_context
+
+    staged = _stage(with_from=[
+        {"mention": "human TP53", "taxon_curie": "NCBITaxon:9606"},
+        {"mention": "Ago2"},
+    ])
+
+    assert staged.status == "ok", staged.model_dump(mode="json")
+    human, unstated = _staged_payload(workspace, staged)["with_from"]
+    assert (human["mention"], human["taxon_curie"], human["lookup_outcome"]) == (
+        "human TP53", "NCBITaxon:9606", "not_validated")
+    assert "taxon_curie" not in unstated
+
+
+def test_a_with_from_species_must_be_an_ncbi_taxon_id(active_go_builder_context):
+    result = _stage(with_from=[{"mention": "human TP53", "taxon_curie": "human"}])
+
+    assert result.status == "error"
+    assert "NCBITaxon:9606" in " ".join(issue["message"] for issue in result.data["validation_issues"])
+
+
 def test_an_unknown_code_or_relation_is_staged_unresolved_not_rejected(active_go_builder_context):
     workspace, _events = active_go_builder_context
 

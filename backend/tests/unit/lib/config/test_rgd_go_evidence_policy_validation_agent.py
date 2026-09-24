@@ -882,6 +882,7 @@ def test_policy_never_passes_a_proposal_with_an_unresolved_qualifier(monkeypatch
     "entry",
     [
         {**_with_from_entry("RGD:621255"), "proposed_curie": "RGD:621255"},
+        {**_with_from_entry("RGD:621255"), "taxon_curie": "NCBITaxon:10116"},
         {
             **_with_from_entry("RGD:621255"),
             "lookup_outcome": "curator_override",

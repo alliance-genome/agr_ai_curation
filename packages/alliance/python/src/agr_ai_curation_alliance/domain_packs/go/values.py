@@ -114,8 +114,15 @@ def reference_value(mention: str, *, proposed_curie: str | None) -> dict[str, An
     return unresolved_value(mention, identity_keys=REFERENCE_IDENTITY, **_proposal(proposed_curie))
 
 
-def with_from_value(mention: str, *, proposed_curie: str | None) -> dict[str, Any]:
-    return unresolved_value(mention, identity_keys=WITH_FROM_IDENTITY, **_proposal(proposed_curie))
+def with_from_value(
+    mention: str, *, proposed_curie: str | None, taxon_curie: str | None = None,
+) -> dict[str, Any]:
+    """A With/From entry; ``taxon_curie`` is the partner's species only when the paper states it."""
+
+    species = {"taxon_curie": taxon_curie} if taxon_curie else {}
+    return unresolved_value(
+        mention, identity_keys=WITH_FROM_IDENTITY, **_proposal(proposed_curie), **species
+    )
 
 
 def qualifier_value(mention: str, *, aspect: str) -> dict[str, Any]:
