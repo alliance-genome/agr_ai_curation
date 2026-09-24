@@ -492,7 +492,7 @@ def test_domain_field_term_options_searches_assay_stage_and_direct_site_fields(m
                 "ontology_type": "MMOTerm",
                 "exact_match": True,
                 "include_synonyms": True,
-                "limit": 2,
+                "limit": 25,
             },
         ),
         (
@@ -736,7 +736,7 @@ def test_domain_field_term_options_routes_gene_expression_site(monkeypatch):
                 "data_provider": "ZFIN",
                 "exact_match": False,
                 "include_synonyms": True,
-                "limit": 3,
+                "limit": 25,
             },
         ),
         (
@@ -746,7 +746,7 @@ def test_domain_field_term_options_routes_gene_expression_site(monkeypatch):
                 "go_aspect": "cellular_component",
                 "exact_match": False,
                 "include_synonyms": True,
-                "limit": 3,
+                "limit": 25,
             },
         ),
     ]
@@ -798,16 +798,66 @@ def test_search_domain_field_terms_returns_field_scoped_candidates(monkeypatch):
     assert result.data["next_tool_call"]["arguments"]["field_path"] == (
         "expression_pattern.where_expressed.anatomical_structure"
     )
-    assert "limited_search_backend:current_api_exact_prefix_contains" in result.warnings
+    assert not any(
+        warning.startswith("limited_search_backend") for warning in result.warnings or []
+    )
     assert calls == [
         {
             "term": "ALM neuron",
             "data_provider": "WB",
             "exact_match": False,
             "include_synonyms": True,
-            "limit": 5,
+            "limit": 25,
         }
     ]
+
+
+def test_search_domain_field_terms_keeps_client_match_facts(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def search_life_stage_terms(**_kwargs):
+            return [
+                SimpleNamespace(
+                    curie="WBls:0000010",
+                    name="gastrulating embryo Ce",
+                    ontology_type="WBLSTerm",
+                    synonyms=["gastrulation"],
+                    match_type="exact",
+                ),
+                SimpleNamespace(
+                    curie="WBls:0000814",
+                    name="C. elegans life stage occurring during gastrulation",
+                    ontology_type="WBLSTerm",
+                    definition="A life stage occurring during gastrulation.",
+                    match_type="trigram",
+                    match_score=0.65,
+                    matched_field="name",
+                ),
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _search_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.when_expressed.developmental_stage_start",
+        query="gastrulation",
+        data_provider="WB",
+    )
+
+    synonym_hit, fuzzy_hit = result.data["candidates"]
+    assert synonym_hit["match_mode"] == "exact_synonym"
+    assert synonym_hit["score"] == 1.0
+    assert fuzzy_hit["match_mode"] == "trigram"
+    assert fuzzy_hit["score"] == 0.65
+    assert fuzzy_hit["matched_field"] == "name"
+    assert fuzzy_hit["definition"] == "A life stage occurring during gastrulation."
+    assert result.data["debug"]["lookup_methods"] == ["search_life_stage_terms"]
 
 
 def test_search_domain_field_terms_does_not_suggest_ontology_inspection_for_cv_ambiguity(monkeypatch):

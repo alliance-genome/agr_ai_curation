@@ -536,6 +536,9 @@ def _ontology_term_result(result: Any) -> Dict[str, Any]:
             "definition",
             "ontology_type",
             "synonyms",
+            "match_type",
+            "match_score",
+            "matched_field",
         )
         if raw.get(key) is not None
     }
@@ -1083,6 +1086,32 @@ def _positive_env_int(name: str, default: int) -> int:
     return max(1, value)
 
 
+_ONTOLOGY_LABEL_SEARCH_METHODS = frozenset({
+    "search_ontology_terms",
+    "search_anatomy_terms",
+    "search_life_stage_terms",
+    "search_go_terms",
+})
+
+
+def _ontology_search_limit(limit: Optional[int]) -> Tuple[int, List[str]]:
+    """Return the row limit for an ontology label search (AGR_ONTOLOGY_SEARCH_MIN_LIMIT, default 25).
+
+    The curation DB client fills its exact, prefix and contains tiers first and
+    runs the fuzzy (trigram) tier only while rows remain under the limit, so a
+    small limit lets alphabetical prefix/contains hits crowd out closer fuzzy
+    matches. Label searches therefore never return fewer rows than the minimum.
+    """
+    minimum = _positive_env_int("AGR_ONTOLOGY_SEARCH_MIN_LIMIT", 25)
+    if limit is None:
+        return _normalize_limit(minimum)[0], []
+    limit_value, warnings = _normalize_limit(limit)
+    if limit_value < minimum:
+        warnings.append(f"ontology_search_limit_raised:{minimum}")
+        limit_value = minimum
+    return limit_value, warnings
+
+
 def _bulk_symbol_soft_cap() -> int:
     cap = int(os.getenv(BULK_SYMBOL_SOFT_CAP_ENV, str(BULK_SYMBOL_SOFT_CAP_DEFAULT)))
     if cap <= 0:
@@ -1582,6 +1611,13 @@ def agr_curation_query(
     across symbols, full names, and synonyms -- so a shorter query returns more
     candidates and adding characters narrows them.
 
+    search_ontology_terms, search_anatomy_terms, search_life_stage_terms and
+    search_go_terms match term names and synonyms by exact, then prefix, then
+    contains, then fuzzy (trigram) similarity. Each row reports how it matched:
+    match_type (exact, prefix, contains or trigram), with match_score and
+    matched_field (name or synonym) on fuzzy rows, plus the term's synonyms and
+    definition. Every row is a candidate, not a confirmed match.
+
     search_alleles separates bounded discovery from display. Supply paper-supported
     gene_id or gene_symbol for database-backed gene scope (exact stored aliases are
     resolved within the supplied species/provider; ambiguous scope is not an allele
@@ -1632,7 +1668,7 @@ def agr_curation_query(
         exact_match: Require exact match for ontology searches
         include_synonyms: Search synonyms in addition to primary symbols (default: True)
         include_obsolete: Include obsolete controlled vocabulary terms
-        limit: Maximum results to return
+        limit: Maximum results to return. Ontology label searches return at least 25.
         force: Accepted for backward-compatible callers; search methods no longer
             perform local symbol validation before querying.
         force_reason: Accepted for backward-compatible callers.
@@ -1795,7 +1831,10 @@ def agr_curation_query(
         provider_mapping_error = _ensure_provider_mappings(method)
         if provider_mapping_error:
             return provider_mapping_error
-        limit_value, warnings = _normalize_limit(limit)
+        if method in _ONTOLOGY_LABEL_SEARCH_METHODS:
+            limit_value, warnings = _ontology_search_limit(limit)
+        else:
+            limit_value, warnings = _normalize_limit(limit)
 
         # Log query parameters for tracing
         logger.debug(
@@ -3173,9 +3212,11 @@ def agr_curation_query(
                 include_synonyms=include_synonyms,
                 limit=limit_value
             )
-            results_data = [{"curie": r.curie, "name": r.name, "ontology_type": r.ontology_type} for r in results]
+            results_data = [_ontology_term_result(result) for result in results]
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
+            validation_warnings = list(warnings)
+            if invalid_curie_count > 0:
+                validation_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
             return _lookup_response(
                 method=method,
@@ -3212,9 +3253,11 @@ def agr_curation_query(
                 include_synonyms=include_synonyms,
                 limit=limit_value
             )
-            results_data = [{"curie": r.curie, "name": r.name, "ontology_type": r.ontology_type} for r in results]
+            results_data = [_ontology_term_result(result) for result in results]
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
+            validation_warnings = list(warnings)
+            if invalid_curie_count > 0:
+                validation_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
             return _lookup_response(
                 method=method,
@@ -3247,9 +3290,11 @@ def agr_curation_query(
                 include_synonyms=include_synonyms,
                 limit=limit_value
             )
-            results_data = [{"curie": r.curie, "name": r.name, "namespace": r.namespace} for r in results]
+            results_data = [_ontology_term_result(result) for result in results]
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
+            validation_warnings = list(warnings)
+            if invalid_curie_count > 0:
+                validation_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
             return _lookup_response(
                 method=method,
@@ -3517,7 +3562,15 @@ def _ontology_helper_result(
     label = _term_name(term)
     normalized_label = (label or "").casefold()
     normalized_source = source_phrase.strip().casefold()
-    match_type = "exact_label" if normalized_label == normalized_source else "candidate"
+    # The client reports its search tier; an exact-tier row whose name differs
+    # from the phrase matched through a synonym.
+    client_match_type = term.get("match_type")
+    if normalized_label == normalized_source:
+        match_type = "exact_label"
+    elif client_match_type == "exact":
+        match_type = "exact_synonym"
+    else:
+        match_type = client_match_type or "candidate"
     return {
         "source_phrase": source_phrase,
         "field_path": field_path,
@@ -3534,12 +3587,14 @@ def _ontology_helper_result(
             "namespace": _first_present(term.get("namespace"), term.get("ontology_type")),
             "ontology_type": term.get("ontology_type"),
             "obsolete": bool(term.get("obsolete", False)),
+            **{key: term[key] for key in ("definition", "synonyms") if term.get(key)},
             "authority": authority,
         },
         "lookup": {
             "method": lookup_method,
             "matched_value": label,
             "match_type": match_type,
+            **{key: term[key] for key in ("match_score", "matched_field") if term.get(key) is not None},
             "queried_at": queried_at,
         },
         "source": dict(source)
@@ -3673,9 +3728,11 @@ def _resolver_candidate_from_helper_result(
         label,
         source_phrase,
     )
-    matched_field = "label" if label and matched_string == label else "candidate"
+    matched_field = lookup.get("matched_field") or (
+        "label" if label and matched_string == label else "candidate"
+    )
     match_mode = str(lookup.get("match_type") or "candidate")
-    score = 1.0 if match_mode in {"exact_label", "exact_synonym"} else max(0.0, 0.85 - (index * 0.05))
+    score = 1.0 if match_mode in {"exact_label", "exact_synonym"} else lookup.get("match_score")
     source_provider = source.get("provider") if isinstance(source, Mapping) else None
     normalized = {
         "candidate_id": f"candidate-{index + 1}",
@@ -3697,7 +3754,7 @@ def _resolver_candidate_from_helper_result(
         "matched_string": matched_string,
         "matched_field": matched_field,
         "match_mode": match_mode,
-        "score": round(score, 3),
+        "score": round(score, 3) if score is not None else None,
         "score_breakdown": {
             "authority": candidate.get("authority") or helper_result.get("authority"),
             "rank": index + 1,
@@ -3927,9 +3984,11 @@ def _resolver_debug_payload(
         "slim_allowed_term_count": allowed_term_count,
         "lookup_attempt_count": len(lookup_attempts or []),
         "lookup_methods": [
-            str(attempt.get("method"))
+            str(attempt["attempted_query"]["method"])
             for attempt in (lookup_attempts or [])
-            if isinstance(attempt, Mapping) and attempt.get("method")
+            if isinstance(attempt, Mapping)
+            and isinstance(attempt.get("attempted_query"), Mapping)
+            and attempt["attempted_query"].get("method")
         ],
         "context_counts": dict(context_counts) if context_counts else None,
     }
@@ -4580,7 +4639,6 @@ def search_domain_field_terms(
     )
     lookup_status = _helper_lookup_status(candidates)
     warnings = list(result.warnings or [])
-    warnings.append("limited_search_backend:current_api_exact_prefix_contains")
     if branch_root_curie:
         warnings.append("branch_root_curie_preserved_for_future_filtering")
     if "vector_recall" in resolver.get("search_channels", []):
