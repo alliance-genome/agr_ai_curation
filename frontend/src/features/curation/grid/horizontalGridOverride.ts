@@ -47,27 +47,24 @@ export function horizontalGridOverrideIdentity(
 
 /**
  * Why an override cannot be sent as entered, or null: the identifier and the
- * name are required, in the backend's own words (resolvable_values.py
- * _override_incomplete_message). A validated key (e.g. a taxon) is always
- * sent, as null when left empty.
+ * name are required, and asked for together, in the backend's own words
+ * (resolvable_values.py _override_incomplete_message). A validated key (e.g. a
+ * taxon) is always sent, as null when left empty, so it is never missing.
  */
 export function horizontalGridOverrideProblem(
   value: DomainEnvelopeReviewResolvedValue,
   identity: HorizontalGridOverrideIdentity,
 ): string | null {
-  const empty = (key: string | null): key is string => Boolean(key) && !(identity[key as string] ?? '').trim()
-  const idMissing = empty(value.id_key)
-  const nameMissing = empty(value.label_key)
-  if (idMissing && nameMissing) {
+  const empty = (key: string | null) => Boolean(key) && !(identity[key as string] ?? '').trim()
+  if (!empty(value.id_key) && !empty(value.label_key)) {
+    return null
+  }
+  if (value.id_key && value.label_key) {
     return 'Enter both the identifier and the name for a curator override.'
   }
-  if (idMissing) {
-    return 'Enter the identifier for a curator override.'
-  }
-  if (nameMissing) {
-    return 'Enter the name for a curator override.'
-  }
-  return null
+  return value.id_key
+    ? 'Enter the identifier for a curator override.'
+    : 'Enter the name for a curator override.'
 }
 
 /** Whether an identity key must be filled in: the identifier and the name. */

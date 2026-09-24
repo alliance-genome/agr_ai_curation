@@ -130,12 +130,13 @@ describe('curator override patches', () => {
   })
 
   it('requires the identifier and the name with the backend\'s wording; a validated key may be empty', () => {
+    // A value declaring both asks for them together, whichever is empty.
     expect(horizontalGridOverrideProblem(value(), { ...IDENTITY, curie: '', name: ' ' }))
       .toBe('Enter both the identifier and the name for a curator override.')
     expect(horizontalGridOverrideProblem(value(), { ...IDENTITY, name: ' ' }))
-      .toBe('Enter the name for a curator override.')
+      .toBe('Enter both the identifier and the name for a curator override.')
     expect(horizontalGridOverrideProblem(value(), { ...IDENTITY, curie: '' }))
-      .toBe('Enter the identifier for a curator override.')
+      .toBe('Enter both the identifier and the name for a curator override.')
     expect(horizontalGridOverrideProblem(value({ label_key: null }), { curie: '', taxon: 'T:1' }))
       .toBe('Enter the identifier for a curator override.')
     expect(horizontalGridOverrideProblem(value({ id_key: null }), { name: '', taxon: 'T:1' }))
