@@ -19,7 +19,6 @@ from src.lib.agent_studio.execution_revision_service import (
     get_execution_revision,
 )
 from src.lib.config.models_loader import get_model
-from src.lib.group_tool_policy import resolve_group_tool_policy
 from src.lib.packages.tool_roles import identity_lookup_tools_on_extraction_agent
 from src.models.sql.agent import Agent
 from src.schemas.agent_execution_revision import AgentExecutionReceipt, AgentExecutionSnapshot
@@ -159,10 +158,12 @@ def resolve_flow_execution_revisions(
                         fix_hint="Open the agent, choose an available model, save it, and select the new revision here.",
                     ))
                     continue
+                # Group-scoped tools count for every group, as in the startup report.
                 lookups = identity_lookup_tools_on_extraction_agent(
-                    resolve_group_tool_policy(
-                        list(saved.tool_ids), saved.group_tool_policy, active_group_ids,
-                    ).tool_ids,
+                    [
+                        *saved.tool_ids,
+                        *(rule["tool_id"] for rule in saved.group_tool_policy.get("rules", [])),
+                    ],
                     output_state=saved.output_contract.output_state,
                     output_schema_key=saved.output_contract.output_schema_key,
                 )

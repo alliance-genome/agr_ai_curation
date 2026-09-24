@@ -169,7 +169,7 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
                       if output.domain_extraction_ref else None},
     )
     result = validate_workshop_context(db, workshop=workshop, user_id=1, active_group_ids=groups)
-    assert result.valid, result.findings
+    assert result.valid, [(f.code, f.message, f.fix_hint) for f in result.findings]
 
     # A different installed helper is not inherited merely because its policy
     # has the same hidden/runtime designation.
@@ -188,7 +188,7 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
     template.tool_ids = [*original_tools, "stage_disease_observation"]
     db.flush()
     result = validate_workshop_context(db, workshop=workshop, user_id=1, active_group_ids=groups)
-    assert result.valid, result.findings
+    assert result.valid, [(f.code, f.message, f.fix_hint) for f in result.findings]
 
     # A metadata-only save must carry source provenance even without tool_ids.
     service.update_custom_agent(
@@ -263,9 +263,10 @@ def _legacy_expression_extractor(db, groups, *, migrated):
 
     definition = get_agent_definition("gene_expression_extraction")
     assert definition is not None
+    agent_id = uuid4()
     head = Agent(
-        id=uuid4(), agent_key=f"ca_{uuid4().hex}", user_id=1, name="Saved expression extractor",
-        instructions="Extract paper-supported records.", model_id="gpt-6-sol",
+        id=agent_id, agent_key=f"ca_{agent_id.hex}", user_id=1, name="Saved expression extractor",
+        instructions="Record zebrafish expression patterns.", model_id="gpt-6-sol",
         model_temperature=0.1, model_reasoning="medium", visibility="private",
         template_source="gene_expression_extraction",
         tool_ids=list(dict.fromkeys([*definition.tools, *RESOLVER_HELPERS])),
@@ -328,22 +329,34 @@ def test_resaving_a_gene_expression_extractor_leaves_out_inherited_identity_look
 
 @pytest.mark.parametrize("migrated", [False, True])
 def test_workshop_accepts_a_legacy_expression_extractor_but_refuses_an_attached_lookup(
-    policy_db, migrated,
+    policy_db, monkeypatch, migrated,
 ):
     """ALL-1276: the Workshop validates the saved tool list unchanged (inherited lookups
     are withheld, as Save withholds them), but a lookup the curator attaches is refused."""
     from src.lib.agent_studio.models import AgentWorkshopContext
     from src.lib.agent_studio.workshop_authoring import validate_workshop_context
     from src.lib.config import get_valid_group_ids
+    from src.lib.prompts import cache
+    from src.models.sql.prompts import PromptTemplate
 
     db = policy_db
     groups = list(get_valid_group_ids())
+    # The Workshop resolves the template's prompt layers from the active prompt cache.
+    PromptTemplate.__table__.create(db.connection())
+    db.add(PromptTemplate(
+        agent_name="gene_expression", prompt_type="system",
+        content="Extract paper-supported records.", version=1, is_active=True,
+    ))
+    db.flush()
+    for name in ("_active_cache", "_version_cache", "_initialized", "_loaded_at"):
+        monkeypatch.setattr(cache, name, getattr(cache, name))
+    cache.initialize(db)
     head, snapshot, saved = _legacy_expression_extractor(db, groups, migrated=migrated)
     output = snapshot.output_contract
     workshop = AgentWorkshopContext(
         getting_started_mode="template", template_source="gene_expression_extraction",
         custom_agent_id=head.agent_key, custom_agent_updated_at=head.updated_at.isoformat(),
-        draft_name=head.name, draft_description=head.description or "", draft_icon=head.icon,
+        draft_name=head.name, draft_description=head.description or "", draft_icon=head.icon or "🔧",
         draft_visibility="private", draft_model_id=head.model_id,
         draft_model_reasoning=head.model_reasoning,
         prompt_draft=service.custom_agent_to_dict(head)["custom_prompt"],
@@ -355,7 +368,7 @@ def test_workshop_accepts_a_legacy_expression_extractor_but_refuses_an_attached_
                       if output.domain_extraction_ref else None},
     )
     result = validate_workshop_context(db, workshop=workshop, user_id=1, active_group_ids=groups)
-    assert result.valid, result.findings
+    assert result.valid, [(f.code, f.message, f.fix_hint) for f in result.findings]
 
     attached = workshop.model_copy(deep=True)
     attached.draft_tool_ids = [*snapshot.tool_ids, "agr_curation_query"]
