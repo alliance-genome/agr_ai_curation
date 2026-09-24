@@ -3021,7 +3021,7 @@ metadata:
             required: false
           data_provider:
             source: payload
-            path: data_provider.abbreviation
+            path: data_provider.mention
             required: false
             context_only: true
         expected_result_fields:
@@ -3133,7 +3133,7 @@ metadata:
             path: expression_pattern.when_expressed.developmental_stage_start.mention
           data_provider:
             source: payload
-            path: data_provider.abbreviation
+            path: data_provider.mention
             required: false
             context_only: true
           ontology_family:
@@ -3269,7 +3269,7 @@ metadata:
             required: false
           data_provider:
             source: payload
-            path: data_provider.abbreviation
+            path: data_provider.mention
             required: false
             context_only: true
           ontology_family:
@@ -3599,7 +3599,7 @@ metadata:
             required: false
           data_provider_abbreviation:
             source: payload
-            path: data_provider.abbreviation
+            path: data_provider.mention
             required: false
             context_only: true
           # EVIDENCE CONTRACT: the validator sees the backend-resolved exact source text for the

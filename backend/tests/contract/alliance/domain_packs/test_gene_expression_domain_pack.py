@@ -811,10 +811,11 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
     assert stage_request.target.field_path == (
         "expression_pattern.when_expressed.developmental_stage_start"
     )
-    # The validator looks up the paper wording, not the stage statement column. The data
-    # provider context reads the confirmed abbreviation, empty until its validator runs.
+    # The validator looks up the paper wording, not the stage statement column. Its species
+    # context is the extractor's data provider, before the data-provider validator runs.
     assert stage_request.selected_inputs == {
         "label": "TS26 embryos",
+        "data_provider": "MGI",
         "ontology_family": "life_stage",
         "lookup_method": "search_life_stage_terms",
     }
@@ -836,6 +837,7 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
     # No ID in the paper for the anatomy: the validator searches with the wording alone.
     assert anatomy_request.selected_inputs == {
         "label": "metanephros",
+        "data_provider": "MGI",
         "ontology_family": "anatomy",
         "lookup_method": "search_anatomy_terms",
     }
@@ -3882,6 +3884,14 @@ def test_non_pinned_bindings_read_the_paper_wording_and_pinned_bindings_are_unch
     assert bindings["subject_gene_validation"]["input_fields"]["gene_id"]["path"] == (
         "expression_annotation_subject.proposed_primary_external_id"
     )
+    # Species context is the extractor's data provider (from the paper or the species lookup).
+    for binding_id, input_name in (
+        ("subject_gene_validation", "data_provider"),
+        ("expression_stage_ontology_validation", "data_provider"),
+        ("expression_anatomical_structure_validation", "data_provider"),
+        ("experimental_condition_validation", "data_provider_abbreviation"),
+    ):
+        assert bindings[binding_id]["input_fields"][input_name]["path"] == "data_provider.mention"
     # Hash-pinned and byte-identical: saved profile mappings pin sha256(binding.raw).
     from src.schemas.generic_extraction_profile import canonical_json
 
@@ -3953,7 +3963,7 @@ def test_builder_staged_subject_is_looked_up_from_its_paper_wording_and_written_
     ]
     request = build_domain_validation_request(matches[0]).request
     assert request is not None
-    assert request.selected_inputs == {"gene_symbol": "Tmem67"}
+    assert request.selected_inputs == {"gene_symbol": "Tmem67", "data_provider": "MGI"}
 
     result = materialize_validator_results_into_envelope(
         envelope,
