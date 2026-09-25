@@ -81,7 +81,7 @@ def test_alembic_upgrade_head_preserves_existing_private_flow():
         with engine.connect() as connection:
             assert connection.execute(text(
                 "SELECT version_num FROM alembic_version"
-            )).scalar_one() == "92a22b250925"
+            )).scalar_one() == "c53c05e0925c"
             assert connection.execute(text(
                 "SELECT visibility, project_id, shared_at FROM curation_flows WHERE id = :id"
             ), {"id": flow_id}).one() == ("private", None, None)

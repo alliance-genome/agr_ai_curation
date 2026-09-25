@@ -1,5 +1,14 @@
 # Recorded AI Curation model cost
 
+The 0.10.0 shared-ledger direction is documented in
+[Cost ledger ownership](COST_LEDGER_OWNERSHIP.md). This CLI remains a read-only
+consumer; it is not a separate billing database.
+
+Cost attribution accepts both direct `metadata.cost_context` and the
+OpenInference JSON span attribute exported by Langfuse under the literal key
+`metadata["attributes.metadata"]`. Direct cost context takes precedence when
+both are present; explicit unknowns are not replaced by ancestor identities.
+
 ALL-1205 / KANBAN-1725 adds content-free execution attribution and a read-only
 TraceReview CLI. It is not the ALL-540 billing ledger. PDFX, compute, storage,
 embeddings, and reranking are outside this report's boundary.

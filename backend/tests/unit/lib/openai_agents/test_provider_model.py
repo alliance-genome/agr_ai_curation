@@ -13,6 +13,7 @@ from agents.retry import ModelRetrySettings
 
 from src.lib.openai_agents.provider_model import ProviderConfiguredChatCompletionsModel
 from src.lib.openai_agents.provider_usage import capture_provider_usage
+from src.lib.observability.cost_context import model_request_scope
 
 
 @pytest.fixture(autouse=True)
@@ -233,14 +234,16 @@ async def test_streaming_telemetry_is_captured_from_terminal_fields(monkeypatch)
     model = _model(telemetry_adapter="openrouter")
 
     with capture_provider_usage() as records:
-        _, stream = await model._fetch_response(
-            None, [], ModelSettings(), [], None, [], None, None, True
-        )
+        with model_request_scope({"model_request_id": "routed-stream-request"}):
+            _, stream = await model._fetch_response(
+                None, [], ModelSettings(), [], None, [], None, None, True
+            )
         async for _ in stream:
             assert provider_parent_for_tool_call("stream-call") == 1
 
     assert len(records) == 1
     assert records[0].actual_provider == "DeepInfra"
+    assert records[0].model_request_id == "routed-stream-request"
     assert records[0].total_tokens == 5
     assert records[0].billed_cost is not None
 

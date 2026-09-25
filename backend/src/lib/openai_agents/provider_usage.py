@@ -59,6 +59,7 @@ class ProviderUsageRecord:
     failure_detail: Optional[str] = None
     stage_execution_id: Optional[str] = None
     parent_invocation_sequence: Optional[int] = None
+    model_request_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,7 @@ class PendingProviderInvocation:
     started_at: float
     stage_execution_id: Optional[str] = None
     parent_invocation_sequence: Optional[int] = None
+    model_request_id: Optional[str] = None
 
 
 class ProviderInvocationObserver(Protocol):
@@ -181,6 +183,7 @@ def begin_provider_invocation(
         capture.reserved += 1
         sequence = capture.reserved
     from src.lib.benchmarks.stage_measurements import current_stage
+    from src.lib.observability.cost_context import current_model_request
 
     stage = current_stage()
     pending = PendingProviderInvocation(
@@ -192,6 +195,7 @@ def begin_provider_invocation(
         started_at=started_at,
         stage_execution_id=str(stage.execution_id) if stage is not None else None,
         parent_invocation_sequence=stage.parent_invocation_sequence if stage is not None else None,
+        model_request_id=current_model_request().get("model_request_id"),
     )
     observer = _provider_invocation_observer.get()
     if observer is not None:
@@ -217,6 +221,7 @@ def complete_provider_invocation(
         failure_detail=None,
         stage_execution_id=pending.stage_execution_id,
         parent_invocation_sequence=pending.parent_invocation_sequence,
+        model_request_id=pending.model_request_id,
     )
     emit_provider_usage(completed)
     observer = _provider_invocation_observer.get()
@@ -260,6 +265,7 @@ def fail_provider_invocation(
         failure_detail=detail,
         stage_execution_id=pending.stage_execution_id,
         parent_invocation_sequence=pending.parent_invocation_sequence,
+        model_request_id=pending.model_request_id,
     )
     emit_provider_usage(failed)
     observer = _provider_invocation_observer.get()
@@ -422,9 +428,14 @@ def _emit_provider_usage_trace_event(record: ProviderUsageRecord) -> None:
         return
 
     try:
+        metadata: dict[str, Any] = {"provider_usage": provider_usage_metadata(record)}
+        # Correlation belongs to the telemetry envelope, not the immutable
+        # benchmark result schema. That schema changes with the ledger cutover.
+        if record.model_request_id is not None:
+            metadata["model_request_id"] = record.model_request_id
         langfuse.create_event(
             name="provider_usage",
-            metadata={"provider_usage": provider_usage_metadata(record)},
+            metadata=metadata,
             trace_context={"trace_id": trace_id},
         )
     except Exception as exc:

@@ -195,6 +195,7 @@ class _DurableInvocationObserver:
                 started_at=started_at,
                 stage_execution_id=UUID(pending.stage_execution_id) if pending.stage_execution_id is not None else None,
                 parent_invocation_sequence=pending.parent_invocation_sequence,
+                model_request_id=UUID(pending.model_request_id) if pending.model_request_id is not None else None,
             )
             session.commit()
             self.invocation_ids[pending.sequence] = invocation.id

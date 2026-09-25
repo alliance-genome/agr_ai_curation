@@ -391,6 +391,7 @@ class BenchmarkInvocation(Base):
     actual_model: Mapped[str | None] = mapped_column(String(255))
     routing_attempt: Mapped[int | None] = mapped_column(Integer)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_request_id: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True))
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
@@ -419,6 +420,7 @@ class BenchmarkInvocation(Base):
         CheckConstraint("parent_invocation_sequence IS NULL OR parent_invocation_sequence >= 1",
                         name="ck_benchmark_invocations_parent_sequence"),
         UniqueConstraint("cell_id", "ordinal", name="uq_benchmark_invocations_cell_ordinal"),
+        UniqueConstraint("model_request_id", name="uq_benchmark_invocations_model_request"),
         CheckConstraint("ordinal >= 0 AND attempt >= 1", name="ck_benchmark_invocations_order"),
         CheckConstraint(
             "sequence >= 1 AND (routing_attempt IS NULL OR routing_attempt >= 0) "

@@ -13,6 +13,35 @@ from src.lib.benchmarks.persistence import BenchmarkLeaseLostError
 from src.lib.benchmarks.worker import BenchmarkWorker, _report_failure
 
 
+@pytest.mark.parametrize("measured", [False, True])
+def test_invocation_observer_persists_measured_identity_before_dispatch(monkeypatch, measured):
+    from src.lib.benchmarks import worker
+    from src.lib.openai_agents.provider_usage import PendingProviderInvocation
+
+    session = MagicMock()
+    session.__enter__.return_value = session
+    repository = MagicMock()
+    repository.cancellation_requested.return_value = False
+    row_id, request_id = uuid4(), uuid4()
+    repository.append_invocation.return_value.id = row_id
+    monkeypatch.setattr(worker, "BenchmarkRepository", lambda db: repository)
+    observer = worker._DurableInvocationObserver(
+        cell=SimpleNamespace(id=uuid4(), job_id=uuid4(), attempt_count=1, input_digest="fixture"),
+        lease_owner=uuid4(), session_factory=lambda: session,
+    )
+    pending = PendingProviderInvocation(
+        route_slot="supervisor", requested_provider="openai", requested_model="fixture",
+        reasoning_effort=None, sequence=1, started_at=1.0,
+        model_request_id=request_id.hex if measured else None,
+    )
+    observer.started(pending)
+    assert repository.append_invocation.call_args.kwargs["model_request_id"] == (
+        request_id if measured else None
+    )
+    session.commit.assert_called_once()
+    assert observer.invocation_ids == {1: row_id}
+
+
 @pytest.mark.parametrize("failure_at", [None, "start", "finish", "commit"])
 def test_stage_observer_commits_boundaries_and_retains_swallowed_failure(monkeypatch, failure_at):
     from src.lib.benchmarks import worker

@@ -21,6 +21,72 @@ from src.lib.openai_agents.provider_usage import (
 )
 
 
+@pytest.mark.parametrize("failed", [False, True])
+def test_request_identity_is_snapshotted_at_start_not_completion(monkeypatch, failed):
+    from src.lib.observability.cost_context import model_request_scope, current_model_request
+
+    emitted = []
+    monkeypatch.setattr(
+        "src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event",
+        emitted.append,
+    )
+    with capture_provider_usage(max_records=2, max_failure_detail_chars=20) as records:
+        for identity in ("first-request", "retry-request"):
+            with model_request_scope({"model_request_id": identity}):
+                pending = begin_provider_invocation(
+                    requested_provider="openai", requested_model="test", started_at=1.0,
+                )
+            assert pending is not None
+            assert pending.model_request_id == identity
+            with model_request_scope({"model_request_id": "unrelated-completion-context"}):
+                if failed:
+                    fail_provider_invocation(pending, RuntimeError("test"), latency_ms=1)
+                else:
+                    complete_generic_provider_invocation(
+                        pending, {"usage": {"input_tokens": 1, "output_tokens": 2}},
+                        latency_ms=1,
+                    )
+    assert [r.model_request_id for r in records] == ["first-request", "retry-request"]
+    assert emitted == records
+    assert current_model_request() == {}
+
+
+def test_provider_trace_event_exposes_join_identity_without_changing_artifact(monkeypatch):
+    from unittest.mock import Mock
+    from src.lib.observability.cost_context import model_request_scope
+    from src.lib.openai_agents.provider_usage import provider_usage_metadata
+
+    client = Mock()
+    monkeypatch.setattr("src.lib.context.get_current_trace_id", lambda: "trace")
+    monkeypatch.setattr("src.lib.openai_agents.langfuse_client.get_langfuse", lambda: client)
+    with capture_provider_usage(max_records=1, max_failure_detail_chars=20) as records:
+        with model_request_scope({"model_request_id": "request"}):
+            pending = begin_provider_invocation(
+                requested_provider="openai", requested_model="test", started_at=1.0,
+            )
+        complete_generic_provider_invocation(
+            pending, {"usage": {"input_tokens": 1, "output_tokens": 2}}, latency_ms=1,
+        )
+    metadata = client.create_event.call_args.kwargs["metadata"]
+    assert metadata["model_request_id"] == "request"
+    assert metadata["provider_usage"] == provider_usage_metadata(records[0])
+    assert "model_request_id" not in provider_usage_metadata(records[0])
+
+
+def test_unmeasured_invocation_keeps_request_identity_unknown(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event", lambda record: None,
+    )
+    with capture_provider_usage(max_records=1, max_failure_detail_chars=20) as records:
+        pending = begin_provider_invocation(
+            requested_provider="openai", requested_model="test", started_at=1.0,
+        )
+        assert pending is not None
+        assert pending.model_request_id is None
+        fail_provider_invocation(pending, RuntimeError("test"), latency_ms=1)
+    assert records[0].model_request_id is None
+
+
 @pytest.mark.parametrize("input_tokens,output_tokens", [(12, 3), (0, 3), (12, 0), (0, 0)])
 def test_generic_usage_retains_native_sdk_dataclass_tokens(
     monkeypatch, input_tokens, output_tokens

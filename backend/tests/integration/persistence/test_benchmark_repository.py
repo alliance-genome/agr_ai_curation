@@ -162,7 +162,7 @@ def _create_job(db, *, owner: str = "owner-a", cells: int = 3, rerun_of: UUID | 
     )
 
 
-def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
+def _run_to_terminal(db, job_id: UUID, *, billed_amount: Decimal | None = None) -> BenchmarkJob:
     repository = BenchmarkRepository(db)
     now = datetime.now(timezone.utc)
     lease_owner = uuid4()
@@ -198,6 +198,9 @@ def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
             status=BenchmarkInvocationStatus.SUCCEEDED,
             completed_at=now,
             response_digest=_digest("2"),
+            billed_amount=billed_amount,
+            billed_unit="credits" if billed_amount is not None else None,
+            billed_source="audit-fixture" if billed_amount is not None else None,
         )
         repository.append_event(
             job_id=job_id, event_type="cell.succeeded", payload={"cell_id": str(cell.id)}
@@ -213,6 +216,73 @@ def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
     return repository.complete_job(
         job_id=job_id, lease_owner=lease_owner, completed_at=now
     )
+
+
+def test_model_request_binding_survives_commit_and_rejects_duplicate_or_stale_dispatch():
+    with SessionLocal() as db:
+        job = _create_job(db, owner="request-binding-owner", cells=1)
+        repository = BenchmarkRepository(db)
+        now, lease_owner = datetime.now(timezone.utc), uuid4()
+        repository.claim_next_job(
+            lease_owner=lease_owner, lease_expires_at=now + timedelta(minutes=5), now=now,
+        )
+        cell = repository.claim_next_cell(
+            job_id=job.id, lease_owner=lease_owner,
+            lease_expires_at=now + timedelta(minutes=5), now=now,
+        )
+        assert cell is not None
+        request_id = uuid4()
+
+        def append(ordinal, identity, owner=lease_owner):
+            return repository.append_invocation(
+                cell_id=cell.id, lease_owner=owner, ordinal=ordinal, attempt=1,
+                route_slot="supervisor", request_digest=_digest("1"),
+                requested_provider="openai", requested_model="fixture", reasoning_effort=None,
+                sequence=ordinal + 1, started_at=now, model_request_id=identity,
+            )
+
+        first = append(0, request_id)
+        with pytest.raises(IntegrityError, match="uq_benchmark_invocations_model_request"):
+            with db.begin_nested():
+                append(1, request_id)
+        with pytest.raises(BenchmarkLeaseLostError):
+            with db.begin_nested():
+                append(1, uuid4(), uuid4())
+        with pytest.raises(BenchmarkLeaseLostError):
+            with db.begin_nested():
+                repository.append_invocation(
+                    cell_id=cell.id, lease_owner=lease_owner, ordinal=1, attempt=1,
+                    route_slot="supervisor", request_digest=_digest("1"),
+                    requested_provider="openai", requested_model="fixture", reasoning_effort=None,
+                    sequence=2, started_at=now, model_request_id=uuid4(),
+                    now=now + timedelta(minutes=6),
+                )
+        retry_id = uuid4()
+        retry = append(1, retry_id)
+        unknowns = [append(2, None), append(3, None)]
+        ids = [row.id for row in [first, retry, *unknowns]]
+        db.commit()
+        with SessionLocal() as fresh:
+            assert [fresh.get(BenchmarkInvocation, key).model_request_id for key in ids] == [
+                request_id, retry_id, None, None,
+            ]
+        for row in [first, retry, *unknowns]:
+            repository.finish_invocation(
+                invocation_id=row.id, lease_owner=lease_owner,
+                status=BenchmarkInvocationStatus.SUCCEEDED, completed_at=now,
+                response_digest=_digest("2"), input_tokens=1, output_tokens=2, total_tokens=3,
+            )
+        repository.finish_cell(
+            cell_id=cell.id, lease_owner=lease_owner, status=BenchmarkCellStatus.SUCCEEDED,
+            completed_at=now, generated_envelope={"records": []},
+            result={"output": {"records": []}, "invocations": []},
+        )
+        repository.complete_job(job_id=job.id, lease_owner=lease_owner, completed_at=now)
+        db.commit()
+        db.refresh(first)
+        assert first.model_request_id == request_id
+        repository.delete_terminal_job(job_id=job.id, owner_subject="request-binding-owner")
+        db.commit()
 
 
 def test_curator_context_is_persisted_separately_and_immutable_while_queued():
@@ -1153,3 +1223,51 @@ def test_postgres_skip_locked_allows_only_one_job_claimant():
                 )
                 first.commit()
         first.close()
+
+
+def test_cost_audit_is_read_only_complete_across_pages_and_snapshot_consistent(monkeypatch):
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_audit import audit_benchmark_costs
+
+    scope = dict(deployment_id="fixture-deployment", source_namespace="fixture-execution")
+    job_ids = []
+    try:
+        with SessionLocal() as db:
+            job = _create_job(db, owner="audit-private-owner", cells=3)
+            job_ids.append(job.id)
+            _run_to_terminal(db, job.id, billed_amount=Decimal("0.000000000000000000123"))
+            db.commit()
+        with SessionLocal() as snapshot:
+            snapshot.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+            monkeypatch.setenv("COST_MIGRATION_AUDIT_PAGE_SIZE", "1")
+            first = audit_benchmark_costs(snapshot, **scope)
+            assert first["planned_invocations"] >= 3
+            assert {"unit": "credits", "source": "audit-fixture", "amount": "3.69E-19", "invocations": 3} in first["recorded_charge_totals"]
+            assert not first["write_side_enabled"] and first["dry_run"]
+            assert "audit-private-owner" not in str(first)
+            monkeypatch.setenv("COST_MIGRATION_AUDIT_PAGE_SIZE", "2")
+            assert audit_benchmark_costs(snapshot, **scope) == first
+            with pytest.raises(DBAPIError):
+                with snapshot.begin_nested():
+                    snapshot.execute(text("UPDATE cost_attempts SET owner_subject = 'not-allowed'"))
+            with SessionLocal() as writer:
+                queued = _create_job(writer, owner="audit-queued-owner", cells=1)
+                job_ids.append(queued.id)
+                writer.commit()
+            assert audit_benchmark_costs(snapshot, **scope) == first
+        with SessionLocal() as fresh:
+            fresh.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+            updated = audit_benchmark_costs(fresh, **scope)
+            assert updated["active_jobs"] == first["active_jobs"] + 1
+            assert updated["cutover_blockers"]["active_jobs"] >= 1
+        with SessionLocal() as unsafe:
+            with pytest.raises(ValueError, match="read-only"):
+                audit_benchmark_costs(unsafe, **scope)
+    finally:
+        with SessionLocal() as cleanup:
+            for job_id in job_ids:
+                job = cleanup.get(BenchmarkJob, job_id)
+                if job.status == BenchmarkJobStatus.QUEUED:
+                    _run_to_terminal(cleanup, job_id)
+                BenchmarkRepository(cleanup).delete_terminal_job(job_id=job_id, owner_subject=job.owner_subject)
+            cleanup.commit()

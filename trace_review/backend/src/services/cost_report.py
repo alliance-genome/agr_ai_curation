@@ -44,7 +44,22 @@ def utc_time(value: Any) -> datetime:
 def _context(observation: Mapping[str, Any]) -> dict[str, Any]:
     metadata = _metadata(observation)
     context = metadata.get("cost_context")
-    return dict(context) if isinstance(context, Mapping) else dict(metadata)
+    if isinstance(context, Mapping):
+        return dict(context)
+    # OpenInference emits the JSON ``metadata`` span attribute; Langfuse
+    # exports it under this literal key, not as observation.cost_context.
+    # Decode only this known transport envelope, never arbitrary nested data.
+    exported = metadata.get("attributes.metadata")
+    if isinstance(exported, str):
+        try:
+            exported = json.loads(exported)
+        except ValueError:
+            exported = None
+    if isinstance(exported, Mapping):
+        context = exported.get("cost_context")
+        if isinstance(context, Mapping):
+            return dict(context)
+    return dict(metadata)
 
 
 def _usage_status(declared: Any, usage: Mapping[str, Any]) -> str:

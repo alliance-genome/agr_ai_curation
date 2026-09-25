@@ -1071,6 +1071,7 @@ class BenchmarkRepository:
         started_at: datetime,
         stage_execution_id: UUID | None = None,
         parent_invocation_sequence: int | None = None,
+        model_request_id: UUID | None = None,
         now: datetime | None = None,
     ) -> BenchmarkInvocation:
         current = now or datetime.now(timezone.utc)
@@ -1117,6 +1118,7 @@ class BenchmarkRepository:
             sequence=sequence,
             stage_execution_id=stage_execution_id,
             parent_invocation_sequence=parent_invocation_sequence,
+            model_request_id=model_request_id,
             status=BenchmarkInvocationStatus.RUNNING,
             started_at=started_at,
         )

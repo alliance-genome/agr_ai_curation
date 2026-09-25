@@ -1570,6 +1570,11 @@ def get_benchmark_max_page_size() -> int:
     return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_PAGE_SIZE", 200))
 
 
+def get_cost_migration_audit_page_size() -> int:
+    """Rows per read-only cost migration audit query; does not cap coverage."""
+    return max(1, _get_env_int_with_fallback("COST_MIGRATION_AUDIT_PAGE_SIZE", 200))
+
+
 def get_go_annotations_request_timeout_seconds() -> float:
     """HTTP timeout for typed existing-GO annotation lookups."""
     return max(
