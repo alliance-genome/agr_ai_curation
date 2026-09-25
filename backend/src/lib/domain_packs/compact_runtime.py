@@ -2,10 +2,12 @@
 
 This layer knows invocation/request identity, not Alliance response formats.
 Package adapters own lookup interpretation and canonical record projection.
+The model-facing view applies only the package-neutral agr_lookup envelope view.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from copy import copy, deepcopy
 from dataclasses import dataclass
 import json
@@ -17,10 +19,23 @@ from uuid import uuid4
 from pydantic import BaseModel
 from pydantic import create_model
 
+from agr_ai_curation_runtime.agr_lookup import lookup_model_view
 from src.lib.domain_packs.compact_decisions import (
     CanonicalValidatorRecord, DecisionContract, ValidatorDecisionWorkspace,
 )
+from src.lib.openai_agents.tool_result_bounds import (
+    ToolResultBudgetError, bounded_json_result, budget_failure, full_tool_results_requested,
+    json_pointer_for_row, report_budget_failure_result, result_view_schema_properties,
+    serialized_size, tool_result_budget,
+)
 from src.schemas.domain_validator import DomainValidatorResultBase, ValidatorLookupAttempt
+
+# Page/detail arguments a validator lookup accepts; continuation always names
+# the stored lookup instead of re-running it, so refs stay call-scoped.
+_LOOKUP_VIEW_ARGUMENTS = ("lookup_ref", "result_offset", "detail_path", "detail_cursor")
+# Runtime-owned fields of the model view; a provider response may not use them.
+_RESERVED_VIEW_FIELDS = frozenset({"validator_record_refs", "validator_record_available_fields",
+                                   "validator_lookup_refs"})
 
 
 @dataclass(frozen=True)
@@ -52,6 +67,10 @@ class CompactValidatorRuntime:
         self.lookup_tool_names: frozenset[str] = frozenset()
         self.source_catalog: list[dict[str, Any]] = []
         self.standalone_evidence_records: list[dict[str, Any]] | None = None
+        # Model views of captured lookups keyed by lookup_ref (the concrete call
+        # id), scoped to this invocation; the model pages them without a re-run.
+        # The complete responses stay in the workspace ledger.
+        self._lookup_views: dict[str, dict[str, Any]] = {}
 
     def wrap_lookup_tool(self, tool: Any) -> Any:
         """Capture raw facts before downstream presentation/trace compaction.
@@ -64,6 +83,26 @@ class CompactValidatorRuntime:
         schema = deepcopy(tool.params_json_schema)
         if "validator_request_ids" in schema.get("properties", {}):
             raise ValueError("Lookup tool already declares validator_request_ids")
+        if "lookup_ref" in schema.get("properties", {}):
+            raise ValueError("Lookup tool already declares lookup_ref")
+        properties = schema.setdefault("properties", {})
+        # Stateless re-query continuation is replaced by stored-lookup paging.
+        properties.pop("result_sha256", None)
+        if "required" in schema:
+            schema["required"] = [name for name in schema["required"] if name != "result_sha256"]
+        view_properties = result_view_schema_properties()
+        properties.update({
+            "lookup_ref": {
+                "type": ["string", "null"],
+                "description": (
+                    "Only to continue a lookup whose result was paged: its lookup_ref. "
+                    "The stored result is paged; the lookup is not run again."
+                ),
+            },
+            **{name: view_properties[name] for name in ("result_offset", "detail_path", "detail_cursor")},
+        })
+        if getattr(tool, "strict_json_schema", False):
+            schema["required"] = sorted({*schema.get("required", []), *_LOOKUP_VIEW_ARGUMENTS})
         batch = len(self.contracts) != 1
         if batch:
             schema.setdefault("properties", {})["validator_request_ids"] = {
@@ -78,6 +117,11 @@ class CompactValidatorRuntime:
             supplied = json.loads(arguments)
             if not isinstance(supplied, dict):
                 raise ValueError("Lookup arguments must be an object")
+            if supplied.get("result_sha256") is not None:
+                raise ValueError("Validator lookups continue with lookup_ref, not result_sha256")
+            supplied.pop("result_sha256", None)
+            view = {name: supplied.pop(name) for name in _LOOKUP_VIEW_ARGUMENTS if name in supplied}
+            view = {name: value for name, value in view.items() if value is not None}
             if batch:
                 request_ids = supplied.pop("validator_request_ids", None)
                 if (not isinstance(request_ids, list) or not request_ids
@@ -88,7 +132,15 @@ class CompactValidatorRuntime:
                 if "validator_request_ids" in supplied:
                     raise ValueError("Single-request lookup scope is supplied by the runtime")
                 request_ids = list(self.contracts)
-            original = await tool.on_invoke_tool(context, json.dumps(supplied))
+            if "lookup_ref" in view:
+                stored = self._lookup_views.get(view.pop("lookup_ref"))
+                if stored is None:
+                    raise ValueError("Unknown lookup_ref for this validator run")
+                return json.dumps(self._bounded_lookup_view(tool.name, stored, view))
+            if view:
+                raise ValueError("Continue a paged lookup with the lookup_ref from its result")
+            with full_tool_results_requested():
+                original = await tool.on_invoke_tool(context, json.dumps(supplied))
             if isinstance(original, BaseModel):
                 payload = original.model_dump(mode="json")
             elif isinstance(original, str):
@@ -97,7 +149,7 @@ class CompactValidatorRuntime:
                 payload = deepcopy(original)
             if not isinstance(payload, dict):
                 raise ValueError("Validator lookup must return a structured object")
-            if {"validator_record_refs", "validator_lookup_refs"}.intersection(payload):
+            if _RESERVED_VIEW_FIELDS.intersection(payload):
                 raise ValueError("Provider response uses reserved validator reference fields")
             # Tool-call IDs are runtime-owned. Test/direct invocation contexts
             # may not carry one; still allocate a unique concrete call identity.
@@ -122,12 +174,68 @@ class CompactValidatorRuntime:
                     })
             # No second copy of the rich records. The catalogue adds only the
             # runtime reference and the names usable for canonical field copies.
-            return json.dumps({**payload, "validator_record_refs": catalog,
-                               "validator_lookup_refs": [{"request_id": request_id, "lookup_ref": call_id}
-                                                         for request_id in request_ids]})
+            # The workspace keeps the complete response; the model pages a view
+            # that shows each returned row once (derived restatements dropped).
+            stored = {
+                "call_id": call_id,
+                "view": lookup_model_view(payload),
+                "catalog": catalog,
+                "lookup_refs": [{"request_id": request_id, "lookup_ref": call_id}
+                                for request_id in request_ids],
+            }
+            self._lookup_views[call_id] = stored
+            return json.dumps(self._bounded_lookup_view(tool.name, stored, {}))
 
         wrapped.on_invoke_tool = invoke
         return wrapped
+
+    def _bounded_lookup_view(self, tool_name: str, stored: Mapping[str, Any],
+                             view: Mapping[str, Any]) -> dict[str, Any]:
+        """Serve a captured lookup's model view whole when it fits, else as bounded pages.
+
+        Capture already holds the complete provider response application-side;
+        the model sees each page's rows with exactly the record refs for those
+        rows, and reads withheld values through exact detail chunks.
+        """
+        model_view, catalog = stored["view"], stored["catalog"]
+        complete = {**model_view, **_record_refs_view(catalog),
+                    "validator_lookup_refs": stored["lookup_refs"]}
+        budget = tool_result_budget()
+        if not view and serialized_size(complete) <= budget:
+            return complete
+
+        def refs_for_page(keys, mode, start, returned):
+            if keys is None or mode != "items":
+                return _record_refs_view(catalog if start == 0 else [])
+            prefixes = [json_pointer_for_row(keys, index) for index in range(start, start + returned)]
+            root = json_pointer_for_row(keys, 0).rsplit("/", 1)[0]
+            rows = [entry for entry in catalog
+                    if any((entry.get("source_path") or "") == prefix
+                           or (entry.get("source_path") or "").startswith(prefix + "/")
+                           for prefix in prefixes)]
+            if start == 0:
+                # Records located outside the paged rows travel with the first page.
+                rows.extend(entry for entry in catalog
+                            if not (entry.get("source_path") or "").startswith(root + "/"))
+            return _record_refs_view(rows)
+
+        try:
+            return bounded_json_result(
+                {**model_view, "validator_lookup_refs": stored["lookup_refs"]},
+                budget=budget,
+                offset=view.get("result_offset", 0),
+                detail_path=view.get("detail_path"),
+                detail_cursor=view.get("detail_cursor"),
+                continuation_args={"lookup_ref": stored["call_id"]},
+                stateless=False,
+                page_extras=refs_for_page,
+            )
+        except ToolResultBudgetError as exc:
+            failure = budget_failure(tool_name=tool_name, measured=exc.measured, limit=exc.limit,
+                                     field=view.get("detail_path"))
+            report_budget_failure_result(failure, tool_name=tool_name,
+                                         component="validator_lookup_capture")
+            return failure
 
     def assemble(self, raw_decision: Mapping[str, Any]) -> DomainValidatorResultBase:
         request_id = raw_decision.get("request_id")
@@ -149,6 +257,28 @@ class CompactValidatorRuntime:
         # Do not publish accepted state until every decision passes assembly.
         assembled = {decision["request_id"]: self.assemble(decision) for decision in raw_decisions}
         return tuple(assembled[request_id] for request_id in self.contracts)
+
+
+def _record_refs_view(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Model-facing record refs, with the field names most of them share listed once.
+
+    Candidates of one lookup usually offer the same field names, so the list
+    travels once per served result or page; a ref keeps its own
+    ``available_fields`` only when its names differ. Stored entries are unchanged.
+    """
+    if not entries:
+        return {"validator_record_refs": []}
+    counts = Counter(frozenset(entry["available_fields"]) for entry in entries)
+    shared = max(counts, key=counts.__getitem__)
+    return {
+        "validator_record_available_fields": next(
+            entry["available_fields"] for entry in entries if frozenset(entry["available_fields"]) == shared),
+        "validator_record_refs": [
+            {key: value for key, value in entry.items() if key != "available_fields"}
+            if frozenset(entry["available_fields"]) == shared else entry
+            for entry in entries
+        ],
+    }
 
 
 def runtime_for_schema(requests, *, result_schema, profile_request_ids=(), input_text=None, evidence=()):
@@ -191,8 +321,12 @@ def compact_finalization_schema(tool, runtime, *, batch=False):
 
 
 def compact_finalization_instruction(runtime, *, tool_name, batch=False):
+    # Lookup tools accept validator_request_ids only when they serve more than
+    # one request (wrap_lookup_tool); a single-request run must not be told to pass it.
+    scoped_lookups = len(runtime.contracts) != 1
     contracts = [{"request_id": identifier,
                   "expected_slots": list(contract.request.expected_result_fields),
+                  "optional_slots": list(contract.request.optional_result_fields or {}),
                   "record_slot_fields": dict(contract.record_slot_fields),
                   "scientific_slots": list(contract.scientific_slots),
                   "domain_contract": deepcopy(dict(contract.domain_contract))}
@@ -201,16 +335,20 @@ def compact_finalization_instruction(runtime, *, tool_name, batch=False):
         "Runtime compact-decision contract: this replaces prior instructions to author a complete "
         "validator result or copy provider facts, identity metadata, or lookup_attempts. "
         "Make the scientific judgment, assess candidates with the returned validator_record_refs, "
-        "and select authoritative fields for requested slots. Preserve ambiguity, explanations, "
-        "and evidence references. Follow each request's domain_contract for its package-specific "
+        "and select authoritative fields for requested slots. A record ref's selectable fields are "
+        "the validator_record_available_fields of the same tool response (page), unless the ref lists "
+        "its own available_fields; never carry that list across responses or pages. "
+        "Preserve ambiguity, explanations, and evidence references. Follow each request's domain_contract for its package-specific "
         "decision shape; component slots are distinct from root slots. "
         "The program copies source facts, request identity and actual lookup counts into the canonical result. "
         f"Call {tool_name} with {'results containing exactly one compact decision per request' if batch else 'result containing one compact decision'} "
         "using the tool's declared schema. Repair rejected decisions; stop after acceptance. "
         "Do not output or reconstruct the complete canonical result. "
-        "For batch lookups, validator_request_ids must identify only the requests served by that call. "
-        "Each reference is valid only for its named request and this invocation. "
+        + ("For batch lookups, validator_request_ids must identify only the requests served by that call. "
+           if scoped_lookups else "")
+        + "Each reference is valid only for its named request and this invocation. "
         "source_path is a JSON pointer into the lookup response, distinguishing records with identical IDs or labels. "
+        "Derived restatements of returned rows are omitted; the program keeps the complete response. "
         "Slot contracts: " + json.dumps(contracts)
         + " Supplied-context/scientific-option references (not database verification): " + json.dumps(runtime.source_catalog)
     )

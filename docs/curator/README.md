@@ -2,6 +2,10 @@
 
 Use AI Curation to read papers, extract information for review, and look up biological identifiers. You can use a ready-made agent or design a custom extractor for the details your curation task needs.
 
+If a Flow Builder draft is missing **Initial Instructions**, use **Restore Initial Instructions** above the canvas, or ask AI Chat to restore it with your agreed text and review the proposal. Other steps and connections remain unchanged. You can agree on instructions first; remaining connection errors must be resolved before Save or Run. The required instructions step cannot be deleted through the editor.
+
+For ABC Literature imports, a ZFIN publication identifier such as `ZDB-PUB-200229-13` is expanded to its full `ZFIN:ZDB-PUB-200229-13` identifier. If no reference is found, check the identifier or upload the PDF; this is different from a service or access failure.
+
 ## Choose where to start
 
 | I want to… | Guide |
@@ -10,6 +14,7 @@ Use AI Curation to read papers, extract information for review, and look up biol
 | Decide what to ask and assess the results | [Best practices](BEST_PRACTICES.md) |
 | See which extractors and lookup agents are available | [Available agents](AVAILABLE_AGENTS.md) |
 | Create or edit an agent, or get help from AI Chat | [Agent Studio](AGENT_STUDIO.md) |
+| Understand checked values, list columns and saved-flow changes | [Workshop results and outputs](WORKSHOP_OUTPUT_GUIDE.md) |
 | Extract my own set of details, such as stocks or reagents | [Custom output structures](CUSTOM_OUTPUT_STRUCTURES.md) |
 | Save a sequence of extraction, validation, and output steps | [Curation flows](CURATION_FLOWS.md) |
 | Run a saved flow on several papers | [Batch processing](BATCH_PROCESSING.md) |
@@ -32,6 +37,8 @@ A flow also needs a way to present its results: **Chat Output**, CSV, TSV, or JS
 Extraction records what the paper supports. Validation can resolve a gene, allele, or other supported value against a database or ontology. A validator attached to a field has not yet validated any answers: it runs when the agent processes data.
 
 Review the evidence and any unresolved or ambiguous results. A valid identifier does not establish that an observation belongs in your curation. Final export or submission also depends on the selected data type's supported fields and readiness rules.
+
+An allele extraction can finish with no retained findings. This means no mentions were retained under that agent's rules and the source text it could inspect; it does not prove the paper contains no alleles. Check the available text and selection rules before interpreting an empty result. An interrupted or unfinalized extraction is still a failure, not an empty success.
 
 ## Reuse shared agents and flows
 

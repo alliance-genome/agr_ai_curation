@@ -2,9 +2,9 @@
 summary: "Formats and displays final results directly in the chat interface for immediate curator review."
 capabilities:
   - name: "Inline result rendering"
-    description: "Presents structured extraction output in readable chat-first format"
-    example_query: "Show me the extracted entities in chat"
-    example_result: "Returns a readable, sectioned summary directly in chat"
+    description: "Builds the table or list you ask for from the saved results, with your column names, order and missing-value marker, and shows every matching row in chat"
+    example_query: "Show one row per expression statement with Gene, Anatomy Terms and PMID columns"
+    example_result: "Shows the requested table in chat, with a short note about values that still need review"
 use_when:
   - "At the end of a flow when you want to read the results in the chat window right away."
   - "For quick checks and small result sets that do not need a file."
@@ -13,3 +13,4 @@ avoid_when:
   - "For large result sets that are easier to review in a spreadsheet."
 limitations:
   - "Output is optimized for interactive reading, not file export"
+  - "Table cells come only from saved results; the agent cannot add values that were not extracted"

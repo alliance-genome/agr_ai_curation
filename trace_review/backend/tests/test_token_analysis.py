@@ -6,14 +6,14 @@ def test_token_analysis_reports_cache_buckets_and_missing_usage_generations():
         {
             "id": "wrapper-1",
             "type": "GENERATION",
-            "model": "gpt-5.6-terra",
+            "model": "gpt-6-sol",
             "usage_details": {},
             "cost_details": {},
         },
         {
             "id": "provider-1",
             "type": "GENERATION",
-            "provided_model_name": "gpt-5.6-terra",
+            "provided_model_name": "gpt-6-sol",
             "startTime": "2026-08-26T12:00:00Z",
             "endTime": "2026-08-26T12:00:01Z",
             "usage_details": {
@@ -47,7 +47,7 @@ def test_token_analysis_reports_cache_buckets_and_missing_usage_generations():
     assert generation["reasoning_tokens"] == 30
     assert generation["cost_source"] == "langfuse_calculated"
     assert generation["estimated_total_cost"] is None
-    assert analysis["model_breakdown"]["gpt-5.6-terra"]["count"] == 2
+    assert analysis["model_breakdown"]["gpt-6-sol"]["count"] == 2
 
 
 def test_token_analysis_decodes_bounded_provider_usage_without_generation():

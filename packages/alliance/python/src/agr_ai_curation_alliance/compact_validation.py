@@ -14,15 +14,52 @@ from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord
 from src.schemas.domain_validator import ValidatorCandidate
 
 
-# Ordered keys are documented provider representations of the same fact.
-_IDENTITIES = ("curie", "primary_external_id", "primaryExternalId", "gene_id", "go_id", "chebi_id", "id", "internal_id")
-_LABELS = ("symbol", "label", "name", "term_name", "display_name", "title")
+# Each result type names the provider keys that carry its record identity and
+# its label. Keys listed together are documented representations of the SAME
+# fact; a record whose identity is missing never falls through to another fact
+# such as an internal database id (ALL-1283).
+_ENTITY_IDS = ("curie", "primary_external_id", "primaryExternalId")
+_IDENTITY_KEYS = {
+    "GeneResultEnvelope": (*_ENTITY_IDS, "gene_id"),
+    "AlleleResultEnvelope": _ENTITY_IDS,
+    "AgmValidationResult": _ENTITY_IDS,
+    "OntologyTermValidationResult": ("curie",),
+    # Vocabulary terms are identified by their curation-database term id.
+    "ControlledVocabularyValidationResult": ("internal_id", "id"),
+    "DataProviderValidationResult": ("abbreviation",),
+    # The GO API carries the GO id as ``id``.
+    "GOTermResultEnvelope": ("go_id", "id"),
+    "ReferenceValidationResult": ("curie",),
+    "OrthologsResult": (*_ENTITY_IDS, "gene_id"),
+    "ChemicalValidationResult": ("chebi_id",),
+    "DiseaseValidationResult": ("curie",),
+}
+_LABEL_KEYS = {
+    "GeneResultEnvelope": ("symbol",),
+    "AlleleResultEnvelope": ("symbol",),
+    "AgmValidationResult": ("name",),
+    "OntologyTermValidationResult": ("name",),
+    "ControlledVocabularyValidationResult": ("term_name", "name"),
+    "DataProviderValidationResult": (),
+    "GOTermResultEnvelope": ("name",),
+    "GOAnnotationsResult": ("go_name",),
+    "ReferenceValidationResult": ("title",),
+    "OrthologsResult": ("symbol",),
+    "ChemicalValidationResult": ("name",),
+    "DiseaseValidationResult": ("name",),
+}
+# Keys that mark a single provider record (rather than a collection) in a lookup payload.
+_RECORD_IDENTITY_KEYS = frozenset(key for keys in _IDENTITY_KEYS.values() for key in keys) | {"chebi_accession"}
 _ROWS = {
-    "GeneResultEnvelope": ("gene_candidates", "Gene", {"gene_id": _IDENTITIES}),
-    "AlleleResultEnvelope": ("allele_candidates", "Allele", {"allele_id": _IDENTITIES}),
-    "AgmValidationResult": ("agm_candidates", "AffectedGenomicModel", {"agm_id": _IDENTITIES, "label": _LABELS}),
-    "SubjectEntityValidationResult": ("subject_candidates", "Subject", {}),
-    "OntologyTermValidationResult": ("ontology_term_candidates", "OntologyTerm", {"curie": _IDENTITIES, "label": _LABELS}),
+    "GeneResultEnvelope": ("gene_candidates", "Gene", {"gene_id": _IDENTITY_KEYS["GeneResultEnvelope"]}),
+    "AlleleResultEnvelope": ("allele_candidates", "Allele", {"allele_id": _ENTITY_IDS}),
+    "AgmValidationResult": ("agm_candidates", "AffectedGenomicModel", {
+        "agm_id": _ENTITY_IDS, "label": _LABEL_KEYS["AgmValidationResult"],
+    }),
+    "OntologyTermValidationResult": ("ontology_term_candidates", "OntologyTerm", {
+        "curie": _IDENTITY_KEYS["OntologyTermValidationResult"],
+        "label": _LABEL_KEYS["OntologyTermValidationResult"],
+    }),
     "ControlledVocabularyValidationResult": ("controlled_vocabulary_candidates", "VocabularyTerm", {
         "internal_id": ("internal_id", "id"), "term_name": ("term_name", "name"),
     }),
@@ -47,7 +84,7 @@ def _first(record: Mapping[str, Any], keys: tuple[str, ...]) -> Any:
     return None
 
 
-def canonical_record(record: Mapping[str, Any], result_schema: type, *, request=None, record_role=None) -> CanonicalValidatorRecord:
+def canonical_record(record: Mapping[str, Any], result_schema: type, *, record_role=None) -> CanonicalValidatorRecord:
     """Build factual views once; selection and candidate assessment come later."""
     name = result_schema.__name__
     if name not in _ROWS:
@@ -79,19 +116,11 @@ def canonical_record(record: Mapping[str, Any], result_schema: type, *, request=
                     record[field] = deepcopy(structure[source])
     elif name == "OrthologsResult" and "geneToGeneOrthologyGenerated" in record:
         record = _ortholog_record(record)
-    elif name == "SubjectEntityValidationResult":
-        subject_type = normalized_subject_type(request)
-        if subject_type is None:
-            raise ValueError("A subject record requires an explicit supported subject type")
-        object_type = {"gene": "Gene", "allele": "Allele", "agm": "AffectedGenomicModel"}[subject_type]
-        record = {**record, "subject_type": subject_type,
-                  "subject_identifier": _first(record, _IDENTITIES), "subject_label": _first(record, _LABELS)}
-    identity = _first(record, _IDENTITIES)
+    label_keys = _LABEL_KEYS.get(name, ())
+    identity = _first(record, _IDENTITY_KEYS.get(name, ()))
     if name == "GOAnnotationsResult":
         provenance = record.get("provenance")
         identity = provenance.get("source_record_id") if isinstance(provenance, Mapping) else None
-    elif name == "DataProviderValidationResult":
-        identity = record.get("abbreviation")
     if identity is None:
         raise ValueError(f"Returned {object_type} record has no authoritative identity")
     values = deepcopy(dict(record))
@@ -116,7 +145,7 @@ def canonical_record(record: Mapping[str, Any], result_schema: type, *, request=
         rows[row_field] = row
         values.update(row)
     candidate = ValidatorCandidate(
-        value=str(identity), label=_first(record, _LABELS), object_type=object_type,
+        value=str(identity), label=_first(record, label_keys), object_type=object_type,
         details={"source_record": raw, **({"record_role": record_role} if record_role else {})},
     )
     return CanonicalValidatorRecord(
@@ -172,25 +201,12 @@ def _ortholog_record(record: Mapping[str, Any]) -> dict[str, Any]:
 
 def _gene_record(gene: Mapping[str, Any]) -> dict[str, Any]:
     result = deepcopy(dict(gene))
-    result["gene_id"] = _first(gene, _IDENTITIES)
+    result["gene_id"] = _first(gene, _IDENTITY_KEYS["GeneResultEnvelope"])
     symbol = gene.get("geneSymbol")
     if "symbol" not in result and isinstance(symbol, Mapping):
         result["symbol"] = symbol.get("displayText")
     # Do not infer organism or provider from identifiers or query context.
     return result
-
-
-def normalized_subject_type(request) -> str | None:
-    if request is None:
-        return None
-    value = request.selected_inputs.get("subject_type", request.target.input_values.get("subject_type"))
-    if not isinstance(value, str):
-        return None
-    return {
-        "gene": "gene", "Gene": "gene", "GENE": "gene",
-        "allele": "allele", "Allele": "allele", "ALLELE": "allele",
-        "agm": "agm", "AGM": "agm", "affected_genomic_model": "agm", "Affected Genomic Model": "agm",
-    }.get(value)
 
 
 def source_records(tool_name: str, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -224,7 +240,7 @@ def source_record_entries(tool_name: str, payload: Mapping[str, Any]) -> list[tu
     for name in ("results", "candidates", "matches", "orthologs"):
         if isinstance(data.get(name), list):
             return collection(data[name], f"/data/{name}")
-    if any(key in data for key in (*_IDENTITIES, "abbreviation", "chebi_accession")):
+    if any(key in data for key in _RECORD_IDENTITY_KEYS):
         return [("/data", deepcopy(data))]
     if not data:
         return []

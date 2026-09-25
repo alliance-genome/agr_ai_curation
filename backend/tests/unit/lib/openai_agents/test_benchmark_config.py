@@ -18,16 +18,15 @@ def test_approved_benchmark_models_load_from_canonical_registry(tmp_path):
 
     assert [(model_id, models[model_id].provider) for model_id in models] == [
         ("gpt-6-astra", "openai"),
-        ("gpt-5.6-sol", "openai"),
-        ("gpt-5.6-terra", "openai"),
+        ("gpt-6-sol", "openai"),
         ("deepseek/deepseek-v4-pro-0813", "openrouter"),
         ("google/gemini-3.7-flash", "openrouter"),
         ("qwen/qwen3.8-27b", "openrouter"),
     ]
-    # ALL-1248 (v0.9.17) moved the registry default to GPT-5.6 Sol: Astra stays
+    # The v0.9.22 registry default is GPT-6 Sol: Astra stays
     # available by explicit selection, new extraction agents default to Sol.
     assert [model_id for model_id, model in models.items() if model.default] == [
-        "gpt-5.6-sol"
+        "gpt-6-sol"
     ]
 
 

@@ -52,6 +52,10 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/gene.yaml
             class: Gene
+    metadata:
+      display:
+        label: gene_symbol
+        id: primary_external_id
   - model_id: ReferencePayload
     display_name: Reference validated-reference payload
     schema_ref:
@@ -67,6 +71,9 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/reference.yaml
             class: Reference
+    metadata:
+      display:
+        id: reference_id
   - model_id: ExpressionPatternContextPayload
     display_name: Expression pattern metadata payload
     schema_ref:

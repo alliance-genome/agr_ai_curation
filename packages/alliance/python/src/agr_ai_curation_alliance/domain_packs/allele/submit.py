@@ -23,7 +23,15 @@ from src.schemas.domain_envelope import (
     ObjectRef,
 )
 
+from src.lib.domain_packs.resolvable_values import (
+    OUTCOME_CURATOR_OVERRIDE,
+    RESOLVED,
+    effective_resolution,
+    value_covered_by_validator,
+)
+
 from .._export_utils import stable_object_id
+from .constants import ALLELE_ASSOCIATION_IDENTITY_KEYS, ALLELE_ASSOCIATION_SPEC
 
 
 ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY = "allele_verified_association_targets"
@@ -270,6 +278,31 @@ def _association_submission_operations(
             )
         )
 
+    # The association's allele is a resolvable value; an unresolved one never reaches
+    # submission as if resolved (values stored before ALL-1283 read through the legacy rule).
+    state, outcome = effective_resolution(
+        association.payload,
+        identity_keys=ALLELE_ASSOCIATION_IDENTITY_KEYS,
+        covered_by_validator=value_covered_by_validator(
+            association.metadata, "", ALLELE_ASSOCIATION_SPEC
+        ),
+    )
+    if state != RESOLVED:
+        blockers.append(
+            _blocker(
+                object_id=object_id,
+                code="alliance.allele.allele_unresolved",
+                message=(
+                    "The association's allele is unresolved; the allele validator must "
+                    "confirm it before submission."
+                ),
+                details={
+                    "lookup_outcome": outcome,
+                    "paper_wording": association.payload.get("mention"),
+                },
+            )
+        )
+
     allele = _referenced_object(
         association,
         object_type="Allele",
@@ -285,7 +318,25 @@ def _association_submission_operations(
         object_type="EvidenceQuote",
         objects_by_ref=objects_by_ref,
     )
-    if allele is None:
+    if allele is None and outcome == OUTCOME_CURATOR_OVERRIDE:
+        # A curator-entered allele the validator did not find has no Alliance allele record.
+        blockers.append(
+            _blocker(
+                object_id=object_id,
+                code="alliance.allele.association_refs_missing",
+                message=(
+                    "This allele was entered by a curator and the allele validator did not find it "
+                    "in the Alliance database, so there is no Alliance allele record to link. "
+                    "Submission needs an allele the validator can find."
+                ),
+                details={
+                    "missing_object_type": "Allele",
+                    "lookup_outcome": outcome,
+                    "allele_identifier": association.payload.get("allele_identifier"),
+                },
+            )
+        )
+    elif allele is None:
         blockers.append(
             _missing_reference_blocker(object_id=object_id, object_type="Allele")
         )

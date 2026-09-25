@@ -58,6 +58,7 @@ def _configure_chat_endpoint(monkeypatch, error: Exception):
         lambda: UUID("12345678-1234-5678-1234-567812345678"),
     )
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
+    monkeypatch.setattr(api_module, "_load_agent_studio_system_prompt_template", lambda: "system prompt template")
     monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
     # Error-stream tests isolate the provider from the database-backed policy catalog.
     def authorized_tools(context, **_kwargs):
@@ -532,7 +533,7 @@ def test_chat_with_opus_reports_turn_limit_without_leaking_sdk_detail(monkeypatc
     }
 
 
-def test_chat_preflight_sizes_instructions_messages_and_authorized_tool_schemas(monkeypatch):
+def test_chat_preflight_sizes_visible_tool_schemas_apart_from_deferred_catalog(monkeypatch):
     captured = {}
     tool_definition = {
         "name": "inspect_catalog",
@@ -577,7 +578,14 @@ def test_chat_preflight_sizes_instructions_messages_and_authorized_tool_schemas(
     assert captured["payload"]["input"] == [
         {"role": "user", "content": "Please help"}
     ]
-    assert captured["payload"]["tools"] == [tool_definition]
+    # The only authorized tool is deferred behind hosted tool search: it is
+    # transported, not model-visible, so it is sized apart from the visible surface.
+    assert captured["payload"]["initially_visible_tools"] == []
+    assert "tools" not in captured["payload"]
+    deferred = captured["metadata"]["deferred_tool_definitions"]
+    assert deferred["count"] == 1
+    assert deferred["json_chars"] == len(json.dumps([tool_definition], sort_keys=True))
+    assert deferred["loaded_status"] == "provider_managed"
     assert {
         key: value
         for key, value in captured["payload"]["tool_search"].items()

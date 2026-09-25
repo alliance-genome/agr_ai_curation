@@ -35,6 +35,9 @@ fixtures:
             uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/gene.yaml
           payload:
             mention: daf-16
+            resolution_state: unresolved
+            lookup_outcome: not_validated
+            validator_explanation: Not validated yet.
             species: Caenorhabditis elegans
             taxon_hint: "NCBITaxon:6239"
             data_provider_hint: WB
@@ -43,6 +46,7 @@ fixtures:
             confidence: high
             identity_resolution_notes:
               - The paper reports a daf-16 nuclear translocation phenotype in C. elegans; WB provider context narrows the validator search.
+            rationale: This paper's heat-shock assay shows DAF-16 nuclear translocation, a new result rather than a cited pathway member.
             evidence_record_id: evidence-daf16-1
             verified_quote: DAF-16 translocated to nuclei after heat shock.
             page: 4

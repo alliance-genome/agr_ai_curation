@@ -412,6 +412,18 @@ def _multi_object_envelope(
     )
 
 
+def _staged_value(mention: str, *identity_keys: str) -> dict[str, Any]:
+    """A gene-expression value staged for validation (ALL-1283): paper wording, no identity."""
+
+    return {
+        **{key: None for key in identity_keys},
+        "mention": mention,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet.",
+    }
+
+
 def _gene_expression_envelope() -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="gene-expression-env",
@@ -423,21 +435,27 @@ def _gene_expression_envelope() -> DomainEnvelope:
                 pending_ref_id="gene-expression-1",
                 object_role="curatable_unit",
                 payload={
-                    "data_provider": {"abbreviation": "MGI"},
-                    "expression_annotation_subject": {
-                        "primary_external_id": "Tmem67",
-                        "gene_symbol": "Tmem67",
+                    # The builder's exact provider-list lookup resolved the data provider.
+                    "data_provider": {
+                        "abbreviation": "MGI",
+                        "mention": "MGI",
+                        "resolution_state": "resolved",
+                        "lookup_outcome": "matched",
+                        "validator_explanation": None,
                     },
+                    "expression_annotation_subject": _staged_value(
+                        "Tmem67", "primary_external_id", "gene_symbol"
+                    ),
                     "when_expressed_stage_name": "TS26",
                     "expression_pattern": {
+                        "when_expressed": {
+                            "developmental_stage_start": _staged_value("TS26", "curie", "name"),
+                        },
                         "where_expressed": {
-                            "anatomical_structure": {
-                                "curie": "EMAPA:17373",
-                                "name": "metanephros",
-                            }
-                        }
+                            "anatomical_structure": _staged_value("metanephros", "curie", "name"),
+                        },
                     },
-                    "relation": {"name": "is_expressed_in"},
+                    "relation": _staged_value("is_expressed_in", "name", "vocabulary", "id"),
                     "single_reference": {
                         "pmid": "PMID:203506",
                         "title": "Paper supplied title",
@@ -1314,7 +1332,8 @@ def test_dispatch_active_binding_returns_unresolved_validator_result(
     assert finding.status.value == "open"
     assert finding.severity.value == "blocker"
     assert finding.code == "domain_pack.validator_unresolved"
-    assert finding.details["failure_classification"] == "missing_expected_result_field"
+    # The lookup outcome says why the fields are missing.
+    assert finding.details["failure_classification"] == "not_found"
     assert finding.details["lookup_attempts"][0]["lookup_status"] == "not_found"
     assert result.validator_results[0].status == "unresolved"
 
@@ -1795,8 +1814,8 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
             "explanation": "Fixture validator resolved this field.",
         }
         if binding.binding_id == "subject_gene_validation":
+            # The gene lookup reads the subject's paper wording.
             assert request.selected_inputs == {
-                "gene_id": "Tmem67",
                 "gene_symbol": "Tmem67",
                 "data_provider": "MGI",
             }
@@ -1925,15 +1944,23 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
         "subject_gene_validation",
     }
     annotation = result.envelope.extracted_objects[0]
-    assert annotation.payload["expression_annotation_subject"] == {
+    subject = annotation.payload["expression_annotation_subject"]
+    assert {key: subject[key] for key in ("primary_external_id", "gene_symbol", "mention")} == {
         "primary_external_id": "MGI:1923928",
         "gene_symbol": "Tmem67",
+        "mention": "Tmem67",
     }
+    assert (subject["resolution_state"], subject["lookup_outcome"]) == ("resolved", "matched")
+    # A reference stored before the contract is verified by this re-validation (ALL-1283).
     assert annotation.payload["single_reference"] == {
         "pmid": "PMID:203506",
         "title": "Resolved literature title",
         "reference_id": 203506,
         "curie": "PMID:203506",
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": "Fixture validator resolved this field.",
+        "validator_curator_message": "source_reference_validation resolved.",
     }
     patch_events = {
         event["validator_binding_id"]: event
@@ -1942,10 +1969,10 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
     assert patch_events["source_reference_validation"]["original_values"] == {
         "single_reference.title": "Paper supplied title"
     }
-    assert patch_events["subject_gene_validation"]["original_values"] == {
-        "expression_annotation_subject.primary_external_id": "Tmem67",
-        "expression_annotation_subject.gene_symbol": "Tmem67",
-    }
+    assert patch_events["subject_gene_validation"]["materialized_field_paths"] == [
+        "expression_annotation_subject.primary_external_id",
+        "expression_annotation_subject.gene_symbol",
+    ]
     field_paths = [
         finding.field_ref.field_path
         for finding in result.appended_findings
@@ -2100,13 +2127,25 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
     )
 
     annotation = result.envelope.extracted_objects[0]
+    # The unresolved gene keeps its paper wording and records why; no identity is written.
     assert annotation.payload["expression_annotation_subject"] == {
-        "primary_external_id": "Tmem67",
-        "gene_symbol": "Tmem67",
+        "primary_external_id": None,
+        "gene_symbol": None,
+        "mention": "Tmem67",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "ambiguous",
+        "validator_explanation": "Multiple provider candidates matched.",
+        "validator_curator_message": "Subject gene lookup is ambiguous.",
     }
+    # The lookup found no reference (decisive): the stored, unverified title is set aside.
     assert annotation.payload["single_reference"] == {
         "pmid": "PMID:203506",
-        "title": "Paper supplied title",
+        "title": None,
+        "overruled_title": "Paper supplied title",
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_found",
+        "validator_explanation": "The API-backed lookup found no source reference.",
+        "validator_curator_message": "No unambiguous reference match found.",
     }
     open_findings = [
         finding
@@ -2126,18 +2165,17 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
         "expression_experiment.single_reference.reference_id",
         "single_reference.curie",
         "single_reference.title",
+        # The experiment's copy mirrors the full reference identity (N6).
+        "expression_experiment.single_reference.curie",
+        "expression_experiment.single_reference.title",
     }
     classifications = {
         finding.field_ref.field_path: finding.details["failure_classification"]
         for finding in open_findings
         if finding.field_ref is not None
     }
-    assert classifications["expression_annotation_subject.primary_external_id"] == (
-        "missing_expected_result_field"
-    )
-    assert classifications["single_reference.reference_id"] == (
-        "missing_expected_result_field"
-    )
+    assert classifications["expression_annotation_subject.primary_external_id"] == "ambiguous"
+    assert classifications["single_reference.reference_id"] == "not_found"
     gene_finding = next(
         finding
         for finding in open_findings
@@ -2552,6 +2590,31 @@ def test_resolved_array_validator_result_accepts_allowed_term_curies():
     assert result.missing_expected_fields == []
 
 
+@pytest.mark.parametrize("violation", ["cardinality", "allowed_term"])
+def test_assembled_completeness_does_not_bypass_array_or_policy_checks(violation):
+    from src.lib.domain_packs.validator_dispatch import _enforce_expected_result_fields
+    from src.schemas.domain_validator import ValidatorFieldResolution
+
+    request = _array_terms_validation_request()
+    terms = [{"curie": "GO:0031981", "name": "nuclear lumen"}]
+    if violation == "allowed_term":
+        terms.append({"curie": "GO:0005654", "name": "nucleoplasm"})
+        request = request.model_copy(update={"selected_inputs": {
+            **request.selected_inputs, "allowed_term_curies": ["GO:0031981"],
+        }})
+    result = DomainValidatorResultBase.model_validate(
+        _result_payload(request, resolved_values={"terms": terms}))
+    result._assembled_field_completeness = True
+    result.field_resolutions = {"terms": ValidatorFieldResolution(
+        status="resolved", lookup_outcome="matched", resolved_values={"terms": terms},
+        explanation="Program-assembled fixture.")}
+    checked = _enforce_expected_result_fields(result, request=request)
+    assert checked.status == "unresolved"
+    assert checked.missing_expected_fields == ["terms"]
+    expected = "one resolved value per selected array item" if violation == "cardinality" else "outside the field-specific allowed term list"
+    assert expected in checked.explanation
+
+
 def test_resolved_array_validator_result_rejects_out_of_allowlist_term_curie():
     base_request = _array_terms_validation_request()
     request = base_request.model_copy(
@@ -2951,6 +3014,18 @@ def test_compact_candidate_science_survives_materialization_and_formatter_cells(
     }))
     assert projection.rows
     row = projection.rows[0]
+    if output_format in {"csv", "tsv"}:
+        # File cells hold display text: every candidate, its science and the
+        # lookup audit stay visible (ALL-1115), with no JSON in the cell.
+        cells = " ".join(str(value) for value in row.values())
+        assert "{" not in cells
+        for expected in ("value: RGD:1", "value: RGD:2", "Paper does not distinguish the candidates.",
+                         "evidence-1", "source_call_id: source-call", "method: search_genes",
+                         "symbol: ABC-1", "candidate_count: 2",
+                         f"object_id: {captured['result'].target.object_id}",
+                         f"field_path: {captured['result'].target.field_path}"):
+            assert expected in cells, expected
+        return
     candidates = json.loads(row["candidates"]) if isinstance(row["candidates"], str) else row["candidates"]
     assert [candidate["value"] for candidate in candidates] == ["RGD:1", "RGD:2"]
     for candidate in candidates:
@@ -3147,17 +3222,14 @@ def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
         "agr_curation_query",
         "search_document",
         "read_chunk",
-        "read_section",
-        "read_subsection",
         "record_evidence",
         "list_recorded_evidence",
         "get_recorded_evidence",
-        "attach_evidence_to_object",
-        "detach_evidence_from_object",
-        "update_recorded_evidence_metadata",
         "finalize_validator_result",
     ]
     instructions = captured["agent"].instructions
+    for removed_tool in NEVER_CALLED_VALIDATOR_TOOLS:
+        assert removed_tool not in instructions
     assert "Extractor-provided evidence" in instructions
     assert (
         "`selected_inputs.evidence_quote` or `selected_inputs.evidence_quotes`"
@@ -3416,6 +3488,81 @@ def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
     }
     assert captured["kwargs"]["max_turns"] == 6
     assert captured["agent_lookup"][1] == {"authenticated_groups": ["RGD"]}
+
+
+# Never called by any validator in 522 production runs (Sep 16-22, 2026);
+# validators read the paper through search_document and read_chunk only.
+NEVER_CALLED_VALIDATOR_TOOLS = (
+    "read_section",
+    "read_subsection",
+    "attach_evidence_to_object",
+    "detach_evidence_from_object",
+    "update_recorded_evidence_metadata",
+)
+
+
+def test_package_scoped_validator_batch_agent_offers_only_used_paper_tools(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[_compact_lookup_tool()],
+        instructions="Base validator instructions.",
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+            batch_capabilities=["domain_validator_batch"],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key, **kwargs: source_agent,
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.resolve_tools",
+        lambda tool_ids, execution_context: [
+            SimpleNamespace(name=tool_id) for tool_id in tool_ids
+        ],
+    )
+
+    def _fake_run_sync(agent, **kwargs):
+        captured["agent"] = agent
+        tool = next(
+            tool for tool in agent.tools if tool.name == "finalize_validator_batch_results"
+        )
+        _unwrap_function_tool(tool)(results=[_compact_test_decision(agent, request)])
+        return {"results": [_result_payload(request)]}
+
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
+
+    run_package_scoped_validator_agent_batch(
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
+        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
+        runtime_context=ValidatorRuntimeContext(document_id="doc-123", user_id="user-1"),
+    )
+
+    runtime_agent = captured["agent"]
+    assert [tool.name for tool in runtime_agent.tools] == [
+        "agr_curation_query",
+        "search_document",
+        "read_chunk",
+        "finalize_validator_batch_results",
+    ]
+    for removed_tool in NEVER_CALLED_VALIDATOR_TOOLS:
+        assert removed_tool not in runtime_agent.instructions
 
 
 @pytest.mark.parametrize("batch", [False, True])
@@ -4168,3 +4315,32 @@ def test_an_update_leaves_the_object_reference_intact():
     )
 
     assert updated.extracted_objects[0].evidence_record_ids == ["evidence-1"]
+
+
+def test_allowed_term_list_checks_identifier_fields_not_per_element_labels():
+    """A slim element's name comes back as a plain label; only its CURIE is checked."""
+
+    from src.lib.domain_packs.validator_result_policies import allowed_term_policy_violations
+
+    base_request = _array_terms_validation_request()
+    request = base_request.model_copy(
+        update={
+            "selected_inputs": {**base_request.selected_inputs, "allowed_term_curies": ["UBERON:0000068"]},
+            "expected_result_fields": {
+                "curie": "stage_uberon_slim_terms[1].curie",
+                "name": "stage_uberon_slim_terms[1].name",
+            },
+        }
+    )
+
+    def violations(values):
+        result = DomainValidatorResultBase.model_validate(
+            _result_payload(request, resolved_values=values)
+        )
+        return [violation.field_name for violation in allowed_term_policy_violations(result, request=request)]
+
+    assert violations({"curie": "UBERON:0000068", "name": "embryo stage"}) == []
+    assert violations({"curie": "UBERON:0000092", "name": "embryo stage"}) == ["curie"]
+    # A result field named as an identifier is checked even when its write leaf is not.
+    request = request.model_copy(update={"expected_result_fields": {"id": "stage_term_ref"}})
+    assert violations({"id": "UBERON:0000092"}) == ["id"]

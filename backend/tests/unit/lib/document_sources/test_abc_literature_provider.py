@@ -15,6 +15,7 @@ from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceConfigError,
     DocumentSourceError,
+    DocumentSourceReferenceNotFound,
     SourceAccessPolicy,
     SourceAccessScope,
     SourceArtifact,
@@ -419,6 +420,41 @@ def test_package_preserves_document_source_timeout_defaults_and_minimum(
         monkeypatch.setenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raw_timeout)
 
     assert _build_abc_literature_client_config().timeout_seconds == expected_timeout
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identifier", ["ZDB-PUB-200229-13", "ZFIN:ZDB-PUB-200229-13"])
+async def test_zfin_publication_identifier_uses_canonical_cross_reference(identifier) -> None:
+    client = FakeABCLiteratureClient()
+    client.cross_reference_payload = {"id": 202, "curie": "AGRKB:202"}
+    provider = provider_from_fake(client)
+    normalized = provider.normalize_identifier(identifier)
+    assert normalized.normalized == "ZFIN:ZDB-PUB-200229-13"
+    assert provider.normalize_identifier(normalized.normalized).normalized == normalized.normalized
+    await provider.resolve_reference(identifier, request_bearer_token="curator-token")
+    assert client.calls == [("lookup_cross_reference", {
+        "cross_reference": "ZFIN:ZDB-PUB-200229-13",
+        "request_bearer_token": "curator-token",
+    })]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,endpoint", [(404, "/reference/by_cross_reference/test"), (404, "token"), (401, "/reference/test"), (403, "/reference/test"), (429, "/reference/test"), (500, "/reference/test")])
+async def test_reference_lookup_classifies_only_not_found(status, endpoint) -> None:
+    class FailingClient(FakeABCLiteratureClient):
+        async def lookup_cross_reference(self, *args, **kwargs):
+            raise ABCLiteratureHTTPError("lookup failed", status_code=status, endpoint=endpoint)
+
+    provider = provider_from_fake(FailingClient())
+    with pytest.raises(DocumentSourceError) as error:
+        await provider.resolve_reference("ZDB-PUB-200229-13")
+    assert isinstance(error.value, DocumentSourceReferenceNotFound) is (status == 404 and endpoint != "token")
+
+
+@pytest.mark.parametrize("identifier", ["FBrf0123456", "FB:FBrf0123456", "ZDB-GENE-200229-13", "ZDB-PUB-20-13", "ZFIN:ZDB-PUB-200229-13"])
+def test_zfin_normalization_does_not_rewrite_other_cross_references(identifier) -> None:
+    provider = provider_from_fake(FakeABCLiteratureClient())
+    assert provider.normalize_identifier(identifier).normalized == identifier
 
 
 @pytest.mark.asyncio

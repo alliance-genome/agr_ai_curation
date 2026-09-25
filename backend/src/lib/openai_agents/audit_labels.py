@@ -49,10 +49,12 @@ INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "inspect_output_artifacts": "Inspect Output Artifacts",
     "inspect_output_rows": "Inspect Output Rows",
     "inspect_field_values": "Inspect Field Values",
+    "read_output_value": "Read Output Value",
     "build_default_projection_plan": "Build Default Projection Plan",
     "validate_output_projection": "Validate Output Projection",
     "preview_output_projection": "Preview Output Projection",
     "finalize_and_save": "Finalize And Save",
+    "finalize_chat_output": "Finalize Chat Output",
     "formatter_cannot_complete": "Formatter Cannot Complete",
     "prepare_for_curation": "Curation Prep",
 }

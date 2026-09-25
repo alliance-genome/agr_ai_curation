@@ -66,7 +66,7 @@ def installed_builder(monkeypatch):
     from src.lib.agent_studio import domain_output_contract
     from src.lib.config.agent_loader import AgentAccessConfig, AgentDefinition, CurationConfig
     from src.lib.flows import validation_attachments
-    from src.lib.openai_agents import streaming_tools
+    from src.lib.packages import tool_roles
 
     definition = AgentDefinition(
         folder_name="gene_extractor", agent_id="gene_extractor", name="Gene extractor",
@@ -80,7 +80,7 @@ def installed_builder(monkeypatch):
         lambda package_id, agent_id: definition
         if (package_id, agent_id) == ("agr.alliance", "gene_extractor") else None,
     )
-    monkeypatch.setattr(streaming_tools, "builder_finalization_tool_names", lambda: frozenset(["finalize_gene_extraction", "finalize_allele_extraction"]))
+    monkeypatch.setattr(tool_roles, "builder_finalization_tool_names", lambda: frozenset(["finalize_gene_extraction", "finalize_allele_extraction"]))
     metadata = SimpleNamespace(
         pack_id="agr.alliance.gene", version="1.0.0", metadata={},
         status=SimpleNamespace(value="under_development"), object_definitions=[],

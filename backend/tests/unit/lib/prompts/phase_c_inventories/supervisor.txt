@@ -47,8 +47,6 @@ Includes validator-resolved values when a specialist returns them
 
 # SUP-11..SUP-14 runtime tool authority
 The runtime availability note and the live tool descriptions are authoritative.
-Use only specialist tools that are installed and callable in this environment.
-follow the runtime names and descriptions.
 Treat the examples below as Alliance-tuned patterns, not permission to call a tool
 that is not live in the current runtime.
 
@@ -224,9 +222,11 @@ The supervisor output contract is prompt-only plain text, not JSON.
 Keep the answer concise and curator-facing.
 # SUP-65 exclude internal identifiers
 Exclude internal chunk_ids, trace IDs, raw tool names, and other system identifiers.
-# SUP-66 user-friendly source labels (Uploaded Document contract-test pinned)
-| ask_pdf_extraction_specialist | "Uploaded Document" |
-| ask_ontology_term_validation_specialist | "Ontology Term Resolver" |
+# SUP-66 user-friendly source labels (Uploaded Document contract-test pinned; ALL-1292
+# merged the Display as labels into the routing map)
+use the user-friendly "Display as" label from the
+Document -> Evidence-backed extraction answer | "Uploaded Document" |
+CURIE or typed label -> OntologyTermValidationResult | "Ontology Term Resolver" |
 
 # SUP-58..SUP-62 stop and abstain rules
 If a specialist returns empty or "not found", say so honestly.

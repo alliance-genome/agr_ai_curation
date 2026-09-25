@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from src.lib.curation_workspace import adapter_registry
 import src.lib.curation_workspace.domain_envelope_normalization as domain_envelope_normalization
 from src.lib.config import schema_discovery
+from src.lib.domain_packs.resolvable_values import unresolved_value
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.models import (
     GeneExtractionResultEnvelope,
@@ -1329,12 +1330,6 @@ def test_lookup_structured_finalization_tool_names_are_enabled():
     )
     assert (
         streaming_tools._structured_specialist_finalization_tool_name(
-            _finalization_config("ask_subject_entity_specialist")
-        )
-        == "finalize_subject_entity_lookup"
-    )
-    assert (
-        streaming_tools._structured_specialist_finalization_tool_name(
             _finalization_config("ask_agm_specialist")
         )
         == "finalize_agm_lookup"
@@ -2516,6 +2511,8 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
                         "gene_symbol": "crb",
                         "taxon": "NCBITaxon:7227",
                         "verified_quote": "Crumbs regulates R8 cell fate.",
+                        "resolution_state": "resolved",
+                        "lookup_outcome": "matched",
                     },
                 }
             ],
@@ -2538,8 +2535,8 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
     assert "Extraction result ready: gene" in result
     assert "Objects found: 1" in result
     assert "Recommended supervisor action: answer_from_manifest" in result
-    assert "gene_mention_evidence gene-mention-evidence-1: Crumbs" in result
-    assert "crb" in result
+    # The manifest labels a resolved gene by its validated symbol, not the paper wording.
+    assert "gene_mention_evidence gene-mention-evidence-1: crb" in result
     assert "FB:FBgn0259685" in result
     assert "NCBITaxon:7227" in result
     assert "proposed_primary_external_id" not in result
@@ -2619,7 +2616,19 @@ def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
                     "status": "validated",
                     "payload": {
                         "expression_annotation_subject": {"gene_symbol": "rpm-1"},
+                        # Filled from the validated stage term's name (ALL-1283).
                         "when_expressed_stage_name": "L4",
+                        "expression_pattern": {
+                            "when_expressed": {
+                                "developmental_stage_start": {
+                                    "curie": "WBls:0000038", "name": "L4",
+                                    "mention": "L4 larvae",
+                                    "resolution_state": "resolved",
+                                    "lookup_outcome": "matched",
+                                    "validator_explanation": None,
+                                },
+                            },
+                        },
                         "where_expressed_statement": huge_note,
                     },
                 }
@@ -3129,6 +3138,12 @@ def _gene_extractor_domain_output() -> str:
                     ],
                     "payload": {
                         "mention": "crumbs",
+                        "gene_symbol": None,
+                        "primary_external_id": None,
+                        "taxon": None,
+                        "resolution_state": "unresolved",
+                        "lookup_outcome": "not_validated",
+                        "validator_explanation": "Not validated yet.",
                         "species": "Drosophila melanogaster",
                         "taxon_hint": "NCBITaxon:7227",
                         "data_provider_hint": "FB",
@@ -3330,20 +3345,27 @@ def _chat_dispatch_domain_cases():
                     CuratableObjectEnvelope(
                         object_type="DiseaseAnnotation",
                         pending_ref_id="disease-annotation-1",
+                        # ALL-1283: every value is staged with its paper wording and the
+                        # extractor's proposals; validators read those.
                         payload={
-                            "disease_annotation_object": {
-                                "curie": "DOID:0050434",
-                                "name": "Andersen-Tawil syndrome",
-                            },
-                            "disease_relation_name": "is_model_of",
+                            "disease_annotation_object": unresolved_value(
+                                "Andersen-Tawil syndrome",
+                                identity_keys=("curie", "name"),
+                                proposed_curie="DOID:0050434",
+                            ),
+                            "disease_relation": unresolved_value(
+                                "is_model_of", identity_keys=("name",)
+                            ),
                             "condition_relations": [
                                 {
-                                    "condition_relation_type": {
-                                        "name": "has_condition",
-                                    }
+                                    "condition_relation_type": unresolved_value(
+                                        "has_condition", identity_keys=("name",)
+                                    ),
                                 }
                             ],
-                            "data_provider": {"abbreviation": "MGI"},
+                            "data_provider": unresolved_value(
+                                "MGI", identity_keys=("abbreviation",)
+                            ),
                         },
                     )
                 ],
@@ -3369,18 +3391,27 @@ def _chat_dispatch_domain_cases():
                 envelope_id="chat-phenotype-env",
                 domain_pack_id="agr.alliance.phenotype",
                 extracted_objects=[
+                    # ALL-1283: the term validator resolves the annotation's own terms.
                     CuratableObjectEnvelope(
-                        object_type="PhenotypeTerm",
-                        object_role="validated_reference",
-                        pending_ref_id="phenotype-term-1",
+                        object_type="PhenotypeAnnotation",
+                        pending_ref_id="phenotype-annotation-1",
                         payload={
-                            "resolution_state": "pending_ontology_resolution",
-                            "curie": "WBPhenotype:0000886",
-                            "label": "reduced brood size",
-                            "ontology_lookup_hint": {
-                                "data_provider": "WB",
-                                "taxon_id": "NCBITaxon:6239",
-                            },
+                            "phenotype_annotation_object": "reduced brood size",
+                            "phenotype_terms": [
+                                {
+                                    "proposed_curie": "WBPhenotype:0000886",
+                                    "curie": None,
+                                    "label": None,
+                                    "mention": "fewer progeny",
+                                    "resolution_state": "unresolved",
+                                    "lookup_outcome": "not_validated",
+                                    "validator_explanation": "Not validated yet.",
+                                    "ontology_lookup_hint": {
+                                        "data_provider": "WB",
+                                        "taxon_id": "NCBITaxon:6239",
+                                    },
+                                }
+                            ],
                         },
                     )
                 ],
@@ -3401,10 +3432,27 @@ def _chat_dispatch_domain_cases():
                         object_type="GeneExpressionAnnotation",
                         pending_ref_id="gene-expression-annotation-1",
                         payload={
-                            "relation": {"name": "is_expressed_in"},
-                            "data_provider": {"abbreviation": "ZFIN"},
+                            # Staged for validation (ALL-1283): the validators read
+                            # the extractor's wording from each value's mention.
+                            "relation": {
+                                "name": None, "vocabulary": None, "id": None,
+                                "mention": "is_expressed_in",
+                                "resolution_state": "unresolved",
+                                "lookup_outcome": "not_validated",
+                                "validator_explanation": "Not validated yet.",
+                            },
+                            "data_provider": {
+                                "abbreviation": None, "mention": "ZFIN",
+                                "resolution_state": "unresolved",
+                                "lookup_outcome": "not_validated",
+                                "validator_explanation": "Not validated yet.",
+                            },
                             "expression_annotation_subject": {
-                                "gene_symbol": "flcn",
+                                "primary_external_id": None, "gene_symbol": None,
+                                "mention": "flcn",
+                                "resolution_state": "unresolved",
+                                "lookup_outcome": "not_validated",
+                                "validator_explanation": "Not validated yet.",
                             },
                             "single_reference": {
                                 "pmid": "PMID:27528223",
@@ -3419,7 +3467,8 @@ def _chat_dispatch_domain_cases():
                 "subject_gene_validation",
                 "source_reference_validation",
             },
-            7,
+            # The slim and qualifier lists fan out per element, so empty lists match nothing.
+            4,
             id="gene-expression",
         ),
     ]
@@ -3446,7 +3495,8 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     )
     observed_record = {}
 
-    def fake_envelope_normalizer(record):
+    def fake_envelope_normalizer(record, *, stored):
+        assert stored is False  # the chat runtime normalizes fresh output
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
         return source_envelope
@@ -3568,7 +3618,8 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
     )
     observed_record = {}
 
-    def fake_envelope_normalizer(record):
+    def fake_envelope_normalizer(record, *, stored):
+        assert stored is False  # the chat runtime normalizes fresh output
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
         observed_record["execution_receipt"] = record.execution_receipt
@@ -3740,7 +3791,7 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     monkeypatch.setattr(
         domain_envelope_normalization,
         "domain_envelope_from_extraction_result",
-        lambda _record: envelope,
+        lambda _record, *, stored: envelope,
     )
 
     captured_requests = []

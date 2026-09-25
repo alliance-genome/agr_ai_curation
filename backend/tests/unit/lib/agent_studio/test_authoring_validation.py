@@ -227,10 +227,15 @@ def _agent_sources() -> AgentValidationSources:
             "finalize_demo": AgentToolValidationRecord(
                 tool_id="finalize_demo", attachable=True, installed=True
             ),
+            "lookup_demo": AgentToolValidationRecord(
+                tool_id="lookup_demo", attachable=True, installed=True
+            ),
         },
         output_schema_keys=frozenset({"DemoEnvelope"}),
         group_ids=frozenset({"TEAM_C", "TEAM_D"}),
         builder_finalization_tool_ids=frozenset({"finalize_demo"}),
+        identity_lookup_tool_ids=frozenset({"lookup_demo"}),
+        extraction_output_schema_keys=frozenset({"DemoEnvelope"}),
     )
 
 
@@ -330,11 +335,30 @@ def test_model_response_schema_requires_available_contract_and_excludes_builder_
     }
 
 
+@pytest.mark.parametrize("phase", ["proposal", "save"])
+def test_an_extraction_agent_cannot_carry_identity_lookup_tools(phase):
+    extractor = _agent_result(_agent(tool_ids=["search", "finalize_demo", "lookup_demo"]), phase=phase)
+    schema_extractor = _agent_result(
+        _agent(tool_ids=["search", "lookup_demo"], output_schema_key="DemoEnvelope"), phase=phase,
+    )
+    lookup_agent = _agent_result(_agent(tool_ids=["search", "lookup_demo"]), phase=phase)
+
+    for result in (extractor, schema_extractor):
+        [finding] = [item for item in result.errors if item.code == "identity_lookup_on_extraction_agent"]
+        assert finding.path == "custom_agent.tool_ids"
+        assert "lookup_demo" in (finding.fix_hint or "")
+        assert "validators do the database search" in finding.message
+    # An agent that is not an extractor (no builder finalizer) keeps its lookups.
+    assert lookup_agent.valid
+
+
 @pytest.mark.parametrize(
     ("overrides", "code", "path"),
     [
         ({"model_id": "retired"}, "unavailable_model", "custom_agent.model_id"),
         ({"model_reasoning": "max"}, "unsupported_reasoning_effort", "custom_agent.model_reasoning"),
+        # A valid effort the model's catalog entry does not offer (GPT-6 Sol rejects minimal).
+        ({"model_reasoning": "minimal"}, "unsupported_reasoning_effort", "custom_agent.model_reasoning"),
         ({"tool_ids": ["retired"]}, "unavailable_tool", "custom_agent.tool_ids.0"),
         ({"allowed_group_ids": ["TEAM_B"]}, "unavailable_group", "custom_agent.allowed_group_ids"),
         ({"allowed_group_ids": []}, "widened_inherited_access", "custom_agent.allowed_group_ids"),
@@ -428,3 +452,41 @@ def test_unexpected_engine_reporting_contains_only_sanitized_metadata(monkeypatc
         "validation_phase": "pre_apply",
     }
     assert kwargs["context"] == {"finding_count": 0, "failure_id": error.failure_id}
+
+
+_CORRECTION_TOOLS = [
+    f"{verb}_{target}"
+    for target in (
+        "gene_expression_observation",
+        "allele_observation",
+        "phenotype_observation",
+        "disease_observation",
+    )
+    for verb in ("patch", "discard")
+] + [
+    "find_staged_gene_expression_observations",
+    "find_staged_allele_observations",
+    "find_staged_phenotype_observations",
+]
+
+
+def test_tool_group_above_the_on_demand_cap_is_rejected_at_save_time():
+    # Eleven tools from one tool group (ALL-1280): blocking at save, and the
+    # curator is sent to the developers.
+    oversized = _agent_result(_agent(tool_ids=["search", *_CORRECTION_TOOLS]), phase="save")
+    one_builder = _agent_result(
+        _agent(tool_ids=["search", *_CORRECTION_TOOLS[:2], _CORRECTION_TOOLS[8]]), phase="save"
+    )
+
+    finding = next(item for item in oversized.errors if item.code == "tool_group_too_large")
+    assert finding.path == "custom_agent.tool_ids"
+    assert finding.message == (
+        "This agent has 11 tools from the 'staged object corrections' group, and custom "
+        "agents can use at most 10 tools from one group. Please contact the AI Curation "
+        "developers for help setting up this agent."
+    )
+    assert finding.fix_hint.startswith(
+        "Contact the AI Curation developers and include this message."
+    )
+    assert "patch_allele_observation" in finding.fix_hint
+    assert "tool_group_too_large" not in {item.code for item in one_builder.errors}

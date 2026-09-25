@@ -21,12 +21,39 @@ class ValidatorResultPolicyViolation:
     message: str
 
 
+# Keys that carry a term identifier in a validator result (the generic id keys
+# of value_display); only these are compared with an allowed-term list.
+KNOWN_IDENTIFIER_KEYS = frozenset({"curie", "id", "identifier"})
+
+
+def _is_identifier_field(
+    field_name: str,
+    field_path: Any,
+) -> bool:
+    """Whether an expected-result field carries an identifier (its own name or its write leaf)."""
+
+    if field_name in KNOWN_IDENTIFIER_KEYS:
+        return True
+    if not isinstance(field_path, str):
+        return False
+    leaf = field_path.strip().rsplit(".", 1)[-1].split("[", 1)[0]
+    return leaf in KNOWN_IDENTIFIER_KEYS
+
+
 def allowed_term_policy_violations(
     result: DomainValidatorResultBase,
     *,
     request: DomainValidationRequest,
 ) -> list[ValidatorResultPolicyViolation]:
-    """Return field violations for request-scoped ontology allowlists."""
+    """Return field violations for request-scoped ontology allowlists.
+
+    Structured term values are checked by their own curie/id, and a list of
+    scalars is a list of proposed identifiers. A single scalar is checked
+    only when it carries an identifier: its result-field name or its write
+    leaf (e.g. ``terms[2].curie``) is an identifier key. Labels (e.g. a
+    term's ``name`` written per element) are never compared with the
+    allowed list.
+    """
 
     if result.status != "resolved":
         return []
@@ -39,11 +66,16 @@ def allowed_term_policy_violations(
         return []
 
     violations: list[ValidatorResultPolicyViolation] = []
-    for field_name in request.expected_result_fields:
+    for field_name, field_path in request.expected_result_fields.items():
         resolved_value = result.resolved_values.get(field_name)
         if missing_resolved_value(resolved_value):
             continue
 
+        if not isinstance(resolved_value, (list, dict)) and not _is_identifier_field(
+            field_name, field_path
+        ):
+            # A single scalar that is not an identifier (e.g. a term's name).
+            continue
         values = resolved_value if isinstance(resolved_value, list) else [resolved_value]
         invalid_terms: list[str] = []
         for item in values:
@@ -123,6 +155,7 @@ def _normalize_string(value: str | None) -> str | None:
 
 
 __all__ = [
+    "KNOWN_IDENTIFIER_KEYS",
     "ValidatorResultPolicyViolation",
     "allowed_term_policy_violations",
 ]

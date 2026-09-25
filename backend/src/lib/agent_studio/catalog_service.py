@@ -43,6 +43,20 @@ from src.lib.prompts.assembly import (
     prompt_templates_for_bundle,
 )
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
+from src.lib.openai_agents.tool_result_bounds import (
+    RESULT_VIEW_ARGUMENTS,
+    ToolResultBudgetError,
+    bounded_json_result,
+    budget_failure,
+    full_tool_results_are_requested,
+    invalid_cursor,
+    is_budget_failure,
+    report_budget_failure_result,
+    report_tool_result_budget_escape,
+    result_view_schema_properties,
+    serialized_size,
+    tool_result_budget,
+)
 
 # Config-driven registry builder (loads metadata from YAML definitions)
 from .registry_builder import build_agent_registry
@@ -106,10 +120,12 @@ _OUTPUT_FORMATTER_RUNTIME_TOOL_IDS = (
     "inspect_output_artifacts",
     "inspect_output_rows",
     "inspect_field_values",
+    "read_output_value",
     "build_default_projection_plan",
     "validate_output_projection",
     "preview_output_projection",
     "finalize_and_save",
+    "finalize_chat_output",
     "formatter_cannot_complete",
 )
 _OUTPUT_FORMATTER_RUNTIME_TOOL_ID_SET = frozenset(_OUTPUT_FORMATTER_RUNTIME_TOOL_IDS)
@@ -120,24 +136,48 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
     "explain_formatter_capabilities": {
         "name": "Explain Formatter Capabilities",
         "description": (
-            "Explain the bound CSV/TSV/JSON formatter workflow, available saved "
-            "row sources, supported plan operations, and completion rules."
+            "Explain the bound CSV/TSV/JSON or chat formatter workflow, available saved "
+            "row sources, supported plan operations, response budgets, and completion rules."
         ),
         "parameters": [],
     },
     "inspect_output_artifacts": {
         "name": "Inspect Output Artifacts",
         "description": (
-            "Inspect saved row-source counts, default columns, field refs, source "
-            "ids/keys, bounded examples, and warnings for the bound export bundle."
+            "Inspect saved row-source counts, default column refs, source ids/keys, "
+            "warnings, and one searchable, bounded page of the field catalog."
         ),
         "parameters": [
+            {
+                "name": "catalog_query",
+                "type": "string",
+                "required": False,
+                "description": "Optional text matched against field refs and labels.",
+            },
+            {
+                "name": "row_source",
+                "type": "string",
+                "required": False,
+                "description": "Optional row source whose catalog fields to list.",
+            },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Cursor returned by a prior catalog page.",
+            },
+            {
+                "name": "limit",
+                "type": "integer",
+                "required": False,
+                "description": "Maximum catalog entries in this page.",
+            },
             {
                 "name": "example_limit",
                 "type": "integer",
                 "required": False,
-                "description": "Maximum bounded examples to include per source.",
-            }
+                "description": "Short example previews per catalog field (default 1).",
+            },
         ],
     },
     "inspect_output_rows": {
@@ -216,6 +256,45 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
                 "required": False,
                 "description": "Maximum distinct values to return.",
             },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Cursor returned by a prior distinct-value page.",
+            },
+        ],
+    },
+    "read_output_value": {
+        "name": "Read Output Value",
+        "description": (
+            "Read an exact, bounded slice of one saved value by row reference and "
+            "field ref, with the offset of the next slice."
+        ),
+        "parameters": [
+            {
+                "name": "row_ref",
+                "type": "string",
+                "required": True,
+                "description": "Runtime row reference such as object#1.",
+            },
+            {
+                "name": "field_ref",
+                "type": "string",
+                "required": True,
+                "description": "Saved field ref to read.",
+            },
+            {
+                "name": "offset",
+                "type": "integer",
+                "required": False,
+                "description": "Character offset to start reading from.",
+            },
+            {
+                "name": "max_chars",
+                "type": "integer",
+                "required": False,
+                "description": "Maximum characters in this slice.",
+            },
         ],
     },
     "build_default_projection_plan": {
@@ -243,41 +322,65 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
                 "required": False,
                 "description": "Optional source id or source key to restrict rows.",
             },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Column cursor returned for a wide plan.",
+            },
         ],
     },
     "validate_output_projection": {
         "name": "Validate Output Projection",
         "description": (
-            "Validate a projection plan over saved bundle fields. The file "
+            "Validate a projection plan over saved bundle fields. The output "
             "format is forced to the bound formatter type."
         ),
         "parameters": [
             {
                 "name": "plan_json",
                 "type": "string",
-                "required": True,
-                "description": "Projection plan JSON using field refs and plan metadata.",
-            }
+                "required": False,
+                "description": (
+                    "Projection plan JSON using field refs and plan metadata. Empty "
+                    "input validates the default or curator-fixed plan."
+                ),
+            },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Column cursor returned for a wide plan.",
+            },
         ],
     },
     "preview_output_projection": {
         "name": "Preview Output Projection",
         "description": (
-            "Validate and preview a source-backed projection plan without saving "
-            "a file."
+            "Validate and preview a page of a source-backed projection without "
+            "saving or delivering output."
         ),
         "parameters": [
             {
                 "name": "plan_json",
                 "type": "string",
-                "required": True,
-                "description": "Projection plan JSON using field refs and plan metadata.",
+                "required": False,
+                "description": (
+                    "Projection plan JSON using field refs and plan metadata. Empty "
+                    "input previews the default or curator-fixed plan."
+                ),
             },
             {
                 "name": "limit",
                 "type": "integer",
                 "required": False,
                 "description": "Maximum preview rows to return.",
+            },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Cursor returned by a prior preview page.",
             },
         ],
     },
@@ -302,6 +405,30 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
                 "type": "string",
                 "required": False,
                 "description": "Clean base filename hint without extension or timestamp.",
+            },
+        ],
+    },
+    "finalize_chat_output": {
+        "name": "Finalize Chat Output",
+        "description": (
+            "Finalize a source-backed projection over every saved row and deliver the "
+            "rendered chat table to the curator exactly once."
+        ),
+        "parameters": [
+            {
+                "name": "plan_json",
+                "type": "string",
+                "required": False,
+                "description": (
+                    "Projection plan JSON. Empty input uses the validated default "
+                    "projection."
+                ),
+            },
+            {
+                "name": "notes",
+                "type": "string",
+                "required": False,
+                "description": "Brief curator-requested caveat shown below the table.",
             },
         ],
     },
@@ -687,20 +814,37 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
 
     tracker = execution_context.tool_tracker
     base_on_invoke_tool = base_tool.on_invoke_tool
+    execute_inline = _should_execute_package_tool_inline(binding)
+    # Stateless re-query paging is only safe for read-only lookups. Builder
+    # run-state tools mutate the workspace and bound their own results.
+    metadata = getattr(binding, "metadata", None)
+    requery_pages = not execute_inline and not (
+        isinstance(metadata, dict) and metadata.get("builder_run_state")
+    )
 
     async def _runner_invoke(ctx, input_str):
         if tracker:
             tracker.record_call(tool_id)
 
-        if _should_execute_package_tool_inline(binding):
+        if execute_inline:
             inline_ctx = ctx or SimpleNamespace(tool_name=tool_id, run_config=None)
             result = base_on_invoke_tool(inline_ctx, input_str)
             if inspect.isawaitable(result):
-                return await result
+                result = await result
+            _report_inline_package_result(tool_id, result)
             return result
 
         runner = _get_package_tool_runner()
         decoded_kwargs = _decode_tool_input(tool_id, input_str)
+        view_arguments = (
+            {
+                key: decoded_kwargs.pop(key)
+                for key in RESULT_VIEW_ARGUMENTS
+                if key in decoded_kwargs
+            }
+            if requery_pages
+            else {}
+        )
         execute_kwargs = {
             "kwargs": decoded_kwargs,
             "context": {
@@ -732,9 +876,162 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             raise RuntimeError(
                 f"Package tool '{tool_id}' execution failed: {error_message}"
             )
-        return result.result
+        if not requery_pages:
+            _report_inline_package_result(tool_id, result.result)
+            return result.result
+        return _bounded_package_result(
+            tool_id,
+            result.result,
+            view_arguments,
+            repeatable=not _is_non_idempotent_http_call(decoded_kwargs),
+        )
 
-    return replace(base_tool, on_invoke_tool=_runner_invoke)
+    if not requery_pages:
+        return replace(base_tool, on_invoke_tool=_runner_invoke)
+    return replace(
+        base_tool,
+        on_invoke_tool=_runner_invoke,
+        params_json_schema=_with_result_view_arguments(base_tool),
+    )
+
+
+def _with_result_view_arguments(tool: Any) -> Dict[str, Any]:
+    """Add the bounded page/detail arguments to a subprocess package tool schema.
+
+    Subprocess package tools return complete results to the backend; the
+    backend serves the model budget-bounded pages and exact detail chunks, so
+    the continuation arguments belong to this adapter, not to package code.
+    """
+    schema = json.loads(json.dumps(getattr(tool, "params_json_schema", None) or {}))
+    schema.setdefault("type", "object")
+    properties = schema.setdefault("properties", {})
+    collisions = sorted(set(properties) & set(RESULT_VIEW_ARGUMENTS))
+    if collisions:
+        raise ValueError(
+            f"Package tool '{getattr(tool, 'name', '')}' declares reserved result view "
+            f"arguments: {', '.join(collisions)}"
+        )
+    properties.update(result_view_schema_properties())
+    if getattr(tool, "strict_json_schema", False):
+        # Strict schemas require every property; the view arguments are nullable.
+        schema["required"] = [*schema.get("required", []), *RESULT_VIEW_ARGUMENTS]
+    return schema
+
+
+_NON_IDEMPOTENT_HTTP_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _is_non_idempotent_http_call(arguments: Dict[str, Any]) -> bool:
+    """Whether a REST-style package call would repeat a side effect if re-run."""
+    method = arguments.get("method")
+    return isinstance(method, str) and method.strip().upper() in _NON_IDEMPOTENT_HTTP_METHODS
+
+
+def _bounded_package_result(
+    tool_id: str,
+    payload: Any,
+    view_arguments: Dict[str, Any],
+    *,
+    repeatable: bool = True,
+) -> Any:
+    """Serve one subprocess package result within the model-facing budget.
+
+    Results that fit are returned unchanged. Larger ones become a first page
+    with explicit continuation; repeating the call with ``result_offset`` /
+    ``result_sha256`` or ``detail_path`` / ``detail_cursor`` pages the same
+    (recomputed and hash-checked) result. Application-side captures that need
+    the complete result (validator lookup capture) request it explicitly.
+
+    Continuation re-runs the call, so a non-repeatable call (a REST write) is
+    never paged: an oversized result is a reported contract failure instead of
+    an invitation to repeat the side effect.
+    """
+    view_arguments = {
+        key: value for key, value in view_arguments.items() if value is not None
+    }
+    if full_tool_results_are_requested():
+        if view_arguments:
+            raise ValueError(
+                f"Tool '{tool_id}' was asked for a complete result and a page at once"
+            )
+        return payload
+    if not repeatable:
+        if view_arguments:
+            return invalid_cursor(
+                "Results of write requests cannot be paged because paging repeats the request.",
+                tool_name=tool_id,
+            )
+        measured = serialized_size(payload)
+        budget = tool_result_budget()
+        if measured <= budget:
+            return payload
+        failure = budget_failure(tool_name=tool_id, measured=measured, limit=budget)
+        report_budget_failure_result(
+            failure,
+            tool_name=tool_id,
+            component="package_tool_adapter",
+        )
+        return failure
+    body = payload if isinstance(payload, dict) else {"data": payload}
+    try:
+        bounded = bounded_json_result(
+            body,
+            budget=tool_result_budget(),
+            offset=view_arguments.get("result_offset"),
+            expected_sha256=view_arguments.get("result_sha256"),
+            detail_path=view_arguments.get("detail_path"),
+            detail_cursor=view_arguments.get("detail_cursor"),
+        )
+    except ValueError as exc:
+        return invalid_cursor(str(exc), tool_name=tool_id)
+    except ToolResultBudgetError as exc:
+        failure = budget_failure(
+            tool_name=tool_id,
+            measured=exc.measured,
+            limit=exc.limit,
+            field=view_arguments.get("detail_path"),
+        )
+        report_budget_failure_result(
+            failure,
+            tool_name=tool_id,
+            component="package_tool_adapter",
+        )
+        return failure
+    return payload if bounded is None else bounded
+
+
+# Inline tools whose result contract is owned by a sibling change (ALL-1277
+# agent contract discovery); they are neither measured nor reported here.
+_INLINE_TOOLS_WITH_SEPARATE_RESULT_CONTRACT = frozenset({"get_agent_contract"})
+
+
+def _report_inline_package_result(tool_id: str, result: Any) -> None:
+    """Report a self-bounded package tool result that broke its size contract.
+
+    Inline document/evidence tools and builder run-state tools bound their own
+    results: a ``tool_result_budget_unmet`` result is reported once, and any
+    other result over the budget is reported as an escape (observed, result
+    unchanged).
+    """
+    if tool_id in _INLINE_TOOLS_WITH_SEPARATE_RESULT_CONTRACT:
+        return
+    if is_budget_failure(result):
+        report_budget_failure_result(
+            result,
+            tool_name=tool_id,
+            component="package_tool_adapter",
+        )
+        return
+    budget = tool_result_budget()
+    measured = serialized_size(result)
+    if measured > budget:
+        report_tool_result_budget_escape(
+            tool_name=tool_id,
+            measured=measured,
+            limit=budget,
+            component="package_tool_adapter",
+            enforced=False,
+        )
 
 
 def _tool_category_for_binding(binding: Any) -> str:
@@ -850,9 +1147,11 @@ def _build_tool_registry() -> Dict[str, Dict[str, Any]]:
             "package_export_name": binding.source.export_name,
         }
         if binding.metadata:
+            # ``namespace`` is hosted tool-search loading metadata (ALL-1280),
+            # not served tool documentation.
             registry[binding.tool_id] = _merge_tool_metadata(
                 registry[binding.tool_id],
-                dict(binding.metadata),
+                {key: value for key, value in binding.metadata.items() if key != "namespace"},
             )
 
     registry.update(_build_runtime_formatter_tool_registry_entries())
@@ -1005,6 +1304,7 @@ def _resolve_runtime_formatter_tool(
 ) -> Any:
     """Resolve one runtime-bound formatter tool from the current export bundle."""
 
+    from src.lib.flows.chat_output_delivery import deliver_projected_chat_output
     from src.lib.openai_agents.tools.file_output_tools import save_projected_file_output
     from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
 
@@ -1023,6 +1323,7 @@ def _resolve_runtime_formatter_tool(
         formatter_agent_id=formatter_agent_id,
         save_projected_output=save_projected_file_output,
         configured_plan=execution_context.formatter_projection_plan,
+        deliver_chat_output=deliver_projected_chat_output,
     )
     for tool in tools:
         if getattr(tool, "name", None) == tool_id:
@@ -1676,7 +1977,7 @@ def _build_runtime_context(
             preamble_lines.append(
                 f'You are helping the user with the document: "{document_name}"'
             )
-        if tool_id_set & _OUTPUT_FORMATTER_RUNTIME_TOOL_ID_SET:
+        if "finalize_and_save" in tool_id_set:
             try:
                 sanitized_stem = sanitize_output_descriptor(document_name)
             except FileValidationError:
@@ -1844,6 +2145,7 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         create_tool_required_output_guardrail,
     )
     from src.lib.openai_agents.config import (
+        PromptCacheIdentity,
         get_model_for_agent,
         build_model_settings,
         normalize_reasoning_effort,
@@ -1860,6 +2162,20 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
     )
     requested_tool_ids = group_tool_resolution.tool_ids
     group_tool_audit = group_tool_resolution.audit_metadata()
+    # An extraction agent never runs with identity-lookup tools (pinned and restored
+    # revisions included); it is refused until re-saved without them.
+    from src.lib.packages.tool_roles import require_no_identity_lookup_on_extraction
+
+    require_no_identity_lookup_on_extraction(
+        requested_tool_ids,
+        output_state=(
+            execution_snapshot.output_contract.output_state if execution_snapshot is not None else None
+        ),
+        output_schema_key=(
+            execution_snapshot.output_contract.output_schema_key if execution_snapshot is not None else None
+        ),
+        agent_label=f"Agent '{db_agent.agent_key}'",
+    )
     if raw_group_tool_policy.get("rules"):
         logger.info(
             "Resolved group-scoped tools for agent '%s': base=%s added=%s denied=%s",
@@ -1951,6 +2267,10 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         runtime_context = _build_runtime_context(
             runtime_kwargs=runtime_kwargs, canonical_tool_ids=canonical_tool_ids
         )
+        if "get_agent_contract" in canonical_tool_id_set:
+            from src.lib.agent_contracts import custom_agent_contract_runtime_note
+
+            runtime_context += "\n\n" + custom_agent_contract_runtime_note(str(db_agent.agent_key))
         if execution_snapshot.output_contract.output_mode == "profile_bound_generic":
             from src.lib.agent_studio.profile_tools import configure_profile_tools, profile_runtime_instruction
 
@@ -2008,6 +2328,10 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         if (output_schema is None and bool(canonical_tool_id_set & DOCUMENT_TOOL_IDS))
         else None,
         provider_override=model_provider,
+        prompt_cache=PromptCacheIdentity(
+            agent_key=str(db_agent.agent_key),
+            static_prompt=prompt_bundle.static_prefix(),
+        ),
     )
 
     runtime_agent = Agent(

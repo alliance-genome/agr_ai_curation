@@ -6,7 +6,7 @@ import { buildRedactedVerdict, verdictFailure } from '../src/verdict.js'
 
 describe('smoke verdict boundary', () => {
   it('retains safe numeric usage while redacting the rest of the verdict', async () => {
-    const modelUsage = await summarizeModelUsage('/missing/midscene-report', 'openai', 'gpt-5.6-sol', 5)
+    const modelUsage = await summarizeModelUsage('/missing/midscene-report', 'openai', 'gpt-6-sol', 5)
     modelUsage.input_tokens = 123
     modelUsage.cached_input_tokens = 45
     modelUsage.output_tokens = 6

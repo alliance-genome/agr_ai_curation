@@ -14,7 +14,7 @@ to capture internal tool calls and emit events to the audit panel.
 
 Advanced features used:
 - ModelSettings: Per-agent temperature and reasoning configuration
-- Reasoning: Extended thinking time for complex routing decisions (GPT-5 models)
+- Reasoning: Extended thinking time for complex routing decisions (reasoning models)
 - Guardrails: Optional input validation for safety (PII detection, topic relevance)
 - Streaming tool wrappers: Specialists run with event capture for audit visibility
 
@@ -28,7 +28,7 @@ import json
 import logging
 import re
 import time
-from typing import Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequence
 
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, function_tool
 
@@ -52,6 +52,7 @@ from src.lib.curation_workspace.extraction_results import (
     list_extraction_results,
 )
 from src.lib.openai_agents.inspect_results import inspect_results
+from src.lib.openai_agents.tool_surface import canonical_tool_name
 from src.lib.openai_agents.supervisor_context_tools import (
     inspect_chat_traces,
     recall_chat_history,
@@ -59,6 +60,9 @@ from src.lib.openai_agents.supervisor_context_tools import (
 from src.lib.prompts.assembly import build_agent_prompt_layers, prompt_templates_for_bundle
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
 from src.schemas.curation_workspace import CurationExtractionSourceKind
+
+if TYPE_CHECKING:
+    from ..config import PromptCacheIdentity
 
 # Note: Answer model not used here - supervisor streams plain text for better UX
 
@@ -313,18 +317,16 @@ def _fetch_document_sections_sync(document_id: str, user_id: str) -> List[Dict[s
     from src.lib.weaviate_client.chunks import get_document_sections
 
     try:
-        # Try to get the running loop
         try:
             asyncio.get_running_loop()
-            # If there's a running loop, we can't use asyncio.run()
-            # Create a new event loop in a thread or use run_coroutine_threadsafe
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, get_document_sections(document_id, user_id))
-                return future.result(timeout=10)
         except RuntimeError:
             # No running loop, safe to use asyncio.run()
             return asyncio.run(get_document_sections(document_id, user_id))
+        # A running loop forbids asyncio.run() here; run the fetch on a worker thread.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, get_document_sections(document_id, user_id))
+            return future.result(timeout=10)
     except Exception as e:
         logger.warning("Failed to fetch document sections: %s", e)
         return []
@@ -342,17 +344,16 @@ def fetch_document_hierarchy_sync(document_id: str, user_id: str) -> Optional[Di
     from src.lib.weaviate_client.chunks import get_document_sections_hierarchical
 
     try:
-        # Try to get the running loop
         try:
             asyncio.get_running_loop()
-            # If there's a running loop, we can't use asyncio.run()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, get_document_sections_hierarchical(document_id, user_id))
-                return future.result(timeout=10)
         except RuntimeError:
             # No running loop, safe to use asyncio.run()
             return asyncio.run(get_document_sections_hierarchical(document_id, user_id))
+        # A running loop forbids asyncio.run() here; run the fetch on a worker thread.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, get_document_sections_hierarchical(document_id, user_id))
+            return future.result(timeout=10)
     except Exception as e:
         logger.warning("Failed to fetch document hierarchy: %s", e)
         try:
@@ -518,6 +519,7 @@ class SupervisorCallLedger:
 
         if not handoff.result_ref:
             return
+        tool_name = canonical_tool_name(tool_name)
         key = (tool_name, _normalize_ledger_query(query))
         if key not in self._extraction_handoffs:
             self._extraction_handoff_order.append(key)
@@ -545,6 +547,7 @@ class SupervisorCallLedger:
         distinct key, and only when budget allows.
         """
 
+        tool_name = canonical_tool_name(tool_name)
         key = (tool_name, _normalize_ledger_query(query))
 
         async with self._lock:
@@ -1052,16 +1055,18 @@ def _build_model_settings(
     temperature: Optional[float] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     provider_override: Optional[str] = None,
+    *,
+    prompt_cache: "PromptCacheIdentity",
 ) -> Optional[ModelSettings]:
     """
     Build ModelSettings with optional reasoning for models that support it.
 
     Reasoning is supported on:
-    - GPT-5.6 Sol/Terra models
+    - GPT-6 Sol/Astra models
     - Gemini 3 models (gemini-3.0-pro) - uses "low"/"high" thinking levels
     - Gemini 2.5 models (gemini-2.5-pro, gemini-2.5-flash) - uses thinking budgets
 
-    IMPORTANT: GPT-5 models don't support the temperature parameter -
+    IMPORTANT: GPT-6 models don't support the temperature parameter -
     they use reasoning instead. Gemini models support both.
 
     For Gemini, the OpenAI SDK's reasoning_effort parameter maps to:
@@ -1070,9 +1075,10 @@ def _build_model_settings(
     - high/xhigh -> "high" thinking level (Gemini 3) or 24,576 budget (Gemini 2.5)
 
     Args:
-        model: The model name (e.g., "gpt-5.6-sol", "gpt-5.6-terra", "gemini-3-pro-preview")
+        model: The model name (e.g., "gpt-6-sol", "gpt-6-astra", "gemini-3-pro-preview")
         temperature: Optional temperature override (0.0-1.0)
         reasoning_effort: Optional reasoning effort for models that support it
+        prompt_cache: The supervisor's static prompt identity (stable cache key)
 
     Returns:
         ModelSettings instance or None if no settings needed
@@ -1086,6 +1092,7 @@ def _build_model_settings(
         temperature=temperature,
         reasoning_effort=reasoning_effort,
         provider_override=provider_override,
+        prompt_cache=prompt_cache,
     )
 
 
@@ -1158,7 +1165,10 @@ def _get_supervisor_specialist_specs(
         ):
             continue
         try:
-            metadata = get_agent_metadata(row.agent_key)
+            # The row passed the caller's group scope above; read its metadata in that scope.
+            metadata = get_agent_metadata(
+                row.agent_key, authenticated_groups=list(active_group_ids or [])
+            )
             requires_document = bool(metadata.get("requires_document", False))
             category = metadata.get("category")
             agent_definition = get_agent_definition(row.agent_key)
@@ -1277,13 +1287,6 @@ def _build_runtime_tool_availability_note(
         "workarounds or require a follow-up question, rerun, or tool call."
     )
 
-    notes.append(
-        "CURATION PREP HANDOFF: First call prepare_for_curation(action='preview') "
-        "with exact saved result refs and the requested candidate count. Present "
-        "the complete returned scope and wait for the curator's next confirmation "
-        "before action='confirm'. Never substitute whole results for a candidate subset."
-    )
-
     formatter_tool_names = sorted(
         {
             str(spec.get("tool_name", "") or "").strip()
@@ -1329,7 +1332,9 @@ def _build_runtime_tool_availability_note(
         "after explicit confirmation. Use inspect_chat_traces for behavior/debug questions "
         "about why a previous answer behaved a certain way or what tools ran. "
         "Use recall_chat_history for exact prior user/assistant transcript text "
-        "when earlier chat turns may have been compacted out of live context."
+        "when earlier chat turns may have been compacted out of live context; "
+        "continue truncated pages with next_cursor and read a withheld long "
+        "message exactly with detail=\"message\"."
     )
 
     return "\n\n".join(notes)
@@ -1520,6 +1525,7 @@ def create_supervisor_agent(
         An Agent instance configured as a supervisor with specialist tools
     """
     from ..config import (
+        PromptCacheIdentity,
         get_agent_config,
         log_agent_config,
         get_model_for_agent,
@@ -1543,14 +1549,6 @@ def create_supervisor_agent(
 
     # Resolve a concrete SDK model for compatible providers or a name for native OpenAI.
     model = get_model_for_agent(effective_model, provider_override=model_provider)
-
-    # Build model settings for supervisor
-    supervisor_settings = _build_model_settings(
-        model=effective_model,
-        temperature=effective_temperature,
-        reasoning_effort=effective_reasoning,
-        provider_override=model_provider,
-    )
 
     # Configure guardrails if enabled
     input_guardrails = []
@@ -1668,20 +1666,23 @@ def create_supervisor_agent(
     @function_tool(
         name_override=_INSPECT_RESULTS_TOOL_NAME,
         description_override=(
-            "Inspect persisted canonical extraction results for this chat. Use "
-            "action=\"help\" for the contract; action=\"list\" for available "
-            "results; action=\"search\" with query/target to find prior evidence "
-            "or manifest-field previews and select a stable result_ref; "
-            "action=\"summary\" for one result; action=\"objects\" or \"object\" for "
-            "YAML-declared manifest fields; action=\"field\" for one "
-            "YAML-declared scalar field; action=\"details\" with object_ref for saved "
-            "generic/custom attributes (field_path selects a nested part; cursor continues a page). "
-            "Read these saved details instead of calling extraction again. action=\"evidence\" for bounded "
-            "evidence text; and action=\"validation\" for validation findings. "
-            "Requires result_ref values in extraction-result:<uuid> form when "
-            "addressing a specific result. This tool browses existing results "
-            "and does not export, prepare for curation, inspect files, inspect "
-            "review sessions, or debug trace behavior."
+            "Explore persisted canonical extraction results for this chat without "
+            "rerunning extraction. Every response is size-bounded: pass next_call "
+            "exactly to continue a page or an exact chunk. Start with "
+            "action=\"summary\" (counts by object type, status and validation state), "
+            "then action=\"objects\" filtered by object_type, status, validation_state "
+            "(open|resolved|none|any), severity, query (field text) or field_path, with "
+            "fields to select YAML manifest fields; action=\"object\" or \"field\" "
+            "for one object or one exact field value; action=\"validation\" (filters "
+            "plus finding_ref for one finding) and action=\"validator_results\" "
+            "(validator_result_key for one) for validation; action=\"evidence\" with "
+            "object_ref for evidence text; action=\"details\" with object_ref for saved "
+            "generic/custom attributes; action=\"list\" and action=\"search\" with "
+            "query/target to choose among results. Values shown withheld are read "
+            "exactly with their read call (detail_path/cursor); pass cursor, limit and "
+            "result_sha256 only from a next_call. Address a specific "
+            "result with result_ref in extraction-result:<uuid> form. This tool does not "
+            "export, prepare for curation, inspect files or review sessions, or debug traces."
         ),
     )
     async def inspect_results_tool(
@@ -1695,6 +1696,15 @@ def create_supervisor_agent(
         flow_run_id: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        object_type: str | None = None,
+        status: str | None = None,
+        validation_state: str | None = None,
+        severity: str | None = None,
+        fields: List[str] | None = None,
+        finding_ref: str | None = None,
+        validator_result_key: str | None = None,
+        detail_path: str | None = None,
+        result_sha256: str | None = None,
     ) -> str:
         """Inspect bounded persisted extraction results for the active chat."""
 
@@ -1709,6 +1719,15 @@ def create_supervisor_agent(
             flow_run_id=flow_run_id,
             limit=limit,
             cursor=cursor,
+            object_type=object_type,
+            status=status,
+            validation_state=validation_state,
+            severity=severity,
+            fields=fields,
+            finding_ref=finding_ref,
+            validator_result_key=validator_result_key,
+            detail_path=detail_path,
+            result_sha256=result_sha256,
         )
 
     specialist_tools.append(inspect_results_tool)
@@ -1777,7 +1796,12 @@ def create_supervisor_agent(
             "detail=\"recent\" for a bounded recent transcript page, detail=\"turn\" "
             "with turn_ref=\"latest\", a turn id, message id, or 1-based turn ordinal "
             "to fetch a specific turn, and detail=\"search\" with query to full-text "
-            "search this conversation. Use this when earlier turns may have been "
+            "search this conversation. Pages are size-bounded: when truncated is true, "
+            "call again with the returned next_cursor. A message too long for a page "
+            "is marked withheld; read it exactly with the arguments in its "
+            "detail_calls (detail=\"message\", message_id, message_field content or "
+            "flow_assistant_message, content_cursor), following next_content_cursor "
+            "until complete. Use this when earlier turns may have been "
             "compacted or summarized and you need exact user/assistant wording. This "
             "does not inspect TraceReview behavior; use inspect_chat_traces for why "
             "tools ran or failed."
@@ -1789,8 +1813,22 @@ def create_supervisor_agent(
         query: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        message_id: str | None = None,
+        message_field: str = "content",
+        content_cursor: int | None = None,
     ) -> str:
-        """Recall exact transcript text for the active main chat."""
+        """Recall exact transcript text for the active main chat.
+
+        Args:
+            detail: recent, turn, search, or message (one exact message in chunks).
+            turn_ref: For detail="turn": latest, a turn id, message id, or 1-based turn ordinal.
+            query: For detail="search": text to find in this conversation.
+            limit: Most messages on one page.
+            cursor: The next_cursor from the previous page of the same request.
+            message_id: For detail="message": the message to read exactly.
+            message_field: For detail="message": content or flow_assistant_message.
+            content_cursor: For detail="message": the next_content_cursor from the previous chunk.
+        """
 
         return await recall_chat_history(
             detail=detail,
@@ -1798,6 +1836,9 @@ def create_supervisor_agent(
             query=query,
             limit=limit,
             cursor=cursor,
+            message_id=message_id,
+            message_field=message_field,
+            content_cursor=content_cursor,
         )
 
     specialist_tools.append(recall_chat_history_tool)
@@ -1834,6 +1875,18 @@ def create_supervisor_agent(
     )
     instructions = prompt_bundle.render()
 
+    # Build model settings for supervisor; its cache key follows the static layers.
+    supervisor_settings = _build_model_settings(
+        model=effective_model,
+        temperature=effective_temperature,
+        reasoning_effort=effective_reasoning,
+        provider_override=model_provider,
+        prompt_cache=PromptCacheIdentity(
+            agent_key="supervisor",
+            static_prompt=prompt_bundle.static_prefix(),
+        ),
+    )
+
     logger.info(
         "Creating Supervisor agent, model=%s prompt_v=%s groups=%s",
         effective_model,
@@ -1854,6 +1907,9 @@ def create_supervisor_agent(
         input_guardrails=input_guardrails,
         tools=specialist_tools,
     )
+    # ALL-1280: runtime key for the tool loading policy; the surface is
+    # compiled at the run point (runner.py) after run-state rebinding.
+    supervisor.tool_surface_runtime = "chat_supervisor"
 
     from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
     attach_agent_cost_identity(supervisor, {**agent_identity(

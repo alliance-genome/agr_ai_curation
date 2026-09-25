@@ -126,6 +126,16 @@ are retired and ignored; no SNS fallback is used. Prompt suggestions and other
 non-error SNS workflows are unchanged. Raw tool error/context text and curator
 identity are not forwarded by the tool-failure facade.
 
+Model-facing payload size and delivery failures report through
+`observability/payload_contracts.py::report_payload_contract_violation`
+(categories `provider_request_blocked`, `tool_result_budget_escape`,
+`output_delivery_failure`, `contract_serialization_failure`), grouped by
+category and component. Once an exception is captured it is marked, and
+`before_send` drops later events that re-report it through `raise ... from`,
+`exc_info`, or a log-message argument, so wrappers and retries do not add
+duplicates. See `MODEL_REQUEST_MEASUREMENT_MATRIX.md` for the per-request
+model input measurement and the OpenAI `instructions` limit.
+
 `report_tool_failure` reports `sentry_capture_queued`, not notification delivery.
 A returned SDK event ID proves only local capture acceptance, not ingestion,
 alert-rule execution, or inbox receipt. Before release, verify those stages

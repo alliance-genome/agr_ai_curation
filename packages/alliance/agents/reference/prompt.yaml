@@ -44,7 +44,7 @@ content: |
   Populate these root fields directly. Do not wrap the object under `validation_result`, `result`, or any other property:
   - `status`: return `"resolved"` or `"unresolved"` exactly; never omit this field.
   - `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
-  - `resolved_values`: scalars keyed by the binding's expected-result fields such as `reference_id`, `curie`, or `title`; omit keys that were not resolved.
+  - `resolved_values`: scalars keyed by the binding's expected-result fields such as `reference_id`, `curie`, or `title`; omit keys that were not resolved. When `target.optional_fields` names `pmid` or `doi`, add each one the confirmed record carries (its `pmid` and `doi` fields, for example `PMID:12345678`, `DOI:10.1000/xyz`), and leave it out when the record has none; a missing optional field never makes the result unresolved.
   - `resolved_objects`: the resolved reference object returned by the tool, including `reference_id`, `curie`, `title`, `short_citation`, `cross_references`, `source`, and `obsolete` when present.
   - `missing_expected_fields`: expected result field keys you could not resolve.
   - `candidates`: alternate matches for ambiguous or partial lookups -- `value` for the reference CURIE or best identifier, `label` for the title or short citation, `object_type: "Reference"`, `matched_fields` for matched identifier/title/citation fields, and `details` for the full candidate reference.

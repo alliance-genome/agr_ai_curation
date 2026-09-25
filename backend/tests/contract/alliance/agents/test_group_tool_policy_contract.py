@@ -88,7 +88,9 @@ def test_rgd_gene_product_resolver_uses_authenticated_group_tool_policy():
     ]
 
 
-def test_rgd_go_paper_curator_scopes_identity_and_annotation_sources():
+def test_rgd_go_paper_curator_has_no_group_scoped_lookup_tools():
+    """The extractor reads the paper; identity lookups belong to validation."""
+
     agents = load_agent_definitions(
         REPO_ROOT / "packages" / "alliance" / "agents",
         force_reload=True,
@@ -98,15 +100,4 @@ def test_rgd_go_paper_curator_scopes_identity_and_annotation_sources():
     assert curator.access.allowed_group_ids == ["RGD"]
     assert "resolve_gene_product" not in curator.tools
     assert "go_api_call" not in curator.tools
-    assert [rule.to_dict() for rule in curator.group_tool_policy.rules] == [
-        {
-            "tool_id": "resolve_gene_product",
-            "allowed_group_ids": ["RGD"],
-            "field_paths": ["gene_product"],
-        },
-        {
-            "tool_id": "go_api_call",
-            "allowed_group_ids": ["RGD"],
-            "field_paths": ["provider_context.existing_annotation_context"],
-        },
-    ]
+    assert curator.group_tool_policy.rules == []

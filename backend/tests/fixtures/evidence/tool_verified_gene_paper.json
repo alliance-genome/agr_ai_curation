@@ -165,7 +165,14 @@
         "source_mentions": [
           "crumb",
           "Crb"
-        ]
+        ],
+        "mention": "crumb",
+        "gene_symbol": null,
+        "primary_external_id": null,
+        "taxon": null,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet."
       },
       "field_paths": [
         "label",

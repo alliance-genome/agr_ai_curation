@@ -26,7 +26,7 @@ describe('VersionsSection', () => {
     expect(rows[0]).not.toHaveAttribute('aria-current')
     expect(rows[1]).toHaveAttribute('aria-current', 'true')
     expect(rows[1]).toHaveTextContent('Current')
-    expect(rows[1]).toHaveTextContent('gpt-5.6-terra · 0 tools · No structured output')
+    expect(rows[1]).toHaveTextContent('gpt-6-sol · 0 tools · No structured output')
     expect(within(rows[1]).queryByRole('button')).not.toBeInTheDocument()
 
     fireEvent.click(within(rows[2]).getByRole('button', { name: 'Restore configuration 1' }))

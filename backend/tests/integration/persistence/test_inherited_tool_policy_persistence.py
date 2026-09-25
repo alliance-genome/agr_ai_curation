@@ -75,7 +75,7 @@ def test_pre_backfill_snapshot_keeps_newly_designated_helpers(execution_db, subm
     groups = list(get_valid_group_ids())
     head = db.get(Agent, agent_id)
     head.template_source = "gene_extractor"
-    head.model_id = "gpt-5.6-sol"
+    head.model_id = "gpt-6-sol"
     head.model_reasoning = "medium"
     head.tool_ids = list(definition.tools)
     head.allowed_group_ids = list(definition.access.allowed_group_ids)
@@ -120,7 +120,7 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
     groups = list(get_valid_group_ids())
     template = Agent(
         id=uuid4(), agent_key=template_key, name=definition.name,
-        instructions="Extract paper-supported records.", model_id="gpt-5.6-sol",
+        instructions="Extract paper-supported records.", model_id="gpt-6-sol",
         model_temperature=0.1, model_reasoning="medium", visibility="system",
         tool_ids=list(definition.tools), allowed_group_ids=list(definition.access.allowed_group_ids),
         group_rules_enabled=False,
@@ -169,7 +169,7 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
                       if output.domain_extraction_ref else None},
     )
     result = validate_workshop_context(db, workshop=workshop, user_id=1, active_group_ids=groups)
-    assert result.valid, result.findings
+    assert result.valid, [(f.code, f.message, f.fix_hint) for f in result.findings]
 
     # A different installed helper is not inherited merely because its policy
     # has the same hidden/runtime designation.
@@ -188,7 +188,7 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
     template.tool_ids = [*original_tools, "stage_disease_observation"]
     db.flush()
     result = validate_workshop_context(db, workshop=workshop, user_id=1, active_group_ids=groups)
-    assert result.valid, result.findings
+    assert result.valid, [(f.code, f.message, f.fix_hint) for f in result.findings]
 
     # A metadata-only save must carry source provenance even without tool_ids.
     service.update_custom_agent(
@@ -228,4 +228,156 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
         service.update_custom_agent(
             db, head, description="Must not bypass revocation",
             expected_revision_id=head.execution_revision_id, active_group_ids=groups,
+        )
+
+
+RESOLVER_HELPERS = ("search_domain_field_terms", "inspect_ontology_term", "resolve_domain_field_term")
+
+
+def resolver_inheritance_migration():
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "alembic/versions/s6t7u8v9w0x1_stop_inheriting_extraction_resolver_helpers.py"
+    )
+    spec = spec_from_file_location("resolver_inheritance_persistence", path)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _legacy_expression_extractor(db, groups, *, migrated):
+    """A custom extractor saved from the gene expression template while it inherited the
+    term resolver helpers, as in production; optionally after s6t7u8v9w0x1 runs."""
+    from src.lib.agent_studio.domain_output_contract import initial_agent_output_contract
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.lib.config.agent_loader import get_agent_definition
+
+    # Before s6t7u8v9w0x1 the resolver helpers were designated for inheritance.
+    for tool_key in RESOLVER_HELPERS:
+        policy = db.get(ToolPolicy, tool_key)
+        policy.config = {**policy.config, "system_managed_inheritance": True}
+    db.flush()
+    get_tool_policy_cache().refresh(db)
+
+    definition = get_agent_definition("gene_expression_extraction")
+    assert definition is not None
+    agent_id = uuid4()
+    head = Agent(
+        id=agent_id, agent_key=f"ca_{agent_id.hex}", user_id=1, name="Saved expression extractor",
+        instructions="Record zebrafish expression patterns.", model_id="gpt-6-sol",
+        model_temperature=0.1, model_reasoning="medium", visibility="private",
+        template_source="gene_expression_extraction",
+        tool_ids=list(dict.fromkeys([*definition.tools, *RESOLVER_HELPERS])),
+        allowed_group_ids=list(definition.access.allowed_group_ids), group_rules_enabled=False,
+    )
+    db.add(head)
+    db.flush()
+    snapshot = capture_execution_snapshot(
+        db, head, initial_agent_output_contract(head), active_group_ids=groups,
+    )
+    # The saved revision carries the helpers as inherited, like the ones in production.
+    assert set(RESOLVER_HELPERS) <= set(snapshot.system_managed_tool_ids)
+    saved = append_execution_revision(db, head, snapshot, user_id=1, expected_revision_id=None)
+
+    if migrated:
+        with Operations.context(MigrationContext.configure(db.connection())):
+            resolver_inheritance_migration().upgrade()
+        get_tool_policy_cache().refresh(db)
+    return head, snapshot, saved
+
+
+@pytest.mark.parametrize("migrated", [False, True])
+@pytest.mark.parametrize("submit", ["visible", "saved_without_lookups", "saved_unchanged"])
+def test_resaving_a_gene_expression_extractor_leaves_out_inherited_identity_lookups(
+    policy_db, migrated, submit,
+):
+    """ALL-1276: a custom extractor saved from the gene expression template while it
+    inherited the term resolver helpers re-saves without any identity lookup tool,
+    including when the Workshop sends its saved tool list back unchanged."""
+    from src.lib.config import get_valid_group_ids
+    from src.lib.packages.tool_roles import identity_lookup_tool_names
+
+    db = policy_db
+    groups = list(get_valid_group_ids())
+    head, snapshot, saved = _legacy_expression_extractor(db, groups, migrated=migrated)
+
+    lookups = identity_lookup_tool_names()
+    if submit == "visible":
+        tool_ids = [p.tool_key for p in db.query(ToolPolicy)
+                    if p.allow_attach and p.tool_key in snapshot.tool_ids]
+    elif submit == "saved_without_lookups":
+        tool_ids = [tool_id for tool_id in snapshot.tool_ids if tool_id not in lookups]
+    else:
+        tool_ids = list(snapshot.tool_ids)
+    service.update_custom_agent(
+        db, head, description="Re-save without database lookups", tool_ids=tool_ids,
+        expected_revision_id=saved.id, active_group_ids=groups,
+    )
+
+    _, updated = get_execution_revision(
+        db, head.id, head.execution_revision_id, 1, active_group_ids=groups,
+    )
+    assert head.execution_revision_id != saved.id
+    assert not lookups & set(head.tool_ids)
+    assert not lookups & set(updated.tool_ids)
+    assert not lookups & set(updated.system_managed_tool_ids)
+    assert "finalize_gene_expression_extraction" in updated.tool_ids
+    assert "agr_species_context_lookup" in updated.tool_ids
+
+
+@pytest.mark.parametrize("migrated", [False, True])
+def test_workshop_accepts_a_legacy_expression_extractor_but_refuses_an_attached_lookup(
+    policy_db, monkeypatch, migrated,
+):
+    """ALL-1276: the Workshop validates the saved tool list unchanged (inherited lookups
+    are withheld, as Save withholds them), but a lookup the curator attaches is refused."""
+    from src.lib.agent_studio.models import AgentWorkshopContext
+    from src.lib.agent_studio.workshop_authoring import validate_workshop_context
+    from src.lib.config import get_valid_group_ids
+    from src.lib.prompts import cache
+    from src.models.sql.prompts import PromptTemplate
+
+    db = policy_db
+    groups = list(get_valid_group_ids())
+    # The Workshop resolves the template's prompt layers from the active prompt cache.
+    PromptTemplate.__table__.create(db.connection())
+    db.add(PromptTemplate(
+        agent_name="gene_expression", prompt_type="system",
+        content="Extract paper-supported records.", version=1, is_active=True,
+    ))
+    db.flush()
+    for name in ("_active_cache", "_version_cache", "_initialized", "_loaded_at"):
+        monkeypatch.setattr(cache, name, getattr(cache, name))
+    cache.initialize(db)
+    head, snapshot, saved = _legacy_expression_extractor(db, groups, migrated=migrated)
+    output = snapshot.output_contract
+    workshop = AgentWorkshopContext(
+        getting_started_mode="template", template_source="gene_expression_extraction",
+        custom_agent_id=head.agent_key, custom_agent_updated_at=head.updated_at.isoformat(),
+        draft_name=head.name, draft_description=head.description or "", draft_icon=head.icon or "🔧",
+        draft_visibility="private", draft_model_id=head.model_id,
+        draft_model_reasoning=head.model_reasoning,
+        prompt_draft=service.custom_agent_to_dict(head)["custom_prompt"],
+        draft_allowed_group_ids=list(head.allowed_group_ids),
+        inherited_allowed_group_ids=list(head.inherited_allowed_group_ids or []),
+        include_group_rules=False, group_prompt_overrides={}, draft_tool_ids=list(snapshot.tool_ids),
+        draft_output={"mode": output.output_mode, "schemaKey": "",
+                      "domainExtractionRef": output.domain_extraction_ref.model_dump(mode="json")
+                      if output.domain_extraction_ref else None},
+    )
+    result = validate_workshop_context(db, workshop=workshop, user_id=1, active_group_ids=groups)
+    assert result.valid, [(f.code, f.message, f.fix_hint) for f in result.findings]
+
+    attached = workshop.model_copy(deep=True)
+    attached.draft_tool_ids = [*snapshot.tool_ids, "agr_curation_query"]
+    result = validate_workshop_context(db, workshop=attached, user_id=1, active_group_ids=groups)
+    [finding] = [f for f in result.findings if f.code == "identity_lookup_on_extraction_agent"]
+    # Only the attached lookup is named; the inherited helpers are withheld, not reported.
+    assert finding.fix_hint == "Remove these tools: agr_curation_query."
+    with pytest.raises(service.AuthoringValidationError):
+        service.update_custom_agent(
+            db, head, tool_ids=[*snapshot.tool_ids, "agr_curation_query"],
+            expected_revision_id=saved.id, active_group_ids=groups,
         )

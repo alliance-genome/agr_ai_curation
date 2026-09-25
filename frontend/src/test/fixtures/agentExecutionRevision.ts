@@ -9,7 +9,7 @@ export function buildExecutionRevision(revision: number): AgentExecutionRevision
     created_at: `2026-02-2${revision}T00:00:00Z`,
     snapshot: {
       snapshot_version: 1,
-      model_id: 'gpt-5.6-terra',
+      model_id: 'gpt-6-sol',
       model_temperature: 0.1,
       model_reasoning: null,
       instructions: 'Prompt',

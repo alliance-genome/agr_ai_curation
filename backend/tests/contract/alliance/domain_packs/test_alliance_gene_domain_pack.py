@@ -6,14 +6,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
-from pydantic import ValidationError
 
 from src.lib.domain_packs.loader import (
     load_domain_fixture_pack,
     load_domain_pack_metadata,
 )
+from src.lib.domain_packs.resolvable_values import resolved_value
 from src.schemas.curation_workspace import SubmissionMode
 from src.schemas.domain_pack_metadata import DomainPackFieldType
 
@@ -33,7 +32,6 @@ from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
 from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
     GENE_DOMAIN_PACK_ID,
     GENE_DOMAIN_PACK_VERSION,
-    GENE_LINKML_SCHEMA_ID,
     GENE_MENTION_EVIDENCE_MODEL_ID,
     GENE_MENTION_EVIDENCE_OBJECT_TYPE,
     GENE_REFERENCE_VALIDATOR_BINDING_ID,
@@ -41,22 +39,12 @@ from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
     GeneMentionEvidenceExportAdapter,
     build_gene_mention_evidence_export,
     build_gene_mention_evidence_submission_plan,
-    tool_verified_gene_output_to_pending_envelope,
 )
 
 GENE_PACK_DIR = get_alliance_domain_packs_dir() / GENE_DOMAIN_PACK_ID
 GENE_PACK_METADATA_PATH = GENE_PACK_DIR / "domain_pack.yaml"
 GENE_VALIDATOR_PROMPT_PATH = (
     REPO_ROOT / "packages" / "alliance" / "agents" / "gene" / "prompt.yaml"
-)
-GENE_RAW_FIXTURE_PATH = (
-    REPO_ROOT
-    / "backend"
-    / "tests"
-    / "fixtures"
-    / "domain_packs"
-    / "gene"
-    / "tool_verified_gene_output.yaml"
 )
 LEGACY_SEMANTIC_KEYS = {
     "items",
@@ -84,8 +72,32 @@ def _gene_object_definition():
     )
 
 
-def _load_raw_gene_fixture() -> dict[str, Any]:
-    return yaml.safe_load(GENE_RAW_FIXTURE_PATH.read_text(encoding="utf-8"))
+def _builder_gene_envelope():
+    fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
+        GENE_DOMAIN_PACK_ID, "daf16_builder_pending"
+    )
+    return load_domain_fixture_pack(GENE_PACK_DIR / fixture_ref.path).fixtures[0].envelope
+
+
+def _validated_gene_envelope():
+    """The builder's daf-16 envelope after the gene validator wrote its identity back."""
+
+    envelope = _builder_gene_envelope()
+    domain_object = envelope.extracted_objects[0]
+    payload = {
+        **domain_object.payload,
+        **resolved_value(
+            domain_object.payload["mention"],
+            {
+                "primary_external_id": "WB:WBGene00000912",
+                "gene_symbol": "daf-16",
+                "taxon": "NCBITaxon:6239",
+            },
+        ),
+    }
+    return envelope.model_copy(
+        update={"extracted_objects": [domain_object.model_copy(update={"payload": payload})]}
+    )
 
 
 def test_gene_domain_pack_loads_from_alliance_registry():
@@ -97,9 +109,9 @@ def test_gene_domain_pack_loads_from_alliance_registry():
     assert loaded_pack.metadata_path == GENE_PACK_METADATA_PATH
     assert loaded_pack.metadata.version == GENE_DOMAIN_PACK_VERSION
 
-    fixture_ref = registry.get_fixture_pack_ref(GENE_DOMAIN_PACK_ID, "tool_verified")
-    assert fixture_ref is not None
-    assert fixture_ref.path == "fixtures/tool_verified.yaml"
+    assert [ref.fixture_pack_id for ref in loaded_pack.metadata.fixture_packs] == [
+        "daf16_builder_pending"
+    ]
 
 
 def test_gene_mention_evidence_is_exporting_validated_reference():
@@ -127,8 +139,9 @@ def test_gene_mention_evidence_is_exporting_validated_reference():
     assert write_behavior["creates_paper_gene_association"] is False
 
     workspace_display = object_metadata["workspace_display"]
-    assert workspace_display["primary_label_field"] == "mention"
-    assert workspace_display["secondary_label_field"] == "gene_symbol"
+    # The validated symbol labels the row; an unresolved gene reads as marked paper wording.
+    assert workspace_display["primary_label_field"] == "gene_symbol"
+    assert "secondary_label_field" not in workspace_display
     assert workspace_display["summary_fields"] == [
         "gene_symbol",
         "primary_external_id",
@@ -137,6 +150,7 @@ def test_gene_mention_evidence_is_exporting_validated_reference():
     assert [group["id"] for group in workspace_display["groups"]] == [
         "identity",
         "ai_proposal",
+        "rationale",
         "evidence_location",
         "provenance",
     ]
@@ -314,35 +328,8 @@ def test_gene_pack_declares_reference_validator_binding():
     assert binding["curator_override"] == {"allowed": False}
 
 
-def test_tool_verified_gene_fixture_converts_to_pending_envelope():
-    raw_fixture = _load_raw_gene_fixture()
-    converted_envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
-
-    fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
-        GENE_DOMAIN_PACK_ID,
-        "tool_verified",
-    )
-    assert fixture_ref is not None
-    fixture_pack = load_domain_fixture_pack(GENE_PACK_DIR / fixture_ref.path)
-    expected_envelope = fixture_pack.fixtures[0].envelope
-
-    assert converted_envelope.model_dump(mode="json", exclude_none=True) == (
-        expected_envelope.model_dump(mode="json", exclude_none=True)
-    )
-    assert converted_envelope.domain_pack_id == GENE_DOMAIN_PACK_ID
-    assert converted_envelope.schema_ref.schema_id == GENE_LINKML_SCHEMA_ID
-    assert converted_envelope.extracted_objects[0].pending_ref_id == "gene-mention-evidence-1"
-    assert converted_envelope.extracted_objects[0].definition_state.value == "stable"
-    assert converted_envelope.extracted_objects[0].metadata[OBJECT_ROLE_METADATA_KEY] == (
-        "validated_reference"
-    )
-    assert converted_envelope.validation_findings[0].severity.value == "info"
-    assert converted_envelope.validation_findings[0].details["blocking"] is False
-
-
-def test_converted_gene_envelope_omits_legacy_semantic_stores():
-    raw_fixture = _load_raw_gene_fixture()
-    converted_envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
+def test_builder_gene_envelope_omits_legacy_semantic_stores():
+    converted_envelope = _builder_gene_envelope()
 
     assert LEGACY_SEMANTIC_KEYS.isdisjoint(converted_envelope.metadata)
     for obj in converted_envelope.extracted_objects:
@@ -350,28 +337,8 @@ def test_converted_gene_envelope_omits_legacy_semantic_stores():
         assert LEGACY_SEMANTIC_KEYS.isdisjoint(obj.metadata)
 
 
-def test_tool_verified_gene_fixture_requires_extractor_confidence():
-    raw_fixture = _load_raw_gene_fixture()
-    del raw_fixture["gene_mentions"][0]["confidence"]
-
-    with pytest.raises(ValidationError, match="confidence"):
-        tool_verified_gene_output_to_pending_envelope(raw_fixture)
-
-
-def test_tool_verified_gene_fixture_rejects_blank_normalization_notes():
-    raw_fixture = _load_raw_gene_fixture()
-    raw_fixture["normalization_notes"] = [
-        "Resolved against current Alliance Gene row.",
-        "  ",
-    ]
-
-    with pytest.raises(ValidationError, match="normalization_notes"):
-        tool_verified_gene_output_to_pending_envelope(raw_fixture)
-
-
 def test_gene_mention_evidence_exports_validated_reference_evidence_payload():
-    raw_fixture = _load_raw_gene_fixture()
-    envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
+    envelope = _validated_gene_envelope()
 
     payload = build_gene_mention_evidence_export(envelope)
 
@@ -389,10 +356,14 @@ def test_gene_mention_evidence_exports_validated_reference_evidence_payload():
         "primary_external_id": "WB:WBGene00000912",
         "gene_symbol": "daf-16",
         "taxon": "NCBITaxon:6239",
+        "resolution_state": "resolved",
+        "lookup_outcome": "matched",
+        "validator_explanation": None,
+        "validator_curator_message": None,
         "confidence": "high",
         "species": "Caenorhabditis elegans",
     }
-    assert record["evidence"]["evidence_record_id"] == "ev-daf16-1"
+    assert record["evidence"]["evidence_record_id"] == "evidence-daf16-1"
     assert record["write_behavior"] == {
         "mutates_base_gene": False,
         "creates_paper_gene_association": False,
@@ -401,8 +372,7 @@ def test_gene_mention_evidence_exports_validated_reference_evidence_payload():
 
 
 def test_gene_export_adapter_rehydrates_selected_domain_envelope_snapshot():
-    raw_fixture = _load_raw_gene_fixture()
-    envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
+    envelope = _validated_gene_envelope()
     selected_object_id = envelope.extracted_objects[0].pending_ref_id
     assert selected_object_id is not None
     snapshot = envelope.model_dump(mode="json")
@@ -427,8 +397,7 @@ def test_gene_export_adapter_rehydrates_selected_domain_envelope_snapshot():
 
 
 def test_gene_submission_plan_is_non_mutating_and_has_no_paper_gene_target():
-    raw_fixture = _load_raw_gene_fixture()
-    envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
+    envelope = _validated_gene_envelope()
 
     plan = build_gene_mention_evidence_submission_plan(envelope)
 
@@ -441,3 +410,115 @@ def test_gene_submission_plan_is_non_mutating_and_has_no_paper_gene_target():
         "public.gene": False,
         "paper_gene_association": False,
     }
+
+
+def _export_record_for(payload_updates: dict[str, Any], *, metadata_updates=None) -> dict[str, Any]:
+    envelope = _validated_gene_envelope()
+    domain_object = envelope.extracted_objects[0]
+    payload = {**domain_object.payload, **payload_updates}
+    payload = {key: value for key, value in payload.items() if value is not ...}
+    metadata = {**domain_object.metadata, **(metadata_updates or {})}
+    envelope = envelope.model_copy(
+        update={
+            "extracted_objects": [
+                domain_object.model_copy(update={"payload": payload, "metadata": metadata})
+            ],
+            # The export no longer reads a fixture-only resolution finding.
+            "validation_findings": [],
+        }
+    )
+    return build_gene_mention_evidence_export(envelope)["records"][0]["validated_reference"]
+
+
+def test_gene_export_does_not_require_the_fixture_only_resolution_finding():
+    reference = _export_record_for({})
+
+    assert reference["resolution_state"] == "resolved"
+    assert reference["primary_external_id"] == "WB:WBGene00000912"
+
+
+def test_gene_export_emits_an_unresolved_gene_explicitly_instead_of_raising():
+    reference = _export_record_for(
+        {
+            "primary_external_id": None,
+            "gene_symbol": None,
+            "taxon": None,
+            "resolution_state": "unresolved",
+            "lookup_outcome": "ambiguous",
+            "validator_explanation": "Two WB genes share this synonym.",
+        }
+    )
+
+    assert reference["mention"] == "daf-16"
+    assert reference["resolution_state"] == "unresolved"
+    assert reference["lookup_outcome"] == "ambiguous"
+    assert reference["validator_explanation"] == "Two WB genes share this synonym."
+    assert reference["primary_external_id"] is None
+    assert reference["gene_symbol"] is None
+    assert reference["taxon"] is None
+
+
+def test_gene_export_reads_a_legacy_record_as_unverified_unless_a_validator_wrote_it():
+    legacy = {"resolution_state": ..., "lookup_outcome": ...}
+
+    unverified = _export_record_for(legacy)
+    assert unverified["resolution_state"] == "unresolved"
+    assert unverified["lookup_outcome"] == "legacy_unverified"
+    assert unverified["mention"] == "daf-16 (legacy, unverified)"
+    assert unverified["primary_external_id"] is None
+    assert unverified["validator_explanation"] == (
+        "Recorded before validation tracking; not verified."
+    )
+
+    validated = _export_record_for(
+        legacy,
+        metadata_updates={
+            "validator_resolved_value_materialization": [
+                {"materialized_field_paths": ["primary_external_id", "gene_symbol", "taxon"]}
+            ]
+        },
+    )
+    assert validated["resolution_state"] == "resolved"
+    assert validated["lookup_outcome"] == "matched"
+    assert validated["mention"] == "daf-16"
+    assert validated["primary_external_id"] == "WB:WBGene00000912"
+
+
+def test_gene_pack_leaf_columns_match_the_shared_resolvable_headers():
+    from src.lib.flows.export_fields import _pack_export_fields
+
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    labels = {
+        entry["payload_path"]: entry["label"]
+        for entry in _pack_export_fields(pack)
+        if entry["object_type"] == GENE_MENTION_EVIDENCE_OBJECT_TYPE
+    }
+    display_names = {field.field_path: field.display_name for field in _gene_object_definition().fields}
+
+    expected = {
+        "mention": "Gene mention (paper wording)",
+        "resolution_state": "Gene mention (status)",
+        "lookup_outcome": "Gene mention (lookup result)",
+        "validator_explanation": "Gene mention (validator explanation)",
+        "validator_curator_message": "Gene mention (validator message)",
+    }
+    for path, header in expected.items():
+        assert labels[path] == header
+        # The review screen's field name is the same column header.
+        assert display_names[path] == header
+
+
+def test_gene_export_never_emits_an_unverified_taxon():
+    legacy = _export_record_for({"resolution_state": ..., "lookup_outcome": ...})
+    unresolved = _export_record_for(
+        {
+            "primary_external_id": None,
+            "gene_symbol": None,
+            "taxon": None,
+            "resolution_state": "unresolved",
+            "lookup_outcome": "not_found",
+        }
+    )
+
+    assert legacy["taxon"] is None
+    assert unresolved["taxon"] is None

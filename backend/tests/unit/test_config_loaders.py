@@ -237,6 +237,7 @@ class TestAgentLoader:
             "inspect_output_artifacts",
             "inspect_output_rows",
             "inspect_field_values",
+            "read_output_value",
             "build_default_projection_plan",
             "validate_output_projection",
             "preview_output_projection",
@@ -560,7 +561,7 @@ class TestErrorHandling:
 
         assert gene is not None
         # Should use the default from the gene agent.yaml.
-        assert gene.model_config.model == "gpt-5.6-terra"
+        assert gene.model_config.model == "gpt-6-sol"
 
     def test_force_reload_actually_reloads(self):
         """Test that force_reload=True actually reloads the definitions."""

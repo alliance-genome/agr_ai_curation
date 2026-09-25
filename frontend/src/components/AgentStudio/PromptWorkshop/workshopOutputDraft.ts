@@ -20,6 +20,15 @@ export function emptyOutputDraft(mode: WorkshopOutputDraft['mode'] = 'none'): Wo
   }
 }
 
+/** An agent with a structured extraction output (not a validator result) is an extraction agent. */
+export function isExtractionOutput(draft: WorkshopOutputDraft, validatorOutputSchemaKeys: readonly string[]): boolean {
+  if (draft.mode === 'none') return false
+  if (draft.mode === 'domain' && !draft.domainExtractionRef && draft.schemaKey) {
+    return !validatorOutputSchemaKeys.includes(draft.schemaKey)
+  }
+  return true
+}
+
 /** Call only with the exact saved executable revision, never a template guess. */
 export function outputDraftFromContract(contract: AgentOutputContract): WorkshopOutputDraft {
   if (contract.output_state === 'none') return emptyOutputDraft()

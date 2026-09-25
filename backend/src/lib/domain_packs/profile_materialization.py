@@ -10,19 +10,28 @@ from copy import deepcopy
 from typing import Iterable
 from uuid import UUID
 
-from src.lib.agent_studio.profile_conformance import ProfileConformanceError, ResolvedGenericProfile
+from src.lib.agent_studio.profile_conformance import (
+    ProfileConformanceError, ResolvedGenericProfile, declared_value_path,
+)
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import (
     ValidatorResultMaterializationInput, ValidatorResultMaterializationResult,
-    _finding_for_materialization_problem, _finding_for_validator_result,
+    _as_curator_override_finding, _finding_for_materialization_problem, _finding_for_validator_result,
 )
 from src.lib.domain_packs.profile_validation import ProfileValidationContext
+from src.lib.domain_packs.resolvable_values import (
+    DECISIVE_OUTCOMES, LOOKUP_OUTCOME_LABELS, OUTCOME_MISSING_EXPECTED_RESULT_FIELD, is_curator_override,
+    lookup_outcome_for_failure, mark_resolved, mark_unresolved,
+)
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_result_policies import allowed_term_policy_violations
 from src.lib.domain_packs.validator_result_classification import validator_failure_classification
+from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.schemas.agent_execution_revision import GenericProfilePin
-from src.schemas.domain_envelope import DomainEnvelope, ValidationFinding, ValidationFindingSeverity
+from src.schemas.domain_envelope import (
+    DomainEnvelope, FieldRef, ValidationFinding, ValidationFindingSeverity, ValidationFindingStatus, parse_field_path,
+)
 from src.schemas.generic_extraction_profile import GenericProfileContract, ProfileField
 
 
@@ -51,7 +60,7 @@ def materialize_profile_validator_results(
         updates, paths, problems = [], [], []
         for item in record_items:
             canonical = canonical_matches.get(_match_key(item.match))
-            problem, proposed = _approved_updates(item, canonical, context)
+            problem, proposed = _approved_updates(item, canonical, context, target)
             if problem:
                 problems.append(problem)
             for update in proposed:
@@ -95,7 +104,14 @@ def materialize_profile_validator_results(
                 finding = finding.model_copy(update={"message": "Profile write-back rejected: " + "; ".join(dict.fromkeys(problems))})
             else:
                 finding = _finding_for_validator_result(item, source_envelope_revision=source_envelope_revision)
-            findings.append(profile_result_finding(finding, item, context, failed=bool(problems)))
+            finding = profile_result_finding(finding, item, context, failed=bool(problems))
+            overrides = {} if problems else _curator_overrides(item, context, target)
+            if overrides and len(overrides) == len(item.request.expected_result_fields):
+                # Every value this result writes is a curator override, which stands.
+                finding = _as_curator_override_finding(finding)
+            findings.append(finding)
+            findings.extend(_override_disagreements(
+                item, overrides, target, source_envelope_revision=source_envelope_revision))
     updated = envelope.model_copy(update={"extracted_objects": [
         replacements.get(_object_key(obj), obj) for obj in envelope.extracted_objects
     ]})
@@ -116,7 +132,7 @@ def _overlap(left: str, right: str) -> bool:
                                 for suffix in (".", "["))
 
 
-def _approved_updates(item, canonical, context):
+def _approved_updates(item, canonical, context, target):
     if canonical is None or item.match.binding != canonical.binding:
         return "Result does not belong to an approved profile binding/target", []
     expected = build_domain_validation_request(canonical).request
@@ -158,12 +174,117 @@ def _approved_updates(item, canonical, context):
             return "Validator result violates the mapped capability slot type: " + "; ".join(i["message"] for i in issues), []
     if result.status != "resolved":
         try:
-            validator_failure_classification(result, error_type=ValueError)
+            classification = validator_failure_classification(result, error_type=ValueError)
         except ValueError as exc:
             return str(exc), []
-        return None, []
-    return None, [{"field_path": expected.expected_result_fields[slot], "value": deepcopy(value)}
-                  for slot, value in result.resolved_values.items()]
+        return None, _resolution_updates(expected, result, context, target,
+                                         unresolved=lookup_outcome_for_failure(classification))
+    return None, _resolution_updates(expected, result, context, target, unresolved=None)
+
+
+def _resolution_updates(expected, result, context, target, *, unresolved):
+    """The record updates for one validator result (ALL-1283).
+
+    A destination inside a resolvable value is written as one update of that
+    value: resolved with the validator's identity when every slot it writes
+    came back, otherwise unresolved with the lookup outcome and the
+    validator's own words, never touching its identity or paper wording.
+    Plain destinations take resolved slots as before.
+    """
+    plain, containers = [], {}
+    for slot, destination in expected.expected_result_fields.items():
+        container = context.profile.resolvable_container(destination)
+        value = result.resolved_values.get(slot)
+        if container is not None:
+            path, key = container
+            containers.setdefault(path, {})[key] = value
+        elif unresolved is None and slot in result.resolved_values:
+            plain.append({"field_path": destination, "value": deepcopy(value)})
+    updates = []
+    for path, identity in containers.items():
+        current = _attribute_value(target.payload.get("attributes") if target is not None else None, path)
+        if not isinstance(current, dict):
+            continue
+        value = deepcopy(current)
+        if unresolved is None and not any(missing_resolved_value(item) for item in identity.values()):
+            mark_resolved(value, identity, explanation=result.explanation, curator_message=result.curator_message)
+        else:
+            # The validator overrules an earlier resolution: its identity is kept as overruled_<key>.
+            mark_unresolved(value, unresolved or OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+                            explanation=result.explanation, curator_message=result.curator_message,
+                            identity_keys=context.profile.resolvable_objects()[declared_value_path(path)])
+        updates.append({"field_path": path, "value": value})
+    return [*plain, *updates]
+
+
+def _curator_overrides(item, context, target):
+    """{destination: container} for each value this result writes that a curator override sets."""
+    attributes = target.payload.get("attributes") if target is not None else None
+    overrides = {}
+    for destination in item.request.expected_result_fields.values():
+        container = context.profile.resolvable_container(destination)
+        if container is None:
+            continue
+        value = _attribute_value(attributes, container[0])
+        if is_curator_override(value):
+            overrides[destination] = value
+    return overrides
+
+
+def _override_disagreements(item, overrides, target, *, source_envelope_revision):
+    """Open warnings, one per value, where the validator disagrees with a curator override (it stands).
+
+    A validator disagrees when it resolves a different identity (empty slots
+    are ignored) or decides against the value (a decisive outcome).
+    """
+    if not overrides:
+        return []
+    result = item.result
+    by_value = defaultdict(dict)
+    for destination, value in overrides.items():
+        container_path, _, key = destination.rpartition(".")
+        by_value[container_path][destination] = (key, value)
+    if result.status == "resolved":
+        outcome = "matched"
+        slot_by_destination = {path: slot for slot, path in item.request.expected_result_fields.items()}
+        details = {}
+        for container_path, entries in by_value.items():
+            differing = {
+                key: result.resolved_values[slot_by_destination[destination]]
+                for destination, (key, value) in entries.items()
+                if not missing_resolved_value(result.resolved_values.get(slot_by_destination[destination]))
+                and result.resolved_values[slot_by_destination[destination]] != value.get(key)
+            }
+            if differing:
+                details[container_path] = "it resolved " + ", ".join(
+                    f"{key} {resolved!r}" for key, resolved in differing.items())
+    else:
+        outcome = lookup_outcome_for_failure(validator_failure_classification(result, error_type=ValueError))
+        details = ({container_path: f"its lookup result is {LOOKUP_OUTCOME_LABELS[outcome]}" for container_path in by_value}
+                   if outcome in DECISIVE_OUTCOMES else {})
+    object_ref = target.to_object_ref()
+    return [ValidationFinding(
+        severity=ValidationFindingSeverity.WARNING, status=ValidationFindingStatus.OPEN,
+        code="domain_pack.validator_disagrees_with_curator_override",
+        message=f"Validator disagrees with the curator override: {detail}.",
+        field_ref=FieldRef(object_ref=object_ref, field_path=container_path),
+        details={"validator_binding_id": result.validator_binding_id, "request_id": result.request_id,
+                 "lookup_outcome": outcome, "validator_explanation": result.explanation,
+                 **({"validator_curator_message": result.curator_message} if result.curator_message else {}),
+                 **({"source_envelope_revision": source_envelope_revision}
+                    if source_envelope_revision is not None else {})},
+    ) for container_path, detail in details.items()]
+
+
+def _attribute_value(attributes, path):
+    """The value at a concrete ``attributes...`` path, or None."""
+    value = attributes
+    for token in parse_field_path(path)[1:]:
+        if isinstance(token, int):
+            value = value[token] if isinstance(value, list) and token < len(value) else None
+        else:
+            value = value.get(token) if isinstance(value, dict) else None
+    return value
 
 
 def profile_result_finding(

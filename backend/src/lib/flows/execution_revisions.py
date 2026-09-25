@@ -18,6 +18,8 @@ from src.lib.agent_studio.execution_revision_service import (
     authorize_execution_receipt,
     get_execution_revision,
 )
+from src.lib.config.models_loader import get_model
+from src.lib.packages.tool_roles import identity_lookup_tools_on_extraction_agent
 from src.models.sql.agent import Agent
 from src.schemas.agent_execution_revision import AgentExecutionReceipt, AgentExecutionSnapshot
 from src.schemas.flows import FlowDefinition, FlowNode
@@ -146,6 +148,52 @@ def resolve_flow_execution_revisions(
                         fingerprint=row.fingerprint, output_contract=saved.output_contract,
                     )
                 node.data.execution_receipt = receipt
+                model = get_model(saved.model_id)
+                if model is None:
+                    # A pinned revision whose model left the catalog cannot run; say so
+                    # before the flow starts, not when the step does.
+                    findings.append(AuthoringValidationFinding(
+                        code="unavailable_model", severity="error", node_id=node.id,
+                        path=f"flow_definition.nodes.{node.id}.data.agent_revision_id",
+                        message="This step uses a model that is no longer available; re-save the agent.",
+                        fix_hint="Open the agent, choose an available model, save it, and select the new revision here.",
+                    ))
+                    continue
+                from src.lib.openai_agents.config import unsupported_reasoning_effort
+
+                if unsupported_reasoning_effort(model, saved.model_reasoning) is not None:
+                    findings.append(AuthoringValidationFinding(
+                        code="unsupported_reasoning_effort", severity="error", node_id=node.id,
+                        path=f"flow_definition.nodes.{node.id}.data.agent_revision_id",
+                        message="This step uses a reasoning level its model no longer offers; re-save the agent.",
+                        fix_hint="Open the agent, choose one of the model's reasoning levels, save it, and select the new revision here.",
+                    ))
+                    continue
+                # Group-scoped tools count for every group, as in the startup report.
+                lookups = identity_lookup_tools_on_extraction_agent(
+                    [
+                        *saved.tool_ids,
+                        *(rule["tool_id"] for rule in saved.group_tool_policy.get("rules", [])),
+                    ],
+                    output_state=saved.output_contract.output_state,
+                    output_schema_key=saved.output_contract.output_schema_key,
+                )
+                if lookups:
+                    # The step would be refused when it runs; say so before the flow starts.
+                    findings.append(AuthoringValidationFinding(
+                        code="extraction_identity_lookup_tools", severity="error", node_id=node.id,
+                        path=f"flow_definition.nodes.{node.id}.data.agent_revision_id",
+                        message=(
+                            "This step's agent reads the paper but still has database lookup tools "
+                            f"({', '.join(lookups)}). Extraction agents no longer look things up; "
+                            "validators do that. Re-save the agent without them."
+                        ),
+                        fix_hint=(
+                            "Open the agent, remove any of these tools still listed, save it, "
+                            "and select the new revision here."
+                        ),
+                    ))
+                    continue
                 entry = _revision_entry(node, receipt, saved)
                 entry["authenticated_group_ids"] = list(active_group_ids)
                 entry["authenticated_user_id"] = user_id

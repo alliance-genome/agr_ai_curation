@@ -272,7 +272,7 @@ def _run_live_chat_pdf_case(
 @pytest.mark.provider_openai
 @pytest.mark.manual_only
 def test_live_chat_with_loaded_pdf_openai(monkeypatch: pytest.MonkeyPatch):
-    model_id = os.getenv("LIVE_LLM_OPENAI_MODEL", "gpt-5.6-terra").strip()
+    model_id = os.getenv("LIVE_LLM_OPENAI_MODEL", "gpt-6-sol").strip()
     _run_live_chat_pdf_case(
         monkeypatch,
         provider="openai",

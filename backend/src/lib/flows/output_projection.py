@@ -7,7 +7,7 @@ from datetime import datetime
 import json
 import math
 import re
-from typing import Any, Callable, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -17,6 +17,7 @@ from src.lib.curation_workspace.domain_envelope_normalization import (
     is_canonical_domain_envelope_payload,
 )
 from src.lib.openai_agents.config import (
+    get_flow_output_split_list_max_columns,
     get_flow_output_projection_preview_max_depth,
     get_flow_projection_max_field_examples,
     get_flow_projection_max_list_items,
@@ -30,6 +31,13 @@ from src.schemas.domain_validator import ValidatorOutputProjection
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
 from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
+from src.lib.domain_packs.resolvable_values import has_resolution_state, without_overruled
+from src.lib.flows.value_display import (
+    LIST_SEPARATOR,
+    display_text,
+    path_tokens,
+    relative_finding_path,
+)
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 
 ProfileResolver = Callable[[AgentExecutionReceipt], ResolvedGenericProfile | None]
@@ -39,16 +47,16 @@ FlowOutputFormat = Literal["csv", "tsv", "json", "chat"]
 FlowOutputRowSource = Literal["artifact", "object", "evidence", "validation_finding"]
 FlowOutputRowStrategy = Literal["object", "object_ledger", "wide_union"]
 FlowOutputJsonShape = Literal["rows", "grouped", "bundle"]
+FlowOutputChatLayout = Literal["table", "sections", "bullets"]
 FlowOutputTransformType = Literal[
     "literal",
-    "first_non_empty",
     "concat",
     "join_list",
     "pair_join",
-    "conditional",
     "count",
     "map_value",
     "boolean_label",
+    "format_elements",
 ]
 FlowOutputFilterOperator = Literal[
     "eq",
@@ -247,27 +255,42 @@ class FlowOutputTransformSpec(BaseModel):
     true_label: str = "Yes"
     false_label: str = "No"
     unknown_label: str = ""
-    condition_op: FlowOutputFilterOperator = "eq"
-    when_true: FlowOutputTransformSpec | None = None
-    when_false: FlowOutputTransformSpec | None = None
 
-    @model_validator(mode="after")
-    def validate_conditional_shape(self) -> FlowOutputTransformSpec:
-        if self.type != "conditional":
-            if self.when_true is not None or self.when_false is not None:
-                raise ValueError("when_true and when_false are supported only by conditional.")
-            return self
-        if not self.field_ref:
-            raise ValueError("conditional requires a condition field_ref.")
-        if self.field_refs:
-            raise ValueError("conditional uses field_ref, not field_refs.")
-        if self.when_true is None or self.when_false is None:
-            raise ValueError("conditional requires both when_true and when_false transforms.")
-        if self.when_true.type == "conditional" or self.when_false.type == "conditional":
-            raise ValueError("conditional branches cannot contain another conditional.")
-        if self.condition_op == "in" and not self.values:
-            raise ValueError("conditional operator 'in' requires values.")
-        return self
+
+class FlowOutputOverrideSpec(BaseModel):
+    """Explicit curator-directed change to one derived output row or cell.
+
+    ``row_ref`` is a runtime row reference (``<row_source>#<n>``) resolved
+    against the bound bundle; it never carries data. Overrides change only the
+    derived output, never the saved results.
+    """
+
+    row_ref: str
+    column_key: str | None = None
+    value: Any = None
+    exclude: bool = False
+
+
+def _split_items(value: Any) -> list[Any]:
+    """Items a split column spreads: a list's items, or one non-empty single value."""
+
+    if isinstance(value, list):
+        return value
+    return [] if _is_empty(value) else [value]
+
+
+class FlowOutputSplitListSpec(BaseModel):
+    """Expand one field into one column per item (never extra rows).
+
+    A single non-empty value counts as a one-item list.
+
+    Headers come from ``header_template`` (must contain ``{n}``; default
+    "<header> {n}") or explicit ``headers``, not both.
+    """
+
+    max_columns: int | None = None
+    header_template: str | None = None
+    headers: list[str] = Field(default_factory=list)
 
 
 class FlowOutputColumnSpec(BaseModel):
@@ -276,6 +299,7 @@ class FlowOutputColumnSpec(BaseModel):
     field_ref: str | None = None
     transform: FlowOutputTransformSpec | None = None
     source_node_id: str | None = None
+    split_list: FlowOutputSplitListSpec | None = None
 
 
 class FlowOutputFilterSpec(BaseModel):
@@ -303,6 +327,7 @@ class FlowOutputProjectionPlan(BaseModel):
     sort: list[FlowOutputSortSpec] = Field(default_factory=list)
     group_by: list[str] = Field(default_factory=list)
     json_shape: FlowOutputJsonShape = "rows"
+    chat_layout: FlowOutputChatLayout = "table"
     row_strategy: FlowOutputRowStrategy = "object"
     source_extraction_result_ids: list[str] = Field(default_factory=list)
     source_keys: list[str] = Field(default_factory=list)
@@ -310,6 +335,7 @@ class FlowOutputProjectionPlan(BaseModel):
     max_rows: int | None = None
     selection_mode: Literal["guided", "selected_fields"] = "guided"
     selected_sources: list[FlowOutputSelectedSource] = Field(default_factory=list)
+    overrides: list[FlowOutputOverrideSpec] = Field(default_factory=list)
 
 
 class FlowOutputProfileBinding(BaseModel):
@@ -331,6 +357,8 @@ class FlowOutputField(BaseModel):
     non_empty_count: int = 0
     examples: list[Any] = Field(default_factory=list)
     profile_bindings: list[FlowOutputProfileBinding] = Field(default_factory=list)
+    # Declared display spec (see value_display); None uses the generic reading.
+    display: dict[str, Any] | None = None
 
 
 class FlowOutputArtifact(BaseModel):
@@ -359,6 +387,20 @@ class FlowOutputArtifact(BaseModel):
     ] = "non_structured"
     warnings: list[str] = Field(default_factory=list)
     rows_by_source: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    # Standard object columns from the source's declared layout, in order.
+    default_object_refs: list[str] = Field(default_factory=list)
+    # Object types a default plan lists as rows (the pack's curatable units);
+    # empty lists every object. Supporting objects stay selectable on request.
+    default_object_types: list[str] = Field(default_factory=list)
+    # Per object key ("object_id:<id>" / "pending_ref_id:<id>"): each declared
+    # object_ref field path and the keys of the objects it references, in the
+    # object's object_refs order, so a cell carries its referenced objects'
+    # open findings.
+    object_ref_links: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
+    # Per object key: the payload paths a declared resolvable value covers (a
+    # field value's path; each identity and contract key of an object-root
+    # value). Its cells read the value's own state, never a finding marker.
+    resolvable_value_paths: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class FlowOutputArtifactBundle(BaseModel):
@@ -390,7 +432,12 @@ class FlowOutputProjectionResult(BaseModel):
     truncated: bool = False
     warnings: list[str] = Field(default_factory=list)
     json_data: Any = None
+    chat_output: str | None = None
     group_by: list[str] = Field(default_factory=list)
+    row_refs: list[str] = Field(default_factory=list)
+    limited_by_max_rows: bool = False
+    overrides_applied: int = 0
+    rows_excluded: int = 0
 
 
 class FlowOutputProjectionPreview(BaseModel):
@@ -533,11 +580,80 @@ def _is_empty(value: Any) -> bool:
 
 
 def _scalar_payload_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+    # An identity a validator overruled is informational only, never exported.
     return {
         str(key): value
-        for key, value in payload.items()
+        for key, value in without_overruled(payload).items()
         if isinstance(value, (str, int, float, bool)) or value is None
     }
+
+
+def _resolvable_value_paths(payload: Mapping[str, Any], resolvable_fields: Mapping[str, Any]) -> list[str]:
+    """The payload paths the object's declared resolvable values cover.
+
+    A field value covers its own path (list elements each theirs); an
+    object-root value covers its identity and contract keys.
+    """
+
+    from src.lib.domain_packs.resolvable_values import CONTRACT_KEYS, MENTION_KEY
+
+    covered: list[str] = []
+    for declared, spec in resolvable_fields.items():
+        if not declared:
+            # The value's own paper-wording key, whatever the pack names it.
+            covered.extend((
+                *spec.identity_keys, spec.mention_key, *(key for key in CONTRACT_KEYS if key != MENTION_KEY),
+            ))
+            continue
+        tokens = path_tokens(declared)
+        if tokens is not None:
+            covered.extend(_concrete_paths(payload, tokens, ""))
+    return list(dict.fromkeys(covered))
+
+
+def _concrete_paths(node: Any, tokens: Sequence[Any], walked: str) -> list[str]:
+    """Concrete paths of a declared path in one payload; an unindexed list fans out."""
+
+    if isinstance(node, list):
+        if tokens and isinstance(tokens[0], int):
+            index = tokens[0]
+            return _concrete_paths(node[index], tokens[1:], f"{walked}[{index}]") if index < len(node) else []
+        return [path for index, item in enumerate(node) for path in _concrete_paths(item, tokens, f"{walked}[{index}]")]
+    if not tokens:
+        return [walked] if isinstance(node, Mapping) else []
+    if not isinstance(node, Mapping) or tokens[0] not in node:
+        return []
+    key = str(tokens[0])
+    return _concrete_paths(node[key], tokens[1:], f"{walked}.{key}" if walked else key)
+
+
+def _read_payload_refs_effectively(
+    row: dict[str, Any], effective_item: Mapping[str, Any], resolvable_fields: Mapping[str, Any],
+) -> None:
+    """``object.payload.<key>`` columns on a declared resolvable value read its read-time state.
+
+    Like ``object.pack.*`` refs, they read the effective payload: an
+    identity key of a resolvable object root shows only a verified identity,
+    and a declared value stored as plain text reads as the value it is
+    ("label (ID)" or UNRESOLVED), never as its unverified stored text.
+    """
+
+    from src.lib.domain_packs.resolvable_values import CONTRACT_KEYS
+
+    root = resolvable_fields.get("")
+    root_keys = set(root.identity_keys) | set(CONTRACT_KEYS) if root is not None else set()
+    payload = _object_payload(effective_item)
+    for ref in [ref for ref in row if ref.startswith("object.payload.")]:
+        key = ref.removeprefix("object.payload.")
+        spec = resolvable_fields.get(key)
+        if spec is None and key not in root_keys:
+            continue
+        value = payload.get(key)
+        if spec is not None and isinstance(value, Mapping):
+            roles = {role: name for role, name in (
+                ("label", spec.label_key), ("id", spec.id_key), ("mention", spec.mention_key)) if name}
+            value = display_text(value, roles)
+        row[ref] = value
 
 
 def _normalize_attribute_key(key: Any) -> str:
@@ -554,12 +670,18 @@ def _scalar_attribute_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(attributes, Mapping):
         return {}
     fields: dict[str, Any] = {}
-    for key, value in attributes.items():
+    for key, value in without_overruled(attributes).items():
         normalized_key = _normalize_attribute_key(key)
         if not normalized_key:
             continue
-        if _is_scalar_attribute_value(value) or (
-            isinstance(value, list) and all(_is_scalar_attribute_value(item) for item in value)
+        # Resolvable values (ALL-1283) are selectable too; they read "label (ID)"
+        # or UNRESOLVED like any other structured value.
+        if _is_scalar_attribute_value(value) or has_resolution_state(value) or (
+            isinstance(value, list)
+            and (
+                all(_is_scalar_attribute_value(item) for item in value)
+                or all(has_resolution_state(item) for item in value)
+            )
         ):
             fields.setdefault(normalized_key, value)
     return fields
@@ -717,6 +839,14 @@ def _object_validation_status(item: Mapping[str, Any]) -> str:
     return ""
 
 
+def _declared_label_fields_text(payload: Mapping[str, Any], label_fields: Sequence[str]) -> str:
+    """Every declared label field, joined; one never stands in for another (ALL-1283)."""
+
+    return LIST_SEPARATOR.join(
+        text for key in label_fields if (text := display_text(payload.get(key)))
+    )
+
+
 def _object_label(
     item: Mapping[str, Any],
     payload: Mapping[str, Any],
@@ -724,17 +854,46 @@ def _object_label(
     *,
     label_fields: Sequence[str] = (),
 ) -> str:
-    for key in dict.fromkeys(
-        (*label_fields, "label", "symbol", "name", "normalized_symbol", "mention", "entity")
-    ):
-        value = _string_value(payload.get(key))
-        if value:
-            return value
-    for key in ("label", "symbol", "name"):
-        value = _string_value(item.get(key))
-        if value:
-            return value
-    return object_id
+    return (
+        _declared_label_fields_text(payload, label_fields) if label_fields else _declared_payload_label(item)
+    ) or object_id
+
+
+def _object_metadata(item: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    metadata = item.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else None
+
+
+def _declared_payload_label(item: Mapping[str, Any]) -> str | None:
+    """Custom and generic objects: their own payload ``label``, nothing else."""
+
+    return _declared_path_label(item, "label")
+
+
+def _declared_path_label(
+    item: Mapping[str, Any], path: str | None, resolvable_fields: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Packaged objects: the value at the pack-declared label path, nothing else.
+
+    A label naming an unresolved value reads as its paper wording (ALL-1283);
+    ``resolvable_fields`` are the pack's declared resolvable values for the
+    object, so values stored before the contract get the legacy rule.
+    """
+
+    if not path:
+        return None
+    from src.lib.domain_packs.resolvable_values import unresolved_header_text
+    from src.lib.flows.export_fields import _walk_payload
+    from src.schemas.domain_envelope import parse_field_path
+
+    payload = _object_payload(item)
+    paper_wording = unresolved_header_text(
+        payload, path, object_metadata=_object_metadata(item), resolvable_fields=resolvable_fields,
+    )
+    if paper_wording is not None:
+        return paper_wording
+    text = display_text(_walk_payload(payload, list(parse_field_path(path))))
+    return text or None
 
 
 def _object_evidence_count(item: Mapping[str, Any]) -> int:
@@ -1365,8 +1524,13 @@ def _artifact_source_key(
 
 
 def _build_artifact_from_step(
-    step: Mapping[str, Any], *, profile_resolver: ProfileResolver | None = None,
+    step: Mapping[str, Any],
+    *,
+    profile_resolver: ProfileResolver | None = None,
+    packaged_sources: dict[tuple[str, str], Any] | None = None,
 ) -> FlowOutputArtifact | None:
+    """One step's artifact; ``packaged_sources`` shares pack catalogs across a bundle."""
+
     candidate = _step_attr(step, "validated_candidate")
     if candidate is None:
         candidate = _step_attr(step, "candidate")
@@ -1591,32 +1755,99 @@ def _build_artifact_from_step(
     if shape == "non_structured":
         warnings.append("No canonical curation object rows are available for this artifact.")
 
-    from src.lib.flows.export_fields import packaged_export_fields, packaged_field_value, profile_export_fields, source_catalog
+    from src.lib.flows.export_fields import (
+        PROFILE_RATIONALE_EXPORT_FIELD,
+        packaged_export_source,
+        packaged_field_value,
+        profile_export_fields,
+        source_catalog,
+    )
+    display_specs: dict[str, dict[str, Any]] = {}
+    default_object_refs: list[str] = []
+    default_object_types: list[str] = []
+    object_ref_links: dict[str, dict[str, list[str]]] = {}
+    resolvable_value_paths: dict[str, list[str]] = {}
+    # Object labels are the declared label only (Chris, Sep 22). The legacy
+    # label stays on the rows until here so record matching is unchanged.
+    declared_labels: list[Any] = [_declared_payload_label(item) for item in object_items]
     if profile_fields is not None:
         export_fields = profile_export_fields(profile_fields)
+        # Custom profiles: top-level contract fields in declaration order, then the rationale.
+        default_object_refs = [
+            *(
+                field.row_ref
+                for field in profile_fields
+                if "." not in field.profile_path.removeprefix("attributes.")
+            ),
+            PROFILE_RATIONALE_EXPORT_FIELD["ref"],
+        ]
     else:
         # A persisted envelope declares its pack independently of whether the
         # producer was a custom agent with an execution receipt.
-        export_fields = packaged_export_fields(
-            agent_id,
-            {"curation": {"domain_pack_id": domain_pack_id}} if domain_pack_id else None,
+        pack_entry = {"curation": {"domain_pack_id": domain_pack_id}} if domain_pack_id else None
+        source = packaged_export_source(
+            agent_id, pack_entry, cache=packaged_sources if packaged_sources is not None else {},
         )
+        export_fields = source.fields if source is not None else []
+        if source is not None:
+            display_specs = source.display_specs
+            default_object_refs = source.default_layout(
+                sorted({str(item.get("object_type") or "") for item in object_items}),
+            )
+            default_object_types = list(source.curatable_unit_types)
+            for row, item in zip(rows_by_source["object"], object_items):
+                links = _object_ref_links(
+                    item, source.object_ref_fields.get(str(item.get("object_type") or ""), {}),
+                )
+                if links:
+                    object_ref_links.update({key: links for key in _object_keys(row)})
+        if domain_pack_id and domain_pack_id != "generic":
+            label_paths = source.object_label_paths if source is not None else {}
+            resolvable = source.resolvable_fields if source is not None else {}
+            declared_labels = [
+                _declared_path_label(
+                    item,
+                    label_paths.get(str(item.get("object_type") or "")),
+                    resolvable.get(str(item.get("object_type") or "")),
+                )
+                for item in object_items
+            ]
         for row, item in zip(rows_by_source["object"], object_items):
+            effective = source.effective_item(item) if source is not None else item
+            if source is not None:
+                value_paths = _resolvable_value_paths(
+                    _object_payload(effective), source.resolvable_fields.get(str(item.get("object_type") or ""), {}),
+                )
+                if value_paths:
+                    resolvable_value_paths.update({key: value_paths for key in _object_keys(row)})
+                _read_payload_refs_effectively(
+                    row, effective, source.resolvable_fields.get(str(item.get("object_type") or ""), {}),
+                )
             for field in export_fields:
                 if "summary_key" not in field:
-                    row[field["ref"]] = packaged_field_value(item, field)
+                    row[field["ref"]] = packaged_field_value(effective, field)
         from src.lib.flows.validation_summary_export import populate_summary_fields
         populate_summary_fields(
             rows_by_source["object"], object_items,
             _explicit_validation_findings(payload) if isinstance(payload, Mapping) else [],
             export_fields, domain_pack_id,
         )
+    if shape == "structured_result":
+        # Validator result rows: the output projection's declared label fields.
+        label_fields = validator_projection.label_fields if validator_projection else ()
+        declared_labels = [
+            _declared_label_fields_text(_object_payload(item), label_fields) or None
+            for item in object_items
+        ]
+    for row, label in zip(rows_by_source["object"], declared_labels):
+        row["object.label"] = label
     catalog = source_catalog(export_fields, receipt.model_dump(mode="json") if receipt else None)
     node_id = str(step.get("node_id") or "")
     for rows in rows_by_source.values():
         for row in rows:
             row["artifact.node_id"] = node_id
-    extra_declared = [FlowOutputField(ref=f["ref"], label=f["label"], value_type=f["value_type"], row_source="object")
+    extra_declared = [FlowOutputField(ref=f["ref"], label=f["label"], value_type=f["value_type"], row_source="object",
+                                      display=display_specs.get(f["ref"]))
                       for f in catalog["fields"] if not f["ref"].startswith("object.attribute.")]
     return FlowOutputArtifact(
         node_id=node_id, export_schema_fingerprint=catalog["schema_fingerprint"],
@@ -1645,6 +1876,10 @@ def _build_artifact_from_step(
         artifact_shape=shape,
         warnings=warnings,
         rows_by_source=rows_by_source,
+        default_object_refs=default_object_refs,
+        default_object_types=default_object_types,
+        object_ref_links=object_ref_links,
+        resolvable_value_paths=resolvable_value_paths,
     )
 
 
@@ -1734,6 +1969,8 @@ def _build_artifact_bundle(
             else:
                 existing.profile_bindings.extend(declared.profile_bindings)
                 existing.label = declared.label
+                if declared.display is not None:
+                    existing.display = declared.display
             existing.value_type = declared.value_type if len(declared_types[key]) == 1 else "mixed"
     warnings = [
         warning
@@ -1766,10 +2003,13 @@ def build_flow_output_artifact_bundle(
 ) -> FlowOutputArtifactBundle:
     """Build the canonical projection bundle from completed flow steps."""
 
+    packaged_sources: dict[tuple[str, str], Any] = {}
     artifacts = [
         artifact
         for step in completed_steps
-        if (artifact := _build_artifact_from_step(step, profile_resolver=profile_resolver)) is not None
+        if (artifact := _build_artifact_from_step(
+            step, profile_resolver=profile_resolver, packaged_sources=packaged_sources,
+        )) is not None
     ]
     return _build_artifact_bundle(
         flow_name=flow_name,
@@ -1796,7 +2036,7 @@ def _step_from_extraction_result(
     *,
     step_number: int,
 ) -> dict[str, Any]:
-    envelope = domain_envelope_from_extraction_result(extraction_result)
+    envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
     metadata = dict(extraction_result.metadata or {})
     metadata.setdefault(
         "source_key",
@@ -1834,10 +2074,13 @@ def build_extraction_result_artifact_bundle(
         _step_from_extraction_result(extraction_result, step_number=index)
         for index, extraction_result in enumerate(extraction_results, start=1)
     ]
+    packaged_sources: dict[tuple[str, str], Any] = {}
     artifacts = [
         artifact
         for step in completed_steps
-        if (artifact := _build_artifact_from_step(step, profile_resolver=profile_resolver)) is not None
+        if (artifact := _build_artifact_from_step(
+            step, profile_resolver=profile_resolver, packaged_sources=packaged_sources,
+        )) is not None
     ]
     return _build_artifact_bundle(
         artifacts=artifacts,
@@ -1883,7 +2126,42 @@ def default_projection_plan(
         row_source=selected_row_source,
         row_strategy=row_strategy,
         columns=columns,
+        filters=(
+            default_object_filters(bundle, bundle.rows_for_source("object"))
+            if selected_row_source == "object"
+            else []
+        ),
     )
+
+
+def default_object_filters(
+    bundle: FlowOutputArtifactBundle,
+    rows: Sequence[Mapping[str, Any]],
+) -> list[FlowOutputFilterSpec]:
+    """Default object rows are each source's curatable units.
+
+    Supporting objects (subjects, terms, validated references) have their own
+    rows but their open findings already mark the annotation cells that
+    reference them, so a default plan leaves them out with an explicit, visible
+    ``object.object_type`` filter; a plan without it lists them. A source whose
+    units are absent keeps all of its rows.
+    """
+
+    row_ids = {id(row) for row in rows}
+    kept: list[str] = []
+    hidden = False
+    for artifact in bundle.artifacts:
+        present = list(dict.fromkeys(
+            str(row.get("object.object_type") or "")
+            for row in artifact.rows_by_source.get("object") or []
+            if id(row) in row_ids
+        ))
+        units = [object_type for object_type in present if object_type in artifact.default_object_types]
+        hidden = hidden or (bool(units) and len(units) < len(present))
+        kept.extend(object_type for object_type in (units or present) if object_type not in kept)
+    if not hidden:
+        return []
+    return [FlowOutputFilterSpec(field_ref="object.object_type", op="in", values=kept)]
 
 
 def default_columns_for_row_source(
@@ -1896,6 +2174,29 @@ def default_columns_for_row_source(
 ) -> list[FlowOutputColumnSpec]:
     available = available_refs if available_refs is not None else bundle.field_refs_for_source(row_source)
     selected_rows = rows if rows is not None else bundle.rows_for_source(row_source)
+    layout_refs = (
+        _declared_layout_refs(bundle, selected_rows, available)
+        if row_source == "object" and row_strategy in {"object", "wide_union"}
+        else []
+    )
+    if layout_refs and (
+        row_strategy == "object"
+        or not any(
+            str(ref).startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+            for row in selected_rows
+            for ref in row
+        )
+    ):
+        labels = {field.ref: field.label for field in bundle.field_catalog if field.row_source == "object"}
+        refs = [*layout_refs, *(["object.validation_status"] if "object.validation_status" in available else [])]
+        return [
+            FlowOutputColumnSpec(
+                key=_column_key_from_ref(field_ref),
+                header=labels.get(field_ref) or _field_label(field_ref),
+                field_ref=field_ref,
+            )
+            for field_ref in dict.fromkeys(refs)
+        ]
     attribute_field_refs: list[str] = []
     if row_source == "object" and row_strategy == "wide_union":
         all_attribute_refs = _first_seen_refs(selected_rows, prefix=_OBJECT_ATTRIBUTE_FIELD_PREFIX)
@@ -1985,6 +2286,22 @@ def default_columns_for_row_source(
     ]
 
 
+def _declared_layout_refs(
+    bundle: FlowOutputArtifactBundle,
+    rows: Sequence[Mapping[str, Any]],
+    available: set[str],
+) -> list[str]:
+    """Declared standard columns of the artifacts that own ``rows``."""
+
+    row_ids = {id(row) for row in rows}
+    refs: list[str] = []
+    for artifact in bundle.artifacts:
+        if not any(id(row) in row_ids for row in artifact.rows_by_source.get("object") or []):
+            continue
+        refs.extend(ref for ref in artifact.default_object_refs if ref in available and ref not in refs)
+    return refs
+
+
 def _field_catalog_map(bundle: FlowOutputArtifactBundle) -> dict[str, FlowOutputField]:
     return {field.ref: field for field in bundle.field_catalog}
 
@@ -2015,12 +2332,8 @@ def projection_plan_field_refs(plan: FlowOutputProjectionPlan) -> list[str]:
 
 
 def projection_plan_predicates(plan: FlowOutputProjectionPlan) -> list[FlowOutputFilterSpec]:
-    """Expose row filters and conditional predicates using runtime semantics."""
-    predicates = list(plan.filters)
-    for column in plan.columns:
-        if column.transform is not None and column.transform.type == "conditional":
-            predicates.append(_conditional_filter(column.transform))
-    return predicates
+    """Expose the plan's row predicates using runtime semantics."""
+    return list(plan.filters)
 
 
 def _transform_refs(transform: FlowOutputTransformSpec) -> list[str]:
@@ -2028,62 +2341,12 @@ def _transform_refs(transform: FlowOutputTransformSpec) -> list[str]:
     if transform.field_ref:
         refs.append(transform.field_ref)
     refs.extend(transform.field_refs)
-    if transform.type != "conditional":
-        for value in transform.values:
-            if isinstance(value, str) and "." in value:
-                refs.append(value)
-            elif isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
-                refs.append(str(value["field_ref"]))
-    if transform.type == "conditional":
-        if transform.when_true is not None:
-            refs.extend(_transform_refs(transform.when_true))
-        if transform.when_false is not None:
-            refs.extend(_transform_refs(transform.when_false))
+    for value in transform.values:
+        if isinstance(value, str) and "." in value:
+            refs.append(value)
+        elif isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
+            refs.append(str(value["field_ref"]))
     return refs
-
-
-def _transform_specs(transform: FlowOutputTransformSpec) -> list[FlowOutputTransformSpec]:
-    """Return a conditional and its bounded, non-conditional branch transforms."""
-
-    specs = [transform]
-    if transform.type == "conditional":
-        if transform.when_true is not None:
-            specs.append(transform.when_true)
-        if transform.when_false is not None:
-            specs.append(transform.when_false)
-    return specs
-
-
-def _conditional_filter(transform: FlowOutputTransformSpec) -> FlowOutputFilterSpec:
-    if transform.type != "conditional" or not transform.field_ref:
-        raise ValueError("conditional requires a condition field_ref.")
-    return FlowOutputFilterSpec(
-        field_ref=transform.field_ref,
-        op=transform.condition_op,
-        value=transform.value,
-        values=transform.values,
-    )
-
-
-def _transform_specs_with_rows(
-    transform: FlowOutputTransformSpec,
-    rows: Sequence[Mapping[str, Any]],
-) -> list[tuple[FlowOutputTransformSpec, Sequence[Mapping[str, Any]]]]:
-    """Pair each bounded branch transform with only the rows that select it."""
-
-    specs: list[tuple[FlowOutputTransformSpec, Sequence[Mapping[str, Any]]]] = [
-        (transform, rows)
-    ]
-    if transform.type != "conditional":
-        return specs
-    condition = _conditional_filter(transform)
-    true_rows = [row for row in rows if _row_matches_filter(row, condition)]
-    false_rows = [row for row in rows if not _row_matches_filter(row, condition)]
-    if transform.when_true is not None:
-        specs.append((transform.when_true, true_rows))
-    if transform.when_false is not None:
-        specs.append((transform.when_false, false_rows))
-    return specs
 
 
 def _pair_join_value_groups(left: Any, right: Any) -> list[tuple[Any, Any]]:
@@ -2109,22 +2372,190 @@ def _pair_join_value_groups(left: Any, right: Any) -> list[tuple[Any, Any]]:
     )
 
 
+# Renders one stored value (field ref, value, list element index) as display text.
+# ``nested`` marks one item of a list (split column, list element), so a list
+# item joins its own items with ", " as it does inside the whole cell.
+class ValueRenderer(Protocol):
+    def __call__(self, field_ref: str, value: Any, index: int | None, *, nested: bool = False) -> str: ...
+
+
+def _plain_text(_field_ref: str, value: Any, _index: int | None = None, *, nested: bool = False) -> str:
+    return str(value)
+
+
+# Text of one stored value without unresolved markers: the key a map_value
+# lookup matches.
+class ValueKey(Protocol):
+    def __call__(self, field_ref: str, value: Any, *, nested: bool = False) -> str: ...
+
+
+def _generic_value_key(_field_ref: str, value: Any, *, nested: bool = False) -> str:
+    return display_text(value, marked=False, nested=nested)
+
+
 def _pair_join_value(
     row: Mapping[str, Any],
     transform: FlowOutputTransformSpec,
     *,
     missing_value: str,
+    render: ValueRenderer = _plain_text,
 ) -> str:
     if len(transform.field_refs) != 2:
         raise ValueError("pair_join requires exactly two field_refs.")
     left_ref, right_ref = transform.field_refs
     pairs = _pair_join_value_groups(row.get(left_ref), row.get(right_ref))
     rendered: list[str] = []
-    for left, right in pairs:
-        parts = [str(value) for value in (left, right) if not _is_empty(value)]
+    for index, (left, right) in enumerate(pairs):
+        position = index if len(pairs) > 1 else None
+        parts = [
+            text
+            for ref, value in ((left_ref, left), (right_ref, right))
+            if not _is_empty(value) and (text := render(ref, value, position))
+        ]
         if parts:
             rendered.append(transform.pair_separator.join(parts))
     return transform.separator.join(rendered) if rendered else missing_value
+
+
+_ELEMENT_PLACEHOLDER = re.compile(r"\{(\d+)\}")
+
+
+def _element_template_errors(transform: FlowOutputTransformSpec) -> list[str]:
+    """Validate format_elements templates and their 1-based placeholders."""
+
+    errors: list[str] = []
+    if not transform.field_refs:
+        errors.append("format_elements requires at least one field_ref in field_refs.")
+    if transform.values:
+        errors.append("format_elements uses field_refs and templates; values are not supported.")
+    if transform.field_ref is not None or transform.mapping:
+        # A per-element template chosen by another field's value is a conditional
+        # output (ALL-1283); every element renders with the one template.
+        errors.append(
+            "format_elements renders every element with its default template; "
+            "a field_ref/mapping template selector is not supported."
+        )
+    for name, template in (("default", transform.default),):
+        if not isinstance(template, str) or not template:
+            errors.append(f"format_elements {name} must be a non-empty template string.")
+            continue
+        for match in _ELEMENT_PLACEHOLDER.finditer(template):
+            position = int(match.group(1))
+            if position < 1 or position > len(transform.field_refs):
+                errors.append(
+                    f"format_elements {name} placeholder {{{position}}} does not match "
+                    f"one of the {len(transform.field_refs)} field_refs."
+                )
+    return errors
+
+
+def _aligned_elements(values: Sequence[Any]) -> list[tuple[Any, ...]]:
+    """Align list values by index; scalars broadcast and empty lists stay empty."""
+
+    width = 0
+    for value in values:
+        if isinstance(value, list) and value:
+            if width and len(value) != width:
+                raise ValueError(
+                    "format_elements cannot align list values with incompatible lengths "
+                    f"{width} and {len(value)}."
+                )
+            width = len(value)
+    if not width:
+        width = 1 if any(not _is_empty(value) for value in values) else 0
+    columns: list[list[Any]] = []
+    for value in values:
+        if isinstance(value, list):
+            columns.append(list(value) if value else [None] * width)
+        else:
+            columns.append([None if _is_empty(value) else value] * width)
+    return list(zip(*columns)) if width else []
+
+
+def _format_elements_value(
+    row: Mapping[str, Any],
+    transform: FlowOutputTransformSpec,
+    *,
+    missing_value: str | None,
+    render: ValueRenderer | None = None,
+) -> str | None:
+    refs = list(transform.field_refs)
+    values = [row.get(ref) for ref in refs]
+    rendered: list[str] = []
+    # Values taken from a list are list items; the rest broadcast whole.
+    from_list = [isinstance(value, list) for value in values]
+    elements = _aligned_elements(values)
+    template = str(transform.default)
+    for position, field_values in enumerate(elements):
+        if all(_is_empty(value) for value in field_values):
+            continue
+
+        def substitute(match: re.Match[str]) -> str:
+            slot = int(match.group(1)) - 1
+            value = field_values[slot]
+            if _is_empty(value):
+                return missing_value or ""
+            if render is None:
+                return _string_value(value)
+            nested = from_list[slot]
+            return render(refs[slot], value, position if len(elements) > 1 else None, nested=nested)
+
+        rendered.append(_ELEMENT_PLACEHOLDER.sub(substitute, template))
+    return transform.separator.join(rendered) if rendered else missing_value
+
+
+def projection_row_ref(row_source: str, index: int) -> str:
+    """Runtime reference for the 1-based ``index`` row of one bundle row source."""
+
+    return f"{row_source}#{index}"
+
+
+def bundle_row_refs(
+    bundle: FlowOutputArtifactBundle,
+    row_source: FlowOutputRowSource,
+) -> dict[int, str]:
+    """Map bundle row identity to its stable runtime row reference."""
+
+    return {
+        id(row): projection_row_ref(row_source, index)
+        for index, row in enumerate(bundle.rows_for_source(row_source), start=1)
+    }
+
+
+def bundle_row_for_ref(
+    bundle: FlowOutputArtifactBundle,
+    row_ref: str,
+) -> tuple[FlowOutputRowSource, dict[str, Any]]:
+    """Resolve a runtime row reference against the bound bundle, or fail."""
+
+    raw = str(row_ref or "").strip()
+    row_source, separator, position = raw.partition("#")
+    if (
+        not separator
+        or row_source not in ("artifact", "object", "evidence", "validation_finding")
+        or not position.isdigit()
+    ):
+        raise ValueError(
+            f"row_ref '{raw}' is not a runtime row reference such as 'object#1'."
+        )
+    rows = bundle.rows_for_source(row_source)  # type: ignore[arg-type]
+    index = int(position)
+    if index < 1 or index > len(rows):
+        raise ValueError(
+            f"row_ref '{raw}' is outside the {len(rows)} saved {row_source} row(s)."
+        )
+    return row_source, rows[index - 1]  # type: ignore[return-value]
+
+
+class FlowOutputOperationalCeilingError(RuntimeError):
+    """A finalized output exceeded an operational ceiling and was not produced."""
+
+    def __init__(self, message: str, *, measured: int, limit: int, setting: str, unit: str) -> None:
+        super().__init__(message)
+        self.measured = measured
+        self.limit = limit
+        self.setting = setting
+        self.unit = unit
 
 
 def projection_plan_allows_empty_bundle(plan: FlowOutputProjectionPlan) -> bool:
@@ -2258,6 +2689,164 @@ def _rows_for_plan(
     ]
 
 
+def _override_errors(
+    bundle: FlowOutputArtifactBundle,
+    plan: FlowOutputProjectionPlan,
+    rows: Sequence[Mapping[str, Any]],
+    columns: Sequence[FlowOutputColumnSpec],
+) -> list[str]:
+    """Validate explicit row/cell overrides against authorized bundle rows."""
+
+    if not plan.overrides:
+        return []
+    errors: list[str] = []
+    selected_row_ids = {id(row) for row in rows}
+    selected_refs = {
+        ref
+        for row_id, ref in bundle_row_refs(bundle, plan.row_source).items()
+        if row_id in selected_row_ids
+    }
+    column_keys = {column.key for column in columns if column.split_list is None}
+    split_keys = {column.key for column in columns if column.split_list is not None}
+    for override in plan.overrides:
+        base, _, number = str(override.column_key or "").rpartition("_")
+        if base in split_keys and number.isdigit():
+            # Expanded split columns are checked against the data at render time.
+            column_keys.add(str(override.column_key))
+    excluded_refs = {override.row_ref for override in plan.overrides if override.exclude}
+    seen: set[tuple[str, str | None]] = set()
+    for index, override in enumerate(plan.overrides, start=1):
+        context = f"Override {index}"
+        try:
+            row_source, _row = bundle_row_for_ref(bundle, override.row_ref)
+        except ValueError as exc:
+            errors.append(f"{context}: {exc}")
+            continue
+        if row_source != plan.row_source or override.row_ref not in selected_refs:
+            errors.append(
+                f"{context}: row_ref '{override.row_ref}' is not one of this projection's "
+                f"selected {plan.row_source} rows."
+            )
+        if override.exclude:
+            if override.column_key is not None or override.value is not None:
+                errors.append(f"{context}: an exclude override cannot also set column_key or value.")
+        elif not override.column_key or override.column_key not in column_keys:
+            errors.append(
+                f"{context}: column_key '{override.column_key}' is not an output column key."
+            )
+        elif override.row_ref in excluded_refs:
+            errors.append(
+                f"{context}: row_ref '{override.row_ref}' is excluded, so its cells cannot be edited."
+            )
+        identity = (override.row_ref, None if override.exclude else override.column_key)
+        if identity in seen:
+            errors.append(f"{context}: duplicate override for {identity[0]} {identity[1] or '(row)'}.")
+        seen.add(identity)
+    return errors
+
+
+def split_list_errors(
+    plan: FlowOutputProjectionPlan,
+    column: FlowOutputColumnSpec,
+) -> list[str]:
+    """Static checks for a split_list column; data-sized checks run at render."""
+
+    split = column.split_list
+    assert split is not None
+    context = f"Column '{column.key}' split_list"
+    errors: list[str] = []
+    if plan.format == "json":
+        errors.append(f"{context} applies to CSV, TSV and chat output; JSON keeps lists lossless.")
+    if column.transform is not None or not column.field_ref:
+        errors.append(f"{context} needs a field_ref, not a transform.")
+    if split.header_template is not None and split.headers:
+        errors.append(f"{context} takes header_template or headers, not both.")
+    if split.header_template is not None and "{n}" not in split.header_template:
+        errors.append(f"{context} header_template must contain {{n}} (e.g. 'Anatomy Term {{n}}').")
+    if any(not str(header).strip() for header in split.headers):
+        errors.append(f"{context} headers cannot be blank.")
+    if len(set(split.headers)) != len(split.headers):
+        errors.append(f"{context} headers must be distinct.")
+    ceiling = get_flow_output_split_list_max_columns()
+    if split.max_columns is not None and not 1 <= split.max_columns <= ceiling:
+        errors.append(f"{context} max_columns must be between 1 and {ceiling}.")
+    if len(split.headers) > (split.max_columns or ceiling):
+        errors.append(f"{context} has more headers than its column limit {split.max_columns or ceiling}.")
+    return errors
+
+
+def _split_list_headers(column: FlowOutputColumnSpec, count: int) -> list[str]:
+    split = column.split_list
+    assert split is not None
+    if split.headers:
+        return list(split.headers[:count])
+    template = split.header_template or f"{column.header or column.key} {{n}}"
+    return [template.replace("{n}", str(number)) for number in range(1, count + 1)]
+
+
+def _expand_split_columns(
+    columns: Sequence[FlowOutputColumnSpec],
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[list[FlowOutputColumnSpec], dict[str, tuple[FlowOutputColumnSpec, int]]]:
+    """Output columns with split lists expanded, sized by the longest list in ``rows``.
+
+    Returns the output columns and, per expanded key, its source column and item
+    index. Fails explicitly rather than dropping items or inventing names.
+    """
+
+    output: list[FlowOutputColumnSpec] = []
+    items: dict[str, tuple[FlowOutputColumnSpec, int]] = {}
+    ceiling = get_flow_output_split_list_max_columns()
+    for column in columns:
+        split = column.split_list
+        if split is None:
+            output.append(column)
+            continue
+        longest = max(
+            (len(_split_items(row.get(column.field_ref or ""))) for row in rows),
+            default=0,
+        )
+        count = max(1, longest, len(split.headers))
+        limit = min(split.max_columns or ceiling, ceiling)
+        if count > limit:
+            message = (
+                f"Column '{column.key}' needs {count} split columns for its longest list, "
+                f"above the limit of {limit}. No items were dropped; filter rows, raise "
+                "max_columns, or keep the list in one column."
+            )
+            if split.max_columns is None or split.max_columns >= ceiling:
+                raise FlowOutputOperationalCeilingError(
+                    message, measured=count, limit=ceiling,
+                    setting="FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS", unit="columns",
+                )
+            raise ValueError(message)
+        if split.headers and len(split.headers) < longest:
+            raise ValueError(
+                f"Column '{column.key}' split_list names {len(split.headers)} headers but the "
+                f"longest list has {longest} items. Add headers or use header_template."
+            )
+        for number, header in enumerate(_split_list_headers(column, count), start=1):
+            key = f"{column.key}_{number}"
+            output.append(FlowOutputColumnSpec(key=key, header=header, field_ref=column.field_ref,
+                                               source_node_id=column.source_node_id))
+            items[key] = (column, number - 1)
+    headers = [column.header or column.key for column in output]
+    duplicates = sorted({header for header in headers if headers.count(header) > 1})
+    if items and duplicates:
+        raise ValueError(
+            "Output headers must be distinct after split_list expansion; duplicated: "
+            + ", ".join(duplicates)
+        )
+    keys = [column.key for column in output]
+    duplicate_keys = sorted({key for key in keys if keys.count(key) > 1})
+    if duplicate_keys:
+        raise ValueError(
+            "Output column keys must be distinct after split_list expansion; duplicated: "
+            + ", ".join(duplicate_keys)
+        )
+    return output, items
+
+
 def validate_projection_plan(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
@@ -2382,6 +2971,8 @@ def validate_projection_plan(
         if column.key in seen_keys:
             errors.append(f"Duplicate output column key '{column.key}'.")
         seen_keys.add(column.key)
+        if column.split_list is not None:
+            errors.extend(split_list_errors(plan, column))
         if column.transform is None:
             _validate_ref(
                 field_ref=column.field_ref,
@@ -2390,9 +2981,13 @@ def validate_projection_plan(
                 context=f"Column '{column.key}'",
             )
         else:
-            for transform in _transform_specs(column.transform):
-                if transform.type != "pair_join":
-                    continue
+            transform = column.transform
+            if transform.type == "format_elements":
+                errors.extend(
+                    f"Column '{column.key}' {error}"
+                    for error in _element_template_errors(transform)
+                )
+            if transform.type == "pair_join":
                 if transform.field_ref is not None or transform.values:
                     errors.append(
                         f"Column '{column.key}' pair_join uses field_refs only; "
@@ -2402,29 +2997,29 @@ def validate_projection_plan(
                     errors.append(
                         f"Column '{column.key}' pair_join requires exactly two field_refs."
                     )
-            for ref in _transform_refs(column.transform):
+            for ref in _transform_refs(transform):
                 _validate_ref(
                     field_ref=ref,
                     available_refs=available_refs,
                     errors=errors,
                     context=f"Column '{column.key}' transform",
                 )
-            try:
-                transforms_with_rows = _transform_specs_with_rows(column.transform, rows)
-            except ValueError as exc:
-                errors.append(f"Column '{column.key}' conditional condition is invalid: {exc}")
-                transforms_with_rows = []
-            for transform, transform_rows in transforms_with_rows:
-                if transform.type == "pair_join" and len(transform.field_refs) == 2:
-                    for row in transform_rows:
-                        try:
-                            _pair_join_value(row, transform, missing_value=plan.missing_value)
-                        except ValueError as exc:
-                            errors.append(f"Column '{column.key}' {exc}")
-                            break
-            for transform in _transform_specs(column.transform):
-                if transform.type == "literal" and transform.value is None:
-                    warnings.append(f"Column '{column.key}' literal transform has a null value.")
+            if transform.type == "pair_join" and len(transform.field_refs) == 2:
+                for row in rows:
+                    try:
+                        _pair_join_value(row, transform, missing_value=plan.missing_value)
+                    except ValueError as exc:
+                        errors.append(f"Column '{column.key}' {exc}")
+                        break
+            if transform.type == "format_elements" and not _element_template_errors(transform):
+                for row in rows:
+                    try:
+                        _format_elements_value(row, transform, missing_value=plan.missing_value)
+                    except ValueError as exc:
+                        errors.append(f"Column '{column.key}' {exc}")
+                        break
+            if transform.type == "literal" and transform.value is None:
+                warnings.append(f"Column '{column.key}' literal transform has a null value.")
 
     for filter_spec in plan.filters:
         _validate_ref(
@@ -2451,10 +3046,11 @@ def validate_projection_plan(
             errors=errors,
             context="Group by",
         )
+    errors.extend(_override_errors(bundle, plan, rows, columns))
     if plan.group_by and plan.format in {"csv", "tsv"}:
         errors.append(
             f"group_by is not supported for {plan.format.upper()} projections; "
-            "use sort/group columns in a flat export or choose JSON output."
+            "use sort/group columns in a flat export or choose JSON/chat output."
         )
     if plan.group_by and plan.format == "json" and plan.json_shape != "grouped":
         errors.append("JSON projection group_by requires json_shape='grouped'.")
@@ -2546,51 +3142,57 @@ def _transform_value(
     transform: FlowOutputTransformSpec,
     *,
     missing_value: str,
+    render: ValueRenderer | None = None,
+    value_key: ValueKey = _generic_value_key,
 ) -> Any:
+    text = render or _plain_text
     if transform.type == "literal":
         return transform.value
-    if transform.type == "first_non_empty":
-        for field_ref in transform.field_refs:
-            value = row.get(field_ref)
-            if not _is_empty(value):
-                return value
-        return missing_value
     if transform.type == "concat":
         parts: list[str] = []
         for value in transform.values:
             if isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
-                part = row.get(str(value["field_ref"]))
-            elif isinstance(value, str) and value in row:
+                ref = str(value["field_ref"])
+                part = row.get(ref)
+                if not _is_empty(part):
+                    parts.append(text(ref, part, None))
+                continue
+            if isinstance(value, str) and value in row:
                 part = row.get(value)
-            else:
-                part = value
-            if not _is_empty(part):
-                parts.append(str(part))
-        return transform.separator.join(parts)
+                if not _is_empty(part):
+                    parts.append(text(value, part, None))
+                continue
+            if not _is_empty(value):
+                parts.append(str(value))
+        return transform.separator.join(part for part in parts if part)
     if transform.type == "join_list":
-        value = row.get(transform.field_ref or "")
+        ref = transform.field_ref or ""
+        value = row.get(ref)
         if isinstance(value, list):
-            return transform.separator.join(str(item) for item in value if not _is_empty(item))
-        return missing_value if _is_empty(value) else str(value)
+            items = [
+                text(ref, item, index, nested=True)
+                for index, item in enumerate(value)
+                if not _is_empty(item)
+            ]
+            return transform.separator.join(item for item in items if item)
+        return missing_value if _is_empty(value) else text(ref, value, None)
     if transform.type == "pair_join":
-        return _pair_join_value(row, transform, missing_value=missing_value)
-    if transform.type == "conditional":
-        condition = _conditional_filter(transform)
-        branch = transform.when_true if _row_matches_filter(row, condition) else transform.when_false
-        if branch is None:
-            raise ValueError("conditional selected an undefined branch.")
-        return _transform_value(row, branch, missing_value=missing_value)
+        return _pair_join_value(row, transform, missing_value=missing_value, render=text)
     if transform.type == "count":
         value = row.get(transform.field_ref or "")
         if isinstance(value, (list, tuple, set, dict)):
             return len(value)
         return 0 if _is_empty(value) else 1
     if transform.type == "map_value":
-        value = row.get(transform.field_ref or "")
-        key = str(value)
+        ref = transform.field_ref or ""
+        value = row.get(ref)
+        # Structured values match by their display text, never Python repr.
+        key = value_key(ref, value) if isinstance(value, (Mapping, list, tuple)) else str(value)
         if key in transform.mapping:
             return transform.mapping[key]
         return transform.default if transform.default is not None else missing_value
+    if transform.type == "format_elements":
+        return _format_elements_value(row, transform, missing_value=missing_value, render=render)
     if transform.type == "boolean_label":
         value = row.get(transform.field_ref or "")
         if isinstance(value, bool):
@@ -2610,37 +3212,239 @@ def _project_row(
     *,
     missing_value: str | None,
     preserve_empty: bool = False,
+    render: ValueRenderer | None = None,
+    value_key: ValueKey = _generic_value_key,
 ) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for column in columns:
         if column.source_node_id and row.get("artifact.node_id") != column.source_node_id:
             value = None
         elif column.transform is not None:
-            value = _transform_value(row, column.transform, missing_value=missing_value)
+            value = _transform_value(
+                row, column.transform, missing_value=missing_value, render=render, value_key=value_key,
+            )
         else:
             value = row.get(column.field_ref or "")
+            # Numbers and booleans stay typed; text and structured values render.
+            if render is not None and not _is_empty(value) and (
+                isinstance(value, (str, list, tuple, dict))
+            ):
+                value = render(column.field_ref or "", value, None)
+        if render is not None and value is not None and not isinstance(value, (str, int, float, bool)):
+            value = display_text(value)
         if value is None or (not preserve_empty and _is_empty(value)):
             value = missing_value
         output[column.key] = _jsonable(value)
     return output
 
 
+def _payload_path_for_ref(field_ref: str) -> str | None:
+    """The object payload path a projection field reads, when it has one."""
+
+    if field_ref.startswith("object.pack."):
+        _, _, rest = field_ref.removeprefix("object.pack.").partition(".")
+        return rest or None
+    if field_ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX):
+        return "attributes." + field_ref.removeprefix(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+    if field_ref.startswith("object.payload."):
+        return field_ref.removeprefix("object.payload.")
+    return None
+
+
+def _object_keys(row: Mapping[str, Any]) -> list[str]:
+    """Envelope-scoped keys of the object a row names (object_id and pending_ref_id)."""
+
+    return [
+        f"{kind}:{reference}"
+        for kind in ("object_id", "pending_ref_id")
+        if (reference := _string_value(row.get(f"object.{kind}")))
+    ]
+
+
+def _ref_key(object_ref: Mapping[str, Any]) -> str | None:
+    for kind in ("object_id", "pending_ref_id"):
+        reference = _string_value(object_ref.get(kind))
+        if reference:
+            return f"{kind}:{reference}"
+    return None
+
+
+def _object_ref_links(
+    item: Mapping[str, Any], ref_fields: Mapping[str, str],
+) -> dict[str, list[str]]:
+    """Referenced object keys per object_ref field path, in object_refs order."""
+
+    object_refs = [ref for ref in item.get("object_refs") or [] if isinstance(ref, Mapping)]
+    links: dict[str, list[str]] = {}
+    for field_path, object_type in ref_fields.items():
+        keys = [
+            key
+            for ref in object_refs
+            if ref.get("object_type") == object_type and (key := _ref_key(ref))
+        ]
+        if keys:
+            links[field_path] = keys
+    return links
+
+
+def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[int, list[tuple[Any, ...]]]:
+    """Open validation finding paths per object row (keyed by ``id(row)``).
+
+    Pending ref ids restart in every envelope, so findings match objects only
+    within their own artifact. An object_ref field also carries the open
+    findings of the object it references: the n-th referenced object of the
+    field's type is the n-th element of a list field.
+    """
+
+    by_row: dict[int, list[tuple[Any, ...]]] = {}
+    for artifact in bundle.artifacts:
+        direct: dict[str, list[tuple[Any, ...]]] = defaultdict(list)
+        for row in artifact.rows_by_source.get("validation_finding") or []:
+            if str(row.get("validation.status") or "").strip().lower() != "open":
+                continue
+            field_path = _string_value(row.get("validation.field_path")).removeprefix("payload.")
+            tokens = path_tokens(field_path) if field_path else None
+            if tokens is None:
+                continue
+            for key in _object_keys(row):
+                direct[key].append(tokens)
+        # A referenced object flags a referencing cell only by findings on its plain
+        # fields; its resolvable values read their own state (ALL-1283 contract section 3).
+        plain = {
+            key: [
+                finding for finding in findings
+                if not _covered_relatives((finding,), _covered_paths(artifact, key), ())
+            ]
+            for key, findings in direct.items()
+        }
+        for row in artifact.rows_by_source.get("object") or []:
+            paths: list[tuple[Any, ...]] = []
+            for key in _object_keys(row):
+                paths.extend(direct.get(key, []))
+                for field_path, ref_keys in artifact.object_ref_links.get(key, {}).items():
+                    tokens = path_tokens(field_path)
+                    flagged = [position for position, ref in enumerate(ref_keys) if plain.get(ref)]
+                    if tokens is None or not flagged:
+                        continue
+                    if isinstance(tokens[-1], int):
+                        # An indexed field is the referenced object at that position.
+                        if tokens[-1] in flagged:
+                            paths.append(tokens)
+                    elif len(ref_keys) == 1:
+                        paths.append(tokens)
+                    else:
+                        paths.extend((*tokens, position) for position in flagged)
+            if paths:
+                by_row[id(row)] = list(dict.fromkeys(paths))
+    return by_row
+
+
+def _resolvable_paths_by_row(bundle: FlowOutputArtifactBundle) -> dict[int, list[tuple[Any, ...]]]:
+    """Payload paths each object row's declared resolvable values cover (keyed by ``id(row)``)."""
+
+    by_row: dict[int, list[tuple[Any, ...]]] = {}
+    for artifact in bundle.artifacts:
+        for row in artifact.rows_by_source.get("object") or []:
+            covered = [path for key in _object_keys(row) for path in _covered_paths(artifact, key)]
+            if covered:
+                by_row[id(row)] = covered
+    return by_row
+
+
+def _covered_paths(artifact: FlowOutputArtifact, object_key: str) -> list[tuple[Any, ...]]:
+    return [
+        tokens for path in artifact.resolvable_value_paths.get(object_key, [])
+        if (tokens := path_tokens(path)) is not None
+    ]
+
+
+def _covered_relatives(
+    finding_paths: Sequence[tuple[Any, ...]], covered: Sequence[tuple[Any, ...]], target: tuple[Any, ...],
+) -> list[tuple[Any, ...]]:
+    """The finding paths (relative to ``target``) that touch a declared resolvable value.
+
+    A finding touches a value when it names the value, a part of it, or an
+    ancestor (a whole list of values, a parent object).
+    """
+
+    covered_relative = [
+        relative for path in covered if (relative := relative_finding_path(path, target)) is not None
+    ]
+    touched = []
+    for finding in finding_paths:
+        relative = relative_finding_path(finding, target)
+        if relative is not None and any(
+            relative[: len(value)] == value or value[: len(relative)] == relative for value in covered_relative
+        ):
+            touched.append(relative)
+    return touched
+
+
+def _unresolved_for(
+    finding_paths: Sequence[tuple[Any, ...]], payload_path: str | None,
+    covered: Sequence[tuple[Any, ...]] = (),
+) -> frozenset[tuple[Any, ...]]:
+    """Open finding paths relative to the value a column reads.
+
+    Indexed findings map onto fanned-out columns by position, so the marker
+    lands on the unresolved element. A finding touching a declared resolvable
+    value (``covered``) marks none of its cells: the value reads its own
+    state (ALL-1283 contract section 3).
+    """
+
+    target = path_tokens(payload_path) if payload_path else None
+    if target is None:
+        return frozenset()
+    touched = set(_covered_relatives(finding_paths, covered, target))
+    return frozenset(
+        relative
+        for finding in finding_paths
+        if (relative := relative_finding_path(finding, target)) is not None and relative not in touched
+    )
+
+
+def _display_renderer(
+    specs: Mapping[str, Any],
+    finding_paths: Sequence[tuple[Any, ...]],
+    covered: Sequence[tuple[Any, ...]] = (),
+) -> ValueRenderer:
+    def render(field_ref: str, value: Any, index: int | None, *, nested: bool = False) -> str:
+        unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref), covered)
+        if index is not None:
+            # One split_list item: the findings on that position, or on every position.
+            unresolved = frozenset(
+                path[1:] if path and path[0] == index else path
+                for path in unresolved
+                if not path or not isinstance(path[0], int) or path[0] == index
+            )
+        return display_text(value, specs.get(field_ref), unresolved=unresolved, nested=nested)
+
+    return render
+
+
 def _group_projected_rows(
     source_rows: Sequence[Mapping[str, Any]],
     projected_rows: Sequence[Mapping[str, Any]],
     group_by: Sequence[str],
+    *,
+    group_value: Callable[[str, Any], Any] | None = None,
 ) -> list[dict[str, Any]]:
-    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    """Group rows by their group_by values (raw JSON values unless ``group_value`` renders them)."""
+
+    groups: dict[str, dict[str, Any]] = {}
     for source_row, projected_row in zip(source_rows, projected_rows):
-        key = tuple(source_row.get(field_ref) for field_ref in group_by)
+        values = {
+            field_ref: (
+                group_value(field_ref, source_row.get(field_ref))
+                if group_value is not None
+                else _jsonable(source_row.get(field_ref))
+            )
+            for field_ref in group_by
+        }
+        # Structured values are unhashable; their canonical JSON is the key.
+        key = json.dumps(list(values.values()), sort_keys=True, default=str)
         if key not in groups:
-            groups[key] = {
-                "group": {
-                    field_ref: _jsonable(source_row.get(field_ref))
-                    for field_ref in group_by
-                },
-                "rows": [],
-            }
+            groups[key] = {"group": values, "rows": []}
         groups[key]["rows"].append(dict(projected_row))
     return list(groups.values())
 
@@ -2649,7 +3453,13 @@ def apply_projection_plan(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
     *, preview_limit: int | None = None,
+    render_display: bool = True,
 ) -> FlowOutputProjectionResult:
+    """Project rows; non-JSON cells become display text (``value_display``).
+
+    JSON output always keeps the raw structured values. Inspection tools pass
+    ``render_display=False`` to see the stored values.
+    """
     errors, warnings, columns = validate_projection_plan(bundle, plan)
     if errors:
         raise ValueError("; ".join(errors))
@@ -2660,6 +3470,23 @@ def apply_projection_plan(
     for filter_spec in plan.filters:
         rows = [row for row in rows if _row_matches_filter(row, filter_spec)]
     rows = _sort_rows(rows, plan.sort)
+    ref_by_row_id = bundle_row_refs(bundle, plan.row_source)
+    excluded_refs = {override.row_ref for override in plan.overrides if override.exclude}
+    if plan.overrides:
+        present_refs = {ref_by_row_id.get(id(row)) for row in rows}
+        missing_refs = sorted(
+            {override.row_ref for override in plan.overrides} - present_refs
+        )
+        if missing_refs:
+            raise ValueError(
+                "Override row_ref(s) are not in the filtered projection: "
+                + ", ".join(missing_refs)
+            )
+    rows_excluded = 0
+    if excluded_refs:
+        kept_rows = [row for row in rows if ref_by_row_id.get(id(row)) not in excluded_refs]
+        rows_excluded = len(rows) - len(kept_rows)
+        rows = kept_rows
 
     total_count = len(rows)
     max_rows = plan.max_rows or MAX_PROJECTION_ROWS
@@ -2667,12 +3494,88 @@ def apply_projection_plan(
         max_rows = min(max_rows, max(1, preview_limit))
     limited_rows = rows[:max_rows]
     truncated = len(rows) > len(limited_rows)
-    projected_rows = [
-        _project_row(row, columns, missing_value=plan.missing_value, preserve_empty=plan.selection_mode == "selected_fields")
-        for row in limited_rows
-    ]
+    limited_by_max_rows = bool(
+        plan.max_rows is not None and total_count > plan.max_rows
+    )
+    row_refs = [ref_by_row_id.get(id(row), "") for row in limited_rows]
+    display = render_display and plan.format != "json"
+    specs = {field.ref: field.display for field in bundle.field_catalog if field.row_source == plan.row_source}
+
+    def value_key(field_ref: str, value: Any, *, nested: bool = False) -> str:
+        return display_text(value, specs.get(field_ref), marked=False, nested=nested)
+
+    open_paths = _open_finding_paths(bundle) if display and plan.row_source == "object" else {}
+    covered_paths = _resolvable_paths_by_row(bundle) if open_paths else {}
+    # Split lists are sized by the longest list across all filtered rows.
+    output_columns, split_items = (
+        _expand_split_columns(columns, rows)
+        if any(column.split_list is not None for column in columns)
+        else (list(columns), {})
+    )
+    base_columns = [column for column in columns if column.split_list is None]
+    preserve_empty = plan.selection_mode == "selected_fields"
+    projected_rows = []
+    for row in limited_rows:
+        render = (
+            _display_renderer(specs, open_paths.get(id(row), []), covered_paths.get(id(row), []))
+            if display
+            else None
+        )
+        base = _project_row(
+            row,
+            base_columns,
+            missing_value=plan.missing_value,
+            preserve_empty=preserve_empty,
+            render=render,
+            value_key=value_key,
+        )
+        if not split_items:
+            projected_rows.append(base)
+            continue
+        projected: dict[str, Any] = {}
+        for column in output_columns:
+            if column.key not in split_items:
+                projected[column.key] = base[column.key]
+                continue
+            source_column, position = split_items[column.key]
+            source_value = row.get(source_column.field_ref or "")
+            values = _split_items(source_value)
+            item = values[position] if position < len(values) else None
+            if source_column.source_node_id and row.get("artifact.node_id") != source_column.source_node_id:
+                item = None
+            if not _is_empty(item) and render is not None:
+                item = render(
+                    source_column.field_ref or "", item, position, nested=isinstance(source_value, list),
+                )
+            if item is None or (not preserve_empty and _is_empty(item)):
+                item = plan.missing_value
+            projected[column.key] = _jsonable(item)
+        projected_rows.append(projected)
+    columns = output_columns
+    cell_overrides = [override for override in plan.overrides if not override.exclude]
+    if cell_overrides:
+        position_by_ref = {ref: position for position, ref in enumerate(row_refs)}
+        beyond_limit = sorted(
+            {override.row_ref for override in cell_overrides} - set(position_by_ref)
+        )
+        if beyond_limit and preview_limit is None:
+            raise ValueError(
+                "Override row_ref(s) fall outside the output row limit: "
+                + ", ".join(beyond_limit)
+            )
+        output_keys = {column.key for column in columns}
+        for override in cell_overrides:
+            if override.column_key not in output_keys:
+                raise ValueError(
+                    f"Override column_key '{override.column_key}' is not an output column "
+                    "after split_list expansion."
+                )
+            position = position_by_ref.get(override.row_ref)
+            if position is not None and override.column_key is not None:
+                projected_rows[position][override.column_key] = _jsonable(override.value)
 
     json_data: Any = None
+    chat_output: str | None = None
     if plan.format == "json":
         if plan.json_shape == "grouped":
             json_data = _group_projected_rows(limited_rows, projected_rows, plan.group_by)
@@ -2683,7 +3586,8 @@ def apply_projection_plan(
                 "document_id": bundle.document_id,
                 "row_source": plan.row_source,
                 "field_catalog": [
-                    field.model_dump(mode="json")
+                    # Display specs only shape non-JSON cells; JSON stays byte-stable.
+                    field.model_dump(mode="json", exclude={"display"})
                     for field in bundle.field_catalog
                     if field.row_source == plan.row_source
                 ],
@@ -2692,6 +3596,31 @@ def apply_projection_plan(
             }
         else:
             json_data = projected_rows
+    elif plan.format == "chat":
+        # Chat output renders every projected row; row counts are limited only
+        # by an explicit max_rows or an explicit preview request.
+        if plan.group_by:
+            chat_output = render_grouped_chat_projection(
+                # Chat groups read by display text: the grouping key and heading.
+                groups=_group_projected_rows(
+                    limited_rows,
+                    projected_rows,
+                    plan.group_by,
+                    group_value=lambda field_ref, value: display_text(value, specs.get(field_ref)),
+                ),
+                columns=columns,
+                layout=plan.chat_layout,
+                total_count=total_count,
+                truncated=truncated,
+            )
+        else:
+            chat_output = render_chat_projection(
+                rows=projected_rows,
+                columns=columns,
+                layout=plan.chat_layout,
+                total_count=total_count,
+                truncated=truncated,
+            )
 
     return FlowOutputProjectionResult(
         format=plan.format,
@@ -2702,7 +3631,12 @@ def apply_projection_plan(
         truncated=truncated,
         warnings=warnings,
         json_data=json_data,
+        chat_output=chat_output,
         group_by=list(plan.group_by),
+        row_refs=row_refs,
+        limited_by_max_rows=limited_by_max_rows,
+        overrides_applied=len(cell_overrides),
+        rows_excluded=rows_excluded,
     )
 
 
@@ -2757,7 +3691,7 @@ def preview_output_projection(
             errors=errors,
             warnings=warnings,
         )
-    result = apply_projection_plan(bundle, plan, preview_limit=limit)
+    result = apply_projection_plan(bundle, plan, preview_limit=limit, render_display=True)
     return FlowOutputProjectionPreview(
         status="ok",
         warnings=_bounded_projection_warnings(result.warnings),
@@ -2771,7 +3705,113 @@ def finalize_output_projection(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
 ) -> FlowOutputProjectionResult:
-    return apply_projection_plan(bundle, plan)
+    """Project every requested row, or fail when an operational ceiling cuts rows.
+
+    An explicit ``max_rows`` is a requested limit and is honored. Without one,
+    rows beyond ``FLOW_PROJECTION_MAX_ROWS`` are never silently dropped.
+    """
+
+    result = apply_projection_plan(bundle, plan, render_display=True)
+    if result.truncated and not result.limited_by_max_rows:
+        raise FlowOutputOperationalCeilingError(
+            f"The projection matched {result.total_count} rows, above the operational "
+            f"ceiling of {MAX_PROJECTION_ROWS} rows. No partial output was produced; "
+            "the saved results are unchanged.",
+            measured=result.total_count,
+            limit=MAX_PROJECTION_ROWS,
+            setting="FLOW_PROJECTION_MAX_ROWS",
+            unit="rows",
+        )
+    return result
+
+
+def render_chat_projection(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    columns: Sequence[FlowOutputColumnSpec],
+    layout: FlowOutputChatLayout,
+    total_count: int,
+    truncated: bool,
+) -> str:
+    if not rows:
+        return "No rows matched the requested output projection."
+
+    if layout == "bullets":
+        lines = []
+        for row in rows:
+            bits = [
+                f"{column.header or column.key}: {_string_value(row.get(column.key))}"
+                for column in columns
+                if not _is_empty(row.get(column.key))
+            ]
+            lines.append("- " + "; ".join(bits))
+    elif layout == "sections":
+        lines = []
+        for index, row in enumerate(rows, start=1):
+            lines.append(f"### Row {index}")
+            for column in columns:
+                lines.append(f"- {column.header or column.key}: {_string_value(row.get(column.key))}")
+    else:
+        headers = [column.header or column.key for column in columns]
+        divider = ["---" for _ in columns]
+        lines = [
+            "| " + " | ".join(_markdown_cell(header) for header in headers) + " |",
+            "| " + " | ".join(divider) + " |",
+        ]
+        for row in rows:
+            lines.append(
+                "| "
+                + " | ".join(_markdown_cell(row.get(column.key)) for column in columns)
+                + " |"
+            )
+
+    if truncated:
+        lines.append(f"\nShowing {len(rows)} of {total_count} projected rows.")
+    return "\n".join(lines)
+
+
+def render_grouped_chat_projection(
+    *,
+    groups: Sequence[Mapping[str, Any]],
+    columns: Sequence[FlowOutputColumnSpec],
+    layout: FlowOutputChatLayout,
+    total_count: int,
+    truncated: bool,
+) -> str:
+    if not groups:
+        return "No rows matched the requested output projection."
+
+    lines: list[str] = []
+    shown_rows = 0
+    for group in groups:
+        group_values = group.get("group")
+        group_rows = group.get("rows")
+        if not isinstance(group_values, Mapping) or not isinstance(group_rows, list):
+            continue
+        heading_bits = [
+            f"{_field_label(str(field_ref))}: {_string_value(value)}"
+            for field_ref, value in group_values.items()
+        ]
+        lines.append(f"## {'; '.join(heading_bits) or 'Ungrouped'}")
+        lines.append(
+            render_chat_projection(
+                rows=group_rows,
+                columns=columns,
+                layout=layout,
+                total_count=len(group_rows),
+                truncated=False,
+            )
+        )
+        shown_rows += len(group_rows)
+
+    if truncated:
+        lines.append(f"\nShowing {shown_rows} of {total_count} projected rows.")
+    return "\n\n".join(lines)
+
+
+def _markdown_cell(value: Any) -> str:
+    text = _string_value(value)
+    return text.replace("|", "\\|").replace("\n", " ")
 
 
 __all__ = [
@@ -2781,6 +3821,9 @@ __all__ = [
     "FlowOutputColumnSpec",
     "FlowOutputField",
     "FlowOutputFilterSpec",
+    "FlowOutputOperationalCeilingError",
+    "FlowOutputOverrideSpec",
+    "FlowOutputSplitListSpec",
     "FlowOutputProjectionPlan",
     "FlowOutputProjectionPreview",
     "FlowOutputProjectionResult",
@@ -2788,12 +3831,18 @@ __all__ = [
     "FlowOutputTransformSpec",
     "apply_projection_plan",
     "build_extraction_result_artifact_bundle",
+    "bundle_row_for_ref",
+    "bundle_row_refs",
     "build_flow_output_artifact_bundle",
     "default_columns_for_row_source",
+    "default_object_filters",
     "default_projection_plan",
     "finalize_output_projection",
     "inspect_output_artifacts",
     "projection_plan_allows_empty_bundle",
+    "projection_row_ref",
     "preview_output_projection",
+    "render_grouped_chat_projection",
+    "render_chat_projection",
     "validate_projection_plan",
 ]

@@ -339,7 +339,7 @@ function NodePanel({
         mode={mode}
         onApply={() => { applyDraft() }}
         onCancel={resetDraft}
-        onDelete={readOnly ? undefined : () => onDelete(node.id)}
+        onDelete={readOnly || isTaskInput ? undefined : () => onDelete(node.id)}
         onHide={guardedHide}
       />
 

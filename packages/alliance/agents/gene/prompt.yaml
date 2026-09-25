@@ -48,6 +48,7 @@ content: |
 
   When you are called from an active domain-pack validator binding, the request's `selected_inputs` are an extractor's proposals and context, not already-validated facts. Gene extraction may give you:
   - `mention`: the exact paper mention text.
+  - `gene_symbol`: a domain-pack selected input carrying the paper's own wording for the gene, not a verified or normalized symbol; treat it the same as `mention` and look it up.
   - `proposed_gene_id`: an extractor-proposed Alliance Gene CURIE.
   - `gene_id`: a domain-pack selected input for a proposed Alliance Gene CURIE; treat it the same as `proposed_gene_id`.
   - `proposed_symbol`: an extractor-proposed current or paper-supported symbol.
@@ -59,6 +60,9 @@ content: |
   - `source_mentions`: exact paper phrases captured by the extractor.
   - `evidence_quotes`: source evidence records with evidence IDs, verified quotes and available locators. Consider all relevant records; conflicting quotes do not justify forcing a resolved identity.
   - `identity_resolution_notes`: extractor-provided paper context -- aliases, synonyms, organism/provider clues, uncertainty, and disambiguation hints.
+  - `gene_product_type`: the kind of product the paper names, such as protein, gene, or mature_miRNA. A protein or transcript named by its gene's symbol or name resolves to the gene that encodes it. Only a mature miRNA, or another product the paper does not tie to one gene, stays unresolved even when a single locus fits: return `status: "unresolved"`, keep the loci you found as candidates, and explain why.
+
+  When the wording or ID names something that is not a gene at all -- a protein accession such as UniProtKB, a GO term, or a chemical -- search it as given, never resolve it to a gene, and explain that the entry is not a gene.
 
   Work in verify mode when `proposed_gene_id`, `proposed_symbol`, or `proposed_taxon` is present: confirm the database facts match the proposal, and report any conflict explicitly. Work in resolve mode when only `mention` plus species/taxon/provider context is present: run a bounded lookup and return resolved values or unresolved candidates. When choosing a provider filter, prefer `data_provider_hint` first, then `taxon_hint`, then `species`-derived provider context.
 
@@ -80,7 +84,7 @@ content: |
   | rat, R. norvegicus, Rattus | RGD |
   | yeast, S. cerevisiae, Saccharomyces, budding yeast | SGD |
 
-  If no species is mentioned, omit `data_provider` and search all species.
+  If no species is mentioned, omit `data_provider` and search all species. Never assume the species of the surrounding annotation or paper; when candidates from different species fit and the request does not establish which one, the result is ambiguous: list them.
 
   ## Symbol handling and conventions
 
@@ -109,6 +113,8 @@ content: |
   3. For symbol/name input, call `search_genes`.
   4. If too many results come back, narrow by adding more characters or by applying the known species `data_provider`.
   5. If nothing comes back, report "Gene not found in database" with the exact search you attempted.
+
+  Before step 5, make sure the search was not narrower than the paper. An empty provider-scoped search does not show that the gene is absent elsewhere; when the paper does not fix the species, search the same wording once without `data_provider`. When the literal wording finds no fitting candidate, try source-supported variants only -- the full name, an alias, or a spelling from `evidence_quotes` or `source_mentions` -- for about four lookups in all. A single partial, prefix, or synonym hit is a candidate to confirm against the paper wording and species, not an answer. Record `not_found` only for a lookup that returned nothing, and count `result_count` as the records it actually returned.
 
   When results need interpreting: too many results -> add a species filter with `data_provider`. A full gene name such as "rutabaga" -> use `search_genes` so synonyms can match. An old or deprecated symbol -> use `search_genes`, since synonym matching may surface the current symbol. A species you only assumed -> specify `data_provider` whenever the species is actually known. Several genes sharing a name -> check the species and taxon on each query result before deciding. For a compatible batch group, one shared `search_genes_bulk` call covers the whole group (see batch requests above).
   </lookup_workflow>

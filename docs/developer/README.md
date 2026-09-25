@@ -59,6 +59,7 @@ Start here for new developers:
 | [PDF_HIGHLIGHT_VERIFICATION.md](guides/PDF_HIGHLIGHT_VERIFICATION.md) | Verification checklist and diagnostics for PDF chunk highlighting bugs |
 | [PDF_NO_JOB_ORPHAN_REPAIR.md](guides/PDF_NO_JOB_ORPHAN_REPAIR.md) | Manual dry-run and bounded application procedure for historical pending PDF documents without durable jobs |
 | [SENTRY_OBSERVABILITY.md](guides/SENTRY_OBSERVABILITY.md) | Backend Sentry operating model: initialization, redaction, reporting facades, CloudWatch/Langfuse boundaries, and dev smoke testing |
+| [MODEL_REQUEST_MEASUREMENT_MATRIX.md](guides/MODEL_REQUEST_MEASUREMENT_MATRIX.md) | Per-request model input measurement: runtime entry paths, measurement points, provider field limits, and the regression guard |
 | [LANGFUSE_V4_MIGRATION.md](guides/LANGFUSE_V4_MIGRATION.md) | One-time operator procedure for rehearsing and migrating the controlled dev and production Langfuse deployments to v4 |
 | [WEAVIATE_BACKUPS.md](guides/WEAVIATE_BACKUPS.md) | Native filesystem backup configuration, create/status workflow, isolated restore requirements, legacy non-multitenant collection migration, and disaster-recovery limitations |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
@@ -196,7 +197,7 @@ the plan supplies an agent ID, review rows, and export/submission readiness
 instead of inferring behavior from static docs or legacy projection payloads.
 
 Agent Studio AI Chat resolves the default OpenAI model and reasoning policy from
-the canonical model catalog. The shipped catalog selects `gpt-5.6-sol` with
+the canonical model catalog. The shipped catalog selects `gpt-6-sol` with
 `medium` reasoning; do not add a second Agent Studio model override.
 
 See [DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md) for the full contract.

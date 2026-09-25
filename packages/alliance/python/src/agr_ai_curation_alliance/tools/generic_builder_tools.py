@@ -39,16 +39,20 @@ from agr_ai_curation_alliance.domain_packs.generic.attributes import (
     normalize_generic_attributes,
     normalized_attribute_keys,
 )
+from agr_ai_curation_alliance.domain_packs.generic.conversion import missing_staged_payload_fields
+from agr_ai_curation_alliance.domain_packs.generic.values import extractor_payload_issues
 
 from .agr_curation import (
     AgrQueryResult,
     _BUILDER_LIST_DEFAULT_LIMIT,
     _builder_candidate_list,
+    _builder_finalization_summary,
     _builder_summary,
     _ok,
     _search_builder_candidates,
 )
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import document_rationale_arg, normalize_rationale
 
 
 _GENERIC_TOP_LEVEL_PATCH_FIELDS = frozenset(
@@ -62,6 +66,7 @@ _GENERIC_TOP_LEVEL_PATCH_FIELDS = frozenset(
         "confidence",
         "semantic_class",
         "classification_notes",
+        "rationale",
         "payload",
         "attributes",
         "evidence_record_ids",
@@ -157,41 +162,43 @@ def _generic_attribute_key_notices(
     )
 
 
-def _augment_generic_candidate_summaries(
-    workspace: Any,
-    summary: dict[str, Any],
-) -> dict[str, Any]:
-    """Add generic shape hints to redacted candidate pages."""
+def _generic_candidate_decorator(workspace: Any) -> Any:
+    """Return a per-candidate decorator adding generic shape hints to page rows.
 
-    try:
-        candidates = workspace.snapshot(redact_payload=False).get("candidates", [])
-    except Exception:
-        return summary
+    The shared builder page helper applies it before measuring each row, so
+    the attribute keys and drift notices count toward the page's size budget.
+    """
+
+    candidates = workspace.snapshot(redact_payload=False).get("candidates", [])
     candidates_by_id = {
         candidate.get("candidate_id"): candidate
         for candidate in candidates
         if candidate.get("candidate_id")
     }
-    for redacted_candidate in summary.get("candidates") or []:
+
+    def decorate(redacted_candidate: dict[str, Any]) -> dict[str, Any]:
         candidate = candidates_by_id.get(redacted_candidate.get("candidate_id"))
         staged_fields = (candidate or {}).get("staged_fields") or {}
         if not isinstance(staged_fields, Mapping):
-            continue
+            return redacted_candidate
         if str(staged_fields.get("class_key") or "").strip() != "generic:generic_object":
-            continue
-        redacted_candidate["class_key"] = "generic:generic_object"
-        redacted_candidate["semantic_class"] = staged_fields.get("semantic_class") or ""
-        redacted_candidate["attribute_keys"] = _staged_attribute_keys(staged_fields)
-        redacted_candidate["attribute_key_notices"] = (
-            _generic_attribute_key_notices_from_candidates(
+            return redacted_candidate
+        attribute_keys = _staged_attribute_keys(staged_fields)
+        return {
+            **redacted_candidate,
+            "class_key": "generic:generic_object",
+            "semantic_class": staged_fields.get("semantic_class") or "",
+            "attribute_keys": attribute_keys,
+            "attribute_key_notices": _generic_attribute_key_notices_from_candidates(
                 candidates,
                 candidate_id=str(redacted_candidate.get("candidate_id") or ""),
                 class_key="generic:generic_object",
                 semantic_class=staged_fields.get("semantic_class"),
-                attribute_keys=redacted_candidate["attribute_keys"],
-            )
-        )
-    return summary
+                attribute_keys=attribute_keys,
+            ),
+        }
+
+    return decorate
 
 
 class _StrictToolModel(BaseModel):
@@ -211,6 +218,7 @@ class GenericStageInput(_StrictToolModel):
     label: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1)
     classification_notes: List[StrictStr] = Field(min_length=1)
+    rationale: StrictStr
     pending_ref_id: Optional[StrictStr] = None
     source_label: Optional[StrictStr] = None
     description: Optional[StrictStr] = None
@@ -251,6 +259,11 @@ class GenericStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("classification_notes must contain at least one non-empty value")
         return cleaned
+
+    @field_validator("rationale")
+    @classmethod
+    def _valid_rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
 
 class GenericPatchUpdateInput(_StrictToolModel):
@@ -397,6 +410,7 @@ def _stage_payload_from_generic_input(
         "class_key": entry.class_key,
         "label": stage_input.label,
         "classification_notes": list(stage_input.classification_notes),
+        "rationale": stage_input.rationale,
         "payload": dict(stage_input.payload),
     }
     if stage_input.pending_ref_id:
@@ -429,6 +443,32 @@ def _validate_payload_keys_for_entry(
         )
 
 
+def _extractor_payload_issues(staged_fields: Mapping[str, Any], *, entry: Any) -> list[dict[str, str]]:
+    """Fields the extractor may not write, resolvable values missing their paper
+    wording, and required class fields the candidate lacks."""
+
+    payload = staged_fields.get("payload")
+    issues = extractor_payload_issues(
+        payload if isinstance(payload, Mapping) else {},
+        resolvable_fields=entry.resolvable_fields,
+        validator_owned_fields=entry.validator_owned_fields,
+        payload_fields=entry.payload_fields,
+    )
+    if issues:
+        return issues
+    return [
+        {
+            "field_path": f"payload.{field_path}",
+            "reason": "missing_required_payload_field",
+            "message": (
+                f"{entry.class_key} requires {field_path}; stage it from the paper, "
+                "nothing fills it in from another field."
+            ),
+        }
+        for field_path in missing_staged_payload_fields(staged_fields, entry=entry)
+    ]
+
+
 def _list_generic_object_classes_impl(
     include_non_stageable: bool = False,
 ) -> AgrQueryResult:
@@ -457,11 +497,13 @@ def _list_generic_object_classes_impl(
     )
 
 
+@document_rationale_arg
 def _stage_generic_object_impl(
     class_key: str,
     label: str,
     evidence_record_ids: List[str],
     classification_notes: List[str],
+    rationale: str,
     pending_ref_id: Optional[str] = None,
     source_label: Optional[str] = None,
     description: Optional[str] = None,
@@ -474,6 +516,13 @@ def _stage_generic_object_impl(
     """Stage one retained, evidence-backed generic object through the builder.
 
     Args:
+        source_label: The paper's own wording for this object. It is kept as the
+            paper wording; the label is never used in its place.
+        payload: Class-specific fields the paper supports. Write each value's paper
+            wording in the class's paper_wording_fields. Never write its
+            system_written_payload_fields: validation, the builder or the verified
+            evidence record fill those in, and a value validation cannot confirm stays
+            unresolved.
         validation_guidance: Optional short sentence forwarding relevant rules from your
             configured prompt and case-specific paper context to this finding's validators.
             Distinguish domain rules from paper facts. Do not copy whole prompts, quote
@@ -499,6 +548,7 @@ def _stage_generic_object_impl(
             label=label,
             evidence_record_ids=evidence_record_ids,
             classification_notes=classification_notes,
+            rationale=rationale,
             pending_ref_id=pending_ref_id,
             source_label=source_label,
             description=description,
@@ -513,7 +563,7 @@ def _stage_generic_object_impl(
                 "class_key": stage_input.class_key, "object_type": "generic_object",
                 "semantic_class": stage_input.semantic_class, "attributes": normalized_attributes,
                 "payload": stage_input.payload,
-            })
+            }, extractor_input=True)
         else:
             normalized_attributes, attribute_issues = normalize_generic_attributes(stage_input.attributes)
         if attribute_issues:
@@ -546,6 +596,16 @@ def _stage_generic_object_impl(
                 attempted_query=attempted_query,
             )
         staged_payload = _stage_payload_from_generic_input(stage_input, entry=entry)
+        payload_issues = (
+            [] if profile is not None else _extractor_payload_issues(staged_payload, entry=entry)
+        )
+        if payload_issues:
+            return _generic_validation_result(
+                message="stage_generic_object rejected payload values the extractor does not write.",
+                issues=payload_issues,
+                method="stage_generic_object",
+                attempted_query=attempted_query,
+            )
     except (ValidationError, KeyError, ValueError) as exc:
         issues = (
             _model_validation_issues(exc)
@@ -576,7 +636,6 @@ def _stage_generic_object_impl(
         staged_fields=staged_payload,
         pending_ref_ids=[stage_input.pending_ref_id] if stage_input.pending_ref_id else [],
         evidence_record_ids=list(stage_input.evidence_record_ids),
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -633,7 +692,12 @@ def _patch_generic_object_impl(
     candidate_id: str,
     updates: List[Mapping[str, Any]],
 ) -> AgrQueryResult:
-    """Patch allowed fields on one staged generic candidate."""
+    """Patch allowed fields on one staged generic candidate.
+
+    Args:
+        updates: Field updates, each a field_path with its value (or evidence_record_ids).
+            A `rationale` update must be non-empty; it cannot be cleared.
+    """
 
     workspace = get_active_extraction_builder_workspace()
     profile = getattr(workspace, "generic_profile", None)
@@ -699,6 +763,19 @@ def _patch_generic_object_impl(
                 )
             evidence_ids = new_ids
             continue
+        if update.field_path == "rationale":
+            try:
+                if not isinstance(update.value, str):
+                    raise ValueError("rationale must be a non-empty string; it cannot be cleared")
+                staged_payload["rationale"] = normalize_rationale(update.value)
+            except ValueError as exc:
+                return _generic_validation_result(
+                    message=f"rationale patch rejected: {exc}",
+                    issues=[{"field_path": "rationale", "reason": "invalid_rationale", "message": str(exc)}],
+                    method="patch_generic_object",
+                    attempted_query=attempted_query,
+                )
+            continue
         if profile is not None:
             if update.field_path == "attributes" or update.field_path.startswith("attributes."):
                 profile_attribute_updates.append({"field_path": update.field_path, "value": update.value})
@@ -741,7 +818,9 @@ def _patch_generic_object_impl(
         )
     if profile is not None:
         normalized_attributes = deepcopy(raw_attributes)
-        attribute_issues = profile.validate_candidate(staged_payload, candidate_id=patch_input.candidate_id)
+        attribute_issues = profile.validate_candidate(
+            staged_payload, candidate_id=patch_input.candidate_id, extractor_input=True,
+        )
     else:
         normalized_attributes, attribute_issues = normalize_generic_attributes(
             raw_attributes if isinstance(raw_attributes, Mapping) else {}
@@ -812,6 +891,16 @@ def _patch_generic_object_impl(
                 method="patch_generic_object",
                 attempted_query=attempted_query,
             )
+        payload_issues = (
+            [] if profile is not None else _extractor_payload_issues(staged_payload, entry=entry)
+        )
+        if payload_issues:
+            return _generic_validation_result(
+                message="patch_generic_object rejected payload values the extractor does not write.",
+                issues=payload_issues,
+                method="patch_generic_object",
+                attempted_query=attempted_query,
+            )
     if isinstance(staged_payload.get("pending_ref_id"), str):
         pending_ref_ids = [staged_payload["pending_ref_id"]]
 
@@ -820,7 +909,6 @@ def _patch_generic_object_impl(
         staged_fields=staged_payload,
         pending_ref_ids=pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -877,7 +965,10 @@ def _discard_generic_object_impl(
             method="discard_generic_object",
             attempted_query=attempted_query,
         )
-    summary = _builder_summary(workspace, include_discarded=True)
+    summary = {
+        **_builder_summary(workspace, include_discarded=True),
+        "discarded_candidate_id": discard_input.candidate_id,
+    }
     _emit_generic_builder_event(
         "generic_builder.discard_completed",
         action="discard",
@@ -924,8 +1015,8 @@ def _list_staged_generic_objects_impl(
         include_discarded=list_input.include_discarded,
         limit=list_input.limit,
         offset=list_input.offset,
+        decorate=_generic_candidate_decorator(workspace),
     )
-    summary = _augment_generic_candidate_summaries(workspace, summary)
     _emit_generic_builder_event(
         "generic_builder.list_completed",
         action="list",
@@ -994,8 +1085,8 @@ def _find_staged_generic_objects_impl(
         include_discarded=find_input.include_discarded,
         limit=find_input.limit,
         offset=find_input.offset,
+        decorate=_generic_candidate_decorator(workspace),
     )
-    summary = _augment_generic_candidate_summaries(workspace, summary)
     _emit_generic_builder_event(
         "generic_builder.find_completed",
         action="find",
@@ -1014,7 +1105,6 @@ def _materialize_generic_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     """Wrap generic materialization with trace events."""
 
@@ -1031,7 +1121,6 @@ def _materialize_generic_with_events(
         workspace=workspace,
         candidate_ids=candidate_id_list,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     if not materialization.ok or materialization.payload is None:
         _emit_generic_builder_event(
@@ -1090,10 +1179,8 @@ def _finalize_generic_extraction_impl(candidate_ids: List[str]) -> AgrQueryResul
         candidate_ids=candidate_ids,
         materialize=_materialize_generic_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="generic-envelope",
         require_evidence_record_ids=True,
-        require_resolver_selections=False,
     )
 
     if not outcome.ok:
@@ -1119,7 +1206,7 @@ def _finalize_generic_extraction_impl(candidate_ids: List[str]) -> AgrQueryResul
             attempted_query=attempted_query,
         )
     summary = {
-        "builder_finalization": finalization.summary(),
+        "builder_finalization": _builder_finalization_summary(finalization.summary()),
         "builder": _builder_summary(workspace, include_discarded=True),
     }
     _emit_generic_builder_event(

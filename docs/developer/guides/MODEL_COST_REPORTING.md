@@ -74,8 +74,8 @@ No prompt/output/user identity is copied into exported events.
   a multi-paper association; producers can supply explicit `related_papers`.
 - Only GENERATION observations contribute exclusive cost. Parent workflow rollups
   are alternative inclusive views, never added to child charges. Provider response
-  IDs, attempt IDs, or trace/span identities deduplicate ingestion; distinct
-  retries remain distinct. Conflicting duplicates are one ambiguous unpriced call.
+  IDs, model request IDs (ALL-1279 measurement IDs), attempt IDs, or trace/span
+  identities deduplicate ingestion; distinct retries remain distinct. Conflicting duplicates are one ambiguous unpriced call.
   Attempts without identifiers remain separate; no fuzzy token/text deduplication.
 - Provider input includes cache read/write subsets; provider output includes
   reasoning. Flat Langfuse usageDetails buckets are already disjoint. The pinned
@@ -87,6 +87,38 @@ No prompt/output/user identity is copied into exported events.
   Missing usage/prices are not free. Complete totals are null if pricing is
   incomplete or uncertain; measured cost, estimated range and priced subtotal
   remain available. Decimal strings preserve export precision before display rounding.
+
+## Usage status per call
+
+Each call reports one `usage_status`, counted per row and in totals as
+`<status>_usage_calls` and usable as a `--group-by`/`--filter` dimension. Since
+ALL-1288 the span's `cost_context.usage_status` says why usage is absent (see
+`MODEL_REQUEST_MEASUREMENT_MATRIX.md`); events also carry the span's
+`model_request_id` and the raw `usage_status_declared`.
+
+| `usage_status` | Meaning in the report |
+| --- | --- |
+| `recorded` | usage retained on the observation |
+| `inconsistent` | impossible token buckets, or the declared status contradicts the retained observation: `recorded` without usage, or `provider_omitted`/`failed`/`cancelled`/`inconsistent` with usage or cost |
+| `provider_omitted` | terminal provider response without usage |
+| `failed` | the attempt errored before usage was returned |
+| `cancelled` | the stream ended before the provider's terminal event |
+| `missing_status_unknown` | older span without a declared status and without usage; the cause was not recorded |
+
+Spans before ALL-1288 already emitted `usage_status` as `recorded`,
+`inconsistent` or `missing`. Their `recorded` and `inconsistent` values are read
+as declared statuses and checked against the retained observation like new
+ones; only `missing` or an absent status becomes `missing_status_unknown` (when
+the observation holds usage, the observed `recorded`/`inconsistent` applies).
+Historical spans that declared `recorded` but whose usage was evicted from the
+span are therefore now `inconsistent`, so historical `inconsistent_usage_calls`
+can be higher than in earlier reports. The new status columns are appended after
+the existing CSV columns. `missing_usage_calls`
+still counts observations without usage. `usage_complete` is true only when every
+call is `recorded`; token totals are sums over retained usage, never zero-filled
+for other calls. Calls without usage stay unpriced and are never estimated, so
+complete cost totals remain null. The CLI prints every status count when usage
+or pricing is incomplete.
 
 ## Supported pricing repair (release-time operation)
 
@@ -103,7 +135,7 @@ applicable pricing tiers. Never apply a default model's prices to another model.
 # active config/models.yaml entry. Output.models is the supported API export.
 python -m src.services.model_prices_cli --at 2026-09-15T00:00:00Z \
   --definitions /private/reviewed-langfuse-models.json \
-  --model gpt-6-astra --model gpt-5.6-sol --model gpt-5.6-terra \
+  --model gpt-6-astra --model gpt-6-sol \
   --model deepseek/deepseek-v4-pro-0813
 # Only after production release authorization: same command plus --apply.
 ```
@@ -121,6 +153,12 @@ DeepSeek V4 route. Leave that route unpriced unless a supported verified definit
 is supplied; provider routing usage records may separately report credits, which
 this USD generation report does not silently convert. This is a documented
 pricing dependency, not permission to upgrade the observability stack.
+
+September 24: GPT-6 Sol replaced GPT-5.6 Sol and GPT-5.6 Terra. Run the same
+read-only coverage check for `gpt-6-sol` before release; its calls stay unpriced
+until a reviewed definition matches it. OpenAI's model page lists $2 input,
+$0.20 cached input, $2.50 cache write and $10 output per million tokens, with
+2x input/cache and 1.5x output above 272K input tokens.
 
 No production pricing is changed during code preparation. At release, review and
 apply the missing Astra definition separately, then run a bounded read-only report

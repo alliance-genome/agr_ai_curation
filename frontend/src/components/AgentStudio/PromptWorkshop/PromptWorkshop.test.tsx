@@ -70,6 +70,7 @@ vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/contexts/AgentMetadataContext', () => ({
   useAgentMetadata: () => ({
     agents: metadataMocks.agents,
+    validatorOutputSchemaKeys: [],
     refresh: metadataMocks.refresh,
     isLoading: false,
     error: null,
@@ -210,7 +211,7 @@ function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
     inherited_allowed_group_ids: [],
     icon: '🔧',
     include_group_rules: true,
-    model_id: 'gpt-5.6-terra',
+    model_id: 'gpt-6-sol',
     model_temperature: 0.1,
     model_reasoning: undefined,
     tool_ids: [],
@@ -296,8 +297,8 @@ async function assertGroupOptions(expected: string[], absent: string[] = []): Pr
 describe('PromptWorkshop', () => {
   const modelOptions: ModelOption[] = [
     {
-      model_id: 'gpt-5.6-terra',
-      name: 'GPT-5.6 Terra',
+      model_id: 'gpt-6-sol',
+      name: 'GPT-6 Sol',
       provider: 'openai',
       description: 'fast reasoning model',
       guidance: 'Use for validation, lookups, utilities, and iterative drafting.',
@@ -311,8 +312,8 @@ describe('PromptWorkshop', () => {
       avoid_for: ['Deep multi-step adjudication'],
     },
     {
-      model_id: 'gpt-5.6-sol',
-      name: 'GPT-5.6 Sol',
+      model_id: 'gpt-6-astra',
+      name: 'GPT-6 Astra',
       provider: 'openai',
       description: 'deep reasoning model',
       guidance: 'Use for complex PDF extraction and difficult reasoning.',
@@ -336,7 +337,7 @@ describe('PromptWorkshop', () => {
       curator_visible: true,
       allow_attach: true,
       allow_execute: true,
-      config: { requires_document: true },
+      config: { requires_document: true, identity_lookup: false },
     },
     {
       tool_key: 'admin_only_tool',
@@ -346,7 +347,7 @@ describe('PromptWorkshop', () => {
       curator_visible: true,
       allow_attach: false,
       allow_execute: false,
-      config: { requires_document: false },
+      config: { requires_document: false, identity_lookup: false },
     },
     {
       tool_key: 'chebi_lookup',
@@ -356,7 +357,7 @@ describe('PromptWorkshop', () => {
       curator_visible: true,
       allow_attach: true,
       allow_execute: true,
-      config: { requires_document: false },
+      config: { requires_document: false, identity_lookup: false },
     },
   ]
 
@@ -367,7 +368,7 @@ describe('PromptWorkshop', () => {
       description: 'Gene validation',
       icon: '🧬',
       category: 'Validation',
-      model_id: 'gpt-5.6-terra',
+      model_id: 'gpt-6-sol',
       tool_ids: ['search_document'],
       allowed_group_ids: [],
       output_schema_key: undefined,
@@ -382,7 +383,7 @@ describe('PromptWorkshop', () => {
       description: 'Disease validation',
       icon: '🦠',
       category: 'Validation',
-      model_id: 'gpt-5.6-terra',
+      model_id: 'gpt-6-sol',
       tool_ids: ['search_document'],
       allowed_group_ids: [],
       output_schema_key: undefined,
@@ -754,7 +755,7 @@ describe('PromptWorkshop', () => {
     await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1))
     const payload = serviceMocks.createCustomAgent.mock.calls[0][0]
     expect(payload.template_source).toBe('gene')
-    expect(payload.model_id).toBe('gpt-5.6-terra')
+    expect(payload.model_id).toBe('gpt-6-sol')
     expect(payload.allowed_group_ids).toEqual([])
     expect(payload.tool_ids).toEqual(['search_document'])
     expect(payload.icon).toBe('🔧')
@@ -972,19 +973,19 @@ describe('PromptWorkshop', () => {
   it('saves selected reasoning for reasoning-capable models', async () => {
     serviceMocks.listCustomAgents
       .mockResolvedValueOnce({ custom_agents: [], total: 0 })
-      .mockResolvedValue({ custom_agents: [buildCustomAgent({ model_id: 'gpt-5.6-sol', model_reasoning: 'high' })], total: 1 })
+      .mockResolvedValue({ custom_agents: [buildCustomAgent({ model_id: 'gpt-6-astra', model_reasoning: 'high' })], total: 1 })
 
     render(<PromptWorkshop catalog={buildCatalog()} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
 
-    await selectOption('Model', 'GPT-5.6 Sol')
+    await selectOption('Model', 'GPT-6 Astra')
     await selectOption('Reasoning', 'High')
-    expect(screen.getByText(/High reasoning selected\. The default for GPT-5.6 Sol is Medium\. Slow\./)).toBeInTheDocument()
+    expect(screen.getByText(/High reasoning selected\. The default for GPT-6 Astra is Medium\. Slow\./)).toBeInTheDocument()
     await saveFromHeader()
 
     await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1))
-    expect(serviceMocks.createCustomAgent.mock.calls[0][0].model_id).toBe('gpt-5.6-sol')
+    expect(serviceMocks.createCustomAgent.mock.calls[0][0].model_id).toBe('gpt-6-astra')
     expect(serviceMocks.createCustomAgent.mock.calls[0][0].model_reasoning).toBe('high')
   }, 15000)
 
@@ -1483,8 +1484,8 @@ describe('PromptWorkshop', () => {
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     const request = onVerifyRequest.mock.calls[0][0]
     expect(request).toContain('Help me choose the best model settings')
-    expect(request).toContain('gpt-5.6-sol')
-    expect(request).toContain('gpt-5.6-terra')
+    expect(request).toContain('gpt-6-astra')
+    expect(request).toContain('gpt-6-sol')
     expect(request).not.toContain('gpt-5.5')
   }, 15000)
 
@@ -1635,7 +1636,7 @@ describe('PromptWorkshop', () => {
     // The compiler fills the configured default when select_model omits reasoning.
     const candidate = {
       ...base, draft_name: 'Reviewed reader', draft_description: 'Reviewed description',
-      prompt_draft: 'Read evidence.', draft_model_id: 'gpt-5.6-sol', draft_model_reasoning: 'medium',
+      prompt_draft: 'Read evidence.', draft_model_id: 'gpt-6-astra', draft_model_reasoning: 'medium',
     }
     const result = await act(async () => handle.current!.applyAuthoringProposal({
       contract_version: 'workshop_authoring_proposal.v1',

@@ -11,8 +11,13 @@ envelope:
   extracted_objects:
     - object_type: Reference
       payload:
-        title: Brood size phenotype evidence fixture paper
         filename: test_tool_verified_phenotype_paper.pdf
+        reference_id: null
+        title: null
+        mention: Brood size phenotype evidence fixture paper
+        resolution_state: unresolved
+        lookup_outcome: not_validated
+        validator_explanation: Not validated yet.
       pending_ref_id: paper-reference-1
       schema_ref:
         schema_id: alliance.linkml.Reference
@@ -28,8 +33,7 @@ envelope:
         validator_binding_id: phenotype_reference_validator
     - object_type: PhenotypeSubject
       payload:
-        resolution_state: blocked_missing_subject
-        resolution_note: Tool-verified phenotype extraction did not provide a durable phenotype_annotation_subject identifier and subtype.
+        resolution_note: Tool-verified phenotype extraction did not name the phenotype_annotation_subject; the subject is absent.
       pending_ref_id: phenotype-subject-1
       schema_ref:
         schema_id: alliance.linkml.BiologicalEntity
@@ -50,15 +54,17 @@ envelope:
         validator_binding_id: phenotype_subject_entity_validator
     - object_type: PhenotypeTerm
       payload:
-        resolution_state: pending_ontology_resolution
-        curie: WBPhenotype:0000886
-        label: reduced brood size
         source_mentions:
           - reduced brood size
         ontology_lookup_hint:
           evidence_record_id: verified_exact
-        export_state: blocked_pending_ontology_resolution
-        write_blocked_reason: phenotype term CURIE unresolved
+        proposed_curie: WBPhenotype:0000886
+        curie: null
+        label: null
+        mention: reduced brood size
+        resolution_state: unresolved
+        lookup_outcome: not_validated
+        validator_explanation: Not validated yet.
       pending_ref_id: phenotype-term-1
       schema_ref:
         schema_id: alliance.linkml.PhenotypeTerm
@@ -73,7 +79,6 @@ envelope:
       metadata:
         object_role: validated_reference
         validation_state: pending_ontology_resolution
-        validator_binding_id: phenotype_term_ontology_validator
         export_state: blocked_pending_ontology_resolution
         write_blocked_reason: phenotype term CURIE unresolved
     - object_type: EvidenceQuote
@@ -109,22 +114,18 @@ envelope:
       payload:
         annotation_kind: phenotype_assertion
         phenotype_annotation_object: reduced brood size
-        phenotype_annotation_subject:
-          resolution_state: blocked_missing_subject
-          resolution_note: Tool-verified phenotype extraction did not provide a durable phenotype_annotation_subject identifier and subtype.
         phenotype_terms:
-          - resolution_state: pending_ontology_resolution
-            curie: WBPhenotype:0000886
-            label: reduced brood size
-            source_mentions:
+          - source_mentions:
               - reduced brood size
             ontology_lookup_hint:
               evidence_record_id: verified_exact
-            export_state: blocked_pending_ontology_resolution
-            write_blocked_reason: phenotype term CURIE unresolved
-        single_reference:
-          title: Brood size phenotype evidence fixture paper
-          filename: test_tool_verified_phenotype_paper.pdf
+            proposed_curie: WBPhenotype:0000886
+            curie: null
+            label: null
+            mention: reduced brood size
+            resolution_state: unresolved
+            lookup_outcome: not_validated
+            validator_explanation: Not validated yet.
         evidence_quote:
           evidence_record_id: verified_exact
         evidence_record_ids:
@@ -133,6 +134,14 @@ envelope:
         source_mentions:
           - reduced brood size
         negated: false
+        single_reference:
+          filename: test_tool_verified_phenotype_paper.pdf
+          reference_id: null
+          title: null
+          mention: Brood size phenotype evidence fixture paper
+          resolution_state: unresolved
+          lookup_outcome: not_validated
+          validator_explanation: Not validated yet.
       pending_ref_id: phenotype-annotation-1
       schema_ref:
         schema_id: alliance.linkml.PhenotypeAnnotation
@@ -158,6 +167,9 @@ envelope:
           object_type: EvidenceQuote
         - pending_ref_id: evidence-quote-1-2
           object_type: EvidenceQuote
+      evidence_record_ids:
+        - verified_exact
+        - verified_supporting
       metadata:
         object_role: curatable_unit
         validation_state: blocked_missing_subject
@@ -196,6 +208,17 @@ envelope:
           - public.agmphenotypeannotation
           - public.phenotypeannotation_ontologyterm
     - severity: blocker
+      message: Phenotype term is pending ontology resolution; export and write remain blocked until the validator resolves a CURIE.
+      code: alliance.phenotype.ontology_resolution_required
+      object_ref:
+        pending_ref_id: phenotype-term-1
+        object_type: PhenotypeTerm
+      details:
+        validator_binding_id: phenotype_term_ontology_validator
+        validation_state: pending_ontology_resolution
+        export_state: blocked_pending_ontology_resolution
+        write_blocked_reason: phenotype term CURIE unresolved
+    - severity: blocker
       message: Phenotype assertion requires a resolved Gene, Allele, or AGM subject before export.
       code: alliance.phenotype.subject_resolution_required
       object_ref:
@@ -214,7 +237,7 @@ envelope:
         skipped_without_evidence: 1
   history:
     - event_type: created
-      timestamp: "2026-05-09T00:00:00Z"
+      timestamp: '2026-05-09T00:00:00Z'
       message: Converted tool-verified phenotype fixture to a pending domain envelope.
       details:
         retained_phenotype_count: 1

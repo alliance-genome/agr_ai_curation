@@ -16,6 +16,12 @@ function field(fieldPath: string, groupKey: string | null): CurationDraftField {
 }
 
 describe('horizontal grid review policy', () => {
+  it.each([null, {}, metadata({ mode: 'all' }), metadata({ mode: 'fields', decision_fields: ['rationale'] })])(
+    'keeps rationale in row context regardless of package policy: %j',
+    (rowMetadata) => {
+      expect(isHorizontalGridDecisionField(rowMetadata, field('rationale', null))).toBe(false)
+    },
+  )
   it('selects custom decision groups without package or object identifiers', () => {
     const grouped = metadata({ mode: 'groups', decision_groups: ['identity', 'decision'] })
     expect(isHorizontalGridDecisionField(grouped, field('record.label', 'identity'))).toBe(true)

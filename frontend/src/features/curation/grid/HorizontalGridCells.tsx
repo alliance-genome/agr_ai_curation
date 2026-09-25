@@ -14,7 +14,14 @@ import type {
   HorizontalGridContextCell,
   HorizontalGridFieldCell,
 } from './horizontalGridModel'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import {
+  formatHorizontalGridValue,
+  HORIZONTAL_GRID_UNRESOLVED_TEXT,
+  horizontalGridLookupResult,
+  horizontalGridPaperWording,
+  horizontalGridValidationDetails,
+  horizontalGridValidatorWords,
+} from './horizontalGridFormatting'
 
 export function contextEvidenceFieldPath(
   projection: DomainEnvelopeEvidenceAnchorProjection,
@@ -28,6 +35,149 @@ export function contextEvidenceLabel(
 ): string {
   const fieldPath = contextEvidenceFieldPath(projection)
   return fieldPath ? `Field evidence (${fieldPath})` : 'Object evidence'
+}
+
+export function HorizontalGridRationaleLine({
+  rationale,
+}: {
+  rationale: HorizontalGridContextCell['value']['rationale']
+}) {
+  if (!rationale) {
+    return null
+  }
+
+  return (
+    <Typography
+      color={rationale.value === null ? 'text.disabled' : 'text.secondary'}
+      data-slot="row-rationale"
+      title={rationale.value ?? undefined}
+      sx={{
+        display: '-webkit-box',
+        fontSize: 11,
+        lineHeight: 1.25,
+        overflow: 'hidden',
+        overflowWrap: 'anywhere',
+        WebkitBoxOrient: 'vertical',
+        WebkitLineClamp: 2,
+      }}
+    >
+      <Box component="span" sx={{ fontWeight: 700 }}>Rationale: </Box>
+      {rationale.value ?? (
+        <Box component="span" sx={{ fontStyle: 'italic' }}>Not recorded</Box>
+      )}
+    </Typography>
+  )
+}
+
+const RESOLUTION_LINE_SX = {
+  display: '-webkit-box',
+  fontSize: 11,
+  lineHeight: 1.25,
+  overflow: 'hidden',
+  overflowWrap: 'anywhere',
+  WebkitBoxOrient: 'vertical',
+  WebkitLineClamp: 1,
+} as const
+
+// Read by screen readers, not shown; the clamped lines keep their full text in
+// the DOM, and the Details popover shows everything in full for keyboard users.
+const VISUALLY_HIDDEN_SX = {
+  border: 0,
+  clip: 'rect(0 0 0 0)',
+  height: '1px',
+  margin: '-1px',
+  overflow: 'hidden',
+  padding: 0,
+  position: 'absolute',
+  whiteSpace: 'nowrap',
+  width: '1px',
+} as const
+
+/** A visible mark on every cell whose value a curator resolved (a validation override). */
+export function HorizontalGridOverrideBadge({ cell }: { cell: HorizontalGridFieldCell }) {
+  if (!cell.curatorOverride) {
+    return null
+  }
+
+  return (
+    <Box
+      component="span"
+      data-slot="field-override-badge"
+      sx={(theme) => ({
+        alignSelf: 'flex-start',
+        border: `1px solid ${theme.palette.info.main}`,
+        borderRadius: '4px',
+        color: theme.palette.mode === 'light' ? theme.palette.info.dark : theme.palette.info.light,
+        fontSize: 10,
+        fontWeight: 700,
+        lineHeight: 1.3,
+        px: '4px',
+      })}
+    >
+      Curator override
+    </Box>
+  )
+}
+
+/**
+ * The paper wording and the lookup result under a validated value (ALL-1283).
+ * Each value's lines appear once per row, on the first cell that shows it.
+ * Who made a curator override, the validator's explanation and message
+ * follow the lookup result for screen readers and in the line's title. An
+ * open validator disagreement with a curator override is shown in full.
+ */
+export function HorizontalGridResolutionLines({ cell }: { cell: HorizontalGridFieldCell }) {
+  const values = cell.resolutionDetails
+  if (values.length === 0) {
+    return null
+  }
+
+  const paperWording = horizontalGridPaperWording(values)
+  const disagreements = values.flatMap((value) => value.override_disagreements)
+  // Disagreements are shown in full below, so they are not repeated here.
+  const validatorWords = horizontalGridValidatorWords(
+    values.map((value) => ({ ...value, override_disagreements: [] })),
+  )
+
+  return (
+    <Box data-slot="field-resolution" id={cell.resolutionLinesId ?? undefined} sx={{ minWidth: 0 }}>
+      {paperWording ? (
+        <Typography
+          color="text.secondary"
+          data-slot="field-paper-wording"
+          title={paperWording}
+          sx={RESOLUTION_LINE_SX}
+        >
+          <Box component="span" sx={{ fontWeight: 700 }}>Paper wording: </Box>
+          {paperWording}
+        </Typography>
+      ) : null}
+      <Typography
+        color="text.secondary"
+        data-slot="field-lookup-result"
+        title={horizontalGridValidationDetails(values).map((lines) => lines.join('\n')).join('\n\n')}
+        sx={RESOLUTION_LINE_SX}
+      >
+        <Box component="span" sx={{ fontWeight: 700 }}>Lookup result: </Box>
+        {horizontalGridLookupResult(values)}
+        {validatorWords.length > 0 ? (
+          <Box component="span" data-slot="field-validator-words" sx={VISUALLY_HIDDEN_SX}>
+            {`. ${validatorWords.join('. ')}`}
+          </Box>
+        ) : null}
+      </Typography>
+      {disagreements.map((message, index) => (
+        <Typography
+          color="warning.dark"
+          data-slot="field-override-disagreement"
+          key={index}
+          sx={{ fontSize: 11, fontWeight: 700, lineHeight: 1.25, overflowWrap: 'anywhere' }}
+        >
+          {message}
+        </Typography>
+      ))}
+    </Box>
+  )
 }
 
 export function HorizontalGridContextCellContent({
@@ -83,6 +233,7 @@ export function HorizontalGridContextCellContent({
               {cell.value.secondaryLabel}
             </Typography>
           ) : null}
+          <HorizontalGridRationaleLine rationale={cell.value.rationale} />
         </Stack>
       </ButtonBase>
       {cell.evidence.length > 0 ? (
@@ -176,14 +327,20 @@ export function HorizontalGridFieldCellContent({
     );
   }
 
-  const value = formatHorizontalGridValue(cell.value)
+  const value = cell.displayText
   const validationMessages = cell.validation.summaries.flatMap((summary) => summary.messages)
+  const extractorValue = cell.extractorComparison
+    ? formatHorizontalGridValue(cell.extractorComparison.value)
+    : null
   const comparisonMessage = cell.extractorComparison?.outcome === 'different'
-    ? `Extractor proposed ${formatHorizontalGridValue(cell.extractorComparison.value)}; validator resolved ${value}. Curator review is needed.`
+    ? `Extractor proposed ${extractorValue}; validator resolved ${value}. Curator review is needed.`
     : cell.extractorComparison?.outcome === 'unresolved'
-      ? `Extractor found ${value}, but the validator did not resolve a canonical value.`
+      ? `Extractor proposed ${extractorValue}, but the validator did not resolve a canonical value.`
       : null
-  const stateMessages = comparisonMessage ? [comparisonMessage] : validationMessages
+  // An open disagreement with a curator override is what needs review.
+  const stateMessages = cell.overrideDisagreements.length > 0
+    ? cell.overrideDisagreements
+    : comparisonMessage ? [comparisonMessage] : validationMessages
   const stateLabel = state === 'resolved'
     ? 'Curator validated'
     : state === 'needs-review'
@@ -198,7 +355,11 @@ export function HorizontalGridFieldCellContent({
         width: "100%"
       }}>
       <ButtonBase
-        aria-label={`Select ${field.label} for ${cell.fieldPath}. ${stateLabel}.`}
+        aria-describedby={cell.resolutionDescribedBy.length > 0
+          ? cell.resolutionDescribedBy.join(' ')
+          : undefined}
+        aria-label={`Select ${field.label} for ${cell.fieldPath}: ${value ?? 'Empty value'}`
+          + `${cell.curatorOverride ? ', curator override' : ''}. ${stateLabel}.`}
         aria-pressed={active}
         data-field-key={field.field_key}
         data-testid={`horizontal-grid-field-${field.field_key}`}
@@ -221,6 +382,7 @@ export function HorizontalGridFieldCellContent({
           }}>
           <Typography
             aria-label={value === null ? 'Empty value' : undefined}
+            color={value === HORIZONTAL_GRID_UNRESOLVED_TEXT ? 'error.main' : undefined}
             data-slot="field-value"
             title={value ?? undefined}
             sx={{
@@ -236,10 +398,11 @@ export function HorizontalGridFieldCellContent({
             }}
           >
             {value ?? '—'}
-            {cell.valueSource === 'extractor' ? ' · Extractor value' : ''}
           </Typography>
         </Stack>
       </ButtonBase>
+      <HorizontalGridOverrideBadge cell={cell} />
+      <HorizontalGridResolutionLines cell={cell} />
       {state === 'needs-review' || state === 'ai-unconfirmed' ? (
         <Tooltip
           arrow

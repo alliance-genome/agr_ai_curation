@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from src.services.cost_report_cli import fetch_window
+from src.services.cost_report_cli import fetch_window, main
 
 
 def page(rows, cursor=None):
@@ -34,3 +34,26 @@ def test_partial_discovery_never_claims_complete():
     assert source["requests"] == 1
     assert traces[0]["observations"][0]["id"] == "a"
     extractor._get_observations_bounded.assert_not_called()
+
+
+def test_offline_report_warns_with_each_usage_status(tmp_path, capsys):
+    def turn(key, status, usage=None):
+        row = {"id": key, "traceId": "trace", "type": "GENERATION", "startTime": "2026-09-07T01:00:00Z",
+               "model": "fixture-model", "metadata": {"cost_context": {"usage_status": status}}}
+        if usage:
+            row.update(usage=usage, costDetails={"total": 0.5})
+        return row
+    source = tmp_path / "retained.json"
+    source.write_text(json.dumps({"source_complete": True, "traces": [{"observations": [
+        turn("rec", "recorded", {"input": 10, "output": 2}),
+        turn("cancel", "cancelled"),
+        {**turn("legacy", None), "metadata": {}},
+    ]}]}))
+    assert main(["--input", str(source), "--start", "2026-09-07T00:00:00Z",
+                 "--end", "2026-09-08T00:00:00Z"]) == 0
+    captured = capsys.readouterr()
+    assert ("Coverage incomplete: 2 unpriced calls; usage status: 1 recorded, 0 inconsistent, "
+            "0 provider_omitted, 0 failed, 1 cancelled, 1 missing_status_unknown.") in captured.err
+    totals = json.loads(captured.out)["totals"]
+    assert totals["usage_complete"] is False
+    assert totals["total_cost"] is None

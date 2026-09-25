@@ -92,7 +92,7 @@ structured_finalization:
       - data_provider_candidates[].species
 
 model_config:
-  model: "${AGENT_DATA_PROVIDER_MODEL:-gpt-5.6-terra}"
+  model: "${AGENT_DATA_PROVIDER_MODEL:-gpt-6-sol}"
   temperature: 0.1
   reasoning: "medium"
 

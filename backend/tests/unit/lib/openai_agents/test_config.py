@@ -12,6 +12,7 @@ from openai import InternalServerError
 
 from src.lib.openai_agents.config import (
     AgentConfig,
+    PromptCacheIdentity,
     build_default_model_retry,
     build_model_settings,
     get_agent_config,
@@ -57,10 +58,7 @@ from src.lib.openai_agents.config import (
     get_flow_definition_max_nodes,
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
-    get_inspect_results_json_depth_limit,
-    get_inspect_results_json_object_item_limit,
     get_inspect_results_list_page_size,
-    get_inspect_results_validation_detail_list_limit,
     get_inspect_results_validation_page_size,
     get_openai_responses_websocket_ping_timeout_seconds,
     get_openai_compatible_http_max_retries,
@@ -86,6 +84,8 @@ from src.lib.openai_agents.config import (
     supports_reasoning,
     supports_temperature,
 )
+
+_PROMPT_CACHE = PromptCacheIdentity(agent_key="test_agent", static_prompt="Static test prompt.")
 
 
 def test_sentry_log_event_level_is_bounded_and_environment_configurable(
@@ -710,7 +710,7 @@ def test_build_model_settings_uses_provider_parallel_tool_policy(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="gemini", supports_parallel_tool_calls=False)
+            SimpleNamespace(provider_id="gemini", driver="openai_compatible", supports_parallel_tool_calls=False)
             if provider_id == "gemini"
             else None
         ),
@@ -718,6 +718,7 @@ def test_build_model_settings_uses_provider_parallel_tool_policy(monkeypatch):
 
     settings = build_model_settings(
         model="gemini-3-pro-preview",
+        prompt_cache=_PROMPT_CACHE,
         parallel_tool_calls=True,
     )
     assert settings is not None
@@ -766,7 +767,7 @@ def test_build_model_settings_drops_invalid_reasoning_without_crashing(monkeypat
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="openai", supports_parallel_tool_calls=True)
+            SimpleNamespace(provider_id="openai", driver="openai_native", supports_parallel_tool_calls=True)
             if provider_id == "openai"
             else None
         ),
@@ -774,6 +775,7 @@ def test_build_model_settings_drops_invalid_reasoning_without_crashing(monkeypat
 
     settings = build_model_settings(
         model="gpt-5.4-mini",
+        prompt_cache=_PROMPT_CACHE,
         reasoning_effort="disabled",  # type: ignore[arg-type]  # deliberately invalid
     )
     assert settings is not None
@@ -792,7 +794,7 @@ def test_build_model_settings_applies_groq_safety_defaults(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="groq", supports_parallel_tool_calls=True)
+            SimpleNamespace(provider_id="groq", driver="openai_compatible", supports_parallel_tool_calls=True)
             if provider_id == "groq"
             else None
         ),
@@ -802,6 +804,7 @@ def test_build_model_settings_applies_groq_safety_defaults(monkeypatch):
 
     settings = build_model_settings(
         model="stub-groq-model",
+        prompt_cache=_PROMPT_CACHE,
         temperature=0.9,
         parallel_tool_calls=True,
     )
@@ -822,7 +825,7 @@ def test_build_model_settings_allows_groq_parallel_when_enabled(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="groq", supports_parallel_tool_calls=True)
+            SimpleNamespace(provider_id="groq", driver="openai_compatible", supports_parallel_tool_calls=True)
             if provider_id == "groq"
             else None
         ),
@@ -831,6 +834,7 @@ def test_build_model_settings_allows_groq_parallel_when_enabled(monkeypatch):
 
     settings = build_model_settings(
         model="stub-groq-model",
+        prompt_cache=_PROMPT_CACHE,
         temperature=0.2,
         parallel_tool_calls=True,
     )
@@ -851,7 +855,7 @@ def test_build_model_settings_keeps_openai_behavior_unchanged(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="openai", supports_parallel_tool_calls=True)
+            SimpleNamespace(provider_id="openai", driver="openai_native", supports_parallel_tool_calls=True)
             if provider_id == "openai"
             else None
         ),
@@ -861,6 +865,7 @@ def test_build_model_settings_keeps_openai_behavior_unchanged(monkeypatch):
 
     settings = build_model_settings(
         model="gpt-4o",
+        prompt_cache=_PROMPT_CACHE,
         temperature=0.8,
         parallel_tool_calls=True,
     )
@@ -881,7 +886,7 @@ def _patch_openai_model(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
         lambda provider_id: (
-            SimpleNamespace(provider_id="openai", supports_parallel_tool_calls=True)
+            SimpleNamespace(provider_id="openai", driver="openai_native", supports_parallel_tool_calls=True)
             if provider_id == "openai"
             else None
         ),
@@ -892,7 +897,7 @@ def test_build_model_settings_enables_model_retry_by_default(monkeypatch):
     monkeypatch.delenv("OPENAI_MODEL_MAX_RETRIES", raising=False)
     _patch_openai_model(monkeypatch)
 
-    settings = build_model_settings(model="gpt-5.5")
+    settings = build_model_settings(model="gpt-5.5", prompt_cache=_PROMPT_CACHE)
 
     assert settings.retry is not None
     assert settings.retry.max_retries == 3
@@ -905,7 +910,7 @@ def test_build_model_settings_retry_disabled_when_max_retries_zero(monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "0")
     _patch_openai_model(monkeypatch)
 
-    settings = build_model_settings(model="gpt-5.5")
+    settings = build_model_settings(model="gpt-5.5", prompt_cache=_PROMPT_CACHE)
 
     assert settings.retry is None
 
@@ -925,6 +930,7 @@ def test_build_model_settings_disables_runner_retry_for_openrouter(monkeypatch):
         lambda provider_id: (
             SimpleNamespace(
                 provider_id="openrouter",
+                driver="openai_compatible",
                 supports_parallel_tool_calls=True,
                 telemetry_adapter="openrouter",
             )
@@ -933,7 +939,7 @@ def test_build_model_settings_disables_runner_retry_for_openrouter(monkeypatch):
         ),
     )
 
-    settings = build_model_settings(model="deepseek/deepseek-v4-pro-0813")
+    settings = build_model_settings(model="deepseek/deepseek-v4-pro-0813", prompt_cache=_PROMPT_CACHE)
 
     assert settings.retry is None
 
@@ -1271,29 +1277,17 @@ def test_pdf_upload_max_page_count_defends_positive_invariant(
 def test_inspect_results_display_limits_are_env_configured(monkeypatch):
     monkeypatch.setenv("INSPECT_RESULTS_LIST_PAGE_SIZE", "7")
     monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_PAGE_SIZE", "9")
-    monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_DETAIL_LIST_LIMIT", "11")
-    monkeypatch.setenv("INSPECT_RESULTS_JSON_DEPTH_LIMIT", "13")
-    monkeypatch.setenv("INSPECT_RESULTS_JSON_OBJECT_ITEM_LIMIT", "15")
 
     assert get_inspect_results_list_page_size() == 7
     assert get_inspect_results_validation_page_size() == 9
-    assert get_inspect_results_validation_detail_list_limit() == 11
-    assert get_inspect_results_json_depth_limit() == 13
-    assert get_inspect_results_json_object_item_limit() == 15
 
 
 def test_inspect_results_display_limits_clamp_to_positive(monkeypatch):
     monkeypatch.setenv("INSPECT_RESULTS_LIST_PAGE_SIZE", "0")
     monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_PAGE_SIZE", "-3")
-    monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_DETAIL_LIST_LIMIT", "0")
-    monkeypatch.setenv("INSPECT_RESULTS_JSON_DEPTH_LIMIT", "-1")
-    monkeypatch.setenv("INSPECT_RESULTS_JSON_OBJECT_ITEM_LIMIT", "0")
 
     assert get_inspect_results_list_page_size() == 1
     assert get_inspect_results_validation_page_size() == 1
-    assert get_inspect_results_validation_detail_list_limit() == 1
-    assert get_inspect_results_json_depth_limit() == 1
-    assert get_inspect_results_json_object_item_limit() == 1
 
 
 def test_domain_runtime_inspection_page_limits_are_env_configured(monkeypatch):
@@ -1675,3 +1669,17 @@ def test_provider_import_deadline_default_and_override(monkeypatch):
     assert get_document_source_import_timeout_seconds() == 600.0
     monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "900")
     assert get_document_source_import_timeout_seconds() == 900.0
+
+
+def test_inspect_results_object_pages_are_env_configured(monkeypatch):
+    from src.lib.openai_agents.config import (
+        get_inspect_results_object_max_page_size,
+        get_inspect_results_object_page_size,
+    )
+
+    assert get_inspect_results_object_page_size() == 20
+    assert get_inspect_results_object_max_page_size() == 100
+    monkeypatch.setenv("INSPECT_RESULTS_OBJECT_PAGE_SIZE", "7")
+    monkeypatch.setenv("INSPECT_RESULTS_OBJECT_MAX_PAGE_SIZE", "0")
+    assert get_inspect_results_object_page_size() == 7
+    assert get_inspect_results_object_max_page_size() == 1

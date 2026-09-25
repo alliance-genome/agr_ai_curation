@@ -646,10 +646,12 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
                     errors,
                 )
             if event.field_ref is not None:
-                self._validate_field_ref(
-                    event.field_ref,
+                # History records a past state: the object must exist, but the field
+                # may since have gone (e.g. a list element a curator removed).
+                self._validate_object_ref(
+                    event.field_ref.object_ref,
                     objects_by_key,
-                    f"history[{index}].field_ref",
+                    f"history[{index}].field_ref.object_ref",
                     errors,
                 )
 

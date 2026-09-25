@@ -9,6 +9,7 @@ from src.lib.curation_workspace.execution_contracts import resolve_receipt_profi
 from src.lib.executable_flow_graph import project_executable_flow_graph
 from src.lib.flows.output_projection import (
     FlowOutputProjectionPlan, projection_plan_field_refs, projection_plan_predicates,
+    split_list_errors,
 )
 from src.lib.flows.profile_projection import profile_projection_fields
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
@@ -100,6 +101,13 @@ def profile_projection_findings(
                     fix_hint="Inspect the formatter_projection_plan output contract schema and correct this field before saving.",
                 ))
             continue
+        # The Workshop proposal/save path must reject the same static split
+        # errors as export, even without any extracted rows. Actual list sizes
+        # and expanded-header collisions are still checked at render time.
+        for column in plan.columns:
+            if column.split_list is not None:
+                for message in split_list_errors(plan, column):
+                    finding(output.id, "invalid_profile_projection", message)
         if plan.selection_mode == "selected_fields":
             from src.lib.flows.formatter_capability import resolved_formatter_format
             expected_format = resolved_formatter_format(output.data.agent_id, entries.get(output.id))

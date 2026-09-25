@@ -53,19 +53,34 @@ from agr_ai_curation_runtime.extraction_builder import (
 )
 from agr_ai_curation_runtime.evidence_workspace import get_active_evidence_records_snapshot
 from agr_ai_curation_runtime.extraction_trace_events import write_extraction_trace_event
-from agr_ai_curation_runtime.resolver_call_ledger import (
-    ResolverCallLedgerEntry,
-    get_active_resolver_call_ledger,
-)
 from agr_ai_curation_alliance.domain_packs.gene_expression import (
     GENE_EXPRESSION_MATERIALIZER_ID,
     materialize_gene_expression_builder_state,
 )
+from agr_ai_curation_alliance.domain_packs.gene_expression.resolvable import (
+    staged_value as staged_gene_expression_value,
+)
+from agr_ai_curation_runtime.tool_result_bounds import (
+    ToolResultBudgetError,
+    budget_failure,
+    clamp_page_limit,
+    env_positive_int,
+    fit_page,
+    invalid_cursor,
+    parse_offset,
+    serialized_size,
+    tool_result_max_bytes,
+)
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import document_rationale_arg, normalize_rationale
 from .search_helpers import (
     enrich_with_match_context,
 )
 from agr_ai_curation_alliance.domain_packs.paths import get_alliance_domain_packs_dir
+from agr_ai_curation_alliance.domain_packs._resolvable_payloads import (
+    CONDITION_TERM_COMPONENTS,
+    CONDITION_TEXT_FIELDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,10 +112,8 @@ GENE_EXPRESSION_OBJECT_TYPE = "GeneExpressionAnnotation"
 GeneExpressionControlledFieldPath = Literal[
     "relation.name",
     "expression_experiment.expression_assay_used",
-    "when_expressed_stage_name",
     "expression_pattern.when_expressed.developmental_stage_start",
     "expression_pattern.when_expressed.stage_uberon_slim_terms",
-    "expression_pattern.where_expressed",
     "expression_pattern.where_expressed.anatomical_structure",
     "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
     "expression_pattern.where_expressed.cellular_component",
@@ -111,22 +124,14 @@ GeneExpressionPatchFieldPath = Literal[
     "pending_ref_id",
     "evidence_record_ids",
     "where_expressed_statement",
-    "subject.source_phrase",
-    "subject.gene_symbol",
-    "subject.primary_external_id",
-    "reference.source_phrase",
-    "reference.reference_id",
-    "reference.curie",
-    "reference.pmid",
-    "reference.doi",
-    "reference.title",
-    "data_provider.abbreviation",
+    "rationale",
+    "subject",
+    "reference",
+    "data_provider",
     "relation.name",
     "expression_experiment.expression_assay_used",
-    "when_expressed_stage_name",
     "expression_pattern.when_expressed.developmental_stage_start",
     "expression_pattern.when_expressed.stage_uberon_slim_terms",
-    "expression_pattern.where_expressed",
     "expression_pattern.where_expressed.anatomical_structure",
     "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
     "expression_pattern.where_expressed.cellular_component",
@@ -134,6 +139,62 @@ GeneExpressionPatchFieldPath = Literal[
 ]
 
 _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS = set(GeneExpressionControlledFieldPath.__args__)
+# Where each controlled field's value is stored, and whether the field holds a list.
+_GENE_EXPRESSION_CONTROLLED_TARGETS: Dict[str, Tuple[str, bool]] = {
+    "relation.name": ("relation", False),
+    "expression_experiment.expression_assay_used": (
+        "expression_experiment.expression_assay_used",
+        False,
+    ),
+    "expression_pattern.when_expressed.developmental_stage_start": (
+        "expression_pattern.when_expressed.developmental_stage_start",
+        False,
+    ),
+    "expression_pattern.when_expressed.stage_uberon_slim_terms": (
+        "expression_pattern.when_expressed.stage_uberon_slim_terms",
+        True,
+    ),
+    "expression_pattern.where_expressed.anatomical_structure": (
+        "expression_pattern.where_expressed.anatomical_structure",
+        False,
+    ),
+    "expression_pattern.where_expressed.anatomical_structure_uberon_terms": (
+        "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        True,
+    ),
+    "expression_pattern.where_expressed.cellular_component": (
+        "expression_pattern.where_expressed.cellular_component",
+        False,
+    ),
+    "expression_pattern.where_expressed.cellular_component_qualifiers": (
+        "expression_pattern.where_expressed.cellular_component_qualifiers",
+        True,
+    ),
+}
+# Controlled fields that name an ontology term; only these may carry a CURIE the paper states.
+# The others (relation, stage slim terms) are fixed choices named by their term name.
+_GENE_EXPRESSION_ONTOLOGY_CONTROLLED_FIELD_PATHS = frozenset(
+    {
+        "expression_experiment.expression_assay_used",
+        "expression_pattern.when_expressed.developmental_stage_start",
+        "expression_pattern.where_expressed.anatomical_structure",
+        "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        "expression_pattern.where_expressed.cellular_component",
+        "expression_pattern.where_expressed.cellular_component_qualifiers",
+    }
+)
+_PROPOSED_CURIE_DESCRIPTION = (
+    "An ontology ID the paper itself prints for this value (for example 'WBbt:0005733'); "
+    "null unless the paper states it. Only for ontology fields (assay, stage, anatomy, "
+    "cellular component), never for the relation or a stage slim term. It is a proposal "
+    "the validator checks, never the validated value; do not look one up or recall one."
+)
+# The values a patch update replaces as a whole, by the paper wording it carries.
+_GENE_EXPRESSION_MENTION_PATCH_TARGETS = {
+    "subject": "expression_annotation_subject",
+    "reference": "single_reference",
+    "data_provider": "data_provider",
+}
 _REFERENCE_PLACEHOLDER_VALUES = {
     "",
     "pmid",
@@ -154,13 +215,14 @@ class _StrictToolModel(BaseModel):
 
 
 class ExperimentalConditionInput(_StrictToolModel):
-    """One grounded ExperimentalCondition the extractor read from the paper.
+    """One experimental condition the extractor read from the paper.
 
-    All ontology/chemical/taxon CURIEs are GROUNDED by the extractor via the term-helper lookup
-    tools before staging (do not guess ZECO/ChEBI from memory). Every field is sparse — stage only
-    what the paper explicitly states. The condition carries no quote text: the validator reads the
-    annotation's evidence_record_ids (the spans the condition was read from) per the evidence
-    contract.
+    Each condition part (class, specific condition, chemical, taxon) is staged with its paper
+    wording in ``<part>_mention``; a CURIE the paper itself prints goes in ``<part>_curie`` as a
+    proposal the condition validator checks (never look one up). A part with a CURIE but no
+    paper wording is rejected. Every field is sparse — stage only what the paper explicitly
+    states. The condition carries no quote text: the validator reads the annotation's
+    evidence_record_ids (the spans the condition was read from) per the evidence contract.
 
     The gene_expression builder tools dispatch under strict tool schemas, which require every
     property to be present (required-but-nullable). So each component is ``Optional[...]`` with NO
@@ -168,12 +230,43 @@ class ExperimentalConditionInput(_StrictToolModel):
     drops the empty leaves.
     """
 
-    condition_class_curie: Optional[StrictStr]
-    condition_id_curie: Optional[StrictStr]
-    condition_chemical_curie: Optional[StrictStr]
-    condition_taxon_curie: Optional[StrictStr]
+    condition_class_mention: Optional[StrictStr] = Field(
+        description="The kind of experimental variable as the paper words it (for example 'chemical treatment').",
+    )
+    condition_class_curie: Optional[StrictStr] = Field(
+        description="A ZECO class ID the paper itself prints for that wording, or null; a validator checks it.",
+    )
+    condition_id_mention: Optional[StrictStr] = Field(
+        description="The specific condition as the paper words it, when stated.",
+    )
+    condition_id_curie: Optional[StrictStr] = Field(
+        description="A ZECO/XCO ID the paper itself prints for the specific condition, or null; a validator checks it.",
+    )
+    condition_chemical_mention: Optional[StrictStr] = Field(
+        description="The chemical as the paper names it, when a chemical treatment is stated.",
+    )
+    condition_chemical_curie: Optional[StrictStr] = Field(
+        description="A ChEBI ID the paper itself prints for the chemical, or null; a validator checks it.",
+    )
+    condition_taxon_mention: Optional[StrictStr] = Field(
+        description="The organism as the paper names it, only when the condition involves a distinct organism.",
+    )
+    condition_taxon_curie: Optional[StrictStr] = Field(
+        description="An NCBITaxon ID the paper itself prints for that organism, or null; a validator checks it.",
+    )
     condition_free_text: Optional[StrictStr]
     condition_summary: Optional[StrictStr]
+
+    @model_validator(mode="after")
+    def _curie_needs_paper_wording(self) -> "ExperimentalConditionInput":
+        for component in CONDITION_TERM_COMPONENTS:
+            curie = getattr(self, f"{component}_curie")
+            mention = getattr(self, f"{component}_mention")
+            if curie is not None and curie.strip() and not (mention and mention.strip()):
+                raise ValueError(
+                    f"{component}_curie needs {component}_mention, the paper's wording for it"
+                )
+        return self
 
 
 class ConditionRelationInput(_StrictToolModel):
@@ -191,38 +284,118 @@ class ConditionRelationInput(_StrictToolModel):
         return cleaned
 
 
+def _non_empty_text(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("value must be non-empty")
+    return cleaned
+
+
 class GeneExpressionSubjectInput(_StrictToolModel):
-    source_phrase: StrictStr
-    gene_symbol: StrictStr
-    primary_external_id: Optional[StrictStr]
+    mention: StrictStr = Field(
+        description=(
+            "The gene whose expression was observed, written as the paper names it "
+            "(for example 'pef-1'). The subject-gene validator looks it up; do not "
+            "supply a normalized symbol of your own."
+        )
+    )
+    proposed_primary_external_id: Optional[StrictStr] = Field(
+        description=(
+            "A gene ID the paper itself prints for this gene (for example 'WBGene00003914'); "
+            "null unless the paper states it. It is a proposal the validator checks, never the "
+            "validated gene; do not look one up or recall one."
+        )
+    )
+
+    @field_validator("mention")
+    @classmethod
+    def _non_empty_mention(cls, value: str) -> str:
+        return _non_empty_text(value)
 
 
 class GeneExpressionReferenceInput(_StrictToolModel):
-    source_phrase: StrictStr
-    reference_id: StrictStr
+    mention: StrictStr = Field(
+        description=(
+            "The identifier of the paper the observation came from, as given by the paper "
+            "or its metadata: a PMID (for example 'PMID:39550471'), a DOI, or another "
+            "reference identifier. The reference validator looks it up."
+        )
+    )
+
+    @field_validator("mention")
+    @classmethod
+    def _non_empty_mention(cls, value: str) -> str:
+        return _non_empty_text(value)
 
 
 class GeneExpressionControlledFieldInput(_StrictToolModel):
-    field_path: GeneExpressionControlledFieldPath
-    selected_value: StrictStr
+    field_path: GeneExpressionControlledFieldPath = Field(
+        description="The controlled field this value belongs to."
+    )
+    mention: StrictStr = Field(
+        description=(
+            "The paper's own wording for this value (for example 'structures associated "
+            "with the residual body'); for a fixed-choice field (the relation or a stage slim "
+            "term), the allowed term name you chose. Always required. The value stays "
+            "UNRESOLVED until its validator looks it up."
+        )
+    )
+    proposed_curie: Optional[StrictStr] = Field(description=_PROPOSED_CURIE_DESCRIPTION)
+
+    @field_validator("mention")
+    @classmethod
+    def _non_empty_mention(cls, value: str) -> str:
+        return _non_empty_text(value)
+
+    @model_validator(mode="after")
+    def _curie_only_on_ontology_fields(self) -> "GeneExpressionControlledFieldInput":
+        _check_proposed_curie(self.field_path, self.proposed_curie)
+        return self
+
+
+def _check_proposed_curie(field_path: str, proposed_curie: Optional[str]) -> None:
+    if _clean_string(proposed_curie) and field_path not in _GENE_EXPRESSION_ONTOLOGY_CONTROLLED_FIELD_PATHS:
+        raise ValueError(
+            f"{field_path} is a fixed choice named by its term name; pass proposed_curie null"
+        )
 
 
 class GeneExpressionPatchUpdateInput(_StrictToolModel):
     field_path: GeneExpressionPatchFieldPath
-    string_value: Optional[StrictStr]
+    string_value: Optional[StrictStr] = Field(
+        description=(
+            "The new text for a plain field. For subject, reference and data_provider it is "
+            "the paper wording; null for a controlled field."
+        )
+    )
+    mention: Optional[StrictStr] = Field(
+        description="The paper's own wording, required for a controlled field; null otherwise."
+    )
+    proposed_curie: Optional[StrictStr] = Field(description=_PROPOSED_CURIE_DESCRIPTION)
     evidence_record_ids: Optional[List[StrictStr]] = Field(min_length=1, max_length=20)
 
     @model_validator(mode="after")
     def _validate_update_shape(self) -> "GeneExpressionPatchUpdateInput":
         if self.field_path in _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS:
-            if not _clean_string(self.string_value):
+            if not _clean_string(self.mention):
                 raise ValueError(
-                    "controlled field patches require the resolved value in string_value"
+                    "controlled field patches require the paper wording in mention"
                 )
+            if _clean_string(self.string_value):
+                raise ValueError(
+                    "controlled field patches carry the paper wording in mention; "
+                    "pass string_value null"
+                )
+            _check_proposed_curie(self.field_path, self.proposed_curie)
             return self
+        if _clean_string(self.proposed_curie):
+            raise ValueError(f"{self.field_path} takes no proposed_curie; pass null")
         if self.field_path == "evidence_record_ids":
             if not self.evidence_record_ids:
                 raise ValueError("evidence_record_ids patch requires evidence_record_ids")
+            return self
+        if self.field_path == "rationale":
+            # Checked by the patch tool so the rejection carries invalid_rationale.
             return self
         if not _clean_string(self.string_value):
             raise ValueError(f"{self.field_path} patch requires string_value")
@@ -233,6 +406,8 @@ class GeneExpressionStageInput(_StrictToolModel):
     pending_ref_id: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
     where_expressed_statement: StrictStr
+    rationale: StrictStr
+    data_provider: StrictStr
     subject: GeneExpressionSubjectInput
     reference: GeneExpressionReferenceInput
     controlled_fields: List[GeneExpressionControlledFieldInput] = Field(min_length=1, max_length=20)
@@ -244,13 +419,15 @@ class GeneExpressionStageInput(_StrictToolModel):
         default=None, max_length=20
     )
 
-    @field_validator("pending_ref_id", "where_expressed_statement")
+    @field_validator("pending_ref_id", "where_expressed_statement", "data_provider")
     @classmethod
     def _non_empty_string(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("value must be non-empty")
-        return cleaned
+        return _non_empty_text(value)
+
+    @field_validator("rationale")
+    @classmethod
+    def _valid_rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
 
 class GeneExpressionPatchInput(_StrictToolModel):
@@ -391,6 +568,9 @@ def _ontology_term_result(result: Any) -> Dict[str, Any]:
             "definition",
             "ontology_type",
             "synonyms",
+            "match_type",
+            "match_score",
+            "matched_field",
         )
         if raw.get(key) is not None
     }
@@ -938,6 +1118,32 @@ def _positive_env_int(name: str, default: int) -> int:
     return max(1, value)
 
 
+_ONTOLOGY_LABEL_SEARCH_METHODS = frozenset({
+    "search_ontology_terms",
+    "search_anatomy_terms",
+    "search_life_stage_terms",
+    "search_go_terms",
+})
+
+
+def _ontology_search_limit(limit: Optional[int]) -> Tuple[int, List[str]]:
+    """Return the row limit for an ontology label search (AGR_ONTOLOGY_SEARCH_MIN_LIMIT, default 25).
+
+    The curation DB client fills its exact, prefix and contains tiers first and
+    runs the fuzzy (trigram) tier only while rows remain under the limit, so a
+    small limit lets alphabetical prefix/contains hits crowd out closer fuzzy
+    matches. Label searches therefore never return fewer rows than the minimum.
+    """
+    minimum = _positive_env_int("AGR_ONTOLOGY_SEARCH_MIN_LIMIT", 25)
+    if limit is None:
+        return _normalize_limit(minimum)[0], []
+    limit_value, warnings = _normalize_limit(limit)
+    if limit_value < minimum:
+        warnings.append(f"ontology_search_limit_raised:{minimum}")
+        limit_value = minimum
+    return limit_value, warnings
+
+
 def _bulk_symbol_soft_cap() -> int:
     cap = int(os.getenv(BULK_SYMBOL_SOFT_CAP_ENV, str(BULK_SYMBOL_SOFT_CAP_DEFAULT)))
     if cap <= 0:
@@ -1436,6 +1642,13 @@ def agr_curation_query(
     across symbols, full names, and synonyms -- so a shorter query returns more
     candidates and adding characters narrows them.
 
+    search_ontology_terms, search_anatomy_terms, search_life_stage_terms and
+    search_go_terms match term names and synonyms by exact, then prefix, then
+    contains, then fuzzy (trigram) similarity. Each row reports how it matched:
+    match_type (exact, prefix, contains or trigram), with match_score and
+    matched_field (name or synonym) on fuzzy rows, plus the term's synonyms and
+    definition. Every row is a candidate, not a confirmed match.
+
     search_alleles separates bounded discovery from display. Supply paper-supported
     gene_id or gene_symbol for database-backed gene scope (exact stored aliases are
     resolved within the supplied species/provider; ambiguous scope is not an allele
@@ -1486,7 +1699,7 @@ def agr_curation_query(
         exact_match: Require exact match for ontology searches
         include_synonyms: Search synonyms in addition to primary symbols (default: True)
         include_obsolete: Include obsolete controlled vocabulary terms
-        limit: Maximum results to return
+        limit: Maximum results to return. Ontology label searches use a configurable minimum.
         validation_retry_context: Optional supervisor-owned context for bounded
             validator reruns, such as missing declared result projections.
 
@@ -1644,7 +1857,10 @@ def agr_curation_query(
         provider_mapping_error = _ensure_provider_mappings(method)
         if provider_mapping_error:
             return provider_mapping_error
-        limit_value, warnings = _normalize_limit(limit)
+        if method in _ONTOLOGY_LABEL_SEARCH_METHODS:
+            limit_value, warnings = _ontology_search_limit(limit)
+        else:
+            limit_value, warnings = _normalize_limit(limit)
 
         # Log query parameters for tracing
         logger.debug(
@@ -3022,9 +3238,11 @@ def agr_curation_query(
                 include_synonyms=include_synonyms,
                 limit=limit_value
             )
-            results_data = [{"curie": r.curie, "name": r.name, "ontology_type": r.ontology_type} for r in results]
+            results_data = [_ontology_term_result(result) for result in results]
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
+            validation_warnings = list(warnings)
+            if invalid_curie_count > 0:
+                validation_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
             return _lookup_response(
                 method=method,
@@ -3061,9 +3279,11 @@ def agr_curation_query(
                 include_synonyms=include_synonyms,
                 limit=limit_value
             )
-            results_data = [{"curie": r.curie, "name": r.name, "ontology_type": r.ontology_type} for r in results]
+            results_data = [_ontology_term_result(result) for result in results]
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
+            validation_warnings = list(warnings)
+            if invalid_curie_count > 0:
+                validation_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
             return _lookup_response(
                 method=method,
@@ -3096,9 +3316,11 @@ def agr_curation_query(
                 include_synonyms=include_synonyms,
                 limit=limit_value
             )
-            results_data = [{"curie": r.curie, "name": r.name, "namespace": r.namespace} for r in results]
+            results_data = [_ontology_term_result(result) for result in results]
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
+            validation_warnings = list(warnings)
+            if invalid_curie_count > 0:
+                validation_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
             return _lookup_response(
                 method=method,
@@ -3366,7 +3588,15 @@ def _ontology_helper_result(
     label = _term_name(term)
     normalized_label = (label or "").casefold()
     normalized_source = source_phrase.strip().casefold()
-    match_type = "exact_label" if normalized_label == normalized_source else "candidate"
+    # The client reports its search tier; an exact-tier row whose name differs
+    # from the phrase matched through a synonym.
+    client_match_type = term.get("match_type")
+    if normalized_label == normalized_source:
+        match_type = "exact_label"
+    elif client_match_type == "exact":
+        match_type = "exact_synonym"
+    else:
+        match_type = client_match_type or "candidate"
     return {
         "source_phrase": source_phrase,
         "field_path": field_path,
@@ -3383,12 +3613,14 @@ def _ontology_helper_result(
             "namespace": _first_present(term.get("namespace"), term.get("ontology_type")),
             "ontology_type": term.get("ontology_type"),
             "obsolete": bool(term.get("obsolete", False)),
+            **{key: term[key] for key in ("definition", "synonyms") if term.get(key)},
             "authority": authority,
         },
         "lookup": {
             "method": lookup_method,
             "matched_value": label,
             "match_type": match_type,
+            **{key: term[key] for key in ("match_score", "matched_field") if term.get(key) is not None},
             "queried_at": queried_at,
         },
         "source": dict(source)
@@ -3442,7 +3674,6 @@ def _resolver_metadata(policy: Mapping[str, Any]) -> Dict[str, Any]:
     resolver.setdefault("search_tool", "search_domain_field_terms")
     resolver.setdefault("inspect_tool", "inspect_ontology_term")
     resolver.setdefault("accepted_provenance_tools", ["resolve_domain_field_term"])
-    resolver.setdefault("unresolved_metadata_path", "metadata.normalization_notes")
     resolver.setdefault(
         "search_channels",
         [
@@ -3523,9 +3754,11 @@ def _resolver_candidate_from_helper_result(
         label,
         source_phrase,
     )
-    matched_field = "label" if label and matched_string == label else "candidate"
+    matched_field = lookup.get("matched_field") or (
+        "label" if label and matched_string == label else "candidate"
+    )
     match_mode = str(lookup.get("match_type") or "candidate")
-    score = 1.0 if match_mode in {"exact_label", "exact_synonym"} else max(0.0, 0.85 - (index * 0.05))
+    score = 1.0 if match_mode in {"exact_label", "exact_synonym"} else lookup.get("match_score")
     source_provider = source.get("provider") if isinstance(source, Mapping) else None
     normalized = {
         "candidate_id": f"candidate-{index + 1}",
@@ -3547,7 +3780,7 @@ def _resolver_candidate_from_helper_result(
         "matched_string": matched_string,
         "matched_field": matched_field,
         "match_mode": match_mode,
-        "score": round(score, 3),
+        "score": round(score, 3) if score is not None else None,
         "score_breakdown": {
             "authority": candidate.get("authority") or helper_result.get("authority"),
             "rank": index + 1,
@@ -3686,6 +3919,16 @@ def _resolver_candidates_from_helper_payload(
     ]
 
 
+def _unmatched_staging_instruction(field_path: str, source_phrase: Optional[str]) -> str:
+    # Shared by every builder, so it names no builder-specific parameter.
+    phrase = repr(source_phrase) if source_phrase else "the paper's wording"
+    return (
+        f"If no term matches, still stage {field_path} with {phrase} as the paper's wording "
+        "(its mention), leaving the identifier empty: the value stays UNRESOLVED and the "
+        "validator will check it. Never drop the finding or fill the identifier from memory."
+    )
+
+
 def _resolver_instruction(
     *,
     resolution_status: str,
@@ -3697,28 +3940,25 @@ def _resolver_instruction(
     if resolution_status == "resolved":
         return [
             f"Set only the controlled selector for {field_path} from the selected candidate.",
-            "When you stage this controlled selector, pass the resolved value as selected_value; provenance is verified automatically against this resolve call. Do not author metadata.provenance.helper_selections.",
+            "When you stage this value, pass the resolved value together with the paper's wording you resolved; provenance is verified automatically against this resolve call. Do not author metadata.provenance.helper_selections.",
         ]
     if resolution_status == "ambiguous":
         return [
-            f"Do not set {field_path} yet.",
+            f"Do not pick a term for {field_path} yet.",
             "Use the suggested next_tool_call, resolve with an explicit candidate_curie or candidate_value, or search with a narrower evidence phrase.",
+            _unmatched_staging_instruction(field_path, source_phrase),
         ]
     if resolution_status == "blocked":
         return [
-            f"Do not set {field_path}.",
-            "Preserve the paper phrase in unresolved metadata and let validation report the blocker.",
+            f"No term can be selected for {field_path}.",
+            _unmatched_staging_instruction(field_path, source_phrase),
         ]
     if candidate and candidate.get("obsolete"):
         return [
-            f"Do not use obsolete candidate for {field_path}.",
-            "Search for a replacement or preserve the unresolved paper phrase.",
+            f"Do not use the obsolete candidate for {field_path}; search for a replacement.",
+            _unmatched_staging_instruction(field_path, source_phrase),
         ]
-    phrase = source_phrase or "the paper phrase"
-    return [
-        f"Do not set {field_path} from memory.",
-        f"Preserve {phrase!r} in unresolved metadata and let validation report the unresolved selector.",
-    ]
+    return [_unmatched_staging_instruction(field_path, source_phrase)]
 
 
 def _resolver_debug_payload(
@@ -3770,9 +4010,11 @@ def _resolver_debug_payload(
         "slim_allowed_term_count": allowed_term_count,
         "lookup_attempt_count": len(lookup_attempts or []),
         "lookup_methods": [
-            str(attempt.get("method"))
+            str(attempt["attempted_query"]["method"])
             for attempt in (lookup_attempts or [])
-            if isinstance(attempt, Mapping) and attempt.get("method")
+            if isinstance(attempt, Mapping)
+            and isinstance(attempt.get("attempted_query"), Mapping)
+            and attempt["attempted_query"].get("method")
         ],
         "context_counts": dict(context_counts) if context_counts else None,
     }
@@ -3799,12 +4041,7 @@ def _resolver_diagnostic_summary(
     count = f"; candidates={candidate_count}" if candidate_count is not None else ""
     selected = ""
     if selected_candidate:
-        selected_value = (
-            selected_candidate.get("curie")
-            or selected_candidate.get("value")
-            or selected_candidate.get("name")
-            or selected_candidate.get("term_name")
-        )
+        selected_value = selected_candidate.get("value")
         if selected_value:
             selected = f"; selected={selected_value}"
     blocker = f"; blocker={policy_blocker}" if policy_blocker else ""
@@ -3812,6 +4049,17 @@ def _resolver_diagnostic_summary(
         f"{stage} {status} for {field_path}{routed}: "
         f"source_phrase={label!r}{count}{selected}{blocker}"
     )
+
+
+def _resolved_candidate_value(
+    candidate: Mapping[str, Any],
+    term_source: Mapping[str, Any],
+) -> Any:
+    """The value a resolved candidate selects: a vocabulary term name or an ontology CURIE."""
+
+    if term_source.get("kind") == "controlled_vocabulary":
+        return candidate.get("term_name")
+    return candidate.get("curie")
 
 
 def _payload_field_instructions(
@@ -3825,12 +4073,12 @@ def _payload_field_instructions(
             "set": [
                 {
                     "field_path": field_path,
-                    "value": candidate.get("term_name") or candidate.get("name") or candidate.get("value"),
+                    "value": candidate.get("term_name"),
                 }
             ]
         }
-    curie = candidate.get("curie") or candidate.get("value")
-    name = candidate.get("name") or candidate.get("term_name")
+    curie = candidate.get("curie")
+    name = candidate.get("name")
     if field_path.endswith("_terms") or field_path.endswith("_qualifiers"):
         return {
             "append": [
@@ -3840,15 +4088,6 @@ def _payload_field_instructions(
                         "curie": curie,
                         "name": name,
                     },
-                }
-            ]
-        }
-    if field_path.endswith("_name"):
-        return {
-            "set": [
-                {
-                    "field_path": field_path,
-                    "value": name or curie,
                 }
             ]
         }
@@ -3870,12 +4109,8 @@ def _resolver_helper_selection(
     evidence_context: Mapping[str, Any],
     resolved_at: str,
 ) -> Dict[str, Any]:
-    selected_value = (
-        candidate.get("term_name")
-        if term_source.get("kind") == "controlled_vocabulary"
-        else candidate.get("curie") or candidate.get("value")
-    )
-    selected_name = candidate.get("name") or candidate.get("term_name")
+    selected_value = _resolved_candidate_value(candidate, term_source)
+    selected_name = candidate.get("name")
     selection = {
         "field_path": field_path,
         "source_tool": "resolve_domain_field_term",
@@ -4021,6 +4256,21 @@ def _configured_ontology_mapping_results(
     return helper_results
 
 
+def _term_lookup_limit(limit: Optional[int], default: int) -> int:
+    """Clamp a term-lookup candidate limit to TOOL_PAGE_MAX_LIMIT (default 50).
+
+    Same variable and default as the backend ``get_tool_page_max_limit``; read
+    directly because package code must not import backend. The resolver and
+    term-search tools previously used ``limit or N`` with no maximum.
+    """
+    effective, _ = clamp_page_limit(
+        limit,
+        default=default,
+        maximum=env_positive_int("TOOL_PAGE_MAX_LIMIT", 50),
+    )
+    return effective
+
+
 @function_tool(strict_mode=False)
 def get_domain_field_term_options(
     domain_pack_id: str,
@@ -4050,7 +4300,7 @@ def get_domain_field_term_options(
         phrase = str(phrase_value) if phrase_value is not None else None
     normalized_phrase = phrase.strip() if isinstance(phrase, str) else None
     normalized_query = query.strip() if isinstance(query, str) and query.strip() else None
-    limit_value = limit or 25
+    limit_value = _term_lookup_limit(limit, 25)
     queried_at = datetime.now(timezone.utc).isoformat()
     attempted_query = _helper_attempt(
         domain_pack_id=domain_pack_id,
@@ -4357,7 +4607,7 @@ def search_domain_field_terms(
 
     evidence_context = evidence_context or {}
     normalized_query = query.strip() if isinstance(query, str) and query.strip() else None
-    limit_value = limit or 10
+    limit_value = _term_lookup_limit(limit, 10)
     attempted_query = _attempt_query(
         "search_domain_field_terms",
         domain_pack_id=domain_pack_id,
@@ -4415,7 +4665,6 @@ def search_domain_field_terms(
     )
     lookup_status = _helper_lookup_status(candidates)
     warnings = list(result.warnings or [])
-    warnings.append("limited_search_backend:current_api_exact_prefix_contains")
     if branch_root_curie:
         warnings.append("branch_root_curie_preserved_for_future_filtering")
     if "vector_recall" in resolver.get("search_channels", []):
@@ -4445,6 +4694,7 @@ def search_domain_field_terms(
                 "object_type": object_type,
                 "field_path": candidates[0].get("slot_hint") or field_path,
                 "curie": candidates[0].get("curie"),
+                "source_phrase": normalized_query,
                 "data_provider": data_provider,
                 "include_parents": True,
                 "include_children": True,
@@ -4691,6 +4941,7 @@ def inspect_ontology_term(
     object_type: str,
     field_path: str,
     curie: str,
+    source_phrase: str,
     data_provider: Optional[str] = None,
     include_parents: bool = True,
     include_children: bool = True,
@@ -4698,16 +4949,26 @@ def inspect_ontology_term(
     max_depth: int = 1,
     limit: Optional[int] = None,
 ) -> AgrQueryResult:
-    """Inspect one authoritative ontology term and bounded graph context."""
+    """Inspect one authoritative ontology term and bounded graph context.
+
+    Args:
+        source_phrase: The paper's wording for this value, exactly as it will be staged (never
+            the term's name or CURIE); the follow-up resolve call uses the same wording.
+    """
 
     normalized_curie = curie.strip() if isinstance(curie, str) and curie.strip() else None
-    limit_value = limit or 25
+    # The paper's wording this term is checked for, exactly as the value will be staged.
+    normalized_phrase = (
+        source_phrase.strip() if isinstance(source_phrase, str) and source_phrase.strip() else None
+    )
+    limit_value = _term_lookup_limit(limit, 25)
     attempted_query = _attempt_query(
         "inspect_ontology_term",
         domain_pack_id=domain_pack_id,
         object_type=object_type,
         field_path=field_path,
         curie=normalized_curie,
+        source_phrase=normalized_phrase,
         data_provider=data_provider,
         include_parents=include_parents,
         include_children=include_children,
@@ -4718,6 +4979,13 @@ def inspect_ontology_term(
     if not normalized_curie:
         return _err(
             "inspect_ontology_term requires a CURIE.",
+            method="inspect_ontology_term",
+            attempted_query=attempted_query,
+        )
+    if not normalized_phrase:
+        return _err(
+            "inspect_ontology_term requires source_phrase: the paper's wording for this value, "
+            "exactly as it will be staged.",
             method="inspect_ontology_term",
             attempted_query=attempted_query,
         )
@@ -4760,14 +5028,14 @@ def inspect_ontology_term(
                 "instructions": _resolver_instruction(
                     resolution_status="unresolved",
                     field_path=field_path,
-                    source_phrase=normalized_curie,
+                    source_phrase=normalized_phrase,
                     resolver=_resolver_metadata(policy),
                 ),
                 "diagnostic_summary": _resolver_diagnostic_summary(
                     stage="inspect",
                     status=LOOKUP_STATUS_NOT_FOUND,
                     field_path=field_path,
-                    source_phrase=normalized_curie,
+                    source_phrase=normalized_phrase,
                     candidate_count=0,
                 ),
                 "debug": _resolver_debug_payload(
@@ -4901,7 +5169,7 @@ def inspect_ontology_term(
             else _resolver_instruction(
                 resolution_status="unresolved",
                 field_path=field_path,
-                source_phrase=normalized_curie,
+                source_phrase=normalized_phrase,
                 resolver=resolver,
                 candidate=term,
             )
@@ -4912,7 +5180,7 @@ def inspect_ontology_term(
                 "domain_pack_id": domain_pack_id,
                 "object_type": object_type,
                 "field_path": field_path,
-                "source_phrase": term.get("name") or normalized_curie,
+                "source_phrase": normalized_phrase,
                 "candidate_curie": normalized_curie,
                 "data_provider": data_provider,
             },
@@ -4923,7 +5191,7 @@ def inspect_ontology_term(
             stage="inspect",
             status=inspect_status,
             field_path=field_path,
-            source_phrase=term.get("name") or normalized_curie,
+            source_phrase=normalized_phrase,
             candidate_count=1,
             selected_candidate=term,
             policy_blocker=policy_blocker,
@@ -4983,7 +5251,7 @@ def _resolve_domain_field_term_impl(
         if isinstance(candidate_value, str) and candidate_value.strip()
         else None
     )
-    limit_value = limit or 10
+    limit_value = _term_lookup_limit(limit, 10)
     attempted_query = _attempt_query(
         "resolve_domain_field_term",
         domain_pack_id=domain_pack_id,
@@ -5044,7 +5312,6 @@ def _resolve_domain_field_term_impl(
                     source_phrase=normalized_phrase,
                     resolver=resolver,
                 ),
-                "unresolved_metadata_path": resolver.get("unresolved_metadata_path"),
                 "diagnostic_summary": _resolver_diagnostic_summary(
                     stage="resolve",
                     status=LOOKUP_STATUS_BLOCKED,
@@ -5127,7 +5394,6 @@ def _resolve_domain_field_term_impl(
                     resolver=resolver,
                 ),
                 "next_tool_call": search_payload.get("next_tool_call"),
-                "unresolved_metadata_path": resolver.get("unresolved_metadata_path"),
                 "diagnostic_summary": _resolver_diagnostic_summary(
                     stage="resolve",
                     status=lookup_status,
@@ -5356,19 +5622,23 @@ def _gene_expression_candidate_id(workspace: Any, pending_ref_id: str) -> str:
     return f"gex-candidate-{len(workspace.candidates) + 1}"
 
 
-def _reference_id_validation_issue(reference_id: str) -> Optional[Dict[str, Any]]:
-    normalized = reference_id.strip()
+def _reference_id_validation_issue(mention: str) -> Optional[Dict[str, Any]]:
+    normalized = mention.strip()
     if normalized.casefold() in _REFERENCE_PLACEHOLDER_VALUES or "..." in normalized:
         return {
-            "field_path": "reference.reference_id",
+            "field_path": "reference.mention",
             "reason": "placeholder_reference",
-            "message": "reference.reference_id must be an actual PMID, DOI, or Alliance reference identifier.",
+            "message": "reference.mention must be an actual PMID, DOI, or Alliance reference identifier.",
         }
-    if ":" not in normalized and not normalized.upper().startswith("PMID"):
+    if (
+        ":" not in normalized
+        and not normalized.upper().startswith("PMID")
+        and not _DOI_REFERENCE_PATTERN.fullmatch(normalized)
+    ):
         return {
-            "field_path": "reference.reference_id",
+            "field_path": "reference.mention",
             "reason": "invalid_reference_id",
-            "message": "reference.reference_id must include a concrete identifier prefix.",
+            "message": "reference.mention must include a concrete identifier prefix.",
         }
     return None
 
@@ -5448,97 +5718,79 @@ def _model_validation_issues(exc: ValidationError) -> List[Dict[str, Any]]:
     ]
 
 
-def _resolver_entry_for_controlled_field(
+def _gene_expression_controlled_value(
     *,
     field_path: str,
-    selected_value: Optional[str],
-) -> Tuple[Optional[ResolverCallLedgerEntry], Optional[Dict[str, Any]]]:
-    """Verify provenance for a controlled field from the resolved value the agent stages.
+    mention: str,
+    proposed_curie: Optional[str],
+) -> Dict[str, Any]:
+    """One controlled field's stored value: the paper wording, UNRESOLVED for its validator.
 
-    The agent stages ``selected_value`` -- the resolved value returned by
-    ``resolve_domain_field_term`` (e.g. ``WBbt:0006816``, ``is_expressed_in``). We look the
-    matching resolver-call-ledger entry up by (field_path, selected_value) rather than
-    asking the agent to thread the resolve call's opaque runtime tool_call_id. A value with
-    no matching resolve call has no provenance and is rejected (anti-hallucination).
+    A CURIE the paper itself states is kept as ``proposed_curie``, a validator
+    input only; extraction never supplies a validated identity.
     """
-    cleaned_value = _clean_string(selected_value)
-    if not cleaned_value:
-        issue = {
-            "field_path": field_path,
-            "reason": "missing_selected_value",
-            "message": "Controlled fields require the resolved value (selected_value) from resolve_domain_field_term.",
-        }
-        _emit_gene_expression_builder_event(
-            "gene_expression_builder.missing_provenance_rejected",
-            action="resolver_lookup",
-            input_summary={"field_path": field_path, "selected_value": selected_value},
-            output_summary=issue,
-            validation={"status": "failed", "issue": issue},
-        )
-        return None, issue
 
-    try:
-        ledger = get_active_resolver_call_ledger()
-    except RuntimeError as exc:
-        issue = {
-            "field_path": field_path,
-            "reason": "resolver_ledger_unavailable",
-            "message": str(exc),
-            "selected_value": cleaned_value,
-        }
-        return None, issue
-
-    entry = ledger.find_validated_selection(field_path=field_path, selected_value=cleaned_value)
-    if entry is None:
-        issue = {
-            "field_path": field_path,
-            "reason": "unresolved_selected_value",
-            "message": (
-                f"No resolve_domain_field_term call validated '{cleaned_value}' for {field_path}; "
-                "resolve the value first, then stage it."
-            ),
-            "selected_value": cleaned_value,
-        }
-        _emit_gene_expression_builder_event(
-            "gene_expression_builder.missing_provenance_rejected",
-            action="resolver_lookup",
-            input_summary={"field_path": field_path, "selected_value": cleaned_value},
-            output_summary=issue,
-            validation={"status": "failed", "issue": issue},
-        )
-        return None, issue
-
-    if entry.domain_pack_id != GENE_EXPRESSION_DOMAIN_PACK_ID or entry.object_type != GENE_EXPRESSION_OBJECT_TYPE:
-        issue = {
-            "field_path": field_path,
-            "reason": "resolver_scope_mismatch",
-            "message": "selected_value was not resolved for Alliance gene-expression annotations.",
-            "selected_value": cleaned_value,
-        }
-        return None, issue
-    return entry, None
+    target_path, _ = _GENE_EXPRESSION_CONTROLLED_TARGETS[field_path]
+    cleaned_curie = _clean_string(proposed_curie)
+    if cleaned_curie is None:
+        return staged_gene_expression_value(target_path, mention)
+    return staged_gene_expression_value(target_path, mention, proposed_curie=cleaned_curie)
 
 
-def _apply_resolver_selection(
+def _place_gene_expression_controlled_value(
     payload: Dict[str, Any],
     *,
-    entry: ResolverCallLedgerEntry,
+    field_path: str,
+    value: Dict[str, Any],
 ) -> None:
-    instructions = entry.payload_field_instructions
-    for operation in instructions.get("set", []) if isinstance(instructions.get("set"), list) else []:
-        if isinstance(operation, Mapping):
-            _set_dotted_payload_value(
-                payload,
-                str(operation.get("field_path") or ""),
-                operation.get("value"),
-            )
-    for operation in instructions.get("append", []) if isinstance(instructions.get("append"), list) else []:
-        if isinstance(operation, Mapping):
-            _append_dotted_payload_value(
-                payload,
-                str(operation.get("field_path") or ""),
-                operation.get("value"),
-            )
+    target_path, multivalued = _GENE_EXPRESSION_CONTROLLED_TARGETS[field_path]
+    if multivalued:
+        _append_dotted_payload_value(payload, target_path, value)
+    else:
+        _set_dotted_payload_value(payload, target_path, value)
+
+
+_PMID_REFERENCE_PATTERN = re.compile(r"PMID\s*:?\s*(\d+)", flags=re.IGNORECASE)
+_DOI_REFERENCE_PATTERN = re.compile(
+    r"(?:doi\s*:\s*|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/\S+)",
+    flags=re.IGNORECASE,
+)
+
+
+def _gene_expression_reference_value(mention: str) -> Dict[str, Any]:
+    """The staged reference: its paper wording plus the PMID/DOI lookup input it names.
+
+    ``pmid`` and ``doi`` are the reference validator's lookup inputs, not the
+    reference identity; the validator writes reference_id, curie and title.
+    """
+
+    lookup_inputs: Dict[str, str] = {}
+    pmid = _PMID_REFERENCE_PATTERN.fullmatch(mention.strip())
+    doi = _DOI_REFERENCE_PATTERN.fullmatch(mention.strip())
+    if pmid:
+        lookup_inputs["pmid"] = f"PMID:{pmid.group(1)}"
+    elif doi:
+        lookup_inputs["doi"] = doi.group(1)
+    return staged_gene_expression_value("single_reference", mention, **lookup_inputs)
+
+
+def _gene_expression_subject_value(subject: GeneExpressionSubjectInput) -> Dict[str, Any]:
+    """The staged subject gene: its paper wording, plus a gene ID only when the paper prints one."""
+
+    proposed_id = _clean_string(subject.proposed_primary_external_id)
+    if proposed_id is None:
+        return staged_gene_expression_value("expression_annotation_subject", subject.mention)
+    return staged_gene_expression_value(
+        "expression_annotation_subject",
+        subject.mention,
+        proposed_primary_external_id=proposed_id,
+    )
+
+
+def _gene_expression_mention_value(target_path: str, mention: str) -> Dict[str, Any]:
+    if target_path == "single_reference":
+        return _gene_expression_reference_value(mention)
+    return staged_gene_expression_value(target_path, mention)
 
 
 def _set_dotted_payload_value(payload: Dict[str, Any], field_path: str, value: Any) -> None:
@@ -5574,8 +5826,8 @@ def _staged_condition_relations(
 
     Drops empty leaves so a condition carries only the components the paper stated. A relation with
     no resolvable conditions is dropped entirely. The structure mirrors the disease builder's staged
-    shape (condition_relation_type + conditions[].condition_*_curie/text); the gene_expression
-    materializer re-reads these into the concrete nested annotation payload.
+    shape (condition_relation_type + conditions[].<part>_mention/<part>_curie/text); the
+    gene_expression materializer re-reads these into the concrete nested annotation payload.
     """
 
     staged: List[Dict[str, Any]] = []
@@ -5585,12 +5837,12 @@ def _staged_condition_relations(
         for condition in relation.conditions:
             component: Dict[str, Any] = {}
             for field_name in (
-                "condition_class_curie",
-                "condition_id_curie",
-                "condition_chemical_curie",
-                "condition_taxon_curie",
-                "condition_free_text",
-                "condition_summary",
+                *(
+                    f"{part}_{key}"
+                    for part in CONDITION_TERM_COMPONENTS
+                    for key in ("mention", "curie")
+                ),
+                *CONDITION_TEXT_FIELDS,
             ):
                 value = getattr(condition, field_name)
                 if value is not None and value.strip():
@@ -5609,32 +5861,20 @@ def _staged_condition_relations(
 
 def _stage_payload_from_gene_expression_input(
     stage_input: GeneExpressionStageInput,
-    resolver_entries: List[ResolverCallLedgerEntry],
+    controlled_values: Sequence[Tuple[str, Dict[str, Any]]],
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
         "object_type": GENE_EXPRESSION_OBJECT_TYPE,
         "pending_ref_id": stage_input.pending_ref_id,
         "where_expressed_statement": stage_input.where_expressed_statement,
-        "expression_annotation_subject": {
-            "source_phrase": stage_input.subject.source_phrase,
-            "gene_symbol": stage_input.subject.gene_symbol,
-            "primary_external_id": stage_input.subject.primary_external_id,
-        },
-        "single_reference": {
-            "source_phrase": stage_input.reference.source_phrase,
-            "reference_id": stage_input.reference.reference_id,
-        },
-        "metadata": {
-            "provenance": {
-                "helper_selections": [
-                    entry.provenance_selection() for entry in resolver_entries
-                ]
-            }
-        },
+        "rationale": stage_input.rationale,
+        "data_provider": staged_gene_expression_value("data_provider", stage_input.data_provider),
+        "expression_annotation_subject": _gene_expression_subject_value(stage_input.subject),
+        "single_reference": _gene_expression_reference_value(stage_input.reference.mention),
     }
-    for entry in resolver_entries:
-        _apply_resolver_selection(payload, entry=entry)
+    for field_path, value in controlled_values:
+        _place_gene_expression_controlled_value(payload, field_path=field_path, value=value)
     staged_condition_relations = _staged_condition_relations(stage_input.condition_relations)
     if staged_condition_relations:
         payload["condition_relations"] = staged_condition_relations
@@ -5648,17 +5888,47 @@ def _stage_payload_from_gene_expression_input(
 _BUILDER_LIST_DEFAULT_LIMIT = int(os.getenv("BUILDER_LIST_DEFAULT_LIMIT", "50"))
 
 
+def _builder_list_max_limit() -> int:
+    """Largest builder list/find page (BUILDER_LIST_MAX_LIMIT, default 100).
+
+    Same variable and default as the backend config getter
+    ``get_builder_list_max_limit``; read directly because package code must
+    not import backend.
+    """
+    return env_positive_int("BUILDER_LIST_MAX_LIMIT", 100)
+
+
+def _builder_finalization_summary(summary: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Model-facing finalization receipt: identity, outcome and counts.
+
+    The full finalization (every source candidate and evidence id) stays in
+    the workspace and trace events; echoing those lists back grows with the
+    extraction and repeats ids the model already supplied.
+    """
+    if summary is None:
+        return None
+    return {
+        "status": summary.get("status"),
+        "builder_run_id": summary.get("builder_run_id"),
+        "builder_invocation_id": summary.get("builder_invocation_id"),
+        "finalized_candidate_count": summary.get("finalized_candidate_count"),
+        "candidate_ids": list(summary.get("candidate_ids") or []),
+        "source_candidate_count": len(summary.get("source_candidate_ids") or []),
+        "evidence_record_count": len(summary.get("evidence_record_ids") or []),
+        "validation_errors": list(summary.get("validation_errors") or []),
+    }
+
+
 def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict[str, Any]:
     """Compact, model-facing builder acknowledgment.
 
-    Deliberately does NOT embed the full per-candidate list. That list scales
-    O(staged candidates) and, for data-rich papers (hundreds of staged
-    observations), blew past the model context window — a single
-    ``patch_*_observation`` return reached ~240K chars / ~600K tokens because it
-    echoed every staged candidate back to the model. The authoritative staged
-    state stays in the backend workspace and in trace events; the model only
-    needs counts + id-lists here. Use ``list_staged_*`` (bounded) to inspect
-    individual candidates.
+    Reports workspace identity, state and counts only. Neither the per-candidate
+    list nor the workspace-wide id lists are embedded: both scale with staged
+    candidates, and echoing them on every mutation made acknowledgments grow
+    without bound (a single ``patch_*_observation`` return once reached ~240K
+    chars). The authoritative staged state stays in the backend workspace and
+    in trace events. Candidate ids and each candidate's pending refs and
+    evidence ids are paged by the ``list_staged_*`` and ``find_staged_*`` tools.
     """
     snapshot = workspace.snapshot(redact_payload=True)
     all_candidates = snapshot["candidates"]
@@ -5670,22 +5940,116 @@ def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict
         "state": snapshot.get("state"),
         "candidate_count": len(counted),
         "discarded_candidate_count": len(discarded),
-        "candidate_ids": [candidate.get("candidate_id") for candidate in counted],
-        "pending_ref_ids": snapshot["pending_ref_ids"],
-        "evidence_record_ids": snapshot["evidence_record_ids"],
-        "resolver_selection_refs": snapshot["resolver_selection_refs"],
-        "finalization": snapshot.get("finalization"),
+        "pending_ref_count": len(snapshot["pending_ref_ids"]),
+        "evidence_record_count": len(snapshot["evidence_record_ids"]),
+        "finalization": _builder_finalization_summary(snapshot.get("finalization")),
+        "reference_access": (
+            "Page candidate ids and each candidate's pending refs and evidence ids "
+            "with this builder's list_staged_* or find_staged_* tool."
+        ),
     }
 
 
-def _normalize_builder_page_limit(limit: int) -> int:
-    """Clamp a caller-supplied page size to a positive integer (default cap)."""
-    return max(1, int(limit)) if limit else _BUILDER_LIST_DEFAULT_LIMIT
+def _oversized_builder_candidate(candidate: Mapping[str, Any]) -> Dict[str, Any]:
+    """Identity and counts for a candidate summary too large for one page."""
+    staged_fields = candidate.get("staged_fields") or {}
+    return {
+        "candidate_id": candidate.get("candidate_id"),
+        "status": candidate.get("status"),
+        "withheld": True,
+        "summary_bytes": serialized_size(candidate),
+        "pending_ref_count": len(candidate.get("pending_ref_ids") or []),
+        "evidence_record_count": len(candidate.get("evidence_record_ids") or []),
+        "validation_error_count": len(candidate.get("validation_errors") or []),
+        "staged_field_count": (
+            staged_fields.get("field_count") if isinstance(staged_fields, Mapping) else None
+        ),
+    }
 
 
-def _normalize_builder_page_offset(offset: int) -> int:
-    """Clamp a caller-supplied page offset to a non-negative integer."""
-    return max(0, int(offset)) if offset else 0
+def _builder_page(
+    workspace: Any,
+    candidates: List[Dict[str, Any]],
+    *,
+    include_discarded: bool,
+    limit: Any,
+    offset: Any,
+    total_key: str,
+    decorate: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Render one size- and count-bounded page of redacted candidate summaries.
+
+    Requested limits above BUILDER_LIST_MAX_LIMIT clamp (reported, not an
+    error); the page also ends before TOOL_RESULT_MAX_BYTES. A malformed or
+    out-of-range offset is an explicit ``invalid_request``.
+    """
+    base = _builder_summary(workspace, include_discarded=include_discarded)
+    total = len(candidates)
+    try:
+        cap, limit_metadata = clamp_page_limit(
+            limit,
+            default=_BUILDER_LIST_DEFAULT_LIMIT,
+            maximum=_builder_list_max_limit(),
+        )
+        start = parse_offset(offset, total=total)
+    except ValueError as exc:
+        return {
+            **base,
+            **invalid_cursor(str(exc)),
+            total_key: total,
+            "candidates": [],
+        }
+    budget = tool_result_max_bytes()
+    items = candidates if decorate is None else None
+
+    def render(page: List[Dict[str, Any]], returned: int) -> Dict[str, Any]:
+        next_offset = start + returned
+        has_more = total > next_offset
+        if not has_more:
+            ended_by = "end"
+        elif returned >= cap:
+            ended_by = "limit"
+        else:
+            ended_by = "size_budget"
+        return {
+            **base,
+            "candidates": page,
+            total_key: total,
+            "returned_candidate_count": returned,
+            "offset": start,
+            "next_offset": next_offset if has_more else None,
+            "truncated": has_more,
+            "page_ended_by": ended_by,
+            **limit_metadata,
+            "budget_bytes": budget,
+        }
+
+    if items is None:
+        # Decorate only the rows that can appear on this page.
+        items = list(candidates[:start]) + [
+            decorate(candidate) for candidate in candidates[start : start + cap]
+        ]
+    try:
+        page, _ = fit_page(
+            items,
+            start=start,
+            limit=cap,
+            render=render,
+            budget=budget,
+            oversized=lambda candidate, _index: _oversized_builder_candidate(candidate),
+        )
+    except ToolResultBudgetError as exc:
+        return {
+            **base,
+            **budget_failure(
+                tool_name="builder_candidate_page",
+                measured=exc.measured,
+                limit=exc.limit,
+            ),
+            total_key: total,
+            "candidates": [],
+        }
+    return page
 
 
 def _builder_candidate_list(
@@ -5694,33 +6058,31 @@ def _builder_candidate_list(
     include_discarded: bool = False,
     limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
+    decorate: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Bounded, pageable per-candidate listing for the ``list_staged_*`` tools.
 
-    Returns the compact builder ack plus a CAPPED page of redacted candidate
-    snapshots (never the unbounded full set), with ``truncated`` /
-    ``total_listed_candidate_count`` so the model knows more exist. The cap is
-    surpassable by paging: pass ``offset`` to step past earlier candidates and
-    read ``next_offset`` to continue. This keeps each page within the model
-    context even for hundreds of staged observations.
+    Returns the compact builder ack plus one page of redacted candidate
+    snapshots, with ``truncated`` / ``total_listed_candidate_count`` so the
+    model knows more exist. Pass ``offset`` to step past earlier candidates and
+    read ``next_offset`` to continue. Pages are bounded by
+    BUILDER_LIST_MAX_LIMIT and by the serialized TOOL_RESULT_MAX_BYTES budget,
+    including any per-candidate ``decorate`` additions, so hundreds of staged
+    observations never produce an oversized result.
     """
     snapshot = workspace.snapshot(redact_payload=True)
     candidates = snapshot["candidates"]
     if not include_discarded:
         candidates = [c for c in candidates if c.get("status") != "discarded"]
-    total = len(candidates)
-    cap = _normalize_builder_page_limit(limit)
-    start = _normalize_builder_page_offset(offset)
-    returned = candidates[start : start + cap]
-    result = _builder_summary(workspace, include_discarded=include_discarded)
-    result["candidates"] = returned
-    result["returned_candidate_count"] = len(returned)
-    result["total_listed_candidate_count"] = total
-    result["offset"] = start
-    has_more = total > start + len(returned)
-    result["next_offset"] = start + len(returned) if has_more else None
-    result["truncated"] = has_more
-    return result
+    return _builder_page(
+        workspace,
+        candidates,
+        include_discarded=include_discarded,
+        limit=limit,
+        offset=offset,
+        total_key="total_listed_candidate_count",
+        decorate=decorate,
+    )
 
 
 def _search_builder_candidates(
@@ -5734,6 +6096,7 @@ def _search_builder_candidates(
     include_discarded: bool = False,
     limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
+    decorate: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Pageable search over staged candidates for the ``find_staged_*`` tools.
 
@@ -5752,8 +6115,10 @@ def _search_builder_candidates(
         the JSON-serialized staged-field values.
 
     Discarded drafts are skipped unless ``include_discarded`` is set. Matches are
-    paged with ``offset`` / ``limit`` and the result carries ``matched_candidate_count``
-    (total before paging), ``offset``, ``next_offset`` and ``truncated``.
+    paged with ``offset`` / ``limit`` (bounded by BUILDER_LIST_MAX_LIMIT and the
+    TOOL_RESULT_MAX_BYTES budget) and the result carries
+    ``matched_candidate_count`` (total before paging), ``offset``,
+    ``next_offset`` and ``truncated``.
     """
     needle = field_value_contains.lower() if field_value_contains else None
     unredacted = workspace.snapshot(redact_payload=False)["candidates"]
@@ -5784,39 +6149,36 @@ def _search_builder_candidates(
             )
             if needle not in serialized.lower():
                 continue
-        matched.append(candidate)
+        # RETURN redacted summaries only: collapse staged-field values to keys/count
+        # so the searched field text is never echoed back to the model.
+        matched.append(
+            {
+                **candidate,
+                "staged_fields": {
+                    "keys": sorted((candidate.get("staged_fields") or {}).keys()),
+                    "field_count": len(candidate.get("staged_fields") or {}),
+                },
+            }
+        )
 
-    matched_total = len(matched)
-    cap = _normalize_builder_page_limit(limit)
-    start = _normalize_builder_page_offset(offset)
-    page = matched[start : start + cap]
-    # RETURN redacted summaries only: collapse staged-field values to keys/count
-    # so the searched field text is never echoed back to the model.
-    redacted_page = [
-        {
-            **candidate,
-            "staged_fields": {
-                "keys": sorted((candidate.get("staged_fields") or {}).keys()),
-                "field_count": len(candidate.get("staged_fields") or {}),
-            },
-        }
-        for candidate in page
-    ]
-    result = _builder_summary(workspace, include_discarded=include_discarded)
-    result["candidates"] = redacted_page
-    result["matched_candidate_count"] = matched_total
-    result["returned_candidate_count"] = len(redacted_page)
-    result["offset"] = start
-    has_more = matched_total > start + len(redacted_page)
-    result["next_offset"] = start + len(redacted_page) if has_more else None
-    result["truncated"] = has_more
-    return result
+    return _builder_page(
+        workspace,
+        matched,
+        include_discarded=include_discarded,
+        limit=limit,
+        offset=offset,
+        total_key="matched_candidate_count",
+        decorate=decorate,
+    )
 
 
+@document_rationale_arg
 def _stage_gene_expression_observation_impl(
     pending_ref_id: str,
     evidence_record_ids: Annotated[List[str], Field(min_length=1, max_length=20)],
     where_expressed_statement: str,
+    rationale: str,
+    data_provider: str,
     subject: GeneExpressionSubjectInput,
     reference: GeneExpressionReferenceInput,
     controlled_fields: Annotated[List[GeneExpressionControlledFieldInput], Field(min_length=1, max_length=20)],
@@ -5824,9 +6186,22 @@ def _stage_gene_expression_observation_impl(
 ) -> AgrQueryResult:
     """Stage one gene-expression observation candidate through the builder workspace.
 
+    Every value is staged in the paper's own wording and stays UNRESOLVED until its
+    validator looks it up; extraction never looks up or supplies a validated identity. A
+    controlled field carries its wording as ``mention`` (for the relation or a stage slim
+    term, the allowed term name you chose) and, only when the paper itself prints one, the
+    ontology ID as ``proposed_curie``. The stage is the developmental_stage_start controlled
+    field: its mention is the paper's stage wording; leave it out when the paper states no
+    stage.
+
     ``condition_relations`` is required-but-nullable under the strict tool schema: pass ``null`` (or
-    ``[]``) when the paper states no experimental conditions; otherwise pass the grounded nested
+    ``[]``) when the paper states no experimental conditions; otherwise pass the nested
     ConditionRelation list (see ``<experimental_condition_rules>`` in the extractor prompt).
+
+    Args:
+        data_provider: The Alliance member database for the paper's organism, as its
+            abbreviation (for example ZFIN, MGI, FB, WB). The data-provider validator
+            confirms it against the Alliance provider list.
     """
 
     attempted_query = _attempt_query(
@@ -5834,6 +6209,8 @@ def _stage_gene_expression_observation_impl(
         pending_ref_id=pending_ref_id,
         evidence_record_ids=evidence_record_ids,
         where_expressed_statement=where_expressed_statement,
+        rationale=rationale,
+        data_provider=data_provider,
         subject=subject.model_dump(mode="json") if hasattr(subject, "model_dump") else subject,
         reference=reference.model_dump(mode="json") if hasattr(reference, "model_dump") else reference,
         controlled_fields=[
@@ -5851,6 +6228,8 @@ def _stage_gene_expression_observation_impl(
             pending_ref_id=pending_ref_id,
             evidence_record_ids=evidence_record_ids,
             where_expressed_statement=where_expressed_statement,
+            rationale=rationale,
+            data_provider=data_provider,
             subject=subject,
             reference=reference,
             controlled_fields=controlled_fields,
@@ -5865,20 +6244,35 @@ def _stage_gene_expression_observation_impl(
         )
 
     issues: List[Dict[str, Any]] = []
-    reference_issue = _reference_id_validation_issue(stage_input.reference.reference_id)
+    reference_issue = _reference_id_validation_issue(stage_input.reference.mention)
     if reference_issue:
         issues.append(reference_issue)
 
-    resolver_entries: List[ResolverCallLedgerEntry] = []
+    controlled_values: List[Tuple[str, Dict[str, Any]]] = []
+    single_valued_paths: set[str] = set()
     for controlled_field in stage_input.controlled_fields:
-        entry, issue = _resolver_entry_for_controlled_field(
-            field_path=controlled_field.field_path,
-            selected_value=controlled_field.selected_value,
+        field_path = controlled_field.field_path
+        if not _GENE_EXPRESSION_CONTROLLED_TARGETS[field_path][1]:
+            if field_path in single_valued_paths:
+                issues.append(
+                    {
+                        "field_path": field_path,
+                        "reason": "duplicate_controlled_field",
+                        "message": f"{field_path} holds one value; stage it once.",
+                    }
+                )
+                continue
+            single_valued_paths.add(field_path)
+        controlled_values.append(
+            (
+                field_path,
+                _gene_expression_controlled_value(
+                    field_path=field_path,
+                    mention=controlled_field.mention,
+                    proposed_curie=controlled_field.proposed_curie,
+                ),
+            )
         )
-        if issue:
-            issues.append(issue)
-        elif entry is not None:
-            resolver_entries.append(entry)
     if issues:
         return _gene_expression_validation_result(
             message="stage_gene_expression_observation rejected invalid builder input.",
@@ -5889,13 +6283,12 @@ def _stage_gene_expression_observation_impl(
 
     workspace = get_active_extraction_builder_workspace()
     candidate_id = _gene_expression_candidate_id(workspace, stage_input.pending_ref_id)
-    payload = _stage_payload_from_gene_expression_input(stage_input, resolver_entries)
+    payload = _stage_payload_from_gene_expression_input(stage_input, controlled_values)
     candidate = workspace.upsert_candidate(
         candidate_id=candidate_id,
         staged_fields=payload,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
-        resolver_selection_refs=[entry.tool_call_id for entry in resolver_entries],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -5903,7 +6296,6 @@ def _stage_gene_expression_observation_impl(
         "status": candidate.status,
         "pending_ref_ids": candidate.pending_ref_ids,
         "evidence_record_ids": candidate.evidence_record_ids,
-        "resolver_selection_refs": candidate.resolver_selection_refs,
         "builder": _builder_summary(workspace),
     }
     _emit_gene_expression_builder_event(
@@ -5920,7 +6312,17 @@ def _patch_gene_expression_observation_impl(
     pending_ref_id: str,
     updates: Annotated[List[GeneExpressionPatchUpdateInput], Field(min_length=1, max_length=25)],
 ) -> AgrQueryResult:
-    """Patch enumerated fields on one staged gene-expression observation."""
+    """Patch enumerated fields on one staged gene-expression observation.
+
+    Args:
+        updates: Field updates, each a field_path with its string_value, mention,
+            proposed_curie or evidence_record_ids. subject, reference and data_provider take the
+            new paper wording in string_value. A controlled field takes its paper wording in
+            mention and, only when the paper prints one, its ontology ID in proposed_curie; a
+            list field gains one more value. Every patched value stays UNRESOLVED until its
+            validator looks it up. A `rationale` update must be non-empty; it cannot be
+            cleared.
+    """
 
     attempted_query = _attempt_query(
         "patch_gene_expression_observation",
@@ -5982,41 +6384,41 @@ def _patch_gene_expression_observation_impl(
 
     issues: List[Dict[str, Any]] = []
     payload = deepcopy(candidate.staged_fields)
-    resolver_refs = list(candidate.resolver_selection_refs)
     evidence_ids = list(candidate.evidence_record_ids)
-    helper_selections = (
-        payload.setdefault("metadata", {})
-        .setdefault("provenance", {})
-        .setdefault("helper_selections", [])
-    )
     for update in patch_input.updates:
         if update.field_path in _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS:
-            entry, issue = _resolver_entry_for_controlled_field(
+            _place_gene_expression_controlled_value(
+                payload,
                 field_path=update.field_path,
-                selected_value=update.string_value,
+                value=_gene_expression_controlled_value(
+                    field_path=update.field_path,
+                    mention=update.mention or "",
+                    proposed_curie=update.proposed_curie,
+                ),
             )
-            if issue:
-                issues.append(issue)
-                continue
-            assert entry is not None
-            _apply_resolver_selection(payload, entry=entry)
-            helper_selections.append(entry.provenance_selection())
-            if entry.tool_call_id not in resolver_refs:
-                resolver_refs.append(entry.tool_call_id)
+            continue
+        if update.field_path in _GENE_EXPRESSION_MENTION_PATCH_TARGETS:
+            mention = update.string_value or ""
+            if update.field_path == "reference":
+                reference_issue = _reference_id_validation_issue(mention)
+                if reference_issue:
+                    issues.append(reference_issue)
+                    continue
+            target_path = _GENE_EXPRESSION_MENTION_PATCH_TARGETS[update.field_path]
+            payload[target_path] = _gene_expression_mention_value(target_path, mention)
             continue
         if update.field_path == "evidence_record_ids":
             evidence_ids = list(update.evidence_record_ids or [])
             continue
-        if update.field_path == "reference.reference_id" and update.string_value:
-            reference_issue = _reference_id_validation_issue(update.string_value)
-            if reference_issue:
-                issues.append(reference_issue)
-                continue
-        _set_gene_expression_patch_value(
-            payload,
-            update.field_path,
-            update.string_value,
-        )
+        if update.field_path == "rationale":
+            try:
+                payload["rationale"] = normalize_rationale(update.string_value or "")
+            except ValueError as exc:
+                issues.append(
+                    {"field_path": "rationale", "reason": "invalid_rationale", "message": str(exc)}
+                )
+            continue
+        _set_dotted_payload_value(payload, update.field_path, update.string_value)
 
     if issues:
         return _gene_expression_validation_result(
@@ -6030,7 +6432,6 @@ def _patch_gene_expression_observation_impl(
         staged_fields=payload,
         pending_ref_ids=candidate.pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=resolver_refs,
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -6045,26 +6446,6 @@ def _patch_gene_expression_observation_impl(
         output_summary=summary,
     )
     return _ok(data=summary, count=1, lookup_status=LOOKUP_STATUS_SUCCESS)
-
-
-def _set_gene_expression_patch_value(
-    payload: Dict[str, Any],
-    field_path: str,
-    value: Optional[str],
-) -> None:
-    mapping = {
-        "subject.source_phrase": "expression_annotation_subject.source_phrase",
-        "subject.gene_symbol": "expression_annotation_subject.gene_symbol",
-        "subject.primary_external_id": "expression_annotation_subject.primary_external_id",
-        "reference.source_phrase": "single_reference.source_phrase",
-        "reference.reference_id": "single_reference.reference_id",
-        "reference.curie": "single_reference.curie",
-        "reference.pmid": "single_reference.pmid",
-        "reference.doi": "single_reference.doi",
-        "reference.title": "single_reference.title",
-    }
-    target_path = mapping.get(field_path, field_path)
-    _set_dotted_payload_value(payload, target_path, value)
 
 
 def _discard_gene_expression_observation_impl(
@@ -6108,7 +6489,10 @@ def _discard_gene_expression_observation_impl(
             method="discard_gene_expression_observation",
             attempted_query=attempted_query,
         )
-    summary = _builder_summary(workspace, include_discarded=True)
+    summary = {
+        **_builder_summary(workspace, include_discarded=True),
+        "discarded_candidate_id": discard_input.candidate_id,
+    }
     _emit_gene_expression_builder_event(
         "gene_expression_builder.discard_completed",
         action="discard",
@@ -6241,7 +6625,6 @@ def _materialize_gene_expression_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     """Domain materializer wrapper that emits gene-expression builder events.
 
@@ -6264,7 +6647,6 @@ def _materialize_gene_expression_with_events(
         workspace=workspace,
         candidate_ids=candidate_id_list,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     for issue in materialization.issues:
         if issue.get("reason") != "placeholder_reference":
@@ -6344,19 +6726,13 @@ def _finalize_gene_expression_extraction_impl(
         # Missing run-scoped context is not recoverable; empty inputs become
         # explicit materialization validation issues downstream.
         evidence_records = []
-    try:
-        resolver_ledger = get_active_resolver_call_ledger()
-    except RuntimeError:
-        # Missing resolver ledger context surfaces as resolver provenance
-        # validation failures rather than a successful finalization.
-        resolver_ledger = None
 
+    # Extraction records the paper's wording only; validators look every value up.
     outcome = finalize_builder_extraction(
         workspace=workspace,
         candidate_ids=candidate_ids,
         materialize=_materialize_gene_expression_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_ledger.get if resolver_ledger is not None else None,
         materialized_candidate_prefix="gene-expression-envelope",
     )
 
@@ -6370,7 +6746,7 @@ def _finalize_gene_expression_extraction_impl(
 
     finalization = outcome.finalization
     summary = {
-        "builder_finalization": finalization.summary(),
+        "builder_finalization": _builder_finalization_summary(finalization.summary()),
         "builder": _builder_summary(workspace, include_discarded=True),
     }
     _emit_gene_expression_builder_event(
@@ -6460,7 +6836,7 @@ def create_groq_agr_curation_query_tool():
 # Public, LLM-facing FunctionTools for the run-state builder/resolver tools.
 #
 # The raw ``_*_impl`` functions above are plain sync functions that read run-scoped state
-# (builder workspace / resolver ledger / evidence records) via the agr_ai_curation_runtime
+# (builder workspace / evidence records) via the agr_ai_curation_runtime
 # ``get_active_*`` shims. The OpenAI Agents SDK runs sync function tools on worker threads,
 # where event-loop contextvars do not reliably appear -- so the core rebuilds each of these
 # per run with a closure that binds the run state inside the worker thread (see

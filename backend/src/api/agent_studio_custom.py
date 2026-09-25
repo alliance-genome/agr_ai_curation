@@ -20,7 +20,10 @@ from src.services.user_service import set_global_user_from_cognito
 from src.services.document_access import exclude_benchmark_document
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.openai_agents import run_agent_streamed
-from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+from src.lib.openai_agents.event_types import (
+    INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+    curator_facing_run_error_message,
+)
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.lib.agent_studio.catalog_service import get_agent_by_id
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
@@ -926,10 +929,13 @@ async def test_custom_agent_endpoint(
                             custom_agent_id,
                             extra={"session_id": session_id, "trace_id": trace_id or flat.get("trace_id")},
                         )
-                    flat["message"] = "Custom-agent test failed unexpectedly."
+                    public_message = (
+                        curator_facing_run_error_message(flat) or "Custom-agent test failed unexpectedly."
+                    )
+                    flat["message"] = public_message
                     details = flat.get("details")
                     if isinstance(details, dict) and "error" in details:
-                        flat["details"] = {**details, "error": "Custom-agent test failed unexpectedly."}
+                        flat["details"] = {**details, "error": public_message}
                 yield f"data: {json.dumps(flat, default=str)}\n\n"
 
             done_event = {

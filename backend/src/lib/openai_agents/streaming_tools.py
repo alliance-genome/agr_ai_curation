@@ -44,7 +44,21 @@ from src.lib.curation_workspace.execution_provenance import capture_source_docum
 from src.schemas.execution_provenance import ExtractionExecutionContext
 
 from .audit_labels import build_specialist_internal_friendly_name
+from .langfuse_client import is_openai_agents_tracing_enabled
+from .tool_surface import (
+    MODE_DEFERRED,
+    ToolGroupCapError,
+    apply_tool_surface,
+    canonical_tool_name,
+    record_tool_surface_prompt,
+    replay_input_without_tool_search,
+    run_config_for_tool_surface,
+    tool_surface_trace_attributes,
+)
 from .config import (
+    PROMPT_CACHE_KEY_FIELD,
+    PromptCacheIdentity,
+    build_prompt_cache_key,
     get_batching_nudge_threshold,
     get_layer2_force_tool_finalization_enabled,
     get_max_turns,
@@ -90,10 +104,13 @@ from .extraction_trace_events import (
     write_extraction_trace_event,
     write_stream_event,
 )
-from .resolver_call_ledger import (
-    ResolverCallLedger,
-    reset_active_resolver_call_ledger,
-    set_active_resolver_call_ledger,
+from .tool_result_bounds import (
+    budget_failure,
+    is_budget_failure,
+    report_budget_failure_result,
+    report_tool_result_budget_escape,
+    serialized_size,
+    tool_result_budget,
 )
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
@@ -125,8 +142,13 @@ from src.lib.curation_workspace.extraction_results import (
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 from src.schemas.domain_validator import is_domain_validator_result_schema
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
+from src.lib.packages import tool_roles
+from .model_request_measurement import install_model_request_measurement
 
 logger = logging.getLogger(__name__)
+
+# Specialist runs (streamed and retry) measure every model request (ALL-1279).
+install_model_request_measurement()
 
 INTERNAL_EXTRACTION_RESULT_EVENT_TYPE = _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 _DOCUMENT_REQUIRED_TOOL_NAMES = set(DOCUMENT_REQUIRED_TOOL_NAMES)
@@ -648,8 +670,14 @@ def _reasoning_summary_text(value: Any) -> str:
 
 
 def _run_config_with_full_trace_payloads(run_config: Any) -> Any:
-    """Return a run config that preserves tracing state but includes payload data."""
-    effective_config = run_config or RunConfig(tracing_disabled=True)
+    """Return a run config that preserves tracing state but includes payload data.
+
+    Without a parent config the specialist follows the process tracing state, so
+    its model turns are traced and cost-attributed like any other run.
+    """
+    effective_config = run_config or RunConfig(
+        tracing_disabled=not is_openai_agents_tracing_enabled()
+    )
     try:
         return replace(effective_config, trace_include_sensitive_data=True)
     except TypeError:
@@ -835,32 +863,9 @@ def _extract_tool_name(tool: Any) -> str:
     ).strip()
 
 
-# Tool-binding metadata flag (in each domain pack's bindings.yaml) that marks a
-# tool as a builder-materializer finalize tool. The runtime derives the set of
-# finalize-tool names from this flag instead of a hardcoded literal, so adding a
-# new builder data type is a domain-pack edit, not a platform edit.
-_BUILDER_FINALIZATION_METADATA_KEY = "builder_finalization"
-
-
-@lru_cache(maxsize=1)
-def builder_finalization_tool_names() -> frozenset[str]:
-    """Return the registry-derived set of builder-materializer finalize-tool names.
-
-    A tool is a builder finalize tool when its package tool-binding metadata
-    declares ``builder_finalization: true``. This makes builder detection a
-    domain-pack/registry concern (project-agnostic core) rather than a hardcoded
-    per-type literal in the platform runtime.
-    """
-    return frozenset(
-        tool_id
-        for tool_id, metadata in _tool_metadata_by_name().items()
-        if bool(metadata.get(_BUILDER_FINALIZATION_METADATA_KEY))
-    )
-
-
 def is_builder_materializer_agent(agent: Agent) -> bool:
     """Return whether an agent finalizes backend-materialized builder output."""
-    finalization_tool_names = builder_finalization_tool_names()
+    finalization_tool_names = tool_roles.builder_finalization_tool_names()
     return any(
         _extract_tool_name(tool) in finalization_tool_names
         for tool in (getattr(agent, "tools", None) or [])
@@ -871,19 +876,6 @@ def _import_callable(import_path: str) -> Any:
     module_name, attr_name = import_path.split(":", 1)
     module = importlib.import_module(module_name)
     return getattr(module, attr_name)
-
-
-@lru_cache(maxsize=16)
-def _tool_metadata_by_name() -> Dict[str, Dict[str, Any]]:
-    """Return package-declared tool metadata keyed by tool ID."""
-    from src.lib.packages.tool_registry import load_tool_registry
-
-    registry = load_tool_registry()
-    return {
-        binding.tool_id: dict(binding.metadata)
-        for binding in registry.bindings
-        if isinstance(binding.metadata, dict)
-    }
 
 
 @lru_cache(maxsize=16)
@@ -908,7 +900,7 @@ def _tool_provider_adapter_factories(adapter_key: str) -> Dict[str, Any]:
 def _required_package_tool_names(available_tool_names: set[str]) -> set[str]:
     return required_package_tool_names_from_metadata(
         available_tool_names,
-        _tool_metadata_by_name(),
+        tool_roles.tool_metadata_by_name(),
     )
 
 
@@ -986,7 +978,7 @@ def _compute_adaptive_specialist_max_turns(
     """Increase turn budget for package-declared bulk lookup workloads."""
     tool_names = _agent_tool_names(agent)
     bulk_specs = [
-        _tool_metadata_by_name().get(tool_name, {}).get("bulk_list_optimization")
+        tool_roles.tool_metadata_by_name().get(tool_name, {}).get("bulk_list_optimization")
         for tool_name in tool_names
     ]
     bulk_specs = [spec for spec in bulk_specs if isinstance(spec, dict) and spec.get("enabled")]
@@ -1048,7 +1040,7 @@ def _build_tool_efficiency_instruction(agent: Agent, input_text: str) -> str:
     """Return guidance that nudges large list processing toward fewer tool turns."""
     tool_names = _agent_tool_names(agent)
     bulk_specs = [
-        _tool_metadata_by_name().get(tool_name, {}).get("bulk_list_optimization")
+        tool_roles.tool_metadata_by_name().get(tool_name, {}).get("bulk_list_optimization")
         for tool_name in tool_names
     ]
     bulk_specs = [spec for spec in bulk_specs if isinstance(spec, dict) and spec.get("enabled")]
@@ -1133,7 +1125,7 @@ def _required_tool_failure_message(
             f"Required: {required_text}. Called: {called_text}."
         )
 
-    metadata_by_name = _tool_metadata_by_name()
+    metadata_by_name = tool_roles.tool_metadata_by_name()
     message = None
     for tool_name in sorted(required_tools):
         required_call = metadata_by_name.get(tool_name, {}).get("required_tool_call")
@@ -1419,7 +1411,7 @@ def _structured_specialist_finalization_required(
     if _structured_specialist_finalization_tool_name(finalization_config) is None:
         return False
     existing_tool_names = _agent_tool_names(agent)
-    if any(name in builder_finalization_tool_names() for name in existing_tool_names):
+    if any(name in tool_roles.builder_finalization_tool_names() for name in existing_tool_names):
         return False
     return True
 
@@ -3374,8 +3366,8 @@ def _active_builder_workspace_or_none() -> ExtractionBuilderWorkspace | None:
         return None
 
 
-# Package tools that need the run-scoped extraction state (builder workspace + resolver
-# ledger + evidence records). Maps the LLM-facing tool name to the import path of the raw
+# Package tools that need the run-scoped extraction state (builder workspace + evidence
+# records). Maps the LLM-facing tool name to the import path of the raw
 # (undecorated) implementation. These tools run as sync function tools, which the Agents
 # SDK dispatches on worker threads via asyncio.to_thread; contextvars set on the event
 # loop do not reliably appear there, but a per-run CLOSURE does (it rides in the function
@@ -3390,7 +3382,7 @@ _BUILDER_RUN_STATE_METADATA_KEY = "builder_run_state"
 def _run_state_tool_impls() -> Dict[str, str]:
     """Return the registry-derived map of run-state tool name -> raw impl import path.
 
-    A tool is a run-state builder/resolver tool when its package tool-binding metadata declares
+    A tool is a run-state builder tool when its package tool-binding metadata declares
     ``builder_run_state: true``. The raw impl path follows the ``_<tool_id>_impl`` convention in
     the same module as the tool's public ``callable`` binding. Deriving this from binding metadata
     (rather than a hardcoded per-type literal) keeps run-state binding a domain-pack/registry
@@ -3418,7 +3410,6 @@ def _build_run_state_bound_tool(
     existing_tool: Any,
     *,
     builder_workspace: ExtractionBuilderWorkspace,
-    resolver_ledger: ResolverCallLedger,
     evidence_records: List[Dict[str, Any]],
 ) -> Any:
     """Rebuild a package tool so the run-scoped state is bound INSIDE the tool's worker
@@ -3427,7 +3418,7 @@ def _build_run_state_bound_tool(
     The OpenAI Agents SDK runs sync function tools on worker threads (asyncio.to_thread).
     Contextvars set on the event loop do not reliably appear in that thread, but a closure
     does -- it is captured in the function object -- which is exactly why the async
-    ``record_evidence`` factory works. We capture the run's workspace/ledger/evidence in a
+    ``record_evidence`` factory works. We capture the run's workspace/evidence in a
     closure and bind them into the contextvars at the top of the call (running in-thread),
     where the unchanged tool body's ``get_active_*`` shims then resolve. ``functools.wraps``
     preserves the original signature so the LLM-facing JSON schema is identical, and the
@@ -3438,22 +3429,23 @@ def _build_run_state_bound_tool(
 
     from agents import function_tool
 
+    tool_name = getattr(existing_tool, "name", None) or raw_func.__name__
+
     @function_tool(
         strict_mode=bool(getattr(existing_tool, "strict_json_schema", True)),
-        name_override=getattr(existing_tool, "name", None) or raw_func.__name__,
+        name_override=tool_name,
         description_override=getattr(existing_tool, "description", "") or "",
     )
     @functools.wraps(raw_func)
     def _run_state_bound(*args: Any, **kwargs: Any) -> Any:
         ev_token = set_active_evidence_records(evidence_records)
         bw_token = set_active_extraction_builder_workspace(builder_workspace)
-        rl_token = set_active_resolver_call_ledger(resolver_ledger)
         try:
-            return raw_func(*args, **kwargs)
+            result = raw_func(*args, **kwargs)
         finally:
-            reset_active_resolver_call_ledger(rl_token)
             reset_active_extraction_builder_workspace(bw_token)
             reset_active_evidence_records(ev_token)
+        return _enforce_run_state_tool_result_budget(tool_name, result)
 
     if hasattr(existing_tool, "profile_bound_schema"):
         from src.lib.agent_studio.profile_tools import preserve_profile_tool_contract
@@ -3461,12 +3453,52 @@ def _build_run_state_bound_tool(
     return _run_state_bound
 
 
+def _enforce_run_state_tool_result_budget(tool_name: str, result: Any) -> Any:
+    """Keep builder tool results inside the model-facing budget.
+
+    Builder acknowledgments and pages are compact by construction, so an
+    oversized result is an unexpected contract escape: it is reported once and
+    replaced by a compact failure that still states the operation's outcome.
+    """
+    # Builder helpers return their compact failure as the result body.
+    body = getattr(result, "data", result)
+    if is_budget_failure(body):
+        report_budget_failure_result(
+            body,
+            tool_name=tool_name,
+            component="builder_tool_adapter",
+        )
+        return result
+    budget = tool_result_budget()
+    measured = serialized_size(result)
+    if measured <= budget:
+        return result
+    report_tool_result_budget_escape(
+        tool_name=tool_name,
+        measured=measured,
+        limit=budget,
+        component="builder_tool_adapter",
+        enforced=True,
+    )
+    plain = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+    failure = budget_failure(tool_name=tool_name, measured=measured, limit=budget)
+    failure["result_bounds"]["reported"] = True
+    if isinstance(plain, dict):
+        failure["operation_status"] = plain.get("status")
+        failure["operation_lookup_status"] = plain.get("lookup_status")
+    failure["message"] = (
+        "The operation ran, but its result was too large to return. Page staged "
+        "candidates with this builder's list_staged_* or find_staged_* tool to "
+        "inspect the current state."
+    )
+    return failure
+
+
 def _bind_run_state_into_tools(
     agent: Agent,
     *,
     evidence_records: List[Dict[str, Any]],
     builder_workspace: ExtractionBuilderWorkspace,
-    resolver_ledger: ResolverCallLedger,
 ) -> Agent:
     """Replace each run-state package tool on the agent with a closure-bound rebuild for
     this run. Non-run-state tools are left untouched. Mirrors
@@ -3486,7 +3518,6 @@ def _bind_run_state_into_tools(
                 raw_func,
                 tool,
                 builder_workspace=builder_workspace,
-                resolver_ledger=resolver_ledger,
                 evidence_records=evidence_records,
             )
         )
@@ -3795,6 +3826,35 @@ def _agent_runtime_curation_adapter_key(agent: Agent) -> Optional[str]:
     return adapter_key or None
 
 
+def _structured_retry_model_settings(
+    agent: Agent,
+    *,
+    agent_key: str,
+    instructions: str,
+) -> ModelSettings:
+    """Model settings for the output-synthesis retry of a structured specialist.
+
+    The retry runs with default settings. When the specialist sends the stable
+    native OpenAI prompt cache key, the retry sends its own stable key too, so
+    the SDK never generates a per-run key for it.
+    """
+
+    source_extra_args = getattr(getattr(agent, "model_settings", None), "extra_args", None) or {}
+    if PROMPT_CACHE_KEY_FIELD not in source_extra_args:
+        return ModelSettings()
+    return ModelSettings(
+        extra_args={
+            PROMPT_CACHE_KEY_FIELD: build_prompt_cache_key(
+                PromptCacheIdentity(
+                    agent_key=f"{agent_key}.structured_retry",
+                    static_prompt=instructions,
+                ),
+                model=str(agent.model),
+            )
+        }
+    )
+
+
 def _agent_runtime_canonical_agent_key(agent: Agent) -> Optional[str]:
     """Return the canonical DB/config agent key attached during runtime creation."""
 
@@ -3994,7 +4054,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
             metadata=dict(candidate.metadata),
             execution_receipt=candidate.execution_receipt,
         )
-        envelope = domain_envelope_from_extraction_result(extraction_record)
+        envelope = domain_envelope_from_extraction_result(extraction_record, stored=False)
         domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
         dispatch_phase_timings_ms["envelope_materialization_ms"] = _elapsed_ms(
             envelope_started_at
@@ -4543,7 +4603,7 @@ def _builder_finalizer_tool_calls(
 ) -> List[SpecialistToolCall]:
     """Return builder finalizer tool calls observed in the specialist stream."""
 
-    finalizer_names = builder_finalization_tool_names()
+    finalizer_names = tool_roles.builder_finalization_tool_names()
     return [
         call
         for call in tool_calls
@@ -4569,7 +4629,6 @@ def _builder_finalization_diagnostics(
             "status": candidate.status,
             "evidenceRecordCount": len(candidate.evidence_record_ids),
             "pendingRefCount": len(candidate.pending_ref_ids),
-            "resolverSelectionCount": len(candidate.resolver_selection_refs),
         }
         for candidate_id, candidate in builder_workspace.candidates.items()
     ]
@@ -4967,14 +5026,14 @@ async def run_specialist_with_events(
                 extra={"specialist_name": specialist_name, "tool_name": tool_name},
             )
 
-    # Commit pending prompts for this specialist - moves from pending to used
-    # This is where the agent ACTUALLY executes, so we log the prompts now
-    commit_pending_prompts(runtime_agent)
+    # Prompts are committed right before the run starts, once the compiled
+    # tool surface has added its runtime layer (see below).
+    prompt_agent = runtime_agent
 
     effective_config = _run_config_with_full_trace_payloads(run_config)
 
-    # Bind the run-scoped extraction context (evidence records, builder workspace,
-    # resolver ledger) BEFORE starting the streamed run. Runner.run_streamed() snapshots
+    # Bind the run-scoped extraction context (evidence records, builder workspace)
+    # BEFORE starting the streamed run. Runner.run_streamed() snapshots
     # the current context for the SDK's background execution task, so any contextvar bound
     # AFTER it is invisible to the specialist's tools (record_evidence / stage /
     # attach_evidence / finalize), which manifests as "No active extraction builder
@@ -5016,8 +5075,6 @@ async def run_specialist_with_events(
         execution_receipt=getattr(runtime_agent, "execution_receipt", None),
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
-    resolver_call_ledger = ResolverCallLedger(trace_id=builder_workspace.run_id)
-    resolver_call_ledger_token = set_active_resolver_call_ledger(resolver_call_ledger)
     logger.info(
         "%s bound extraction builder workspace before run start (run_id=%s, "
         "document_id=%s, domain_pack_id=%s, trace_run_present=%s)",
@@ -5033,25 +5090,69 @@ async def run_specialist_with_events(
         },
     )
 
-    # Rebuild the run-state package tools so the builder workspace + resolver ledger +
+    # Rebuild the run-state package tools so the builder workspace and
     # evidence records are bound INSIDE each tool's worker thread via a per-run closure.
     # The SDK runs sync function tools on worker threads (asyncio.to_thread) where the
     # contextvars set above do not reliably appear; a closure does (it rides in the
     # function object), so each tool resolves its run state regardless of the thread
     # boundary. Tool bodies and the package contract are unchanged.
-    runtime_agent = _bind_run_state_into_tools(
-        runtime_agent,
-        evidence_records=live_evidence_records,
-        builder_workspace=builder_workspace,
-        resolver_ledger=resolver_call_ledger,
+    # The caller's agent is shared by every invocation of this specialist tool
+    # (including concurrent ones); run-state binding and the compiled tool
+    # surface below are per run, so they go on a per-run copy (ALL-1280).
+    try:
+        if runtime_agent is agent:
+            runtime_agent = copy.copy(agent)
+        runtime_agent = _bind_run_state_into_tools(
+            runtime_agent,
+            evidence_records=live_evidence_records,
+            builder_workspace=builder_workspace,
+        )
+
+        # Validate the actual post-adapter, post-rebinding schema sent to the SDK.
+        from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
+
+        for runtime_tool in runtime_agent.tools:
+            if hasattr(runtime_tool, "profile_bound_schema"):
+                assert_profile_tool_contract(runtime_tool)
+
+        # ALL-1280: compile the provider-facing tool surface LAST, after run-state
+        # rebinding (which rebuilds tools without deferral metadata).
+        tool_surface = apply_tool_surface(
+            runtime_agent,
+            required_tool_names=(
+                (structured_finalization_state.tool_name,)
+                if structured_finalization_state.required and structured_finalization_state.tool_name
+                else ()
+            ),
+        )
+        record_tool_surface_prompt(prompt_agent, tool_surface, target_agent=runtime_agent)
+        # The specialist run gets tool-not-found recovery for its deferred
+        # tools; the tool-less structured-output retry keeps effective_config.
+        specialist_run_config = run_config_for_tool_surface(effective_config, tool_surface)
+    except BaseException as exc:
+        if isinstance(exc, ToolGroupCapError):
+            # Curator-facing: the audit trail and a flow's failure message show
+            # this text (a chat run error is replaced by a generic message).
+            add_specialist_event({
+                "type": "SPECIALIST_ERROR",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "specialist": specialist_name,
+                    "error": str(exc),
+                    "message": str(exc),
+                    "reason": "tool_group_too_large",
+                    "severity": "error",
+                },
+            })
+        reset_active_evidence_records(evidence_workspace_token)
+        reset_active_extraction_builder_workspace(builder_workspace_token)
+        raise
+
+    # Commit pending prompts for this specialist - moves from pending to used
+    # This is where the agent ACTUALLY executes, so we log the prompts now
+    commit_pending_prompts(
+        runtime_agent if tool_surface.mode == MODE_DEFERRED else prompt_agent
     )
-
-    # Validate the actual post-adapter, post-rebinding schema sent to the SDK.
-    from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
-
-    for runtime_tool in runtime_agent.tools:
-        if hasattr(runtime_tool, "profile_bound_schema"):
-            assert_profile_tool_contract(runtime_tool)
 
     # Run with streaming to capture internal events
     runner_create_started_at = time.monotonic()
@@ -5169,12 +5270,13 @@ async def run_specialist_with_events(
 
     benchmark_route_token = set_benchmark_invocation_route(runtime_agent)
     try:
-        result = Runner.run_streamed(
-            runtime_agent,
-            input=input_text,
-            max_turns=max_turns,
-            run_config=effective_config
-        )
+        with tool_surface_trace_attributes(tool_surface):
+            result = Runner.run_streamed(
+                runtime_agent,
+                input=input_text,
+                max_turns=max_turns,
+                run_config=specialist_run_config
+            )
     except BaseException as exc:
         reset_benchmark_invocation_route(benchmark_route_token)
         sentry_stream_finalization_status = (
@@ -5198,6 +5300,8 @@ async def run_specialist_with_events(
         finally:
             sentry_span_context_manager.__exit__(None, None, None)
             conversation_context_manager.__exit__(None, None, None)
+            reset_active_evidence_records(evidence_workspace_token)
+            reset_active_extraction_builder_workspace(builder_workspace_token)
         raise
     phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
     write_extraction_trace_event(
@@ -5269,7 +5373,7 @@ async def run_specialist_with_events(
                                 preview = result._accumulated_text[-200:] if text_len > 200 else result._accumulated_text
                                 logger.debug("%s TEXT OUTPUT (%s chars): ...%s", specialist_name, text_len, preview)
 
-                    # Capture reasoning summary delta events (GPT-5 reasoning mode)
+                    # Capture reasoning summary delta events (reasoning mode)
                     elif response_type == "ResponseReasoningSummaryPartDoneEvent":
                         # This event contains a part of the reasoning summary
                         part = getattr(data, "part", None)
@@ -5346,13 +5450,16 @@ async def run_specialist_with_events(
                         full_text = getattr(data, "text", "")
                         if full_text:
                             result._final_text_output = full_text
-                            logger.warning(
-                                "%s GENERATED TEXT INSTEAD OF STRUCTURED OUTPUT! Length: %s chars. First 500: %s...",
-                                specialist_name,
-                                len(full_text),
-                                full_text[:500],
-                                extra={"specialist_name": specialist_name},
-                            )
+                            # Builders have no output_type (finalization is their
+                            # output), so their closing text is expected.
+                            if expected_output_type is not None:
+                                logger.warning(
+                                    "%s GENERATED TEXT INSTEAD OF STRUCTURED OUTPUT! Length: %s chars. First 500: %s...",
+                                    specialist_name,
+                                    len(full_text),
+                                    full_text[:500],
+                                    extra={"specialist_name": specialist_name},
+                                )
                     elif response_type not in ("ResponseFunctionCallArgumentsDeltaEvent",):
                         # Log other response types (but not the spammy argument deltas)
                         logger.debug("%s raw_response: type=%s", specialist_name, response_type)
@@ -5463,7 +5570,7 @@ async def run_specialist_with_events(
                         is_generating = False
 
                         tool_started_at = datetime.now(timezone.utc)
-                        current_tool_name = (
+                        current_tool_name = canonical_tool_name(
                             getattr(item, "name", None) or
                             getattr(item, "tool_name", None) or
                             getattr(getattr(item, "raw_item", None), "name", None) or
@@ -5605,12 +5712,6 @@ async def run_specialist_with_events(
                             _append_live_evidence_record(
                                 live_evidence_records, evidence_record
                             )
-
-                        resolver_call_ledger.record_tool_output(
-                            tool_call_id=str(completed_tool.get("tool_id") or "") or None,
-                            tool_name=current_tool_name,
-                            output=output,
-                        )
 
                         # Extract chunk provenance from PDF tool outputs for highlighting
                         if current_tool_name in ("search_document", "read_section"):
@@ -5792,7 +5893,6 @@ async def run_specialist_with_events(
         sentry_span_context_manager.__exit__(None, None, None)
         conversation_context_manager.__exit__(None, None, None)
         reset_active_evidence_records(evidence_workspace_token)
-        reset_active_resolver_call_ledger(resolver_call_ledger_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
         reset_benchmark_invocation_route(benchmark_route_token)
 
@@ -6005,7 +6105,7 @@ async def run_specialist_with_events(
         # =============================================================================
         # STREAMING TEXT FALLBACK
         # =============================================================================
-        # GPT-5 + reasoning mode may not include a message_output_item in new_items,
+        # Reasoning mode may not include a message_output_item in new_items,
         # but the text IS streamed via ResponseTextDeltaEvent and accumulated in
         # result._accumulated_text. Use this as a last-resort fallback for plain text agents.
         if (
@@ -6031,7 +6131,7 @@ async def run_specialist_with_events(
                         "specialist": specialist_name,
                         "text_length": len(final_output),
                         "extraction_method": "streaming_text_fallback",
-                        "message": f"{specialist_name} output extracted from streaming deltas (GPT-5 reasoning mode workaround)"
+                        "message": f"{specialist_name} output extracted from streaming deltas (reasoning mode workaround)"
                     }
                 })
 
@@ -6080,15 +6180,25 @@ async def run_specialist_with_events(
                 try:
                     # Get conversation history from the failed run so the model knows what was searched
                     # This is CRITICAL - without history, the model has no context to synthesize
-                    previous_items = result.to_input_list()
+                    # The retry agent declares no tools, so hosted tool-search
+                    # items and namespaces are rewritten for a tool-less request;
+                    # every tool call and result is kept (ALL-1280).
+                    previous_items, replay_changes = replay_input_without_tool_search(
+                        result.to_input_list()
+                    )
 
                     # Append nudge prompt to the conversation history
                     retry_input = previous_items + [{"role": "user", "content": nudge_prompt}]
 
                     logger.info(
-                        "%s retry: including %s previous items plus nudge prompt",
+                        "%s retry: including %s previous items plus nudge prompt "
+                        "(tool search items removed=%s, reasoning items removed=%s, "
+                        "function call namespaces removed=%s)",
                         specialist_name,
                         len(previous_items),
+                        replay_changes["tool_search_items_removed"],
+                        replay_changes["reasoning_items_removed"],
+                        replay_changes["function_call_namespaces_removed"],
                     )
 
                     # Create a simplified "retry agent" WITHOUT output_guardrails
@@ -6107,15 +6217,21 @@ async def run_specialist_with_events(
                             f"specialist agent has no model configured."
                         )
 
+                    retry_instructions = (
+                        f"You are completing the work of the {specialist_name}. "
+                        f"You have already gathered information through tool calls (shown in the conversation history). "
+                        f"Your ONLY task now is to synthesize this information into the required {output_type_name} structured output. "
+                        f"Do NOT attempt to call any tools. Just analyze the previous tool results and produce the output."
+                    )
                     retry_agent = Agent(
                         name=f"{specialist_name} (Retry)",
-                        instructions=(
-                            f"You are completing the work of the {specialist_name}. "
-                            f"You have already gathered information through tool calls (shown in the conversation history). "
-                            f"Your ONLY task now is to synthesize this information into the required {output_type_name} structured output. "
-                            f"Do NOT attempt to call any tools. Just analyze the previous tool results and produce the output."
-                        ),
+                        instructions=retry_instructions,
                         model=retry_model,
+                        model_settings=_structured_retry_model_settings(
+                            agent,
+                            agent_key=runtime_canonical_agent_key or specialist_name,
+                            instructions=retry_instructions,
+                        ),
                         output_type=output_type,
                         # NO tools - we don't want new searches, just synthesis
                         tools=[],

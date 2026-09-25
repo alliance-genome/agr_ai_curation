@@ -353,6 +353,8 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
         ExportKind.MODEL,
         ExportKind.PROVIDER,
         ExportKind.TOOL_POLICY_DEFAULTS,
+        ExportKind.TOOL_NAMESPACES,
+        ExportKind.TOOL_LOADING,
     }
 
     alliance_package = registry.get_package("agr.alliance")

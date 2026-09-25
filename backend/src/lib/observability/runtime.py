@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import importlib
 import logging
 from typing import Any, Literal
@@ -76,8 +76,13 @@ def report_runtime_exception(
     tags: Mapping[str, Any] | None = None,
     context: Mapping[str, Any] | None = None,
     level: Literal["fatal", "error", "warning", "info", "debug"] = "error",
+    fingerprint: Sequence[str] | None = None,
 ) -> bool:
-    """Best-effort Sentry capture for caught runtime exceptions."""
+    """Best-effort Sentry capture for caught runtime exceptions.
+
+    ``fingerprint`` overrides Sentry grouping with stable, low-cardinality
+    parts; never include per-run identifiers in it.
+    """
 
     cause: BaseException | None = exc
     seen: set[int] = set()
@@ -100,6 +105,11 @@ def report_runtime_exception(
     try:
         with sentry_sdk.new_scope() as scope:
             scope.set_level(level)
+            if fingerprint:
+                scope.fingerprint = [
+                    _safe_text(part, max_chars=tag_value_max_chars)
+                    for part in fingerprint
+                ]
             scope.set_tag("alert_type", "runtime_exception")
             scope.set_tag("runtime_component", safe_component)
             scope.set_tag("operation", safe_operation)

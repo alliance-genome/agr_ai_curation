@@ -53,7 +53,7 @@ describe('agentStudioService', () => {
         agent_id: 'gene',
         name: 'Gene Specialist',
         icon: 'G',
-        model_id: 'gpt-5.6-terra',
+        model_id: 'gpt-6-sol',
         tool_ids: [],
         allowed_group_ids: ['GROUP_A'],
       }],

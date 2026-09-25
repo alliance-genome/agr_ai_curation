@@ -101,8 +101,17 @@ def build_provider_runtime_report(
                 "provider_id": provider_id,
                 "provider_exists": provider_exists,
                 "curator_visible": bool(getattr(model, "curator_visible", True)),
+                "supports_tool_search": bool(getattr(model, "supports_tool_search", False)),
             }
         )
+        if provider_exists and getattr(model, "supports_tool_search", False) and not (
+            getattr(providers_by_id[provider_id], "supports_tool_search", False)
+        ):
+            errors.append(
+                f"Model '{model.model_id}'{_format_source_suffix(model)} declares "
+                f"supports_tool_search but provider '{provider_id}' does not declare "
+                "supports.tool_search"
+            )
         if provider_exists:
             model_ids_by_provider[provider_id].append(model.model_id)
             if bool(getattr(model, "curator_visible", True)):
@@ -199,6 +208,7 @@ def build_provider_runtime_report(
                 "mapped_model_ids": mapped_models,
                 "mapped_curator_visible_model_ids": mapped_visible_models,
                 "supports_parallel_tool_calls": bool(provider.supports_parallel_tool_calls),
+                "supports_tool_search": bool(getattr(provider, "supports_tool_search", False)),
                 "readiness": readiness,
             }
         )

@@ -23,9 +23,7 @@ from agents import (
     ModelSettings,
     RunConfig,
     Runner,
-    ToolSearchTool,
     ToolsToFinalOutputResult,
-    tool_namespace,
 )
 from langfuse import propagate_attributes
 from openai import BadRequestError
@@ -39,17 +37,25 @@ from src.lib.observability.sentry import (
     set_sentry_span_status,
 )
 from src.lib.openai_agents.config import (
-    ReasoningEffort, build_model_settings, get_agent_studio_openai_model,
+    PromptCacheIdentity, ReasoningEffort, build_model_settings, get_agent_studio_openai_model,
     get_agent_studio_reasoning_effort, require_model_reasoning_effort,
 )
 from src.lib.openai_agents.langfuse_client import get_langfuse, is_openai_agents_tracing_enabled
 from src.lib.observability.cost_context import (
     agent_identity, attach_agent_cost_identity, cost_scope, execution_context,
 )
+from src.lib.openai_agents.tool_surface import (
+    ToolSurface,
+    canonical_tool_name,
+    compile_tool_surface,
+    model_supports_tool_search,
+    resolve_tool_loading_policy,
+)
 from src.lib.openai_agents.runner import (
     build_owned_openai_responses_resources,
     close_owned_openai_resources,
 )
+from src.lib.openai_agents.model_request_measurement import flatten_loaded_tool_definitions
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +124,7 @@ class AgentStudioRunState:
     tool_search_calls: int = 0
     tool_search_outputs: int = 0
     tool_search_loaded_tools: int = 0
+    tool_surface: ToolSurface | None = None
 
     @property
     def assistant_text(self) -> str:
@@ -147,7 +154,7 @@ def _tool_call_details(item: Any) -> tuple[str, str | None, dict[str, Any]]:
     # Hosted search exposes deferred functions as ``namespace.tool_name``.
     # Keep that provider-only namespace out of the stable application SSE and
     # audit contracts, which use the registered application tool name.
-    tool_name = wire_tool_name.rsplit(".", 1)[-1]
+    tool_name = canonical_tool_name(wire_tool_name)
     call_id_value = (
         getattr(item, "call_id", None)
         or raw.get("call_id")
@@ -185,7 +192,6 @@ def _build_function_tool(
     *,
     executor: ToolExecutor,
     state: AgentStudioRunState,
-    defer_loading: bool,
 ) -> FunctionTool:
     name = str(definition.get("name") or "").strip()
     description = str(definition.get("description") or "").strip()
@@ -232,7 +238,6 @@ def _build_function_tool(
         params_json_schema=dict(schema),
         on_invoke_tool=invoke,
         strict_json_schema=False,
-        defer_loading=defer_loading,
     )
 
 
@@ -243,60 +248,48 @@ def build_agent_studio_tools(
     state: AgentStudioRunState,
     namespace_for_tool: Callable[[str], tuple[str, str]],
     forced_tool_name: str | None = None,
-    eager_tool_names: frozenset[str] = frozenset(),
 ) -> tuple[list[Any], dict[str, int]]:
-    """Build one hosted-search surface from an already authorized tool universe."""
+    """Build one hosted-search surface from an already authorized tool universe.
 
-    eager: list[FunctionTool] = []
-    grouped: dict[tuple[str, str], list[FunctionTool]] = {}
-    for definition in definitions:
-        name = str(definition.get("name") or "").strip()
-        is_forced = bool(forced_tool_name and name == forced_tool_name)
-        is_eager = is_forced or name in eager_tool_names
-        tool = _build_function_tool(
+    The shared tool-surface compiler applies the ``agent_studio`` loading
+    policy (tool_loading.yaml): the forced tool and the policy's eager tools
+    stay eager; every other tool is deferred into its Studio namespace.
+    """
+
+    tools = [
+        _build_function_tool(
             definition,
             executor=executor,
             state=state,
-            defer_loading=not is_eager,
         )
-        if is_eager:
-            eager.append(tool)
-            continue
-        namespace = namespace_for_tool(name)
-        grouped.setdefault(namespace, []).append(tool)
-
-    deferred: list[FunctionTool] = []
-    for (namespace_name, namespace_description), tools in grouped.items():
-        deferred.extend(
-            tool_namespace(
-                name=namespace_name,
-                description=namespace_description,
-                tools=tools,
-            )
-        )
-
-    tools: list[Any] = [*eager, *deferred]
-    if deferred:
-        tools.insert(
-            0,
-            ToolSearchTool(
-                execution="server",
-            ),
-        )
-    return tools, {
-        "candidate_count": len(definitions),
-        "eager_count": len(eager),
-        "deferred_count": len(deferred),
-        "namespace_count": len(grouped),
-    }
+        for definition in definitions
+    ]
+    surface = compile_tool_surface(
+        tools,
+        runtime="agent_studio",
+        agent_key="agent_studio_authoring",
+        policy=resolve_tool_loading_policy("agent_studio"),
+        supports_tool_search=model_supports_tool_search(AGENT_STUDIO_OPENAI_MODEL, "openai"),
+        namespace_resolver=namespace_for_tool,
+        forced_tool_names=(forced_tool_name,) if forced_tool_name else (),
+        model=AGENT_STUDIO_OPENAI_MODEL,
+        provider="openai",
+    )
+    state.tool_surface = surface
+    return surface.tools, surface.counts
 
 
 def build_agent_studio_model_settings(
     *,
     max_output_tokens: int,
+    prompt_cache: PromptCacheIdentity,
     tool_choice: str | None = None,
 ) -> ModelSettings:
-    """Return the exact OpenAI Responses settings required by Agent Studio."""
+    """Return the exact OpenAI Responses settings required by Agent Studio.
+
+    ``prompt_cache`` names the Studio assistant and its installed system prompt
+    template, so every Studio session shares one stable prompt cache key.
+    """
 
     shared_settings = build_model_settings(
         model=AGENT_STUDIO_OPENAI_MODEL,
@@ -305,6 +298,7 @@ def build_agent_studio_model_settings(
         parallel_tool_calls=False,
         include_usage=True,
         provider_override="openai",
+        prompt_cache=prompt_cache,
     )
     return replace(
         shared_settings,
@@ -491,6 +485,7 @@ async def stream_agent_studio_run(
             tools=tools,
             tool_use_behavior=_proposal_review_behavior(state),
         )
+        agent.tool_surface = state.tool_surface
         attach_agent_cost_identity(agent, {
             **agent_identity(workflow, agent.name, "other"),
             "provider": "openai",
@@ -543,8 +538,7 @@ async def stream_agent_studio_run(
                     elif event_name == "tool_search_output_created":
                         state.tool_search_outputs += 1
                         raw = _mapping(getattr(item, "raw_item", None))
-                        loaded_tools = raw.get("tools")
-                        loaded_count = len(loaded_tools) if isinstance(loaded_tools, list) else 0
+                        loaded_count = len(flatten_loaded_tool_definitions(raw.get("tools")))
                         state.tool_search_loaded_tools += loaded_count
                         yield {
                             "type": "TOOL_SEARCH_RESULT",
@@ -601,6 +595,7 @@ async def stream_agent_studio_run(
 async def run_forced_agent_studio_tool(
     *,
     instructions: str,
+    static_prompt: str,
     input_items: list[dict[str, Any]],
     tool_definition: Mapping[str, Any],
     executor: ToolExecutor,
@@ -610,7 +605,11 @@ async def run_forced_agent_studio_tool(
     max_turns: int,
     max_output_tokens: int,
 ) -> ExecutedTool | None:
-    """Run a bounded SDK turn that must execute one named application tool."""
+    """Run a bounded SDK turn that must execute one named application tool.
+
+    ``static_prompt`` is the installed Studio system prompt template the
+    instructions are rendered from; it keys the stable prompt cache.
+    """
 
     tool_name = str(tool_definition.get("name") or "").strip()
     tools, _ = build_agent_studio_tools(
@@ -635,10 +634,15 @@ async def run_forced_agent_studio_tool(
             model_settings=build_agent_studio_model_settings(
                 max_output_tokens=max_output_tokens,
                 tool_choice=tool_name,
+                prompt_cache=PromptCacheIdentity(
+                    agent_key="agent_studio_suggestion",
+                    static_prompt=static_prompt,
+                ),
             ),
             tools=tools,
             tool_use_behavior="stop_on_first_tool",
         )
+        agent.tool_surface = state.tool_surface
         attach_agent_cost_identity(agent, {
             **agent_identity("agent_studio_suggestion", agent.name, "other"),
             "provider": "openai",

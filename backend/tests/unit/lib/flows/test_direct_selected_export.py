@@ -8,6 +8,7 @@ import pytest
 from src.lib.context import get_current_flow_output_attachment
 from src.lib.flows import executor
 from src.lib.flows.output_projection import build_flow_output_artifact_bundle
+from src.lib.openai_agents.tools import output_formatter_tools
 from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
 from .test_profile_projection import profile_step, _selected_plan  # noqa: F401
 
@@ -54,9 +55,20 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
         completed_steps=[step], flow_name="Stock", flow_run_id="run-1", document_id="doc-1",
         node_data={"export_execution_mode": "direct", "projection_plan": plan.model_dump(mode="json")}, source_node_ids=["stocks"],
     )
+    reports = []
+    monkeypatch.setattr(
+        output_formatter_tools, "report_payload_contract_violation",
+        lambda violation, **kwargs: reports.append((violation, kwargs)),
+    )
     if save_failure:
-        with pytest.raises(ValueError, match="Storage unavailable"):
-            await tool.on_invoke_tool(SimpleNamespace(tool_name="export", run_config=None), json.dumps({"query": "Export"}))
+        # One reported failure fails the branch with its reason; nothing is re-raised.
+        result = json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name="export", run_config=None), json.dumps({"query": "Export"})))
+        assert result["status"] == "failed"
+        assert result["code"] == "save_failed"
+        assert "Storage unavailable" in executor._flow_formatter_failure_reason({"output": json.dumps(result)})
+        assert executor._formatter_failure_reported(json.dumps(result))
+        assert len(reports) == 1
+        assert reports[0][0].category == "output_delivery_failure"
     else:
         result = json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name="export", run_config=None), json.dumps({"query": "Export"})))
         assert result["status"] == "ok"
@@ -66,7 +78,11 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
     assert saved[0][3] == expected_agent_id
     assert saved[0][1].total_count == (0 if empty else 1)
     if not empty:
-        assert saved[0][1].rows[0]["stocks sources"][1] == {"name": "B"}
+        if format == "json":
+            assert saved[0][1].rows[0]["stocks sources"][1] == {"name": "B"}
+        else:
+            # CSV/TSV cells hold display text for structured values, never JSON.
+            assert saved[0][1].rows[0]["stocks sources"] == "A (A:1) | B | C:3"
     assert saved[0][4]["source_keys"] == [a.source_key for a in bundle.artifacts if a.source_key]
     assert get_current_flow_output_attachment() == before
 

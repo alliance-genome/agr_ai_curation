@@ -71,8 +71,11 @@ Token accounting preserves these meanings:
   otherwise. TraceReview does not maintain a shadow price table or silently
   estimate historical cost.
 
-Langfuse 4.21's managed model catalog contains the deployed GPT-5.4, GPT-5.5,
-and GPT-5.6 pricing variants, including applicable cache and service-tier rates.
+Langfuse 4.21's managed model catalog contains the GPT-5.4, GPT-5.5 and GPT-5.6
+pricing variants used by earlier releases, including applicable cache and
+service-tier rates. The current models (`gpt-6-sol`, `gpt-6-astra`) are priced
+only after a reviewed definition is applied; see
+[MODEL_COST_REPORTING.md](../guides/MODEL_COST_REPORTING.md).
 Historical zero-cost observations remain explicitly unavailable until an
 operator runs a supported Langfuse recalculation/backfill; TraceReview never
 mutates vendor tables.

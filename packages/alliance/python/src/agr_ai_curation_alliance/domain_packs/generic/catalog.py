@@ -8,6 +8,10 @@ from typing import Any, Mapping
 
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.capabilities import object_capabilities
+from src.lib.domain_packs.resolvable_values import (
+    ResolvableSpec,
+    declared_resolvable_fields,
+)
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
@@ -15,6 +19,8 @@ from src.lib.domain_packs.validation_registry import (
 )
 from src.schemas.domain_pack_metadata import (
     DomainPackActiveValidatorBinding,
+    DomainPackEnumDefinition,
+    DomainPackModelDefinition,
     DomainPackValidatorGroupScope,
     DomainPackFieldType,
     DomainPackFieldDefinition,
@@ -32,6 +38,7 @@ from agr_ai_curation_alliance.domain_packs.loader import get_alliance_domain_pac
 from agr_ai_curation_alliance.domain_packs.loader import load_alliance_domain_packs
 
 from .constants import GENERIC_DOMAIN_PACK_ID, GENERIC_PROXY_PREFIX
+from .values import EVIDENCE_SOURCE_FIELDS, builder_owned_keys
 
 
 @dataclass(frozen=True)
@@ -64,6 +71,33 @@ class GenericClassCatalogEntry:
     task_hints: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
     capabilities: dict[str, Any] = field(default_factory=dict)
+    # Declared resolvable values by payload path ("" for the object root).
+    resolvable_fields: Mapping[str, ResolvableSpec] = field(default_factory=dict)
+    # Payload paths a validator binding writes back; the extractor never writes them.
+    validator_owned_fields: tuple[str, ...] = ()
+
+    @property
+    def paper_wording_fields(self) -> tuple[str, ...]:
+        """Where the extractor writes each resolvable value's paper wording."""
+
+        return tuple(
+            f"{field_path}.{spec.mention_key}" if field_path else spec.mention_key
+            for field_path, spec in sorted(self.resolvable_fields.items())
+        )
+
+    @property
+    def system_written_payload_fields(self) -> tuple[str, ...]:
+        """Payload fields validation, the builder or the evidence record fill in; never the extractor."""
+
+        builder_owned = [
+            f"{field_path}.{key}" if field_path else key
+            for field_path, spec in sorted(self.resolvable_fields.items())
+            for key in builder_owned_keys(spec)
+        ]
+        evidence_owned = [
+            field_path for field_path in EVIDENCE_SOURCE_FIELDS if field_path in self.payload_fields
+        ]
+        return tuple(dict.fromkeys([*self.validator_owned_fields, *builder_owned, *evidence_owned]))
 
     @property
     def validator_state(self) -> str:
@@ -99,6 +133,8 @@ class GenericClassCatalogEntry:
             ],
             "payload_fields": list(self.payload_fields),
             "required_payload_fields": list(self.required_payload_fields),
+            "paper_wording_fields": list(self.paper_wording_fields),
+            "system_written_payload_fields": list(self.system_written_payload_fields),
             "field_summaries": list(self.field_summaries),
             "validator_input_fields": sorted(
                 {
@@ -180,6 +216,8 @@ def load_generic_class_catalog() -> GenericClassCatalog:
     generated_objects: list[DomainPackObjectDefinition] = []
     active_bindings: list[DomainPackActiveValidatorBinding] = []
     under_dev_bindings: list[DomainPackUnderDevelopmentValidatorBinding] = []
+    proxied_enums: dict[str, DomainPackEnumDefinition] = {}
+    proxied_models: dict[str, DomainPackModelDefinition] = {}
 
     for object_definition in generic_pack.metadata.object_definitions:
         entry = _entry_from_object_definition(
@@ -209,7 +247,13 @@ def load_generic_class_catalog() -> GenericClassCatalog:
             )
             entries.append(entry)
             generated_objects.append(
-                _proxy_object_definition(object_definition, entry=entry)
+                _proxy_object_definition(
+                    object_definition,
+                    entry=entry,
+                    source_pack=source_pack,
+                    proxied_enums=proxied_enums,
+                    proxied_models=proxied_models,
+                )
             )
             for binding in registry.bindings:
                 if not _binding_applies_to_object(
@@ -228,6 +272,14 @@ def load_generic_class_catalog() -> GenericClassCatalog:
     generated_metadata = generic_pack.metadata.model_copy(
         update={
             "object_definitions": generated_objects,
+            "enum_definitions": [
+                *generic_pack.metadata.enum_definitions,
+                *proxied_enums.values(),
+            ],
+            "model_definitions": [
+                *generic_pack.metadata.model_definitions,
+                *proxied_models.values(),
+            ],
             "metadata": {
                 **generic_pack.metadata.metadata,
                 "generic_extraction": {
@@ -334,7 +386,40 @@ def _entry_from_object_definition(
             source_pack.metadata, object_definition,
             active_validators=len(active), development_validators=len(under_dev),
         ),
+        resolvable_fields=declared_resolvable_fields(
+            source_pack.metadata, object_definition.object_type
+        ),
+        validator_owned_fields=_validator_owned_fields(
+            registry, source_pack_id=source_pack.pack_id, object_definition=object_definition
+        ),
     )
+
+
+def _validator_owned_fields(
+    registry: DomainPackValidationRegistry,
+    *,
+    source_pack_id: str,
+    object_definition: DomainPackObjectDefinition,
+) -> tuple[str, ...]:
+    """Payload fields a binding writes back; one it also reads stays the extractor's input."""
+
+    owned: list[str] = []
+    for binding in registry.bindings:
+        if not _binding_applies_to_object(
+            binding, source_pack_id=source_pack_id, object_definition=object_definition
+        ):
+            continue
+        reads = {
+            selector.path
+            for selector in binding.input_fields.values()
+            if selector.source == "payload"
+        }
+        owned.extend(
+            str(field_path)
+            for field_path in binding.expected_result_fields.values()
+            if field_path not in reads
+        )
+    return tuple(dict.fromkeys(owned))
 
 
 def _binding_summary(binding: ValidatorBinding) -> GenericValidatorBindingSummary:
@@ -398,6 +483,9 @@ def _proxy_object_definition(
     object_definition: DomainPackObjectDefinition,
     *,
     entry: GenericClassCatalogEntry,
+    source_pack: LoadedDomainPack,
+    proxied_enums: dict[str, DomainPackEnumDefinition],
+    proxied_models: dict[str, DomainPackModelDefinition],
 ) -> DomainPackObjectDefinition:
     metadata = {
         **object_definition.metadata,
@@ -412,9 +500,17 @@ def _proxy_object_definition(
     return object_definition.model_copy(
         update={
             "object_type": entry.generic_object_type,
-            "model_ref": None,
+            # A resolvable object root stays resolvable in the generic view (ALL-1283).
+            "model_ref": _proxy_resolvable_model_ref(
+                object_definition.model_ref, source_pack, proxied_models
+            ),
             "fields": [
-                _proxy_field_definition(field_definition)
+                _proxy_field_definition(
+                    field_definition,
+                    source_pack=source_pack,
+                    proxied_enums=proxied_enums,
+                    proxied_models=proxied_models,
+                )
                 for field_definition in object_definition.fields
             ],
             "metadata": metadata,
@@ -425,6 +521,10 @@ def _proxy_object_definition(
 
 def _proxy_field_definition(
     field_definition: DomainPackFieldDefinition,
+    *,
+    source_pack: LoadedDomainPack,
+    proxied_enums: dict[str, DomainPackEnumDefinition],
+    proxied_models: dict[str, DomainPackModelDefinition],
 ) -> DomainPackFieldDefinition:
     source_refs: dict[str, str] = {}
     updates: dict[str, Any] = {}
@@ -436,12 +536,90 @@ def _proxy_field_definition(
             continue
         source_refs[ref_field] = value
         updates[ref_field] = None
-    if field_definition.field_type is DomainPackFieldType.ENUM:
+    vocabulary_enum = _resolvable_vocabulary_enum(field_definition, source_pack)
+    if vocabulary_enum is not None:
+        # A resolvable value's resolution_state / lookup_outcome stays a closed
+        # vocabulary (ALL-1283), under a proxied enum id.
+        proxied_id = _proxy_definition_id(source_pack.pack_id, vocabulary_enum.enum_id)
+        proxied_enums.setdefault(
+            proxied_id, vocabulary_enum.model_copy(update={"enum_id": proxied_id}, deep=True)
+        )
+        updates["enum_ref"] = proxied_id
+    elif field_definition.field_type is DomainPackFieldType.ENUM:
         updates["field_type"] = DomainPackFieldType.STRING
+    model_ref = _proxy_resolvable_model_ref(field_definition.model_ref, source_pack, proxied_models)
+    if model_ref is not None:
+        updates["model_ref"] = model_ref
     if source_refs:
         metadata["generic_extraction_proxy_source_refs"] = source_refs
     updates["metadata"] = metadata
     return field_definition.model_copy(update=updates, deep=True)
+
+
+def _resolvable_vocabulary_enum(
+    field_definition: DomainPackFieldDefinition,
+    source_pack: LoadedDomainPack,
+) -> DomainPackEnumDefinition | None:
+    """The source enum of a resolvable value's resolution_state or lookup_outcome leaf."""
+
+    from src.lib.domain_packs.resolvable_values import (
+        LOOKUP_OUTCOME_KEY,
+        LOOKUP_OUTCOMES,
+        RESOLUTION_STATE_KEY,
+        RESOLUTION_STATES,
+    )
+
+    if field_definition.field_type is not DomainPackFieldType.ENUM or field_definition.enum_ref is None:
+        return None
+    vocabulary = {RESOLUTION_STATE_KEY: RESOLUTION_STATES, LOOKUP_OUTCOME_KEY: LOOKUP_OUTCOMES}.get(
+        field_definition.field_path.rpartition(".")[2]
+    )
+    if vocabulary is None:
+        return None
+    enum = next(
+        (item for item in source_pack.metadata.enum_definitions if item.enum_id == field_definition.enum_ref),
+        None,
+    )
+    if enum is None or [value.value for value in enum.values] != list(vocabulary):
+        return None
+    return enum
+
+
+def _proxy_resolvable_model_ref(
+    model_ref: str | None,
+    source_pack: LoadedDomainPack,
+    proxied_models: dict[str, DomainPackModelDefinition],
+) -> str | None:
+    """A proxied id for a source model that declares a resolvable value, else None.
+
+    Only the model's display declaration travels (under a proxied model id),
+    so the generic view reads the same resolvable value (headers, legacy rule,
+    vocabulary checks); other models stay source-pack concerns.
+    """
+
+    from src.lib.domain_packs.resolvable_values import resolvable_spec_from_display
+
+    model = next(
+        (item for item in source_pack.metadata.model_definitions if item.model_id == model_ref), None,
+    ) if model_ref else None
+    if model is None or resolvable_spec_from_display(model.metadata.get("display")) is None:
+        return None
+    proxied_id = _proxy_definition_id(source_pack.pack_id, model.model_id)
+    proxied_models.setdefault(
+        proxied_id,
+        DomainPackModelDefinition(
+            model_id=proxied_id,
+            display_name=model.display_name,
+            description=model.description,
+            definition_state=model.definition_state,
+            metadata={"display": dict(model.metadata["display"])},
+        ),
+    )
+    return proxied_id
+
+
+def _proxy_definition_id(source_domain_pack_id: str, definition_id: str) -> str:
+    return f"{GENERIC_PROXY_PREFIX}__{_safe_key(source_domain_pack_id)}__{_safe_key(definition_id)}"
 
 
 def _proxy_active_binding(

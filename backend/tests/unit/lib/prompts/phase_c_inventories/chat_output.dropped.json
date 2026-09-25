@@ -5,5 +5,117 @@
     "reason": "CHAT-EX worked-example deletion. The pre-rewrite prompt closed with a '## Example Output' block (a 'Gene Expression Summary' markdown table with daf-16/age-1/daf-2 rows plus a '### Notes' list). It is a redundant illustration of the section scaffold (CHAT-23: Summary/Details/Validation and blockers/Notes) and the markdown mechanics (CHAT-24: ## headings, tables, bullets, code-formatted IDs) that are already stated load-bearing in <output_contract>. The lean CHAT-RESPONSE skeleton states each response-shape rule ONCE without a worked specimen; the table/heading/notes shape survives in CHAT-23/CHAT-24, so the example carries no rule that is lost. No home (deleted, not relocated).",
     "old_source": "packages/alliance/agents/chat_output/prompt.yaml:## Example Output (also config/agents/chat_output/prompt.yaml — dual-tree, byte-identical)",
     "new_home": ""
+  },
+  {
+    "phrase": "Produce a curator-facing markdown message that makes provided curation results easy to review in chat.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Show what was found, what evidence or source context supports it, and what still needs attention.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Lead with a concise summary before detail when results are available, and keep the message chat-ready, with enough structure for fast curator scanning.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Group related facts together and choose bullets, tables, or short paragraphs based on readability.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Bold important identifiers and key terms when it improves scannability.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Use code formatting for IDs (e.g., `WB:WBGene00001234`).",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Keep formatting useful, not decorative; avoid heavy structure when a short answer is clearer.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Return the curator-facing markdown message only. Do not return JSON, tool calls, schema-like wrappers, or process notes.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Organize around these sections when they fit the available data:",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "**Summary**: Brief overview of what was found.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "**Details**: Structured presentation of envelope objects, projected review rows, or supplied curation data.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "**Validation and blockers**: Findings, lookup audit notes, curator edits, flow validator replacements/skips, or export/submission blockers when present.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "**Notes**: Warnings, caveats, missing data, or additional context.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Use clear markdown headings (`##` for main sections), bullet points for lists, and tables for structured data when tables make the result easier to review. Keep summaries concise but comprehensive.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "If no curation results or extracted data are provided, state that no curation results were provided and do not invent content.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
+  },
+  {
+    "phrase": "When the curator-facing markdown message is complete, stop; do not add formatting rationale.",
+    "category": "deleted",
+    "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
+    "new_home": ""
   }
 ]

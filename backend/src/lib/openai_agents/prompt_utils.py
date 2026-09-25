@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 # Template for structured output requirement instruction
-# NOTE: GPT-5 models with reasoning enabled may output JSON as plain text instead of
+# NOTE: reasoning models may output JSON as plain text instead of
 # using the structured output mechanism. The explicit JSON instructions ensure the
 # model outputs parseable JSON that our text fallback can capture.
 STRUCTURED_OUTPUT_INSTRUCTION_TEMPLATE = """
@@ -366,7 +366,17 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
                     model, require_env("ABSTRACT_EXTRACTION_REASONING")
                 )
 
-            response = await client.chat.completions.create(**completion_kwargs)
+            from src.lib.openai_agents.model_request_measurement import (
+                call_measured_direct_request,
+            )
+
+            response = await call_measured_direct_request(
+                surface="abstract_extraction",
+                provider="openai",
+                api="chat_completions",
+                kwargs=completion_kwargs,
+                call=client.chat.completions.create,
+            )
 
             content = response.choices[0].message.content
             if content is None:
@@ -603,23 +613,19 @@ def fetch_document_abstract_sync(
     import asyncio
 
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # We're in an async context - need to use a different approach
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(
-                    asyncio.run,
-                    fetch_document_abstract(document_id, user_id, hierarchy)
-                )
-                return future.result(timeout=10)
-        else:
-            return loop.run_until_complete(
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run()
+            return asyncio.run(fetch_document_abstract(document_id, user_id, hierarchy))
+        # A running loop forbids asyncio.run() here; run the fetch on a worker thread.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(
+                asyncio.run,
                 fetch_document_abstract(document_id, user_id, hierarchy)
             )
-    except RuntimeError:
-        # No event loop exists, create a new one
-        return asyncio.run(fetch_document_abstract(document_id, user_id, hierarchy))
+            return future.result(timeout=10)
     except Exception as e:
         logger.warning('Error in sync abstract fetch: %s', e)
         return None

@@ -206,7 +206,7 @@ def test_alliance_active_validator_bindings_have_dispatch_contracts():
         for binding in registry.bindings:
             if binding.state is not ValidationBindingState.ACTIVE:
                 continue
-            if binding.input_fields or binding.expected_result_fields:
+            if binding.has_dispatch_contract:
                 continue
             empty_active_bindings.append(f"{pack_id}:{binding.binding_id}")
 
@@ -229,7 +229,12 @@ def test_alliance_under_development_bindings_have_dispatch_contracts():
         for binding in registry.bindings:
             if binding.state is not ValidationBindingState.UNDER_DEVELOPMENT:
                 continue
-            if binding.input_fields and binding.expected_result_fields:
+            targets = (
+                [binding.for_route(value) for value in binding.routes]
+                if binding.routes is not None
+                else [binding]
+            )
+            if all(target.input_fields and target.expected_result_fields for target in targets):
                 continue
             incomplete_bindings.append(f"{pack_id}:{binding.binding_id}")
 
@@ -316,16 +321,24 @@ def test_source_mentions_objects_pass_context_to_active_validators():
             if not set(binding.object_types).intersection(source_mention_object_types):
                 continue
 
-            selector = binding.input_fields.get("source_mentions")
-            if (
-                selector is None
-                or selector.source != "payload"
-                or selector.path != "source_mentions"
-                or selector.required is not False
-                or selector.allow_multiple is not True
-                or selector.context_only is not True
-            ):
-                violations.append(f"{pack_id}:{binding.binding_id}")
+            targets = (
+                [binding.for_route(value) for value in binding.routes]
+                if binding.routes is not None
+                else [binding]
+            )
+            for target in targets:
+                selector = target.input_fields.get("source_mentions")
+                if (
+                    selector is None
+                    or selector.source != "payload"
+                    or selector.path != "source_mentions"
+                    or selector.required is not False
+                    or selector.allow_multiple is not True
+                    or selector.context_only is not True
+                ):
+                    violations.append(
+                        f"{pack_id}:{binding.binding_id}:{target.route_value or ''}"
+                    )
 
     assert violations == []
 
@@ -343,7 +356,6 @@ def test_source_mentions_prompt_and_tool_language_is_consistent():
         REPO_ROOT / "packages/alliance/agents/experimental_condition/prompt.yaml",
         REPO_ROOT / "packages/alliance/agents/gene/prompt.yaml",
         REPO_ROOT / "packages/alliance/agents/ontology_term/prompt.yaml",
-        REPO_ROOT / "packages/alliance/agents/subject_entity/prompt.yaml",
     ]
 
     for path in extractor_prompt_paths:
@@ -361,6 +373,13 @@ def test_source_mentions_prompt_and_tool_language_is_consistent():
             expected_context = (
                 "Use `selected_inputs.taxon`, `selected_inputs.source_mentions`, supplied evidence records, "
                 "and `selected_inputs.evidence_quotes` as context."
+            )
+        if path.parent.name == "ontology_term":
+            # The Sep 22 hotfix ontology prompt states the boundary once, with
+            # the other request inputs, instead of the legacy paragraph.
+            expected_context = (
+                "`source_mentions`, `evidence_quotes` and `evidence_summary`: paper context for "
+                "choosing variant searches and judging candidates, never a substitute for a lookup."
             )
         assert expected_context in prompt_text
         assert "had access to the paper; you do not" not in prompt_text
@@ -503,23 +522,43 @@ def test_alliance_validator_binding_capability_groups_have_explicit_policies():
         assert isinstance(raw_bindings["under_development"], list)
 
         for binding in raw_bindings["active"]:
-            assert binding["validator_agent"]["package_id"] == "agr.alliance"
             assert "applies_to" in binding
-            assert "input_fields" in binding
-            assert "expected_result_fields" in binding
+            for target in binding.get("routes", {"": binding}).values():
+                assert target["validator_agent"]["package_id"] == "agr.alliance"
+                assert "input_fields" in target
+                assert "expected_result_fields" in target
             assert binding["required"] is True
             if binding["binding_id"] == "allele_mention_reference_validation":
                 assert binding["blocking"] is True
                 assert binding["allow_opt_out"] is False
                 assert binding["curator_override"] == {"allowed": False}
             elif binding["binding_id"] == "disease_subject_materialization":
-                # R3: a disease annotation cannot be curated without a subject, so a
-                # missing required subject input gates submission (blocking+required) but
+                # R3: a disease annotation cannot be curated without a subject, so an
+                # unconfirmed or unrouted subject gates submission (blocking+required) but
                 # is curator-WAIVABLE (curator_override.allowed) — e.g. a genotype/AGM that
                 # the paper names with no durable MOD identifier yet.
                 assert binding["blocking"] is True
                 assert binding["allow_opt_out"] is True
                 assert binding["curator_override"] == {"allowed": True}
+            elif pack_id == "agr.alliance.disease":
+                # ALL-1283: the gate and the export agree. Every other disease value the
+                # export needs blocks readiness while unresolved; opting out is allowed and
+                # its consequence is stated.
+                assert binding["blocking"] is True
+                assert binding["allow_opt_out"] is True
+                assert binding["curator_override"] == {"allowed": False}
+                if binding["binding_id"] == "disease_annotation_type_cv_lookup":
+                    # The backend fixes the annotation type, so no curator override exists.
+                    assert binding["when_off"] == (
+                        "If you turn this check off, the annotation type stays unresolved and "
+                        "cannot be exported, and since curators cannot override it, a failing "
+                        "lookup needs a developer."
+                    )
+                else:
+                    assert binding["when_off"] == (
+                        "If you turn this check off, these values stay unresolved and the "
+                        "annotation cannot be exported until they are validated."
+                    )
             else:
                 assert binding["blocking"] is False
                 assert binding["allow_opt_out"] is True
@@ -561,7 +600,12 @@ def test_alliance_active_and_under_development_capabilities_have_distinct_visibi
     for option in active_options:
         assert option.default_enabled is True
         assert option.validator_package_id == "agr.alliance"
-        assert option.validator_agent_id
+        # A routed binding names its package but no single validator agent.
+        if option.validator_binding_id == "disease_subject_materialization":
+            assert option.validator_agent_id is None
+            assert option.validator_id == "disease_subject_materialization"
+        else:
+            assert option.validator_agent_id
 
     for option in under_development_options:
         assert option.default_enabled is False
@@ -569,7 +613,11 @@ def test_alliance_active_and_under_development_capabilities_have_distinct_visibi
         assert option.export_blocking is False
         assert option.allow_opt_out is False
         assert option.state_explanation
-        if option.validator_package_id is not None or option.validator_agent_id is not None:
+        if option.validator_binding_id == "phenotype_subject_entity_validator":
+            # Routed: one package, no single validator agent.
+            assert option.validator_package_id == "agr.alliance"
+            assert option.validator_agent_id is None
+        elif option.validator_package_id is not None or option.validator_agent_id is not None:
             assert option.validator_package_id == "agr.alliance"
             assert option.validator_agent_id
 
@@ -755,8 +803,11 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "ontology_family": "assay",
         "ontology_term_type": "MMOTerm",
     }
+    # The stage term is looked up on developmental_stage_start; when_expressed_stage_name
+    # is the paper's stage wording and has no term helper (ALL-1283).
+    assert "term_helper" not in expression_fields["when_expressed_stage_name"].metadata
     assert expression_fields[
-        "when_expressed_stage_name"
+        "expression_pattern.when_expressed.developmental_stage_start"
     ].metadata["term_helper"]["lookup"] == {
         "package_tool": "search_domain_field_terms",
         "method": "search_life_stage_terms",
@@ -814,12 +865,13 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert disease_relation_binding.input_fields["vocabulary"].value == (
         "Disease Relation"
     )
+    # The extractor's chosen relation text is the input; the validator writes the term.
     assert disease_relation_binding.input_fields["term_name"].path == (
-        "disease_relation_name"
+        "disease_relation.mention"
     )
     assert (
         disease_relation_binding.expected_result_fields["internal_id"]
-        == "disease_relation_id"
+        == "disease_relation.id"
     )
 
     disease_condition_binding = disease_bindings["disease_condition_relation_lookup"]
@@ -853,28 +905,50 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "abbreviation": "data_provider.abbreviation",
     }
 
-    # D2 full LinkML alignment: subject_entity_validation is now ACTIVE; the staged subject selects
-    # the concrete Gene/Allele/AGM subtype. (The prior under-development binding carried a
-    # context-only data_provider.taxon input that is dropped now the field isn't declared.)
+    # D2 full LinkML alignment: the staged subject_type routes the subject to the validator
+    # that owns that identity, searched by the paper's wording. The routing key is never
+    # written back, and a subject type with no route runs no validator.
     disease_subject_binding = disease_bindings["disease_subject_materialization"]
-    assert disease_subject_binding.validator_agent is not None
-    assert (
-        disease_subject_binding.validator_agent.agent_id
-        == "subject_entity_validation"
-    )
     assert disease_subject_binding.state is ValidationBindingState.ACTIVE
+    assert disease_subject_binding.validator_agent is None
+    assert disease_subject_binding.unrouted
+    assert disease_subject_binding.route_by_path == "disease_annotation_subject.subject_type"
     assert disease_subject_binding.field_paths == (
         "disease_annotation_subject.subject_identifier",
         "disease_annotation_subject.subject_type",
     )
-    assert (
-        disease_subject_binding.input_fields["subject_label"].required is False
+    assert {
+        value: route.validator_agent.agent_id
+        for value, route in disease_subject_binding.routes.items()
+    } == {"gene": "gene_validation", "allele": "allele_validation", "agm": "agm_validation"}
+    disease_gene_route = disease_subject_binding.for_route("gene")
+    assert disease_gene_route.input_fields["mention"].path == "disease_annotation_subject.mention"
+    assert disease_gene_route.input_fields["mention"].required is True
+    assert disease_gene_route.input_fields["proposed_gene_id"].path == (
+        "disease_annotation_subject.proposed_subject_identifier"
     )
-    assert disease_subject_binding.expected_result_fields == {
-        "subject_identifier": "disease_annotation_subject.subject_identifier",
-        "subject_type": "disease_annotation_subject.subject_type",
-        "subject_label": "disease_annotation_subject.subject_label",
+    assert disease_gene_route.input_fields["proposed_gene_id"].required is False
+    assert disease_gene_route.input_fields["data_provider_hint"].path == "data_provider.mention"
+    assert disease_gene_route.expected_result_fields == {
+        "primary_external_id": "disease_annotation_subject.subject_identifier",
+        "symbol": "disease_annotation_subject.subject_label",
     }
+    disease_allele_route = disease_subject_binding.for_route("allele")
+    assert set(disease_allele_route.input_fields) == {
+        "mention", "normalized_hint", "data_provider_hint", "source_mentions", "evidence_quotes",
+    }
+    assert disease_allele_route.expected_result_fields == {
+        "curie": "disease_annotation_subject.subject_identifier",
+        "symbol": "disease_annotation_subject.subject_label",
+    }
+    assert disease_subject_binding.for_route("agm").expected_result_fields == {
+        "agm_id": "disease_annotation_subject.subject_identifier",
+        "label": "disease_annotation_subject.subject_label",
+    }
+    for route in disease_subject_binding.routes.values():
+        assert not any(
+            path.endswith("subject_type") for path in route.expected_result_fields.values()
+        )
 
     phenotype_bindings = {
         binding.binding_id: binding
@@ -883,41 +957,40 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     phenotype_subject_binding = phenotype_bindings[
         "phenotype_subject_entity_validator"
     ]
-    assert phenotype_subject_binding.validator_agent is not None
-    assert (
-        phenotype_subject_binding.validator_agent.agent_id
-        == "subject_entity_validation"
-    )
     assert phenotype_subject_binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert phenotype_subject_binding.route_by_path == "subject_type"
     assert phenotype_subject_binding.field_paths == (
         "subject_identifier",
         "subject_type",
     )
-    assert (
-        phenotype_subject_binding.input_fields["subject_label"].required is False
-    )
-    assert phenotype_subject_binding.input_fields["taxon"].required is False
-    assert phenotype_subject_binding.expected_result_fields == {
-        "subject_identifier": "subject_identifier",
-        "subject_type": "subject_type",
-        "subject_label": "subject_label",
+    assert {
+        value: route.validator_agent.agent_id
+        for value, route in phenotype_subject_binding.routes.items()
+    } == {"gene": "gene_validation", "allele": "allele_validation", "agm": "agm_validation"}
+    assert phenotype_subject_binding.for_route("gene").expected_result_fields == {
+        "primary_external_id": "subject_identifier",
+        "symbol": "subject_label",
         "taxon": "taxon",
     }
 
+    # ALL-1283: the term validator resolves each annotation term in place, reading the
+    # paper wording as its label and the extractor's CURIE only as a proposal.
     phenotype_term_binding = phenotype_bindings["phenotype_term_ontology_validator"]
     assert phenotype_term_binding.validator_agent is not None
     assert phenotype_term_binding.validator_agent.agent_id == "ontology_term_validation"
     assert phenotype_term_binding.state is ValidationBindingState.ACTIVE
-    assert phenotype_term_binding.object_types == ("PhenotypeTerm",)
-    assert phenotype_term_binding.field_paths == ()
+    assert phenotype_term_binding.object_types == ("PhenotypeAnnotation",)
+    assert phenotype_term_binding.field_paths == ("phenotype_terms",)
+    assert phenotype_term_binding.input_fields["curie"].path == "phenotype_terms.proposed_curie"
     assert phenotype_term_binding.input_fields["curie"].required is False
-    assert phenotype_term_binding.input_fields["label"].required is False
+    assert phenotype_term_binding.input_fields["label"].path == "phenotype_terms.mention"
+    assert phenotype_term_binding.input_fields["label"].required is True
     assert phenotype_term_binding.input_fields["data_provider"].path == (
-        "ontology_lookup_hint.data_provider"
+        "phenotype_terms.ontology_lookup_hint.data_provider"
     )
     assert phenotype_term_binding.input_fields["data_provider"].context_only is True
     assert phenotype_term_binding.input_fields["taxon_id"].path == (
-        "ontology_lookup_hint.taxon_id"
+        "phenotype_terms.ontology_lookup_hint.taxon_id"
     )
     assert phenotype_term_binding.input_fields["taxon_id"].context_only is True
     assert (
@@ -927,14 +1000,10 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     )
 
 
-def test_subject_entity_selectors_require_type_and_omit_absent_optional_context():
+def _phenotype_subject_match(payload):
     alliance_registry = load_alliance_domain_pack_registry()
     phenotype_pack = alliance_registry.get_pack("agr.alliance.phenotype")
     registry = DomainPackValidationRegistry.from_domain_pack(phenotype_pack)
-    subject_binding = {
-        binding.binding_id: binding for binding in registry.bindings
-    }["phenotype_subject_entity_validator"]
-
     envelope = DomainEnvelope(
         envelope_id="phenotype-env",
         domain_pack_id="agr.alliance.phenotype",
@@ -942,87 +1011,11 @@ def test_subject_entity_selectors_require_type_and_omit_absent_optional_context(
             CuratableObjectEnvelope(
                 object_type="PhenotypeSubject",
                 pending_ref_id="subject-1",
-                payload={
-                    "subject_identifier": "WB:WBGene00000001",
-                    "subject_type": "gene",
-                },
+                payload=payload,
             )
         ],
     )
-    match = next(
-        match
-        for match in registry.match_bindings(
-            envelope,
-            states=[ValidationBindingState.UNDER_DEVELOPMENT],
-        )
-        if match.binding.binding_id == subject_binding.binding_id
-        and match.field_path == "subject_identifier"
-    )
-
-    result = build_domain_validation_request(match)
-
-    assert result.request is not None
-    assert result.findings == ()
-    assert result.selected_inputs == {
-        "subject_type": "gene",
-        "subject_identifier": "WB:WBGene00000001",
-    }
-    assert result.request.target.input_values == result.selected_inputs
-
-    missing_type_envelope = DomainEnvelope(
-        envelope_id="phenotype-env-missing-type",
-        domain_pack_id="agr.alliance.phenotype",
-        extracted_objects=[
-            CuratableObjectEnvelope(
-                object_type="PhenotypeSubject",
-                pending_ref_id="subject-1",
-                payload={"subject_identifier": "WB:WBGene00000001"},
-            )
-        ],
-    )
-    missing_type_match = next(
-        match
-        for match in registry.match_bindings(
-            missing_type_envelope,
-            states=[ValidationBindingState.UNDER_DEVELOPMENT],
-        )
-        if match.binding.binding_id == subject_binding.binding_id
-        and match.field_path == "subject_identifier"
-    )
-
-    missing_type_result = build_domain_validation_request(missing_type_match)
-
-    assert missing_type_result.request is None
-    assert [finding.code for finding in missing_type_result.findings] == [
-        "selector_missing_field"
-    ]
-    assert (
-        missing_type_result.findings[0].details["selector_problem"]["input_name"]
-        == "subject_type"
-    )
-
-
-def test_subject_entity_selectors_reject_ambiguous_optional_taxon_context():
-    alliance_registry = load_alliance_domain_pack_registry()
-    phenotype_pack = alliance_registry.get_pack("agr.alliance.phenotype")
-    registry = DomainPackValidationRegistry.from_domain_pack(phenotype_pack)
-
-    envelope = DomainEnvelope(
-        envelope_id="phenotype-env-ambiguous-taxon",
-        domain_pack_id="agr.alliance.phenotype",
-        extracted_objects=[
-            CuratableObjectEnvelope(
-                object_type="PhenotypeSubject",
-                pending_ref_id="subject-1",
-                payload={
-                    "subject_identifier": "WB:WBGene00000001",
-                    "subject_type": "gene",
-                    "taxon": ["NCBITaxon:6239", "NCBITaxon:10090"],
-                },
-            )
-        ],
-    )
-    match = next(
+    return next(
         match
         for match in registry.match_bindings(
             envelope,
@@ -1032,11 +1025,106 @@ def test_subject_entity_selectors_reject_ambiguous_optional_taxon_context():
         and match.field_path == "subject_identifier"
     )
 
-    result = build_domain_validation_request(match)
+
+def test_subject_routes_search_the_paper_wording_with_the_route_validator():
+    result = build_domain_validation_request(
+        _phenotype_subject_match(
+            {"mention": "daf-2", "subject_type": "gene", "proposed_taxon": "NCBITaxon:6239"}
+        )
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    assert result.request.validator_agent.agent_id == "gene_validation"
+    # The paper wording is the search input; an identifier the paper never printed is absent.
+    assert result.selected_inputs == {"mention": "daf-2", "proposed_taxon": "NCBITaxon:6239"}
+    assert result.request.expected_result_fields == {
+        "primary_external_id": "subject_identifier",
+        "symbol": "subject_label",
+        "taxon": "taxon",
+    }
+
+    allele = build_domain_validation_request(
+        _phenotype_subject_match(
+            {"mention": "e1370", "subject_type": "allele", "proposed_subject_identifier": "WB:WBVar00143949"}
+        )
+    )
+    assert allele.request.validator_agent.agent_id == "allele_validation"
+    assert allele.selected_inputs == {"mention": "e1370", "normalized_hint": "WB:WBVar00143949"}
+
+
+def _validator_lookup_configs() -> dict[str, Mapping[str, Any]]:
+    configs = {}
+    for agent_path in (REPO_ROOT / "packages/alliance/agents").glob("*/agent.yaml"):
+        agent = yaml.safe_load(agent_path.read_text())
+        lookup = (agent.get("structured_finalization") or {}).get("lookup")
+        if lookup:
+            configs[agent["agent_id"]] = lookup
+    return configs
+
+
+def _result_key_is_grounded(lookup: Mapping[str, Any], key: str) -> bool:
+    if f"resolved_values.{key}" in lookup.get("fact_identity_paths", ()):
+        return True
+    grounding = lookup.get("record_grounding") or {}
+    return "resolved_values" in grounding.get("result_paths", ()) and key in grounding.get(
+        "identity_fields", ()
+    )
+
+
+def test_subject_routes_write_identifiers_their_validator_grounds():
+    """The subject identifier each route writes is checked against the lookup output
+    by that validator's finalization provenance check, so an identifier no lookup
+    returned can never reach the blocking subject_identifier."""
+
+    alliance_registry = load_alliance_domain_pack_registry()
+    lookups = _validator_lookup_configs()
+    for pack_id, binding_id in (
+        ("agr.alliance.disease", "disease_subject_materialization"),
+        ("agr.alliance.phenotype", "phenotype_subject_entity_validator"),
+    ):
+        registry = DomainPackValidationRegistry.from_domain_pack(alliance_registry.get_pack(pack_id))
+        binding = next(item for item in registry.bindings if item.binding_id == binding_id)
+        for route_value, route in binding.routes.items():
+            lookup = lookups[route.validator_agent.agent_id]
+            identity_keys = [
+                key for key, path in route.expected_result_fields.items()
+                if path.endswith("subject_identifier")
+            ]
+            assert len(identity_keys) == 1, (binding_id, route_value)
+            assert _result_key_is_grounded(lookup, identity_keys[0]), (binding_id, route_value)
+
+
+def test_subject_without_a_route_is_reported_and_never_validated():
+    missing = build_domain_validation_request(
+        _phenotype_subject_match({"mention": "daf-2"})
+    )
+    assert missing.request is None
+    assert [finding.code for finding in missing.findings] == ["selector_missing"]
+    assert missing.findings[0].details["selector_problem"]["input_name"] == "route_by"
+
+    unknown = build_domain_validation_request(
+        _phenotype_subject_match({"mention": "daf-2", "subject_type": "unknown"})
+    )
+    assert unknown.request is None
+    assert [finding.code for finding in unknown.findings] == ["selector_unrouted"]
+    assert unknown.findings[0].details["selector_problem"]["route_value"] == "unknown"
+
+
+def test_subject_route_rejects_ambiguous_optional_taxon_context():
+    result = build_domain_validation_request(
+        _phenotype_subject_match(
+            {
+                "mention": "daf-2",
+                "subject_type": "gene",
+                "proposed_taxon": ["NCBITaxon:6239", "NCBITaxon:10090"],
+            }
+        )
+    )
 
     assert result.request is None
     assert [finding.code for finding in result.findings] == ["selector_ambiguous"]
-    assert result.findings[0].details["selector_problem"]["input_name"] == "taxon"
+    assert result.findings[0].details["selector_problem"]["input_name"] == "proposed_taxon"
 
 
 def test_under_development_validator_bindings_remain_metadata_only():
@@ -1110,7 +1198,8 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "disease",
                 "accepted_prefixes": ["DOID"],
-                "optional_inputs": ["curie", "label"],
+                # The paper wording (label) is required; a printed DOID is optional.
+                "optional_inputs": ["curie"],
                 "expected_result_fields": {
                     "curie": "disease_annotation_object.curie",
                     "label": "disease_annotation_object.name",
@@ -1123,7 +1212,7 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "accepted_prefixes": ["ECO"],
                 "optional_inputs": ["curie"],
                 "expected_result_fields": {
-                    "curie": "evidence_code_curies",
+                    "curie": "evidence_code_curies.curie",
                 },
             },
         },
@@ -1134,15 +1223,14 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "accepted_prefixes": ["MP", "WBPhenotype"],
                 "optional_inputs": [
                     "curie",
-                    "label",
                     "data_provider",
                     "taxon_id",
                     "evidence_record_id",
                     "evidence_quotes",
                 ],
                 "expected_result_fields": {
-                    "curie": "curie",
-                    "label": "label",
+                    "curie": "phenotype_terms.curie",
+                    "label": "phenotype_terms.label",
                 },
             }
         },
@@ -1152,7 +1240,6 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "ontology_family": "life_stage",
                 "optional_inputs": ["data_provider"],
                 "expected_result_fields": {
-                    "label": "when_expressed_stage_name",
                     "curie": (
                         "expression_pattern.when_expressed."
                         "developmental_stage_start.curie"
@@ -1282,12 +1369,21 @@ def test_representative_alliance_active_validators_dispatch_unresolved_results()
                 domain_pack_id="agr.alliance.phenotype",
                 extracted_objects=[
                     CuratableObjectEnvelope(
-                        object_type="PhenotypeTerm",
-                        object_role="validated_reference",
-                        pending_ref_id="phenotype-term-1",
+                        object_type="PhenotypeAnnotation",
+                        pending_ref_id="phenotype-annotation-1",
                         payload={
-                            "curie": "WBPhenotype:0000001",
-                            "label": "fixture phenotype",
+                            "phenotype_annotation_object": "fixture phenotype",
+                            "phenotype_terms": [
+                                {
+                                    "proposed_curie": "WBPhenotype:0000001",
+                                    "curie": None,
+                                    "label": None,
+                                    "mention": "fixture phenotype",
+                                    "resolution_state": "unresolved",
+                                    "lookup_outcome": "not_validated",
+                                    "validator_explanation": "Not validated yet.",
+                                }
+                            ],
                         },
                     )
                 ],

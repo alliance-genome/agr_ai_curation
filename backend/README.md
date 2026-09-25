@@ -97,7 +97,7 @@ config/
 - `GET /api/chat/status` - Check chat service status
 
 ### Agent Studio (`/api/agent-studio`)
-- Agent Studio AI Chat uses its separate `gpt-6-astra` / `medium` settings. New extraction agents use the canonical catalog default, `gpt-6-astra` / `low`; validators retain `gpt-5.6-terra` / `medium`.
+- Agent Studio AI Chat uses its separate `gpt-6-astra` / `medium` settings. New extraction agents use the canonical catalog default, `gpt-6-sol` / `medium`; validators use `gpt-6-sol` / `medium`.
 - `GET /api/agent-studio/catalog` - Get all agent prompts organized by category
 - `GET /api/agent-studio/registry/metadata` - Get agent metadata, including domain-envelope and validation attachment metadata for domain-pack agents
 - `POST /api/agent-studio/chat` - Stream an AI Chat conversation

@@ -200,7 +200,14 @@
         "taxon": "NCBITaxon:6239",
         "source_mentions": [
           "daf-2(m41)"
-        ]
+        ],
+        "mention": "daf-2(m41)",
+        "allele_label": null,
+        "allele_identifier": null,
+        "allele_taxon": null,
+        "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated",
+        "validator_explanation": "Not validated yet."
       },
       "field_paths": [
         "label",

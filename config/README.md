@@ -32,8 +32,9 @@ Repository-development note:
 - Domain-pack metadata lives with packages. In this source checkout, Alliance
   packs live under `packages/alliance/domain_packs/`; core provider-neutral
   tests also use fixtures under `backend/tests/fixtures/domain_packs/`.
-- `config/models.yaml`, `config/providers.yaml`, and
-  `config/tool_policy_defaults.yaml` remain aligned with `packages/core/config/`.
+- `config/models.yaml`, `config/providers.yaml`,
+  `config/tool_policy_defaults.yaml`, and `config/tool_loading.yaml` remain
+  aligned with `packages/core/config/`.
 - Package-profile override templates live with their packages. The installer
   writes the selected template to `runtime/config/overrides.yaml` instead of
   copying the source checkout's Alliance-profile selection into every install.
@@ -50,6 +51,7 @@ config/
 ├── providers.yaml               # LLM runtime provider definitions
 ├── models.yaml                  # LLM model catalog overrides
 ├── tool_policy_defaults.yaml    # Tool policy default overrides
+├── tool_loading.yaml            # Per-runtime hosted tool-search loading policy
 ├── overrides.yaml               # Source checkout's core + Alliance selections
 ├── maintenance_message.txt      # Optional maintenance banner content
 ├── groups.yaml.example          # Template for groups configuration
@@ -191,6 +193,7 @@ providers:
     default_for_runner: true
     supports:
       parallel_tool_calls: true
+      tool_search: true
 
   org_custom:
     driver: openai_compatible
@@ -229,6 +232,7 @@ Notes:
 - `optional_for_runtime: true` keeps a missing credential visible as degraded route readiness without preventing a valid default provider from starting.
 - `request` defines immutable headers/body policy and fields that callers may not add. `omit_usage_request` suppresses deprecated provider usage-inclusion flags when accounting is automatic. Configured policy currently applies to `chat_completions` routes.
 - `request.omit_parallel_tool_calls_when_enabled` omits an enabled parallel-tool hint on the wire, leaving tool-call batching to the selected model. OpenRouter uses this because strict parameter routing rejects the hint for endpoints such as Gemini. An explicit `false` is preserved: silently dropping a single-call restriction could change formatter behavior. Endpoints that cannot accept that restriction remain incompatible with those requests; the policy does not relax strict routing or add fallback providers.
+- `supports.tool_search` (default `false`) declares OpenAI Responses hosted tool search. It is valid only with `api_mode: responses`; a model may set `supports_tool_search: true` only on such a provider (startup validation error otherwise).
 - `telemetry.adapter` enables a content-free response decoder. The OpenRouter adapter records only selected route identifiers, routing attempt, latency, tokens, and authoritative billed cost.
 - API key values are never stored in YAML, only env var names.
 
@@ -238,8 +242,8 @@ Defines deployment override entries for the model catalog and maps each model to
 
 ```yaml
 models:
-  - model_id: gpt-5.6-sol
-    name: GPT-5.6 Sol
+  - model_id: gpt-6-sol
+    name: GPT-6 Sol
     provider: openai
     default: true
     curator_visible: true
@@ -255,6 +259,32 @@ Notes:
 - Override entries replace the full model definition for the same `model_id`.
 - Unknown provider references are startup validation errors.
 - `curator_visible: false` keeps runtime compatibility models hidden from Agent Workshop.
+- `supports_tool_search: true` (default `false`) marks a model that can use hosted tool search; its provider must declare `supports.tool_search`.
+
+### tool_loading.yaml
+
+Declares how each runtime exposes its already-authorized tools to the model
+(ALL-1280). Package exports (`kind: tool_loading`) load first; this file (or
+`TOOL_LOADING_CONFIG_PATH`) replaces a runtime's whole policy.
+
+```yaml
+tool_loading_api_version: 1.0.0
+runtimes:
+  agent_studio:
+    mode: deferred
+    eager_tools: [search_studio_capabilities, read_studio_guide]
+  validator:
+    mode: eager
+```
+
+Notes:
+- Runtimes: `agent_studio`, `chat_supervisor`, `flow_supervisor`, `extractor`, `validator`, `formatter`, `specialist`; every one needs a policy.
+- Shipped defaults: `agent_studio` and `extractor` are deferred; every other runtime is eager. Extractors keep reading, staging, listing, evidence-recording, term-resolution and finalize tools visible and load `staged_object_corrections`, `evidence_maintenance`, `ontology_term_lookup` and `reference_data_lookup` on demand. A deferred agent's instructions gain a short "Tools loaded on demand" note naming each hidden group and its tools.
+- Runtime classification: supervisors declare their runtime; other agents use their category (`Extraction` -> `extractor`, `Validation` -> `validator`, `Output` -> `formatter`, otherwise `specialist`). Custom agents follow their category.
+- `mode: eager` sends every definition up front. `mode: deferred` defers namespaced function tools behind hosted tool search (only `deferred_namespaces` when listed); `eager_tools`, forced, required and `finalize_*` tools always stay eager.
+- `on_unsupported_provider: eager` (default) runs a deferred policy eagerly on a provider/model without `supports_tool_search` and records mode `eager_provider_unsupported`; `fail` refuses the run.
+- Namespaces come from package `tool_namespaces` exports (`id`, one description of at most 160 characters, `owner`); tools join one with `metadata.namespace` in their package `tools/bindings.yaml`. Startup fails on an unknown namespace, a `finalize_*`/builder-finalization tool in a namespace, or an agent with more than `TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS` tools in one namespace.
+- An `agent.yaml` may declare a `tool_loading` block with the same fields for that agent only.
 
 ### tool_policy_defaults.yaml
 

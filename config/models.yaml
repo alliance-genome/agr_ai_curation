@@ -3,11 +3,12 @@ models:
     name: GPT-6 Astra
     provider: openai
     description: Reasoning model for routing, output, and explicitly selected document extraction.
-    guidance: Default for routing and output agents, with low reasoning. Available for extraction agents by explicit selection; new extraction agents use GPT-5.6 Sol with medium reasoning. Agent Studio AI Chat uses medium reasoning separately.
+    guidance: Default for routing and output agents, with low reasoning. Available for extraction agents by explicit selection; new extraction agents use GPT-6 Sol with medium reasoning. Agent Studio AI Chat uses medium reasoning separately.
     default: false
     curator_visible: true
     supports_reasoning: true
     supports_temperature: false
+    supports_tool_search: true
     reasoning_options: [low, medium, high, xhigh]
     default_reasoning: low
     reasoning_descriptions:
@@ -19,16 +20,17 @@ models:
       - Routing and formatting extracted information
       - Paper extraction when explicitly selected
     avoid_for:
-      - Routine validation and database lookups where Terra is the default
+      - Routine validation and database lookups where GPT-6 Sol is the default
 
-  - model_id: gpt-5.6-sol
-    name: GPT-5.6 Sol
+  - model_id: gpt-6-sol
+    name: GPT-6 Sol
     provider: openai
-    description: Default reasoning model for document extraction and curation.
-    guidance: Default for new extraction agents. Start with medium reasoning; increase it when difficult evidence needs more analysis. Existing saved agents retain their saved settings; GPT-6 Astra is available by explicit selection.
+    description: Default reasoning model for document extraction, validation, and curation.
+    guidance: Default for new extraction agents and for validation and utility agents. Start with medium reasoning; increase it when difficult evidence needs more analysis. GPT-6 Astra is available by explicit selection.
     default: true
     supports_reasoning: true
     supports_temperature: false
+    supports_tool_search: true
     reasoning_options:
       - low
       - medium
@@ -36,41 +38,16 @@ models:
       - xhigh
     default_reasoning: medium
     reasoning_descriptions:
-      low: Fastest GPT-5.6 Sol mode. Good for quick checks and straightforward extraction.
-      medium: Default for extraction and curation. Start here when designing a new agent.
-      high: Deep reasoning for hard ambiguity.
+      low: Fastest GPT-6 Sol mode. Good for quick checks, simple lookups, and straightforward extraction.
+      medium: Default for extraction, validation, and curation. Start here when designing a new agent.
+      high: Deeper reasoning for hard ambiguity in extraction or validation.
       xhigh: Deepest reasoning but slowest. Use sparingly for hard ambiguity, not routine DB lookups.
     recommended_for:
-      - Complex evidence synthesis and conflict resolution
       - Document extraction and high-stakes interpretation where instruction fidelity matters
-      - Prompt architecture or policy refinement
+      - Validation and database lookups after using search/read tools
+      - Complex evidence synthesis and conflict resolution
     avoid_for:
-      - Simple database retrieval tasks where latency is the priority
-
-  - model_id: gpt-5.6-terra
-    name: GPT-5.6 Terra
-    provider: openai
-    description: Faster, lower-cost reasoning model for validation and lightweight tasks.
-    guidance: Use for validation and utility agents where speed matters but reasoning still helps. Use GPT-5.6 Sol for new document extraction agents.
-    default: false
-    supports_reasoning: true
-    supports_temperature: false
-    reasoning_options:
-      - low
-      - medium
-      - high
-      - xhigh
-    default_reasoning: medium
-    reasoning_descriptions:
-      low: Fastest GPT-5.6 Terra mode. Good for simple lookups.
-      medium: Balanced Terra reasoning for routine validation.
-      high: Deeper Terra reasoning for validation ambiguity.
-      xhigh: Maximum Terra reasoning for difficult validation ambiguity for difficult cases.
-    recommended_for:
-      - Validation and lightweight extraction
-      - Follow-up checks after using search/read tools
-    avoid_for:
-      - Deep multi-step adjudication with conflicting evidence
+      - Work that must remain on GPT-6 Astra routing or output settings
 
   - model_id: deepseek/deepseek-v4-pro-0813
     name: DeepSeek V4 Pro 0813 (OpenRouter)
@@ -80,6 +57,7 @@ models:
     default: false
     supports_reasoning: true
     supports_temperature: true
+    supports_tool_search: false
     recommended_for:
       - Explicit OpenRouter route evaluation
     avoid_for:

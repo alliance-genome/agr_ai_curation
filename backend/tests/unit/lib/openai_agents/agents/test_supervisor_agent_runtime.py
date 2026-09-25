@@ -14,6 +14,9 @@ from src.lib.chat_history_repository import ChatMessageRecord
 from src.lib.agent_studio import tools as trace_review_tools
 from src.lib.openai_agents import supervisor_context_tools
 from src.lib.openai_agents.agents import supervisor_agent
+from src.lib.openai_agents.config import PromptCacheIdentity
+
+_SUPERVISOR_CACHE = PromptCacheIdentity(agent_key="supervisor", static_prompt="Base prompt")
 
 
 def _patch_supervisor_prompt_bundle(monkeypatch, *, version: int = 1):
@@ -33,6 +36,7 @@ def _patch_supervisor_prompt_bundle(monkeypatch, *, version: int = 1):
         )
         return SimpleNamespace(
             render=lambda: rendered,
+            static_prefix=lambda: "Base prompt",
             hash=f"hash-{version}",
             to_manifest=lambda: {
                 "agent_id": "supervisor",
@@ -92,6 +96,9 @@ class _FakeQuery:
 
     def all(self):
         return self._rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
 
 
 class _FakeSession:
@@ -179,13 +186,30 @@ def test_supervisor_prompt_explains_result_inspection_boundaries():
     normalized_prompt = " ".join(prompt_text.split())
 
     assert "inspect_results(action=\"help\")" in prompt_text
-    assert "inspect_results(action=\"search\"" in prompt_text
+    # ALL-1287: counts first, filtered pages, bounded continuation.
+    assert "inspect_results(action=\"summary\")" in prompt_text
+    assert "`validation_state`" in prompt_text
+    assert "`next_call` arguments exactly" in normalized_prompt
+    assert "marked `withheld` is not missing or shortened" in normalized_prompt
     assert "extraction-result:<uuid>" in prompt_text
     assert (
         "Do not silently export a different result than the curator requested."
         in normalized_prompt
     )
-    assert "do not call another extractor just to summarize" in normalized_prompt
+    # ALL-1292: completion, search-before-rerun and export selection live once in
+    # the runtime notes; the base prompt defers to them instead of repeating them.
+    assert "EXTRACTION RESULT COMPLETION and EXPORT/DOWNLOAD ROUTING notes" in normalized_prompt
+    assert "inspect_results(action=\"search\"" not in prompt_text
+    note = supervisor_agent._build_runtime_tool_availability_note(
+        tool_specs=[{"tool_name": "ask_csv_formatter_specialist", "agent_key": "csv_formatter"}],
+        available_specialist_tools=[SimpleNamespace(name="ask_csv_formatter_specialist")],
+        document_loaded=True,
+    )
+    assert note.count("EXTRACTION RESULT COMPLETION:") == 1
+    assert "search/list existing results before rerunning" in note
+    assert "Do not call extractors again only to summarize existing results" in note
+    assert note.count("EXPORT/DOWNLOAD ROUTING:") == 1
+    assert "select only a result_ref listed in the runtime formatter bundle" in note
     assert "Export and curation prep are separate explicit actions" in prompt_text
     assert "trace inspection only to debug behavior" in prompt_text
     assert "inspect_curation_context" not in prompt_text
@@ -586,6 +610,7 @@ def test_build_model_settings_applies_reasoning_and_provider_parallel_policy(mon
         model="gpt-5.4-mini",
         temperature=0.7,
         reasoning_effort="high",
+        prompt_cache=_SUPERVISOR_CACHE,
     )
 
     assert settings is not None
@@ -604,13 +629,14 @@ def test_build_model_settings_returns_none_when_no_overrides(monkeypatch):
     )
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
-        lambda _provider: SimpleNamespace(supports_parallel_tool_calls=True),
+        lambda _provider: SimpleNamespace(driver="openai_native", supports_parallel_tool_calls=True),
     )
 
     settings = supervisor_agent._build_model_settings(
         model="gpt-4o",
         temperature=None,
         reasoning_effort=None,
+        prompt_cache=_SUPERVISOR_CACHE,
     )
 
     assert settings is not None
@@ -629,7 +655,7 @@ def test_build_model_settings_raises_for_unknown_provider(monkeypatch):
     monkeypatch.setattr("src.lib.config.providers_loader.get_provider", lambda _provider: None)
 
     with pytest.raises(ValueError, match="Unknown provider_id"):
-        supervisor_agent._build_model_settings(model="gpt-4o")
+        supervisor_agent._build_model_settings(model="gpt-4o", prompt_cache=_SUPERVISOR_CACHE)
 
 
 def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failures(monkeypatch):
@@ -660,7 +686,7 @@ def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failure
     monkeypatch.setattr("src.models.sql.agent.Agent", _FakeAgentRecord)
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
 
-    def _metadata(agent_key):
+    def _metadata(agent_key, **_kwargs):
         if agent_key == "gene-extractor":
             return {"requires_document": True, "category": "Extraction"}
         raise RuntimeError("metadata failure")
@@ -710,7 +736,7 @@ def test_rgd_go_specialist_is_discoverable_only_to_authenticated_rgd(monkeypatch
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.get_agent_metadata",
-        lambda _agent_key: {"requires_document": True, "category": "Extraction"},
+        lambda _agent_key, **_kwargs: {"requires_document": True, "category": "Extraction"},
     )
 
     rgd_specs = supervisor_agent._get_supervisor_specialist_specs(["RGD"])
@@ -728,6 +754,42 @@ def test_rgd_go_specialist_is_discoverable_only_to_authenticated_rgd(monkeypatch
         "GO": r"^GO:\d{7}$",
         "RGD": r"^RGD:\d+$",
     }
+
+
+def test_group_restricted_specialist_metadata_reads_its_db_row_without_a_denial(monkeypatch, caplog):
+    """Regression: the metadata lookup runs in the caller's group scope, so an RGD-only
+    specialist reads its own DB row and no false authorization denial is logged."""
+
+    row = SimpleNamespace(
+        agent_key="rgd_go_paper_curator",
+        name="RGD GO Paper Curator",
+        description="From the DB row",
+        supervisor_description="Use for paper-derived RGD GO recommendations",
+        supervisor_batchable=0,
+        supervisor_batching_entity=None,
+        allowed_group_ids=["RGD"],
+        tool_ids=[],
+        category="DB row category",
+        output_schema_key=None,
+        is_active=True,
+        visibility="system",
+        supervisor_enabled=True,
+        show_in_palette=True,
+        execution_revision_id=None,
+        template_source=None,
+        group_rules_component=None,
+    )
+    monkeypatch.setattr("src.models.sql.agent.Agent", _FakeAgentRecord)
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: _FakeSession([row]))
+
+    with caplog.at_level("WARNING", logger="src.lib.agent_access"):
+        specs = supervisor_agent._get_supervisor_specialist_specs(["RGD"])
+
+    assert [spec["agent_key"] for spec in specs] == ["rgd_go_paper_curator"]
+    assert specs[0]["category"] == "DB row category"
+    assert not [
+        record for record in caplog.records if record.getMessage() == "Resource authorization denied"
+    ]
 
 
 def test_create_dynamic_specialist_tools_skips_document_required_tools_without_document(monkeypatch):
@@ -1044,6 +1106,31 @@ def test_fetch_document_hierarchy_sync_returns_none_on_exception(monkeypatch, re
     assert context["document_id"].startswith("sha256:")
     assert "doc-1" not in json.dumps(context)
     assert "user-1" not in json.dumps(context)
+
+
+def test_fetch_document_hierarchy_sync_reports_worker_runtime_error_under_running_loop(monkeypatch):
+    import asyncio
+
+    async def _worker_failure(_document_id, _user_id):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(
+        "src.lib.weaviate_client.chunks.get_document_sections_hierarchical",
+        _worker_failure,
+    )
+    captured = []
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda exc, **_kwargs: captured.append(exc),
+    )
+
+    async def _from_running_loop():
+        return supervisor_agent.fetch_document_hierarchy_sync("doc-1", "user-1")
+
+    # The worker's own failure is reported; it is never retried with asyncio.run()
+    # on the running loop.
+    assert asyncio.run(_from_running_loop()) is None
+    assert [str(exc) for exc in captured] == ["can't start new thread"]
 
 
 @pytest.mark.parametrize("result", [None, {"sections": [], "top_level_sections": []}])
@@ -1715,6 +1802,11 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert "object_ref" in inspect_params
     assert "review_session_id" not in inspect_params
     assert "file_id" not in inspect_params
+    for exploration_param in (
+        "object_type", "status", "validation_state", "severity", "fields",
+        "finding_ref", "validator_result_key", "detail_path", "result_sha256",
+    ):
+        assert exploration_param in inspect_params
     tools_by_name = {getattr(tool, "name", ""): tool for tool in created.tools}
     trace_inspect_params = inspect.signature(
         tools_by_name["inspect_chat_traces"]
@@ -1733,6 +1825,8 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert "assistant_response independently" in tools_by_name["inspect_chat_traces"].description
     assert "its offset as cursor" in tools_by_name["inspect_chat_traces"].description
     assert "action=\"search\"" in tools_by_name["inspect_results"].description
+    assert "action=\"summary\"" in tools_by_name["inspect_results"].description
+    assert "next_call" in tools_by_name["inspect_results"].description
     assert "export_to_file" not in tools_by_name
     assert captured_langfuse["metadata"]["specialist_count"] == 4
 

@@ -26,3 +26,49 @@ def test_formatter_policy_backfill_preserves_existing_decisions(monkeypatch):
         assert not values['curator_visible']
         assert values['allow_execute']
         assert isinstance(json.loads(values['config']), dict)
+
+
+def test_chat_output_policy_backfill_seeds_only_new_runtime_helpers(monkeypatch):
+    root = find_repo_root(Path(__file__))
+    path = root / 'backend/alembic/versions/q4f5a6b7c8d9_backfill_chat_output_tool_policies.py'
+    spec = spec_from_file_location('chat_output_policy_migration_test', path)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.down_revision == 'p3e4f5a6b7c8'
+    for key in ['AGR_RUNTIME_ROOT', 'AGR_RUNTIME_CONFIG_DIR', 'AGR_RUNTIME_PACKAGES_DIR',
+                'TOOL_POLICY_DEFAULTS_CONFIG_PATH', 'APP_VERSION', 'AGR_RUNTIME_PACKAGE_API_VERSION']:
+        monkeypatch.delenv(key, raising=False)
+    calls = []
+    monkeypatch.setattr(module.op, 'get_bind', lambda: SimpleNamespace(execute=lambda sql, values: calls.append((str(sql), values))))
+    module.upgrade()
+    assert [values['tool_key'] for _, values in calls] == ['read_output_value', 'finalize_chat_output']
+    for sql, values in calls:
+        assert 'ON CONFLICT (tool_key) DO NOTHING' in sql
+        assert values['category'] == 'Output'
+        assert not values['allow_attach']
+        assert not values['curator_visible']
+        assert values['allow_execute']
+        assert isinstance(json.loads(values['config']), dict)
+
+
+def test_extraction_resolver_helpers_stop_being_inherited(monkeypatch):
+    root = find_repo_root(Path(__file__))
+    path = root / 'backend/alembic/versions/s6t7u8v9w0x1_stop_inheriting_extraction_resolver_helpers.py'
+    spec = spec_from_file_location('resolver_inheritance_migration_test', path)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    # Chained after the model migration (q4f5a6b7c8d9 -> r5a6b7c8d9e0 -> here): one head.
+    assert module.down_revision == 'r5a6b7c8d9e0'
+    calls = []
+    monkeypatch.setattr(module.op, 'get_bind', lambda: SimpleNamespace(execute=lambda sql, values: calls.append((str(sql), values))))
+
+    module.upgrade()
+
+    assert [values['tool_key'] for _, values in calls] == [
+        'search_domain_field_terms', 'inspect_ontology_term', 'resolve_domain_field_term',
+    ]
+    for sql, values in calls:
+        # Only the inheritance designation changes; the row is never inserted or replaced.
+        assert sql.strip().startswith('UPDATE tool_policies')
+        assert "'{system_managed_inheritance}'" in sql
+        assert values['value'] == 'false'

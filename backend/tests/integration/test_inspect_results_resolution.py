@@ -138,6 +138,9 @@ def _gene_envelope(*, object_count: int) -> dict:
                     "gene_symbol": f"sym-{index}",
                     "primary_external_id": f"FB:FBgn{index:07d}",
                     "taxon": "NCBITaxon:7227",
+                    "resolution_state": "resolved",
+                    "lookup_outcome": "matched",
+                    "validator_explanation": None,
                 },
                 "evidence_record_ids": [f"evidence-{index}"],
             }
@@ -313,8 +316,8 @@ async def test_allele_trace_shaped_durability_empty_attempt_cannot_replace(
         await inspect_results(action="summary", result_ref=good.result_ref)
     )
     assert good_summary["status"] == "ok"
-    assert good_summary["manifest"]["result_status"] == "non_empty_extraction_ready"
-    assert good_summary["manifest"]["object_count"] == 16
+    assert good_summary["inventory"]["result_status"] == "non_empty_extraction_ready"
+    assert good_summary["inventory"]["object_count"] == 16
 
     # The empty result is independently distinguishable as empty.
     empty_response = json.loads(
@@ -326,7 +329,7 @@ async def test_allele_trace_shaped_durability_empty_attempt_cannot_replace(
     empty_summary = json.loads(
         await inspect_results(action="summary", result_ref=empty.result_ref)
     )
-    assert empty_summary["manifest"]["result_status"] == "empty_extraction"
+    assert empty_summary["inventory"]["result_status"] == "empty_extraction"
 
     # Durable rows both exist; the good row's payload is intact.
     from uuid import UUID

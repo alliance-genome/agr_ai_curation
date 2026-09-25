@@ -10,6 +10,7 @@ from src.lib.executable_runs import (
     executable_run_manager,
 )
 from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
+from src.lib.openai_agents.event_types import curator_facing_run_error_message
 from src.lib.observability.sentry import (
     gen_ai_workflow_transaction,
     hash_sentry_identifier,
@@ -936,7 +937,7 @@ async def chat_stream_endpoint(
                             "sentry_skip_event": resolved_route.mode == "flow",
                         },
                     )
-                    runner_error_message = (
+                    runner_error_message = curator_facing_run_error_message(event_data) or (
                         "An error occurred. Please provide feedback using the ⋮ menu on this message, "
                         "then try your query again."
                     )

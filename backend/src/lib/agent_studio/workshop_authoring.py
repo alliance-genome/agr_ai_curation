@@ -65,7 +65,27 @@ def workshop_save_candidate(workshop: AgentWorkshopContext) -> dict[str, Any]:
     }
 
 
+def workshop_draft_output(workshop) -> dict[str, Any]:
+    """The draft's output state and schema, as Save classifies an extraction agent."""
+    from src.schemas.agent_execution_revision import initial_output_contract
+
+    schema = workshop.draft_output_schema_key or None
+    if workshop.draft_output is None:
+        return {"output_state": initial_output_contract(schema).output_state, "output_schema_key": schema}
+    state = "none" if workshop.draft_output.get("mode") == "none" else "structured_extraction"
+    return {"output_state": state, "output_schema_key": schema}
+
+
 def workshop_system_tools(db, workshop, active_group_ids, *, user_id):
+    """Template-owned mechanical tools the draft keeps; an extraction draft keeps no inherited lookup."""
+    from src.lib.agent_studio import custom_agent_service as service
+    inherited = workshop_inherited_tools(db, workshop, active_group_ids, user_id=user_id)
+    return service._withhold_inherited_identity_lookups(
+        inherited, inherited, **workshop_draft_output(workshop),
+    )
+
+
+def workshop_inherited_tools(db, workshop, active_group_ids, *, user_id):
     """Resolve template-owned mechanical tools using the existing Save rules."""
     from src.lib.agent_studio import custom_agent_service as service
     saved_source_id = workshop.custom_agent_id or workshop.clone_source_agent_id
@@ -233,7 +253,15 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
                 raise ValueError("Changed inherited access")
         elif candidate["inherited_allowed_group_ids"]:
             raise ValueError("Missing inherited source")
-        required_tools = workshop_system_tools(db, workshop, active_group_ids, user_id=user_id)
+        source_system_tools = workshop_inherited_tools(db, workshop, active_group_ids, user_id=user_id)
+        draft_output = workshop_draft_output(workshop)
+        required_tools = service._withhold_inherited_identity_lookups(
+            source_system_tools, source_system_tools, **draft_output,
+        )
+        # Save withholds the same inherited lookups from the tools the editor sends back.
+        candidate["tool_ids"] = service._withhold_inherited_identity_lookups(
+            candidate["tool_ids"], source_system_tools, **draft_output,
+        )
         if not set(required_tools).issubset(candidate["tool_ids"]):
             findings.append(AuthoringValidationFinding(
                 code="missing_inherited_tools", severity="error", path="custom_agent.tool_ids",

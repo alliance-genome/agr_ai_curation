@@ -625,6 +625,7 @@ def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch,
     monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
+    monkeypatch.setattr(api_module, "_load_agent_studio_system_prompt_template", lambda: "system prompt template")
     monkeypatch.setattr(
         api_module,
         "_get_all_opus_tools",
@@ -745,6 +746,7 @@ def test_repeated_tool_loop_continuations_stay_compact_and_keep_exact_results(
     monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
+    monkeypatch.setattr(api_module, "_load_agent_studio_system_prompt_template", lambda: "system prompt template")
     monkeypatch.setattr(
         api_module,
         "_get_all_opus_tools",

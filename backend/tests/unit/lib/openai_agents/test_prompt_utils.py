@@ -208,7 +208,7 @@ def test_format_abstract_for_prompt_trims_and_formats_text():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-5.6-sol"])
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6-sol"])
 async def test_extract_abstract_with_llm_uses_catalog_reasoning_without_temperature(monkeypatch, model):
     captured = {}
 
@@ -551,7 +551,7 @@ async def test_fetch_document_abstract_uses_last_resort_first_chunks(monkeypatch
 def test_fetch_document_abstract_sync_handles_missing_event_loop(monkeypatch):
     import asyncio
 
-    monkeypatch.setattr(asyncio, "get_event_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
 
     def _fake_run(coro):
         coro.close()
@@ -567,11 +567,6 @@ def test_fetch_document_abstract_sync_returns_none_on_unexpected_error(monkeypat
     import asyncio
     import concurrent.futures
 
-    class _RunningLoop:
-        @staticmethod
-        def is_running():
-            return True
-
     class _BrokenPool:
         def __enter__(self):
             raise RuntimeError("boom")
@@ -579,8 +574,21 @@ def test_fetch_document_abstract_sync_returns_none_on_unexpected_error(monkeypat
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(asyncio, "get_event_loop", lambda: _RunningLoop())
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: object())
     monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", lambda: _BrokenPool())
 
     result = prompt_utils.fetch_document_abstract_sync("doc", "user")
     assert result is None
+
+
+def test_fetch_document_abstract_sync_contains_worker_runtime_error_under_running_loop(monkeypatch):
+    async def _worker_failure(_document_id, _user_id, _hierarchy):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(prompt_utils, "fetch_document_abstract", _worker_failure)
+
+    async def _from_running_loop():
+        return prompt_utils.fetch_document_abstract_sync("doc", "user")
+
+    # A worker RuntimeError is a failed fetch, not a missing event loop.
+    assert asyncio.run(_from_running_loop()) is None

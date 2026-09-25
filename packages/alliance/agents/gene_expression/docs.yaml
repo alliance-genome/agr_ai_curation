@@ -14,7 +14,7 @@ capabilities:
     example_query: "Find tissues where the gene is not expressed"
     example_result: "Flags these as negative results — for example 'not detected in neurons'."
   - name: "Hands expression details to the validators"
-    description: "Passes each expression observation — the gene, the tissue or cell type, the developmental stage, the data provider, and the reagent used — to the specialist validators, each backed by its supporting quote. The extractor proposes; the validators authoritatively confirm the official terms and the data provider."
+    description: "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, tissue/cell-type, stage and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed."
     example_query: "Extract the expression observations and pass them on for confirmation"
     example_result: "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms"
 data_sources:
@@ -27,9 +27,9 @@ use_when:
   - "At the start of a gene expression curation flow; the domain pack's validators then confirm genes, anatomy, and stage terms automatically."
   - "When a paper uses reporters, in situ hybridization, or antibody staining to show baseline expression."
 avoid_when:
-  - "For expression changes caused by mutations, RNAi, heat shock, or drug treatment; only wild-type patterns are captured."
+  - "For rescue-only overexpression, marker-only cell labeling or methods-only reagent descriptions without an expression finding. Measured expression changes after perturbation are in scope when supported by the paper."
   - "To turn tissue or stage wording into official ontology IDs; the domain pack's validators do that automatically on everything this agent extracts."
-  - "To produce a downloadable file; add a File Formatter after this agent."
+  - "To produce a downloadable file by itself; attach a CSV, TSV or JSON output branch to this extractor."
 limitations:
   - "Does NOT annotate transgenic markers used solely for strain identification (e.g., rol-6, myo-2::GFP co-injection markers)"
   - "Requires at least one document search or read tool call before returning results"

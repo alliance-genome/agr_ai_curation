@@ -265,9 +265,6 @@ def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):
         "update_recorded_evidence_metadata",
         "get_agent_contract",
         "agr_species_context_lookup",
-        "search_domain_field_terms",
-        "inspect_ontology_term",
-        "resolve_domain_field_term",
         "stage_gene_expression_observation",
         "patch_gene_expression_observation",
         "discard_gene_expression_observation",
@@ -669,3 +666,49 @@ def test_bundled_alliance_first_pass_extractors_still_register_domain_envelope_s
         assert any(_b.__qualname__ == DomainEnvelopeExtractionResult.__qualname__ for _b in type.mro(discovered_schema))
         assert "curatable_objects" in discovered_schema.model_fields
         assert "metadata" in discovered_schema.model_fields
+
+
+def test_packaged_identity_lookup_tools_are_declared_in_their_bindings(monkeypatch):
+    """Every Alliance tool that searches a database for an identity says so (ALL-1276)."""
+    from src.lib.packages import tool_roles
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    tool_roles.reset_cache()
+    try:
+        assert tool_roles.identity_lookup_tool_names() == frozenset({
+            "agr_curation_query", "agr_literature_reference_lookup", "alliance_api_call",
+            "chebi_api_call", "curation_db_sql", "go_api_call", "inspect_ontology_term",
+            "quickgo_api_call", "resolve_domain_field_term", "resolve_gene_product",
+            "search_domain_field_terms",
+        })
+    finally:
+        tool_roles.reset_cache()
+
+
+def test_no_packaged_extraction_agent_carries_identity_lookup_tools(monkeypatch):
+    """Extraction reads the paper; validators do every database search (ALL-1276).
+
+    Base tools and group-scoped tools both count. Only the species context helper, which
+    maps a species to its provider and taxon (not an identity), stays on extractors.
+    """
+    from src.lib.packages import tool_roles
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    tool_roles.reset_cache()
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+    lookups = tool_roles.identity_lookup_tool_names()
+
+    assert "agr_species_context_lookup" not in lookups
+    assert {
+        "agr_curation_query", "search_domain_field_terms", "resolve_domain_field_term",
+        "inspect_ontology_term", "agr_literature_reference_lookup", "quickgo_api_call",
+    } <= lookups
+    violations = {
+        agent.agent_id: sorted(
+            ({*agent.tools, *(rule.tool_id for rule in agent.group_tool_policy.rules)}) & lookups
+        )
+        for agent in agents.values()
+        if tool_roles.is_extraction_agent(agent.tools)
+    }
+    assert {agent_id: tools for agent_id, tools in violations.items() if tools} == {}
+    tool_roles.reset_cache()

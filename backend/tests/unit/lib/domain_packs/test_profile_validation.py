@@ -471,3 +471,52 @@ def test_allele_capability_persistence_uses_new_version_identity(example):
     assert "0.1.1" in select.compile(dialect=postgresql.dialect()).params.values()
     assert "0.1.0" not in select.compile(dialect=postgresql.dialect()).params.values()
     assert db.add.call_args.args[0].capability_fingerprint == cap.fingerprint()
+
+
+def test_overlay_declares_a_resolvable_values_paper_wording_and_resolution_leaves(example):
+    from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOMES, RESOLUTION_STATES
+
+    raw, cap, pack = example
+    raw["fields"] = [{"key": "gene", "display_name": "Gene", "required": True, "value_schema": {
+        "kind": "object", "fields": [
+            {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+            {"key": "gene_id", "value_schema": {"kind": "string"}},
+        ]}}]
+    raw["validator_mappings"][0].update(inputs={"mention": {"field_path": "attributes.gene.mention"}},
+                                        outputs={"identifier": "attributes.gene.gene_id"})
+    receipt, profile = resolve(raw)
+    context = compile_profile_validation(receipt, profile, pack, capabilities=[cap])
+    metadata = context.registry.domain_pack.metadata
+    fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
+    enums = {enum.enum_id: [value.value for value in enum.values] for enum in metadata.enum_definitions}
+    # The value reads "label (id)" or UNRESOLVED; the core legacy rule and headers use this spec.
+    assert fields["attributes.gene"].metadata["display"] == {"id": "gene_id", "mention": "mention"}
+    assert enums[fields["attributes.gene.resolution_state"].enum_ref] == list(RESOLUTION_STATES)
+    assert enums[fields["attributes.gene.lookup_outcome"].enum_ref] == list(LOOKUP_OUTCOMES)
+    assert fields["attributes.gene.validator_explanation"].field_type.value == "string"
+    assert "attributes.gene.validator_curator_message" in fields
+    assert "attributes.gene.overruled_gene_id" not in fields  # Stripped by every reader, never a column.
+    # Declaration guard: every value the profile stages and validation writes into is declared (H1/F2).
+    from src.lib.domain_packs.resolvable_values import LOOKUP_OUTCOME_KEY as _key, declared_resolvable_fields as _declared
+    assert set(_declared(metadata, "generic_object")) == {
+        path.replace("[]", "") for path in profile.resolvable_objects()
+    }
+    assert enums[fields[f"attributes.gene.{_key}"].enum_ref][-1] == "curator_override"
+    # A value stored before the contract goes through the shared legacy rule.
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, effective_payload
+    from src.lib.flows.value_display import display_text
+
+    specs = declared_resolvable_fields(metadata, "generic_object")
+    legacy = effective_payload({"attributes": {"gene": {"mention": "daf-16", "gene_id": "EX:1"}}},
+                               specs, object_metadata={})
+    assert legacy["attributes"]["gene"]["lookup_outcome"] == "legacy_unverified"
+    assert legacy["attributes"]["gene"]["gene_id"] is None
+    assert display_text(legacy["attributes"]["gene"], fields["attributes.gene"].metadata["display"]) == "UNRESOLVED"
+    # A profile validator write-back recorded on the object counts as validator coverage (core h).
+    covered = effective_payload(
+        {"attributes": {"gene": {"mention": "daf-16", "gene_id": "EX:1"}}}, specs,
+        object_metadata={"profile_validator_materialization": [{"field_paths": ["attributes.gene.gene_id"]}]},
+    )
+    assert (covered["attributes"]["gene"]["resolution_state"], covered["attributes"]["gene"]["gene_id"]) == (
+        "resolved", "EX:1")
+    assert display_text(covered["attributes"]["gene"], fields["attributes.gene"].metadata["display"]) == "EX:1"

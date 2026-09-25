@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import re
 from typing import Any, Self, TypeGuard
 
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceError,
+    DocumentSourceReferenceNotFound,
     DocumentSourceHealth,
     DocumentSourceProvider,
     NormalizedSourceIdentifier,
@@ -41,6 +43,14 @@ _ARTIFACT_STATUS_KEYS = (
 )
 
 
+def _canonical_publication_identifier(identifier: str) -> str:
+    """ABC cross-reference lookup requires ZFIN's full publication CURIE."""
+    normalized = identifier.strip()
+    if re.fullmatch(r"ZDB-PUB-\d{6}-\d+", normalized):
+        return f"ZFIN:{normalized}"
+    return normalized
+
+
 class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
     """Map ABC Literature REST payloads into provider-neutral source objects."""
 
@@ -64,7 +74,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         *,
         request_bearer_token: str | None = None,
     ) -> SourceReference:
-        normalized = identifier.strip()
+        normalized = _canonical_publication_identifier(identifier)
         if not normalized:
             raise DocumentSourceError("identifier is required")
 
@@ -90,6 +100,13 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                     normalized,
                     request_bearer_token=request_bearer_token,
                 )
+        except ABCLiteratureHTTPError as exc:
+            if exc.status_code == 404 and exc.endpoint.startswith("/reference/"):
+                raise DocumentSourceReferenceNotFound(
+                    "No matching reference was found in ABC Literature. "
+                    "Check the publication identifier or upload the PDF."
+                ) from exc
+            raise DocumentSourceError("ABC Literature reference lookup failed") from exc
         except ABCLiteratureClientError as exc:
             raise DocumentSourceError("ABC Literature reference lookup failed") from exc
 
@@ -126,7 +143,9 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 )
 
         if _looks_like_provider_cross_reference(original):
-            return NormalizedSourceIdentifier(original=original, normalized=original)
+            return NormalizedSourceIdentifier(
+                original=original, normalized=_canonical_publication_identifier(original),
+            )
 
         return NormalizedSourceIdentifier(
             original=original,

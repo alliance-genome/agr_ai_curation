@@ -32,6 +32,7 @@ from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceConfigError,
     DocumentSourceError,
+    DocumentSourceReferenceNotFound,
     DocumentSourceProvider,
     NormalizedSourceIdentifier,
     SourceArtifact,
@@ -97,6 +98,7 @@ class ReferenceImportDecisionStatus(str):
     """Decision categories for reference-backed imports."""
 
     READY = "ready"
+    REFERENCE_NOT_FOUND = "reference_not_found"
     NO_SOURCE_ARTIFACT = "no_source_artifact"
     ACCESS_DENIED = "access_denied"
     AMBIGUOUS_MATCH = "ambiguous_match"
@@ -279,10 +281,18 @@ async def select_reference_import_candidate(
     resolve callers must leave provider state untouched.
     """
 
-    reference = await provider.resolve_reference(
-        identifier,
-        request_bearer_token=request_bearer_token,
-    )
+    try:
+        reference = await provider.resolve_reference(
+            identifier,
+            request_bearer_token=request_bearer_token,
+        )
+    except DocumentSourceReferenceNotFound as exc:
+        return ReferenceImportDecision(
+            status=ReferenceImportDecisionStatus.REFERENCE_NOT_FOUND,
+            provider=provider.provider_id,
+            identifier=identifier,
+            message=str(exc),
+        )
     artifacts = await provider.list_artifacts(
         reference,
         request_bearer_token=request_bearer_token,
@@ -1253,6 +1263,7 @@ class IdentifierImportService:
         decision: ReferenceImportDecision,
     ) -> IdentifierImportItemResult:
         error_code_by_status = {
+            ReferenceImportDecisionStatus.REFERENCE_NOT_FOUND: "document_source_reference_not_found",
             ReferenceImportDecisionStatus.NO_SOURCE_ARTIFACT: "document_source_no_source_artifact",
             ReferenceImportDecisionStatus.ACCESS_DENIED: "document_source_access_denied",
             ReferenceImportDecisionStatus.AMBIGUOUS_MATCH: "document_source_ambiguous_match",

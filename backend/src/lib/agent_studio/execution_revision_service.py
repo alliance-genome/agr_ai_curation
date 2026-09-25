@@ -281,9 +281,27 @@ def restore_execution_revision(
     _, saved = get_execution_revision(
         db, agent_id, revision_id, user_id, active_group_ids=active_group_ids
     )
+    from src.lib.config.models_loader import get_model
+
+    # A restored head must still run, and startup rejects active agents whose
+    # model is no longer in the catalog (for example, retired GPT-5.6 models).
+    if get_model(saved.model_id) is None:
+        raise ValueError(
+            f"This saved version uses the model '{saved.model_id}', which is no longer "
+            "available. Open the agent, choose an available model, and save it instead."
+        )
     require_allowed_group_ids_narrowing(
         list(head.inherited_allowed_group_ids or []), saved.inherited_allowed_group_ids,
         source_name="current inherited access floor",
+    )
+    from src.lib.packages.tool_roles import require_no_identity_lookup_on_extraction
+
+    # A saved extraction revision with identity-lookup tools cannot run, so it is not restored.
+    require_no_identity_lookup_on_extraction(
+        saved.tool_ids,
+        output_state=saved.output_contract.output_state,
+        output_schema_key=saved.output_contract.output_schema_key,
+        agent_label="This saved version",
     )
     # No current template, prompt normalizer or recapture is involved. In
     # particular, saved resolved main/group prompt bytes remain unchanged.

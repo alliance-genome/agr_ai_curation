@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from src.api import agent_studio as api_module
 from src.lib.agent_studio import domain_envelope_tools as domain_tools
 from src.lib.agent_studio.models import ChatContext
@@ -479,3 +481,41 @@ def test_domain_reference_summary_merges_stable_tool_refs_without_prompt_text():
         },
     }
     assert "Raw message should not become a reference." not in str(merged)
+
+
+
+def _validation_plan_pack_ids():
+    from src.lib.flows.validation_attachments import domain_pack_validation_registries
+
+    return sorted(domain_pack_validation_registries())
+
+
+@pytest.mark.parametrize("domain_pack_id", _validation_plan_pack_ids())
+def test_every_pack_plan_page_remains_provider_visible(monkeypatch, domain_pack_id):
+    """Object definitions report field counts; the fields section pages the paths (ALL-1283)."""
+
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    for section in domain_tools._DOMAIN_PLAN_SECTIONS:
+        cursor = None
+        while True:
+            page = domain_tools.get_domain_pack_validation_plan(
+                domain_pack_id=domain_pack_id, section=section, cursor=cursor,
+            )
+            assert page["success"], page
+            content = api_module._provider_tool_result_content(
+                tool_name="get_domain_pack_validation_plan",
+                tool_input={"domain_pack_id": domain_pack_id, "section": section},
+                tool_result=page,
+                session_id="agent-studio-session-1",
+                turn_id="opus-turn-domain-plan",
+            )
+            assert json.loads(content) == page
+            assert len(content) <= 12000, (section, len(content))
+            if section == "object_definitions":
+                for item in page["items"]:
+                    assert "field_paths" not in item
+                    assert item["field_count"] >= 0
+                    assert isinstance(item["resolvable_value_paths"], list)
+            if page["complete"]:
+                break
+            cursor = page["next_cursor"]

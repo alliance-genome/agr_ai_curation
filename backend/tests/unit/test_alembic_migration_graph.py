@@ -9,8 +9,12 @@ from pathlib import Path
 
 import pytest
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 
-VERSIONS_DIR = Path(__file__).resolve().parents[2] / "alembic" / "versions"
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+VERSIONS_DIR = BACKEND_DIR / "alembic" / "versions"
 
 
 def _literal_assignment(module: ast.Module, name: str) -> object:
@@ -66,7 +70,7 @@ def test_alembic_revision_graph_has_single_head():
 
     heads = sorted(revision for revision in revisions if revision not in children)
 
-    assert heads == ["8c4279ba51ef"]
+    assert heads == ["92a22b250925"]
 
 
 def test_alembic_revision_graph_rejects_duplicate_revision_ids(
@@ -128,4 +132,19 @@ def test_convergence_runs_only_the_missing_parent_branch(start, expected):
         # Match Alembic command.upgrade, including the other merge branch.
         item.revision for item in scripts.iterate_revisions("heads", start, implicit_base=True)
     }
-    assert upgrade == expected | {"8c4279ba51ef"}
+    assert upgrade == expected | {"8c4279ba51ef", "q4f5a6b7c8d9", "r5a6b7c8d9e0", "s6t7u8v9w0x1", "92a22b250925"}
+
+def test_alembic_script_directory_resolves_exactly_one_head():
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    script = ScriptDirectory.from_config(config)
+
+    assert script.get_heads() == ["92a22b250925"]
+
+
+@pytest.mark.parametrize("start", ["8c4279ba51ef", "s6t7u8v9w0x1"])
+def test_v0922_convergence_reaches_head_from_each_deployed_branch(start):
+    scripts = ScriptDirectory(str(VERSIONS_DIR.parent))
+    upgrade = {item.revision for item in scripts.iterate_revisions("heads", start, implicit_base=True)}
+    assert "92a22b250925" in upgrade
+    assert start not in upgrade

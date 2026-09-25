@@ -73,6 +73,7 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
 
     monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
+    monkeypatch.setattr(api_module, "_load_agent_studio_system_prompt_template", lambda: "system prompt template")
     monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
     monkeypatch.setattr(api_module, "clear_workflow_user_context", lambda: None)

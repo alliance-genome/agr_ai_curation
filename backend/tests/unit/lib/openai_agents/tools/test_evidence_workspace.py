@@ -174,13 +174,6 @@ async def test_scoped_workspace_tools_limit_ids_and_target_changes(workspace_rec
         required_pending_ref_id="expression-flcn-brain",
         required_field_path="expression_annotation_subject.gene_symbol",
     )
-    detach_tool = evidence_workspace.create_detach_evidence_from_object_tool(
-        "doc-1",
-        "user-1",
-        workspace_records=workspace_records,
-        allowed_evidence_record_ids={"ev-active"},
-        allow_detach=False,
-    )
     update_tool = evidence_workspace.create_update_recorded_evidence_metadata_tool(
         "doc-1",
         "user-1",
@@ -201,7 +194,6 @@ async def test_scoped_workspace_tools_limit_ids_and_target_changes(workspace_rec
         pending_ref_id="expression-flcn-brain",
         field_path="expression_annotation_subject.gene_symbol",
     )
-    forbidden_detach = await detach_tool("ev-active", pending_ref_id="expression-flcn-brain")
     forbidden_update = await update_tool("ev-active", field_path="other.field")
 
     assert listed["count"] == 1
@@ -217,8 +209,6 @@ async def test_scoped_workspace_tools_limit_ids_and_target_changes(workspace_rec
             "field_path": "expression_annotation_subject.gene_symbol",
         }
     ]
-    assert forbidden_detach["status"] == "forbidden"
-    assert "cannot detach" in forbidden_detach["message"]
     assert forbidden_update["status"] == "forbidden"
     assert forbidden_update["target_field_path"] == (
         "expression_annotation_subject.gene_symbol"

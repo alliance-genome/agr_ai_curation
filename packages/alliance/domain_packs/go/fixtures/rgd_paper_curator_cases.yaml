@@ -18,9 +18,9 @@ cases:
     targets: [Cttn]
     discover_additional_entities: false
     expect:
-      required_identity_lookup: true
-      required_existing_annotation_lookup: true
-      retained_gene_curie: RGD:619839
+      # Extraction never searches: the gene validator confirms the identity.
+      extraction_identity_lookup: false
+      validated_gene_curie: RGD:619839
       verified_results_evidence_required: true
   - id: mature_mir_124_3p_ambiguity
     targets: [miR-124-3p]
@@ -28,7 +28,7 @@ cases:
     expect:
       resolution_state: unresolved
       gene_product_curie_absent: true
-      resolver_candidates_retained: true
+      validator_candidates_retained: true
       blocker_required: true
   - id: distinct_ago_products
     targets: [Ago1, Ago2]

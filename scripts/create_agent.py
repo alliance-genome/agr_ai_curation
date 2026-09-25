@@ -213,6 +213,7 @@ from src.lib.prompts.cache import get_prompt
 from src.lib.prompts.context import set_pending_prompts
 
 from ..config import (
+    PromptCacheIdentity,
     build_model_settings,
     get_agent_config,
     get_model_for_agent,
@@ -276,6 +277,10 @@ def create_{config.agent_id}_agent(
         reasoning_effort=agent_config.reasoning,
         tool_choice=agent_config.tool_choice,
         parallel_tool_calls=True,
+        prompt_cache=PromptCacheIdentity(
+            agent_key="{config.agent_id}",
+            static_prompt=instructions,
+        ),
     )
 
     logger.info(

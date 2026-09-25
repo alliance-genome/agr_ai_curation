@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import logging
 from pathlib import Path
 from typing import Any, Protocol, TYPE_CHECKING
 
@@ -17,6 +18,9 @@ from sqlalchemy.orm import Session
 
 from src.schemas.curation_workspace import (
     DomainEnvelopeEvidenceAnchorProjection,
+    DomainEnvelopeReviewCuratorOverride,
+    DomainEnvelopeReviewFieldResolution,
+    DomainEnvelopeReviewResolvedValue,
     DomainEnvelopeReviewRow,
     DomainEnvelopeReviewRowsResponse,
     DomainEnvelopeReviewRowSummaryField,
@@ -42,12 +46,14 @@ from src.schemas.domain_envelope import (
 )
 from src.schemas.domain_pack_metadata import (
     DomainPackFieldDefinition,
+    DomainPackFieldType,
     DomainPackMetadata,
     DomainPackObjectDefinition,
 )
 from src.schemas.domain_validator import (
     DomainValidationRequest,
     DomainValidatorResultBase,
+    ValidatorFieldResolution,
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import (
@@ -62,6 +68,40 @@ from src.lib.domain_packs.validator_result_classification import (
 from src.lib.domain_packs.validator_result_policies import (
     allowed_term_policy_violations,
 )
+from src.lib.domain_packs.resolvable_values import (
+    CURATOR_OVERRIDE_KEY,
+    DECISIVE_OUTCOMES,
+    INVALID_RECORD_EXPLANATION,
+    LEAF_VALUE_LABELS,
+    LOOKUP_OUTCOME_KEY,
+    LOOKUP_OUTCOME_LABELS,
+    MENTION_KEY,
+    OUTCOME_INVALID_SCHEMA,
+    OUTCOME_MATCHED,
+    OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+    OUTCOME_NOT_VALIDATED,
+    RESOLUTION_STATE_KEY,
+    RESOLVED,
+    ResolvableSpec,
+    ResolvableValueError,
+    UNRESOLVED,
+    UNRESOLVED_DISPLAY,
+    VALIDATOR_CURATOR_MESSAGE_KEY,
+    VALIDATOR_EXPLANATION_KEY,
+    VALIDATOR_MATERIALIZATION_METADATA_KEY,
+    copy_resolution,
+    declared_resolvable_fields,
+    declared_spec_for,
+    effective_payload,
+    has_resolution_state,
+    is_curator_override,
+    lookup_outcome_for_failure,
+    mark_resolved,
+    mark_unresolved,
+    stored_state_problem,
+    unresolved_header_text,
+    validator_event_covers,
+)
 from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.lib.openai_agents.config import (
     get_validation_detail_list_limit,
@@ -69,6 +109,8 @@ from src.lib.openai_agents.config import (
     get_validation_detail_string_limit,
 )
 
+
+logger = logging.getLogger(__name__)
 
 REVIEW_ROW_PROJECTION_TYPE = "workspace_review_row"
 _MISSING = object()
@@ -148,8 +190,14 @@ class DomainPackMetadataReviewRowMaterializer:
         envelope: DomainEnvelope,
         *,
         envelope_revision: int,
+        stored_envelope: DomainEnvelope | None = None,
     ) -> list[DomainEnvelopeReviewRow]:
-        """Project one review row per non-metadata-only envelope object."""
+        """Project one review row per non-metadata-only envelope object.
+
+        A pack that reads its values through a display copy passes the stored
+        envelope as ``stored_envelope`` (same objects, same order): a value's
+        stored identity, the ``before`` of an override, comes from storage.
+        """
 
         if envelope.domain_pack_id != self.metadata.pack_id:
             raise DomainEnvelopeMaterializationError(
@@ -170,6 +218,8 @@ class DomainPackMetadataReviewRowMaterializer:
             for definition in self.metadata.object_definitions
         }
         validation_state_by_object = _validation_state_by_object(envelope)
+        value_display_source = _review_value_display_source(self.metadata)
+        override_disagreements = _open_override_disagreements(envelope)
         unavailable_capabilities = _unavailable_validator_capabilities_by_target(
             envelope,
             metadata=self.metadata,
@@ -177,6 +227,9 @@ class DomainPackMetadataReviewRowMaterializer:
         )
         rows: list[DomainEnvelopeReviewRow] = []
 
+        stored_objects = (stored_envelope or envelope).extracted_objects
+        if len(stored_objects) != len(envelope.extracted_objects):
+            raise DomainEnvelopeMaterializationError("stored_envelope must hold the same objects as the envelope")
         for object_index, domain_object in enumerate(envelope.extracted_objects):
             object_definition = object_definitions.get(domain_object.object_type)
             object_id = stable_object_id(domain_object)
@@ -195,6 +248,26 @@ class DomainPackMetadataReviewRowMaterializer:
             display_config = _workspace_display_config(domain_object, object_definition)
             if self.profile_context is not None:
                 display_config = object_definition.metadata.get("workspace_display", {}) if object_definition else {}
+            resolvable_fields = declared_resolvable_fields(self.metadata, domain_object.object_type)
+            if resolvable_fields:
+                # The one read-time pass of the legacy rule: every surface of the
+                # row (values, readings, labels) reads this copy.
+                domain_object = domain_object.model_copy(update={"payload": dict(effective_payload(
+                    domain_object.payload, resolvable_fields, object_metadata=domain_object.metadata,
+                ))})
+            value_reader = _review_value_reader(
+                domain_object,
+                stored_objects[object_index].payload,
+                resolvable_fields,
+                value_display_source,
+                envelope_id=envelope.envelope_id,
+                envelope_revision=envelope_revision,
+                override_disagreements=override_disagreements.get(object_id, {}),
+                field_definitions={
+                    field.field_path: field
+                    for field in (object_definition.fields if object_definition is not None else [])
+                },
+            )
             summary_fields = _summary_fields(
                 domain_object,
                 object_definition=object_definition,
@@ -202,6 +275,7 @@ class DomainPackMetadataReviewRowMaterializer:
                 unavailable_capabilities_by_field=(
                     unavailable_capabilities["by_field"]
                 ),
+                value_reader=value_reader,
             )
             workspace_fields = _workspace_fields(
                 domain_object,
@@ -210,16 +284,17 @@ class DomainPackMetadataReviewRowMaterializer:
                 unavailable_capabilities_by_field=(
                     unavailable_capabilities["by_field"]
                 ),
+                value_reader=value_reader,
             )
             display_label = _display_label(
                 domain_object,
-                summary_fields=summary_fields,
                 display_config=display_config,
+                resolvable_fields=resolvable_fields,
             )
             secondary_label = _secondary_label(
                 domain_object,
-                summary_fields=summary_fields,
                 display_config=display_config,
+                resolvable_fields=resolvable_fields,
             )
 
             metadata = {
@@ -400,65 +475,34 @@ def materialize_validator_results_into_envelope(
     working_envelope = envelope
     findings: list[ValidationFinding] = []
     materialized_objects: list[CuratableObjectEnvelope] = []
+    resolvable_fields_by_type = {
+        definition.object_type: declared_resolvable_fields(metadata, definition.object_type)
+        for definition in metadata.object_definitions
+    }
 
     for item in items:
-        (
-            working_envelope,
-            patch_problem,
-        ) = _patch_target_object_from_resolved_values(
-            working_envelope,
-            item,
-            object_definitions=object_definitions,
-            source_envelope_revision=source_envelope_revision,
-        )
-        if patch_problem is not None:
-            findings.append(
-                _finding_for_materialization_problem(
-                    item,
-                    patch_problem,
-                    source_envelope_revision=source_envelope_revision,
-                )
-            )
-            continue
-
-        new_objects, materialization_problem = _materialized_objects_for_result(
-            working_envelope,
-            item,
-            object_definitions=object_definitions,
-            object_role_key=object_role_key,
-            source_envelope_revision=source_envelope_revision,
-        )
-        if materialization_problem is None:
-            working_envelope, linked_objects = _append_materialized_objects(
+        try:
+            working_envelope, item_findings, linked_objects = _materialize_one_result(
                 working_envelope,
                 item,
-                new_objects,
-            )
-            materialized_objects.extend(linked_objects)
-            validator_finding = _finding_for_validator_result(
-                item,
+                object_definitions=object_definitions,
+                object_role_key=object_role_key,
                 source_envelope_revision=source_envelope_revision,
+                resolvable_fields_by_type=resolvable_fields_by_type,
             )
-            findings.append(validator_finding)
-            findings.extend(
-                _field_findings_for_expected_result_fields(
-                    working_envelope,
+        except ResolvableValueError as exc:
+            # One value that cannot be written never aborts the run or loses the
+            # other results: it becomes this item's finding, nothing is written.
+            item_findings = [
+                _finding_for_materialization_problem(
                     item,
-                    validator_finding=validator_finding,
-                    object_definitions=object_definitions,
-                    materialized_objects=new_objects,
+                    f"A validated value could not be written: {exc}",
                     source_envelope_revision=source_envelope_revision,
                 )
-            )
-            continue
-
-        findings.append(
-            _finding_for_materialization_problem(
-                item,
-                materialization_problem,
-                source_envelope_revision=source_envelope_revision,
-            )
-        )
+            ]
+            linked_objects = ()
+        findings.extend(item_findings)
+        materialized_objects.extend(linked_objects)
 
     from .validation_findings import append_validation_findings_to_envelope
 
@@ -474,54 +518,487 @@ def materialize_validator_results_into_envelope(
     )
 
 
+def _materialize_one_result(
+    working_envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    object_role_key: str,
+    source_envelope_revision: int | None,
+    resolvable_fields_by_type: Mapping[str, Mapping[str, ResolvableSpec]],
+) -> tuple[DomainEnvelope, list[ValidationFinding], tuple[CuratableObjectEnvelope, ...]]:
+    """One validator result's write-back, findings and linked reference objects."""
+
+    findings: list[ValidationFinding] = []
+    target_type = (
+        item.match.object_envelope.object_type if item.match.object_envelope is not None else None
+    )
+    overrides = _curator_overridden_values(
+        working_envelope,
+        item,
+        object_definitions=object_definitions,
+        resolvable_fields=resolvable_fields_by_type.get(target_type or "", {}),
+    )
+    (
+        working_envelope,
+        patch_problem,
+    ) = _patch_target_object_from_resolved_values(
+        working_envelope,
+        item,
+        object_definitions=object_definitions,
+        source_envelope_revision=source_envelope_revision,
+        resolvable_fields=resolvable_fields_by_type.get(target_type or "", {}),
+    )
+    if patch_problem is not None:
+        working_envelope = _write_back_to_referencing_objects(
+            working_envelope,
+            item,
+            object_definitions=object_definitions,
+            resolvable_fields_by_type=resolvable_fields_by_type,
+            validated_references=None,
+            source_envelope_revision=source_envelope_revision,
+        )
+        findings.append(
+            _finding_for_materialization_problem(
+                item,
+                patch_problem,
+                source_envelope_revision=source_envelope_revision,
+            )
+        )
+        return working_envelope, findings, ()
+
+    new_objects, materialization_problem = _materialized_objects_for_result(
+        working_envelope,
+        item,
+        object_definitions=object_definitions,
+        object_role_key=object_role_key,
+        source_envelope_revision=source_envelope_revision,
+    )
+    if materialization_problem is None:
+        if overrides.covers_every_write:
+            # A validated reference object is not added or linked for values a
+            # curator override sets.
+            new_objects = []
+        working_envelope, linked_objects = _append_materialized_objects(
+            working_envelope,
+            item,
+            new_objects,
+        )
+        working_envelope = _write_back_to_referencing_objects(
+            working_envelope,
+            item,
+            object_definitions=object_definitions,
+            resolvable_fields_by_type=resolvable_fields_by_type,
+            validated_references=new_objects,
+            source_envelope_revision=source_envelope_revision,
+        )
+        validator_finding = _finding_for_validator_result(
+            item,
+            source_envelope_revision=source_envelope_revision,
+        )
+        if overrides.settles(item.result):
+            # Curator overrides settle what this binding writes: the
+            # validator's own outcome is not an open problem.
+            validator_finding = _as_curator_override_finding(validator_finding)
+        findings.append(validator_finding)
+        findings.extend(
+            _as_curator_override_finding(finding)
+            if finding.field_ref is not None and overrides.covers_field(finding.field_ref.field_path)
+            else finding
+            for finding in _field_findings_for_expected_result_fields(
+                working_envelope,
+                item,
+                validator_finding=validator_finding,
+                object_definitions=object_definitions,
+                materialized_objects=new_objects,
+                source_envelope_revision=source_envelope_revision,
+                resolvable_fields_by_type=resolvable_fields_by_type,
+            )
+        )
+        findings.extend(
+            _curator_override_disagreements(item, overrides, source_envelope_revision=source_envelope_revision)
+        )
+        return working_envelope, findings, tuple(linked_objects)
+
+    working_envelope = _write_back_to_referencing_objects(
+        working_envelope,
+        item,
+        object_definitions=object_definitions,
+        resolvable_fields_by_type=resolvable_fields_by_type,
+        validated_references=None,
+        source_envelope_revision=source_envelope_revision,
+    )
+    findings.append(
+        _finding_for_materialization_problem(
+            item,
+            materialization_problem,
+            source_envelope_revision=source_envelope_revision,
+        )
+    )
+    return working_envelope, findings, ()
+
+
+@dataclass(frozen=True)
+class _CuratorOverrides:
+    """The curator-overridden values a validator result writes into (container path -> value)."""
+
+    target: CuratableObjectEnvelope | None
+    values: Mapping[str, Mapping[str, Any]]
+    # Expected-result fields per overridden value: [(result field, materialized path)].
+    fields: Mapping[str, Sequence[tuple[str, str]]]
+    covers_every_write: bool
+    # Result fields and value paths of declared values absent from the payload.
+    absent: frozenset[str] = frozenset()
+
+    def settles(self, result: DomainValidatorResultBase) -> bool:
+        """Whether curator overrides settle this result's binding-level outcome.
+
+        They do when they cover every present value the binding writes, or,
+        for a composite result (``field_resolutions``), when every value it
+        did not resolve is overridden or absent.
+        """
+
+        return self.settles_decisions(
+            {key: resolution.status for key, resolution in result.field_resolutions.items()}
+        )
+
+    def settles_decisions(self, field_resolution_statuses: Mapping[str, str]) -> bool:
+        """``settles`` from a composite result's per-value statuses ({key: status})."""
+
+        if self.covers_every_write:
+            return True
+        if not self.values or not field_resolution_statuses:
+            return False
+        overridden = set(self.values) | {
+            result_field for entries in self.fields.values() for result_field, _ in entries
+        }
+        return all(
+            status == "resolved"
+            for key, status in field_resolution_statuses.items()
+            if key not in overridden and key not in self.absent
+        )
+
+    def covers_field(self, field_path: str) -> bool:
+        try:
+            parts = parse_field_path(field_path)
+        except ValueError:
+            return False
+        return _format_field_path(parts[:-1]) in self.values or field_path in self.values
+
+
+def _curator_overridden_values(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec],
+) -> _CuratorOverrides:
+    matched_target = item.match.object_envelope
+    target = _current_object_for_match(envelope, matched_target) if matched_target is not None else None
+    object_definition = item.match.object_definition or (
+        object_definitions.get(target.object_type) if target is not None else None
+    )
+    if target is None or object_definition is None:
+        return _CuratorOverrides(target, {}, {}, False)
+    values, fields, mapped, absent = _overridden_writes(
+        target.payload,
+        item.request.expected_result_fields,
+        declared_fields={field.field_path: field for field in object_definition.fields},
+        resolvable_fields=resolvable_fields,
+    )
+    covered = sum(len(entries) for entries in fields.values())
+    return _CuratorOverrides(target, values, fields, bool(values) and covered == mapped, absent)
+
+
+def _overridden_writes(
+    payload: Mapping[str, Any],
+    expected_result_fields: Mapping[str, Any],
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec],
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, list[tuple[str, str]]], int, frozenset[str]]:
+    """What a binding writes into curator overrides on one object payload.
+
+    Returns (overridden values by path, their (result field, path) writes,
+    the number of writes into present values, the result fields and value
+    paths of declared values absent from the payload). A write into a
+    declared value the payload does not hold (e.g. an absent condition
+    component) is not counted: nothing is there to settle.
+    """
+
+    values: dict[str, Mapping[str, Any]] = {}
+    fields: dict[str, list[tuple[str, str]]] = {}
+    absent: set[str] = set()
+    mapped = 0
+    for result_field, raw_field_path in expected_result_fields.items():
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            continue
+        materialized_field_path = _materialized_field_path(raw_field_path, declared_fields=declared_fields)
+        if materialized_field_path is None:
+            continue
+        parts = parse_field_path(materialized_field_path)
+        container_parts = parts[:-1] if isinstance(parts[-1], str) else parts
+        if (
+            declared_spec_for(resolvable_fields, container_parts) is not None
+            and _payload_container(payload, _format_field_path(container_parts)) is None
+        ):
+            absent.update((result_field, _format_field_path(container_parts)))
+            continue
+        mapped += 1
+        container_path = _resolvable_container_path(
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
+        if container_path is None:
+            continue
+        container = _payload_container(payload, container_path)
+        if is_curator_override(container):
+            values[container_path] = container
+            fields.setdefault(container_path, []).append((result_field, materialized_field_path))
+    return values, fields, mapped, frozenset(absent)
+
+
+def expected_writes_settled_by_overrides(
+    payload: Mapping[str, Any],
+    expected_result_fields: Mapping[str, Any],
+    *,
+    field_resolution_statuses: Mapping[str, str],
+    object_definition: DomainPackObjectDefinition,
+    resolvable_fields: Mapping[str, ResolvableSpec],
+) -> bool:
+    """Whether curator overrides now settle a binding's outcome on this payload.
+
+    The rule the materializer applies (``_CuratorOverrides.settles``): the
+    overrides cover every present value the binding writes, or every value
+    its composite result did not resolve (``field_resolution_statuses``).
+    """
+
+    try:
+        values, fields, mapped, absent = _overridden_writes(
+            payload,
+            expected_result_fields,
+            declared_fields={field.field_path: field for field in object_definition.fields},
+            resolvable_fields=resolvable_fields,
+        )
+    except ResolvableValueError:
+        return False
+    covered = sum(len(entries) for entries in fields.values())
+    overrides = _CuratorOverrides(None, values, fields, bool(values) and covered == mapped, absent)
+    return overrides.settles_decisions(field_resolution_statuses)
+
+
+def _as_curator_override_finding(finding: ValidationFinding) -> ValidationFinding:
+    details = {
+        key: value for key, value in finding.details.items() if key != "failure_classification"
+    }
+    return finding.model_copy(update={
+        "severity": ValidationFindingSeverity.INFO,
+        "status": ValidationFindingStatus.RESOLVED,
+        "code": "domain_pack.curator_override",
+        "message": "A curator override sets this value; a validator result does not change it.",
+        "details": details,
+    })
+
+
+# An open finding: a validator disagrees with a curator override (the override stands).
+CURATOR_OVERRIDE_DISAGREEMENT_CODE = "domain_pack.validator_disagrees_with_curator_override"
+
+
+def _curator_override_disagreements(
+    item: ValidatorResultMaterializationInput,
+    overrides: _CuratorOverrides,
+    *,
+    source_envelope_revision: int | None,
+) -> list[ValidationFinding]:
+    """Open findings where a validator disagrees with a curator override (the override stands).
+
+    A validator disagrees when it resolves a different identity or decides
+    against the value (a decisive outcome); a non-decisive outcome or a
+    matching identity is no disagreement.
+    """
+
+    result = item.result
+    findings: list[ValidationFinding] = []
+    for container_path, value in overrides.values.items():
+        entries = overrides.fields[container_path]
+        resolution = next(
+            (
+                result.field_resolutions[key]
+                for key in result.field_resolutions
+                if key == container_path or key in {result_field for result_field, _ in entries}
+            ),
+            None,
+        )
+        if resolution is not None:
+            status, resolved_values, outcome = (
+                resolution.status, resolution.resolved_values, resolution.lookup_outcome,
+            )
+        elif result.status == "resolved":
+            status, resolved_values, outcome = "resolved", result.resolved_values, OUTCOME_MATCHED
+        else:
+            status, resolved_values = "unresolved", {}
+            outcome = lookup_outcome_for_failure(
+                validator_failure_classification(result, error_type=DomainEnvelopeMaterializationError)
+            )
+        if status == "resolved":
+            differing = {
+                str(parse_field_path(path)[-1]): resolved_values[result_field]
+                for result_field, path in entries
+                if not missing_resolved_value(resolved_values.get(result_field))
+                # A key the override holds empty is not compared.
+                and value.get(str(parse_field_path(path)[-1])) is not None
+                and resolved_values[result_field] != value.get(str(parse_field_path(path)[-1]))
+            }
+            if not differing:
+                continue
+            detail = "it resolved " + ", ".join(f"{key} {item!r}" for key, item in differing.items())
+        elif outcome in DECISIVE_OUTCOMES:
+            detail = f"its lookup result is {LOOKUP_OUTCOME_LABELS[outcome]}"
+        else:
+            continue
+        object_ref = overrides.target.to_object_ref()
+        findings.append(ValidationFinding(
+            severity=ValidationFindingSeverity.WARNING,
+            status=ValidationFindingStatus.OPEN,
+            code=CURATOR_OVERRIDE_DISAGREEMENT_CODE,
+            message=f"Validator disagrees with the curator override: {detail}.",
+            object_ref=None if container_path else object_ref,
+            field_ref=FieldRef(object_ref=object_ref, field_path=container_path) if container_path else None,
+            details={
+                "validator_binding_id": result.validator_binding_id,
+                "request_id": result.request_id,
+                "lookup_outcome": outcome,
+                "validator_explanation": result.explanation,
+                **({"validator_curator_message": result.curator_message} if result.curator_message else {}),
+                **({"source_envelope_revision": source_envelope_revision}
+                   if source_envelope_revision is not None else {}),
+            },
+        ))
+    return findings
+
+
 def _patch_target_object_from_resolved_values(
     envelope: DomainEnvelope,
     item: ValidatorResultMaterializationInput,
     *,
     object_definitions: Mapping[str, DomainPackObjectDefinition],
     source_envelope_revision: int | None,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> tuple[DomainEnvelope, str | None]:
-    """Patch validator-owned scalar results onto the matched envelope object."""
+    """Patch validator-owned results onto the matched envelope object.
+
+    Plain fields receive resolved values as before. A resolvable value (a
+    stored object with a ``mention`` or ``resolution_state``, see
+    ``resolvable_values``) is written as a whole: resolved only when every
+    expected field the binding writes into it came back, and otherwise marked
+    unresolved with the validator's failure classification, never touching
+    its id/label.
+    """
 
     result = item.result
     matched_target = item.match.object_envelope
-    if result.status != "resolved" or matched_target is None or not result.resolved_values:
+    if matched_target is None:
         return envelope, None
+    target = _current_object_for_match(envelope, matched_target)
+    object_definition = item.match.object_definition
+    if object_definition is None and target is not None:
+        object_definition = object_definitions.get(target.object_type)
+    declared_fields = (
+        {field.field_path: field for field in object_definition.fields}
+        if object_definition is not None
+        else {}
+    )
+
+    if result.field_resolutions:
+        # A composite validator decides each value itself (ALL-1299).
+        if target is None or object_definition is None:
+            return envelope, None
+        return _patch_target_object_from_field_resolutions(
+            envelope,
+            item,
+            target,
+            object_definition=object_definition,
+            declared_fields=declared_fields,
+            source_envelope_revision=source_envelope_revision,
+            resolvable_fields=resolvable_fields,
+        )
+
+    if result.status != "resolved":
+        if target is None or object_definition is None:
+            return envelope, None
+        outcome = lookup_outcome_for_failure(
+            validator_failure_classification(
+                result,
+                error_type=DomainEnvelopeMaterializationError,
+            )
+        )
+        return (
+            _with_unresolved_values(
+                envelope, item, target, declared_fields, outcome,
+                resolvable_fields=resolvable_fields,
+            ),
+            None,
+        )
+    if not result.resolved_values:
+        if target is None or object_definition is None:
+            return envelope, None
+        return (
+            _with_unresolved_values(
+                envelope,
+                item,
+                target,
+                declared_fields,
+                OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+                resolvable_fields=resolvable_fields,
+            ),
+            None,
+        )
     policy_violations = allowed_term_policy_violations(result, request=item.request)
     if policy_violations:
+        if target is not None and object_definition is not None:
+            envelope = _with_unresolved_values(
+                envelope, item, target, declared_fields, OUTCOME_INVALID_SCHEMA,
+                resolvable_fields=resolvable_fields,
+            )
         return envelope, "; ".join(
             violation.message for violation in policy_violations
         )
-
-    target = _current_object_for_match(envelope, matched_target)
-    if target is None:
+    if target is None or object_definition is None:
         return envelope, None
 
-    object_definition = item.match.object_definition
-    if object_definition is None:
-        object_definition = object_definitions.get(target.object_type)
-    if object_definition is None:
-        return envelope, None
-
-    declared_fields = {field.field_path: field for field in object_definition.fields}
     payload = copy.deepcopy(target.payload)
     has_materializable_resolved_value = False
-    payload_changed = False
+    plain_writes: list[tuple[str, Any]] = []
+    resolvable_writes: dict[str, list[tuple[str, Any]]] = {}
 
     for result_field, raw_field_path in item.request.expected_result_fields.items():
         if not isinstance(raw_field_path, str) or not raw_field_path.strip():
             return envelope, (
                 "expected_result_fields values must be non-empty field path strings"
             )
-        resolved_value = result.resolved_values.get(result_field)
-        if missing_resolved_value(resolved_value):
-            continue
         materialized_field_path = _materialized_field_path(
             raw_field_path,
             declared_fields=declared_fields,
         )
         if materialized_field_path is None:
             continue
+        resolved_value = result.resolved_values.get(result_field)
+        container_path = _resolvable_container_path(
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
+        if container_path is not None:
+            missing = (
+                result_field in result.missing_expected_fields
+                or missing_resolved_value(resolved_value)
+            )
+            resolvable_writes.setdefault(container_path, []).append(
+                (materialized_field_path, _MISSING if missing else resolved_value)
+            )
+            continue
+        if missing_resolved_value(resolved_value):
+            continue
+        plain_writes.append((materialized_field_path, resolved_value))
+
+    for materialized_field_path, resolved_value in plain_writes:
         has_materializable_resolved_value = True
         current_value = _payload_value(payload, materialized_field_path)
         if current_value is not _MISSING and current_value == resolved_value:
@@ -532,10 +1009,332 @@ def _patch_target_object_from_resolved_values(
             materialized_field_path,
             resolved_value,
             declared_fields=declared_fields,
+            resolvable_fields=resolvable_fields,
         )
-        payload_changed = True
-    if not has_materializable_resolved_value:
-        return envelope, None
+
+    for container_path, writes in resolvable_writes.items():
+        container = _payload_container(payload, container_path)
+        if is_curator_override(container):
+            # A curator override wins: the validator's result is reported, not written.
+            continue
+        if any(value is _MISSING for _, value in writes):
+            # A partial identity is not a validated value.
+            before = copy.deepcopy(container)
+            mark_unresolved(
+                container,
+                OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+                explanation=result.explanation,
+                curator_message=result.curator_message,
+                identity_keys=_container_identity_keys(
+                    item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+                ),
+            )
+            if container == before:
+                continue
+            for materialized_field_path, _ in writes:
+                _propagate_materialized_resolution_state(
+                    payload, materialized_field_path, declared_fields=declared_fields,
+                    resolvable_fields=resolvable_fields,
+                )
+            continue
+        has_materializable_resolved_value = True
+        mark_resolved(
+            container,
+            {
+                str(parse_field_path(materialized_field_path)[-1]): resolved_value
+                for materialized_field_path, resolved_value in writes
+            },
+            explanation=result.explanation,
+            curator_message=result.curator_message,
+            identity_keys=_container_identity_keys(
+                item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+            ),
+        )
+        for materialized_field_path, resolved_value in writes:
+            _propagate_materialized_mirror_paths(
+                payload,
+                materialized_field_path,
+                resolved_value,
+                declared_fields=declared_fields,
+                resolvable_fields=resolvable_fields,
+            )
+    return _with_patched_target(
+        envelope,
+        item,
+        target,
+        payload,
+        object_definition=object_definition,
+        declared_fields=declared_fields,
+        validated=has_materializable_resolved_value,
+        materialized_field_paths=[
+            *(path for path, _ in plain_writes),
+            *(
+                path
+                for writes in resolvable_writes.values()
+                if all(value is not _MISSING for _, value in writes)
+                for path, _ in writes
+            ),
+        ],
+        source_envelope_revision=source_envelope_revision,
+    )
+
+
+def _field_resolution_targets(
+    item: ValidatorResultMaterializationInput,
+    payload: Mapping[str, Any],
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
+) -> tuple[dict[str, tuple[str, list[tuple[str, str]]]], str | None]:
+    """Resolve each ``field_resolutions`` key to the resolvable value it decides.
+
+    A key is an expected-result field or the payload path of a resolvable
+    value that expected-result fields write into. Returns {key: (container
+    path, [(result field, materialized field path), ...])} or a problem.
+    """
+
+    fields_by_container: dict[str, list[tuple[str, str]]] = {}
+    container_by_result_field: dict[str, str] = {}
+    for result_field, raw_field_path in item.request.expected_result_fields.items():
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            return {}, "expected_result_fields values must be non-empty field path strings"
+        materialized_field_path = _materialized_field_path(
+            raw_field_path,
+            declared_fields=declared_fields,
+        )
+        if materialized_field_path is None:
+            continue
+        container_path = _resolvable_container_path(
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
+        if container_path is None:
+            continue
+        fields_by_container.setdefault(container_path, []).append(
+            (result_field, materialized_field_path)
+        )
+        container_by_result_field[result_field] = container_path
+
+    targets: dict[str, tuple[str, list[tuple[str, str]]]] = {}
+    for key in item.result.field_resolutions:
+        container_path = container_by_result_field.get(key)
+        if container_path is None and key in fields_by_container:
+            container_path = key
+        if container_path is None:
+            return {}, (
+                f"field_resolutions key {key!r} names no resolvable value this binding writes"
+            )
+        if any(existing == container_path for existing, _ in targets.values()):
+            return {}, (
+                f"field_resolutions decide the value at {container_path!r} more than once"
+            )
+        targets[key] = (container_path, fields_by_container[container_path])
+    return targets, None
+
+
+def _patch_target_object_from_field_resolutions(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    target: CuratableObjectEnvelope,
+    *,
+    object_definition: DomainPackObjectDefinition,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+    source_envelope_revision: int | None,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
+) -> tuple[DomainEnvelope, str | None]:
+    """Write a composite validator's per-value decisions (``field_resolutions``).
+
+    Each listed resolvable value is marked resolved with its own values (all
+    of the binding's expected fields for it must come back) or unresolved
+    with its own lookup outcome; its explanation and curator message are the
+    validator's own. Values not listed get no write, and the overall result
+    status never overwrites a value with its own decision. Plain fields
+    still take the overall resolved values. Each resolved decision obeys the
+    request's allowed-term list: a violation leaves the value unresolved
+    (``invalid_schema``, never touching a resolved one) and is reported.
+    """
+
+    result = item.result
+    payload = copy.deepcopy(target.payload)
+    targets, problem = _field_resolution_targets(
+        item, payload, declared_fields, resolvable_fields=resolvable_fields
+    )
+    if problem is not None:
+        return envelope, problem
+
+    written: list[str] = []
+    policy_problems: list[str] = []
+    for key, (container_path, fields) in targets.items():
+        resolution = result.field_resolutions[key]
+        container = _payload_container(payload, container_path)
+        if is_curator_override(container):
+            # A curator override wins: the validator's decision is reported, not written.
+            continue
+        values = {
+            materialized_field_path: resolution.resolved_values.get(result_field)
+            for result_field, materialized_field_path in fields
+        }
+        violated = False
+        if resolution.status == "resolved":
+            # Each decision obeys the request's allowed-term list, like a whole result.
+            violations = allowed_term_policy_violations(
+                result.model_copy(
+                    update={"status": "resolved", "resolved_values": dict(resolution.resolved_values)}
+                ),
+                request=item.request,
+            )
+            policy_problems.extend(violation.message for violation in violations)
+            violated = bool(violations)
+        if resolution.status == "resolved" and not violated and not any(
+            missing_resolved_value(value) for value in values.values()
+        ):
+            mark_resolved(
+                container,
+                {str(parse_field_path(path)[-1]): value for path, value in values.items()},
+                explanation=resolution.explanation,
+                curator_message=resolution.curator_message,
+                identity_keys=_container_identity_keys(
+                    item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+                ),
+            )
+            for materialized_field_path, value in values.items():
+                _propagate_materialized_mirror_paths(
+                    payload, materialized_field_path, value, declared_fields=declared_fields,
+                    resolvable_fields=resolvable_fields,
+                )
+            written.extend(values)
+            continue
+        before = copy.deepcopy(container)
+        mark_unresolved(
+            container,
+            (
+                OUTCOME_INVALID_SCHEMA
+                if violated
+                else resolution.lookup_outcome
+                if resolution.status == "unresolved"
+                else OUTCOME_MISSING_EXPECTED_RESULT_FIELD
+            ),
+            explanation=resolution.explanation,
+            curator_message=resolution.curator_message,
+            identity_keys=_container_identity_keys(
+                item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+            ),
+        )
+        if container == before:
+            continue
+        for _result_field, materialized_field_path in fields:
+            _propagate_materialized_resolution_state(
+                payload, materialized_field_path, declared_fields=declared_fields,
+                resolvable_fields=resolvable_fields,
+            )
+
+    overall_violations = (
+        allowed_term_policy_violations(result, request=item.request) if result.status == "resolved" else []
+    )
+    policy_problems.extend(violation.message for violation in overall_violations)
+    if result.status == "resolved" and not overall_violations:
+        for result_field, raw_field_path in item.request.expected_result_fields.items():
+            materialized_field_path = _materialized_field_path(
+                raw_field_path,
+                declared_fields=declared_fields,
+            )
+            resolved_value = result.resolved_values.get(result_field)
+            if (
+                materialized_field_path is None
+                or missing_resolved_value(resolved_value)
+                or _resolvable_container_path(
+                    payload, materialized_field_path, resolvable_fields=resolvable_fields
+                ) is not None
+                # An absent declared component still requires its own decision;
+                # a root slot must not create a bare identity without state.
+                or declared_spec_for(
+                    resolvable_fields or {}, parse_field_path(materialized_field_path)[:-1]
+                ) is not None
+            ):
+                continue
+            if _payload_value(payload, materialized_field_path) != resolved_value:
+                _set_payload_value(payload, materialized_field_path, resolved_value)
+                _propagate_materialized_mirror_paths(
+                    payload, materialized_field_path, resolved_value, declared_fields=declared_fields,
+                    resolvable_fields=resolvable_fields,
+                )
+            written.append(materialized_field_path)
+
+    patched, _ = _with_patched_target(
+        envelope,
+        item,
+        target,
+        payload,
+        object_definition=object_definition,
+        declared_fields=declared_fields,
+        validated=bool(written),
+        materialized_field_paths=written,
+        source_envelope_revision=source_envelope_revision,
+    )
+    # The other decisions are written; an allowed-term violation is reported.
+    return patched, ("; ".join(dict.fromkeys(policy_problems)) if policy_problems else None)
+
+
+def _field_resolution_for(
+    item: ValidatorResultMaterializationInput,
+    materialized_field_path: str,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+) -> ValidatorFieldResolution | None:
+    """The composite decision covering the value an expected-result field writes into."""
+
+    def container_of(field_path: str) -> str | None:
+        try:
+            parts = parse_field_path(field_path)
+        except ValueError:
+            return None
+        return _format_field_path(parts[:-1])
+
+    container = container_of(materialized_field_path)
+    for key, resolution in item.result.field_resolutions.items():
+        if key == container:
+            return resolution
+        raw_field_path = item.request.expected_result_fields.get(key)
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            continue
+        key_path = _materialized_field_path(raw_field_path, declared_fields=declared_fields)
+        if key_path is not None and container_of(key_path) == container:
+            return resolution
+    return None
+
+
+def _without_validator_words(value: Any) -> Any:
+    """A payload without the validators' free-text words (identity, state and outcome only)."""
+
+    if isinstance(value, list):
+        return [_without_validator_words(item) for item in value]
+    if isinstance(value, Mapping):
+        return {
+            key: _without_validator_words(item)
+            for key, item in value.items()
+            if key not in (VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY)
+        }
+    return value
+
+
+def _with_patched_target(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    target: CuratableObjectEnvelope,
+    payload: dict[str, Any],
+    *,
+    object_definition: DomainPackObjectDefinition,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+    validated: bool,
+    materialized_field_paths: Sequence[str],
+    source_envelope_revision: int | None,
+) -> tuple[DomainEnvelope, str | None]:
+    """Apply a write-back payload; a validated write also records its event and status."""
+
+    result = item.result
+    payload_changed = payload != target.payload
+    if not validated:
+        if not payload_changed:
+            return envelope, None
+        return _with_object_payload(envelope, target, payload), None
 
     definition_state = (
         DefinitionState.STABLE
@@ -544,11 +1343,19 @@ def _patch_target_object_from_resolved_values(
         else target.definition_state
     )
     if (
-        not payload_changed
+        # Only the decision counts: a validator's explanation words differ from
+        # run to run, so they are updated in place without a new event.
+        _without_validator_words(payload) == _without_validator_words(target.payload)
         and target.status is CuratableObjectStatus.VALIDATED
         and target.definition_state is definition_state
+        # A value an earlier event already covers needs no new event; an
+        # unchanged value no event covers yet (e.g. one stored before
+        # validator events) is recorded so the legacy rule sees it verified.
+        and all(validator_event_covers(target.metadata, path) for path in materialized_field_paths)
     ):
-        return envelope, None
+        if not payload_changed:
+            return envelope, None
+        return _with_object_payload(envelope, target, payload), None
 
     original_values = _original_materialized_values(
         target.payload,
@@ -557,7 +1364,7 @@ def _patch_target_object_from_resolved_values(
     )
 
     metadata = dict(target.metadata)
-    existing_patch_metadata = metadata.get("validator_resolved_value_materialization")
+    existing_patch_metadata = metadata.get(VALIDATOR_MATERIALIZATION_METADATA_KEY)
     patch_events: list[dict[str, Any]]
     if isinstance(existing_patch_metadata, list):
         patch_events = list(existing_patch_metadata)
@@ -572,6 +1379,7 @@ def _patch_target_object_from_resolved_values(
             "selected_inputs": dict(item.request.selected_inputs),
             "input_selectors": dict(item.request.input_selectors),
             "original_values": original_values,
+            "materialized_field_paths": list(materialized_field_paths),
             **(
                 {"source_envelope_revision": source_envelope_revision}
                 if source_envelope_revision is not None
@@ -579,7 +1387,7 @@ def _patch_target_object_from_resolved_values(
             ),
         }
     )
-    metadata["validator_resolved_value_materialization"] = patch_events
+    metadata[VALIDATOR_MATERIALIZATION_METADATA_KEY] = patch_events
 
     patched_target = target.model_copy(
         update={
@@ -594,6 +1402,597 @@ def _patch_target_object_from_resolved_values(
         for candidate in envelope.extracted_objects
     ]
     return envelope.model_copy(update={"extracted_objects": objects}), None
+
+
+def _write_back_to_referencing_objects(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    resolvable_fields_by_type: Mapping[str, Mapping[str, ResolvableSpec]],
+    validated_references: Sequence[CuratableObjectEnvelope] | None,
+    source_envelope_revision: int | None,
+) -> DomainEnvelope:
+    """Carry a binding's outcome onto the objects that reference its target.
+
+    A binding validates one target object, but a pack may declare that its
+    value belongs on another object too: a field whose
+    ``metadata.validation_result_binding_id`` names the binding, on an object
+    holding an object_ref to the validated target. A scalar field names the
+    result field it mirrors (``validation_result_field``); an object_ref field
+    links the validated reference of its ``object_type_ref``.
+
+    The referencing object follows the target's value as written for this
+    result (``_referenced_decision``), so a curator override on the target
+    drives it exactly like a validated identity. Resolved: the mirrored values
+    are written, a resolvable value holding them takes the source's state, the
+    matching validated reference is linked, and a write-back event is recorded.
+    Otherwise only the outcome is recorded on such a value (a resolved one is
+    overruled into hints by a decisive outcome), and a value left unresolved
+    drops its now-stale links. The referencing value only ever follows its
+    source (``follow_referenced_value`` carries a curator's edit of the source
+    right away). ``validated_references`` is None when the result could not be
+    materialized.
+    """
+
+    matched_target = item.match.object_envelope
+    if matched_target is None:
+        return envelope
+    target = _current_object_for_match(envelope, matched_target)
+    target_definition = item.match.object_definition or (
+        object_definitions.get(target.object_type) if target is not None else None
+    )
+    if target is None or target_definition is None:
+        return envelope
+    result = item.result
+    event = {
+        "source": "domain_validator_referenced_target",
+        "request_id": result.request_id,
+        "validator_binding_id": result.validator_binding_id,
+        "validator_agent": result.validator_agent.model_dump(mode="json"),
+        "validated_target": matched_target.to_object_ref().model_dump(mode="json", exclude_none=True),
+        **(
+            {"source_envelope_revision": source_envelope_revision}
+            if source_envelope_revision is not None
+            else {}
+        ),
+    }
+    return _with_referencing_objects_following(
+        envelope,
+        target,
+        item.request.validator_binding_id,
+        item.request.expected_result_fields,
+        object_definitions=object_definitions,
+        target_definition=target_definition,
+        resolvable_fields_by_type=resolvable_fields_by_type,
+        decide=lambda declared, target_fields, target_resolvable_fields: _referenced_decision(
+            item,
+            declared,
+            target=target,
+            target_fields=target_fields,
+            target_resolvable_fields=target_resolvable_fields,
+            validated_references=validated_references,
+        ),
+        validated_references=validated_references or (),
+        fallback_text=(result.explanation, result.curator_message),
+        event=event,
+    )
+
+
+def follow_referenced_value(
+    envelope: DomainEnvelope,
+    source_object: CuratableObjectEnvelope,
+    *,
+    metadata: DomainPackMetadata,
+    expected_result_fields_by_binding: Mapping[str, Mapping[str, str]],
+) -> DomainEnvelope:
+    """Carry a curator's edit of a validated value to the objects that mirror it.
+
+    The same declarations as the validator write-back
+    (``_write_back_to_referencing_objects``): objects holding an object_ref to
+    ``source_object`` whose fields name one of the bindings take the source
+    value's identity and state straight away, exactly as the next validator
+    run would. Links to validated references carrying another identity drop.
+    """
+
+    object_definitions = {definition.object_type: definition for definition in metadata.object_definitions}
+    source_definition = object_definitions.get(source_object.object_type)
+    if source_definition is None:
+        return envelope
+    resolvable_fields_by_type = {
+        definition.object_type: declared_resolvable_fields(metadata, definition.object_type)
+        for definition in metadata.object_definitions
+    }
+    for binding_id, expected_result_fields in expected_result_fields_by_binding.items():
+        envelope = _with_referencing_objects_following(
+            envelope,
+            source_object,
+            binding_id,
+            expected_result_fields,
+            object_definitions=object_definitions,
+            target_definition=source_definition,
+            resolvable_fields_by_type=resolvable_fields_by_type,
+            decide=lambda declared, target_fields, target_resolvable_fields, binding=expected_result_fields: (
+                _source_decision(
+                    binding,
+                    declared,
+                    target=source_object,
+                    target_fields=target_fields,
+                    target_resolvable_fields=target_resolvable_fields,
+                )
+            ),
+            validated_references=(),
+            fallback_text=(None, None),
+            event=None,
+        )
+    return envelope
+
+
+def _with_referencing_objects_following(
+    envelope: DomainEnvelope,
+    target: CuratableObjectEnvelope,
+    binding_id: str,
+    expected_result_fields: Mapping[str, Any],
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    target_definition: DomainPackObjectDefinition,
+    resolvable_fields_by_type: Mapping[str, Mapping[str, ResolvableSpec]],
+    decide: Any,
+    validated_references: Sequence[CuratableObjectEnvelope],
+    fallback_text: tuple[str | None, str | None],
+    event: Mapping[str, Any] | None,
+) -> DomainEnvelope:
+    target_keys = set(target.ref_keys())
+    target_fields = {field.field_path: field for field in target_definition.fields}
+    target_resolvable_fields = resolvable_fields_by_type.get(target.object_type, {})
+    objects = list(envelope.extracted_objects)
+    objects_by_ref = {key: obj for obj in objects for key in obj.ref_keys()}
+    changed = False
+    for index, domain_object in enumerate(objects):
+        if _same_object_identity(domain_object, target) or not any(
+            ref.ref_key() in target_keys for ref in domain_object.object_refs
+        ):
+            continue
+        object_definition = object_definitions.get(domain_object.object_type)
+        declared = [
+            field
+            for field in (object_definition.fields if object_definition is not None else [])
+            if field.metadata.get("validation_result_binding_id") == binding_id
+        ]
+        if not declared:
+            continue
+        decision = decide(declared, target_fields, target_resolvable_fields)
+        if decision is None:
+            continue
+        updated = _referencing_object_with_result(
+            domain_object,
+            declared,
+            decision,
+            resolvable_fields=resolvable_fields_by_type.get(domain_object.object_type, {}),
+            validated_references=validated_references,
+            objects_by_ref=objects_by_ref,
+            fallback_text=fallback_text,
+            event=event,
+        )
+        if updated is not domain_object:
+            objects[index] = updated
+            changed = True
+    if not changed:
+        return envelope
+    return envelope.model_copy(update={"extracted_objects": objects})
+
+
+@dataclass(frozen=True)
+class _ReferencedDecision:
+    """What the referencing objects mirror for one validator result.
+
+    ``values`` maps each referencing scalar path to its value; ``source`` is the
+    target's resolvable value those came from (None for a plain target, where
+    the validator result itself decides); ``target_keys`` maps each referencing
+    scalar path to the key it mirrors on the target.
+    """
+
+    resolved: bool
+    outcome: str | None
+    values: Mapping[str, Any]
+    target_keys: Mapping[str, str]
+    source: Mapping[str, Any] | None
+
+
+def _source_paths(
+    expected_result_fields: Mapping[str, Any],
+    declared: Sequence[DomainPackFieldDefinition],
+    target_fields: Mapping[str, DomainPackFieldDefinition],
+) -> dict[str, str | None]:
+    """Each referencing scalar path -> the target path its result field is written to."""
+
+    source_paths: dict[str, str | None] = {}
+    for field in declared:
+        result_field = field.metadata.get("validation_result_field")
+        if not result_field:
+            continue
+        raw_path = expected_result_fields.get(str(result_field))
+        source_paths[field.field_path] = (
+            _materialized_field_path(raw_path, declared_fields=target_fields)
+            if isinstance(raw_path, str) and raw_path.strip()
+            else None
+        )
+    return source_paths
+
+
+def _source_decision(
+    expected_result_fields: Mapping[str, Any],
+    declared: Sequence[DomainPackFieldDefinition],
+    *,
+    target: CuratableObjectEnvelope,
+    target_fields: Mapping[str, DomainPackFieldDefinition],
+    target_resolvable_fields: Mapping[str, ResolvableSpec],
+) -> _ReferencedDecision | None:
+    """The decision the target's resolvable value (validated or curator-set) makes, if it has one."""
+
+    source_paths = _source_paths(expected_result_fields, declared, target_fields)
+    containers = {
+        _resolvable_container_path(target.payload, source, resolvable_fields=target_resolvable_fields)
+        for source in source_paths.values()
+        if source is not None
+    }
+    if len(containers) != 1 or None in containers:
+        return None
+    source = _payload_container(target.payload, next(iter(containers)))
+    if not has_resolution_state(source):
+        return None
+    values = {
+        path: _payload_value(target.payload, source_path)
+        for path, source_path in source_paths.items()
+        if source_path is not None
+    }
+    resolved = source[RESOLUTION_STATE_KEY] == RESOLVED
+    return _ReferencedDecision(
+        resolved=resolved,
+        outcome=None if resolved else str(source[LOOKUP_OUTCOME_KEY]),
+        values={path: None if value is _MISSING else value for path, value in values.items()},
+        target_keys={
+            path: str(parse_field_path(source_path)[-1]) if source_path else ""
+            for path, source_path in source_paths.items()
+        },
+        source=source,
+    )
+
+
+def _referenced_decision(
+    item: ValidatorResultMaterializationInput,
+    declared: Sequence[DomainPackFieldDefinition],
+    *,
+    target: CuratableObjectEnvelope,
+    target_fields: Mapping[str, DomainPackFieldDefinition],
+    target_resolvable_fields: Mapping[str, ResolvableSpec],
+    validated_references: Sequence[CuratableObjectEnvelope] | None,
+) -> _ReferencedDecision:
+    # The target's value, as the materializer (or a curator override) left it.
+    decision = _source_decision(
+        item.request.expected_result_fields,
+        declared,
+        target=target,
+        target_fields=target_fields,
+        target_resolvable_fields=target_resolvable_fields,
+    )
+    if decision is not None:
+        return decision
+    result = item.result
+    source_paths = _source_paths(item.request.expected_result_fields, declared, target_fields)
+    target_keys = {
+        path: str(parse_field_path(source)[-1]) if source else ""
+        for path, source in source_paths.items()
+    }
+    values = {
+        field.field_path: result.resolved_values.get(str(field.metadata["validation_result_field"]))
+        for field in declared
+        if field.metadata.get("validation_result_field")
+    }
+    if result.status != "resolved":
+        outcome = lookup_outcome_for_failure(
+            validator_failure_classification(result, error_type=DomainEnvelopeMaterializationError)
+        )
+    elif any(missing_resolved_value(value) for value in values.values()):
+        outcome = OUTCOME_MISSING_EXPECTED_RESULT_FIELD
+    elif validated_references is None:
+        outcome = OUTCOME_INVALID_SCHEMA
+    else:
+        outcome = None
+    return _ReferencedDecision(
+        resolved=outcome is None, outcome=outcome, values=values, target_keys=target_keys, source=None,
+    )
+
+
+def _reference_matches(reference: CuratableObjectEnvelope, decision: _ReferencedDecision) -> bool:
+    """A validated reference carries the identity the referencing object mirrors."""
+
+    return all(
+        reference.payload.get(key) == decision.values[path]
+        for path, key in decision.target_keys.items()
+        if key and key in reference.payload
+    )
+
+
+def _referencing_object_with_result(
+    domain_object: CuratableObjectEnvelope,
+    declared: Sequence[DomainPackFieldDefinition],
+    decision: _ReferencedDecision,
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec],
+    validated_references: Sequence[CuratableObjectEnvelope],
+    objects_by_ref: Mapping[tuple[str, str], CuratableObjectEnvelope],
+    fallback_text: tuple[str | None, str | None],
+    event: Mapping[str, Any] | None,
+) -> CuratableObjectEnvelope:
+    ref_types = {
+        field.object_type_ref
+        for field in declared
+        if field.field_type is DomainPackFieldType.OBJECT_REF and field.object_type_ref
+    }
+    payload = copy.deepcopy(domain_object.payload)
+    containers: dict[str, list[str]] = {}
+    for field_path in decision.values:
+        container_path = _resolvable_container_path(
+            payload, field_path, resolvable_fields=resolvable_fields
+        )
+        if container_path is not None:
+            containers.setdefault(container_path, []).append(field_path)
+    explanation, curator_message = (
+        (decision.source.get(VALIDATOR_EXPLANATION_KEY), decision.source.get(VALIDATOR_CURATOR_MESSAGE_KEY))
+        if decision.source is not None
+        else fallback_text
+    )
+
+    source_overridden = decision.source is not None and is_curator_override(decision.source)
+    for container_path, field_paths in containers.items():
+        container = _payload_container(payload, container_path)
+        spec = declared_spec_for(
+            resolvable_fields, parse_field_path(container_path) if container_path else (),
+        )
+        identity_keys = tuple(dict.fromkeys([
+            *(spec.identity_keys if spec is not None else ()),
+            *(str(parse_field_path(path)[-1]) for path in field_paths),
+        ]))
+        if is_curator_override(container) and not source_overridden:
+            # The value only follows its source: a curator override copied from the
+            # source is withdrawn with it, and the value takes the source's state.
+            container.pop(CURATOR_OVERRIDE_KEY, None)
+            for key in identity_keys:
+                container[key] = None
+            container[RESOLUTION_STATE_KEY] = UNRESOLVED
+            container[LOOKUP_OUTCOME_KEY] = OUTCOME_NOT_VALIDATED
+        if decision.resolved:
+            identity = {str(parse_field_path(path)[-1]): decision.values[path] for path in field_paths}
+            if decision.source is not None:
+                container.update(identity)
+                copy_resolution(decision.source, container, identity_keys=identity_keys)
+            else:
+                mark_resolved(
+                    container, identity, explanation=explanation, curator_message=curator_message,
+                )
+        else:
+            mark_unresolved(
+                container,
+                str(decision.outcome),
+                explanation=explanation,
+                curator_message=curator_message,
+                identity_keys=identity_keys,
+            )
+    if decision.resolved:
+        for field_path, value in decision.values.items():
+            if not any(field_path in paths for paths in containers.values()):
+                _set_payload_value(payload, field_path, value)
+
+    states = [
+        _payload_container(payload, container_path).get(RESOLUTION_STATE_KEY)
+        for container_path in containers
+    ]
+    object_refs = list(domain_object.object_refs)
+    if decision.resolved and all(state == RESOLVED for state in states):
+        # Link the validated reference carrying this identity; drop links to any other.
+        object_refs = [
+            ref
+            for ref in object_refs
+            if ref.object_type not in ref_types
+            or (
+                (linked := objects_by_ref.get(ref.ref_key())) is not None
+                and _reference_matches(linked, decision)
+            )
+        ]
+        existing_ref_keys = {ref.ref_key() for ref in object_refs}
+        for reference in validated_references:
+            object_ref = reference.to_object_ref()
+            if (
+                reference.object_type in ref_types
+                and object_ref.ref_key() not in existing_ref_keys
+                and _reference_matches(reference, decision)
+            ):
+                object_refs.append(object_ref)
+                existing_ref_keys.add(object_ref.ref_key())
+    elif states and all(state != RESOLVED for state in states):
+        # A link to a validated reference is stale on a value left unresolved.
+        object_refs = [ref for ref in object_refs if ref.object_type not in ref_types]
+    if payload == domain_object.payload and object_refs == list(domain_object.object_refs):
+        return domain_object
+    if not decision.resolved or event is None or source_overridden:
+        # Only a validator's resolution is a write-back event; a curator's identity is
+        # recorded by the copied curator_override.
+        return domain_object.model_copy(update={"payload": payload, "object_refs": object_refs})
+
+    metadata = dict(domain_object.metadata)
+    events = metadata.get(VALIDATOR_MATERIALIZATION_METADATA_KEY)
+    metadata[VALIDATOR_MATERIALIZATION_METADATA_KEY] = [
+        *(events if isinstance(events, list) else []),
+        {**event, "materialized_field_paths": list(decision.values)},
+    ]
+    return domain_object.model_copy(
+        update={"payload": payload, "object_refs": object_refs, "metadata": metadata}
+    )
+
+
+def _with_unresolved_values(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    target: CuratableObjectEnvelope,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+    outcome: str,
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
+) -> DomainEnvelope:
+    """Record why the resolvable values a binding writes stay unresolved.
+
+    The state, lookup outcome and the validator's own words change; a value
+    that read as resolved (e.g. a builder's deterministic lookup) keeps its
+    identity only as informational ``overruled_*`` keys (a decisive outcome;
+    the validator is the authority).
+    ``mention`` is untouched, and plain fields keep whatever the extractor staged.
+    """
+
+    payload = copy.deepcopy(target.payload)
+    # Each value is marked once; every path written into a value that changed
+    # then carries the change to its mirrors.
+    changed: dict[str, bool] = {}
+    written: list[tuple[str, str]] = []
+    for raw_field_path in item.request.expected_result_fields.values():
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            continue
+        materialized_field_path = _materialized_field_path(
+            raw_field_path,
+            declared_fields=declared_fields,
+        )
+        if materialized_field_path is None:
+            continue
+        container_path = _resolvable_container_path(
+            payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
+        if container_path is None:
+            continue
+        written.append((container_path, materialized_field_path))
+        if container_path in changed:
+            continue
+        container = _payload_container(payload, container_path)
+        before = copy.deepcopy(container)
+        mark_unresolved(
+            container,
+            outcome,
+            explanation=item.result.explanation,
+            curator_message=item.result.curator_message,
+            identity_keys=_container_identity_keys(
+                item, container_path, declared_fields=declared_fields, resolvable_fields=resolvable_fields,
+            ),
+        )
+        # A non-decisive outcome leaves a resolved value as it was; so do its mirrors.
+        changed[container_path] = container != before
+    for container_path, materialized_field_path in written:
+        if changed[container_path]:
+            _propagate_materialized_resolution_state(
+                payload, materialized_field_path, declared_fields=declared_fields,
+                resolvable_fields=resolvable_fields,
+            )
+    if payload == target.payload:
+        return envelope
+    return _with_object_payload(envelope, target, payload)
+
+
+def _with_object_payload(
+    envelope: DomainEnvelope,
+    target: CuratableObjectEnvelope,
+    payload: dict[str, Any],
+) -> DomainEnvelope:
+    patched_target = target.model_copy(update={"payload": payload})
+    objects = [
+        patched_target if _same_object_identity(candidate, target) else candidate
+        for candidate in envelope.extracted_objects
+    ]
+    return envelope.model_copy(update={"extracted_objects": objects})
+
+
+def _resolvable_container_path(
+    payload: Mapping[str, Any],
+    field_path: str,
+    *,
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
+) -> str | None:
+    """The path of the declared resolvable value holding ``field_path`` ("" for the root), or None.
+
+    Only the pack's declarations (``declared_resolvable_fields``) make a
+    container a resolvable value, never the keys it happens to hold: an
+    object root with a ``mention`` key is not a resolvable value unless its
+    model declares it. A declared value stored before the contract (no state,
+    no mention) is written as one too, so it takes the contract shape.
+    """
+
+    try:
+        parts = parse_field_path(field_path)
+    except ValueError:
+        return None
+    if not parts or not isinstance(parts[-1], str):
+        return None
+    container_path = _format_field_path(parts[:-1])
+    container = _payload_container(payload, container_path)
+    if (
+        resolvable_fields
+        and isinstance(container, dict)
+        and declared_spec_for(resolvable_fields, parts[:-1]) is not None
+    ):
+        return container_path
+    if has_resolution_state(container):
+        # A value in the contract shape the pack does not declare: a plain
+        # write into it would leave it unresolved forever.
+        raise ResolvableValueError(
+            f"{container_path or 'the object root'} holds a resolvable value the pack does not declare"
+        )
+    return None
+
+
+def _container_identity_keys(
+    item: ValidatorResultMaterializationInput,
+    container_path: str,
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec] | None,
+) -> tuple[str, ...]:
+    """The keys that make up one value's identity. A declared value's identity is its display
+    id, label and ``validated`` keys only; other keys a binding writes (routing context such
+    as a subject type) are never cleared or overruled. An undeclared container's keys are
+    the ones this binding writes into it."""
+
+    keys: list[str] = []
+    try:
+        container_tokens = parse_field_path(container_path) if container_path else ()
+    except ValueError:
+        container_tokens = ()
+    spec = declared_spec_for(resolvable_fields, container_tokens) if resolvable_fields else None
+    if spec is not None:
+        return spec.identity_keys
+    for raw_field_path in item.request.expected_result_fields.values():
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            continue
+        materialized_field_path = _materialized_field_path(raw_field_path, declared_fields=declared_fields)
+        if materialized_field_path is None:
+            continue
+        parts = parse_field_path(materialized_field_path)
+        if isinstance(parts[-1], str) and _format_field_path(parts[:-1]) == container_path:
+            keys.append(parts[-1])
+    return tuple(dict.fromkeys(keys))
+
+
+def _payload_container(payload: Mapping[str, Any], container_path: str) -> Any:
+    if not container_path:
+        return payload
+    value = _payload_value(payload, container_path)
+    return None if value is _MISSING else value
+
+
+def _format_field_path(parts: Sequence[str | int]) -> str:
+    text = ""
+    for part in parts:
+        if isinstance(part, int):
+            text += f"[{part}]"
+        else:
+            text = f"{text}.{part}" if text else part
+    return text
 
 
 def _original_materialized_values(
@@ -968,12 +2367,32 @@ def _multivalued_indexed_base(
     return bare_field_path
 
 
+def _mirror_field_paths(
+    materialized_field_path: str,
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+) -> list[str]:
+    field_def = declared_fields.get(materialized_field_path)
+    if field_def is None:
+        return []
+    mirror_paths = field_def.metadata.get("materializes_to_field_paths")
+    if not isinstance(mirror_paths, list):
+        return []
+    return [
+        _materialized_field_path(mirror_raw, declared_fields=declared_fields)
+        or mirror_raw.strip()
+        for mirror_raw in mirror_paths
+        if isinstance(mirror_raw, str) and mirror_raw.strip()
+    ]
+
+
 def _propagate_materialized_mirror_paths(
     payload: dict[str, Any],
     materialized_field_path: str,
     resolved_value: Any,
     *,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> None:
     """Copy a resolved value into the field's declared ``materializes_to_field_paths`` mirrors.
 
@@ -983,22 +2402,66 @@ def _propagate_materialized_mirror_paths(
     resolved subject gene must also land on ``entity_assayed`` to satisfy the LinkML
     "entity_assayed must match expression_annotation_subject" contract. The mirror targets are
     declared metadata, so this is domain-pack-driven, not gene-expression-specific code.
+    A mirror that is itself a resolvable value takes the source value's resolution state.
     """
-    field_def = declared_fields.get(materialized_field_path)
-    if field_def is None:
-        return
-    mirror_paths = field_def.metadata.get("materializes_to_field_paths")
-    if not isinstance(mirror_paths, list):
-        return
-    for mirror_raw in mirror_paths:
-        if not isinstance(mirror_raw, str) or not mirror_raw.strip():
-            continue
-        mirror_path = (
-            _materialized_field_path(mirror_raw, declared_fields=declared_fields)
-            or mirror_raw.strip()
-        )
+    for mirror_path in _mirror_field_paths(
+        materialized_field_path, declared_fields=declared_fields
+    ):
         if _payload_value(payload, mirror_path) != resolved_value:
             _set_payload_value(payload, mirror_path, resolved_value)
+    _propagate_materialized_resolution_state(
+        payload, materialized_field_path, declared_fields=declared_fields,
+        resolvable_fields=resolvable_fields,
+    )
+
+
+def _propagate_materialized_resolution_state(
+    payload: dict[str, Any],
+    materialized_field_path: str,
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
+) -> None:
+    """Give each mirror of a written field its source value's resolution.
+
+    A resolvable mirror takes the source's state and identity; a plain mirror
+    (e.g. a name kept beside its term) takes the source key's current value,
+    so a demoted term leaves no stale name behind.
+    """
+
+    source_path = _resolvable_container_path(
+        payload, materialized_field_path, resolvable_fields=resolvable_fields
+    )
+    if source_path is None:
+        return
+    source = _payload_container(payload, source_path)
+    source_key = str(parse_field_path(materialized_field_path)[-1])
+    for mirror_path in _mirror_field_paths(
+        materialized_field_path, declared_fields=declared_fields
+    ):
+        mirror_container_path = _resolvable_container_path(
+            payload, mirror_path, resolvable_fields=resolvable_fields
+        )
+        if mirror_container_path is None:
+            parent_path = _format_field_path(parse_field_path(mirror_path)[:-1])
+            current = _payload_value(payload, mirror_path)
+            value = source.get(source_key)
+            if (
+                isinstance(_payload_container(payload, parent_path), dict)
+                and current != value
+                and not (current is _MISSING and value is None)
+            ):
+                _set_payload_value(payload, mirror_path, copy.deepcopy(value))
+            continue
+        mirror_spec = declared_spec_for(
+            resolvable_fields or {},
+            parse_field_path(mirror_container_path) if mirror_container_path else (),
+        )
+        copy_resolution(
+            source,
+            _payload_container(payload, mirror_container_path),
+            identity_keys=mirror_spec.identity_keys if mirror_spec is not None else (),
+        )
 
 
 def _append_materialized_objects(
@@ -1171,6 +2634,7 @@ def _field_findings_for_expected_result_fields(
     object_definitions: Mapping[str, DomainPackObjectDefinition],
     materialized_objects: Sequence[CuratableObjectEnvelope],
     source_envelope_revision: int | None,
+    resolvable_fields_by_type: Mapping[str, Mapping[str, ResolvableSpec]],
 ) -> list[ValidationFinding]:
     if not item.request.expected_result_fields:
         return []
@@ -1199,6 +2663,23 @@ def _field_findings_for_expected_result_fields(
             )
             if materialized_paths:
                 mapped_result_field = True
+            field_resolution = (
+                _field_resolution_for(item, materialized_paths[0], target.declared_fields)
+                if materialized_paths and item.result.field_resolutions
+                else None
+            )
+            if (
+                item.result.field_resolutions
+                and field_resolution is None
+                and materialized_paths
+                and _resolvable_container_path(
+                    target.domain_object.payload,
+                    materialized_paths[0],
+                    resolvable_fields=resolvable_fields_by_type.get(target.domain_object.object_type),
+                ) is not None
+            ):
+                # A composite validator made no decision for this value: no write, no finding.
+                continue
             for materialized_field_path in materialized_paths:
                 field_ref = FieldRef(
                     object_ref=target.domain_object.to_object_ref(),
@@ -1226,6 +2707,7 @@ def _field_findings_for_expected_result_fields(
                         field_ref=field_ref,
                         result_field=result_field,
                         materialized_field_path=materialized_field_path,
+                        field_resolution=field_resolution,
                         source_envelope_revision=source_envelope_revision,
                     )
                 )
@@ -1325,11 +2807,38 @@ def _field_finding_for_expected_result_field(
     result_field: str,
     materialized_field_path: str,
     source_envelope_revision: int | None,
+    field_resolution: ValidatorFieldResolution | None = None,
 ) -> ValidationFinding:
     result = item.result
     resolved_value = result.resolved_values.get(result_field)
     result_field_missing = result_field in result.missing_expected_fields
-    if result.status == "resolved" and not (
+    if field_resolution is not None:
+        # A composite validator's own decision for this value (ALL-1299).
+        resolved_value = field_resolution.resolved_values.get(result_field)
+        resolved = field_resolution.status == "resolved" and not missing_resolved_value(
+            resolved_value
+        )
+        outcome = (
+            field_resolution.lookup_outcome
+            if field_resolution.status == "unresolved"
+            else OUTCOME_MISSING_EXPECTED_RESULT_FIELD
+        )
+        severity = (
+            ValidationFindingSeverity.INFO
+            if resolved
+            else ValidationFindingSeverity.BLOCKER
+            if item.match.binding.blocking
+            else ValidationFindingSeverity.WARNING
+        )
+        status = ValidationFindingStatus.RESOLVED if resolved else ValidationFindingStatus.OPEN
+        code = "domain_pack.validator_resolved" if resolved else "domain_pack.validator_unresolved"
+        message = (
+            field_resolution.curator_message
+            or field_resolution.explanation
+            or validator_finding.message
+        )
+        extra_details = {} if resolved else {"failure_classification": outcome}
+    elif result.status == "resolved" and not (
         result_field_missing or missing_resolved_value(resolved_value)
     ):
         severity = ValidationFindingSeverity.INFO
@@ -1382,6 +2891,10 @@ def _field_finding_for_expected_result_field(
     )
     details["validation_metadata"] = validation_metadata
     details.update(extra_details)
+    if status is ValidationFindingStatus.RESOLVED:
+        # A resolved value carries no failure classification (a composite's
+        # parent result may be unresolved while this value resolved).
+        details.pop("failure_classification", None)
     return ValidationFinding(
         severity=severity,
         status=status,
@@ -1503,8 +3016,6 @@ def _lookup_attempt_details(
                 "lookup_status": lookup_status,
                 "candidate_count": payload["result_count"],
                 **({"coverage": payload["coverage"]} if payload.get("coverage") is not None else {}),
-                "resolved_id": _resolved_id(item.result),
-                "resolved_label": _resolved_label(item.result),
                 "explanation": payload.get("message") or item.result.explanation,
                 "provider": payload.get("provider"),
                 "method": payload.get("method"),
@@ -1569,6 +3080,11 @@ def _validation_result_finding_payload(
         ]
         if len(resolved_objects) > _VALIDATION_DETAIL_LIST_LIMIT:
             compact["resolved_object_count"] = len(resolved_objects)
+    if result.field_resolutions:
+        # Each composite decision's status, which a later curator override settles against.
+        compact["field_resolution_statuses"] = {
+            key: resolution.status for key, resolution in result.field_resolutions.items()
+        }
     lookup_attempts = payload.get("lookup_attempts")
     if isinstance(lookup_attempts, list):
         compact["lookup_attempt_count"] = len(lookup_attempts)
@@ -1631,25 +3147,6 @@ def _compact_validation_detail_value(value: Any) -> Any:
             )
         return compact_list
     return value
-
-
-def _resolved_id(result: DomainValidatorResultBase) -> str | None:
-    for value in result.resolved_values.values():
-        if isinstance(value, str) and value.strip():
-            return value
-    for resolved_object in result.resolved_objects:
-        value = resolved_object.get("canonical_id")
-        if isinstance(value, str) and value.strip():
-            return value
-    return None
-
-
-def _resolved_label(result: DomainValidatorResultBase) -> str | None:
-    for key in ("label", "symbol", "name"):
-        value = result.resolved_values.get(key)
-        if isinstance(value, str) and value.strip():
-            return value
-    return None
 
 
 def _match_object_ref(match: ValidatorBindingMatch) -> ObjectRef | None:
@@ -1945,6 +3442,7 @@ def _summary_fields(
     object_definition: DomainPackObjectDefinition | None,
     display_config: Mapping[str, Any],
     unavailable_capabilities_by_field: Mapping[tuple[str, str], tuple[dict[str, Any], ...]],
+    value_reader: _ReviewValueReader | None,
 ) -> list[DomainEnvelopeReviewRowSummaryField]:
     field_definitions = {
         field.field_path: field
@@ -1982,6 +3480,7 @@ def _summary_fields(
                 )
             )
         )
+        resolution = value_reader.resolution(field_path) if value_reader is not None else None
         summary_fields.append(
             DomainEnvelopeReviewRowSummaryField(
                 field_path=field_path,
@@ -1992,7 +3491,8 @@ def _summary_fields(
                     if field_definition is not None
                     else _value_field_type(value)
                 ),
-                metadata=metadata,
+                metadata=_with_resolution_edit_policy(metadata, resolution),
+                resolution=resolution,
             )
         )
 
@@ -2005,6 +3505,7 @@ def _workspace_fields(
     object_definition: DomainPackObjectDefinition | None,
     display_config: Mapping[str, Any],
     unavailable_capabilities_by_field: Mapping[tuple[str, str], tuple[dict[str, Any], ...]],
+    value_reader: _ReviewValueReader | None,
 ) -> list[DomainEnvelopeReviewRowSummaryField]:
     field_definitions = {
         field.field_path: field
@@ -2037,6 +3538,7 @@ def _workspace_fields(
         if value is _MISSING:
             value = None
 
+        resolution = value_reader.resolution(field_path) if value_reader is not None else None
         workspace_fields.append(
             DomainEnvelopeReviewRowSummaryField(
                 field_path=field_path,
@@ -2047,10 +3549,10 @@ def _workspace_fields(
                     if field_definition is not None
                     else _value_field_type(value)
                 ),
-                metadata={
-                    **metadata,
-                    "workspace_order": order,
-                },
+                metadata=_with_resolution_edit_policy(
+                    {**metadata, "workspace_order": order}, resolution,
+                ),
+                resolution=resolution,
             )
         )
 
@@ -2064,6 +3566,368 @@ def _is_empty_projection_value(value: Any) -> bool:
         return True
     return False
 
+
+# --- Extracted vs validated values on review fields (ALL-1283) -----------------
+
+# Curator-facing; the technical detail goes to the log only.
+_UNREADABLE_ISSUE = (
+    "This stored value could not be read; please re-run validation or contact the "
+    "AI Curation developers."
+)
+# A value's own leaves; the paper-wording key is the spec's mention key.
+_VALUE_LEAF_KEYS = (
+    RESOLUTION_STATE_KEY,
+    LOOKUP_OUTCOME_KEY,
+    VALIDATOR_EXPLANATION_KEY,
+    VALIDATOR_CURATOR_MESSAGE_KEY,
+)
+
+
+@dataclass(frozen=True)
+class _ValueReading:
+    """One resolvable value as a review field reads it."""
+
+    path: tuple[str | int, ...]
+    spec: ResolvableSpec
+    reviewed: DomainEnvelopeReviewResolvedValue
+    # The read-time value (legacy and invalid-record rules applied).
+    value: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _ReviewValueReader:
+    """Reads one object's declared resolvable values for its review fields.
+
+    ``payload`` is the object's read-time payload (``effective_payload``: the
+    legacy rule applied and invalid stored records read as unresolved);
+    ``readings`` holds each resolvable value; ``field_displays`` holds the
+    declared display spec per field path.
+    """
+
+    payload: Mapping[str, Any]
+    readings: tuple[_ValueReading, ...]
+    field_displays: Mapping[str, Mapping[str, Any]]
+
+    def resolution(self, field_path: str) -> DomainEnvelopeReviewFieldResolution | None:
+        """The extracted-vs-validated reading of one review field, or None.
+
+        A field that is, or contains, resolvable values reads through its
+        declared display ("label (ID)" or UNRESOLVED per value). A field that
+        is one identity key of a value (its id, label or a declared validated
+        key such as a taxon) shows that key when the value is resolved and
+        UNRESOLVED otherwise. A field that is one of the value's own leaves
+        (paper wording, status, lookup result, validator text) shows that
+        leaf in plain words. Paper wording, the extractor's ``proposed_*``
+        keys and a validator's ``overruled_*`` keys never fill a validated
+        value's text.
+        """
+
+        from src.lib.flows.value_display import display_text
+
+        try:
+            field_tokens = parse_field_path(field_path)
+        except ValueError:
+            return None
+        key = field_tokens[-1]
+        for reading in self.readings:
+            if field_tokens[:-1] != reading.path or not isinstance(key, str):
+                continue
+            if key in reading.spec.identity_keys:
+                resolved = reading.reviewed.resolution_state == RESOLVED
+                return DomainEnvelopeReviewFieldResolution(
+                    display_text=(
+                        display_text(reading.value.get(key)) if resolved else UNRESOLVED_DISPLAY
+                    ),
+                    values=[reading.reviewed],
+                )
+            if key == reading.spec.mention_key or key in _VALUE_LEAF_KEYS:
+                leaf_key = MENTION_KEY if key == reading.spec.mention_key else key
+                return DomainEnvelopeReviewFieldResolution(
+                    display_text=_value_leaf_text(reading.reviewed, leaf_key),
+                    values=[reading.reviewed],
+                    leaf_key=leaf_key,
+                )
+
+        contained = [
+            reading
+            for reading in self.readings
+            if reading.path[: len(field_tokens)] == field_tokens
+        ]
+        if not contained:
+            return None
+        field_value = _payload_value(self.payload, field_path)
+        return DomainEnvelopeReviewFieldResolution(
+            display_text=display_text(
+                None if field_value is _MISSING else field_value,
+                self.field_displays.get(field_path),
+            ),
+            values=[reading.reviewed for reading in contained],
+        )
+
+
+def _with_resolution_edit_policy(
+    metadata: dict[str, Any],
+    resolution: DomainEnvelopeReviewFieldResolution | None,
+) -> dict[str, Any]:
+    """A value's own leaves (paper wording, status, lookup result, validator
+    text) are set by extraction and validation, never edited by a curator.
+
+    A curator edits a value's identity keys instead, which records a
+    validation override (``resolvable_values.apply_curator_identity``).
+    """
+
+    if resolution is None or resolution.leaf_key is None:
+        return metadata
+    return {**metadata, "editable": False, "read_only": True}
+
+
+def _value_leaf_text(reviewed: DomainEnvelopeReviewResolvedValue, leaf_key: str) -> str:
+    """A value's own leaf in the plain words exports use (resolvable_values labels)."""
+
+    if leaf_key == MENTION_KEY:
+        return reviewed.mention or ""
+    if leaf_key == RESOLUTION_STATE_KEY:
+        return LEAF_VALUE_LABELS[RESOLUTION_STATE_KEY][reviewed.resolution_state]
+    if leaf_key == LOOKUP_OUTCOME_KEY:
+        return reviewed.lookup_result
+    if leaf_key == VALIDATOR_EXPLANATION_KEY:
+        return reviewed.validator_explanation or ""
+    return reviewed.validator_curator_message or ""
+
+
+def _review_value_display_source(metadata: DomainPackMetadata) -> Any:
+    """The pack's declared display specs, as exports resolve them."""
+
+    from src.lib.flows.export_fields import PackagedExportSource
+
+    return PackagedExportSource(
+        LoadedDomainPack(
+            pack_id=metadata.pack_id,
+            display_name=metadata.display_name,
+            version=metadata.version,
+            pack_path=Path("."),
+            metadata_path=Path("."),
+            metadata=metadata,
+        )
+    )
+
+
+def _review_value_reader(
+    domain_object: CuratableObjectEnvelope,
+    stored_payload: Mapping[str, Any],
+    specs: Mapping[str, ResolvableSpec],
+    display_source: Any,
+    *,
+    envelope_id: str,
+    envelope_revision: int,
+    override_disagreements: Mapping[str, Sequence[str]],
+    field_definitions: Mapping[str, DomainPackFieldDefinition],
+) -> _ReviewValueReader | None:
+    if not specs:
+        return None
+    # The row's read-time copy (effective_payload already applied).
+    payload = domain_object.payload
+    readings: dict[tuple[str | int, ...], tuple[int, _ValueReading]] = {}
+    declared = list(specs.items())
+    # The most specific declaration reads a value declared both as a list and
+    # as one of its elements, as effective_payload does; readings keep the
+    # pack's declaration order, then payload order.
+    for order, (declared_path, spec) in sorted(
+        enumerate(declared), key=lambda item: -len(item[1][0]),
+    ):
+        try:
+            tokens = parse_field_path(declared_path) if declared_path else ()
+        except ValueError:
+            continue
+        for value_path in _concrete_value_paths(payload, tokens, ()):
+            if value_path in readings or not has_resolution_state(
+                _payload_container(payload, _format_field_path(value_path))
+            ):
+                # An empty value (nothing the legacy rule reads) has no reading.
+                continue
+            readings[value_path] = (
+                order,
+                _read_review_value(
+                    domain_object,
+                    stored_payload,
+                    value_path,
+                    spec,
+                    envelope_id=envelope_id,
+                    envelope_revision=envelope_revision,
+                    override_disagreements=override_disagreements.get(
+                        _format_field_path(value_path), (),
+                    ),
+                    field_definitions=field_definitions,
+                ),
+            )
+    ordered = [
+        reading
+        for _order, reading in sorted(readings.values(), key=lambda item: item[0])
+    ]
+    prefix = f"object.pack.{domain_object.object_type}."
+    return _ReviewValueReader(
+        payload=payload,
+        readings=tuple(ordered),
+        field_displays={
+            ref[len(prefix):]: spec
+            for ref, spec in display_source.display_specs.items()
+            if ref.startswith(prefix)
+        },
+    )
+
+
+def _read_review_value(
+    domain_object: CuratableObjectEnvelope,
+    stored_payload: Mapping[str, Any],
+    value_path: tuple[str | int, ...],
+    spec: ResolvableSpec,
+    *,
+    envelope_id: str,
+    envelope_revision: int,
+    override_disagreements: Sequence[str],
+    field_definitions: Mapping[str, DomainPackFieldDefinition],
+) -> _ValueReading:
+    """Read one value from the read-time payload; a broken stored record says so plainly."""
+
+    from src.lib.domain_envelopes.patches import curator_override_allowed, is_generic_attribute_path
+    from src.lib.flows.value_display import display_text
+
+    path_text = _format_field_path(value_path)
+    # The value as the row's read-time copy holds it: the legacy rule already
+    # read it once (a plain-text value became legacy text), never again here.
+    value = _payload_container(domain_object.payload, path_text)
+    raw = _payload_container(stored_payload, path_text)
+    # The legacy rule read a broken stored record as an invalid-record reading;
+    # validator words that are not text are broken too.
+    problem = (
+        (stored_state_problem(raw, identity_keys=spec.identity_keys) if has_resolution_state(raw) else None)
+        or "the stored validation record is invalid"
+        if value.get(VALIDATOR_EXPLANATION_KEY) == INVALID_RECORD_EXPLANATION
+        else next(
+            (
+                f"{text_key} must be text or null"
+                for text_key in (VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY)
+                if value.get(text_key) is not None and not isinstance(value.get(text_key), str)
+            ),
+            None,
+        )
+    )
+    broken = problem is not None
+    if broken:
+        logger.warning(
+            "Review row reads an unreadable resolvable value as unresolved: "
+            "envelope_id=%s envelope_revision=%s object_id=%s object_type=%s value_path=%r: %s",
+            envelope_id, envelope_revision, stable_object_id(domain_object),
+            domain_object.object_type, path_text, problem,
+        )
+    state, outcome = str(value[RESOLUTION_STATE_KEY]), str(value[LOOKUP_OUTCOME_KEY])
+    mention = value.get(spec.mention_key)
+    override = value.get(CURATOR_OVERRIDE_KEY) if not broken and is_curator_override(value) else None
+    return _ValueReading(
+        path=value_path,
+        spec=spec,
+        reviewed=DomainEnvelopeReviewResolvedValue(
+            value_path=path_text,
+            display_text=display_text(
+                value,
+                {
+                    role: key
+                    for role, key in (
+                        ("label", spec.label_key),
+                        ("id", spec.id_key),
+                        ("mention", spec.mention_key),
+                    )
+                    if key
+                }
+                | ({"validated": list(spec.validated_keys)} if spec.validated_keys else {}),
+            ),
+            mention=mention.strip() if isinstance(mention, str) and mention.strip() else None,
+            resolution_state=UNRESOLVED if broken else state,
+            lookup_outcome=OUTCOME_INVALID_SCHEMA if broken else outcome,
+            lookup_result=LOOKUP_OUTCOME_LABELS[OUTCOME_INVALID_SCHEMA if broken else outcome],
+            validator_explanation=None if broken else value.get(VALIDATOR_EXPLANATION_KEY),
+            validator_curator_message=None if broken else value.get(VALIDATOR_CURATOR_MESSAGE_KEY),
+            issue=_UNREADABLE_ISSUE if broken else None,
+            curator_override=(
+                DomainEnvelopeReviewCuratorOverride(
+                    actor_id=str(override["actor_id"]),
+                    actor_display_name=str(override["actor_display_name"]),
+                    at=str(override["at"]),
+                )
+                if override is not None
+                else None
+            ),
+            override_disagreements=list(override_disagreements) if override is not None else [],
+            identity_field_paths=[
+                f"{path_text}.{key}" if path_text else key for key in spec.identity_keys
+            ],
+            id_key=spec.id_key,
+            label_key=spec.label_key,
+            validated_keys=list(spec.validated_keys),
+            # As stored (a legacy identity included; null for a value stored as plain text).
+            stored_identity={
+                key: copy.deepcopy(raw.get(key)) if isinstance(raw, Mapping) else None
+                for key in spec.identity_keys
+            },
+            # The value as stored, for the edits whose `before` is the whole value: a
+            # saved profile's attribute value (a whole-value replace) and a list
+            # element (a removal).
+            stored_value=(
+                copy.deepcopy(dict(raw))
+                if isinstance(raw, Mapping)
+                and path_text
+                and (is_generic_attribute_path(path_text) or isinstance(value_path[-1], int))
+                else None
+            ),
+            **curator_override_allowed(field_definitions, path_text, spec),
+        ),
+        value=value,
+    )
+
+
+def _open_override_disagreements(envelope: DomainEnvelope) -> dict[str, dict[str, list[str]]]:
+    """Open validator-disagrees-with-override warnings: {object id: {value path: [messages]}}.
+
+    The warning names the overridden value's payload path, or the object
+    itself for a resolvable object root (value path "").
+    """
+
+    object_id_by_ref = _object_id_by_ref(envelope)
+    disagreements: dict[str, dict[str, list[str]]] = {}
+    for finding in envelope.validation_findings:
+        if (
+            finding.code != CURATOR_OVERRIDE_DISAGREEMENT_CODE
+            or finding.status is not ValidationFindingStatus.OPEN
+        ):
+            continue
+        object_id, field_path = _finding_target(finding, object_id_by_ref)
+        if object_id is None:
+            continue
+        disagreements.setdefault(object_id, {}).setdefault(field_path or "", []).append(finding.message)
+    return disagreements
+
+def _concrete_value_paths(
+    node: Any,
+    tokens: Sequence[str | int],
+    walked: tuple[str | int, ...],
+) -> Iterable[tuple[str | int, ...]]:
+    """Payload paths of the mappings a declared path names; unindexed lists fan out."""
+
+    if tokens and isinstance(tokens[0], int):
+        if isinstance(node, list) and tokens[0] < len(node):
+            yield from _concrete_value_paths(node[tokens[0]], tokens[1:], (*walked, tokens[0]))
+        return
+    if isinstance(node, list):
+        for index, item in enumerate(node):
+            yield from _concrete_value_paths(item, tokens, (*walked, index))
+        return
+    if not isinstance(node, Mapping):
+        return
+    if not tokens:
+        yield walked
+        return
+    if tokens[0] in node:
+        yield from _concrete_value_paths(node[tokens[0]], tokens[1:], (*walked, tokens[0]))
 
 def _workspace_group_fields(
     display_config: Mapping[str, Any],
@@ -2257,73 +4121,52 @@ def _unavailable_capabilities_metadata(
 def _display_label(
     domain_object: CuratableObjectEnvelope,
     *,
-    summary_fields: Sequence[DomainEnvelopeReviewRowSummaryField],
     display_config: Mapping[str, Any],
+    resolvable_fields: Mapping[str, ResolvableSpec],
 ) -> str:
-    for configured_field in _primary_label_field_candidates(display_config):
-        configured_value = _payload_value(domain_object.payload, configured_field)
-        if configured_value is not _MISSING:
-            normalized = _display_value(configured_value)
-            if normalized is not None:
-                return normalized
+    """The row's label: the pack's single primary_label_field, else the object id.
 
-    for field in summary_fields:
-        normalized = _display_value(field.value)
-        if normalized is not None:
-            return normalized
-    return stable_object_id(domain_object)
-
-
-def _primary_label_field_candidates(
-    display_config: Mapping[str, Any],
-) -> list[str]:
-    """Return ordered primary-label payload paths declared by a pack's workspace_display.
-
-    Packs may declare a single ``primary_label_field`` or an ordered
-    ``primary_label_fields`` fallback chain. The chain lets a pack name the best
-    label field plus deterministic fallbacks (e.g. an allele label, then the
-    associated gene symbol) so a curatable unit never falls back to its opaque
-    pending id when a real label is present on the payload. Both keys are generic
-    workspace_display metadata, so this stays domain-agnostic.
+    No other field fills an empty label. A label that names an unresolved
+    value reads as its paper wording, labelled as such (ALL-1283).
     """
 
-    candidates: list[str] = []
-    configured_fields = display_config.get("primary_label_fields")
-    if isinstance(configured_fields, Sequence) and not isinstance(
-        configured_fields, (str, bytes, bytearray)
-    ):
-        for raw_field in configured_fields:
-            if isinstance(raw_field, str) and raw_field.strip():
-                candidates.append(raw_field.strip())
     configured_field = display_config.get("primary_label_field")
     if isinstance(configured_field, str) and configured_field.strip():
-        candidates.append(configured_field.strip())
-
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for candidate in candidates:
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        ordered.append(candidate)
-    return ordered
+        label = _declared_label_text(domain_object, configured_field.strip(), resolvable_fields)
+        if label is not None:
+            return label
+    return stable_object_id(domain_object)
 
 
 def _secondary_label(
     domain_object: CuratableObjectEnvelope,
     *,
-    summary_fields: Sequence[DomainEnvelopeReviewRowSummaryField],
     display_config: Mapping[str, Any],
+    resolvable_fields: Mapping[str, ResolvableSpec],
 ) -> str | None:
     configured_field = display_config.get("secondary_label_field")
-    if isinstance(configured_field, str):
-        configured_value = _payload_value(domain_object.payload, configured_field)
-        if configured_value is not _MISSING:
-            return _display_value(configured_value)
+    if isinstance(configured_field, str) and configured_field.strip():
+        return _declared_label_text(domain_object, configured_field.strip(), resolvable_fields)
+    return None
 
-    if len(summary_fields) < 2:
+
+def _declared_label_text(
+    domain_object: CuratableObjectEnvelope,
+    field_path: str,
+    resolvable_fields: Mapping[str, ResolvableSpec],
+) -> str | None:
+    paper_wording = unresolved_header_text(
+        domain_object.payload,
+        field_path,
+        object_metadata=domain_object.metadata,
+        resolvable_fields=resolvable_fields,
+    )
+    if paper_wording is not None:
+        return paper_wording
+    configured_value = _payload_value(domain_object.payload, field_path)
+    if configured_value is _MISSING:
         return None
-    return _display_value(summary_fields[1].value)
+    return _display_value(configured_value)
 
 
 def _projection_type(display_config: Mapping[str, Any]) -> str:

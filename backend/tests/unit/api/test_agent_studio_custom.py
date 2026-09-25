@@ -1029,6 +1029,33 @@ class TestCustomAgentCrudErrorsAndBranches:
         assert "stream exploded" not in stream_text
         assert "stream exploded" in caplog.text
 
+        # A RUN_ERROR written for the curator (custom agent over the per-group
+        # tool cap, ALL-1280) keeps its message; any other one stays generic.
+        cap_message = (
+            "This agent has 11 tools from the 'staged object corrections' group, and custom "
+            "agents can use at most 10 tools from one group. Please contact the AI Curation "
+            "developers for help setting up this agent."
+        )
+
+        async def _fake_run_errors(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-y"}}
+            yield {"type": "RUN_ERROR", "data": {"message": cap_message, "error_type": "ToolGroupCapError"}}
+            yield {"type": "RUN_ERROR", "data": {"message": "internal detail", "error_type": "ValueError"}}
+
+        monkeypatch.setattr(api_module, "run_agent_streamed", _fake_run_errors)
+        response = asyncio.run(
+            api_module.test_custom_agent_endpoint(
+                custom_agent_id=custom_agent_id,
+                request=api_module.TestCustomAgentRequest(input="hello"),
+                user={"sub": "auth-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+        stream_text = asyncio.run(_consume_stream())
+        assert cap_message in stream_text
+        assert "internal detail" not in stream_text
+        assert "Custom-agent test failed unexpectedly." in stream_text
+
 
 @pytest.mark.parametrize("scope", ["owned", "visible"])
 def test_discovery_scope_preserves_management_and_group_filtering(monkeypatch, scope):

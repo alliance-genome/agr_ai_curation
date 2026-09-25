@@ -79,14 +79,12 @@ def test_stage_and_finalize_extraction_payload_returns_canonical_payload_with_ev
         workspace=workspace,
         candidate_id="candidate-1",
         evidence_records=[evidence_record],
-        resolver_selection_refs=["resolver:gene:crumb"],
     )
     finalization = workspace.finalize(candidate_ids=["candidate-1"])
 
     assert finalization.payload["evidence_records"] == [evidence_record]
     assert finalization.summary()["finalized_candidate_count"] == 1
     assert finalization.summary()["evidence_record_ids"] == ["evidence-live"]
-    assert finalization.summary()["resolver_selection_count"] == 1
     assert captured_events[-1]["event_type"] == "extraction_builder.finalization_decision"
 
 
@@ -408,7 +406,6 @@ class _BuilderFinalizingRunResult:
             },
             pending_ref_ids=["gene-expression-annotation-pef-1"],
             evidence_record_ids=["evidence-67598e5688f123c8"],
-            resolver_selection_refs=["call_relation"],
             status=builder.CANDIDATE_STATUS_VALID,
         )
         workspace.finalize(candidate_ids=["gex-candidate-1"])
@@ -540,7 +537,6 @@ class _BuilderFinalizingRunResultWithRecordedEvidence:
             },
             pending_ref_ids=["gene-expression-annotation-pef-1"],
             evidence_record_ids=[self.evidence_record["evidence_record_id"]],
-            resolver_selection_refs=["call_relation"],
             status=builder.CANDIDATE_STATUS_VALID,
         )
         workspace.finalize(candidate_ids=["gex-candidate-1"])
@@ -1632,24 +1628,41 @@ def _spy_inline_persistence(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_explicit_empty_disease_finalizer_reaches_chat_handoff(monkeypatch):
-    from agr_ai_curation_alliance.tools import disease_builder_tools
-    from agr_ai_curation_alliance.domain_packs.disease.conversion import disease_extraction_output_to_pending_envelope
+@pytest.mark.parametrize("domain", ["disease", "allele"])
+async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain):
+    from datetime import datetime, timezone
+    from importlib import import_module
+    from src.lib.curation_workspace.domain_envelope_normalization import (
+        domain_envelope_from_extraction_result,
+        require_recorded_resolution_states,
+    )
+    from src.schemas.curation_workspace import CurationExtractionResultRecord
 
-    class EmptyDiseaseRun(_FakeRunResult):
+    tools = import_module(f"agr_ai_curation_alliance.tools.{domain}_builder_tools")
+    finalize = getattr(tools, f"_finalize_{domain}_extraction_impl")
+    specialist_name = f"{domain.title()} Extractor"
+    tool_name = f"ask_{domain}_extractor_specialist"
+
+    class EmptyRun(_FakeRunResult):
         async def stream_events(self):
             workspace = builder.get_active_extraction_builder_workspace()
-            monkeypatch.setattr(disease_builder_tools, "get_active_extraction_builder_workspace", lambda: workspace)
-            monkeypatch.setattr(disease_builder_tools, "get_active_evidence_records_snapshot", lambda: [])
-            result = disease_builder_tools._finalize_disease_extraction_impl([])
+            monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
+            monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: [])
+            result = finalize([])
             assert result.status == "ok"
             if False:
                 yield
 
     async def materialize(serialized_payload, *_args, **_kwargs):
-        envelope = disease_extraction_output_to_pending_envelope(
-            json.loads(serialized_payload), envelope_id="empty-disease-chat",
+        payload = json.loads(serialized_payload)
+        require_recorded_resolution_states(payload, adapter_key=domain)
+        record = CurationExtractionResultRecord.model_validate(
+            {"extraction_result_id": f"empty-{domain}-chat", "document_id": "doc-1",
+             "adapter_key": domain, "agent_key": f"{domain}_extractor",
+             "source_kind": "chat", "candidate_count": 0, "payload_json": payload,
+             "created_at": datetime.now(timezone.utc), "metadata": {}}
         )
+        envelope = domain_envelope_from_extraction_result(record, stored=False)
         return envelope.model_dump_json()
 
     events, handoffs = [], []
@@ -1658,21 +1671,21 @@ async def test_explicit_empty_disease_finalizer_reaches_chat_handoff(monkeypatch
     monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _name: None)
     monkeypatch.setattr(streaming_tools, "RunConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", lambda *args, **kwargs: EmptyDiseaseRun(final_output="Finalized."))
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", lambda *args, **kwargs: EmptyRun(final_output="Finalized."))
     monkeypatch.setattr(streaming_tools, "_dispatch_domain_envelope_validators_for_chat", materialize)
     expected = streaming_tools.SupervisorExtractionHandoff(
-        tool_name="ask_disease_extractor_specialist", specialist_name="Disease Extractor",
+        tool_name=tool_name, specialist_name=specialist_name,
         result_ref="extraction-result:00000000-0000-4000-8000-000000000001",
         extraction_result_id="00000000-0000-4000-8000-000000000001",
-        result_status="empty_extraction", object_count=0, adapter_key="disease",
-        agent_key="disease_extractor", created_new=True,
+        result_status="empty_extraction", object_count=0, adapter_key=domain,
+        agent_key=f"{domain}_extractor", created_new=True,
     )
     monkeypatch.setattr(streaming_tools, "_build_supervisor_extraction_handoff", lambda **kwargs: expected)
     await streaming_tools.run_specialist_with_events(
-        agent=SimpleNamespace(name="Disease Extractor", tools=[_builder_finalizer_tool("finalize_disease_extraction")],
+        agent=SimpleNamespace(name=specialist_name, tools=[_builder_finalizer_tool(f"finalize_{domain}_extraction")],
                               output_type=None, instructions="", model="gpt-4o"),
-        input_text="Extract diseases", specialist_name="Disease Extractor", max_turns=3,
-        tool_name="ask_disease_extractor_specialist", inline_chat_persistence=True,
+        input_text=f"Extract {domain}", specialist_name=specialist_name, max_turns=3,
+        tool_name=tool_name, inline_chat_persistence=True,
         validated_handoff_callback=handoffs.append,
     )
     assert handoffs == [expected]

@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import copy
 import sys
-from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
-import yaml
 
 from src.schemas.curation_workspace import SubmissionMode
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
+from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.domain_packs.materialization import (
     DomainPackMetadataReviewRowMaterializer,
     ValidatorResultMaterializationInput,
@@ -52,10 +48,7 @@ from agr_ai_curation_alliance.domain_packs.allele import (  # noqa: E402
     VERIFIED_ALLELE_ASSOCIATION_TARGETS,
     build_allele_association_export,
     build_allele_association_submission_plan,
-    build_pending_allele_envelope_from_tool_verified_fixture,
-    validate_pending_allele_envelope,
 )
-from tests.fixtures.evidence.harness import load_evidence_fixture  # noqa: E402
 
 from .test_alliance_domain_pack_scaffold import (  # noqa: E402
     _assert_range_exists,
@@ -73,9 +66,16 @@ def _allele_pack():
     return pack
 
 
+def _pending_allele_envelope():
+    """The allele pack's declared fixture: a pending, unvalidated allele association."""
+    registry = load_alliance_domain_pack_registry()
+    fixture_ref = registry.get_fixture_pack_ref(ALLELE_DOMAIN_PACK_ID, "tool_verified")
+    assert fixture_ref is not None
+    return load_domain_fixture_pack(_allele_pack().pack_path / fixture_ref.path).fixtures[0].envelope
+
+
 def _resolved_allele_association_envelope():
-    fixture = load_evidence_fixture("tool_verified_allele_paper")
-    envelope = build_pending_allele_envelope_from_tool_verified_fixture(fixture)
+    envelope = _pending_allele_envelope()
 
     resolved_objects = []
     allele_ref = ObjectRef(pending_ref_id="allele-reference-1", object_type="Allele")
@@ -90,7 +90,12 @@ def _resolved_allele_association_envelope():
             payload["information_content_entity_id"] = 269867
         elif obj.object_type == "AllelePaperEvidenceAssociation":
             payload["association_id"] = 210252399
+            # What the allele validator's write-back leaves on the association.
             payload["allele_identifier"] = "WB:WBVar00000001"
+            payload["allele_label"] = "daf-2(m41)"
+            payload["allele_taxon"] = "NCBITaxon:6239"
+            payload["resolution_state"] = "resolved"
+            payload["lookup_outcome"] = "matched"
             object_refs = [allele_ref, *object_refs]
             metadata.pop("write_behavior", None)
             metadata.pop("export_behavior", None)
@@ -169,7 +174,6 @@ def test_allele_pack_declares_object_roles_and_validator_bindings(monkeypatch):
         "allele": "Allele",
         "reference": "Reference",
         "evidence_quote": "EvidenceQuote",
-        "mention": "AlleleMention",
     }
 
     validator_bindings = metadata.metadata["validator_bindings"]
@@ -732,105 +736,17 @@ def test_allele_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path: 
         _assert_range_exists(index, provider_ref)
 
 
-def test_tool_verified_allele_fixture_converts_to_pending_envelope():
-    fixture = load_evidence_fixture("tool_verified_allele_paper")
-    envelope = build_pending_allele_envelope_from_tool_verified_fixture(
-        fixture,
-        envelope_id="allele-tool-verified-envelope",
-        created_at=datetime(2026, 5, 9, tzinfo=timezone.utc),
-    )
-
-    assert validate_pending_allele_envelope(envelope) == ()
-    assert envelope.domain_pack_id == ALLELE_DOMAIN_PACK_ID
-    assert {obj.status for obj in envelope.extracted_objects} == {CuratableObjectStatus.PENDING}
-
-    counts = Counter(obj.object_type for obj in envelope.extracted_objects)
-    assert counts == {
-        "Reference": 1,
-        "AlleleMention": 1,
-        "EvidenceQuote": 2,
-        "AllelePaperEvidenceAssociation": 1,
-    }
-
-    association = next(
-        obj
-        for obj in envelope.extracted_objects
-        if obj.object_type == "AllelePaperEvidenceAssociation"
-    )
-    assert "allele_identifier" not in association.payload
-    assert association.payload["evidence_record_ids"] == [
-        "daf-2-m41-evidence-1",
-        "daf-2-m41-evidence-2",
-    ]
-    assert association.metadata["export_behavior"]["status"] == "blocked"
-    assert association.metadata["export_behavior"]["mode"] == (
-        "verified_association_targets_only"
-    )
-    assert association.metadata["write_behavior"]["status"] == "blocked"
-
-    mention = next(obj for obj in envelope.extracted_objects if obj.object_type == "AlleleMention")
-    assert mention.payload["mention"] == {
-        "text": "daf-2(m41)",
-        "normalized_hint": "WB:WBVar00000001",
-    }
-    assert mention.payload["associated_gene"] == {"symbol": "daf-2"}
-    assert mention.payload["taxon"] == {"curie": "NCBITaxon:6239"}
-    assert mention.evidence_record_ids == [
-        "daf-2-m41-evidence-1",
-        "daf-2-m41-evidence-2",
-    ]
-    assert all(obj.object_type != "Allele" for obj in envelope.extracted_objects)
-
-    finding_codes = [finding.code for finding in envelope.validation_findings]
-    assert finding_codes == [
-        "alliance.allele.write_blocked",
-        "alliance.allele.skipped_without_verified_evidence",
-    ]
-    assert envelope.validation_findings[0].details["verified_targets"] == [
-        "public.allele_reference",
-        "public.allelegeneassociation",
-        "public.allelegeneassociation_informationcontententity",
-    ]
-    assert envelope.validation_findings[0].details["mutates_base_rows"] == {
-        "public.allele": False,
-        "public.gene": False,
-    }
-
-    expected_path = (
-        REPO_ROOT
-        / "backend"
-        / "tests"
-        / "fixtures"
-        / "domain_packs"
-        / "allele"
-        / "tool_verified_pending_envelope.yaml"
-    )
-    expected = yaml.safe_load(expected_path.read_text(encoding="utf-8"))
-    assert (
-        envelope.model_dump(
-            mode="json",
-            exclude_defaults=True,
-            exclude_none=True,
-        )
-        == expected["envelope"]
-    )
-
-
 def test_allele_association_review_row_surfaces_allele_label_not_pending_ref_id():
     """0.7.2 Fix B: a pending allele association review row leads with its allele label.
 
     Before the fix the curatable association row fell back to its opaque
     ``allele-paper-evidence-association-N`` pending id (the curator saw "nothing but a
-    title"). The label must instead come from the payload ``allele_label`` (with the
-    associated gene as the fallback), and the Title-only Reference row must not lead.
+    title"). ALL-1283: the label is the validated ``allele_label``; until the allele
+    validator writes it, the row reads as the paper wording, marked as such. The
+    Title-only Reference row must not lead.
     """
 
-    fixture = load_evidence_fixture("tool_verified_allele_paper")
-    envelope = build_pending_allele_envelope_from_tool_verified_fixture(
-        fixture,
-        envelope_id="allele-tool-verified-envelope",
-        created_at=datetime(2026, 5, 9, tzinfo=timezone.utc),
-    )
+    envelope = _pending_allele_envelope()
 
     rows = DomainPackMetadataReviewRowMaterializer(_allele_pack().metadata).materialize(
         envelope,
@@ -843,15 +759,12 @@ def test_allele_association_review_row_surfaces_allele_label_not_pending_ref_id(
     assert set(rows_by_type) == {"AllelePaperEvidenceAssociation", "Reference"}
 
     association_row = rows_by_type["AllelePaperEvidenceAssociation"]
-    assert association_row.display_label == "daf-2(m41)"
-    assert not association_row.display_label.startswith(
-        "allele-paper-evidence-association"
-    )
-    # The allele label surfaces as a row field so the curator sees it inline.
+    assert association_row.display_label == "daf-2(m41) (paper wording)"
+    # The paper wording never fills the validated allele label.
     summary_field_values = {
         field.field_path: field.value for field in association_row.summary_fields
     }
-    assert summary_field_values.get("allele_label") == "daf-2(m41)"
+    assert summary_field_values.get("allele_label") in (None, "")
 
     # The curatable unit leads; the Title-only Reference does not dominate first.
     assert rows[0].object_type == "AllelePaperEvidenceAssociation"
@@ -867,46 +780,8 @@ def test_allele_association_review_row_surfaces_allele_label_not_pending_ref_id(
     assert association_index < reference_index
 
 
-def test_tool_verified_allele_fixture_rejects_malformed_required_data():
-    fixture = load_evidence_fixture("tool_verified_allele_paper")
-
-    missing_extraction = copy.deepcopy(fixture)
-    missing_extraction.pop("extraction")
-    with pytest.raises(ValueError, match="extraction must be an object"):
-        build_pending_allele_envelope_from_tool_verified_fixture(missing_extraction)
-
-    legacy_items_only = copy.deepcopy(fixture)
-    legacy_items_only["extraction"].pop("alleles")
-    with pytest.raises(ValueError, match="extraction.alleles must be a list"):
-        build_pending_allele_envelope_from_tool_verified_fixture(legacy_items_only)
-
-    missing_evidence_id = copy.deepcopy(fixture)
-    missing_evidence_id["tool_cases"][0]["expected_tool_result"].pop(
-        "evidence_record_id"
-    )
-    with pytest.raises(ValueError, match="evidence_record_id"):
-        build_pending_allele_envelope_from_tool_verified_fixture(missing_evidence_id)
-
-    malformed_normalized_id = copy.deepcopy(fixture)
-    malformed_normalized_id["extraction"]["alleles"][0]["normalized_id"] = 42
-    with pytest.raises(ValueError, match="normalized_id must be a string"):
-        build_pending_allele_envelope_from_tool_verified_fixture(
-            malformed_normalized_id
-        )
-
-    missing_taxon = copy.deepcopy(fixture)
-    missing_taxon["extraction"]["alleles"][0].pop("taxon")
-    with pytest.raises(ValueError, match="taxon must be a non-empty string"):
-        build_pending_allele_envelope_from_tool_verified_fixture(missing_taxon)
-
-
 def test_allele_submission_plan_blocks_until_durable_targets_resolve():
-    fixture = load_evidence_fixture("tool_verified_allele_paper")
-    envelope = build_pending_allele_envelope_from_tool_verified_fixture(
-        fixture,
-        envelope_id="allele-tool-verified-envelope",
-        created_at=datetime(2026, 5, 9, tzinfo=timezone.utc),
-    )
+    envelope = _pending_allele_envelope()
 
     plan = build_allele_association_submission_plan(envelope)
 
@@ -929,8 +804,7 @@ def test_allele_submission_plan_blocks_until_durable_targets_resolve():
 
 
 def test_allele_submission_plan_blocks_unknown_write_target_loudly():
-    fixture = load_evidence_fixture("tool_verified_allele_paper")
-    envelope = build_pending_allele_envelope_from_tool_verified_fixture(fixture)
+    envelope = _pending_allele_envelope()
 
     plan = build_allele_association_submission_plan(
         envelope,
@@ -964,7 +838,6 @@ def test_allele_submission_plan_emits_only_verified_non_mutating_operations_when
     assert plan["blockers"] == []
     assert [operation["target_table"] for operation in plan["operations"]] == [
         "public.allele_reference",
-        "public.allelegeneassociation_informationcontententity",
         "public.allelegeneassociation_informationcontententity",
     ]
     assert all(
@@ -1028,13 +901,11 @@ def test_allele_export_adapter_preserves_verified_operations_from_workspace_snap
     assert [operation["target_table"] for operation in plan["operations"]] == [
         "public.allele_reference",
         "public.allelegeneassociation_informationcontententity",
-        "public.allelegeneassociation_informationcontententity",
     ]
 
 
 def test_allele_export_carries_submission_plan_and_never_base_row_mutations():
-    fixture = load_evidence_fixture("tool_verified_allele_paper")
-    envelope = build_pending_allele_envelope_from_tool_verified_fixture(fixture)
+    envelope = _pending_allele_envelope()
 
     export_payload = build_allele_association_export(envelope)
 

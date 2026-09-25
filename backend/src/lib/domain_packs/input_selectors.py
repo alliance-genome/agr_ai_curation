@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from pydantic import ValidationError
 
+from src.lib.domain_packs.resolvable_values import OVERRULED_KEY_PREFIX, without_overruled
 from src.lib.domain_packs.validation_registry import ValidatorBindingMatch
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -57,6 +58,16 @@ def build_domain_validation_request(
     """Build a validator request or structured selector findings for one match."""
 
     binding = match.binding
+    if binding.unrouted:
+        # No route means no validator to run; the target stays unresolved.
+        problem = _route_problem(match)
+        return SelectorBuildResult(
+            request=None,
+            findings=(_problem_finding(match, problem),),
+            selected_inputs={},
+            input_selectors={"route_by": _selector_payload(problem.selector)},
+            evidence=_evidence_records_for_target(match),
+        )
     problems: list[_SelectorProblem] = []
     selected_inputs: dict[str, Any] = {}
     selectors: dict[str, dict[str, Any]] = {}
@@ -115,6 +126,11 @@ def build_domain_validation_request(
     expected_result_fields = _element_expected_result_fields(
         match, binding.expected_result_fields
     )
+    optional_result_fields = (
+        _element_expected_result_fields(match, binding.optional_result_fields)
+        if binding.optional_result_fields
+        else None
+    )
     target = _validation_target(match, selected_inputs)
     validation_guidance = (
         match.object_envelope.validation_guidance
@@ -128,6 +144,8 @@ def build_domain_validation_request(
         "selected_inputs": selected_inputs,
         "expected_result_fields": expected_result_fields,
     }
+    if optional_result_fields is not None:
+        request_payload["optional_result_fields"] = optional_result_fields
     if validation_guidance is not None:
         request_payload["validation_guidance"] = validation_guidance
     request_id = (
@@ -150,6 +168,7 @@ def build_domain_validation_request(
             input_selectors=selectors,
             evidence=_evidence_records_for_target(match),
             expected_result_fields=expected_result_fields,
+            optional_result_fields=optional_result_fields,
         ),
         findings=(),
         selected_inputs=selected_inputs,
@@ -233,14 +252,17 @@ def _resolve_selector(
         value, exists = _value_at_path(
             match.object_envelope.payload, resolved_path
         )
-        if not exists:
+        if not exists or _names_overruled_identity(resolved_path):
             return _missing_field(
                 input_name,
                 selector,
                 f"Payload path '{resolved_path}' is missing from the target object.",
                 field_path=resolved_path,
             )
-        return _single_value(input_name, selector, value, field_path=resolved_path)
+        # An identity a validator overruled is never a validator input.
+        return _single_value(
+            input_name, selector, without_overruled(value), field_path=resolved_path
+        )
 
     if selector.source == "object_metadata":
         if match.object_envelope is None:
@@ -616,6 +638,12 @@ def _object_for_ref(
     return None
 
 
+def _names_overruled_identity(path: str) -> bool:
+    return any(
+        segment.split("[", 1)[0].startswith(OVERRULED_KEY_PREFIX) for segment in str(path).split(".")
+    )
+
+
 def _single_value(
     input_name: str,
     selector: DomainPackInputSelector,
@@ -741,6 +769,44 @@ def _unresolved_ref(
     )
 
 
+def _route_problem(match: ValidatorBindingMatch) -> _SelectorProblem:
+    """Why a routed binding's target selects no route."""
+
+    binding = match.binding
+    selector = DomainPackInputSelector(source="payload", path=binding.route_by_path)
+    if match.object_envelope is None:
+        return _SelectorProblem(
+            code="selector_missing",
+            input_name="route_by",
+            message="routed bindings require an object target",
+            selector=selector,
+            details={},
+        )
+    resolved_path = _element_indexed_path(match, binding.route_by_path or "")
+    value, exists = _value_at_path(match.object_envelope.payload, resolved_path)
+    routes = sorted(binding.routes or ())
+    if not exists or value is None or value == "":
+        return _SelectorProblem(
+            code="selector_missing",
+            input_name="route_by",
+            message=f"Payload path '{resolved_path}' is missing, so no validator route applies.",
+            selector=selector,
+            details={"routes": routes},
+            field_path=resolved_path,
+        )
+    return _SelectorProblem(
+        code="selector_unrouted",
+        input_name="route_by",
+        message=(
+            f"Payload path '{resolved_path}' value {value!r} names no validator route "
+            f"(routes: {', '.join(routes)})."
+        ),
+        selector=selector,
+        details={"route_value": value, "routes": routes},
+        field_path=resolved_path,
+    )
+
+
 def _problem_finding(
     match: ValidatorBindingMatch,
     problem: _SelectorProblem,
@@ -799,6 +865,7 @@ def _validation_target(
         object_role=details.get("object_role"),
         field_path=match.field_path,
         expected_fields=list(match.binding.expected_result_fields),
+        optional_fields=list(match.binding.optional_result_fields) or None,
         input_values=selected_inputs,
     )
 

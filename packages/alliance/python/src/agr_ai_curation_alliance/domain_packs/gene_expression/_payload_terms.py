@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-
-TERM_SELECTOR_FIELDS = ("curie", "name", "abbreviation")
+from .resolvable import TERM_IDENTITY_KEYS, is_resolved
 
 
 def value_missing_or_blank(value: Any) -> bool:
@@ -21,22 +20,30 @@ def value_missing_or_blank(value: Any) -> bool:
     return False
 
 
+def term_present(value: Any) -> bool:
+    """Whether the paper supplied this term at all, resolved or not."""
+
+    return isinstance(value, Mapping) and not value_missing_or_blank(value)
+
+
 def term_payload(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, Mapping):
+    """The validated ``{curie, name}`` of a resolved term; None for any other value.
+
+    Only the term's own identity keys are read; an unresolved term has none.
+    """
+
+    if not is_resolved(value):
         return None
-    payload = {
-        selector: value.get(selector)
-        for selector in TERM_SELECTOR_FIELDS
-        if not value_missing_or_blank(value.get(selector))
+    return {
+        key: value[key]
+        for key in TERM_IDENTITY_KEYS
+        if not value_missing_or_blank(value.get(key))
     }
-    return payload or None
-
-
-def has_term_selector(value: Any) -> bool:
-    return term_payload(value) is not None
 
 
 def term_list(value: Any) -> list[dict[str, Any]]:
+    """The validated identities of a list's resolved terms."""
+
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return []
     return [
@@ -47,8 +54,8 @@ def term_list(value: Any) -> list[dict[str, Any]]:
 
 
 __all__ = (
-    "has_term_selector",
     "term_list",
     "term_payload",
+    "term_present",
     "value_missing_or_blank",
 )
