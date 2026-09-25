@@ -11,7 +11,6 @@ the operator's verified inventory; database ownership comes from the job join.
 
 import argparse
 from collections import Counter
-from dataclasses import asdict
 from decimal import Decimal, localcontext
 import hashlib
 import json
@@ -19,20 +18,14 @@ import json
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from src.lib.openai_agents.config import get_cost_migration_audit_page_size
 from src.models.sql.benchmark import (
-    BenchmarkCell, BenchmarkCellStatus, BenchmarkInvocation,
-    BenchmarkInvocationStatus, BenchmarkJob, BenchmarkJobStatus,
+    BenchmarkInvocationStatus, BenchmarkJob,
 )
 from src.models.sql.database import SessionLocal
-from .benchmark_migration import plan_benchmark_cost_migration
-
-
-_TERMINAL_JOBS = (
-    BenchmarkJobStatus.COMPLETED, BenchmarkJobStatus.COMPLETED_WITH_FAILURES,
-    BenchmarkJobStatus.CANCELLED, BenchmarkJobStatus.FAILED,
+from .benchmark_migration import (
+    TERMINAL_CELLS, TERMINAL_JOBS, iter_benchmark_migration_rows,
+    migration_fingerprint_line, plan_benchmark_cost_migration,
 )
-_TERMINAL_CELLS = (BenchmarkCellStatus.SUCCEEDED, BenchmarkCellStatus.FAILED, BenchmarkCellStatus.CANCELLED)
 
 
 def _add_exact(left: Decimal, right: Decimal) -> Decimal:
@@ -54,9 +47,8 @@ def audit_benchmark_costs(session: Session, *, deployment_id: str, source_namesp
         text("SHOW transaction_isolation")
     ) != "repeatable read":
         raise ValueError("Audit requires a repeatable-read, read-only transaction")
-    page_size = get_cost_migration_audit_page_size()
     active_jobs = session.scalar(select(func.count()).select_from(BenchmarkJob).where(
-        BenchmarkJob.status.not_in(_TERMINAL_JOBS),
+        BenchmarkJob.status.not_in(TERMINAL_JOBS),
     ))
     counters = Counter()
     identities = Counter()
@@ -64,44 +56,29 @@ def audit_benchmark_costs(session: Session, *, deployment_id: str, source_namesp
     amounts: dict[tuple[str, str], Decimal] = {}
     charge_counts = Counter()
     digest = hashlib.sha256()
-    cursor = None
-    while True:
-        query = select(BenchmarkInvocation, BenchmarkJob.owner_subject, BenchmarkJob.status, BenchmarkCell.status).join(
-            BenchmarkCell, BenchmarkCell.id == BenchmarkInvocation.cell_id,
-        ).join(BenchmarkJob, BenchmarkJob.id == BenchmarkCell.job_id).order_by(BenchmarkInvocation.id).limit(page_size)
-        if cursor is not None:
-            query = query.where(BenchmarkInvocation.id > cursor)
-        page = session.execute(query).all()
-        if not page:
-            break
-        for invocation, owner, job_status, cell_status in page:
-            counters["scanned_invocations"] += 1
-            if job_status not in _TERMINAL_JOBS or cell_status not in _TERMINAL_CELLS or invocation.status == BenchmarkInvocationStatus.RUNNING:
-                counters["nonterminal_invocations"] += 1
-                continue
-            try:
-                entry = plan_benchmark_cost_migration(
-                    invocation, deployment_id=deployment_id,
-                    source_namespace=source_namespace, owner_subject=owner,
-                )
-            except ValueError:
-                counters["invalid_invocations"] += 1
-                continue
-            counters["planned_invocations"] += 1
-            identities[entry.identity_basis] += 1
-            usage_statuses[entry.usage.status] += 1
-            digest.update(json.dumps(asdict(entry), default=str, sort_keys=True, separators=(",", ":")).encode())
-            digest.update(b"\n")
-            if entry.charge is None:
-                counters["unknown_charge_invocations"] += 1
-            else:
-                key = (entry.charge.unit, entry.charge.source)
-                amounts[key] = _add_exact(amounts.get(key, Decimal(0)), entry.charge.amount)
-                charge_counts[key] += 1
-        cursor = page[-1][0].id
-        # SQLAlchemy's identity map should not accumulate mapped invocation rows
-        # over a large inventory. Caller must dedicate this read-only session.
-        session.expunge_all()
+    for invocation, owner, job_status, cell_status in iter_benchmark_migration_rows(session):
+        counters["scanned_invocations"] += 1
+        if job_status not in TERMINAL_JOBS or cell_status not in TERMINAL_CELLS or invocation.status == BenchmarkInvocationStatus.RUNNING:
+            counters["nonterminal_invocations"] += 1
+            continue
+        try:
+            entry = plan_benchmark_cost_migration(
+                invocation, deployment_id=deployment_id,
+                source_namespace=source_namespace, owner_subject=owner,
+            )
+        except ValueError:
+            counters["invalid_invocations"] += 1
+            continue
+        counters["planned_invocations"] += 1
+        identities[entry.identity_basis] += 1
+        usage_statuses[entry.usage.status] += 1
+        digest.update(migration_fingerprint_line(entry))
+        if entry.charge is None:
+            counters["unknown_charge_invocations"] += 1
+        else:
+            key = (entry.charge.unit, entry.charge.source)
+            amounts[key] = _add_exact(amounts.get(key, Decimal(0)), entry.charge.amount)
+            charge_counts[key] += 1
     return {
         "schema_version": 1, "dry_run": True, "write_side_enabled": False,
         "deployment_id": deployment_id, "source_namespace": source_namespace,

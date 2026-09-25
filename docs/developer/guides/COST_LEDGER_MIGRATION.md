@@ -212,8 +212,8 @@ replace the current execution API/result fields or modify historical artifacts.
 fact-receipt verifier. It is not a runtime compatibility reader and is not called
 by any existing writer. It accepts only terminal invocations and requires
 deployment, execution-source namespace and job-owner scope from verified
-inventory. A later migration runner must freeze execution and obtain ownership
-through the invocation/cell/job relationship, not trust artifact metadata.
+inventory. The offline runner freezes execution tables and obtains ownership
+through the invocation/cell/job relationship, not artifact metadata.
 
 Measured request IDs remain the canonical attempt ID. Historical invocations
 without a measured ID receive a deterministic UUIDv5 over the versioned tuple
@@ -261,9 +261,48 @@ upgrade old schemas automatically. A long snapshot can delay PostgreSQL vacuum
 cleanup, so schedule large inventories with operations. No shared database audit
 has been performed by the local tests.
 
-There is no write/apply mode, bulk backfill runner or consumer cutover yet.
-Immutable artifacts and current execution API contracts remain untouched until
-coordinated consumer work is ready.
+### Explicit offline backfill
+
+`benchmark_audit` remains read-only. The separate `benchmark_backfill` command
+also defaults to the same read-only audit; only explicit `--apply` writes. It
+requires the candidate schema through `c53c05e0925c`, verified target database,
+and reviewed audit fingerprint. Deployment and source labels must exactly match
+`COST_LEDGER_DEPLOYMENT_ID` and `COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE` for apply.
+Labels do not select a database or prove its identity.
+
+After approved maintenance has stopped new submissions and drained workers,
+review all audit blockers and the planned fingerprint. Within that backend
+environment, the explicit apply command is:
+
+```bash
+python -m src.lib.cost_ledger.benchmark_backfill \
+  --deployment-id VERIFIED_DEPLOYMENT_ID \
+  --source-namespace VERIFIED_EXECUTION_SOURCE \
+  --expected-planned-facts-sha256 REVIEWED_AUDIT_SHA256 \
+  --apply
+```
+
+The write runner requires a fresh, dedicated READ COMMITTED session so a snapshot
+taken before lock acquisition cannot hide a concurrent writer's commit. It locks
+all three benchmark source tables and all three ledger destination tables against
+writes while allowing ordinary readers. `COST_MIGRATION_LOCK_TIMEOUT_MS` bounds
+lock waits (default 30000 ms), not total migration duration. Query pages use
+`COST_MIGRATION_AUDIT_PAGE_SIZE`; the transaction covers the entire migration.
+
+Active jobs, nonterminal or invalid source records, inconsistent usage, binding
+conflicts, per-record parity failures, or a changed final fingerprint reject the
+run. A savepoint rolls back all additions, including prior pages and identity
+bindings, even if a caller catches the exception. Exact replay adds no duplicate
+facts. The callable never commits; the CLI commits only after verification and
+then emits its committed receipt. Failures emit sanitized error codes.
+
+Keep maintenance active through commit **and the coordinated writer/consumer
+cutover**. Database locks end at commit; they do not prevent an old worker from
+writing afterward. This runner preserves source columns and immutable artifacts,
+does not switch live writers, and explicitly reports that cutover is incomplete.
+Its temporary migration copy is not permission to operate two accounting owners.
+No shared database backfill has been performed; local tests use disposable data.
+Current execution API/result contracts remain unchanged pending consumer work.
 
 The local storage primitive now adds `cost_fact_revisions` in migration
 `c53c05e0925c`. Each row contains only newly known token fields and/or a newly

@@ -1323,3 +1323,145 @@ def test_accounting_read_requires_owned_membership_and_verified_binding(monkeypa
             with SessionLocal() as db:
                 BenchmarkRepository(db).delete_terminal_job(job_id=job_id, owner_subject=owner)
                 db.commit()
+
+
+@pytest.fixture
+def cost_backfill_case(monkeypatch):
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_audit import audit_benchmark_costs
+
+    scope = dict(deployment_id=uuid4().hex, source_namespace="backfill-fixture")
+    monkeypatch.setenv("COST_LEDGER_DEPLOYMENT_ID", scope["deployment_id"])
+    monkeypatch.setenv("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", scope["source_namespace"])
+    monkeypatch.setenv("COST_MIGRATION_AUDIT_PAGE_SIZE", "1")
+    with SessionLocal() as db:
+        job = _create_job(db, owner="backfill-owner", cells=2)
+        _run_to_terminal(db, job.id, billed_amount=Decimal("7.000000000000000000123"))
+        job_id = job.id
+        db.commit()
+    with SessionLocal() as audit:
+        audit.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        receipt = audit_benchmark_costs(audit, **scope)
+    try:
+        yield scope, receipt, job_id
+    finally:
+        with SessionLocal() as db:
+            BenchmarkRepository(db).delete_terminal_job(job_id=job_id, owner_subject="backfill-owner")
+            db.commit()
+
+
+def _backfill_fact_count(db, scope):
+    from src.models.sql.cost_ledger import CostFactRevision
+    return db.scalar(select(func.count()).select_from(CostFactRevision).where(
+        CostFactRevision.deployment_id == scope["deployment_id"],
+    ))
+
+
+def test_offline_backfill_parity_replay_and_write_fencing(cost_backfill_case):
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_backfill import backfill_benchmark_costs
+    from src.lib.cost_ledger.benchmark_reads import read_benchmark_accounting
+
+    scope, audit, job_id = cost_backfill_case
+    args = {**scope, "expected_planned_facts_sha256": audit["planned_facts_sha256"]}
+    with SessionLocal() as migration:
+        receipt = backfill_benchmark_costs(migration, **args)
+        assert receipt["verified_invocations"] == 2
+        assert receipt["committed"] is False and receipt["writer_cutover_complete"] is False
+        with SessionLocal() as reader:
+            assert _backfill_fact_count(reader, scope) == 0
+        with SessionLocal() as blocked_writer:
+            blocked_writer.execute(text("SET LOCAL lock_timeout = '20ms'"))
+            with pytest.raises(DBAPIError):
+                blocked_writer.execute(text("UPDATE benchmark_invocations SET latency_ms = latency_ms WHERE false"))
+        migration.commit()
+    with SessionLocal() as replay:
+        assert backfill_benchmark_costs(replay, **args)["verified_invocations"] == 2
+        replay.commit()
+    with SessionLocal() as db:
+        assert _backfill_fact_count(db, scope) == 2
+        for row in db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job_id)):
+            projection = read_benchmark_accounting(db, job_id=job_id, cell_id=row.cell_id,
+                                                   invocation_id=row.id, owner_subject="backfill-owner")
+            assert projection.recorded_charge.amount == row.billed_amount == Decimal("7.000000000000000000123")
+            assert projection.usage.input_tokens is None
+
+
+def test_backfill_fingerprint_failure_rolls_back_all_pages_even_if_caught(cost_backfill_case):
+    from src.lib.cost_ledger.benchmark_backfill import BenchmarkBackfillError, backfill_benchmark_costs
+    from src.models.sql.cost_ledger import CostAttempt, CostSourceReference
+
+    scope, _, _ = cost_backfill_case
+    with SessionLocal() as migration:
+        with pytest.raises(BenchmarkBackfillError, match="source_fingerprint_changed"):
+            backfill_benchmark_costs(migration, **scope, expected_planned_facts_sha256="0" * 64)
+        migration.commit()
+    with SessionLocal() as db:
+        assert _backfill_fact_count(db, scope) == 0
+        for model in (CostAttempt, CostSourceReference):
+            assert db.scalar(select(func.count()).select_from(model).where(model.deployment_id == scope["deployment_id"])) == 0
+
+
+def test_backfill_existing_fact_conflict_preserves_only_original_data(cost_backfill_case):
+    from src.lib.cost_ledger.benchmark_backfill import backfill_benchmark_costs
+    from src.lib.cost_ledger.benchmark_migration import plan_benchmark_cost_migration
+    from src.lib.cost_ledger.facts import CostFactConflict, RecordedCharge
+    from src.lib.cost_ledger.persistence import record_cost_facts
+
+    scope, audit, job_id = cost_backfill_case
+    with SessionLocal() as db:
+        last = db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(
+            BenchmarkCell.job_id == job_id,
+        ).order_by(BenchmarkInvocation.id.desc())).first()
+        entry = plan_benchmark_cost_migration(last, **scope, owner_subject="backfill-owner")
+        record_cost_facts(db, **scope, owner_subject="backfill-owner", attempt_id=entry.attempt_id,
+                          source_system="benchmark", source_id=str(last.id), usage=entry.usage,
+                          charge=RecordedCharge(Decimal("8"), "credits", "audit-fixture"))
+        db.commit()
+    with SessionLocal() as migration:
+        with pytest.raises(CostFactConflict):
+            backfill_benchmark_costs(migration, **scope, expected_planned_facts_sha256=audit["planned_facts_sha256"])
+        migration.commit()
+    with SessionLocal() as db:
+        assert _backfill_fact_count(db, scope) == 1
+
+
+def test_backfill_rejects_queued_jobs_and_scope_mismatch(cost_backfill_case, monkeypatch):
+    from src.lib.cost_ledger.benchmark_backfill import BenchmarkBackfillError, backfill_benchmark_costs
+
+    scope, audit, _ = cost_backfill_case
+    args = {**scope, "expected_planned_facts_sha256": audit["planned_facts_sha256"]}
+    with SessionLocal() as db:
+        queued = _create_job(db, owner="backfill-queued", cells=1)
+        queued_id = queued.id
+        db.commit()
+    try:
+        with SessionLocal() as migration:
+            with pytest.raises(BenchmarkBackfillError, match="active_benchmark_jobs"):
+                backfill_benchmark_costs(migration, **args)
+            migration.commit()
+        monkeypatch.setenv("COST_LEDGER_DEPLOYMENT_ID", "wrong-deployment")
+        with SessionLocal() as migration:
+            with pytest.raises(BenchmarkBackfillError, match="verified_scope_configuration_required"):
+                backfill_benchmark_costs(migration, **args)
+        with SessionLocal() as db:
+            assert _backfill_fact_count(db, scope) == 0
+    finally:
+        with SessionLocal() as db:
+            _run_to_terminal(db, queued_id)
+            BenchmarkRepository(db).delete_terminal_job(job_id=queued_id, owner_subject="backfill-queued")
+            db.commit()
+
+
+def test_backfill_refuses_prelock_repeatable_read_snapshot(cost_backfill_case):
+    from sqlalchemy.orm import Session
+    from src.models.sql.database import engine
+    from src.lib.cost_ledger.benchmark_backfill import BenchmarkBackfillError, backfill_benchmark_costs
+
+    scope, audit, _ = cost_backfill_case
+    with Session(engine.execution_options(isolation_level="REPEATABLE READ")) as migration:
+        with pytest.raises(BenchmarkBackfillError, match="read_committed_required"):
+            backfill_benchmark_costs(migration, **scope, expected_planned_facts_sha256=audit["planned_facts_sha256"])
+        migration.commit()
+    with SessionLocal() as db:
+        assert _backfill_fact_count(db, scope) == 0

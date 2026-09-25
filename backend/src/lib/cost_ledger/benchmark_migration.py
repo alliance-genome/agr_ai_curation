@@ -7,14 +7,50 @@ result artifacts are not rewritten. Historical source identity is not evidence
 of a join to independently retained telemetry.
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 from typing import Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from src.models.sql.benchmark import BenchmarkInvocation, BenchmarkInvocationStatus
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from src.models.sql.benchmark import (
+    BenchmarkCell, BenchmarkCellStatus, BenchmarkInvocation, BenchmarkInvocationStatus,
+    BenchmarkJob, BenchmarkJobStatus,
+)
+from src.lib.openai_agents.config import get_cost_migration_audit_page_size
 from .facts import RecordedCharge, TokenUsage
 from .persistence import CostFacts
+
+
+TERMINAL_JOBS = (
+    BenchmarkJobStatus.COMPLETED, BenchmarkJobStatus.COMPLETED_WITH_FAILURES,
+    BenchmarkJobStatus.CANCELLED, BenchmarkJobStatus.FAILED,
+)
+TERMINAL_CELLS = (BenchmarkCellStatus.SUCCEEDED, BenchmarkCellStatus.FAILED, BenchmarkCellStatus.CANCELLED)
+
+
+def iter_benchmark_migration_rows(session: Session):
+    """Bounded keyset traversal for a dedicated audit/backfill session."""
+    cursor = None
+    size = get_cost_migration_audit_page_size()
+    while True:
+        query = select(BenchmarkInvocation, BenchmarkJob.owner_subject, BenchmarkJob.status, BenchmarkCell.status).join(
+            BenchmarkCell, BenchmarkCell.id == BenchmarkInvocation.cell_id,
+        ).join(BenchmarkJob, BenchmarkJob.id == BenchmarkCell.job_id).order_by(BenchmarkInvocation.id).limit(size)
+        if cursor is not None:
+            query = query.where(BenchmarkInvocation.id > cursor)
+        page = session.execute(query).all()
+        if not page:
+            return
+        yield from page
+        cursor = page[-1][0].id
+        session.expunge_all()
+
+
+def migration_fingerprint_line(entry: "BenchmarkCostMigrationEntry") -> bytes:
+    return json.dumps(asdict(entry), default=str, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
 @dataclass(frozen=True)

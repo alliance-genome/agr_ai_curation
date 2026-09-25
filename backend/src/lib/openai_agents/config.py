@@ -1571,8 +1571,13 @@ def get_benchmark_max_page_size() -> int:
 
 
 def get_cost_migration_audit_page_size() -> int:
-    """Rows per read-only cost migration audit query; does not cap coverage."""
+    """Rows per cost migration audit/backfill query; does not cap coverage."""
     return max(1, _get_env_int_with_fallback("COST_MIGRATION_AUDIT_PAGE_SIZE", 200))
+
+
+def get_cost_migration_lock_timeout_ms() -> int:
+    """Maximum wait for offline accounting migration locks."""
+    return max(1, _get_env_int_with_fallback("COST_MIGRATION_LOCK_TIMEOUT_MS", 30000))
 
 
 def get_cost_ledger_deployment_id() -> str:
