@@ -178,7 +178,7 @@ class AlleleFindInput(_StrictToolModel):
 
 
 class AlleleFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(min_length=1, max_length=50)
+    candidate_ids: List[StrictStr] = Field(max_length=50)
 
 
 def _emit_allele_builder_event(

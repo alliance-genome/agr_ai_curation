@@ -335,7 +335,7 @@ def validate_allele_builder_objects(
         for obj in output.curatable_objects
         if obj.object_type == ALLELE_ASSOCIATION_OBJECT_TYPE
     ]
-    if not associations:
+    if output.curatable_objects and not associations:
         errors.append(
             "curatable_objects must contain at least one AllelePaperEvidenceAssociation"
         )
@@ -841,7 +841,11 @@ def materialize_allele_builder_state(
         "source_candidate_ids": list(normalized_candidate_ids),
     }
     output_payload = {
-        "summary": "Finalized allele extraction from builder-staged mentions.",
+        "summary": (
+            "Finalized allele extraction from builder-staged mentions."
+            if retained_count
+            else "Finalized allele extraction with no retained allele mentions."
+        ),
         "curatable_objects": [
             obj.model_dump(mode="json", exclude_none=True) for obj in curatable_objects
         ],
@@ -867,7 +871,9 @@ def materialize_allele_builder_state(
         "schema_ref": _association_schema_ref().model_dump(mode="json", exclude_none=True),
     }
 
-    if retained_count == 0 and not issues:
+    # Only an explicitly empty selection represents a successful no-findings run.
+    # Nonempty invalid selections must not become empty successes after normalization.
+    if retained_count == 0 and candidate_ids and not issues:
         issues.append(
             _materialization_issue(
                 field_path="curatable_objects",

@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+import pytest
+from pydantic import ValidationError
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.openai_agents.extraction_builder_workspace import (
@@ -172,6 +174,76 @@ def test_fresh_allele_builder_output_passes_normalization_and_persistence():
     result = _materialize_one_candidate()
     assert result.ok, result.summary()
     assert_fresh_output_records_every_state(result.payload, adapter_key="allele", agent_key="allele_extractor")
+
+
+def test_explicit_empty_allele_materialization_preserves_nonempty_graph_guards():
+    empty = materialize_allele_builder_state(
+        workspace=ExtractionBuilderWorkspace(run_id="empty-allele"),
+        candidate_ids=[], evidence_records=[],
+    )
+    assert empty.ok, empty.summary()
+    assert empty.payload["curatable_objects"] == []
+    assert empty.payload["metadata"]["evidence_records"] == []
+    assert empty.payload["metadata"]["provenance"]["source_candidate_ids"] == []
+    assert empty.payload["run_summary"]["candidate_count"] == 0
+    assert empty.payload["run_summary"]["kept_count"] == 0
+    assert "no retained allele mentions" in empty.payload["summary"]
+    assert validate_allele_builder_objects(AlleleBuilderExtractionOutput.model_validate(empty.payload)) == ()
+
+    populated = AlleleBuilderExtractionOutput.model_validate(_materialize_one_candidate().payload)
+    orphaned = populated.model_copy(update={"curatable_objects": [
+        obj for obj in populated.curatable_objects if obj.object_type == ALLELE_MENTION_OBJECT_TYPE
+    ]})
+    assert orphaned.curatable_objects
+    assert "curatable_objects must contain at least one AllelePaperEvidenceAssociation" in validate_allele_builder_objects(orphaned)
+
+    # A nonempty malformed selection must not normalize into an empty success.
+    for candidate_ids in ([" "], ["unknown-candidate"]):
+        rejected = materialize_allele_builder_state(
+            workspace=ExtractionBuilderWorkspace(run_id="invalid-allele"),
+            candidate_ids=candidate_ids, evidence_records=[],
+        )
+        assert not rejected.ok
+        assert rejected.payload is None
+
+
+def test_explicit_empty_allele_finalization_is_idempotent_and_membership_guarded(monkeypatch):
+    tools, workspace = _rationale_tools(monkeypatch)
+    monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: [])
+    result = tools._finalize_allele_extraction_impl([])
+    assert result.status == "ok", result
+    finalization = workspace.finalization
+    assert finalization is not None
+    assert finalization.source_candidate_ids == ()
+    assert finalization.evidence_record_ids == ()
+    assert finalization.payload["curatable_objects"] == []
+    assert tools._finalize_allele_extraction_impl([]).status == "ok"
+    assert workspace.finalization is finalization
+    for candidate_ids in ([" "], ["different-candidate"]):
+        assert tools._finalize_allele_extraction_impl(candidate_ids).status == "error"
+        assert workspace.finalization is finalization
+
+
+@pytest.mark.asyncio
+async def test_public_allele_finalizer_accepts_empty_but_rejects_invalid_inputs(monkeypatch):
+    from agents.tool_context import ToolContext
+
+    tools, workspace = _rationale_tools(monkeypatch)
+    monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: [])
+    with pytest.raises(ValidationError):
+        tools.AlleleFinalizeInput()
+    for bad in (None, [None], [""], [" "], ["missing"], ["same", "same"]):
+        assert tools._finalize_allele_extraction_impl(bad).status == "error"
+        assert workspace.finalization is None
+    arguments = '{"candidate_ids": []}'
+    await tools.finalize_allele_extraction.on_invoke_tool(
+        ToolContext(context=None, tool_name="finalize_allele_extraction",
+                    tool_call_id="empty-allele", tool_arguments=arguments),
+        arguments,
+    )
+    assert workspace.finalization is not None
+    assert workspace.finalization.source_candidate_ids == ()
+    assert workspace.finalization.payload["curatable_objects"] == []
 
 
 def test_allele_builder_materializer_produces_clean_extraction_output():

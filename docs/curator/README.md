@@ -34,6 +34,8 @@ Extraction records what the paper supports. Validation can resolve a gene, allel
 
 Review the evidence and any unresolved or ambiguous results. A valid identifier does not establish that an observation belongs in your curation. Final export or submission also depends on the selected data type's supported fields and readiness rules.
 
+An allele extraction can finish with no retained findings. This means no mentions were retained under that agent's rules and the source text it could inspect; it does not prove the paper contains no alleles. Check the available text and selection rules before interpreting an empty result. An interrupted or unfinalized extraction is still a failure, not an empty success.
+
 ## Keep your work
 
 Workshop and Flow Builder retain unsaved drafts on the current browser for your signed-in account. On returning, choose **Resume draft** or **Discard draft**. Use **Save** to keep work in your account; local recovery does not transfer between devices and can be lost if browser storage is cleared.

@@ -489,8 +489,8 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
     assert fetched["execution_count"] == 1
 
 
-@pytest.mark.parametrize("disease_finalizer", [False, True])
-def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_db, monkeypatch, request, disease_finalizer):
+@pytest.mark.parametrize("domain_finalizer", [None, "disease", "allele"])
+def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_db, monkeypatch, request, domain_finalizer):
     """Exercise real result persistence, envelope checkpoint, and durable chat replay."""
     from src.lib.curation_workspace.extraction_results import build_extraction_envelope_candidate
     from src.lib.curation_workspace.models import (
@@ -558,19 +558,30 @@ def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_
             "envelope_id": envelope_id, "domain_pack_id": "fixture.empty", "extracted_objects": [],
         })
         finalization = workspace.finalize(candidate_ids=["materialized-empty"], source_candidate_ids=[])
-        if disease_finalizer:
-            from agr_ai_curation_alliance.tools import disease_builder_tools
-            from agr_ai_curation_alliance.domain_packs.disease.conversion import (
-                disease_extraction_output_to_pending_envelope,
+        if domain_finalizer:
+            from datetime import datetime, timezone
+            from importlib import import_module
+            from src.lib.curation_workspace.domain_envelope_normalization import (
+                domain_envelope_from_extraction_result,
             )
+            from src.schemas.curation_workspace import CurationExtractionResultRecord as ResultSchema
 
-            workspace = ExtractionBuilderWorkspace(run_id="empty-disease-replay", agent_id="disease_extractor")
-            monkeypatch.setattr(disease_builder_tools, "get_active_extraction_builder_workspace", lambda: workspace)
-            monkeypatch.setattr(disease_builder_tools, "get_active_evidence_records_snapshot", lambda: [])
-            assert disease_builder_tools._finalize_disease_extraction_impl([]).status == "ok"
+            tools = import_module(f"agr_ai_curation_alliance.tools.{domain_finalizer}_builder_tools")
+            workspace = ExtractionBuilderWorkspace(run_id=f"empty-{domain_finalizer}-replay",
+                                                   agent_id=f"{domain_finalizer}_extractor")
+            monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
+            monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: [])
+            assert getattr(tools, f"_finalize_{domain_finalizer}_extraction_impl")([]).status == "ok"
             finalization = workspace.finalization
-            canonical = disease_extraction_output_to_pending_envelope(
-                finalization.payload, envelope_id=envelope_id, document_id=str(document_id),
+            assert finalization is not None
+            record = ResultSchema.model_validate(
+                {"extraction_result_id": "empty-replay", "document_id": str(document_id),
+                 "adapter_key": domain_finalizer, "agent_key": f"{domain_finalizer}_extractor",
+                 "source_kind": "flow", "candidate_count": 0, "payload_json": finalization.payload,
+                 "created_at": datetime.now(timezone.utc), "metadata": {}}
+            )
+            canonical = domain_envelope_from_extraction_result(record, stored=False).model_copy(
+                update={"envelope_id": envelope_id}
             )
             from dataclasses import replace
             finalization = replace(finalization, payload=canonical.model_dump(mode="json"))
