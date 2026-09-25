@@ -1465,3 +1465,125 @@ def test_backfill_refuses_prelock_repeatable_read_snapshot(cost_backfill_case):
         migration.commit()
     with SessionLocal() as db:
         assert _backfill_fact_count(db, scope) == 0
+
+
+@pytest.mark.parametrize("scenario", ["exact", "units", "duplicate", "unknown"])
+def test_job_accounting_uses_unique_ledger_attempts_and_exact_buckets(cost_backfill_case, monkeypatch, scenario):
+    from decimal import localcontext
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_summary import read_benchmark_job_accounting
+    from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
+    from src.lib.cost_ledger.persistence import record_cost_facts
+
+    scope, _, job_id = cost_backfill_case
+    monkeypatch.setenv("COST_LEDGER_READ_PAGE_SIZE", "1")
+    attempt_ids = [uuid4(), uuid4()]
+    if scenario == "duplicate":
+        attempt_ids[1] = attempt_ids[0]
+    with SessionLocal() as db:
+        invocations = list(db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job_id)))
+        for index, invocation in enumerate(invocations):
+            amount = Decimal("1000000000000000000000") if index == 0 else Decimal("0.000000000000000000123")
+            usage = TokenUsage(input_tokens=10, cache_read_tokens=2) if index == 0 else TokenUsage()
+            charge = RecordedCharge(amount, "credits", "fixture")
+            if scenario == "units" and index == 1:
+                charge = RecordedCharge(Decimal(0), "USD", "other-source")
+            if scenario in ("unknown", "duplicate") and index == 1:
+                charge = None
+            record_cost_facts(db, **scope, attempt_id=attempt_ids[index], owner_subject="backfill-owner",
+                              source_system="benchmark", source_id=str(invocation.id), usage=usage, charge=charge)
+        db.commit()
+    with SessionLocal() as db, localcontext() as context:
+        context.prec = 6
+        db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        report = read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+    assert report.invocation_count == 2
+    assert report.attempt_count == (1 if scenario == "duplicate" else 2)
+    assert report.usage["input_tokens"].known_total == 10
+    assert report.usage["input_tokens"].unknown_attempts == (0 if scenario == "duplicate" else 1)
+    assert report.usage["total_tokens"].known_total is None
+    assert report.unknown_charge_attempts == (1 if scenario == "unknown" else 0)
+    if scenario == "exact":
+        assert report.recorded_charges[0].amount == Decimal("1000000000000000000000.000000000000000000123")
+        assert '"amount":"1000000000000000000000.000000000000000000123"' in report.model_dump_json()
+    elif scenario == "units":
+        assert len(report.recorded_charges) == 2
+        assert report.recorded_charges[0].amount == 0
+        assert report.recorded_charges[0].unit == "USD"
+    else:
+        assert report.recorded_charges[0].amount == Decimal("1000000000000000000000")
+
+
+def test_job_accounting_rejects_missing_foreign_and_wrong_scope(cost_backfill_case, monkeypatch):
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_summary import read_benchmark_job_accounting
+    from src.lib.cost_ledger.benchmark_reads import BenchmarkAccountingUnavailable
+    from src.lib.cost_ledger.facts import TokenUsage
+    from src.lib.cost_ledger.persistence import record_cost_facts
+
+    scope, _, job_id = cost_backfill_case
+    with SessionLocal() as db:
+        with pytest.raises(ValueError, match="repeatable-read"):
+            read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+    with SessionLocal() as db:
+        db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        for owner, target in (("foreign-owner", job_id), ("backfill-owner", uuid4())):
+            with pytest.raises(LookupError):
+                read_benchmark_job_accounting(db, job_id=target, owner_subject=owner)
+        with pytest.raises(BenchmarkAccountingUnavailable):
+            read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+    with SessionLocal() as db:
+        invocations = list(db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job_id)))
+        for invocation in invocations:
+            record_cost_facts(db, **scope, attempt_id=uuid4(), owner_subject="foreign-owner",
+                              source_system="benchmark", source_id=str(invocation.id), usage=TokenUsage())
+        db.commit()
+    with SessionLocal() as db:
+        db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        with pytest.raises(BenchmarkAccountingUnavailable):
+            read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+        monkeypatch.setenv("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", "wrong-source")
+        with pytest.raises(BenchmarkAccountingUnavailable):
+            read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+        monkeypatch.setenv("COST_LEDGER_DEPLOYMENT_ID", "")
+        with pytest.raises(BenchmarkAccountingUnavailable):
+            read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+
+
+def test_job_accounting_snapshot_empty_and_late_enrichment(cost_backfill_case, monkeypatch):
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_summary import read_benchmark_job_accounting
+    from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
+    from src.lib.cost_ledger.persistence import record_cost_facts
+
+    scope, _, job_id = cost_backfill_case
+    monkeypatch.setenv("COST_LEDGER_READ_PAGE_SIZE", "1")
+    bindings = []
+    with SessionLocal() as db:
+        for invocation in db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job_id)):
+            binding = dict(**scope, attempt_id=uuid4(), owner_subject="backfill-owner",
+                           source_system="benchmark", source_id=str(invocation.id))
+            record_cost_facts(db, **binding, usage=TokenUsage())
+            bindings.append(binding)
+        db.commit()
+    with SessionLocal() as reader:
+        reader.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        before = read_benchmark_job_accounting(reader, job_id=job_id, owner_subject="backfill-owner")
+        assert before.unknown_charge_attempts == 2
+        assert before.usage["input_tokens"].known_total is None
+        with SessionLocal() as writer:
+            record_cost_facts(writer, **bindings[0], usage=TokenUsage(input_tokens=0))
+            record_cost_facts(writer, **bindings[0], usage=TokenUsage(output_tokens=3, total_tokens=3),
+                              charge=RecordedCharge(Decimal(0), "credits", "fixture"))
+            record_cost_facts(writer, **bindings[1], usage=TokenUsage(input_tokens=1, cache_read_tokens=2))
+            writer.commit()
+        assert read_benchmark_job_accounting(reader, job_id=job_id, owner_subject="backfill-owner") == before
+    with SessionLocal() as reader:
+        reader.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        after = read_benchmark_job_accounting(reader, job_id=job_id, owner_subject="backfill-owner")
+        assert after.usage["input_tokens"].known_total == 1
+        assert after.usage["input_tokens"].known_attempts == 2
+        assert after.usage["output_tokens"].known_total == 3
+        assert after.recorded_charges[0].amount == 0 and after.recorded_charges[0].attempts == 1
+        assert after.unknown_charge_attempts == 1 and after.attempt_count == 2
+        assert after.inconsistent_usage_attempts == 1

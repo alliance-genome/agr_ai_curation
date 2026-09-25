@@ -4,16 +4,16 @@ from decimal import Decimal, localcontext
 
 import pytest
 
-from src.lib.cost_ledger.benchmark_audit import _add_exact
+from src.lib.cost_ledger.decimal_math import add_exact
 from src.lib.openai_agents.config import get_cost_migration_audit_page_size
 
 
 def test_audit_does_not_round_away_small_provider_charges():
     with localcontext() as context:
         context.prec = 3
-        assert _add_exact(Decimal("1000000000000000000000"), Decimal("0.000000000000000000123")) == Decimal("1000000000000000000000.000000000000000000123")
-        assert _add_exact(Decimal("999.99"), Decimal("0.01")) == Decimal("1000.00")
-        assert _add_exact(Decimal("0"), Decimal("0")) == Decimal("0")
+        assert add_exact(Decimal("1000000000000000000000"), Decimal("0.000000000000000000123")) == Decimal("1000000000000000000000.000000000000000000123")
+        assert add_exact(Decimal("999.99"), Decimal("0.01")) == Decimal("1000.00")
+        assert add_exact(Decimal("0"), Decimal("0")) == Decimal("0")
 
 
 @pytest.mark.parametrize("setting, expected", [(None, 200), ("3", 3), ("0", 1), ("invalid", 200)])

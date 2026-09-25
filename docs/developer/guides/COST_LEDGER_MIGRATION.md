@@ -230,6 +230,29 @@ switches. No live ledger writer is enabled by setting them, and the endpoint doe
 not give the private portal any database credentials. This read slice does not
 replace the current execution API/result fields or modify historical artifacts.
 
+`GET /api/v1/benchmarks/jobs/{job_id}/accounting` now derives a job-level summary
+from that same authorized ledger scope. It uses a repeatable-read, read-only
+snapshot and a server-side cursor controlled by `COST_LEDGER_READ_PAGE_SIZE`
+(default 200 rows per fetch, not a coverage cap). Each distinct ledger attempt is
+counted once even when multiple invocation references identify it. Invocation and
+attempt counts are reported separately. Sparse revisions enrich one attempt's
+facts; they are not added as separate charges. No aggregate is persisted.
+
+Token fields report known totals and known/unknown attempt counts; missing totals
+are not inferred from other fields. Inconsistent reported usage remains visible,
+with an explicit inconsistent-attempt count, and is not priced by this endpoint.
+Recorded charges are summed exactly and separated by both unit and source, with
+unknown-charge counts. An explicit zero remains a known charge. Missing bindings,
+foreign ledger ownership or unavailable accounting return 503 for the whole read,
+not a misleading partial total. Foreign/missing jobs return 404. The benchmark
+read capability/API gate and no-store success/503 behavior also apply here.
+
+This is a current snapshot, not a pinned historical valuation or a complete bill.
+Its scope is benchmark invocations only: shared preparation is explicitly excluded
+and no estimated model prices, currency conversion or provider invoice totals are
+invented. Individual invocation reads still provide pinned fact references for
+reproducible consumers. The portal is not switched to this endpoint yet.
+
 `benchmark_migration.py` provides a pure, explicit backfill planner and exact
 fact-receipt verifier. It is not a runtime compatibility reader and is not called
 by any existing writer. It accepts only terminal invocations and requires

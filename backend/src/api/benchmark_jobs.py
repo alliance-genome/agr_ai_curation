@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
 
 from src.api.benchmark_auth import (
     require_benchmark_cancel,
@@ -48,7 +49,8 @@ from src.schemas.benchmark_jobs import (
 from src.schemas import benchmark_job_examples as examples
 from src.lib.openai_agents.config import get_benchmark_admission_max_bytes
 from src.lib.cost_ledger.benchmark_reads import BenchmarkAccountingUnavailable, read_benchmark_accounting
-from src.schemas.cost_ledger import CostFactsProjection
+from src.schemas.cost_ledger import BenchmarkJobAccounting, CostFactsProjection
+from src.lib.cost_ledger.benchmark_summary import read_benchmark_job_accounting
 
 
 AdmissionBody = TypeVar("AdmissionBody", bound=BaseModel)
@@ -362,6 +364,39 @@ def list_invocations(
         return BenchmarkInvocationPage(
             items=items, next_after_ordinal=items[-1].ordinal if has_more else None,
         )
+
+
+@router.get("/{job_id}/accounting", response_model=BenchmarkJobAccounting,
+            responses=examples.json_example({
+                "schema_version": 1, "job_id": "10000000-0000-0000-0000-000000000001",
+                "scope": "benchmark_invocations", "valuation": "recorded_charges_only",
+                "shared_preparation_accounting": "not_included",
+                "invocation_count": 1, "attempt_count": 1,
+                "usage": {key: {"known_total": None, "known_attempts": 0, "unknown_attempts": 1}
+                          for key in ("input_tokens", "output_tokens", "total_tokens", "cache_read_tokens",
+                                      "cache_write_tokens", "reasoning_tokens")},
+                "inconsistent_usage_attempts": 0, "recorded_charges": [], "unknown_charge_attempts": 1,
+            }))
+def get_job_accounting(
+    job_id: UUID, response: Response,
+    principal: dict[str, Any] = Depends(require_benchmark_read),
+):
+    """Current ledger totals for this job; no stored aggregate or cost estimate."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        with SessionLocal() as session:
+            session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+            return read_benchmark_job_accounting(session, job_id=job_id, owner_subject=_owner(principal))
+    except BenchmarkAccountingUnavailable:
+        raise HTTPException(503, {"code": "accounting_unavailable", "message": "Benchmark accounting is unavailable"},
+                            headers={"Cache-Control": "no-store"}) from None
+    except (SQLAlchemyError, ValueError) as exc:
+        report_runtime_exception(
+            sanitized_benchmark_error("job_accounting_read", type(exc).__name__),
+            component="benchmark_api", operation="job_accounting_read",
+        )
+        raise HTTPException(503, {"code": "accounting_unavailable", "message": "Benchmark accounting is unavailable"},
+                            headers={"Cache-Control": "no-store"}) from None
 
 
 @router.get("/{job_id}/cells/{cell_id}/invocations/{invocation_id}/accounting",

@@ -11,7 +11,7 @@ the operator's verified inventory; database ownership comes from the job join.
 
 import argparse
 from collections import Counter
-from decimal import Decimal, localcontext
+from decimal import Decimal
 import hashlib
 import json
 
@@ -22,21 +22,11 @@ from src.models.sql.benchmark import (
     BenchmarkInvocationStatus, BenchmarkJob,
 )
 from src.models.sql.database import SessionLocal
+from .decimal_math import add_exact
 from .benchmark_migration import (
     TERMINAL_CELLS, TERMINAL_JOBS, iter_benchmark_migration_rows,
     migration_fingerprint_line, plan_benchmark_cost_migration,
 )
-
-
-def _add_exact(left: Decimal, right: Decimal) -> Decimal:
-    # RecordedCharge guarantees finite nonnegative operands. Size precision from
-    # their decimal positions so the process-wide Decimal context cannot round
-    # a tiny recorded charge out of a larger accumulated sum.
-    with localcontext() as context:
-        context.prec = max(left.adjusted(), right.adjusted()) - min(
-            int(left.as_tuple().exponent), int(right.as_tuple().exponent),
-        ) + 2
-        return left + right
 
 
 def audit_benchmark_costs(session: Session, *, deployment_id: str, source_namespace: str) -> dict:
@@ -77,7 +67,7 @@ def audit_benchmark_costs(session: Session, *, deployment_id: str, source_namesp
             counters["unknown_charge_invocations"] += 1
         else:
             key = (entry.charge.unit, entry.charge.source)
-            amounts[key] = _add_exact(amounts.get(key, Decimal(0)), entry.charge.amount)
+            amounts[key] = add_exact(amounts.get(key, Decimal(0)), entry.charge.amount)
             charge_counts[key] += 1
     return {
         "schema_version": 1, "dry_run": True, "write_side_enabled": False,

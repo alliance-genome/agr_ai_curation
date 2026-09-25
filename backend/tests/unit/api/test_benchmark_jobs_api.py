@@ -31,9 +31,10 @@ def submission_body():
 
 
 @pytest.mark.parametrize("enabled, allowed", [(True, True), (True, False), (False, True)])
-def test_accounting_requires_read_capability_and_api_gate(monkeypatch, enabled, allowed):
+@pytest.mark.parametrize("job_summary", [False, True])
+def test_accounting_requires_read_capability_and_api_gate(monkeypatch, enabled, allowed, job_summary):
     from src.lib.cost_ledger.facts import TokenUsage
-    from src.schemas.cost_ledger import CostFactsProjection, CostLedgerReference
+    from src.schemas.cost_ledger import BenchmarkJobAccounting, CostFactsProjection, CostLedgerReference
 
     monkeypatch.setenv("BENCHMARK_API_ENABLED", str(enabled).lower())
     app = FastAPI()
@@ -48,18 +49,26 @@ def test_accounting_requires_read_capability_and_api_gate(monkeypatch, enabled, 
         reference=CostLedgerReference(schema_version=1, deployment_id="fixture", attempt_id=uuid4(), fact_revision=0),
         usage=TokenUsage(), usage_status="missing", usage_issues=(), recorded_charge=None,
     )
+    job, cell, invocation = uuid4(), uuid4(), uuid4()
+    if job_summary:
+        projection = BenchmarkJobAccounting(job_id=job, invocation_count=0, attempt_count=0, usage={},
+                                            inconsistent_usage_attempts=0, recorded_charges=(), unknown_charge_attempts=0)
     reader = Mock(return_value=projection)
     sessions = MagicMock()
     monkeypatch.setattr(benchmark_jobs, "SessionLocal", sessions)
-    monkeypatch.setattr(benchmark_jobs, "read_benchmark_accounting", reader)
-    job, cell, invocation = uuid4(), uuid4(), uuid4()
+    monkeypatch.setattr(benchmark_jobs, "read_benchmark_job_accounting" if job_summary else "read_benchmark_accounting", reader)
     with TestClient(app) as client:
-        result = client.get(f"/api/v1/benchmarks/jobs/{job}/cells/{cell}/invocations/{invocation}/accounting?revision=0")
+        suffix = "" if job_summary else f"/cells/{cell}/invocations/{invocation}"
+        result = client.get(f"/api/v1/benchmarks/jobs/{job}{suffix}/accounting?revision=0")
     if enabled and allowed:
         assert result.status_code == 200 and result.headers["cache-control"] == "no-store"
         assert result.json() == projection.model_dump(mode="json")
-        assert reader.call_args.kwargs == dict(job_id=job, cell_id=cell, invocation_id=invocation,
-                                               owner_subject="service:portal", revision=0)
+        expected = dict(job_id=job, owner_subject="service:portal")
+        if not job_summary:
+            expected.update(cell_id=cell, invocation_id=invocation, revision=0)
+        assert reader.call_args.kwargs == expected
+        if job_summary:
+            assert str(sessions.return_value.__enter__.return_value.execute.call_args.args[0]) == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
         sessions.return_value.__enter__.return_value.commit.assert_not_called()
     else:
         assert result.status_code == (404 if not enabled else 403)
@@ -68,7 +77,8 @@ def test_accounting_requires_read_capability_and_api_gate(monkeypatch, enabled, 
 
 
 @pytest.mark.parametrize("failure, expected", [("missing", 404), ("unbound", 503), ("database", 503), ("inconsistent", 503)])
-def test_accounting_errors_do_not_leak_or_fabricate_cost(monkeypatch, failure, expected):
+@pytest.mark.parametrize("job_summary", [False, True])
+def test_accounting_errors_do_not_leak_or_fabricate_cost(monkeypatch, failure, expected, job_summary):
     from sqlalchemy.exc import OperationalError
 
     monkeypatch.setenv("BENCHMARK_API_ENABLED", "true")
@@ -82,11 +92,13 @@ def test_accounting_errors_do_not_leak_or_fabricate_cost(monkeypatch, failure, e
         "inconsistent": ValueError("private facts"),
     }
     monkeypatch.setattr(benchmark_jobs, "SessionLocal", MagicMock())
-    monkeypatch.setattr(benchmark_jobs, "read_benchmark_accounting", Mock(side_effect=errors[failure]))
+    reader_name = "read_benchmark_job_accounting" if job_summary else "read_benchmark_accounting"
+    monkeypatch.setattr(benchmark_jobs, reader_name, Mock(side_effect=errors[failure]))
     reporter = Mock()
     monkeypatch.setattr(benchmark_jobs, "report_runtime_exception", reporter)
     with TestClient(app) as client:
-        result = client.get(f"/api/v1/benchmarks/jobs/{uuid4()}/cells/{uuid4()}/invocations/{uuid4()}/accounting")
+        suffix = "" if job_summary else f"/cells/{uuid4()}/invocations/{uuid4()}"
+        result = client.get(f"/api/v1/benchmarks/jobs/{uuid4()}{suffix}/accounting")
     assert result.status_code == expected
     assert "private" not in result.text and "secret" not in result.text and "credentials" not in result.text
     assert "recorded_charge" not in result.json()

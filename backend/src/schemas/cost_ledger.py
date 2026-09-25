@@ -61,3 +61,35 @@ class CostFactsProjection(BaseModel):
         if (self.reference.fact_revision == 0) != empty:
             raise ValueError("Empty snapshot must use revision zero; known facts require a revision")
         return self
+
+
+class KnownTokenTotal(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    known_total: int | None
+    known_attempts: int
+    unknown_attempts: int
+
+
+class RecordedChargeTotal(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    unit: str
+    source: str
+    amount: Decimal
+    attempts: int
+
+
+class BenchmarkJobAccounting(BaseModel):
+    """Current snapshot, not a stored valuation or a complete provider bill."""
+
+    model_config = ConfigDict(frozen=True)
+    schema_version: Literal[1] = 1
+    job_id: UUID
+    scope: Literal["benchmark_invocations"] = "benchmark_invocations"
+    valuation: Literal["recorded_charges_only"] = "recorded_charges_only"
+    shared_preparation_accounting: Literal["not_included"] = "not_included"
+    invocation_count: int
+    attempt_count: int
+    usage: dict[str, KnownTokenTotal]
+    inconsistent_usage_attempts: int
+    recorded_charges: tuple[RecordedChargeTotal, ...]
+    unknown_charge_attempts: int
