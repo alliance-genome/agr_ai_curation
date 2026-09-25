@@ -30,6 +30,79 @@ def submission_body():
     return {"suite": suite, "plan": plan.model_dump(mode="json")}
 
 
+@pytest.mark.parametrize("mode", ["success", "empty", "unbound", "database", "denied", "disabled"])
+def test_invocation_page_exposes_only_pinned_ledger_references(monkeypatch, mode):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from sqlalchemy.exc import OperationalError
+    from src.lib.cost_ledger.facts import TokenUsage
+    from src.schemas.cost_ledger import CostFactsProjection, CostLedgerReference
+
+    monkeypatch.setenv("BENCHMARK_API_ENABLED", str(mode != "disabled").lower())
+    app = FastAPI()
+    def principal():
+        if mode == "denied":
+            raise HTTPException(403, "read capability required")
+        return {"sub": "service:portal"}
+    app.dependency_overrides[require_benchmark_read] = principal
+    app.include_router(benchmark_jobs.router)
+    job, cell = uuid4(), uuid4()
+    row = SimpleNamespace(
+        id=uuid4(), cell_id=cell, ordinal=3, attempt=1, route_slot="extractor",
+        request_digest="a" * 64, response_digest=None, requested_provider="openai",
+        requested_model="model", reasoning_effort=None, actual_provider=None,
+        actual_model=None, routing_attempt=None, sequence=1, latency_ms=None,
+        status="running", failure=None, started_at=datetime.now(timezone.utc), completed_at=None,
+        input_tokens=999, output_tokens=999, total_tokens=1998,
+        billed_amount="999", billed_unit="USD", billed_source="obsolete",
+    )
+    reference = CostLedgerReference(schema_version=1, deployment_id="fixture", attempt_id=uuid4(), fact_revision=0)
+    reader = Mock(return_value=CostFactsProjection(
+        schema_version=1, reference=reference, usage=TokenUsage(),
+        usage_status="missing", usage_issues=(), recorded_charge=None,
+    ))
+    if mode == "unbound":
+        reader.side_effect = benchmark_jobs.BenchmarkAccountingUnavailable("private binding")
+    elif mode == "database":
+        reader.side_effect = OperationalError("secret SQL", {}, Exception("credentials"))
+    repository = Mock()
+    repository.list_invocations.side_effect = [() if mode == "empty" else (row,), (row,)]
+    sessions = MagicMock()
+    monkeypatch.setattr(benchmark_jobs, "SessionLocal", sessions)
+    monkeypatch.setattr(benchmark_jobs, "BenchmarkRepository", Mock(return_value=repository))
+    monkeypatch.setattr(benchmark_jobs, "read_benchmark_accounting", reader)
+    monkeypatch.setattr(benchmark_jobs, "report_runtime_exception", Mock())
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/benchmarks/jobs/{job}/cells/{cell}/invocations?limit=1")
+    if mode in {"denied", "disabled"}:
+        assert response.status_code == (403 if mode == "denied" else 404)
+        sessions.assert_not_called()
+        reader.assert_not_called()
+        return
+    assert response.headers["cache-control"] == "no-store"
+    if mode in {"unbound", "database"}:
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "accounting_unavailable"
+        assert all(secret not in response.text for secret in ("private", "secret", "credentials", "obsolete"))
+        return
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == 2
+    if mode == "empty":
+        assert body["items"] == [] and body["next_after_ordinal"] is None
+        reader.assert_not_called()
+    else:
+        item = body["items"][0]
+        assert item["accounting_reference"] == reference.model_dump(mode="json")
+        assert not {"input_tokens", "output_tokens", "total_tokens", "billed_amount", "billed_unit", "billed_source"} & item.keys()
+        assert item["status"] == "running" and body["next_after_ordinal"] == 3
+        assert reader.call_args.kwargs == dict(job_id=job, cell_id=cell, invocation_id=row.id, owner_subject="service:portal")
+        assert repository.list_invocations.call_args_list[1].kwargs["after_ordinal"] == 3
+    session = sessions.return_value.__enter__.return_value
+    assert str(session.execute.call_args.args[0]) == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+    session.commit.assert_not_called()
+
+
 @pytest.mark.parametrize("enabled, allowed", [(True, True), (True, False), (False, True)])
 @pytest.mark.parametrize("job_summary", [False, True])
 def test_accounting_requires_read_capability_and_api_gate(monkeypatch, enabled, allowed, job_summary):

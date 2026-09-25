@@ -42,7 +42,7 @@ from src.lib.benchmarks.persistence import (
 from src.models.sql.benchmark import BenchmarkJobStatus
 from src.models.sql.database import SessionLocal
 from src.schemas.benchmark_jobs import (
-    BenchmarkInvocationPage, BenchmarkInvocationResponse, BenchmarkRerunRequest,
+    BenchmarkInvocationExecution, BenchmarkInvocationPage, BenchmarkInvocationResponse, BenchmarkRerunRequest,
     BenchmarkSubmitRequest, admission_body_schema, lifecycle_error_responses,
     BenchmarkStagePage, BenchmarkStageResponse,
 )
@@ -341,29 +341,49 @@ def delete_job(job_id: UUID, principal: dict[str, Any] = Depends(require_benchma
 
 
 @router.get("/{job_id}/cells/{cell_id}/invocations", response_model=BenchmarkInvocationPage,
-            responses=examples.json_example({"items": [], "next_after_ordinal": None}))
+            responses=examples.json_example({"schema_version": 2, "items": [], "next_after_ordinal": None}))
 def list_invocations(
     job_id: UUID,
     cell_id: UUID,
+    response: Response,
     principal: dict[str, Any] = Depends(require_benchmark_read),
     after_ordinal: int = Query(default=-1, ge=-1),
     limit: int | None = Query(default=None, ge=1),
 ):
-    """Page all stored invocation telemetry, preserving unavailable values as null."""
-    with SessionLocal() as session:
-        repository = BenchmarkRepository(session)
-        rows = repository.list_invocations(
-            job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
-            after_ordinal=after_ordinal, limit=limit,
+    """Page execution evidence and pinned ledger references, never inline costs."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        with SessionLocal() as session:
+            session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+            repository = BenchmarkRepository(session)
+            rows = repository.list_invocations(
+                job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
+                after_ordinal=after_ordinal, limit=limit,
+            )
+            items = tuple(BenchmarkInvocationResponse(
+                **BenchmarkInvocationExecution.model_validate(row).model_dump(),
+                accounting_reference=read_benchmark_accounting(
+                    session, job_id=job_id, cell_id=cell_id, invocation_id=row.id,
+                    owner_subject=_owner(principal),
+                ).reference,
+            ) for row in rows)
+            has_more = bool(items) and bool(repository.list_invocations(
+                job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
+                after_ordinal=items[-1].ordinal, limit=1,
+            ))
+            return BenchmarkInvocationPage(
+                items=items, next_after_ordinal=items[-1].ordinal if has_more else None,
+            )
+    except BenchmarkAccountingUnavailable:
+        raise HTTPException(503, {"code": "accounting_unavailable", "message": "Benchmark accounting is unavailable"},
+                            headers={"Cache-Control": "no-store"}) from None
+    except (SQLAlchemyError, ValueError) as exc:
+        report_runtime_exception(
+            sanitized_benchmark_error("invocation_page_read", type(exc).__name__),
+            component="benchmark_api", operation="invocation_page_read",
         )
-        items = tuple(BenchmarkInvocationResponse.model_validate(row) for row in rows)
-        has_more = bool(items) and bool(repository.list_invocations(
-            job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
-            after_ordinal=items[-1].ordinal, limit=1,
-        ))
-        return BenchmarkInvocationPage(
-            items=items, next_after_ordinal=items[-1].ordinal if has_more else None,
-        )
+        raise HTTPException(503, {"code": "accounting_unavailable", "message": "Benchmark accounting is unavailable"},
+                            headers={"Cache-Control": "no-store"}) from None
 
 
 @router.get("/{job_id}/accounting", response_model=BenchmarkJobAccounting,

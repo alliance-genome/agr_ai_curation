@@ -10,11 +10,17 @@ lease-fenced invocation completion. It no longer writes inline cost columns.
 Missing scope blocks dispatch; a changed or missing binding blocks completion.
 Failed/cancelled calls without evidence retain unknown facts, not free calls.
 
-Still required in this candidate: replace execution API and new artifact/import
-cost fields with versioned ledger references; update all consumers and historical
+The invocation page now uses schema version 2: execution fields plus a required
+`accounting_reference` (deployment, attempt UUID, pinned fact revision). It no
+longer returns token or billing columns. The page resolves references in one
+read-only repeatable-read snapshot, after ownership checks; unknown evidence is
+revision zero, while missing bindings fail explicitly. No inline fallback exists.
+
+Still required in this candidate: replace new artifact/import cost fields with
+versioned ledger references; update all consumers and historical
 fixtures; explicitly migrate and retire old columns after verified backfill;
 then run full integration and release gates. Existing artifact serializers and
-invocation API projections are not yet converted and are not valid release
+private invocation consumers are not yet converted and are not valid release
 consumers of this candidate. Historical backfill must run against the pre-cutover
 schema/writer checkpoint during maintenance, not against newly captured rows.
 Tests of the atomic writer boundary alone do not establish cutover readiness.
