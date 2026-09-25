@@ -336,7 +336,7 @@ function NodePanel({
         mode={mode}
         onApply={() => { applyDraft() }}
         onCancel={resetDraft}
-        onDelete={() => onDelete(node.id)}
+        onDelete={isTaskInput ? undefined : () => onDelete(node.id)}
         onHide={guardedHide}
       />
 

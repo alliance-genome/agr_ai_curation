@@ -961,7 +961,7 @@ describe('OpusChat', () => {
     expect(JSON.stringify(snapshot.mock.calls)).not.toContain('Private candidate instructions')
   })
 
-  it.each(['Apply changes', 'Cancel', 'failed Apply', 'unavailable Apply'])('requires explicit review of a transient flow proposal: %s', async (decision) => {
+  it.each(['Apply changes', 'Restore Initial Instructions', 'Cancel', 'failed Apply', 'unavailable Apply'])('requires explicit review of a transient flow proposal: %s', async (decision) => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
       value: vi.fn(),
@@ -970,7 +970,8 @@ describe('OpusChat', () => {
     const proposal = {
       contract_version: 'flow_authoring_proposal.v1',
       success: true,
-      valid: true,
+      valid: decision !== 'Restore Initial Instructions',
+      restoration_only: decision === 'Restore Initial Instructions',
       pending_user_approval: true,
       base_draft_fingerprint: `sha256:${'a'.repeat(64)}`,
       candidate_draft_fingerprint: `sha256:${'b'.repeat(64)}`,
@@ -981,7 +982,9 @@ describe('OpusChat', () => {
         before: 'Old instructions',
         after: 'Extract genes.',
       }],
-      findings: [],
+      findings: decision === 'Restore Initial Instructions'
+        ? [{ code: 'disconnected', severity: 'error', path: 'flow_definition', message: 'Connections still need repair.' }]
+        : [],
       candidate: {
         name: 'Gene flow',
         description: 'Extract genes.',

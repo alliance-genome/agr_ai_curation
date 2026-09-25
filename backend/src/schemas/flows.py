@@ -10,7 +10,7 @@ import re
 from typing import Any, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 
 from src.lib.executable_flow_graph import project_executable_flow_graph
@@ -447,7 +447,7 @@ class FlowDefinition(BaseModel):
         if len(task_input_nodes) == 0:
             raise ValueError(
                 "Flow must have a 'Task Input' node with instructions. "
-                "Add one from the agent catalog to define what the flow should do."
+                "Use Restore Initial Instructions in Flow Builder to define what the flow should do."
             )
         if len(task_input_nodes) > 1:
             raise ValueError("Flow can only have one task_input node")
@@ -468,10 +468,13 @@ class FlowDefinition(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_executable_topology(self) -> "FlowDefinition":
+    def validate_executable_topology(self, info: ValidationInfo) -> "FlowDefinition":
         """Enforce the canonical sequential control-flow contract at save time."""
 
-        project_executable_flow_graph(self)
+        # Internal authoring recovery checks topology separately while retaining
+        # schema, exact-revision and policy validation. Never set by Save/Run.
+        if not (info.context or {}).get("instruction_restoration"):
+            project_executable_flow_graph(self)
         return self
 
 

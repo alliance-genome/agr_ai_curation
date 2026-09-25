@@ -915,7 +915,7 @@ function OpusChat({
         const candidate = toolResult.candidate
         const isWorkshop = event.tool_name === 'propose_workshop_draft_update'
         const proposalReady =
-          ((toolResult.success === true && toolResult.valid === true && toolResult.pending_user_approval === true)
+          ((toolResult.success === true && (toolResult.valid === true || (!isWorkshop && toolResult.restoration_only === true)) && toolResult.pending_user_approval === true)
             || (isWorkshop && toolResult.valid === false))
           && toolResult.contract_version === (isWorkshop ? 'workshop_authoring_proposal.v1' : 'flow_authoring_proposal.v1')
           && typeof toolResult.base_draft_fingerprint === 'string'
@@ -937,7 +937,9 @@ function OpusChat({
             ...prev,
             {
               role: 'system',
-              content: toolResult.valid === false
+              content: !isWorkshop && toolResult.restoration_only === true
+                ? 'Review restoring Initial Instructions only. Other steps are unchanged; connections may still need repair before Save or Run.'
+                : toolResult.valid === false
                 ? 'This agent change needs attention. Review the notes and ask AI Chat to fix it before applying.'
                 : 'A change is ready for your review. Apply it to your draft, or cancel. Nothing has been saved.',
               timestamp: new Date().toISOString(),
@@ -1336,7 +1338,10 @@ function OpusChat({
 
 
   const handleApplyFlowProposal = useCallback(async () => {
-    if (startingNewChatRef.current || isStreaming || proposalApplyInFlightRef.current || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')) return
+    const isRestoration = pendingFlowProposal?.contract_version === 'flow_authoring_proposal.v1'
+      && pendingFlowProposal.restoration_only === true
+    if (startingNewChatRef.current || isStreaming || proposalApplyInFlightRef.current
+      || (pendingFlowProposal?.findings.some((finding) => finding.severity === 'error') && !isRestoration)) return
     const isWorkshop = pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
     if (!pendingFlowProposal || (isWorkshop ? !onApplyWorkshopProposal : !onApplyFlowProposal)) {
       setSnackbar({
@@ -1944,7 +1949,9 @@ function OpusChat({
           )}
           {pendingFlowProposal?.findings.some(finding => finding.severity === 'error') && (
             <Typography variant="body2" sx={{ mb: 1.5 }} role="status">
-              Ask AI Chat to resolve the issues below before applying.
+              {pendingFlowProposal.contract_version === 'flow_authoring_proposal.v1' && pendingFlowProposal.restoration_only
+                ? 'You can restore Initial Instructions now. The issues below still need attention before Save or Run.'
+                : 'Ask AI Chat to resolve the issues below before applying.'}
             </Typography>
           )}
           {pendingFlowProposal?.findings.filter(finding => finding.severity !== 'info').map((finding, index) => (
@@ -2070,7 +2077,8 @@ function OpusChat({
           <Button
             onClick={() => void handleApplyFlowProposal()}
             variant="contained"
-            disabled={startingNewChat || isStreaming || flowProposalApplying || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')
+            disabled={startingNewChat || isStreaming || flowProposalApplying || (pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')
+              && !(pendingFlowProposal?.contract_version === 'flow_authoring_proposal.v1' && pendingFlowProposal.restoration_only))
               || (pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
               ? !onApplyWorkshopProposal : !onApplyFlowProposal)}
             aria-busy={isStreaming || flowProposalApplying}
@@ -2078,7 +2086,9 @@ function OpusChat({
               ? <CircularProgress size={16} sx={{ color: 'primary.main' }} aria-label={flowProposalApplying ? 'Applying changes' : 'Preparing changes'} />
               : undefined}
           >
-            {flowProposalApplying ? 'Applying…' : isStreaming ? 'Preparing…' : 'Apply changes'}
+            {flowProposalApplying ? 'Applying…' : isStreaming ? 'Preparing…'
+              : pendingFlowProposal?.contract_version === 'flow_authoring_proposal.v1' && pendingFlowProposal.restoration_only
+                ? 'Restore Initial Instructions' : 'Apply changes'}
           </Button>
         </DialogActions>
       </Dialog>

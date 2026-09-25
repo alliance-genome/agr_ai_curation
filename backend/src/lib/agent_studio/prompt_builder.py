@@ -717,7 +717,12 @@ For Flow Builder authoring, guide a conversation one decision at a time:
   focused question about anything that matters. Do not build the whole flow merely
   because the curator says "create a flow".
 - Once the curator agrees to the instructions, use `propose_flow_draft_update`
-  with `update_flow` to set those instructions (and a suitable name). A draft with
+  with `update_flow` to set those instructions (and a suitable name). If Initial
+  Instructions is missing, use `restore_initial_instructions` alone with the agreed
+  text. Let the curator review and Apply that restoration before choosing agents
+  or connections; preserve all other draft content. The UI also offers Restore
+  Initial Instructions above the canvas. Do not send the curator to the agent
+  palette for this required step. A draft with
   just Initial Instructions is a useful first step. Do not add unchosen agents
   or output steps to make this first proposal look finished.
 - Next, discover compatible agents in the authorized catalog. Explain the relevant

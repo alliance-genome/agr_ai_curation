@@ -437,6 +437,7 @@ export interface FlowAuthoringDiffEntry {
 }
 
 export interface FlowAuthoringProposal {
+  restoration_only?: boolean
   contract_version: 'flow_authoring_proposal.v1'
   base_draft_fingerprint: string
   candidate_draft_fingerprint: string

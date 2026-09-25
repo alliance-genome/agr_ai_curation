@@ -345,11 +345,14 @@ def validate_flow_authoring_draft(
     entries_by_node: Mapping[str, Mapping[str, Any] | None] | None = None,
     contract_findings: Sequence[AuthoringValidationFinding] = (),
     projection_catalogs: dict[str, dict] | None = None,
+    instruction_restoration: bool = False,
 ) -> AuthoringValidationResult:
     """Validate one exact full ``FlowDefinition`` without writing or applying it."""
 
     try:
-        flow_definition = FlowDefinition.model_validate(candidate).model_copy(deep=True)
+        flow_definition = FlowDefinition.model_validate(
+            candidate, context={"instruction_restoration": instruction_restoration and phase != "save"},
+        ).model_copy(deep=True)
     except ValidationError as exc:
         return AuthoringValidationResult(
             artifact_kind="flow",
@@ -364,9 +367,13 @@ def validate_flow_authoring_draft(
     )
     if stale_finding is not None:
         findings.append(stale_finding)
-    if hydrate_attachment_defaults:
+    if hydrate_attachment_defaults or instruction_restoration:
         try:
-            flow_definition = apply_attachment_defaults(flow_definition)
+            hydrated = apply_attachment_defaults(
+                flow_definition.model_copy(deep=True) if instruction_restoration else flow_definition,
+            )
+            if not instruction_restoration:
+                flow_definition = hydrated
         except ValueError:
             findings.append(
                 AuthoringValidationFinding(

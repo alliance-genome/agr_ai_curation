@@ -894,6 +894,7 @@ function FlowBuilderInner({
 
   const canvasNodes = useMemo(
     () => (nodes as AgentNode[]).map((node) => {
+      if (node.type === 'task_input' || node.data.agent_id === 'task_input') return { ...node, deletable: false }
       const outputBinding = outputBindingsByNodeId.get(node.id)
       if (!outputBinding) return node
       return { ...node, data: { ...node.data, outputBinding } }
@@ -1268,12 +1269,17 @@ function FlowBuilderInner({
     }
 
     let canonicalPreApply
+    if (proposal.restoration_only && (proposal.candidate.name !== captured.flowName
+      || proposal.candidate.description !== captured.flowDescription)) {
+      return { applied: false, reason: 'invalid', message: 'Restoring instructions cannot change other flow settings.' }
+    }
     try {
       canonicalPreApply = await validateFlowDraft(
         proposal.candidate.flow_definition,
         'pre_apply',
         proposal.base_draft_fingerprint,
         currentFingerprint,
+        ...(proposal.restoration_only ? [capturedDefinition] : []),
       )
     } catch (error) {
       logger.error('Flow proposal pre-apply validation failed', error as Error, {
@@ -1286,7 +1292,7 @@ function FlowBuilderInner({
         message: 'Canonical validation is temporarily unavailable; the draft was not changed.',
       }
     }
-    if (!canonicalPreApply.valid) {
+    if (!canonicalPreApply.valid && !(proposal.restoration_only && canonicalPreApply.restoration_only)) {
       return {
         applied: false,
         reason: canonicalPreApply.findings.some((finding) => finding.code === 'stale_draft_fingerprint')
@@ -1315,7 +1321,7 @@ function FlowBuilderInner({
       data: { role: edge.role ?? 'control_flow' },
     })) as FlowEdge[]
     const localFindings = computeValidationErrors(candidateNodes, candidateEdges)
-    if (localFindings.length > 0) {
+    if (localFindings.length > 0 && !(proposal.restoration_only && canonicalPreApply.restoration_only)) {
       return { applied: false, reason: 'invalid', message: localFindings[0].message }
     }
 
@@ -1347,11 +1353,12 @@ function FlowBuilderInner({
         'post_apply',
         proposal.candidate_draft_fingerprint,
         actualAppliedFingerprint,
+        ...(proposal.restoration_only ? [capturedDefinition] : []),
       )
       if (!appliedDraftStillCurrent()) {
         return { applied: false, reason: 'stale', message: 'The flow changed during validation; your latest edits were preserved.' }
       }
-      if (!canonicalPostApply.valid) {
+      if (!canonicalPostApply.valid && !(proposal.restoration_only && canonicalPostApply.restoration_only)) {
         flushSync(() => applyDefinitionToEditor(undoDraft))
         setProposalUndo(null)
         return {
@@ -1550,7 +1557,7 @@ function FlowBuilderInner({
     const taskInputNode = nodes.find(n => n.data.agent_id === 'task_input')
     if (!taskInputNode) {
       setSnackbar({
-        message: 'Flow requires a Task Input node. Add "Initial Instructions" from the catalog.',
+        message: 'Use Restore Initial Instructions above the canvas, or ask AI Chat to restore it.',
         severity: 'error'
       })
       return
@@ -2037,12 +2044,13 @@ function FlowBuilderInner({
 
   // Handle node deletion by ID (for the step panel Delete step action)
   const handleDeleteNode = useCallback((nodeId: string) => {
+    if (nodes.some((node) => node.id === nodeId && (node.type === 'task_input' || node.data.agent_id === 'task_input'))) return
     setNodes((nds) => nds.filter((n) => n.id !== nodeId))
     setEdges((eds) =>
       eds.filter((e) => e.source !== nodeId && e.target !== nodeId)
     )
     setSelectedNode(null)
-  }, [setNodes, setEdges])
+  }, [nodes, setNodes, setEdges])
 
   // Step numbers for the panel header and its cross-step sentences.
   const stepIds = useMemo(
@@ -2331,14 +2339,16 @@ function FlowBuilderInner({
       return
     }
 
-    setNodes((nds) => nds.filter((n) => !n.selected))
+    const deletableIds = selectedNodeIds.filter((id) => !nodes.some((node) => node.id === id
+      && (node.type === 'task_input' || node.data.agent_id === 'task_input')))
+    setNodes((nds) => nds.filter((n) => !deletableIds.includes(n.id)))
     setEdges((eds) => eds.filter((e) => (
       !selectedEdgeIds.includes(e.id)
-      && !selectedNodeIds.includes(e.source)
-      && !selectedNodeIds.includes(e.target)
+      && !deletableIds.includes(e.source)
+      && !deletableIds.includes(e.target)
     )))
     setSelectedNode(null)
-  }, [selectedNodeIds, selectedEdgeIds, setNodes, setEdges])
+  }, [nodes, selectedNodeIds, selectedEdgeIds, setNodes, setEdges])
 
   // Handle delete flow - show confirmation dialog
   const handleDeleteFlowClick = useCallback(() => {
@@ -2625,6 +2635,29 @@ function FlowBuilderInner({
         </ToolbarStatus>
       </Toolbar>
 
+      {!loading && !nodes.some((node) => node.type === 'task_input' || node.data.agent_id === 'task_input') && (
+        <Alert severity="warning" action={
+          <Button color="inherit" disabled={saving} onClick={async () => {
+            if (!await confirmLeaveNode()) return
+            const task = createInitialTaskInputNode()
+            const usedIds = new Set(nodes.map((node) => node.id))
+            let id = getNodeId()
+            while (usedIds.has(id)) id = getNodeId()
+            task.id = id
+            const usedKeys = new Set(nodes.map((node) => node.data.output_key))
+            let outputKey = 'task_input'
+            let suffix = 1
+            while (usedKeys.has(outputKey)) outputKey = `task_input_${suffix++}`
+            task.data.output_key = outputKey
+            setNodes((current) => current.some((node) => node.type === 'task_input' || node.data.agent_id === 'task_input')
+              ? current : [...current, task])
+            setSelectedNode(task)
+            setSnackbar({ message: 'Initial Instructions restored. Enter the agreed instructions; other steps are unchanged.', severity: 'success' })
+          }}>Restore Initial Instructions</Button>
+        }>
+          Initial Instructions is missing. Restore it to describe what to extract. Existing steps and connections will stay unchanged.
+        </Alert>
+      )}
       <BuilderContent>
         <PanelGroup
           direction="horizontal"
@@ -2665,7 +2698,10 @@ function FlowBuilderInner({
                 <ReactFlow
                   nodes={canvasNodes}
                   edges={canvasEdges}
-                  onNodesChange={onNodesChange}
+                  onNodesChange={(changes) => onNodesChange(changes.filter((change) => (
+                    change.type !== 'remove' || !nodes.some((node) => node.id === change.id
+                      && (node.type === 'task_input' || node.data.agent_id === 'task_input'))
+                  )))}
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
                   onInit={setReactFlowInstance}

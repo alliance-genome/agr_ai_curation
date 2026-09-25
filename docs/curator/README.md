@@ -2,6 +2,10 @@
 
 Use AI Curation to read papers, extract information for review, and look up biological identifiers. You can use a ready-made agent or design a custom extractor for the details your curation task needs.
 
+If a Flow Builder draft is missing **Initial Instructions**, use **Restore Initial Instructions** above the canvas, or ask AI Chat to restore it with your agreed text and review the proposal. Other steps and connections remain unchanged. You can agree on instructions first; remaining connection errors must be resolved before Save or Run. The required instructions step cannot be deleted through the editor.
+
+For ABC Literature imports, a ZFIN publication identifier such as `ZDB-PUB-200229-13` is expanded to its full `ZFIN:ZDB-PUB-200229-13` identifier. If no reference is found, check the identifier or upload the PDF; this is different from a service or access failure.
+
 ## Choose where to start
 
 | I want to… | Guide |

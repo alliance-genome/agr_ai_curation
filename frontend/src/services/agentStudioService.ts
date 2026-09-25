@@ -1249,6 +1249,7 @@ export async function updateFlow(
 }
 
 export interface FlowDraftValidationResponse {
+  restoration_only?: boolean
   projection_fields_by_node?: Record<string, {
     execution_receipt: AgentExecutionReceipt | null
     schema_fingerprint?: string
@@ -1297,6 +1298,7 @@ export async function validateFlowDraft(
   phase: 'pre_apply' | 'post_apply',
   expectedDraftFingerprint: string,
   currentDraftFingerprint: string,
+  restorationBase?: FlowDefinition,
 ): Promise<FlowDraftValidationResponse> {
   const response = await fetch(`${FLOWS_URL}/validate-draft`, {
     method: 'POST',
@@ -1307,6 +1309,7 @@ export async function validateFlowDraft(
       phase,
       expected_draft_fingerprint: expectedDraftFingerprint,
       current_draft_fingerprint: currentDraftFingerprint,
+      ...(restorationBase ? { restoration_base: restorationBase } : {}),
     }),
   })
   if (!response.ok) {
