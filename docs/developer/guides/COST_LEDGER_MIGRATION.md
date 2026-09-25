@@ -1,5 +1,24 @@
 # Shared ledger: source inventory and cutover plan
 
+## Unreleased writer cutover candidate
+
+This worktree contains an incomplete, breaking cutover candidate. **Do not merge
+or deploy it independently.** The reviewed read-side branch remains separate.
+The benchmark repository now reserves the verified source/attempt binding before
+dispatch and writes canonical usage/charge facts in the same savepoint as
+lease-fenced invocation completion. It no longer writes inline cost columns.
+Missing scope blocks dispatch; a changed or missing binding blocks completion.
+Failed/cancelled calls without evidence retain unknown facts, not free calls.
+
+Still required in this candidate: replace execution API and new artifact/import
+cost fields with versioned ledger references; update all consumers and historical
+fixtures; explicitly migrate and retire old columns after verified backfill;
+then run full integration and release gates. Existing artifact serializers and
+invocation API projections are not yet converted and are not valid release
+consumers of this candidate. Historical backfill must run against the pre-cutover
+schema/writer checkpoint during maintenance, not against newly captured rows.
+Tests of the atomic writer boundary alone do not establish cutover readiness.
+
 Status: implementation plan, not a deployed migration. This refines
 [cost ledger ownership](COST_LEDGER_OWNERSHIP.md) for ALL-540 and ALL-1311.
 The public source inventory is based on main `87ff9d6cb`; private portal consumers

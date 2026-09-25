@@ -10,7 +10,7 @@ of a join to independently retained telemetry.
 from dataclasses import asdict, dataclass
 import json
 from typing import Literal
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -21,6 +21,7 @@ from src.models.sql.benchmark import (
 )
 from src.lib.openai_agents.config import get_cost_migration_audit_page_size
 from .facts import RecordedCharge, TokenUsage
+from .benchmark_identity import benchmark_attempt_id
 from .persistence import CostFacts
 
 
@@ -93,10 +94,8 @@ Terminal failure/cancellation does not imply zero cost or absence of usage.
     # This stable surrogate names a historical source, not a measured request.
     # Tuple JSON avoids delimiter collisions. Keep this algorithm/version fixed
     # once any migration uses it; changing it would manufacture duplicate calls.
-    attempt_id = measured if measured is not None else uuid5(NAMESPACE_URL, json.dumps(
-        ["agr-ai-curation:benchmark-cost-source:v1", deployment_id,
-         source_namespace, str(invocation.id)], separators=(",", ":"), ensure_ascii=True,
-    ))
+    attempt_id = benchmark_attempt_id(invocation_id=invocation.id, model_request_id=measured,
+                                      deployment_id=deployment_id, source_namespace=source_namespace)
     usage = TokenUsage(
         input_tokens=invocation.input_tokens, output_tokens=invocation.output_tokens,
         total_tokens=invocation.total_tokens,

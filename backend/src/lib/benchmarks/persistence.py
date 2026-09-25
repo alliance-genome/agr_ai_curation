@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 import hashlib
 import json
 from collections.abc import Mapping
@@ -18,6 +17,8 @@ from sqlalchemy.orm import Session
 from src.lib.benchmarks.models import BenchmarkCellExecutionResult, BenchmarkSuite, ResolvedBenchmarkPlan
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.benchmarks.stage_measurements import StageStart, StageFinish
+from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
+from src.lib.cost_ledger.benchmark_writes import reserve_benchmark_accounting, complete_benchmark_accounting
 from src.lib.openai_agents.config import (
     get_benchmark_default_page_size,
     get_benchmark_event_retention_count,
@@ -1122,8 +1123,13 @@ class BenchmarkRepository:
             status=BenchmarkInvocationStatus.RUNNING,
             started_at=started_at,
         )
-        self.session.add(invocation)
-        self.session.flush()
+        with self.session.begin_nested():
+            self.session.add(invocation)
+            self.session.flush()
+            reserve_benchmark_accounting(
+                self.session, invocation_id=invocation.id, model_request_id=model_request_id,
+                owner_subject=job.owner_subject,
+            )
         return invocation
 
     def finish_invocation(
@@ -1138,12 +1144,8 @@ class BenchmarkRepository:
         actual_model: str | None = None,
         routing_attempt: int | None = None,
         latency_ms: int | None = None,
-        input_tokens: int | None = None,
-        output_tokens: int | None = None,
-        total_tokens: int | None = None,
-        billed_amount: Decimal | None = None,
-        billed_unit: str | None = None,
-        billed_source: str | None = None,
+        usage: TokenUsage = TokenUsage(),
+        charge: RecordedCharge | None = None,
         failure: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> BenchmarkInvocation:
@@ -1201,21 +1203,20 @@ class BenchmarkRepository:
                 raise ValueError("failed invocation requires only a failure object")
         elif response_digest is not None or failure is not None:
             raise ValueError("cancelled invocation stores no response or failure")
-        invocation.status = status
-        invocation.completed_at = completed_at
-        invocation.response_digest = response_digest
-        invocation.failure = failure
-        invocation.actual_provider = actual_provider
-        invocation.actual_model = actual_model
-        invocation.routing_attempt = routing_attempt
-        invocation.latency_ms = latency_ms
-        invocation.input_tokens = input_tokens
-        invocation.output_tokens = output_tokens
-        invocation.total_tokens = total_tokens
-        invocation.billed_amount = billed_amount
-        invocation.billed_unit = billed_unit
-        invocation.billed_source = billed_source
-        self.session.flush()
+        with self.session.begin_nested():
+            complete_benchmark_accounting(
+                self.session, invocation_id=invocation.id, owner_subject=job.owner_subject,
+                usage=usage, charge=charge,
+            )
+            invocation.status = status
+            invocation.completed_at = completed_at
+            invocation.response_digest = response_digest
+            invocation.failure = failure
+            invocation.actual_provider = actual_provider
+            invocation.actual_model = actual_model
+            invocation.routing_attempt = routing_attempt
+            invocation.latency_ms = latency_ms
+            self.session.flush()
         return invocation
 
     def list_stages(
