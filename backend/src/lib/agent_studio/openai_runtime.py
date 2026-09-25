@@ -248,12 +248,14 @@ def build_agent_studio_tools(
     state: AgentStudioRunState,
     namespace_for_tool: Callable[[str], tuple[str, str]],
     forced_tool_name: str | None = None,
+    eager_tool_names: Sequence[str] = (),
 ) -> tuple[list[Any], dict[str, int]]:
     """Build one hosted-search surface from an already authorized tool universe.
 
     The shared tool-surface compiler applies the ``agent_studio`` loading
-    policy (tool_loading.yaml): the forced tool and the policy's eager tools
-    stay eager; every other tool is deferred into its Studio namespace.
+    policy (tool_loading.yaml): the forced tool, caller-required eager tools,
+    and the policy's eager tools stay eager; every other tool is deferred into
+    its Studio namespace. Eager names never add tools to the authorized universe.
     """
 
     tools = [
@@ -271,7 +273,7 @@ def build_agent_studio_tools(
         policy=resolve_tool_loading_policy("agent_studio"),
         supports_tool_search=model_supports_tool_search(AGENT_STUDIO_OPENAI_MODEL, "openai"),
         namespace_resolver=namespace_for_tool,
-        forced_tool_names=(forced_tool_name,) if forced_tool_name else (),
+        forced_tool_names=(*eager_tool_names, *((forced_tool_name,) if forced_tool_name else ())),
         model=AGENT_STUDIO_OPENAI_MODEL,
         provider="openai",
     )

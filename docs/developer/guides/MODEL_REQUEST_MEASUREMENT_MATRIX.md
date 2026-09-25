@@ -62,7 +62,7 @@ There are two measurement points and no per-call-site instrumentation.
 | OpenAI-compatible providers (Gemini, Groq, OpenRouter) | `lib/openai_agents/config.py` `get_model_for_agent` builds provider-bound SDK models | SDK resolution; provider-aware limits | HTTP (chat completions) | `test_compatible_provider_is_measured_not_blocked_by_openai_field_limit` |
 | Standard-chat context compaction | SDK `OpenAIResponsesCompactionSession` -> `client.responses.compact` on `SafeAsyncOpenAI` in `lib/openai_agents/runner.py` | `SafeAsyncOpenAI._wrap_responses_compact` -> `call_measured_direct_request` | HTTP | `test_safe_client_compaction_request_is_measured` |
 | Abstract extraction | `lib/openai_agents/prompt_utils.py` `_extract_abstract_with_llm` (`chat.completions`) | `call_measured_direct_request` | HTTP | `test_direct_chat_completion_measured_with_usage` |
-| Benchmark adjudication (admin harness) | `lib/benchmarks/adjudication.py` `execute_direct_openai_adjudication` (`responses.parse`) | `call_measured_direct_request` | HTTP | `test_direct_responses_request_blocked_before_call` |
+| Benchmark model routing | `lib/openai_agents/benchmark_routing.py` `BenchmarkTelemetryModel` | SDK-resolution `MeasuredModel` wraps this delegating adapter; no second measurement inside its delegate | Inherits selected model | `test_benchmark_adapter_composes_with_measurement_once` |
 
 Embedding requests are not model-context requests and are out of scope.
 
@@ -75,7 +75,6 @@ The guard compares these with the code. A new site must be measured and added.
 | `lib/openai_agents/runner.py` (`SafeAsyncOpenAI`, default and owned clients) | SDK models resolved per turn; `responses.compact` wrapped |
 | `lib/openai_agents/config.py` (`get_model_for_agent`, compatible providers) | SDK models resolved per turn |
 | `lib/openai_agents/prompt_utils.py` | `call_measured_direct_request` |
-| `lib/benchmarks/adjudication.py` | `call_measured_direct_request` |
 
 ## What one measurement record contains
 

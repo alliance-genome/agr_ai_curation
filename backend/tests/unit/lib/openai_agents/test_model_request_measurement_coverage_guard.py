@@ -47,7 +47,6 @@ CLIENT_CONSTRUCTION_SITES = {
     "src/lib/openai_agents/runner.py": "SafeAsyncOpenAI: SDK models measured at resolution; compact wrapped",
     "src/lib/openai_agents/config.py": "compatible-provider SDK models measured at resolution",
     "src/lib/openai_agents/prompt_utils.py": "call_measured_direct_request",
-    "src/lib/benchmarks/adjudication.py": "call_measured_direct_request",
 }
 
 
@@ -126,10 +125,18 @@ def _runner_names(tree: ast.Module) -> set[str]:
 
 def _calls_runner(tree: ast.Module) -> bool:
     runner_names = _runner_names(tree)
+    non_sdk_calls = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and not (node.module or "").startswith("agents")
+        for alias in node.names
+    }
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         chain = _attribute_chain(node.func)
+        if len(chain) == 1 and chain[0] in non_sdk_calls:
+            continue
         if chain[-1:] in (["run_streamed"], ["run_sync"]):
             return True
         if len(chain) >= 2 and chain[-1] == "run" and chain[-2] in runner_names:
@@ -178,15 +185,29 @@ def test_no_direct_provider_request_calls_bypass_measurement():
 
 
 def test_no_direct_model_calls_outside_measurement_wrapper():
+    # BenchmarkTelemetryModel is a delegating Model adapter wrapped by the SDK
+    # resolution hook; composition coverage verifies one measured request.
     allowed = {MEASUREMENT_MODULE}
     offenders = []
     for path, tree in _source_trees():
         module_path = _relative(path)
         if module_path in allowed:
             continue
+        benchmark_delegates = set()
+        if module_path == "src/lib/openai_agents/benchmark_routing.py":
+            for cls in tree.body:
+                if isinstance(cls, ast.ClassDef) and cls.name == "BenchmarkTelemetryModel":
+                    for method in cls.body:
+                        if isinstance(method, ast.AsyncFunctionDef) and method.name in {"get_response", "stream_response"}:
+                            benchmark_delegates.update(
+                                node for node in ast.walk(method)
+                                if isinstance(node, ast.Call)
+                                and _attribute_chain(node.func) == ["self", "_model", method.name]
+                            )
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Call)
+                and node not in benchmark_delegates
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr in {"get_response", "stream_response"}
             ):
@@ -267,6 +288,18 @@ def test_guard_detects_aliased_runner_and_raw_response_calls():
     assert _is_direct_request_call(raw)
     unrelated = ast.parse("session.create(name='x')").body[0].value
     assert not _is_direct_request_call(unrelated)
+
+
+def test_guard_does_not_treat_anyio_thread_offload_as_model_execution():
+    assert not _calls_runner(ast.parse(
+        "from anyio.to_thread import run_sync\n"
+        "async def f():\n"
+        "    return await run_sync(database_work)\n"
+    ))
+    assert _calls_runner(ast.parse(
+        "from agents import Runner as R\n"
+        "R.run_sync(agent, 'x')\n"
+    ))
 
 
 def test_app_startup_installs_measurement():

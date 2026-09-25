@@ -260,6 +260,61 @@ def test_sdk_model_resolution_is_measured():
     assert isinstance(wrapped, measurement_module.MeasuredModel)
 
 
+@pytest.mark.parametrize("streamed", [False, True])
+@pytest.mark.parametrize("oversized", [False, True])
+@pytest.mark.parametrize("model_type,transport", [
+    (FakeResponsesHTTPModel, "http"), (FakeResponsesWSModel, "websocket"),
+])
+def test_benchmark_adapter_composes_with_measurement_once(
+    published, sentry_calls, monkeypatch, model_type, transport, oversized, streamed,
+):
+    from unittest.mock import Mock
+    from src.lib.openai_agents import provider_usage
+    from src.lib.openai_agents.benchmark_routing import (
+        BenchmarkTelemetryModel, set_benchmark_invocation_route, reset_benchmark_invocation_route,
+    )
+
+    model = model_type([_final()])
+    adapter = BenchmarkTelemetryModel(model)
+    adapter._agr_provider_id = "openai"
+    begin = Mock(return_value=None)
+    monkeypatch.setattr(provider_usage, "begin_provider_invocation", begin)
+    provider = SimpleNamespace(get_model=lambda _name: adapter, _agr_provider_id="openai")
+    agent = Agent(name="benchmark", model="gpt-test",
+                  instructions="x" * (OPENAI_LIMIT + 1) if oversized else "Extract")
+
+    async def execute():
+        config = RunConfig(model_provider=provider, tracing_disabled=True)
+        token = set_benchmark_invocation_route(SimpleNamespace(
+            benchmark_route_slot="supervisor", benchmark_requested_provider="openai",
+            benchmark_requested_model="gpt-test", benchmark_reasoning_effort="low",
+        ))
+        try:
+            if streamed:
+                result = Runner.run_streamed(agent, "Read", run_config=config)
+                async for _event in result.stream_events():
+                    pass
+            else:
+                await Runner.run(agent, "Read", run_config=config)
+        finally:
+            reset_benchmark_invocation_route(token)
+
+    if oversized:
+        with pytest.raises(ModelRequestBlockedError):
+            asyncio.run(execute())
+    else:
+        asyncio.run(execute())
+    assert len(model.calls) == (0 if oversized else 1)
+    assert begin.call_count == (0 if oversized else 1)
+    if not oversized:
+        assert begin.call_args.kwargs["route_slot"] == "supervisor"
+        assert begin.call_args.kwargs["requested_model"] == "gpt-test"
+    assert len(published) == 1
+    assert published[0]["api"] == "responses"
+    assert published[0]["transport"] == transport
+    assert published[0]["provider"] == "openai"
+
+
 @pytest.mark.parametrize("order", ["foreign_wrapper_first", "measurement_first"])
 def test_install_order_with_dynamic_foreign_wrapper(monkeypatch, order):
     """Sentry's OpenAI Agents integration rebinds run_loop.get_model to a wrapper

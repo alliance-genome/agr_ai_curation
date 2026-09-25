@@ -10,7 +10,7 @@ SENTENCE = "Die Expression von β-Catenin 表达 wurde im Flügel nachgewiesen �
 
 @pytest.fixture(autouse=True)
 def identity_function_tool(monkeypatch):
-    monkeypatch.setattr(weaviate_search, "function_tool", lambda fn: fn)
+    monkeypatch.setattr(weaviate_search, "function_tool", lambda fn=None, **kwargs: fn if fn is not None else lambda decorated: decorated)
 
 
 def _chunks(count: int, *, chars: int) -> list[dict]:

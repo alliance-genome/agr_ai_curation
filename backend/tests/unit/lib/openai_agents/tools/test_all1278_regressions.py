@@ -25,7 +25,7 @@ def _size(value):
 @pytest.fixture(autouse=True)
 def identity_function_tool(monkeypatch):
     monkeypatch.setattr(evidence_workspace, "function_tool", lambda fn: fn)
-    monkeypatch.setattr(weaviate_search, "function_tool", lambda fn: fn)
+    monkeypatch.setattr(weaviate_search, "function_tool", lambda fn=None, **kwargs: fn if fn is not None else lambda decorated: decorated)
 
 
 def _records(count):

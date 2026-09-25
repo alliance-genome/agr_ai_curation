@@ -126,6 +126,8 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # Direct-run context isolation exercises the real packaged expression builder.
+    Path("backend/tests/unit/lib/openai_agents/test_runner_direct_builder.py"),
     # Benchmark identity integration verifies the shipped provider-group mapping.
     Path("backend/tests/unit/lib/benchmarks/test_execution_context.py"),
     Path("backend/tests/unit/lib/benchmarks/test_curator_authorization.py"),

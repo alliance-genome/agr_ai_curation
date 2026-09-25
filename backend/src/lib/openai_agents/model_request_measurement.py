@@ -968,11 +968,17 @@ def describe_model(model: Any, *, provider_hint: str | None = None) -> tuple[str
     from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
     from agents.models.openai_responses import OpenAIResponsesModel, OpenAIResponsesWSModel
 
+    from src.lib.openai_agents.benchmark_routing import BenchmarkTelemetryModel
+
     tagged = (
         getattr(model, "_agr_provider_id", None)
         or getattr(model, "_provider_id", None)
         or provider_hint
     )
+    # Classify the native transport under our transparent benchmark adapter.
+    # Measurement still wraps the adapter call, preserving benchmark telemetry.
+    if isinstance(model, BenchmarkTelemetryModel):
+        model = model._model
     if isinstance(model, OpenAIResponsesWSModel):
         api, transport = "responses", "websocket"
     elif isinstance(model, OpenAIResponsesModel):
