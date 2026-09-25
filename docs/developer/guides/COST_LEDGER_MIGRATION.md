@@ -154,8 +154,30 @@ invoice adjustments must not be passed as provider-recorded attempt charges.
 The existing TraceReview display normalizer supplies zero defaults and synthesized
 totals. Do not persist those display projections as original ledger facts. A future
 adapter must normalize the retained raw source with its declared inclusive or
-exclusive semantics. No live report or provider capture behavior changes in this
-contract-only slice.
+exclusive semantics. The pure contract does not change live report behavior.
+
+Provider capture now carries `ProviderUsageRecord.accounting_usage` using that
+same `TokenUsage` type. Raw Responses and Chat Completions usage (including the
+OpenRouter adapter) preserves reported inclusive counts, cache reads/writes and
+reasoning details without synthesizing a missing total. Missing fields and values
+that are not nonnegative integers remain null; inconsistent reported combinations remain
+visible as inconsistent rather than being clamped. The telemetry event carries
+these facts in its `accounting_usage` envelope. Existing benchmark artifact
+serialization is unchanged; its legacy synthesized totals are not ledger inputs.
+This is source capture, not live database ingestion or a second cost store.
+
+There is an explicit SDK coverage limitation: the installed Agents SDK `Usage`
+dataclass and its Chat Completions streaming conversion insert zero for missing
+counts/details before the observer receives them. The streaming wrapper preserves
+that normalization provenance. Such zeros cannot establish a recorded fact, so canonical
+accounting leaves them unknown. Positive SDK counts are retained. Raw response
+objects and mappings preserve explicit zero. Recovering exact SDK zero values
+requires capture before that normalization; do not infer them from artifact
+defaults. Failed calls with no usage retain unknown facts, not zero cost.
+
+Field semantics were checked against the installed SDK and official
+[OpenAI reasoning usage example](https://developers.openai.com/api/docs/guides/reasoning)
+and [OpenRouter cache usage documentation](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
 
 ### Storage and consumer cutover
 

@@ -515,6 +515,11 @@ def test_emit_provider_usage_publishes_only_bounded_trace_metadata(monkeypatch):
         {
             "name": "provider_usage",
             "metadata": {
+                "accounting_usage": {
+                    "input_tokens": 10, "output_tokens": 20, "total_tokens": 30,
+                    "cache_read_tokens": None, "cache_write_tokens": None,
+                    "reasoning_tokens": None,
+                },
                 "provider_usage": {
                     "route_slot": None,
                     "requested_provider": "openrouter",

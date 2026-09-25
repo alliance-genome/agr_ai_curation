@@ -217,10 +217,16 @@ class BenchmarkTelemetryModel:
                 pending, exc, latency_ms=round((monotonic() - started_at) * 1000)
             )
             raise
+        # The Chat Completions SDK builds a synthetic Responses object and
+        # defaults missing token details to zero. Keep that provenance instead
+        # of mistaking the synthesized response for raw provider evidence.
+        from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+
         complete_generic_provider_invocation(
             pending,
             terminal_response,
             latency_ms=round((monotonic() - started_at) * 1000),
+            sdk_normalized_usage=isinstance(self._model, OpenAIChatCompletionsModel),
         )
 
     def __getattr__(self, name: str) -> Any:
