@@ -9,7 +9,7 @@ import math
 import re
 from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from src.lib.config.agent_loader import get_agent_definition_for_package
 from src.lib.curation_workspace.domain_envelope_normalization import (

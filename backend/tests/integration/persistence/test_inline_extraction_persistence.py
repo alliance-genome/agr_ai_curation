@@ -216,6 +216,7 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
             })
             arguments = [
                 {"pending_ref_id": "pending:gene:1", "mention": "synthetic gene",
+                 "rationale": "The synthetic gene was measured in the paper's experiment.",
                  "evidence_record_ids": ["evidence-1"], "confidence": "high",
                  "identity_resolution_notes": ["Synthetic unresolved identity"]},
                 {"candidate_ids": ["gene-candidate-1"]},

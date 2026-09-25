@@ -36,7 +36,7 @@ async def test_custom_benchmark_executes_frozen_source_with_separate_model_route
 
     db, agent_id, _, _ = execution_db
     head = db.get(Agent, agent_id)
-    head.model_id = "gpt-5.6-sol"
+    head.model_id = "gpt-6-sol"
     if with_tool:
         ToolPolicy.__table__.create(db.connection())
         head.tool_ids = ["synthetic_lookup"]
@@ -64,13 +64,13 @@ async def test_custom_benchmark_executes_frozen_source_with_separate_model_route
             "input": {"resolver": "fixture", "reference": "paper", "version": "1", "digest": "sha256:" + "d" * 64},
             "user_query": "Extract the requested evidence",
         }], "configurations": [{"configuration_id": "different-model", "routes": {
-            slot: {"provider": "openai", "model": "gpt-5.6-terra", "reasoning_effort": "low"},
+            slot: {"provider": "openai", "model": "gpt-6-astra", "reasoning_effort": "low"},
         }}],
     })
     limits = dict(max_cases=1, max_configurations=1, max_repetitions=1, max_cells=1)
     plan = resolve_suite(suite, catalog, **limits)
     head.instructions = "Later mutable head instructions"
-    head.model_id = "gpt-5.6-terra"
+    head.model_id = "gpt-6-astra"
     second = append_execution_revision(db, head, capture_execution_snapshot(db, head, saved.output_contract),
                                        user_id=1, expected_revision_id=first.id)
     changed_catalog = runtime_catalog.build_curator_route_catalog(db, curator)
@@ -98,7 +98,7 @@ async def test_custom_benchmark_executes_frozen_source_with_separate_model_route
         assert agent.execution_revision_id == str(first.id)
         assert agent.execution_receipt == source.model_dump(mode="json")
         assert agent.execution_snapshot_fingerprint == saved.fingerprint()
-        assert agent.model == agent.benchmark_requested_model == "gpt-5.6-terra"
+        assert agent.model == agent.benchmark_requested_model == "gpt-6-astra"
         assert agent.benchmark_requested_provider == "openai"
         assert agent.benchmark_route_slot == slot
         assert agent.benchmark_reasoning_effort == "low"
@@ -113,7 +113,7 @@ async def test_custom_benchmark_executes_frozen_source_with_separate_model_route
         db.flush()
     with pytest.raises(ValueError, match="cannot be overridden"):
         catalog_service.get_agent_by_id(head.agent_key, db_user_id=1, authenticated_groups=[],
-                                       execution_revision_id=str(first.id), model_id_override="gpt-5.6-terra")
+                                       execution_revision_id=str(first.id), model_id_override="gpt-6-astra")
     with pytest.raises(ExecutionRevisionNotFoundError):
         await runtime.execute_resolved_agent_cell(cell, {**runtime_input, "db_user_id": 3}, "denied")
     with pytest.raises(ValueError, match="frozen source"):
@@ -142,7 +142,7 @@ def test_saved_flow_capture_preserves_real_revision_and_rechecks_access(request,
     db.execute(text("CREATE TABLE project_members (project_id uuid, user_id integer)"))
     CurationFlow.__table__.create(db.connection())
     head = db.get(Agent, agent_id)
-    head.model_id = "gpt-5.6-sol"
+    head.model_id = "gpt-6-sol"
     saved = capture_execution_snapshot(db, head, AgentOutputContract(output_state="none"))
     first = append_execution_revision(db, head, saved, user_id=1, expected_revision_id=None)
     receipt = current_execution_receipt(db, head.agent_key, 1, active_group_ids=[])
