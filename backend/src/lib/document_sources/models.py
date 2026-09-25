@@ -12,6 +12,10 @@ class DocumentSourceError(RuntimeError):
     """Base error for document-source provider failures."""
 
 
+class DocumentSourceReferenceNotFound(DocumentSourceError):
+    """The provider's reference lookup found no matching publication."""
+
+
 class DocumentSourceConfigError(DocumentSourceError):
     """Raised when document-source provider configuration is invalid."""
 

@@ -1029,6 +1029,50 @@ async def test_identifier_import_reports_source_pdf_download_access_denied(tmp_p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("import_mode", [False, True])
+async def test_reference_not_found_is_per_item_without_runtime_error(tmp_path, monkeypatch, import_mode):
+    from src.lib.document_sources.models import DocumentSourceReferenceNotFound
+
+    class MissingProvider(_FakeProvider):
+        async def list_artifacts(self, reference, **kwargs):
+            return []
+
+        async def resolve_reference(self, identifier, **kwargs):
+            if identifier == "PMID:123":
+                raise DocumentSourceReferenceNotFound("Check the publication identifier or upload the PDF.")
+            return await super().resolve_reference(identifier, **kwargs)
+
+    provider = MissingProvider(artifacts=())
+    reports = []
+    monkeypatch.setattr("src.lib.document_sources.identifier_import._report_source_failure", lambda *args: reports.append(args))
+    service = IdentifierImportService(
+        upload_execution_service=_DispatchRecorder(),
+        provider_factory=lambda: provider,
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+        session_factory=lambda: _FakeSession([]),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        import_batch_limit_provider=lambda: 10,
+    )
+    kwargs = dict(
+        identifiers="123,456", user={"sub": "user-1"},
+        document_source_context=DocumentSourceRequestContext(
+            provider_groups=("FBStaff",), authorized_group_ids=("FB",), curator_token="curator-token",
+        ),
+    )
+    if import_mode:
+        result = await service.import_identifiers(background_tasks=BackgroundTasks(), **kwargs)
+    else:
+        result = await service.resolve_identifiers(**kwargs)
+    assert len(result.results) == 2
+    assert result.results[0].error_code == "document_source_reference_not_found"
+    assert "Check the publication" in result.results[0].message
+    assert result.results[1].error_code == "document_source_no_source_artifact"
+    assert reports == []
+
+
+@pytest.mark.asyncio
 async def test_identifier_import_service_resolve_does_not_download_or_dispatch(tmp_path):
     sessions = []
     provider = _FakeConversionProvider(
