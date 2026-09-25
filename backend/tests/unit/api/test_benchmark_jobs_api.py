@@ -30,6 +30,75 @@ def submission_body():
     return {"suite": suite, "plan": plan.model_dump(mode="json")}
 
 
+@pytest.mark.parametrize("enabled, allowed", [(True, True), (True, False), (False, True)])
+def test_accounting_requires_read_capability_and_api_gate(monkeypatch, enabled, allowed):
+    from src.lib.cost_ledger.facts import TokenUsage
+    from src.schemas.cost_ledger import CostFactsProjection, CostLedgerReference
+
+    monkeypatch.setenv("BENCHMARK_API_ENABLED", str(enabled).lower())
+    app = FastAPI()
+    def principal():
+        if not allowed:
+            raise HTTPException(403, "read capability required")
+        return {"sub": "service:portal"}
+    app.dependency_overrides[require_benchmark_read] = principal
+    app.include_router(benchmark_jobs.router)
+    projection = CostFactsProjection(
+        schema_version=1,
+        reference=CostLedgerReference(schema_version=1, deployment_id="fixture", attempt_id=uuid4(), fact_revision=0),
+        usage=TokenUsage(), usage_status="missing", usage_issues=(), recorded_charge=None,
+    )
+    reader = Mock(return_value=projection)
+    sessions = MagicMock()
+    monkeypatch.setattr(benchmark_jobs, "SessionLocal", sessions)
+    monkeypatch.setattr(benchmark_jobs, "read_benchmark_accounting", reader)
+    job, cell, invocation = uuid4(), uuid4(), uuid4()
+    with TestClient(app) as client:
+        result = client.get(f"/api/v1/benchmarks/jobs/{job}/cells/{cell}/invocations/{invocation}/accounting?revision=0")
+    if enabled and allowed:
+        assert result.status_code == 200 and result.headers["cache-control"] == "no-store"
+        assert result.json() == projection.model_dump(mode="json")
+        assert reader.call_args.kwargs == dict(job_id=job, cell_id=cell, invocation_id=invocation,
+                                               owner_subject="service:portal", revision=0)
+        sessions.return_value.__enter__.return_value.commit.assert_not_called()
+    else:
+        assert result.status_code == (404 if not enabled else 403)
+        reader.assert_not_called()
+        sessions.assert_not_called()
+
+
+@pytest.mark.parametrize("failure, expected", [("missing", 404), ("unbound", 503), ("database", 503), ("inconsistent", 503)])
+def test_accounting_errors_do_not_leak_or_fabricate_cost(monkeypatch, failure, expected):
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setenv("BENCHMARK_API_ENABLED", "true")
+    app = FastAPI()
+    app.dependency_overrides[require_benchmark_read] = lambda: {"sub": "service:portal"}
+    app.include_router(benchmark_jobs.router)
+    errors = {
+        "missing": LookupError("private source"),
+        "unbound": benchmark_jobs.BenchmarkAccountingUnavailable("private source"),
+        "database": OperationalError("secret SQL", {"secret": "private"}, Exception("credentials")),
+        "inconsistent": ValueError("private facts"),
+    }
+    monkeypatch.setattr(benchmark_jobs, "SessionLocal", MagicMock())
+    monkeypatch.setattr(benchmark_jobs, "read_benchmark_accounting", Mock(side_effect=errors[failure]))
+    reporter = Mock()
+    monkeypatch.setattr(benchmark_jobs, "report_runtime_exception", reporter)
+    with TestClient(app) as client:
+        result = client.get(f"/api/v1/benchmarks/jobs/{uuid4()}/cells/{uuid4()}/invocations/{uuid4()}/accounting")
+    assert result.status_code == expected
+    assert "private" not in result.text and "secret" not in result.text and "credentials" not in result.text
+    assert "recorded_charge" not in result.json()
+    if expected == 503:
+        assert result.headers["cache-control"] == "no-store"
+        assert result.json()["detail"]["code"] == "accounting_unavailable"
+    if reporter.called:
+        safe_error = reporter.call_args.args[0]
+        assert safe_error.__context__ is None and safe_error.__cause__ is None
+        assert "secret" not in str(safe_error) and "private" not in str(safe_error)
+
+
 @pytest.mark.parametrize("allowed", [True, False])
 def test_stage_page_preserves_unknowns_and_requires_read_capability(monkeypatch, allowed):
     from datetime import datetime, timezone

@@ -1575,6 +1575,16 @@ def get_cost_migration_audit_page_size() -> int:
     return max(1, _get_env_int_with_fallback("COST_MIGRATION_AUDIT_PAGE_SIZE", 200))
 
 
+def get_cost_ledger_deployment_id() -> str:
+    """Verified immutable accounting deployment scope; empty means unconfigured."""
+    return os.getenv("COST_LEDGER_DEPLOYMENT_ID", "").strip()
+
+
+def get_cost_ledger_benchmark_source_namespace() -> str:
+    """Verified benchmark execution source namespace within the deployment."""
+    return os.getenv("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", "").strip()
+
+
 def get_go_annotations_request_timeout_seconds() -> float:
     """HTTP timeout for typed existing-GO annotation lookups."""
     return max(

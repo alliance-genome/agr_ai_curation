@@ -180,9 +180,33 @@ Private portal inspection confirms that `result_contracts.Invocation` currently
 requires inline token/billing fields, `execution_import_repository` retains them
 in immutable import metadata, and `report_accounting` reads those retained facts.
 Those readers and the public worker/result serializer must switch together. The
-new projection is a contract/resolver only, not a deployed endpoint or portal
-cutover. No old artifact bytes/hashes have been changed. Historical evidence
+projection now has an implemented, gated benchmark read endpoint (below), but
+has not been deployed or connected to portal consumers. No old artifact
+bytes/hashes have been changed. Historical evidence
 readers may inspect retained artifacts but must not become a live-cost fallback.
+
+The implemented route is
+`GET /api/v1/benchmarks/jobs/{job_id}/cells/{cell_id}/invocations/{invocation_id}/accounting`.
+It uses the existing benchmark API gate and `benchmark:read` capability. Before
+reading accounting it verifies invocation membership in the supplied cell/job
+and that job's authenticated owner. It then resolves only a `benchmark` source
+binding in the server-configured `COST_LEDGER_DEPLOYMENT_ID` and
+`COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE`. Clients cannot select an arbitrary
+ledger UUID, deployment or namespace. Ledger owner scope is checked independently.
+
+An omitted `revision` reads latest and returns the exact pinned reference;
+`?revision=0` pins the empty snapshot and positive revisions pin fact history.
+Unknown/foreign membership or absent requested revisions return 404. Unconfigured
+accounting, absent bindings, database outages or malformed ledger facts return
+explicit 503 accounting-unavailable responses, never the existing inline cost
+columns. Unexpected accounting failures use sanitized operational telemetry.
+Successful projections and 503 responses are `Cache-Control: no-store`.
+
+Both identity environment settings default empty and must be set from verified
+deployment inventory at coordinated cutover. They are not automatic migration
+switches. No live ledger writer is enabled by setting them, and the endpoint does
+not give the private portal any database credentials. This read slice does not
+replace the current execution API/result fields or modify historical artifacts.
 
 `benchmark_migration.py` provides a pure, explicit backfill planner and exact
 fact-receipt verifier. It is not a runtime compatibility reader and is not called

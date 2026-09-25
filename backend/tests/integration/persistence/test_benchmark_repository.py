@@ -1271,3 +1271,55 @@ def test_cost_audit_is_read_only_complete_across_pages_and_snapshot_consistent(m
                     _run_to_terminal(cleanup, job_id)
                 BenchmarkRepository(cleanup).delete_terminal_job(job_id=job_id, owner_subject=job.owner_subject)
             cleanup.commit()
+
+
+def test_accounting_read_requires_owned_membership_and_verified_binding(monkeypatch):
+    from src.lib.cost_ledger.benchmark_reads import BenchmarkAccountingUnavailable, read_benchmark_accounting
+    from src.lib.cost_ledger.benchmark_migration import plan_benchmark_cost_migration
+    from src.lib.cost_ledger.persistence import record_cost_facts
+    from src.lib.cost_ledger.facts import TokenUsage
+
+    deployment, namespace, owner = uuid4().hex, "fixture-source", "accounting-owner"
+    monkeypatch.setenv("COST_LEDGER_DEPLOYMENT_ID", deployment)
+    monkeypatch.setenv("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", namespace)
+    job_id = None
+    try:
+        with SessionLocal() as db:
+            job = _create_job(db, owner=owner, cells=1)
+            job_id = job.id
+            _run_to_terminal(db, job.id, billed_amount=Decimal("7"))
+            row = db.scalar(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job.id))
+            scope = dict(job_id=job.id, cell_id=row.cell_id, invocation_id=row.id, owner_subject=owner)
+            # Inline charge exists, but no ledger binding: never serve old copies.
+            with pytest.raises(BenchmarkAccountingUnavailable):
+                read_benchmark_accounting(db, **scope)
+            entry = plan_benchmark_cost_migration(row, deployment_id=deployment, source_namespace=namespace, owner_subject=owner)
+            binding = dict(deployment_id=deployment, source_namespace=namespace, owner_subject=owner,
+                           attempt_id=entry.attempt_id, source_system="benchmark", source_id=str(row.id))
+            record_cost_facts(db, **binding, usage=entry.usage, charge=entry.charge)
+            first = read_benchmark_accounting(db, **scope)
+            assert first.recorded_charge.amount == Decimal("7") and first.reference.fact_revision == 1
+            record_cost_facts(db, **binding, usage=TokenUsage(input_tokens=10))
+            assert read_benchmark_accounting(db, **scope).reference.fact_revision == 2
+            assert read_benchmark_accounting(db, **scope, revision=1) == first
+            assert read_benchmark_accounting(db, **scope, revision=0).recorded_charge is None
+            for field, value in (("job_id", uuid4()), ("cell_id", uuid4()), ("invocation_id", uuid4()), ("owner_subject", "another-owner")):
+                with pytest.raises(LookupError):
+                    read_benchmark_accounting(db, **{**scope, field: value})
+            with pytest.raises(LookupError):
+                read_benchmark_accounting(db, **scope, revision=3)
+            monkeypatch.setenv("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", "wrong-source")
+            with pytest.raises(BenchmarkAccountingUnavailable):
+                read_benchmark_accounting(db, **scope)
+            monkeypatch.delenv("COST_LEDGER_DEPLOYMENT_ID")
+            with pytest.raises(BenchmarkAccountingUnavailable):
+                read_benchmark_accounting(db, **scope)
+            # Membership remains the first boundary even when unconfigured.
+            with pytest.raises(LookupError):
+                read_benchmark_accounting(db, **{**scope, "owner_subject": "another-owner"})
+            db.commit()
+    finally:
+        if job_id is not None:
+            with SessionLocal() as db:
+                BenchmarkRepository(db).delete_terminal_job(job_id=job_id, owner_subject=owner)
+                db.commit()
