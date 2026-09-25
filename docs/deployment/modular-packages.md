@@ -336,9 +336,20 @@ remain available for fresh installs and upgrades.
 ### Agent Studio system prompt
 
 Each healthy package profile must resolve exactly one `agent_studio_prompt`
-export. The export is a UTF-8 Markdown template and must retain the
-`{{USER_GREETING}}` and `{{PACKAGE_DIAGNOSTIC_TOOLS}}` placeholders when that
-dynamic context is desired:
+export. The export is a UTF-8 Markdown template. It may include the
+`{{PACKAGE_DIAGNOSTIC_TOOLS}}` placeholder where the installed diagnostic tool
+list belongs. It must not include `{{USER_GREETING}}`: the application appends
+the current user after all static instructions so the shared prefix stays
+cacheable, and a template that still contains the placeholder fails explicitly.
+
+Keep the always-sent template to behavioural rules. Reference material the
+assistant only sometimes needs (tool catalogs, long workflows, playbooks) goes
+in `<studio_guide_topic id="..." title="..." read_when="...">` blocks, each
+closed by `</studio_guide_topic>` on its own line. Those blocks are removed
+from the system prompt, listed in a short topic index, and served exactly
+through the bounded `read_studio_guide` tool (`AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS`
+per chunk). Topic ids must be unique across the package template and the
+backend core guide.
 
 ```yaml
 exports:
@@ -372,6 +383,18 @@ the same way.
 Use `runtime/config/providers.yaml`, `runtime/config/models.yaml`, and
 `runtime/config/tool_policy_defaults.yaml` for deployment-local overrides. Use a
 custom package when you want a reusable bundle that can move across installs.
+
+Hosted tool search (ALL-1280) uses two more package exports. `tool_namespaces`
+declares namespaces (`id`, one description of at most 160 characters, `owner`);
+tools join one with `metadata.namespace` in the package `tools/bindings.yaml`.
+`tool_loading` declares each runtime's loading policy (`eager` or `deferred`).
+Namespace ids are unique across packages (startup fails on a duplicate); a later
+`tool_loading` source replaces a runtime's whole policy, and an optional
+`runtime/config/tool_loading.yaml` loads last. A runtime override
+`providers.yaml`/`models.yaml` replaces whole definitions, so it must carry
+`supports.tool_search` / `supports_tool_search` for OpenAI Responses routes that
+should keep hosted tool search; otherwise a deferred policy runs eagerly and is
+recorded as `eager_provider_unsupported`.
 
 ### Agents
 

@@ -27,7 +27,7 @@ scripts/
 │   └── run-tests.sh             # Docker Compose test runner
 │   └── llm_provider_smoke_local.sh  # Local LLM provider smoke checks (health/contracts)
 │   └── rerank_provider_smoke_local.sh  # Local rerank provider smoke across bedrock/local/none
-│   └── evaluate_figure_locator_classifier.py # Live Terra evaluation against labeled locator corpus
+│   └── evaluate_figure_locator_classifier.py # Live GPT-6 Sol evaluation against labeled locator corpus
 │   └── file_output_storage_preflight.sh # Deployment-stage probe for export temp/output writeability
 │   └── dev_release_smoke.py     # Deep dev-release smoke: upload, chat, custom flow, batch, optional rerank smoke, cleanup
 │   └── abc_literature_live_smoke.py # ABC Literature stage smoke with ephemeral Cognito users and evidence JSON
@@ -501,7 +501,7 @@ Useful selections:
 ./scripts/testing/agent_ui_smoke.sh --provider openai --case create --cost-warning-usd 5
 ```
 
-Codex app-server with `gpt-5.6-sol` and low reasoning is the default and does
+Codex app-server with `gpt-6-sol` and low reasoning is the default and does
 not use or fall back to `OPENAI_API_KEY`. Direct OpenAI billing requires the
 explicit `--provider openai` option. Curator-cookie support is retained for a
 local cookie-auth stack, but the harness rejects non-loopback application URLs.

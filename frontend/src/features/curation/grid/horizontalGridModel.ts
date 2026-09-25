@@ -11,6 +11,8 @@ import type {
   CurationDraftField,
   DomainEnvelopeEvidenceAnchorProjection,
   DomainEnvelopeProjectionRef,
+  DomainEnvelopeReviewFieldResolution,
+  DomainEnvelopeReviewResolvedValue,
   DomainEnvelopeReviewRow,
   DomainEnvelopeReviewRowSummaryField,
   DomainEnvelopeValidationStatus,
@@ -20,8 +22,14 @@ import type {
 import type { WorkspaceEnvelopeObjectReviewRow } from '@/features/curation/workspace/envelopeObjectReviewRows'
 import { objectSelectorLabel } from '@/features/curation/workspace/objectSelector'
 import { resolveEnvelopeFieldPath } from '@/features/curation/workspace/workspaceState'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
-import { isHorizontalGridDecisionField } from './horizontalGridReviewPolicy'
+import {
+  formatHorizontalGridValue,
+  HORIZONTAL_GRID_UNRESOLVED_TEXT,
+} from './horizontalGridFormatting'
+import {
+  HORIZONTAL_GRID_RATIONALE_FIELD_PATH,
+  isHorizontalGridDecisionField,
+} from './horizontalGridReviewPolicy'
 
 export const HORIZONTAL_GRID_CONTEXT_COLUMN_KEY = 'context'
 
@@ -59,6 +67,10 @@ export interface HorizontalGridRowContext {
   candidateMetadata: Record<string, unknown>
   summaryFields: DomainEnvelopeReviewRowSummaryField[] | null
   reviewRowMetadata: Record<string, unknown> | null
+  // Null when the object type declares no rationale field; a declared field
+  // without a stored value (records extracted before rationale existed) keeps
+  // `value: null` so review can say it was not recorded.
+  rationale: { value: string | null } | null
 }
 
 export interface HorizontalGridContextCell {
@@ -73,7 +85,28 @@ export interface HorizontalGridFieldCell {
   fieldKey: string | null
   fieldPath: string
   hasField: boolean
+  // The canonical field's stored value; never replaced by the extractor's.
   value: unknown
+  // Main cell text: the validated value, UNRESOLVED, or the curator's own edit.
+  displayText: string | null
+  // The field's values as extracted vs as validated, from the review row
+  // regenerated for this revision (ALL-1283); null for fields without any.
+  resolution: DomainEnvelopeReviewFieldResolution | null
+  // The values whose paper wording and lookup result this cell shows: each
+  // value's details appear once per row, on the first cell that shows it.
+  resolutionDetails: DomainEnvelopeReviewResolvedValue[]
+  // The id of this cell's resolution lines, when it shows any.
+  resolutionLinesId: string | null
+  // The resolution lines describing this cell's values, wherever they are shown.
+  resolutionDescribedBy: string[]
+  // A curator set this value's identity (a validation override).
+  curatorOverride: boolean
+  // Open warnings where a validator disagrees with the curator override.
+  overrideDisagreements: string[]
+  // The values a curator override from this cell can set, each in one atomic
+  // identity edit: the cell's own value, or each element of a list cell.
+  // Empty when the cell cannot override any.
+  overrideTargets: DomainEnvelopeReviewResolvedValue[]
   required: boolean | null
   readOnly: boolean | null
   staleValidation: boolean | null
@@ -82,7 +115,6 @@ export interface HorizontalGridFieldCell {
   evidence: DomainEnvelopeEvidenceAnchorProjection[]
   validation: HorizontalGridValidationProjection
   extractorComparison: HorizontalGridExtractorComparison | null
-  valueSource: 'canonical' | 'extractor'
 }
 
 export interface HorizontalGridExtractorComparison {
@@ -117,6 +149,7 @@ interface HorizontalGridSourceRow {
   candidate: CurationCandidate
   projectionRef: DomainEnvelopeProjectionRef | null
   reviewRow: DomainEnvelopeReviewRow | null
+  resolutions: Map<string, DomainEnvelopeReviewFieldResolution>
   evidenceAnchors: DomainEnvelopeEvidenceAnchorProjection[]
   validationSummaries: DomainEnvelopeValidationSummaryProjection[]
 }
@@ -160,6 +193,7 @@ function extractorComparison(
   candidate: CurationCandidate,
   canonicalField: CurationDraftField,
   canonicalPath: string,
+  canonicalUnresolved: boolean,
 ): HorizontalGridExtractorComparison | null {
   const extractorField = divergenceFieldForCanonicalPath(candidate, canonicalPath)
   const extractorValue = extractorField?.value
@@ -168,7 +202,11 @@ function extractorComparison(
     return null
   }
 
-  const formattedCanonicalValue = formatHorizontalGridValue(canonicalField.value)
+  // A stored canonical value that its resolution reads as unresolved (e.g. a
+  // legacy, unverified value) is not a validator result to compare against.
+  const formattedCanonicalValue = canonicalUnresolved
+    ? null
+    : formatHorizontalGridValue(canonicalField.value)
   return {
     fieldKey: extractorField.field_key,
     fieldPath: resolveEnvelopeFieldPath(extractorField),
@@ -190,6 +228,81 @@ function isProjectedAsCanonicalComparison(
   return canonicalPath !== null && candidate.draft.fields.some(
     (candidateField) => resolveEnvelopeFieldPath(candidateField) === canonicalPath,
   )
+}
+
+function hasUnresolvedValue(resolution: DomainEnvelopeReviewFieldResolution | null): boolean {
+  return resolution?.values.some((value) => value.resolution_state === 'unresolved') ?? false
+}
+
+// A value's own leaf (its paper wording, status, lookup result or validator
+// text) needs no column of its own when a grid cell of the same row already
+// shows that value, with those details on its lines.
+function isCoveredResolvableLeaf(row: HorizontalGridSourceRow, field: CurationDraftField): boolean {
+  const resolution = row.resolutions.get(resolveEnvelopeFieldPath(field))
+  if (!resolution?.leaf_key) {
+    return false
+  }
+  const valuePaths = new Set(resolution.values.map((value) => value.value_path))
+  return row.candidate.draft.fields.some((candidateField) => {
+    const owner = row.resolutions.get(resolveEnvelopeFieldPath(candidateField))
+    return Boolean(owner && !owner.leaf_key)
+      && owner!.values.some((value) => valuePaths.has(value.value_path))
+      && !isProjectedAsCanonicalComparison(row.candidate, candidateField)
+      && isHorizontalGridDecisionField(row.reviewRow?.metadata ?? null, candidateField)
+  })
+}
+
+function isGridCellField(row: HorizontalGridSourceRow, field: CurationDraftField): boolean {
+  return !isProjectedAsCanonicalComparison(row.candidate, field)
+    && isHorizontalGridDecisionField(row.reviewRow?.metadata ?? null, field)
+}
+
+// A column exists when some row needs it; a covered leaf alone adds none. A
+// row whose leaf is covered still shows that leaf in a column other rows need.
+function isGridColumnField(row: HorizontalGridSourceRow, field: CurationDraftField): boolean {
+  return isGridCellField(row, field) && !isCoveredResolvableLeaf(row, field)
+}
+
+function resolutionLinesId(candidateId: string, columnKey: string): string {
+  return `horizontal-grid-resolution-${encodeURIComponent(candidateId)}-${encodeURIComponent(columnKey)}`
+}
+
+// Each value's details go on the first cell that shows it; every cell
+// showing the value is described by those lines.
+function withResolutionDetails(
+  candidateId: string,
+  cells: HorizontalGridFieldCell[],
+): HorizontalGridFieldCell[] {
+  const ownerByValuePath = new Map<string, number>()
+  cells.forEach((cell, index) => {
+    if (!cell.resolution || cell.resolution.leaf_key) {
+      return
+    }
+    for (const value of cell.resolution.values) {
+      if (!ownerByValuePath.has(value.value_path)) {
+        ownerByValuePath.set(value.value_path, index)
+      }
+    }
+  })
+
+  return cells.map((cell, index) => {
+    const values = cell.resolution && !cell.resolution.leaf_key ? cell.resolution.values : []
+    const resolutionDetails = values.filter(
+      (value) => ownerByValuePath.get(value.value_path) === index,
+    )
+    const describedBy = [...new Set(values.map((value) => {
+      const owner = ownerByValuePath.get(value.value_path)!
+      return resolutionLinesId(candidateId, cells[owner]!.columnKey)
+    }))]
+    return {
+      ...cell,
+      resolutionDetails,
+      resolutionLinesId: resolutionDetails.length > 0
+        ? resolutionLinesId(candidateId, cell.columnKey)
+        : null,
+      resolutionDescribedBy: describedBy,
+    }
+  })
 }
 
 function fieldColumnKey(fieldPath: string): string {
@@ -260,10 +373,7 @@ function buildFieldColumns(
       // When the candidate also has the canonical target, the proposal belongs in
       // that target's Details comparison—not in a peer grid column that could be
       // mistaken for a second authoritative or curator-editable value.
-      if (isProjectedAsCanonicalComparison(row.candidate, field)) {
-        continue
-      }
-      if (!isHorizontalGridDecisionField(row.reviewRow?.metadata ?? null, field)) {
+      if (!isGridColumnField(row, field)) {
         continue
       }
       const occurrence = fieldOccurrence(row.candidate, field)
@@ -385,6 +495,99 @@ function fieldsByCanonicalPath(candidate: CurationCandidate): Map<string, Curati
   return fieldsByPath
 }
 
+function reviewRowFields(reviewRow: DomainEnvelopeReviewRow): DomainEnvelopeReviewRowSummaryField[] {
+  // The same field list the backend seeds draft fields from: the pack's
+  // workspace fields when declared, otherwise its summary fields.
+  if (!('workspace_fields' in reviewRow.metadata)) {
+    return reviewRow.summary_fields
+  }
+  const workspaceFields = reviewRow.metadata.workspace_fields
+  if (!Array.isArray(workspaceFields)) {
+    throw new Error(
+      `Review row '${reviewRow.object_id}' metadata.workspace_fields must be a list`,
+    )
+  }
+  return workspaceFields as DomainEnvelopeReviewRowSummaryField[]
+}
+
+function resolutionsByFieldPath(
+  reviewRow: DomainEnvelopeReviewRow | null,
+): Map<string, DomainEnvelopeReviewFieldResolution> {
+  const resolutions = new Map<string, DomainEnvelopeReviewFieldResolution>()
+  for (const field of reviewRow ? reviewRowFields(reviewRow) : []) {
+    if (field.resolution) {
+      resolutions.set(field.field_path, field.resolution)
+    }
+  }
+  return resolutions
+}
+
+function cellDisplayText(
+  field: CurationDraftField | null,
+  resolution: DomainEnvelopeReviewFieldResolution | null,
+  comparison: HorizontalGridExtractorComparison | null,
+): string | null {
+  if (!field) {
+    return null
+  }
+  // The review row is regenerated for the candidate's current revision, so
+  // its reading already includes saved curator edits (e.g. an override).
+  if (resolution) {
+    return resolution.display_text || null
+  }
+  if (comparison?.outcome === 'unresolved') {
+    return HORIZONTAL_GRID_UNRESOLVED_TEXT
+  }
+  return formatHorizontalGridValue(field.value)
+}
+
+function overriddenValues(
+  resolution: DomainEnvelopeReviewFieldResolution | null,
+): DomainEnvelopeReviewResolvedValue[] {
+  if (!resolution || resolution.leaf_key) {
+    return []
+  }
+  return resolution.values.filter((value) => value.curator_override)
+}
+
+// A curator overrides one value, the object itself included, from a cell that
+// is that value, one of its identity keys, or a list or record holding it at
+// any depth (a list element, or e.g. one component of a condition). The
+// backend says which values take an override (overridable: an open value
+// field and editable identity fields).
+function overrideTargets(
+  fieldPath: string,
+  resolution: DomainEnvelopeReviewFieldResolution | null,
+  readOnly: boolean,
+): DomainEnvelopeReviewResolvedValue[] {
+  if (readOnly || !resolution || resolution.leaf_key) {
+    return []
+  }
+  return resolution.values.filter((value) => (
+    value.overridable
+    && !value.issue
+    && Boolean(value.id_key || value.label_key)
+    && (
+      fieldPath === value.value_path
+      || value.identity_field_paths.includes(fieldPath)
+      || value.value_path.startsWith(`${fieldPath}[`)
+      || value.value_path.startsWith(`${fieldPath}.`)
+    )
+  ))
+}
+
+function rationaleForCandidate(candidate: CurationCandidate): HorizontalGridRowContext['rationale'] {
+  const field = candidate.draft.fields.find(
+    (item) => resolveEnvelopeFieldPath(item) === HORIZONTAL_GRID_RATIONALE_FIELD_PATH,
+  )
+  if (!field) {
+    return null
+  }
+  return {
+    value: typeof field.value === 'string' && field.value.trim() ? field.value.trim() : null,
+  }
+}
+
 function contextForRow(row: HorizontalGridSourceRow): HorizontalGridRowContext {
   const candidate = row.candidate
 
@@ -402,6 +605,7 @@ function contextForRow(row: HorizontalGridSourceRow): HorizontalGridRowContext {
     candidateMetadata: candidate.metadata,
     summaryFields: row.reviewRow ? [...row.reviewRow.summary_fields] : null,
     reviewRowMetadata: row.reviewRow?.metadata ?? null,
+    rationale: rationaleForCandidate(candidate),
   }
 }
 
@@ -411,10 +615,7 @@ function projectRow(
 ): HorizontalGridRow {
   const fieldsByPath = fieldsByCanonicalPath(row.candidate)
   const projectedFieldsByPath = new Map(
-    [...fieldsByPath.entries()].filter(([, field]) => (
-      !isProjectedAsCanonicalComparison(row.candidate, field)
-      && isHorizontalGridDecisionField(row.reviewRow?.metadata ?? null, field)
-    )),
+    [...fieldsByPath.entries()].filter(([, field]) => isGridCellField(row, field)),
   )
   const evidence = [...row.evidenceAnchors].sort(compareEvidence)
   const validationSummaries = [...row.validationSummaries].sort(compareValidationSummaries)
@@ -452,7 +653,23 @@ function projectRow(
     )
 
     const baseState = field ? fieldState(field, cellValidation) : null
-    const projectedComparison = field ? extractorComparison(row.candidate, field, fieldPath) : null
+    const resolution = field ? row.resolutions.get(fieldPath) ?? null : null
+    const canonicalUnresolved = Boolean(field && !resolution?.leaf_key)
+      && hasUnresolvedValue(resolution)
+    const overridden = field ? overriddenValues(resolution) : []
+    // A value's own leaves (paper wording, status, lookup result, validator
+    // text) are set by extraction and validation; curators edit a value's
+    // identity through an override.
+    const baseReadOnly = Boolean(field?.read_only || resolution?.leaf_key)
+    const targets = field ? overrideTargets(fieldPath, resolution, baseReadOnly) : []
+    // A cell showing validated values edits them only through an override;
+    // with none it can override (e.g. none overridable) it is read-only, never
+    // a plain field edit.
+    const cellReadOnly = baseReadOnly || Boolean(resolution?.values.length && targets.length === 0)
+    const overrideDisagreements = overridden.flatMap((value) => value.override_disagreements)
+    const projectedComparison = field
+      ? extractorComparison(row.candidate, field, fieldPath, canonicalUnresolved)
+      : null
     const validatorResolved = !field?.stale_validation
       && cellValidation.some((summary) => summary.status === 'resolved')
       && cellValidation.every((summary) => (
@@ -462,7 +679,9 @@ function projectRow(
     // resolved validation projection may describe the second stage as a validator
     // result; otherwise the extractor value remains explicitly unvalidated.
     const comparison = projectedComparison
-      ? projectedComparison.outcome === 'unresolved'
+      ? overridden.length > 0 && !canonicalUnresolved
+        ? { ...projectedComparison, outcome: 'overridden' as const }
+        : projectedComparison.outcome === 'unresolved'
         ? projectedComparison
         : validatorResolved
           ? projectedComparison
@@ -470,30 +689,43 @@ function projectRow(
             ? { ...projectedComparison, outcome: 'overridden' as const }
             : { ...projectedComparison, outcome: 'unresolved' as const }
       : null
-    const valueSource = comparison?.outcome === 'unresolved' ? 'extractor' : 'canonical'
-    const projectedState = field
+    const comparedState = field
       ? comparison?.outcome === 'different'
         ? 'needs-review'
         : comparison?.outcome === 'unresolved'
           ? baseState === 'needs-review' ? 'needs-review' : 'ai-unconfirmed'
           : baseState
       : null
+    // A value that reads unresolved is never presented as validated. A
+    // curator override is curator validated, unless a validator disagrees.
+    const projectedState = field && overridden.length > 0 && !canonicalUnresolved
+      ? overrideDisagreements.length > 0 ? 'needs-review' : 'resolved'
+      : canonicalUnresolved && comparedState === 'resolved'
+        ? 'needs-review'
+        : comparedState
 
     return {
       columnKey: column.key,
       fieldKey: field?.field_key ?? null,
       fieldPath,
       hasField: field !== null,
-      value: valueSource === 'extractor' ? comparison?.value ?? null : field?.value ?? null,
+      value: field?.value ?? null,
+      displayText: cellDisplayText(field, resolution, comparison),
+      resolution,
+      resolutionDetails: [],
+      resolutionLinesId: null,
+      resolutionDescribedBy: [],
+      curatorOverride: overridden.length > 0,
+      overrideDisagreements,
+      overrideTargets: targets,
       required: field?.required ?? null,
-      readOnly: field?.read_only ?? null,
+      readOnly: field ? cellReadOnly : null,
       staleValidation: field?.stale_validation ?? null,
       state: projectedState,
       fieldValidation: field?.validation_result ?? null,
       evidence: cellEvidence,
       validation: validationProjection(cellValidation),
       extractorComparison: comparison,
-      valueSource,
     }
   })
 
@@ -505,7 +737,7 @@ function projectRow(
       evidence: contextEvidence,
       validation: validationProjection(objectValidation),
     },
-    cells,
+    cells: withResolutionDetails(row.candidate.candidate_id, cells),
     evidence,
     validation: validationProjection(validationSummaries),
     unmappedEvidence: evidence.filter((projection) => {
@@ -573,6 +805,7 @@ function sourceRows({
         candidate,
         projectionRef: candidate.projection_ref,
         reviewRow: envelopeReviewRow.reviewRow,
+        resolutions: resolutionsByFieldPath(envelopeReviewRow.reviewRow),
         evidenceAnchors: envelopeReviewRow.evidenceAnchors,
         validationSummaries: envelopeReviewRow.validationSummaries,
       }
@@ -588,6 +821,7 @@ function sourceRows({
       candidate,
       projectionRef: null,
       reviewRow: null,
+      resolutions: new Map(),
       evidenceAnchors: candidate.evidence_anchor_projections ?? [],
       validationSummaries: candidate.validation_summary_projections ?? [],
     }

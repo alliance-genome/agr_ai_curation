@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, NoReturn, Optional
 
 import boto3
 import openai
-from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
+from agents import FunctionTool, MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -86,6 +86,10 @@ from src.lib.agent_studio.tool_search_authorization import (
 import src.lib.agent_studio.chat_session as agent_studio_chat_session
 import src.lib.agent_studio.domain_envelope_tools as agent_studio_domain_envelope_tools
 import src.lib.agent_studio.prompt_builder as prompt_builder
+from src.lib.agent_studio.studio_guide import (
+    READ_STUDIO_GUIDE_TOOL_NAME,
+    read_studio_guide,
+)
 from src.lib.agent_studio.flow_tools import (
     set_workflow_user_context,
     clear_workflow_user_context,
@@ -149,6 +153,7 @@ from src.lib.agent_studio.openai_runtime import (
 )
 from src.lib.openai_agents.config import get_domain_reference_max_values
 from src.lib.openai_agents.config import (
+    PromptCacheIdentity,
     get_api_key,
     get_agent_studio_chat_history_page_size,
     get_agent_studio_chat_recall_chunk_max_chars,
@@ -181,9 +186,12 @@ from src.lib.config.models_loader import is_model_selectable
 from src.lib.packages import load_installed_agent_studio_prompt
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
-from src.lib.runtime_payload_budget import provider_context_preflight
+from src.lib.runtime_payload_budget import json_size, provider_context_preflight
 from src.lib.openai_agents import run_agent_streamed
-from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+from src.lib.openai_agents.event_types import (
+    INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+    curator_facing_run_error_message,
+)
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.models.sql.agent import Agent as UnifiedAgent
 from src.models.sql import SessionLocal, get_db
@@ -515,7 +523,10 @@ async def get_tool_library_endpoint(
     user: Any = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> ToolLibraryResponse:
+    from src.lib.packages.tool_roles import identity_lookup_tool_names
+
     try:
+        identity_lookups = identity_lookup_tool_names()
         entries = get_tool_policy_cache().list_curator_visible(db)
         return ToolLibraryResponse(
             tools=[
@@ -531,6 +542,7 @@ async def get_tool_library_endpoint(
                         {
                             **entry.config,
                             "requires_document": tool_requires_document(entry.tool_key),
+                            "identity_lookup": entry.tool_key in identity_lookups,
                         }
                     ),
                 )
@@ -1292,10 +1304,13 @@ async def test_agent_endpoint(
                             agent_id,
                             extra={"session_id": session_id, "trace_id": trace_id or flat.get("trace_id")},
                         )
-                    flat["message"] = "Agent test failed unexpectedly."
+                    public_message = (
+                        curator_facing_run_error_message(flat) or "Agent test failed unexpectedly."
+                    )
+                    flat["message"] = public_message
                     details = flat.get("details")
                     if isinstance(details, dict) and "error" in details:
-                        flat["details"] = {**details, "error": "Agent test failed unexpectedly."}
+                        flat["details"] = {**details, "error": public_message}
                 yield f"data: {json.dumps(flat, default=str)}\n\n"
 
             done_event = {
@@ -2900,6 +2915,16 @@ async def _execute_tool_call(
         caller_email=user_email,
     )
 
+    if tool_name == READ_STUDIO_GUIDE_TOOL_NAME:
+        return read_studio_guide(
+            template=_load_agent_studio_system_prompt_template(),
+            render_diagnostic_tools=prompt_builder.build_package_diagnostic_tools_prompt,
+            topic=tool_input.get("topic"),
+            query=tool_input.get("query"),
+            start=tool_input.get("start"),
+            content_hash=tool_input.get("content_hash"),
+        )
+
     if tool_name in _CAPABILITY_CATALOG_TOOLS:
         if user_db_id is None:
             return {
@@ -4375,7 +4400,6 @@ async def chat_with_opus(
                 state=run_state,
                 namespace_for_tool=_agent_studio_tool_namespace,
                 forced_tool_name=forced_tool_name,
-                eager_tool_names=frozenset({"search_studio_capabilities"}),
             )
         except Exception as exc:
             _report_agent_studio_exception_once(
@@ -4414,6 +4438,24 @@ async def chat_with_opus(
         )
 
         try:
+            # Deferred definitions are transported for hosted tool search but are
+            # not model-visible until the provider loads them, so they are
+            # sized separately from the initially visible surface (ALL-1279).
+            initially_visible_tool_names = {
+                tool.name
+                for tool in tools
+                if isinstance(tool, FunctionTool) and not tool.defer_loading
+            }
+            initially_visible_definitions = [
+                definition
+                for definition in tool_definitions
+                if definition.get("name") in initially_visible_tool_names
+            ]
+            deferred_definitions = [
+                definition
+                for definition in tool_definitions
+                if definition.get("name") not in initially_visible_tool_names
+            ]
             preflight = provider_context_preflight(
                 surface="agent_studio",
                 operation="agents_sdk_run",
@@ -4422,7 +4464,7 @@ async def chat_with_opus(
                 payload={
                     "instructions": system_prompt,
                     "input": input_items,
-                    "tools": tool_definitions,
+                    "initially_visible_tools": initially_visible_definitions,
                     "tool_search": {
                         "forced_tool_name": forced_tool_name,
                         "authorization_fingerprint": authorized_tools.fingerprint,
@@ -4434,6 +4476,11 @@ async def chat_with_opus(
                     "session_id": prepared_turn.session_id,
                     "turn_id": prepared_turn.turn_id,
                     "trace_id": run_state.trace_id,
+                    "deferred_tool_definitions": {
+                        "count": len(deferred_definitions),
+                        "json_chars": json_size(deferred_definitions).json_chars,
+                        "loaded_status": "provider_managed",
+                    },
                 },
                 emit_trace_event=True,
             )
@@ -4457,6 +4504,10 @@ async def chat_with_opus(
             model_settings = build_agent_studio_model_settings(
                 max_output_tokens=get_agent_studio_openai_max_output_tokens(),
                 tool_choice=forced_tool_name,
+                prompt_cache=PromptCacheIdentity(
+                    agent_key="agent_studio_authoring",
+                    static_prompt=_load_agent_studio_system_prompt_template(),
+                ),
             )
             async for runtime_event in stream_agent_studio_run(
                 instructions=system_prompt,
@@ -4816,6 +4867,7 @@ async def _process_suggestion_background(
     try:
         execution = await run_forced_agent_studio_tool(
             instructions=system_prompt,
+            static_prompt=_load_agent_studio_system_prompt_template(),
             input_items=messages,
             tool_definition=SUGGESTION_TOOL,
             executor=execute_tool,

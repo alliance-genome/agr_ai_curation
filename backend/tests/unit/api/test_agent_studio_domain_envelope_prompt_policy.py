@@ -17,6 +17,7 @@ VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS = (
     "backend/src/lib/agent_studio/domain_envelope_tools.py",
     "backend/src/lib/agent_studio/flow_tools.py",
     "backend/src/lib/agent_studio/prompt_builder.py",
+    "backend/src/lib/agent_studio/studio_guide_core.md",
     "backend/src/lib/agent_studio/diagnostic_tools/tool_definitions.py",
     "backend/src/lib/domain_packs/validation_registry.py",
     "backend/src/lib/domain_packs/validator_dispatch.py",
@@ -201,13 +202,12 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "validation_attachments[].validator_agent_id" in prompt
     assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
     assert "Extractor and validator responsibilities are deliberately separate" in prompt
-    assert "First-pass extractors must not use broad database/entity lookup tools" in prompt
-    assert "`agr_species_context_lookup` is the shared narrow context tool" in prompt
-    assert "Domain-pack-declared extractor helper tools may provide" in prompt
-    assert "controlled-vocabulary options or slot-routing hints" in prompt
-    assert "helper output remains candidate guidance, not validator authority" in prompt
+    assert "Extractors must not search databases" in prompt
+    assert "`agr_species_context_lookup` is the narrow context tool" in prompt
+    assert "Only an explicit fixed `extraction_mapping`" in prompt
+    assert "Do not revive removed vocabulary helpers or lookup tools" in prompt
     assert "Validators receive `DomainValidationRequest` payloads" in prompt
-    assert "Materialized/resolved fields belong to validator results" in prompt
+    assert "Validators own lookup-confirmed identities" in prompt
     assert "Do not infer that an extractor called a validator directly" in prompt
     assert "Domain-envelope extractors" in prompt
     assert "gene_expression_extraction" in prompt
@@ -237,6 +237,35 @@ def test_agent_studio_system_prompt_uses_bounded_trace_review_contracts():
     assert "include_values" not in prompt, source_path
 
 
+def _flow_reachable_guidance(relative_path: str) -> tuple[str, str]:
+    """Return (always-sent Flows prompt, full reachable text incl. guide topics).
+
+    ALL-1292 serves the flow verification protocol and design reference through
+    read_studio_guide; they must remain reachable from every installed template.
+    """
+    from types import SimpleNamespace
+
+    from src.lib.agent_studio import prompt_builder
+    from src.lib.agent_studio.models import ChatContext
+    from src.lib.agent_studio.studio_guide import studio_guide_topics
+
+    template = _read_repo_text(relative_path)
+    original = prompt_builder.build_package_diagnostic_tools_prompt
+    prompt_builder.build_package_diagnostic_tools_prompt = lambda: "- diagnostic fixture"
+    try:
+        prompt = prompt_builder.build_opus_system_prompt(
+            ChatContext(active_tab="flows"),
+            load_template=lambda: template,
+            list_model_definitions=lambda: [],
+            get_prompt_catalog=lambda: SimpleNamespace(get_agent=lambda _agent_id: None),
+            prepare_trace_context=lambda _trace_id: None,
+        )
+    finally:
+        prompt_builder.build_package_diagnostic_tools_prompt = original
+    guide = "\n".join(topic.content for topic in studio_guide_topics(template))
+    return prompt, prompt + "\n" + guide
+
+
 def test_installed_agent_studio_prompts_require_targeted_flow_verification():
     prompt_paths = (
         "packages/core/config/agent_studio_system_prompt.md",
@@ -244,13 +273,15 @@ def test_installed_agent_studio_prompts_require_targeted_flow_verification():
     )
 
     for relative_path in prompt_paths:
-        prompt = _read_repo_text(relative_path)
-        assert "Call `get_current_flow()` first" in prompt, relative_path
+        always_sent, prompt = _flow_reachable_guidance(relative_path)
+        assert "call `get_current_flow` tool FIRST" in always_sent, relative_path
+        assert "read studio guide topic `flow_verification`" in always_sent, relative_path
+        assert "`compacted_tool_result`" in always_sent, relative_path
+        assert "`output_key` is HIGH" in always_sent, relative_path
         assert 'get_available_agents(category="Output")' in prompt, relative_path
         assert 'get_prompt(agent_id, group_id, view="summary")' in prompt, relative_path
         assert 'view="effective_prompt"' in prompt, relative_path
-        assert "`compacted_tool_result`" in prompt, relative_path
-        assert "every present `custom_instructions`" in prompt, relative_path
+        assert "every nonempty active `custom_instructions`" in prompt, relative_path
         assert "returned `next_call` until `complete=true`" in prompt, relative_path
         assert (
             "`next_call` through ordinary pages and exact record chunks until"
@@ -263,15 +294,13 @@ def test_installed_agent_studio_prompts_require_targeted_flow_verification():
         assert "`scheduled_validators`" in prompt, relative_path
         assert "method/PDF-level `get_tool_details(tool_id, agent_id)`" in prompt, relative_path
         assert "Output agents are attachment branches with ordered" in prompt, relative_path
-        assert "duplicate `output_key` as HIGH" in prompt, relative_path
-        assert (
-            "get_domain_pack_validation_plan(agent_id, domain_pack_id, section, "
-            "object_type, field_path, validator_id, binding_id, state, query, limit, cursor)"
-        ) in prompt, relative_path
+        assert "`get_domain_pack_validation_plan(agent_id=<node agent>" in prompt, relative_path
 
 
 def test_alliance_prompt_documents_catalog_and_tool_continuation_contracts():
-    prompt = _read_repo_text("packages/alliance/config/agent_studio_system_prompt.md")
+    _always_sent, prompt = _flow_reachable_guidance(
+        "packages/alliance/config/agent_studio_system_prompt.md"
+    )
 
     assert (
         "get_flow_templates(template_query, query, category, section, "

@@ -20,9 +20,9 @@ from src.schemas.curation_workspace import (
 
 from ..schema_refs import ALLIANCE_LINKML_COMMIT, ALLIANCE_LINKML_PROVIDER_KEY
 from ._payload_terms import (
-    has_term_selector as _has_term_selector,
     term_list as _term_list,
     term_payload as _term_payload,
+    term_present as _term_present,
     value_missing_or_blank as _value_missing_or_blank,
 )
 from .constants import (
@@ -35,6 +35,12 @@ from .constants import (
     GENE_EXPRESSION_OBJECT_TYPE,
 )
 from .conversion import REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS
+from .resolvable import (
+    GENE_EXPRESSION_RESOLVABLE_VALUES,
+    effective_gene_expression_payload,
+    is_resolved,
+    unresolved_value_message,
+)
 
 
 GENE_EXPRESSION_ADAPTER_KEY = "gene_expression"
@@ -242,13 +248,20 @@ def build_gene_expression_export_payload(
     return _canonicalize(payload)
 
 
+# The stage name is filled from a confirmed stage term; without one a curator enters it.
+_STAGE_NAME_MISSING_MESSAGE = (
+    "The stage name is empty. It is filled in when the stage term is confirmed; if the "
+    "stage term stays unconfirmed, or the paper states no stage, enter the stage name."
+)
+
+
 def gene_expression_export_blockers(
     candidate: Mapping[str, Any],
 ) -> tuple[GeneExpressionExportBlocker, ...]:
     """Return deterministic adapter blockers for one domain-envelope candidate."""
 
     projection_ref = _mapping(candidate.get("projection_ref"))
-    payload = _mapping(candidate.get("payload"))
+    payload = _effective_candidate_payload(candidate)
     candidate_id = _optional_string(candidate.get("candidate_id"))
     envelope_id = _optional_string(
         candidate.get("envelope_id") or projection_ref.get("envelope_id")
@@ -286,16 +299,71 @@ def gene_expression_export_blockers(
             )
         )
 
+    def blocker(field_path: str | None, code: str, message: str) -> GeneExpressionExportBlocker:
+        return GeneExpressionExportBlocker(
+            candidate_id=candidate_id,
+            envelope_id=envelope_id,
+            object_id=object_id,
+            field_path=field_path,
+            code=code,
+            message=message,
+        )
+
+    # Each exported value blocks on its own field until it resolves.
+    unresolved_values: set[str] = set()
+    for declared in GENE_EXPRESSION_RESOLVABLE_VALUES:
+        if not declared.exported:
+            continue
+        stored = _payload_value(payload, declared.field_path)
+        if stored is None:
+            continue
+        elements = (
+            [(f"{declared.field_path}[{index}]", item) for index, item in enumerate(stored)]
+            if declared.multivalued and isinstance(stored, list)
+            else [(declared.field_path, stored)]
+        )
+        # The keys the curation DB joins on (declared.join_keys). Required join keys are
+        # reported with the other required fields below.
+        for field_path, value in elements:
+            if not isinstance(value, Mapping):
+                continue
+            if not is_resolved(value):
+                unresolved_values.add(declared.field_path)
+                blockers.append(
+                    blocker(
+                        field_path,
+                        "alliance.gene_expression.value_unresolved",
+                        unresolved_value_message(declared.label, value),
+                    )
+                )
+                continue
+            for join_key in declared.join_keys:
+                if (
+                    f"{declared.field_path}.{join_key}" not in REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS
+                    and _value_missing_or_blank(value.get(join_key))
+                ):
+                    blockers.append(
+                        blocker(
+                            f"{field_path}.{join_key}",
+                            "alliance.gene_expression.required_field_missing",
+                            f"{declared.label} has no {join_key.replace('_', ' ')}, which the export "
+                            "needs to find it in the curation database. Re-run validation, or enter "
+                            "it in a curator override.",
+                        )
+                    )
+
     for field_path in sorted(REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS):
+        if field_path.rpartition(".")[0] in unresolved_values:
+            # An unresolved value's identity keys are reported through its own state.
+            continue
         if _value_missing_or_blank(_payload_value(payload, field_path)):
             blockers.append(
-                GeneExpressionExportBlocker(
-                    candidate_id=candidate_id,
-                    envelope_id=envelope_id,
-                    object_id=object_id,
-                    field_path=field_path,
-                    code="alliance.gene_expression.required_field_missing",
-                    message=f"Required gene-expression export field is missing: {field_path}.",
+                blocker(
+                    field_path,
+                    "alliance.gene_expression.required_field_missing",
+                    _STAGE_NAME_MISSING_MESSAGE
+                    if field_path == "when_expressed_stage_name"
+                    else f"Required gene-expression export field is missing: {field_path}.",
                 )
             )
 
@@ -303,17 +371,14 @@ def gene_expression_export_blockers(
         _payload_value(payload, "expression_pattern.where_expressed")
     )
     if (
-        not _has_term_selector(where_expressed.get("anatomical_structure"))
-        and not _has_term_selector(where_expressed.get("cellular_component"))
+        not _term_present(where_expressed.get("anatomical_structure"))
+        and not _term_present(where_expressed.get("cellular_component"))
     ):
         blockers.append(
-            GeneExpressionExportBlocker(
-                candidate_id=candidate_id,
-                envelope_id=envelope_id,
-                object_id=object_id,
-                field_path="expression_pattern.where_expressed",
-                code="alliance.gene_expression.anatomical_site_required",
-                message=(
+            blocker(
+                "expression_pattern.where_expressed",
+                "alliance.gene_expression.anatomical_site_required",
+                (
                     "Gene-expression export requires anatomical_structure or "
                     "cellular_component on expression_pattern.where_expressed."
                 ),
@@ -323,8 +388,18 @@ def gene_expression_export_blockers(
     return tuple(blockers)
 
 
+def _effective_candidate_payload(candidate: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The candidate payload with each value's read-time resolution (legacy values included)."""
+
+    object_metadata = _mapping(_mapping(candidate.get("object")).get("metadata"))
+    return effective_gene_expression_payload(
+        _mapping(candidate.get("payload")),
+        object_metadata,
+    )
+
+
 def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[str, Any]:
-    payload = _mapping(candidate["payload"])
+    payload = _effective_candidate_payload(candidate)
     expression_experiment = _mapping(payload["expression_experiment"])
     expression_pattern = _mapping(payload["expression_pattern"])
     when_expressed = _mapping(expression_pattern.get("when_expressed"))
@@ -350,7 +425,7 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
         ),
         "relationships": _drop_empty(
             {
-                "temporalcontext_stageuberonslimterms": _term_list(
+                "temporalcontext_stageuberonslimterms": _vocabulary_term_lookups(
                     when_expressed.get("stage_uberon_slim_terms")
                 ),
             }
@@ -390,6 +465,7 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                     "datecreated": payload["date_created"],
                     "internal": payload["internal"],
                     "obsolete": payload.get("obsolete"),
+                    # Filled by validation from the stage term's name, or by a curator.
                     "whenexpressedstagename": payload["when_expressed_stage_name"],
                     "whereexpressedstatement": payload["where_expressed_statement"],
                     "negated": payload.get("negated"),
@@ -516,9 +592,12 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                     "developmental_stage_start": _term_payload(
                         when_expressed.get("developmental_stage_start")
                     ),
-                    "stage_uberon_slim_terms": _term_list(
-                        when_expressed.get("stage_uberon_slim_terms")
-                    ),
+                    "stage_uberon_slim_terms": [
+                        lookup["match"]
+                        for lookup in _vocabulary_term_lookups(
+                            when_expressed.get("stage_uberon_slim_terms")
+                        )
+                    ],
                     "anatomical_structure": _term_payload(
                         where_expressed.get("anatomical_structure")
                     ),
@@ -599,11 +678,27 @@ def _export_warning_messages(payload: Mapping[str, Any]) -> list[str]:
 
 
 def _term_lookup(value: Any) -> dict[str, Any] | None:
+    """The ontologyterm lookup for a resolved term, matched by its validated CURIE."""
+
     term = _term_payload(value)
     if not term:
         return None
-    match = {"curie": term["curie"]} if term.get("curie") else {"name": term["name"]}
-    return {"table": "ontologyterm", "match": match, "projection": term}
+    return {"table": "ontologyterm", "match": {"curie": term["curie"]}, "projection": term}
+
+
+def _vocabulary_term_lookups(values: Any) -> list[dict[str, Any]]:
+    """vocabularyterm lookups for resolved vocabulary terms, matched by vocabulary and name."""
+
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        return []
+    return [
+        {
+            "table": "vocabularyterm",
+            "match": {"vocabulary": value["vocabulary"], "name": value["name"]},
+        }
+        for value in values
+        if is_resolved(value)
+    ]
 
 
 def _readiness_blocker_from_export_blocker(

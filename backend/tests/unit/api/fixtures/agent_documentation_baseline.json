@@ -2,7 +2,6 @@
   "agm": {
     "avoid_when": [
       "For gene or allele subjects; use the Gene Validation Agent or the Allele Validation Agent.",
-      "When the subject type is not yet known; use the Subject Entity Validation Agent to route it.",
       "To pull model names out of a paper; run an extractor first and validate its output here."
     ],
     "capabilities": [
@@ -53,7 +52,7 @@
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "note": "Models in disease records are confirmed automatically by the subject entity check. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically on every disease record whose subject is a model. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
     "use_when": [
       "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record.",
@@ -64,7 +63,6 @@
   "agm_validation": {
     "avoid_when": [
       "For gene or allele subjects; use the Gene Validation Agent or the Allele Validation Agent.",
-      "When the subject type is not yet known; use the Subject Entity Validation Agent to route it.",
       "To pull model names out of a paper; run an extractor first and validate its output here."
     ],
     "capabilities": [
@@ -115,7 +113,7 @@
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "note": "Models in disease records are confirmed automatically by the subject entity check. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically on every disease record whose subject is a model. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
     "use_when": [
       "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record.",
@@ -241,7 +239,7 @@
       "Allele symbols written with angle brackets are matched to their superscript form automatically \u2014 you don't need to reformat them.",
       "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."
     ],
-    "note": "Validation runs automatically. This check runs on every allele an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on every allele an extractor produces, including the allele a disease record is about, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association.",
     "use_when": [
       "When you want a custom allele check: a changed prompt, different tools, or a stricter or looser match than the automatic check.",
@@ -256,15 +254,16 @@
     ],
     "capabilities": [
       {
-        "description": "Presents structured extraction output in readable chat-first format",
-        "example_query": "Show me the extracted entities in chat",
-        "example_result": "Returns a readable, sectioned summary directly in chat",
+        "description": "Builds the table or list you ask for from the saved results, with your column names, order and missing-value marker, and shows every matching row in chat",
+        "example_query": "Show one row per expression statement with Gene, Anatomy Terms and PMID columns",
+        "example_result": "Shows the requested table in chat, with a short note about values that still need review",
         "name": "Inline result rendering"
       }
     ],
     "data_sources": [],
     "limitations": [
-      "Output is optimized for interactive reading, not file export"
+      "Output is optimized for interactive reading, not file export",
+      "Table cells come only from saved results; the agent cannot add values that were not extracted"
     ],
     "note": "",
     "summary": "Formats and displays final results directly in the chat interface for immediate curator review.",
@@ -280,15 +279,16 @@
     ],
     "capabilities": [
       {
-        "description": "Presents structured extraction output in readable chat-first format",
-        "example_query": "Show me the extracted entities in chat",
-        "example_result": "Returns a readable, sectioned summary directly in chat",
+        "description": "Builds the table or list you ask for from the saved results, with your column names, order and missing-value marker, and shows every matching row in chat",
+        "example_query": "Show one row per expression statement with Gene, Anatomy Terms and PMID columns",
+        "example_result": "Shows the requested table in chat, with a short note about values that still need review",
         "name": "Inline result rendering"
       }
     ],
     "data_sources": [],
     "limitations": [
-      "Output is optimized for interactive reading, not file export"
+      "Output is optimized for interactive reading, not file export",
+      "Table cells come only from saved results; the agent cannot add values that were not extracted"
     ],
     "note": "",
     "summary": "Formats and displays final results directly in the chat interface for immediate curator review.",
@@ -709,13 +709,13 @@
         "name": "Role classification"
       },
       {
-        "description": "Determines the relationship type between genes and diseases using Alliance annotation types: is_implicated_in, is_marker_for, contributes_to, is_model_of",
+        "description": "Uses the relationship allowed for the paper's subject: genes can be is_implicated_in or is_marker_for (including supported orthology variants), alleles can be is_implicated_in, and affected genomic models can be is_model_of, is_ameliorated_model_of or is_exacerbated_model_of.",
         "example_query": "What gene-disease relationships are reported?",
         "example_result": "Returns association types with evidence (e.g., LRRK2 is_implicated_in Parkinson's disease)",
         "name": "Gene-disease association typing"
       },
       {
-        "description": "Passes each proposed disease \u2014 with the name as written, the gene-disease relationship, the data provider, the subject, and the supporting quote \u2014 to the Disease Validation Agent, the stronger specialist that authoritatively confirms each one. The extractor proposes; the validator looks the disease up in the Disease Ontology, confirms the vocabulary, and settles the result.",
+        "description": "Retains paper wording, the subject kind, relation, provider and supporting quote. Active specialist validators check their assigned fields: the Disease Validation Agent confirms the disease term, and subject validation routes separately to the gene, allele or affected-genomic-model validator. Unresolved checks remain visible for review.",
         "example_query": "Extract the diseases and pass them on for confirmation",
         "example_result": "Returns each proposed disease, its relationship, provider, and subject, with the supporting quote, ready for the Disease Validation Agent to confirm",
         "name": "Hands diseases to the validator"
@@ -736,7 +736,8 @@
     "limitations": [
       "Requires an uploaded PDF document \u2014 cannot extract diseases from chat text alone",
       "Distinguishes diseases from phenotypes \u2014 observable traits in model organisms are phenotypes, not diseases",
-      "Diseases mentioned only in introduction/background without new experimental findings are excluded"
+      "Diseases mentioned only in introduction/background without new experimental findings are excluded",
+      "Does not look anything up in the Alliance database: it records the paper's wording, plus an ID only when the paper prints one, and the validators find the official term and subject"
     ],
     "note": "",
     "summary": "Extracts experimentally supported disease associations from uploaded PDFs, classifying disease roles and gene-disease relationship types for Alliance curation.",
@@ -926,9 +927,9 @@
   },
   "gene_expression": {
     "avoid_when": [
-      "For expression changes caused by mutations, RNAi, heat shock, or drug treatment; only wild-type patterns are captured.",
+      "For rescue-only overexpression, marker-only cell labeling or methods-only reagent descriptions without an expression finding. Measured expression changes after perturbation are in scope when supported by the paper.",
       "To turn tissue or stage wording into official ontology IDs; the domain pack's validators do that automatically on everything this agent extracts.",
-      "To produce a downloadable file; add a File Formatter after this agent."
+      "To produce a downloadable file by itself; attach a CSV, TSV or JSON output branch to this extractor."
     ],
     "capabilities": [
       {
@@ -950,7 +951,7 @@
         "name": "Negative Evidence Capture"
       },
       {
-        "description": "Passes each expression observation \u2014 the gene, the tissue or cell type, the developmental stage, the data provider, and the reagent used \u2014 to the specialist validators, each backed by its supporting quote. The extractor proposes; the validators authoritatively confirm the official terms and the data provider.",
+        "description": "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, tissue/cell-type, stage and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed.",
         "example_query": "Extract the expression observations and pass them on for confirmation",
         "example_result": "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms",
         "name": "Hands expression details to the validators"
@@ -982,9 +983,9 @@
   },
   "gene_expression_extraction": {
     "avoid_when": [
-      "For expression changes caused by mutations, RNAi, heat shock, or drug treatment; only wild-type patterns are captured.",
+      "For rescue-only overexpression, marker-only cell labeling or methods-only reagent descriptions without an expression finding. Measured expression changes after perturbation are in scope when supported by the paper.",
       "To turn tissue or stage wording into official ontology IDs; the domain pack's validators do that automatically on everything this agent extracts.",
-      "To produce a downloadable file; add a File Formatter after this agent."
+      "To produce a downloadable file by itself; attach a CSV, TSV or JSON output branch to this extractor."
     ],
     "capabilities": [
       {
@@ -1006,7 +1007,7 @@
         "name": "Negative Evidence Capture"
       },
       {
-        "description": "Passes each expression observation \u2014 the gene, the tissue or cell type, the developmental stage, the data provider, and the reagent used \u2014 to the specialist validators, each backed by its supporting quote. The extractor proposes; the validators authoritatively confirm the official terms and the data provider.",
+        "description": "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, tissue/cell-type, stage and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed.",
         "example_query": "Extract the expression observations and pass them on for confirmation",
         "example_result": "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms",
         "name": "Hands expression details to the validators"
@@ -1729,7 +1730,9 @@
     ],
     "limitations": [
       "Requires an uploaded PDF document \u2014 cannot extract phenotypes from chat text alone",
-      "Wild-type/control observations are baselines, not phenotype assertions"
+      "Wild-type/control observations are baselines, not phenotype assertions",
+      "Records paper wording and paper-printed IDs without identity lookups; the active term validator can confirm phenotype terms, while subject and reference resolution remain under development. Extraction does not imply submission readiness.",
+      "An assertion can contain several phenotype terms. Export the complete term list to retain all of them; the primary display label is not the full list."
     ],
     "note": "",
     "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence.",
@@ -1944,14 +1947,8 @@
       {
         "description": "Reads Results, Methods, figures, and tables for named rat gene products and produces review-only GO recommendations with exact document evidence.\n",
         "example_query": "Review Cttn and discover any additional GO-curatable genes in this paper.",
-        "example_result": "Returns typed GOCuratableObject recommendations with gene-product identity, GO term, evidence/ECO, rationale, reference, With/From, and evidence anchors.\n",
+        "example_result": "Returns typed GOCuratableObject recommendations with the paper's wording for the gene product, GO term, evidence code, reference, and With/From, any identifiers the paper prints, a rationale, and evidence anchors. Validation confirms each identity afterwards.\n",
         "name": "Evidence-backed GO paper review"
-      },
-      {
-        "description": "Resolves RGD gene or mature-RNA identity and compares each proposal with current typed GO annotations while preserving ambiguity and source status.\n",
-        "example_query": "Check whether miR-124-3p has an unambiguous RGD product identity.",
-        "example_result": "Preserves all resolver candidates and a blocking unresolved state instead of guessing a precursor-gene CURIE.\n",
-        "name": "Identity and annotation comparison"
       }
     ],
     "data_sources": [
@@ -1967,158 +1964,17 @@
         "species_supported": [
           "R. norvegicus (RGD)"
         ]
-      },
-      {
-        "data_types": [
-          "Gene-product identity",
-          "Existing GO annotations",
-          "GO terms",
-          "GO hierarchy"
-        ],
-        "description": "Alliance gene-product resolution, GO Consortium existing annotations, and QuickGO term and hierarchy endpoints with retained provenance.\n",
-        "name": "Alliance and GO read-only sources",
-        "species_supported": [
-          "R. norvegicus (RGD)"
-        ]
       }
     ],
     "limitations": [
       "Introduction and Discussion are excluded as sole recommendation evidence.",
-      "Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE."
+      "Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE.",
+      "It never looks identities up; it records the paper's wording and any identifiers the paper prints, and validation confirms them."
     ],
     "note": "",
     "summary": "Authenticated RGD-only extraction specialist for evidence-backed GO recommendations from one active paper.\n",
     "use_when": [
-      "When you are an RGD curator with a paper open and want evidence-backed GO recommendations from it.",
-      "When you want a paper's findings compared against the GO annotations already recorded for its genes."
-    ]
-  },
-  "subject_entity": {
-    "avoid_when": [
-      "To get the subject of a disease record validated; the domain pack already runs this check automatically.",
-      "When the subject type is not stated; the agent does not guess it.",
-      "For references, ontology terms, controlled vocabulary, or experimental conditions; use the matching validation agent.",
-      "When you already know the subject is a gene, allele, or model; use that validation agent directly."
-    ],
-    "capabilities": [
-      {
-        "description": "Uses the submitted subject_type to choose the correct validation path for gene, allele, or AGM subjects.\n",
-        "example_query": "Validate this phenotype subject with subject_type allele and ID WB:WBVar0001",
-        "example_result": "Returns the selected validator route and the type-specific validation result.\n",
-        "name": "Subject type routing"
-      },
-      {
-        "description": "Keeps the submitted identifier, label, taxon, and field path together while validating the subject entity.\n",
-        "example_query": "Check subject label daf-16 with gene subject type for WormBase",
-        "example_result": "Returns matched gene evidence or unresolved notes tied to the original subject field.\n",
-        "name": "Identifier and label preservation"
-      },
-      {
-        "description": "Reports one validation outcome per submitted subject so mixed subject batches remain auditable.\n",
-        "example_query": "Validate these phenotype and disease annotation subjects",
-        "example_result": "Returns accepted, ambiguous, or unresolved subject results with selected validator metadata.\n",
-        "name": "Per-subject review decisions"
-      }
-    ],
-    "data_sources": [
-      {
-        "data_types": [
-          "genes",
-          "alleles",
-          "affected genomic models",
-          "entity labels",
-          "taxon context"
-        ],
-        "description": "Alliance entity records used by gene, allele, and affected genomic model validation routes.\n",
-        "name": "Alliance Curation Database",
-        "species_supported": [
-          "C. elegans (WB)",
-          "D. melanogaster (FB)",
-          "D. rerio (ZFIN)",
-          "M. musculus (MGI)",
-          "R. norvegicus (RGD)",
-          "S. cerevisiae (SGD)",
-          "X. laevis (XB)",
-          "H. sapiens (HGNC)"
-        ]
-      }
-    ],
-    "limitations": [
-      "Requires an explicit subject_type; it does not guess whether a value is a gene, allele, or AGM.",
-      "Ambiguous or missing type-specific lookup results still require curator review.",
-      "Cannot create missing subject records or assign new entity identifiers.",
-      "Only routes among the supported subject validation paths exposed by the package."
-    ],
-    "note": "Validation runs automatically. This check runs on the subject of every disease record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
-    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n",
-    "use_when": [
-      "When you want a custom subject check: a changed prompt, different routing, or a stricter or looser match for gene, allele, or model subjects.",
-      "When you want to review how an annotation's subject is sent to the gene, allele, or model check and keeps the identifier and label it arrived with.",
-      "When you clone it in the Agent Workshop to build a custom version for a check the domain pack does not include."
-    ]
-  },
-  "subject_entity_validation": {
-    "avoid_when": [
-      "To get the subject of a disease record validated; the domain pack already runs this check automatically.",
-      "When the subject type is not stated; the agent does not guess it.",
-      "For references, ontology terms, controlled vocabulary, or experimental conditions; use the matching validation agent.",
-      "When you already know the subject is a gene, allele, or model; use that validation agent directly."
-    ],
-    "capabilities": [
-      {
-        "description": "Uses the submitted subject_type to choose the correct validation path for gene, allele, or AGM subjects.\n",
-        "example_query": "Validate this phenotype subject with subject_type allele and ID WB:WBVar0001",
-        "example_result": "Returns the selected validator route and the type-specific validation result.\n",
-        "name": "Subject type routing"
-      },
-      {
-        "description": "Keeps the submitted identifier, label, taxon, and field path together while validating the subject entity.\n",
-        "example_query": "Check subject label daf-16 with gene subject type for WormBase",
-        "example_result": "Returns matched gene evidence or unresolved notes tied to the original subject field.\n",
-        "name": "Identifier and label preservation"
-      },
-      {
-        "description": "Reports one validation outcome per submitted subject so mixed subject batches remain auditable.\n",
-        "example_query": "Validate these phenotype and disease annotation subjects",
-        "example_result": "Returns accepted, ambiguous, or unresolved subject results with selected validator metadata.\n",
-        "name": "Per-subject review decisions"
-      }
-    ],
-    "data_sources": [
-      {
-        "data_types": [
-          "genes",
-          "alleles",
-          "affected genomic models",
-          "entity labels",
-          "taxon context"
-        ],
-        "description": "Alliance entity records used by gene, allele, and affected genomic model validation routes.\n",
-        "name": "Alliance Curation Database",
-        "species_supported": [
-          "C. elegans (WB)",
-          "D. melanogaster (FB)",
-          "D. rerio (ZFIN)",
-          "M. musculus (MGI)",
-          "R. norvegicus (RGD)",
-          "S. cerevisiae (SGD)",
-          "X. laevis (XB)",
-          "H. sapiens (HGNC)"
-        ]
-      }
-    ],
-    "limitations": [
-      "Requires an explicit subject_type; it does not guess whether a value is a gene, allele, or AGM.",
-      "Ambiguous or missing type-specific lookup results still require curator review.",
-      "Cannot create missing subject records or assign new entity identifiers.",
-      "Only routes among the supported subject validation paths exposed by the package."
-    ],
-    "note": "Validation runs automatically. This check runs on the subject of every disease record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
-    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n",
-    "use_when": [
-      "When you want a custom subject check: a changed prompt, different routing, or a stricter or looser match for gene, allele, or model subjects.",
-      "When you want to review how an annotation's subject is sent to the gene, allele, or model check and keeps the identifier and label it arrived with.",
-      "When you clone it in the Agent Workshop to build a custom version for a check the domain pack does not include."
+      "When you are an RGD curator with a paper open and want evidence-backed GO recommendations from it."
     ]
   },
   "supervisor": {

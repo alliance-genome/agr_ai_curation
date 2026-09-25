@@ -345,11 +345,14 @@ def validate_flow_authoring_draft(
     entries_by_node: Mapping[str, Mapping[str, Any] | None] | None = None,
     contract_findings: Sequence[AuthoringValidationFinding] = (),
     projection_catalogs: dict[str, dict] | None = None,
+    instruction_restoration: bool = False,
 ) -> AuthoringValidationResult:
     """Validate one exact full ``FlowDefinition`` without writing or applying it."""
 
     try:
-        flow_definition = FlowDefinition.model_validate(candidate).model_copy(deep=True)
+        flow_definition = FlowDefinition.model_validate(
+            candidate, context={"instruction_restoration": instruction_restoration and phase != "save"},
+        ).model_copy(deep=True)
     except ValidationError as exc:
         return AuthoringValidationResult(
             artifact_kind="flow",
@@ -364,9 +367,13 @@ def validate_flow_authoring_draft(
     )
     if stale_finding is not None:
         findings.append(stale_finding)
-    if hydrate_attachment_defaults:
+    if hydrate_attachment_defaults or instruction_restoration:
         try:
-            flow_definition = apply_attachment_defaults(flow_definition)
+            hydrated = apply_attachment_defaults(
+                flow_definition.model_copy(deep=True) if instruction_restoration else flow_definition,
+            )
+            if not instruction_restoration:
+                flow_definition = hydrated
         except ValueError:
             findings.append(
                 AuthoringValidationFinding(
@@ -627,6 +634,9 @@ class AgentValidationSources:
     output_schema_keys: frozenset[str]
     group_ids: frozenset[str]
     builder_finalization_tool_ids: frozenset[str]
+    identity_lookup_tool_ids: frozenset[str]
+    # Output schemas whose agents extract (structured extraction, not validator results).
+    extraction_output_schema_keys: frozenset[str]
 
 
 class AgentDraftExtensionValidator(Protocol):
@@ -767,6 +777,35 @@ def validate_custom_agent_authoring_draft(
                 )
             )
 
+    from src.lib.agent_studio.catalog_service import _load_package_tool_registry
+    from src.lib.openai_agents.config import get_tool_surface_namespace_max_functions
+    from src.lib.openai_agents.tool_surface import (
+        oversized_tool_namespaces,
+        tool_group_cap_message,
+        tool_namespace_memberships,
+    )
+
+    # A run loads at most this many tools of one group (ALL-1280). Blocking,
+    # and the curator is sent to the developers rather than asked to trim.
+    namespace_max = get_tool_surface_namespace_max_functions()
+    for namespace, members in oversized_tool_namespaces(
+        normalized_tool_ids,
+        tool_namespace_memberships(_load_package_tool_registry().bindings),
+        namespace_max,
+    ).items():
+        findings.append(
+            AuthoringValidationFinding(
+                code="tool_group_too_large",
+                severity="error",
+                path="custom_agent.tool_ids",
+                message=tool_group_cap_message(namespace, len(members), namespace_max),
+                fix_hint=(
+                    "Contact the AI Curation developers and include this message. "
+                    f"Tools from this group on the agent: {', '.join(members)}."
+                ),
+            )
+        )
+
     schema_key = draft.output_schema_key
     if schema_key is not None and schema_key not in sources.output_schema_keys:
         findings.append(
@@ -790,6 +829,24 @@ def validate_custom_agent_authoring_draft(
                 fix_hint="Choose a packaged builder format with no model schema, or remove the builder finalizer.",
             )
         )
+
+    if set(normalized_tool_ids) & set(sources.builder_finalization_tool_ids) or (
+        schema_key is not None and schema_key in sources.extraction_output_schema_keys
+    ):
+        lookups = [tool_id for tool_id in normalized_tool_ids if tool_id in sources.identity_lookup_tool_ids]
+        if lookups:
+            findings.append(
+                AuthoringValidationFinding(
+                    code="identity_lookup_on_extraction_agent",
+                    severity="error",
+                    path="custom_agent.tool_ids",
+                    message=(
+                        "Extraction agents cannot use database lookup tools. Extraction records the "
+                        "paper's wording; validators do the database search."
+                    ),
+                    fix_hint=f"Remove these tools: {', '.join(lookups)}.",
+                )
+            )
 
     normalized_allowed = list(dict.fromkeys(draft.allowed_group_ids))
     normalized_inherited = list(dict.fromkeys(draft.inherited_allowed_group_ids))

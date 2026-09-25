@@ -1457,14 +1457,14 @@ async def get_chunks_by_parent_section(
     max_chunks: int = 50
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve all chunks belonging to a top-level section (e.g., Methods, Results).
+    Retrieve all chunks belonging to a top-level section (e.g., Materials and Methods, Results).
 
     Uses the LLM-resolved parentSection field for accurate section boundaries.
     Unlike get_chunks_by_section, this respects the hierarchical structure.
 
     Args:
         document_id: Document UUID
-        parent_section: Top-level section name (e.g., "Methods", "Results", "Abstract")
+        parent_section: The paper's own top-level section heading (e.g., "Materials and Methods", "Results")
         user_id: User identifier for tenant scoping
         max_chunks: Maximum number of chunks to retrieve
 
@@ -1685,7 +1685,7 @@ async def get_document_sections_hierarchical(
     {
         "sections": [
             {
-                "name": "Methods",
+                "name": "Materials and Methods",
                 "is_top_level": True,
                 "page_numbers": [2, 3],
                 "chunk_count": 15,
@@ -1696,7 +1696,7 @@ async def get_document_sections_hierarchical(
             },
             ...
         ],
-        "top_level_sections": ["TITLE", "Abstract", "Introduction", "Methods", "Results", "Discussion", "References"]
+        "top_level_sections": ["<paper title>", "Abstract", "Introduction", "Materials and Methods", "Results", "Discussion", "References"]
     }
 
     Args:

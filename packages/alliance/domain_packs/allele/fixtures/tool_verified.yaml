@@ -52,6 +52,14 @@ fixtures:
               curie: NCBITaxon:6239
             source_mentions:
               - daf-2(m41)
+            allele:
+              primary_external_id: null
+              allele_symbol: null
+              taxon: null
+              mention: daf-2(m41)
+              resolution_state: unresolved
+              lookup_outcome: not_validated
+              validator_explanation: Not validated yet.
           evidence_record_ids:
             - daf-2-m41-evidence-1
           metadata:
@@ -92,7 +100,13 @@ fixtures:
             - Pending only; write behavior is blocked until reference IDs and write targets are verified.
           payload:
             association_kind: allele_paper_evidence
-            allele_label: daf-2(m41)
+            allele_identifier: null
+            allele_label: null
+            allele_taxon: null
+            mention: daf-2(m41)
+            resolution_state: unresolved
+            lookup_outcome: not_validated
+            validator_explanation: Not validated yet.
             associated_gene: daf-2
             confidence: high
             evidence_record_ids:

@@ -4,6 +4,8 @@ This section supersedes the historical section layout and verbatim phrase pins
 below. Historical AV identifiers remain useful for the coverage audit. The
 current workflow is role -> identity decision -> request context -> lookup ->
 result contract. The model and reasoning setting remain Terra/medium.
+(Update, September 24, 2026: GPT-5.6 Terra was retired; the allele validator
+now runs GPT-6 Sol with medium reasoning. The notes below are the Sep 16 record.)
 
 ## Coverage audit
 

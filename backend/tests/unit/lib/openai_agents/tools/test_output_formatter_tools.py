@@ -237,6 +237,7 @@ async def test_formatter_tool_suite_is_plan_only_and_structure_bound():
         "inspect_output_artifacts",
         "inspect_output_rows",
         "inspect_field_values",
+        "read_output_value",
         "build_default_projection_plan",
         "validate_output_projection",
         "preview_output_projection",
@@ -266,24 +267,32 @@ async def test_formatter_tool_suite_is_plan_only_and_structure_bound():
     assert capabilities["format"] == "csv"
     assert "pair_join" in capabilities["allowed_transform_types"]
     assert "broadcasts across a list" in capabilities["transform_rules"]["pair_join"]
-    assert "conditional" in capabilities["allowed_transform_types"]
-    assert "nested conditionals are rejected" in capabilities["transform_rules"]["conditional"]
-    assert "whole field value" in capabilities["transform_rules"]["conditional"]
+    # ALL-1283: outputs never choose between fields per row.
+    assert "conditional" not in capabilities["allowed_transform_types"]
+    assert "first_non_empty" not in capabilities["allowed_transform_types"]
+    assert "conditional" not in capabilities["transform_rules"]
 
 
 @pytest.mark.asyncio
-async def test_formatter_tools_validate_preview_and_finalize_conditional_plan():
+@pytest.mark.parametrize(
+    "transform",
+    [
+        {
+            "type": "conditional",
+            "field_ref": "object.status",
+            "value": "validated",
+            "when_true": {"type": "literal", "value": "Ready"},
+            "when_false": {"type": "literal", "value": "Review"},
+        },
+        {"type": "first_non_empty", "field_refs": ["object.label", "object.payload.symbol"]},
+    ],
+)
+async def test_formatter_tools_reject_per_row_field_choice_plans(transform):
     saved = []
 
     async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
         saved.append(projection)
-        return {
-            "file_id": "conditional-file",
-            "filename": f"{filename_hint}.{output_format}",
-            "format": output_format,
-            "size_bytes": 1,
-            "download_url": "/download/conditional-file",
-        }
+        return {}
 
     tools = build_output_formatter_tools(
         bundle=_bundle(),
@@ -294,46 +303,21 @@ async def test_formatter_tools_validate_preview_and_finalize_conditional_plan():
     plan = {
         "format": "tsv",
         "row_source": "object",
-        "columns": [
-            {
-                "key": "display",
-                "transform": {
-                    "type": "conditional",
-                    "field_ref": "object.status",
-                    "condition_op": "eq",
-                    "value": "validated",
-                    "when_true": {"type": "literal", "value": "Ready"},
-                    "when_false": {
-                        "type": "first_non_empty",
-                        "field_refs": ["object.payload.symbol"],
-                    },
-                },
-            }
-        ],
+        "columns": [{"key": "display", "transform": transform}],
     }
 
     validation = await _invoke(
         _tool_by_name(tools, "validate_output_projection"),
         {"plan_json": json.dumps(plan)},
     )
-    assert validation["status"] == "ok"
-
-    preview = await _invoke(
-        _tool_by_name(tools, "preview_output_projection"),
-        {"plan_json": json.dumps(plan)},
-    )
-    assert [row["display"] for row in preview["preview"]["preview_rows"]] == [
-        "Ready",
-        "TP53",
-        "Ready",
-    ]
-
     result = await _invoke(
         _tool_by_name(tools, "finalize_and_save"),
-        {"plan_json": json.dumps(plan), "filename_hint": "conditional"},
+        {"plan_json": json.dumps(plan), "filename_hint": "fallback"},
     )
-    assert result["status"] == "ok"
-    assert [row["display"] for row in saved[0].rows] == ["Ready", "TP53", "Ready"]
+
+    assert validation["status"] == "invalid"
+    assert result["status"] == "invalid"
+    assert saved == []
 
 
 @pytest.mark.asyncio
@@ -833,10 +817,7 @@ async def test_validate_preview_and_finalize_support_full_csv_shaping_surface():
             },
             {
                 "key": "best_label",
-                "transform": {
-                    "type": "first_non_empty",
-                    "field_refs": ["object.label", "object.payload.symbol"],
-                },
+                "field_ref": "object.payload.symbol",
             },
             {
                 "key": "display",
@@ -1044,36 +1025,6 @@ async def test_invalid_raw_content_plans_and_impossible_requests_do_not_save():
     assert invalid["status"] == "invalid"
     assert "model-authored content key 'rows'" in invalid["errors"][0]
 
-    nested_raw_rows_plan = {
-        "format": "csv",
-        "row_source": "object",
-        "columns": [
-            {
-                "key": "symbol",
-                "transform": {
-                    "type": "conditional",
-                    "field_ref": "object.status",
-                    "value": "validated",
-                    "when_true": {
-                        "type": "first_non_empty",
-                        "field_refs": ["object.payload.symbol"],
-                        "rows": [{"symbol": "model-authored"}],
-                    },
-                    "when_false": {
-                        "type": "first_non_empty",
-                        "field_refs": ["object.payload.symbol"],
-                    },
-                },
-            }
-        ],
-    }
-    nested_invalid = await _invoke(
-        _tool_by_name(tools, "validate_output_projection"),
-        {"plan_json": json.dumps(nested_raw_rows_plan)},
-    )
-    assert nested_invalid["status"] == "invalid"
-    assert "when_true contains unsupported key 'rows'" in nested_invalid["errors"][0]
-
     grouped_csv_plan = {
         "format": "csv",
         "row_source": "object",
@@ -1227,29 +1178,6 @@ async def test_transform_literals_cannot_smuggle_structured_replacement_content(
             },
         ],
     }
-    conditional_structured_literal_plan = {
-        "format": "csv",
-        "row_source": "object",
-        "columns": [
-            {"key": "symbol", "field_ref": "object.payload.symbol"},
-            {
-                "key": "conditional_replacement",
-                "transform": {
-                    "type": "conditional",
-                    "field_ref": "object.status",
-                    "value": "validated",
-                    "when_true": {
-                        "type": "literal",
-                        "value": {"rows": [{"symbol": "model-authored"}]},
-                    },
-                    "when_false": {
-                        "type": "first_non_empty",
-                        "field_refs": ["object.payload.symbol"],
-                    },
-                },
-            },
-        ],
-    }
 
     structured = await _invoke(
         _tool_by_name(tools, "validate_output_projection"),
@@ -1268,12 +1196,6 @@ async def test_transform_literals_cannot_smuggle_structured_replacement_content(
     assert encoded["status"] == "invalid"
     assert "encoded JSON objects or arrays" in encoded["errors"][0]
 
-    conditional = await _invoke(
-        _tool_by_name(tools, "validate_output_projection"),
-        {"plan_json": json.dumps(conditional_structured_literal_plan)},
-    )
-    assert conditional["status"] == "invalid"
-    assert "structured replacement data" in conditional["errors"][0]
     assert saved == []
 
 
@@ -1412,3 +1334,93 @@ async def test_finalize_rejects_literal_only_files_without_saved_rows():
     assert result["status"] == "invalid"
     assert "literal-only files" in result["errors"][0]
     assert saved == []
+
+
+@pytest.mark.asyncio
+async def test_chat_capabilities_route_explanations_to_stored_rationale_and_sections_to_group_by():
+    async def _deliver(*_args, **_kwargs):
+        return {}
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="chat",
+        formatter_agent_id="chat_output_formatter",
+        deliver_chat_output=_deliver,
+    )
+
+    capabilities = await _invoke(_tool_by_name(tools, "explain_formatter_capabilities"))
+    chat_rules = capabilities["format_rules"]
+    assert "never table rows or explanations" in chat_rules
+    assert "group_by splits rows into headed groups" in chat_rules
+    assert "different columns are not supported" in chat_rules
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_format", ["chat", "csv", "tsv", "json"])
+async def test_capabilities_find_rationale_in_catalog_and_keep_one_field_per_column(output_format):
+    async def _deliver(*_args, **_kwargs):
+        return {}
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format=output_format,
+        formatter_agent_id=f"{output_format}_formatter",
+        save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
+        deliver_chat_output=_deliver,
+    )
+
+    capabilities = await _invoke(_tool_by_name(tools, "explain_formatter_capabilities"))
+    rationale = capabilities["rationale"]
+    # Packaged and custom-profile sources expose rationale under different refs,
+    # and older results may carry the declared field with every value empty.
+    assert "catalog_query 'rationale'" in rationale
+    assert "object.pack.<ObjectType>.rationale" in rationale
+    assert "object.payload.rationale" in rationale
+    assert "even when some or all values are empty" in rationale
+    assert "only when a requested source declares no rationale field" in rationale
+    assert "Never write explanations yourself" in rationale
+    column_sources = capabilities["column_sources"]
+    assert "Map each requested column to one source field" in column_sources
+    assert "cannot choose between fields per row" in column_sources
+    assert "no conditional or fallback columns ('if X is missing use Y')" in column_sources
+    assert "resolved field and its paper-wording field as side-by-side" in column_sources
+    assert "Never use concat or pair_join to merge a resolved field" in column_sources
+    assert "unresolved marker on the requested field" in column_sources
+
+
+def test_chat_group_by_renders_separate_sections_with_the_stored_rationale():
+    from src.lib.flows.output_projection import FlowOutputProjectionPlan, apply_projection_plan
+
+    step = _completed_gene_step()
+    objects = step["candidate"].payload_json["extracted_objects"]
+    objects[0]["payload"]["rationale"] = "Loss of BRCA1 abolished the repair phenotype."
+    objects[1]["payload"]["rationale"] = "Only TP53 knockdown changed the reporter."
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Formatter Tool Flow",
+        flow_run_id="flow-run-1",
+        document_id="doc-1",
+        output_format="chat",
+    )
+    plan = FlowOutputProjectionPlan.model_validate(
+        {
+            "format": "chat",
+            "row_source": "object",
+            "columns": [
+                {"key": "symbol", "header": "Gene", "field_ref": "object.payload.symbol"},
+                {"key": "why", "header": "Rationale", "field_ref": "object.payload.rationale"},
+            ],
+            "group_by": ["object.status"],
+            "missing_value": "Not recorded",
+        }
+    )
+
+    result = apply_projection_plan(bundle, plan)
+
+    assert result.chat_output is not None
+    sections = result.chat_output.split("## ")[1:]
+    assert len(sections) == 2
+    rendered = result.chat_output
+    assert "| BRCA1 | Loss of BRCA1 abolished the repair phenotype. |" in rendered
+    assert "| TP53 | Only TP53 knockdown changed the reporter. |" in rendered
+    assert "| MAPK | Not recorded |" in rendered

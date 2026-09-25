@@ -101,6 +101,7 @@ agr_ai_curation/
 │   ├── models.yaml
 │   ├── providers.yaml
 │   ├── tool_policy_defaults.yaml
+│   ├── tool_loading.yaml                # Per-runtime hosted tool-search loading policy
 │   ├── groups.yaml.example
 │   ├── connections.yaml.example
 │   └── agents/                          # Explicit source-development agent overrides
@@ -312,7 +313,7 @@ output_schema: GeneValidationEnvelope
 
 # Model configuration
 model_config:
-  model: "${AGENT_GENE_MODEL:-gpt-5.6-terra}"
+  model: "${AGENT_GENE_MODEL:-gpt-6-sol}"
   temperature: 0.1
   reasoning: "medium"
 
@@ -435,26 +436,25 @@ Located at: `config/models.yaml`
 
 ```yaml
 models:
-  - model_id: gpt-5.6-terra
-    name: GPT-5.6 Terra
+  - model_id: gpt-6-astra
+    name: GPT-6 Astra
     provider: openai                    # Must match a key in providers.yaml
-    description: Faster, lower-cost reasoning model for validation and lightweight tasks.
-    guidance: Use for validation and utility agents where speed matters but reasoning still helps.
+    description: Reasoning model for routing, output, and explicitly selected document extraction.
+    guidance: Default for routing and output agents, with low reasoning.
     default: false                      # Exactly one model should be default
     supports_reasoning: true
     supports_temperature: false
     reasoning_options: [low, medium, high, xhigh]
-    default_reasoning: medium
+    default_reasoning: low
     recommended_for:
-      - Validation and lightweight extraction
-      - Follow-up checks after using search/read tools
+      - Routing and formatting extracted information
     avoid_for:
-      - Deep multi-step adjudication with conflicting evidence
+      - Routine validation and database lookups where GPT-6 Sol is the default
 
-  - model_id: gpt-5.6-sol
-    name: GPT-5.6 Sol
+  - model_id: gpt-6-sol
+    name: GPT-6 Sol
     provider: openai
-    description: Highest-quality model for complex curation reasoning and extraction.
+    description: Default reasoning model for document extraction, validation, and curation.
     default: true
     supports_reasoning: true
     reasoning_options: [low, medium, high, xhigh]
@@ -740,7 +740,7 @@ output_projection:
   inherited_parent_fields: []
 
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-5.6-terra}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-6-sol}"
   temperature: 0.2
   reasoning: "low"
 
@@ -1156,8 +1156,8 @@ GROQ_BASE_URL=https://api.groq.com/openai/v1
 LLM_PROVIDER_STRICT_MODE=true      # Fail startup if required keys missing (default: true)
 
 # Per-agent model overrides (in agent.yaml via ${VAR:-default})
-AGENT_GENE_MODEL=gpt-5.6-terra
-AGENT_SUPERVISOR_MODEL=gpt-5.6-sol
+AGENT_GENE_MODEL=gpt-6-sol
+AGENT_SUPERVISOR_MODEL=gpt-6-astra
 
 # Runtime paths (optional; these are the container defaults)
 AGR_RUNTIME_CONFIG_DIR=/runtime/config

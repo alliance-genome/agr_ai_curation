@@ -100,8 +100,9 @@ class GeneExpressionEnvelope(RuntimeGeneExpressionEnvelope):
                 continue
             if not _object_ref_value(obj):
                 payload = obj.get("payload")
-                gene_symbol = (
-                    payload.get("expression_annotation_subject", {}).get("gene_symbol")
+                # The subject as the paper names it; its validated symbol comes later.
+                subject_mention = (
+                    payload.get("expression_annotation_subject", {}).get("mention")
                     if isinstance(payload, Mapping)
                     and isinstance(
                         payload.get("expression_annotation_subject"), Mapping
@@ -110,7 +111,7 @@ class GeneExpressionEnvelope(RuntimeGeneExpressionEnvelope):
                 )
                 base = (
                     "gene-expression-annotation-"
-                    f"{_slug(gene_symbol, fallback=str(index + 1))}"
+                    f"{_slug(subject_mention, fallback=str(index + 1))}"
                 )
                 obj["pending_ref_id"] = _next_pending_ref(base, used_refs)
             obj.setdefault("model_ref", GENE_EXPRESSION_MODEL_ID)

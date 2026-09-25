@@ -756,6 +756,7 @@ def _validate_exact_flow_for_current_user(
     *,
     phase: Literal["proposal", "pre_apply", "post_apply", "save"],
     retargeted_node_ids: frozenset[str] = frozenset(),
+    instruction_restoration: bool = False,
 ):
     """Run the canonical exact-draft validator with live request authorization."""
 
@@ -774,7 +775,7 @@ def _validate_exact_flow_for_current_user(
     node_entries = {}
     contract_findings = ()
     try:
-        parsed = FlowDefinition.model_validate(flow_definition)
+        parsed = FlowDefinition.model_validate(flow_definition, context={"instruction_restoration": instruction_restoration and phase != "save"})
     except ValidationError:
         parsed = None  # The canonical validator below supplies schema findings.
     projection_catalogs = {}
@@ -787,7 +788,7 @@ def _validate_exact_flow_for_current_user(
         node_entries = resolved.entries_by_node
         contract_findings = resolved.findings
         projection_catalogs = resolved.projection_catalogs
-        flow_definition = resolved.definition
+        flow_definition = parsed if instruction_restoration else resolved.definition
     resolved_entries: dict[str, Mapping[str, Any]] = {}
 
     def _resolve(agent_id: str, auth: AuthoringValidationContext):
@@ -838,6 +839,8 @@ def _validate_exact_flow_for_current_user(
         entries_by_node=node_entries,
         contract_findings=contract_findings,
         projection_catalogs=projection_catalogs,
+        instruction_restoration=instruction_restoration,
+        hydrate_attachment_defaults=not instruction_restoration,
     )
 
 
@@ -1421,6 +1424,19 @@ def _compile_flow_operations(
 
     for operation in operations:
         op = str(operation.get("operation") or "").strip()
+        if op == "restore_initial_instructions":
+            if any(node.get("type") == "task_input" or node.get("data", {}).get("agent_id") == "task_input" for node in nodes):
+                raise _FlowProposalCompileError("Initial Instructions already exists; edit that step instead.")
+            node_id = _next_mechanical_id("node", {str(node.get("id")) for node in nodes})
+            output_key = _next_mechanical_id("task_input", {str(node.get("data", {}).get("output_key")) for node in nodes})
+            nodes.append({
+                "id": node_id, "type": "task_input", "position": {"x": 250, "y": 100},
+                "data": {"agent_id": "task_input", "agent_display_name": "Initial Instructions",
+                         "task_instructions": str(operation.get("task_instructions") or "").strip(),
+                         "custom_instructions": "", "output_key": output_key},
+            })
+            candidate["entry_node_id"] = node_id
+            continue
         if op == "update_flow":
             if "name" in operation:
                 metadata["name"] = str(operation.get("name") or "").strip()
@@ -1435,7 +1451,7 @@ def _compile_flow_operations(
                 )
                 if task_node is None:
                     raise _FlowProposalCompileError(
-                        "The draft has no Initial Instructions step."
+                        "The draft has no Initial Instructions step. Use restore_initial_instructions with the agreed text."
                     )
                 task_node["data"]["task_instructions"] = str(
                     operation.get("task_instructions") or ""
@@ -1939,9 +1955,12 @@ def _propose_flow_draft_update_handler():
                 "help": "Correct the flow metadata and compile the proposal again.",
             }
 
+        from .flow_restoration import inspect_instruction_restoration
+        restoration_requested = inspect_instruction_restoration(_save_equivalent_flow_payload(original), candidate) is not None
         try:
             validation = _validate_exact_flow_for_current_user(
                 candidate, phase="proposal",
+                **({"instruction_restoration": True} if restoration_requested else {}),
                 **({"retargeted_node_ids": retargeted_node_ids} if retargeted_node_ids else {}),
             )
         except Exception:
@@ -1985,6 +2004,28 @@ def _propose_flow_draft_update_handler():
         )
         findings = [finding.to_dict() for finding in validation.findings]
         valid = validation.valid
+        from .flow_restoration import inspect_instruction_restoration
+
+        restoration_findings = inspect_instruction_restoration(normalized_original, candidate)
+        restoration_only = (
+            restoration_findings is not None
+            and validation.valid
+            and metadata["name"] == base_payload["name"]
+            and metadata["description"] == base_payload["description"]
+            and all(node.get("data", {}).get("agent_id") in accessible_agents
+                    for node in candidate["nodes"] if node.get("type") != "task_input")
+        )
+        if restoration_only:
+            findings += [finding.to_dict() for finding in restoration_findings]
+            valid = valid and not restoration_findings
+        elif restoration_requested:
+            valid = False
+            findings.append({
+                "code": "instruction_restoration_changed_draft", "severity": "error",
+                "path": "flow_definition",
+                "message": "Restore Initial Instructions on its own; other draft settings must stay unchanged.",
+            })
+        applicable = valid or restoration_only
         new_output_node_ids = set(metadata.get("new_output_node_ids", []))
         mode_choices = metadata.get("output_mode_choices", {})
         output_mode_node_ids = [
@@ -2003,10 +2044,11 @@ def _propose_flow_draft_update_handler():
         )
         return {
             "contract_version": "flow_authoring_proposal.v1",
-            "success": valid,
+            "success": applicable,
             "valid": valid,
-            "pending_user_approval": valid,
-            "approval_status": "pending" if valid else "repair_required",
+            "restoration_only": restoration_only,
+            "pending_user_approval": applicable,
+            "approval_status": "pending" if applicable else "repair_required",
             "base_draft_fingerprint": base_draft_fingerprint,
             "candidate_draft_fingerprint": candidate_fingerprint,
             "change_summary": str(change_summary).strip(),
@@ -2015,6 +2057,8 @@ def _propose_flow_draft_update_handler():
             "candidate": candidate_payload,
             "output_mode_node_ids": output_mode_node_ids,
             "message": (
+                "Restore Initial Instructions only; existing connections still need repair before Save or Run."
+                if restoration_only and not valid else
                 "Flow proposal is ready for curator review."
                 if valid
                 else "Flow proposal needs repair before curator review."
@@ -3578,7 +3622,11 @@ Use this tool for a clear request to build, fix, or revise the exact current
 Flow Builder draft. In guided creation, propose only the current agreed decision:
 initial instructions first, then the chosen agent, then other requested steps.
 Use update_flow alone for an instructions-only first draft. Do not bundle an
-entire flow unless explicitly requested. A clear curator choice authorizes that
+agent choice or topology repair with restoring missing instructions. If task_input
+is missing, use restore_initial_instructions alone with the agreed task_instructions.
+This produces a reviewed draft-only restoration; existing steps/connections stay
+unchanged and any remaining graph findings still block Save/Run.
+Do not propose an entire flow unless explicitly requested. A clear curator choice authorizes that
 proposal without another permission question. The application resolves authorized agents and generates node
 IDs, edge IDs, output keys, positions, defaults, and the exact graph. Never ask
 the curator or model to supply those mechanics.
@@ -3628,6 +3676,7 @@ application-generated node IDs.""",
                                     "disconnect_steps",
                                     "reorder_control_steps",
                                     "configure_validation_attachments",
+                                    "restore_initial_instructions",
                                     "apply_template",
                                 ],
                             },

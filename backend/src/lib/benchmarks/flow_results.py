@@ -77,7 +77,7 @@ def load_flow_extractions(
             for key in ("curatable_objects", "extracted_objects")
         ):
             raise ValueError("Benchmark flow result is not an extraction envelope")
-        envelope = domain_envelope_from_extraction_result(record)
+        envelope = domain_envelope_from_extraction_result(record, stored=True)
         # Node identity comes only from the executor's persisted context, never
         # model-authored payload metadata. Historical records remain explicitly
         # unbound and cannot satisfy a node-specific mapping.

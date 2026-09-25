@@ -6,6 +6,10 @@ from typing import Any, Mapping
 
 from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+from src.lib.domain_packs.resolvable_values import (
+    extraction_value_problems,
+    unrecorded_state_problems,
+)
 from src.schemas.curation_workspace import CurationExtractionResultRecord
 from src.schemas.domain_envelope import (
     DomainEnvelope,
@@ -20,10 +24,14 @@ from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtracti
 def domain_envelope_from_extraction_result(
     extraction_result: CurationExtractionResultRecord,
     *,
+    stored: bool,
     include_persistence_history: bool = True,
 ) -> DomainEnvelope:
     """Return the canonical downstream DomainEnvelope for an extraction result.
 
+    ``stored`` says the result was read back from storage, where values stored
+    before the resolvable-value contract are left to the legacy rule; fresh
+    output (``stored=False``) must record every declared value's state.
     Pre-persistence callers can omit the persistence event so canonical payloads do
     not claim a persistence timestamp before the authoritative row exists. Callers
     normalizing an authoritative persisted record should keep the default.
@@ -63,6 +71,18 @@ def domain_envelope_from_extraction_result(
         raise ValueError(
             f"adapter_key={adapter_key!r} does not declare a domain pack for envelope prep"
         )
+    # Extraction reads the paper and never searches: every declared value arrives
+    # unvalidated, except a pack-declared fixed mapping (``extraction_value_problems``).
+    problems = [
+        problem
+        for extracted_object in source.curatable_objects
+        for problem in extraction_value_problems(
+            extracted_object.payload, domain_pack.metadata, extracted_object.object_type,
+            stored=stored,
+        )
+    ]
+    if problems:
+        raise ValueError("extraction staged validated values: " + "; ".join(problems))
 
     metadata = {
         "semantic_source": "domain_envelope.extracted_objects",
@@ -99,6 +119,40 @@ def domain_envelope_from_extraction_result(
         history=history,
         metadata=metadata,
     )
+
+
+def require_recorded_resolution_states(payload: Any, *, adapter_key: str | None) -> None:
+    """Refuse a new extraction row whose declared values record no resolution state.
+
+    A new row is fresh output, never a record stored before the resolvable-value
+    contract, so a stateless value (``unrecorded_state_problems``) would read
+    as legacy. Payloads with no extracted object list (e.g. curation-prep
+    output) and adapters without a domain pack declare no resolvable values.
+    """
+
+    if not isinstance(payload, Mapping) or adapter_key is None:
+        return
+    objects = [
+        item
+        for key in ("extracted_objects", "curatable_objects")
+        if isinstance(payload.get(key), list)
+        for item in payload[key]
+    ]
+    if not objects:
+        return
+    domain_pack = load_curation_adapter_registry().get_domain_pack(adapter_key)
+    if domain_pack is None:
+        return
+    problems = [
+        problem
+        for item in objects
+        if isinstance(item, Mapping) and isinstance(item.get("payload"), Mapping)
+        for problem in unrecorded_state_problems(
+            item["payload"], domain_pack.metadata, str(item.get("object_type") or ""),
+        )
+    ]
+    if problems:
+        raise ValueError("extraction recorded values without a resolution state: " + "; ".join(problems))
 
 
 def _authoritative_source_metadata(
@@ -167,5 +221,6 @@ __all__ = [
     "extraction_envelope_id",
     "is_canonical_domain_envelope_payload",
     "normalized_optional_string",
+    "require_recorded_resolution_states",
     "resolve_extraction_adapter_key",
 ]

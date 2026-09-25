@@ -31,8 +31,13 @@ fixtures:
           status: pending
           definition_state: in_development
           payload:
-            title: Brood size phenotype evidence fixture paper
             filename: test_tool_verified_phenotype_paper.pdf
+            reference_id: null
+            title: null
+            mention: Brood size phenotype evidence fixture paper
+            resolution_state: unresolved
+            lookup_outcome: not_validated
+            validator_explanation: Not validated yet.
           metadata:
             object_role: validated_reference
             validation_state: pending_reference_resolution
@@ -55,11 +60,16 @@ fixtures:
           definition_notes:
             - Pending subject reference; concrete Gene, Allele, or AGM subtype must be resolved before export.
           payload:
-            resolution_state: pending_entity_resolution
-            subject_identifier: WB:WBGene00000912
-            subject_label: daf-2(e1370)
             subject_type: gene
-            taxon: NCBITaxon:6239
+            proposed_taxon: NCBITaxon:6239
+            taxon: null
+            proposed_subject_identifier: WB:WBGene00000912
+            subject_identifier: null
+            subject_label: null
+            mention: daf-2(e1370)
+            resolution_state: unresolved
+            lookup_outcome: not_validated
+            validator_explanation: Not validated yet.
           metadata:
             object_role: validated_reference
             validation_state: pending_entity_resolution
@@ -77,23 +87,24 @@ fixtures:
           status: pending
           definition_state: in_development
           payload:
-            resolution_state: pending_ontology_resolution
-            curie: WBPhenotype:0000886
-            label: reduced brood size
             source_mentions:
               - reduced brood size
             ontology_lookup_hint:
               data_provider: WB
               taxon_id: NCBITaxon:6239
               evidence_record_id: reduced-brood-size-evidence-1
-            export_state: blocked_pending_ontology_resolution
-            write_blocked_reason: phenotype term CURIE unresolved
+            proposed_curie: WBPhenotype:0000886
+            curie: null
+            label: null
+            mention: reduced brood size
+            resolution_state: unresolved
+            lookup_outcome: not_validated
+            validator_explanation: Not validated yet.
           evidence_record_ids:
             - reduced-brood-size-evidence-1
           metadata:
             object_role: validated_reference
             validation_state: pending_ontology_resolution
-            validator_binding_id: phenotype_term_ontology_validator
             export_state: blocked_pending_ontology_resolution
             write_blocked_reason: phenotype term CURIE unresolved
         - object_type: EvidenceQuote
@@ -134,26 +145,38 @@ fixtures:
             annotation_kind: phenotype_assertion
             phenotype_annotation_object: reduced brood size
             phenotype_annotation_subject:
-              resolution_state: pending_entity_resolution
-              subject_identifier: WB:WBGene00000912
-              subject_label: daf-2(e1370)
               subject_type: gene
-              taxon: NCBITaxon:6239
+              proposed_taxon: NCBITaxon:6239
+              taxon: null
+              proposed_subject_identifier: WB:WBGene00000912
+              subject_identifier: null
+              subject_label: null
+              mention: daf-2(e1370)
+              resolution_state: unresolved
+              lookup_outcome: not_validated
+              validator_explanation: Not validated yet.
             phenotype_terms:
-              - resolution_state: pending_ontology_resolution
-                curie: WBPhenotype:0000886
-                label: reduced brood size
-                source_mentions:
+              - source_mentions:
                   - reduced brood size
                 ontology_lookup_hint:
                   data_provider: WB
                   taxon_id: NCBITaxon:6239
                   evidence_record_id: reduced-brood-size-evidence-1
-                export_state: blocked_pending_ontology_resolution
-                write_blocked_reason: phenotype term CURIE unresolved
+                proposed_curie: WBPhenotype:0000886
+                curie: null
+                label: null
+                mention: reduced brood size
+                resolution_state: unresolved
+                lookup_outcome: not_validated
+                validator_explanation: Not validated yet.
             single_reference:
-              title: Brood size phenotype evidence fixture paper
               filename: test_tool_verified_phenotype_paper.pdf
+              reference_id: null
+              title: null
+              mention: Brood size phenotype evidence fixture paper
+              resolution_state: unresolved
+              lookup_outcome: not_validated
+              validator_explanation: Not validated yet.
             evidence_quote:
               evidence_record_id: reduced-brood-size-evidence-1
             evidence_record_ids:
@@ -221,6 +244,18 @@ fixtures:
               - public.phenotypeannotation_ontologyterm
         - severity: blocker
           status: open
+          code: alliance.phenotype.ontology_resolution_required
+          message: Phenotype term is pending ontology resolution; export and write remain blocked until the validator resolves a CURIE.
+          object_ref:
+            pending_ref_id: phenotype-term-1
+            object_type: PhenotypeTerm
+          details:
+            validator_binding_id: phenotype_term_ontology_validator
+            validation_state: pending_ontology_resolution
+            export_state: blocked_pending_ontology_resolution
+            write_blocked_reason: phenotype term CURIE unresolved
+        - severity: blocker
+          status: open
           code: alliance.phenotype.subject_resolution_required
           message: Phenotype assertion requires a resolved Gene, Allele, or AGM subject before export.
           object_ref:
@@ -231,7 +266,7 @@ fixtures:
             subject_resolution_state: pending_entity_resolution
       history:
         - event_type: created
-          timestamp: "2026-05-09T00:00:00Z"
+          timestamp: '2026-05-09T00:00:00Z'
           actor_type: system
           actor_id: phenotype_extractor
           message: Converted tool-verified phenotype extraction output to a pending domain envelope.

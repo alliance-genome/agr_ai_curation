@@ -7,8 +7,8 @@ import SetupSection, { type SetupSectionProps } from './SetupSection'
 
 const modelOptions: ModelOption[] = [
   {
-    model_id: 'gpt-5.6-terra',
-    name: 'GPT-5.6 Terra',
+    model_id: 'gpt-6-sol',
+    name: 'GPT-6 Sol',
     provider: 'openai',
     description: 'fast reasoning model',
     guidance: 'Use for validation and lookups.',
@@ -38,8 +38,8 @@ const modelOptions: ModelOption[] = [
 ]
 
 const templates: AgentTemplate[] = [
-  { agent_id: 'gene', name: 'Gene Specialist', icon: 'G', model_id: 'gpt-5.6-terra', tool_ids: [], allowed_group_ids: [] },
-  { agent_id: 'disease', name: 'Disease Specialist', icon: 'D', model_id: 'gpt-5.6-terra', tool_ids: [], allowed_group_ids: ['GROUP_A'] },
+  { agent_id: 'gene', name: 'Gene Specialist', icon: 'G', model_id: 'gpt-6-sol', tool_ids: [], allowed_group_ids: [] },
+  { agent_id: 'disease', name: 'Disease Specialist', icon: 'D', model_id: 'gpt-6-sol', tool_ids: [], allowed_group_ids: ['GROUP_A'] },
 ]
 
 const groupOptions: GroupOption[] = [
@@ -60,7 +60,7 @@ const customAgents: CustomAgent[] = [
     inherited_allowed_group_ids: [],
     icon: 'x',
     include_group_rules: true,
-    model_id: 'gpt-5.6-terra',
+    model_id: 'gpt-6-sol',
     model_temperature: 0,
     tool_ids: [],
     visibility: 'private',
@@ -95,7 +95,7 @@ function renderSetup(overrides: Partial<SetupSectionProps> = {}) {
     envelope: null,
     onViewEnvelope: vi.fn(),
     modelOptions,
-    selectedModelId: 'gpt-5.6-terra',
+    selectedModelId: 'gpt-6-sol',
     onModelChange: vi.fn(),
     selectedModelOption: modelOptions[0],
     selectedModelReasoning: 'medium',
@@ -181,9 +181,9 @@ describe('SetupSection', () => {
 
   it('shows model and reasoning side by side with the default helper line', async () => {
     const props = renderSetup()
-    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveTextContent('GPT-5.6 Terra')
+    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveTextContent('GPT-6 Sol')
     expect(screen.getByRole('combobox', { name: 'Reasoning' })).toHaveTextContent('Medium')
-    expect(screen.getByText(/Medium is the default reasoning for GPT-5.6 Terra\. Balanced\./)).toBeInTheDocument()
+    expect(screen.getByText(/Medium is the default reasoning for GPT-6 Sol\. Balanced\./)).toBeInTheDocument()
 
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Reasoning' }))
     fireEvent.click(await screen.findByRole('option', { name: 'High' }))
@@ -196,7 +196,7 @@ describe('SetupSection', () => {
 
   it('names the model default when a non-default reasoning is selected', () => {
     renderSetup({ selectedModelReasoning: 'high', reasoningDescription: 'Deep' })
-    expect(screen.getByText(/High reasoning selected\. The default for GPT-5.6 Terra is Medium\. Deep\./)).toBeInTheDocument()
+    expect(screen.getByText(/High reasoning selected\. The default for GPT-6 Sol is Medium\. Deep\./)).toBeInTheDocument()
   })
 
   it('omits the reasoning select for models without reasoning', () => {
@@ -213,7 +213,7 @@ describe('SetupSection', () => {
     fireEvent.click(disclosure)
     expect(disclosure).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('Use for validation and lookups.')).toBeInTheDocument()
-    expect(screen.getByText(/OPENAI · gpt-5.6-terra/)).toBeInTheDocument()
+    expect(screen.getByText(/OPENAI · gpt-6-sol/)).toBeInTheDocument()
     expect(screen.getByText('Validation')).toBeInTheDocument()
     expect(screen.getByText('Deep adjudication')).toBeInTheDocument()
   })

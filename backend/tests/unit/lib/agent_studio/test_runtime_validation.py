@@ -558,3 +558,142 @@ def test_validate_and_cache_agent_runtime_contracts_disables_missing_tool_agents
 
     assert report["status"] == "degraded"
     assert len(disable_calls) == 1
+
+
+def _identity_lookup_report(monkeypatch, row, *, strict):
+    import src.lib.agent_studio.runtime_validation as module
+    from src.lib.packages import tool_roles
+
+    monkeypatch.setattr(tool_roles, "builder_finalization_tool_names", lambda: frozenset({"finalize_demo"}))
+    monkeypatch.setattr(tool_roles, "identity_lookup_tool_names", lambda: frozenset({"lookup_demo", "group_lookup_demo"}))
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [row])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
+    monkeypatch.setattr(module, "_resolve_output_schema", lambda schema_key: object())
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {
+                tool_id: {"required_context": []}
+                for tool_id in ("stage_demo", "finalize_demo", "lookup_demo", "group_lookup_demo")
+            },
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": set(),
+            "package_required_tool_ids": set(),
+        },
+    )
+    return module.build_agent_runtime_report(strict_mode=strict)
+
+
+def test_packaged_extraction_agent_with_identity_lookup_fails_the_runtime_report(monkeypatch):
+    report = _identity_lookup_report(monkeypatch, _agent(
+        agent_key="demo_extractor",
+        visibility="system",
+        user_id=None,
+        category="Extraction",
+        tool_ids=["stage_demo", "finalize_demo", "lookup_demo"],
+        group_tool_policy={"rules": [{"tool_id": "group_lookup_demo", "allowed_group_ids": ["TEAM_C"]}]},
+    ), strict=False)
+
+    assert report["status"] == "unhealthy"
+    [message] = [msg for msg in report["errors"] if "database lookup tools" in msg]
+    # Group-scoped lookups count as well as base tools.
+    assert "group_lookup_demo, lookup_demo" in message
+
+
+def test_validation_agent_keeps_its_identity_lookup_tools(monkeypatch):
+    report = _identity_lookup_report(monkeypatch, _agent(
+        agent_key="demo_validator",
+        visibility="system",
+        user_id=None,
+        category="Validation",
+        output_schema_key="DemoValidationResult",
+        tool_ids=["lookup_demo"],
+    ), strict=True)
+
+    assert not [msg for msg in report["errors"] + report["warnings"] if "database lookup tools" in msg]
+
+
+def test_custom_extraction_agent_with_identity_lookup_warns_unless_strict(monkeypatch):
+    row = _agent(
+        agent_key="ca_demo_extractor",
+        category="Custom",
+        tool_ids=["stage_demo", "finalize_demo", "lookup_demo"],
+    )
+
+    relaxed = _identity_lookup_report(monkeypatch, row, strict=False)
+    strict = _identity_lookup_report(monkeypatch, row, strict=True)
+
+    assert any("database lookup tools" in msg for msg in relaxed["warnings"])
+    assert any("database lookup tools" in msg for msg in strict["errors"])
+
+
+def test_schema_extraction_agent_without_a_finalizer_is_classified_by_its_head_revision(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+    from src.lib.packages import tool_roles
+
+    monkeypatch.setattr(tool_roles, "is_validator_output_schema", lambda key: key == "DemoValidationResult")
+    extractor = _agent(
+        agent_key="ca_schema_extractor", category="Custom", execution_revision_id="rev-extractor",
+        output_schema_key="DemoEnvelope", tool_ids=["stage_demo", "lookup_demo"],
+    )
+    validator = _agent(
+        agent_key="ca_schema_validator", category="Custom", execution_revision_id="rev-validator",
+        output_schema_key="DemoValidationResult", tool_ids=["lookup_demo"],
+    )
+    monkeypatch.setattr(module, "_fetch_head_output_contracts", lambda _agents: {
+        "rev-extractor": ("structured_extraction", "DemoEnvelope"),
+        "rev-validator": ("structured_extraction", "DemoValidationResult"),
+    })
+
+    report = _identity_lookup_report(monkeypatch, extractor, strict=True)
+    assert any("ca_schema_extractor" in msg and "database lookup tools" in msg for msg in report["errors"])
+
+    report = _identity_lookup_report(monkeypatch, validator, strict=True)
+    assert not [msg for msg in report["errors"] + report["warnings"] if "database lookup tools" in msg]
+
+
+def _report_for_reasoning(monkeypatch, reasoning):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
+        _agent(agent_key="ca_reasoning", model_id="gpt-6-sol", model_reasoning=reasoning)
+    ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(
+        model_id="gpt-6-sol", supports_reasoning=True,
+        reasoning_options=["low", "medium", "high", "xhigh"],
+    )])
+    monkeypatch.setattr(module, "_load_runtime_policy", lambda: {
+        "tool_bindings": {},
+        "canonicalize_tool_id": lambda tool_id: tool_id,
+        "document_tool_ids": set(),
+        "package_required_tool_ids": set(),
+    })
+    return module.build_agent_runtime_report(strict_mode=False)
+
+
+def test_startup_rejects_a_reasoning_level_the_catalog_model_does_not_offer(monkeypatch):
+    report = _report_for_reasoning(monkeypatch, "minimal")
+
+    assert report["status"] == "unhealthy"
+    assert report["errors"] == [
+        "ca_reasoning: model_reasoning 'minimal' is not supported by model 'gpt-6-sol'"
+    ]
+
+
+@pytest.mark.parametrize("reasoning", ["medium", "XHIGH", None])
+def test_startup_accepts_a_reasoning_level_the_catalog_model_offers(monkeypatch, reasoning):
+    report = _report_for_reasoning(monkeypatch, reasoning)
+
+    assert report["errors"] == []
+
+
+def test_startup_only_warns_for_a_reasoning_value_that_is_never_sent(monkeypatch):
+    report = _report_for_reasoning(monkeypatch, "disabled")
+
+    assert report["errors"] == []
+    assert any("Invalid model_reasoning 'disabled'" in msg for msg in report["warnings"])

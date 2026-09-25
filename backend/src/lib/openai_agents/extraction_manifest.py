@@ -8,6 +8,11 @@ from typing import Any, Mapping
 
 from pydantic import ValidationError
 
+from src.lib.domain_packs.resolvable_values import (
+    ResolvableSpec,
+    declared_resolvable_fields,
+    unresolved_header_text,
+)
 from src.lib.domain_packs.supervisor_manifest import (
     SupervisorManifestField,
     SupervisorManifestPolicy,
@@ -47,15 +52,7 @@ def build_extraction_manifest_page(
 
     envelope = _canonical_envelope(payload)
     metadata = _domain_pack_metadata(envelope.domain_pack_id)
-    object_definitions = {
-        definition.object_type: definition
-        for definition in metadata.object_definitions
-    }
-    manifest_objects = [
-        domain_object
-        for domain_object in envelope.extracted_objects
-        if _include_object_in_manifest(domain_object, object_definitions)
-    ]
+    manifest_objects = supervisor_manifest_objects(envelope, metadata)
 
     page_limit = _normalize_limit(limit)
     offset = _cursor_offset(cursor)
@@ -136,6 +133,23 @@ def build_extraction_manifest_object(
     raise ExtractionManifestError(
         f"No supervisor-visible object matched object_ref {normalized_ref!r}"
     )
+
+
+def supervisor_manifest_objects(
+    envelope: DomainEnvelope,
+    metadata: DomainPackMetadata,
+) -> list[CuratableObjectEnvelope]:
+    """Objects a supervisor manifest lists, in envelope order."""
+
+    object_definitions = {
+        definition.object_type: definition
+        for definition in metadata.object_definitions
+    }
+    return [
+        domain_object
+        for domain_object in envelope.extracted_objects
+        if _include_object_in_manifest(domain_object, object_definitions)
+    ]
 
 
 def render_extraction_manifest_page(page: Mapping[str, Any]) -> str:
@@ -340,6 +354,7 @@ def _manifest_object(
         domain_object.object_type,
     )
     object_ref = _object_ref(domain_object)
+    resolvable_fields = declared_resolvable_fields(metadata, domain_object.object_type)
     scoped_findings = [
         finding
         for finding in validation_findings
@@ -349,36 +364,35 @@ def _manifest_object(
         "object_ref": object_ref,
         "object_type": domain_object.object_type,
         "status": domain_object.status.value,
-        "display_label": _first_policy_value(
-            domain_object.payload,
-            policy.primary_label_fields,
-            default=object_ref,
+        "display_label": _policy_label(
+            domain_object,
+            policy.primary_label_field,
+            resolvable_fields,
+            limit=get_supervisor_text_preview_limit(),
+        ) or _truncate(object_ref, limit=get_supervisor_text_preview_limit()),
+        "secondary_label": _policy_label(
+            domain_object,
+            policy.secondary_label_field,
+            resolvable_fields,
             limit=get_supervisor_text_preview_limit(),
         ),
-        "secondary_label": (
-            _policy_value(
-                domain_object.payload,
-                policy.secondary_label_field,
-                limit=get_supervisor_text_preview_limit(),
-            )
-            if policy.secondary_label_field is not None
-            else None
-        ),
-        "fields": _policy_fields(domain_object.payload, policy),
+        "fields": _policy_fields(domain_object, policy, resolvable_fields),
         "validation": _validation_counts(scoped_findings),
         "evidence_count": len(domain_object.evidence_record_ids),
     }
 
 
 def _policy_fields(
-    payload: Mapping[str, Any],
+    domain_object: CuratableObjectEnvelope,
     policy: SupervisorManifestPolicy,
+    resolvable_fields: Mapping[str, ResolvableSpec],
 ) -> list[dict[str, Any]]:
     fields: list[dict[str, Any]] = []
     for field in policy.summary_fields:
-        value = _policy_value(
-            payload,
+        value = _policy_label(
+            domain_object,
             field,
+            resolvable_fields,
             limit=get_supervisor_field_text_limit(),
         )
         if value is None:
@@ -387,18 +401,26 @@ def _policy_fields(
     return fields
 
 
-def _first_policy_value(
-    payload: Mapping[str, Any],
-    fields: tuple[SupervisorManifestField, ...],
+def _policy_label(
+    domain_object: CuratableObjectEnvelope,
+    field: SupervisorManifestField | None,
+    resolvable_fields: Mapping[str, ResolvableSpec],
     *,
-    default: str,
     limit: int,
-) -> str:
-    for field in fields:
-        value = _policy_value(payload, field, limit=limit)
-        if value:
-            return value
-    return _truncate(default, limit=limit)
+) -> str | None:
+    """One declared label field; an unresolved value reads as its paper wording (ALL-1283)."""
+
+    if field is None:
+        return None
+    paper_wording = unresolved_header_text(
+        domain_object.payload,
+        field.path,
+        object_metadata=domain_object.metadata,
+        resolvable_fields=resolvable_fields,
+    )
+    if paper_wording is not None:
+        return _truncate(paper_wording, limit=limit)
+    return _policy_value(domain_object.payload, field, limit=limit) or None
 
 
 def _policy_value(
@@ -449,8 +471,14 @@ def _parse_path(field_path: str) -> tuple[str | int, ...]:
     return tuple(parts)
 
 
-def _validator_results_summary(findings: list[ValidationFinding]) -> dict[str, Any]:
-    """Expose canonical validator decisions, including targets hidden by object policy."""
+def validator_result_entries(
+    findings: list[ValidationFinding],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Complete canonical validator decisions keyed by request (or finding index).
+
+    Includes targets hidden by object policy. Entries are never shortened;
+    callers decide how to present large ones.
+    """
     decisions: dict[str, dict[str, Any]] = {}
     for index, finding in enumerate(findings):
         details = finding.details or {}
@@ -468,7 +496,7 @@ def _validator_results_summary(findings: list[ValidationFinding]) -> dict[str, A
         if isinstance(target, Mapping):
             entry["target"] = {
                 name: target[name]
-                for name in ("object_type", "object_id", "field_path")
+                for name in ("object_type", "object_id", "pending_ref_id", "field_path")
                 if target.get(name) is not None
             }
         # Per-field copies can include later rejection: never let the first result
@@ -479,6 +507,12 @@ def _validator_results_summary(findings: list[ValidationFinding]) -> dict[str, A
                 or details.get("failure_classification") == "invalid_materialization_input"
                 or finding.code == "domain_pack.validator_materialization_invalid"):
             entry["writeback_rejected"] = True
+    return list(decisions.items())
+
+
+def _validator_results_summary(findings: list[ValidationFinding]) -> dict[str, Any]:
+    """Expose canonical validator decisions, including targets hidden by object policy."""
+    decisions = dict(validator_result_entries(findings))
     counts: dict[str, int] = {}
     entries: list[dict[str, Any]] = []
     for entry in decisions.values():
@@ -637,4 +671,6 @@ __all__ = [
     "build_extraction_manifest_object",
     "build_extraction_manifest_page",
     "render_extraction_manifest_page",
+    "supervisor_manifest_objects",
+    "validator_result_entries",
 ]

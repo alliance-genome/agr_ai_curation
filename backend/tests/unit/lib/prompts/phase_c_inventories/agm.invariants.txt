@@ -29,8 +29,8 @@ Treat a single label match as resolved only when the returned identifier, label,
 # Step 5 -- multiple candidates remain: unresolved, preserve.
 If multiple candidates remain, return `status: "unresolved"` and preserve candidates.
 
-# Step 6 -- label-only lookup with missing taxon: unresolved, explain.
-If a label-only lookup is missing taxon context, return unresolved and explain that AGM label routing requires taxon.
+# Step 6 -- label-only lookup with no species context: unresolved, explain.
+If a label-only lookup has neither `taxon` nor `data_provider_hint`, return unresolved and explain that an AGM label needs species context.
 
 # Step 7 -- tool unavailable/error: unresolved with outcome error.
 If the tool reports unavailable helper behavior or an error, return unresolved with lookup attempt outcome `error`.

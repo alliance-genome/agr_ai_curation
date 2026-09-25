@@ -15,6 +15,13 @@ from pydantic import (
     model_validator,
 )
 
+from src.lib.domain_packs.resolvable_values import (
+    LOOKUP_OUTCOMES,
+    MENTION_KEY,
+    RESOLUTION_STATES,
+    ResolvableValueError,
+    check_resolvable_value,
+)
 from src.lib.openai_agents.models import (
     PhenotypeResultEnvelope as RuntimePhenotypeResultEnvelope,
 )
@@ -69,12 +76,23 @@ _EXPECTED_OBJECT_REF_TYPES = frozenset(
         EVIDENCE_QUOTE_OBJECT_TYPE,
     }
 )
-_SUBJECT_RESOLUTION_STATES = frozenset(
-    {"resolved", "pending_entity_resolution", "blocked_missing_subject"}
+# Object-level workflow states (object metadata). Each value carries the shared
+# extracted-vs-validated state itself (resolution_state / lookup_outcome).
+_SUBJECT_PENDING_STATE = "pending_entity_resolution"
+_SUBJECT_BLOCKED_STATE = "blocked_missing_subject"
+_TERM_PENDING_STATE = "pending_ontology_resolution"
+_TERM_EXPORT_BLOCKED = "blocked_pending_ontology_resolution"
+_TERM_WRITE_BLOCKED_REASON = "phenotype term CURIE unresolved"
+_SUBJECT_BLOCKED_NOTE = (
+    "Phenotype extraction did not name the phenotype_annotation_subject; "
+    "the subject is absent."
 )
-_TERM_RESOLUTION_STATES = frozenset(
-    {"resolved", "pending_ontology_resolution"}
-)
+_SUBJECT_IDENTITY_KEYS = ("subject_identifier", "subject_label")
+_TERM_IDENTITY_KEYS = ("curie", "label")
+_REFERENCE_IDENTITY_KEYS = ("reference_id", "title")
+_DATA_PROVIDER_IDENTITY_KEYS = ("abbreviation",)
+ResolutionStateValue = Literal[RESOLUTION_STATES]  # type: ignore[valid-type]
+LookupOutcomeValue = Literal[LOOKUP_OUTCOMES]  # type: ignore[valid-type]
 
 
 def _optional_text(value: object) -> str | None:
@@ -222,42 +240,88 @@ def _blocked_write_behavior() -> dict[str, Any]:
     }
 
 
-def _normalize_subject_payload_scaffold(payload: dict[str, Any]) -> None:
-    if payload.get("resolution_state") != "resolved":
-        return
-    missing = [
-        field_name
-        for field_name in ("subject_identifier", "subject_type", "taxon")
-        if _is_missing(payload.get(field_name))
-    ]
-    if not missing:
-        return
-    if "subject_identifier" not in missing:
-        return
-    payload["resolution_state"] = "pending_entity_resolution"
-    payload.setdefault(
-        "resolution_note",
-        "Subject was marked resolved but is missing required resolved identifiers.",
+def _check_value(payload: BaseModel, identity_keys: tuple[str, ...]) -> None:
+    """Enforce the shared extracted-vs-validated invariant on one payload value."""
+
+    try:
+        # Unset optional keys are absent, not null: core reads a present curator_override key
+        # as a curator override.
+        check_resolvable_value(
+            payload.model_dump(mode="python", exclude_none=True),
+            identity_keys=identity_keys,
+        )
+    except ResolvableValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _subject_workflow_state(subject_payload: Any) -> str:
+    """The subject object's workflow state: pending when a subject value is staged."""
+
+    if isinstance(subject_payload, Mapping) and _optional_text(subject_payload.get(MENTION_KEY)):
+        return _SUBJECT_PENDING_STATE
+    return _SUBJECT_BLOCKED_STATE
+
+
+class _ResolvablePayload(BaseModel):
+    """The shared keys every resolvable value carries (ALL-1283)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mention: StrictStr = Field(description="The value as the paper words it")
+    resolution_state: ResolutionStateValue = Field(
+        description="resolved only when a validator supplied the identity"
+    )
+    lookup_outcome: LookupOutcomeValue = Field(
+        description="What the validator lookup found, or not_validated before any validator ran"
+    )
+    validator_explanation: StrictStr | None = Field(
+        default=None, description="The validator's own explanation"
+    )
+    validator_curator_message: StrictStr | None = Field(
+        default=None, description="The validator's curator message"
+    )
+    curator_override: dict[str, Any] | None = Field(
+        default=None, description="Who overrode the validation and when (informational)",
     )
 
 
 class PhenotypeSubjectPayload(BaseModel):
-    """Pending biological entity subject metadata for a phenotype assertion."""
+    """The phenotype subject value, or only a note when the paper names no subject."""
 
     model_config = ConfigDict(extra="forbid")
 
-    resolution_state: Literal[
-        "resolved",
-        "pending_entity_resolution",
-        "blocked_missing_subject",
-    ] = Field(description="Subject resolution state for the phenotype assertion")
+    mention: StrictStr | None = Field(
+        default=None,
+        description="The subject (gene, allele, genotype, or model) as the paper names it",
+    )
     subject_identifier: StrictStr | None = Field(
         default=None,
-        description="Durable subject identifier when available from extraction or lookup",
+        description="Subject identifier a validator confirmed; empty until then",
     )
     subject_label: StrictStr | None = Field(
         default=None,
-        description="Paper-facing subject label, genotype, allele, gene, or AGM text",
+        description="Subject label a validator confirmed; empty until then",
+    )
+    proposed_subject_identifier: StrictStr | None = Field(
+        default=None,
+        description="Subject identifier the extractor proposed for validation",
+    )
+    # Core keeps an identity a validator overruled under overruled_<key>, and a curator
+    # override's audit under curator_override; neither is ever the value.
+    overruled_subject_identifier: StrictStr | None = Field(
+        default=None, description="A subject identifier a validator overruled; informational only, never the value",
+    )
+    overruled_subject_label: StrictStr | None = Field(
+        default=None, description="A subject label a validator overruled; informational only, never the value",
+    )
+    overruled_subject_type: StrictStr | None = Field(
+        default=None, description="A subject type a validator overruled; informational only, never the value",
+    )
+    overruled_taxon: StrictStr | None = Field(
+        default=None, description="A subject taxon a validator overruled; informational only, never the value",
+    )
+    curator_override: dict[str, Any] | None = Field(
+        default=None, description="Who overrode the validation and when (informational)",
     )
     subject_type: StrictStr | None = Field(
         default=None,
@@ -267,31 +331,32 @@ class PhenotypeSubjectPayload(BaseModel):
         default=None,
         description="NCBI Taxon CURIE when explicitly supported by the paper or lookup",
     )
+    resolution_state: ResolutionStateValue | None = None
+    lookup_outcome: LookupOutcomeValue | None = None
+    validator_explanation: StrictStr | None = None
+    validator_curator_message: StrictStr | None = None
     resolution_note: StrictStr | None = Field(
         default=None,
-        description="Curator-facing blocker when the subject cannot be resolved yet",
+        description="Curator-facing note when the paper names no subject",
     )
 
     @model_validator(mode="after")
-    def _validate_resolution_state(self) -> "PhenotypeSubjectPayload":
-        if self.resolution_state == "resolved":
-            missing = [
-                field_name
-                for field_name in ("subject_identifier", "subject_type", "taxon")
-                if _is_missing(getattr(self, field_name))
-            ]
-            if missing:
-                raise ValueError(
-                    "resolved phenotype subjects must include "
-                    + ", ".join(missing)
-                )
-        if (
-            self.resolution_state == "blocked_missing_subject"
-            and _is_missing(self.resolution_note)
-        ):
-            raise ValueError(
-                "blocked_missing_subject phenotype subjects must include resolution_note"
+    def _validate_subject_value(self) -> "PhenotypeSubjectPayload":
+        if self.mention is None:
+            staged = sorted(
+                name
+                for name, value in self.model_dump(exclude={"resolution_note"}).items()
+                if value is not None
             )
+            if staged:
+                raise ValueError(
+                    "a phenotype subject needs its paper wording (mention); found "
+                    + ", ".join(staged)
+                )
+            if _is_missing(self.resolution_note):
+                raise ValueError("an absent phenotype subject must include resolution_note")
+            return self
+        _check_value(self, _SUBJECT_IDENTITY_KEYS)
         return self
 
 
@@ -322,86 +387,107 @@ class OntologyLookupHintPayload(BaseModel):
         return self
 
 
-class PhenotypeTermPayload(BaseModel):
-    """Pending phenotype ontology term reference."""
+class PhenotypeTermPayload(_ResolvablePayload):
+    """One phenotype term value: paper wording, extractor proposals, validated identity."""
 
-    model_config = ConfigDict(extra="forbid")
-
-    resolution_state: Literal[
-        "resolved",
-        "pending_ontology_resolution",
-    ] = Field(
-        default="pending_ontology_resolution",
-        description="Phenotype ontology term resolution state",
-    )
     curie: StrictStr | None = Field(
         default=None,
-        description="Phenotype ontology CURIE when already supplied or resolved",
+        description="Phenotype ontology CURIE a validator confirmed; empty until then",
     )
     label: StrictStr | None = Field(
         default=None,
-        description="Curator-facing term label or source label for lookup",
+        description="Phenotype ontology label a validator confirmed; empty until then",
+    )
+    proposed_curie: StrictStr | None = Field(
+        default=None,
+        description="Ontology CURIE the extractor proposed for validation",
+    )
+    overruled_curie: StrictStr | None = Field(
+        default=None, description="An ontology CURIE a validator overruled; informational only, never the value",
+    )
+    overruled_label: StrictStr | None = Field(
+        default=None, description="An ontology label a validator overruled; informational only, never the value",
     )
     source_mentions: list[StrictStr] = Field(
-        default_factory=list,
-        description="Paper text that supported this phenotype term candidate",
+        min_length=1,
+        description="Paper text that supported this phenotype term",
     )
     ontology_lookup_hint: OntologyLookupHintPayload | None = Field(
         default=None,
         description="Structured provider/taxon/evidence context for ontology lookup",
     )
-    export_state: Literal[
-        "blocked_pending_ontology_resolution",
-        "ready_after_ontology_resolution",
-    ] = Field(
-        default="blocked_pending_ontology_resolution",
-        description="Export gate for unresolved phenotype term candidates",
-    )
-    write_blocked_reason: StrictStr | None = Field(
-        default="phenotype term CURIE unresolved",
-        description="Curator-facing write blocker while the phenotype CURIE is unresolved",
-    )
 
     @model_validator(mode="after")
-    def _validate_resolution_state(self) -> "PhenotypeTermPayload":
-        if _is_missing(self.curie) and _is_missing(self.label):
-            raise ValueError(
-                "PhenotypeTerm payload requires curie or label for ontology lookup"
-            )
+    def _validate_term_value(self) -> "PhenotypeTermPayload":
         if _has_missing_strings(self.source_mentions):
             raise ValueError(
                 "PhenotypeTerm payload.source_mentions must not contain empty values"
             )
-        if self.resolution_state == "resolved" and _is_missing(self.curie):
-            raise ValueError("resolved PhenotypeTerm payload.curie is required")
-        if self.resolution_state == "pending_ontology_resolution":
-            if not self.source_mentions:
-                raise ValueError(
-                    "pending PhenotypeTerm payload.source_mentions must include "
-                    "at least one source mention"
-                )
-            if self.export_state != "blocked_pending_ontology_resolution":
-                raise ValueError(
-                    "pending PhenotypeTerm payload.export_state must block export"
-                )
-            if _is_missing(self.write_blocked_reason):
-                raise ValueError(
-                    "pending PhenotypeTerm payload.write_blocked_reason is required"
-                )
+        _check_value(self, _TERM_IDENTITY_KEYS)
         return self
 
 
 class ReferencePayload(BaseModel):
-    """Pending source-paper reference metadata."""
+    """The source paper as a reference value; its title from the paper is the wording."""
 
     model_config = ConfigDict(extra="forbid")
 
+    mention: StrictStr | None = Field(default=None, description="The source paper title as given")
     reference_id: int | None = Field(
         default=None,
-        description="Alliance reference row ID when already resolved",
+        description="Alliance reference row ID a validator confirmed",
     )
-    title: StrictStr | None = Field(default=None, description="Source paper title")
+    title: StrictStr | None = Field(default=None, description="Reference title a validator confirmed")
+    # Core keeps an identity a validator overruled under overruled_<key>, and a curator
+    # override's audit under curator_override; neither is ever the value.
+    overruled_reference_id: int | None = Field(
+        default=None, description="A reference ID a validator overruled; informational only, never the value",
+    )
+    overruled_title: StrictStr | None = Field(
+        default=None, description="A reference title a validator overruled; informational only, never the value",
+    )
+    curator_override: dict[str, Any] | None = Field(
+        default=None, description="Who overrode the validation and when (informational)",
+    )
     filename: StrictStr | None = Field(default=None, description="Source document filename")
+    resolution_state: ResolutionStateValue | None = None
+    lookup_outcome: LookupOutcomeValue | None = None
+    validator_explanation: StrictStr | None = None
+    validator_curator_message: StrictStr | None = None
+
+    @model_validator(mode="after")
+    def _validate_reference_value(self) -> "ReferencePayload":
+        if self.mention is None:
+            staged = sorted(
+                name
+                for name, value in self.model_dump(exclude={"filename"}).items()
+                if value is not None
+            )
+            if staged:
+                raise ValueError(
+                    "a reference value needs its paper wording (mention); found "
+                    + ", ".join(staged)
+                )
+            return self
+        _check_value(self, _REFERENCE_IDENTITY_KEYS)
+        return self
+
+
+class DataProviderPayload(_ResolvablePayload):
+    """The data provider value the extractor staged."""
+
+    abbreviation: StrictStr | None = Field(
+        default=None,
+        description="Data provider abbreviation a validator confirmed; empty until then",
+    )
+    overruled_abbreviation: StrictStr | None = Field(
+        default=None, description="A data provider abbreviation a validator overruled; informational only, never the value",
+    )
+
+    @model_validator(mode="after")
+    def _validate_data_provider_value(self) -> "DataProviderPayload":
+        _check_value(self, _DATA_PROVIDER_IDENTITY_KEYS)
+        return self
 
 
 class EvidenceQuotePayload(BaseModel):
@@ -453,15 +539,21 @@ class PhenotypeAnnotationPayload(BaseModel):
     phenotype_annotation_object: StrictStr = Field(
         description="Free-text phenotype statement from the paper"
     )
-    phenotype_annotation_subject: PhenotypeSubjectPayload = Field(
-        description="Pending subject/context payload for the phenotype carrier"
+    phenotype_annotation_subject: PhenotypeSubjectPayload | None = Field(
+        default=None,
+        description="The subject value; absent when the paper names no subject",
     )
     phenotype_terms: list[PhenotypeTermPayload] = Field(
         min_length=1,
         description="Phenotype ontology terms for this assertion",
     )
-    single_reference: ReferencePayload = Field(
-        description="Source paper reference metadata"
+    single_reference: ReferencePayload | None = Field(
+        default=None,
+        description="Source paper reference value; absent when no reference wording is staged",
+    )
+    data_provider: DataProviderPayload | None = Field(
+        default=None,
+        description="Data provider value the extractor staged",
     )
     evidence_quote: EvidenceQuoteRefPayload = Field(
         description="Primary supporting evidence quote reference"
@@ -473,6 +565,10 @@ class PhenotypeAnnotationPayload(BaseModel):
     source_mentions: list[StrictStr] = Field(
         min_length=1,
         description="Raw phenotype mentions supporting this assertion",
+    )
+    rationale: StrictStr | None = Field(
+        default=None,
+        description="Curator-facing reason the extractor selected this item, written at extraction time",
     )
     negated: bool = Field(
         default=False,
@@ -491,12 +587,16 @@ class PhenotypeAnnotationPayload(BaseModel):
     def _validate_required_values(self) -> "PhenotypeAnnotationPayload":
         if _is_missing(self.phenotype_annotation_object):
             raise ValueError("PhenotypeAnnotation payload.phenotype_annotation_object is required")
-        if not self.phenotype_terms or (
-            _is_missing(self.phenotype_terms[0].curie)
-            and _is_missing(self.phenotype_terms[0].label)
+        if not self.phenotype_terms or _is_missing(self.phenotype_terms[0].mention):
+            raise ValueError(
+                "PhenotypeAnnotation payload.phenotype_terms[0] requires its paper wording (mention)"
+            )
+        if self.phenotype_annotation_subject is not None and _is_missing(
+            self.phenotype_annotation_subject.mention
         ):
             raise ValueError(
-                "PhenotypeAnnotation payload.phenotype_terms[0] requires curie or label"
+                "PhenotypeAnnotation payload.phenotype_annotation_subject requires its "
+                "paper wording (mention)"
             )
         if _is_missing(self.evidence_quote.evidence_record_id):
             raise ValueError("PhenotypeAnnotation payload.evidence_quote.evidence_record_id is required")
@@ -636,11 +736,6 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
                     uri=PHENOTYPE_SCHEMA_URI,
                     definition_state=DefinitionState.IN_DEVELOPMENT,
                 )
-                payload = obj.get("payload")
-                if isinstance(payload, dict):
-                    subject_payload = payload.get("phenotype_annotation_subject")
-                    if isinstance(subject_payload, dict):
-                        _normalize_subject_payload_scaffold(subject_payload)
             elif obj.get("object_type") == PHENOTYPE_SUBJECT_OBJECT_TYPE:
                 obj["schema_ref"] = _schema_ref_payload(
                     schema_id=PHENOTYPE_SUBJECT_SCHEMA_ID,
@@ -650,12 +745,11 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
                 )
                 payload = obj.get("payload")
                 if isinstance(payload, dict):
-                    _normalize_subject_payload_scaffold(payload)
                     metadata_payload = obj.setdefault("metadata", {})
                     if isinstance(metadata_payload, dict):
                         metadata_payload.setdefault(
                             "validation_state",
-                            payload.get("resolution_state"),
+                            _subject_workflow_state(payload),
                         )
             elif obj.get("object_type") == PHENOTYPE_TERM_OBJECT_TYPE:
                 obj["schema_ref"] = _schema_ref_payload(
@@ -697,9 +791,6 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
                         ),
                         None,
                     )
-                mention = mention or _optional_text(
-                    payload.get("phenotype_annotation_object")
-                )
                 if mention:
                     inferred_mentions.append(
                         {
@@ -777,22 +868,15 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
             )
             metadata_payload = obj.setdefault("metadata", {})
             if isinstance(metadata_payload, dict):
-                subject_payload = payload.get("phenotype_annotation_subject")
-                subject_state = (
-                    subject_payload.get("resolution_state")
-                    if isinstance(subject_payload, Mapping)
-                    else None
+                metadata_payload.setdefault(
+                    "validation_state",
+                    _subject_workflow_state(payload.get("phenotype_annotation_subject")),
                 )
-                if isinstance(subject_state, str) and subject_state.strip():
-                    metadata_payload.setdefault("validation_state", subject_state)
                 metadata_payload.setdefault("export_behavior", _blocked_export_behavior())
                 metadata_payload.setdefault("write_behavior", _blocked_write_behavior())
 
             subject_payload = payload.get("phenotype_annotation_subject")
-            if (
-                isinstance(subject_payload, Mapping)
-                and not _has_object_ref_type(obj, PHENOTYPE_SUBJECT_OBJECT_TYPE)
-            ):
+            if not _has_object_ref_type(obj, PHENOTYPE_SUBJECT_OBJECT_TYPE):
                 subject_ref = _next_pending_ref(
                     f"phenotype-subject-{annotation_index}", used_refs
                 )
@@ -809,11 +893,13 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
                             definition_state=DefinitionState.IN_DEVELOPMENT,
                         ),
                         "definition_state": DefinitionState.IN_DEVELOPMENT.value,
-                        "payload": dict(subject_payload),
+                        "payload": (
+                            dict(subject_payload)
+                            if isinstance(subject_payload, Mapping)
+                            else {"resolution_note": _SUBJECT_BLOCKED_NOTE}
+                        ),
                         "metadata": {
-                            "validation_state": subject_payload.get(
-                                "resolution_state"
-                            ),
+                            "validation_state": _subject_workflow_state(subject_payload),
                             "validator_binding_id": "phenotype_subject_entity_validator",
                         },
                     }
@@ -859,21 +945,9 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
                             "payload": dict(term_payload),
                             "evidence_record_ids": term_evidence_ids,
                             "metadata": {
-                                "validation_state": term_payload.get(
-                                    "resolution_state",
-                                    "pending_ontology_resolution",
-                                ),
-                                "validator_binding_id": (
-                                    "phenotype_term_ontology_validator"
-                                ),
-                                "export_state": term_payload.get(
-                                    "export_state",
-                                    "blocked_pending_ontology_resolution",
-                                ),
-                                "write_blocked_reason": term_payload.get(
-                                    "write_blocked_reason",
-                                    "phenotype term CURIE unresolved",
-                                ),
+                                "validation_state": _TERM_PENDING_STATE,
+                                "export_state": _TERM_EXPORT_BLOCKED,
+                                "write_blocked_reason": _TERM_WRITE_BLOCKED_REASON,
                             },
                         }
                     )
@@ -1058,17 +1132,12 @@ def _evidence_quote_errors(
 
 
 def _subject_errors(obj: PhenotypeSubjectObject, location: str) -> list[str]:
-    errors: list[str] = []
-    validation_state = obj.metadata.get("validation_state")
-    if validation_state not in _SUBJECT_RESOLUTION_STATES:
-        errors.append(
-            f"{location}.metadata.validation_state must describe phenotype subject resolution"
-        )
-    if validation_state != obj.payload.resolution_state:
-        errors.append(
-            f"{location}.metadata.validation_state must match payload.resolution_state"
-        )
-    return errors
+    expected = _subject_workflow_state(obj.payload.model_dump())
+    if obj.metadata.get("validation_state") != expected:
+        return [
+            f"{location}.metadata.validation_state must be {expected} for this subject payload"
+        ]
+    return []
 
 
 def _term_errors(
@@ -1077,26 +1146,18 @@ def _term_errors(
     evidence_by_id: dict[str, Any],
 ) -> list[str]:
     errors: list[str] = []
-    validation_state = obj.metadata.get("validation_state")
-    if validation_state not in _TERM_RESOLUTION_STATES:
+    if obj.metadata.get("validation_state") != _TERM_PENDING_STATE:
         errors.append(
-            f"{location}.metadata.validation_state must describe phenotype term resolution"
+            f"{location}.metadata.validation_state must be {_TERM_PENDING_STATE}; "
+            "the support object is a structural copy the validator does not resolve"
         )
-    if validation_state != obj.payload.resolution_state:
+    if obj.metadata.get("export_state") != _TERM_EXPORT_BLOCKED:
+        errors.append(f"{location}.metadata.export_state must block pending ontology terms")
+    write_blocked_reason = obj.metadata.get("write_blocked_reason")
+    if not isinstance(write_blocked_reason, str) or not write_blocked_reason.strip():
         errors.append(
-            f"{location}.metadata.validation_state must match payload.resolution_state"
+            f"{location}.metadata.write_blocked_reason is required for pending ontology terms"
         )
-
-    if obj.payload.resolution_state == "pending_ontology_resolution":
-        if obj.metadata.get("export_state") != "blocked_pending_ontology_resolution":
-            errors.append(
-                f"{location}.metadata.export_state must block pending ontology terms"
-            )
-        write_blocked_reason = obj.metadata.get("write_blocked_reason")
-        if not isinstance(write_blocked_reason, str) or not write_blocked_reason.strip():
-            errors.append(
-                f"{location}.metadata.write_blocked_reason is required for pending ontology terms"
-            )
 
     hint = obj.payload.ontology_lookup_hint
     if hint is not None and hint.evidence_record_id is not None:
@@ -1187,11 +1248,11 @@ def _annotation_errors(
         if not isinstance(behavior, dict) or behavior.get("status") != "blocked":
             errors.append(f"{location}.metadata.{metadata_key}.status must be blocked")
 
-    subject_state = obj.payload.phenotype_annotation_subject.resolution_state
+    subject = obj.payload.phenotype_annotation_subject
+    subject_state = _subject_workflow_state(subject.model_dump() if subject is not None else None)
     if obj.metadata.get("validation_state") != subject_state:
         errors.append(
-            f"{location}.metadata.validation_state must match "
-            "payload.phenotype_annotation_subject.resolution_state"
+            f"{location}.metadata.validation_state must be {subject_state} for this subject"
         )
     return errors
 
@@ -1242,6 +1303,7 @@ def _has_missing_strings(values: list[str]) -> bool:
 
 
 __all__ = [
+    "DataProviderPayload",
     "EvidenceQuoteObject",
     "EvidenceQuotePayload",
     "OntologyLookupHintPayload",

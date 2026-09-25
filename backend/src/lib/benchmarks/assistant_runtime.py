@@ -20,6 +20,7 @@ from src.lib.agent_studio.openai_runtime import (
     stream_agent_studio_run,
 )
 from src.lib.openai_agents.config import (
+    PromptCacheIdentity,
     get_agent_studio_openai_max_output_tokens,
     get_agent_studio_openai_max_turns,
 )
@@ -77,7 +78,7 @@ async def stream_benchmark_assistant(
     tools, _ = build_agent_studio_tools(
         definitions, executor=execute, state=state,
         namespace_for_tool=lambda _name: ("benchmark", "Benchmark preparation"),
-        eager_tool_names=ASSISTANT_TOOL_NAMES,
+        eager_tool_names=tuple(sorted(ASSISTANT_TOOL_NAMES)),
     )
     async for event in stream_agent_studio_run(
         instructions=ASSISTANT_INSTRUCTIONS, input_items=input_items,
@@ -85,6 +86,9 @@ async def stream_benchmark_assistant(
         max_turns=get_agent_studio_openai_max_turns(),
         model_settings=build_agent_studio_model_settings(
             max_output_tokens=get_agent_studio_openai_max_output_tokens(),
+            prompt_cache=PromptCacheIdentity(
+                agent_key="benchmark_assistant", static_prompt=ASSISTANT_INSTRUCTIONS,
+            ),
         ),
         cancel_event=cancel_event, surface="benchmark_assistant",
     ):

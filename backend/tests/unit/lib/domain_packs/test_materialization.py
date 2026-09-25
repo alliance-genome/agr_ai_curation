@@ -1335,6 +1335,7 @@ def test_validator_result_materialization_propagates_materializes_to_field_paths
 
 
 def test_validator_result_materialization_merges_multiple_target_payload_patches():
+    # Plain fields (no resolvable value around them) merge partial patches.
     metadata = DomainPackMetadata(
         pack_id="fixture.target_patch",
         display_name="Fixture Target Patch Pack",
@@ -1357,7 +1358,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
                         "input_fields": {
                             "mention": {
                                 "source": "payload",
-                                "path": "mention",
+                                "path": "paper_text",
                             }
                         },
                         "expected_result_fields": {
@@ -1377,7 +1378,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
                 metadata={"object_role": "validated_reference"},
                 fields=[
                     DomainPackFieldDefinition(
-                        field_path="mention",
+                        field_path="paper_text",
                         field_type=DomainPackFieldType.STRING,
                         required=True,
                     ),
@@ -1405,7 +1406,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
                 object_type="GeneMention",
                 pending_ref_id="gene-mention-1",
                 status=CuratableObjectStatus.PENDING,
-                payload={"mention": "crumbs"},
+                payload={"paper_text": "crumbs"},
             )
         ],
     )
@@ -1429,7 +1430,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
     )
 
     assert result.envelope.extracted_objects[0].payload == {
-        "mention": "crumbs",
+        "paper_text": "crumbs",
         "primary_external_id": "FB:FBgn0259685",
         "gene_symbol": "crb",
         "taxon": "NCBITaxon:7227",
@@ -1467,7 +1468,13 @@ def test_validator_result_materialization_is_deterministic_for_existing_referenc
     assert second_result.appended_findings == ()
 
 
-def test_unresolved_validator_result_materializes_missing_field_finding():
+@pytest.mark.parametrize(("lookup_outcome", "classification"), [
+    # The lookup outcome says why the fields are missing; it decides.
+    ("not_found", "not_found"),
+    # Lookups that found something the validator rejected, filling nothing.
+    ("success", "rejected_candidates"),
+])
+def test_unresolved_validator_result_materializes_missing_field_finding(lookup_outcome, classification):
     metadata = _validator_metadata()
     envelope = _validator_envelope()
     envelope = envelope.model_copy(
@@ -1484,7 +1491,7 @@ def test_unresolved_validator_result_materializes_missing_field_finding():
         envelope,
         status="unresolved",
         missing_expected_fields=["curie", "symbol"],
-        lookup_outcome="not_found",
+        lookup_outcome=lookup_outcome,
     )
 
     result = materialize_validator_results_into_envelope(envelope, metadata, [item])
@@ -1497,9 +1504,11 @@ def test_unresolved_validator_result_materializes_missing_field_finding():
     finding = result.appended_findings[0]
     assert finding.status is ValidationFindingStatus.OPEN
     assert finding.code == "domain_pack.validator_unresolved"
-    assert finding.details["failure_classification"] == "missing_expected_result_field"
+    assert finding.details["failure_classification"] == classification
     assert finding.details["missing_expected_fields"] == ["curie", "symbol"]
-    assert finding.details["lookup_attempts"][0]["lookup_status"] == "not_found"
+    assert finding.details["lookup_attempts"][0]["lookup_status"] == (
+        "not_found" if lookup_outcome == "not_found" else "success"
+    )
 
 
 def test_errored_validator_result_materializes_validator_error_finding():

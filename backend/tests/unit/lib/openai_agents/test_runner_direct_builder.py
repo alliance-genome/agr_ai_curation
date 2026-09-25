@@ -13,7 +13,6 @@ from src.lib.agent_studio import catalog_service
 from src.lib.openai_agents import runner
 from src.lib.openai_agents import extraction_builder_workspace as builder
 from src.lib.openai_agents import streaming_tools
-from src.lib.openai_agents import resolver_call_ledger
 
 
 @pytest.fixture
@@ -24,7 +23,6 @@ def runtime(monkeypatch):
     monkeypatch.setattr(runner, "write_stream_event", lambda *a, **k: None)
     monkeypatch.setattr(runner, "write_extraction_trace_event", lambda **k: k)
     monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **k: k)
-    monkeypatch.setattr(resolver_call_ledger, "write_extraction_trace_event", lambda **k: k)
     monkeypatch.setattr(runner, "_build_agents_run_config", lambda **k: SimpleNamespace())
     return SimpleNamespace(client=None, provider=None)
 
@@ -200,6 +198,7 @@ async def test_direct_builder_binds_actual_package_stage_tool(runtime, monkeypat
                 "pending_ref_id": "pending:gene:1", "mention": "synthetic gene",
                 "evidence_record_ids": ["evidence-1"],
                 "identity_resolution_notes": ["Synthetic unresolved identity"], "confidence": "high",
+                "rationale": "The paper experimentally studies this gene.",
             }))
             assert "An error occurred" not in str(value)
             workspace = builder.get_active_extraction_builder_workspace()
@@ -306,6 +305,7 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
             args = [
                 {"pending_ref_id": "pending:gene:1", "mention": "synthetic gene",
                  "evidence_record_ids": ["evidence-1"], "confidence": "high",
+                 "rationale": "The paper experimentally studies this gene.",
                  "identity_resolution_notes": ["Synthetic unresolved identity"]},
                 {"candidate_ids": ["gene-candidate-1"]},
             ]
@@ -388,8 +388,6 @@ async def test_binding_failure_restores_parent_state(runtime, monkeypatch):
     parent_evidence = [{"evidence_record_id": "parent-evidence"}]
     builder_token = builder.set_active_extraction_builder_workspace(parent)
     evidence_token = evidence_workspace.set_active_evidence_records(parent_evidence)
-    parent_ledger = resolver_call_ledger.ResolverCallLedger(trace_id="parent")
-    ledger_token = resolver_call_ledger.set_active_resolver_call_ledger(parent_ledger)
 
     def reject(*args, **kwargs):
         raise ValueError("synthetic binding failure")
@@ -401,105 +399,65 @@ async def test_binding_failure_restores_parent_state(runtime, monkeypatch):
             await run_direct(runtime, agent, "rejected")
         assert builder.get_active_extraction_builder_workspace() is parent
         assert evidence_workspace.get_active_evidence_records_snapshot() == parent_evidence
-        assert resolver_call_ledger.get_active_resolver_call_ledger() is parent_ledger
     finally:
         builder.reset_active_extraction_builder_workspace(builder_token)
         evidence_workspace.reset_active_evidence_records(evidence_token)
-        resolver_call_ledger.reset_active_resolver_call_ledger(ledger_token)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("resolved", [True, False])
-async def test_direct_controlled_selection_records_runtime_tool_output(runtime, monkeypatch, resolved):
-    from agr_ai_curation_alliance.tools import agr_curation
-
-    monkeypatch.setattr(agr_curation, "write_extraction_trace_event", lambda **k: k)
+async def test_direct_expression_stage_preserves_unresolved_mentions_without_resolver(runtime, monkeypatch):
     stage = catalog_service._resolve_package_tool(
         "stage_gene_expression_observation", catalog_service.ToolExecutionContext(database_url="unused"),
     )
-    agent = Agent(name="Synthetic controlled selection", model="gpt-5.6-sol", tools=[stage])
-    output = {"status": "resolved", "data": {
-        "domain_pack_id": agr_curation.GENE_EXPRESSION_DOMAIN_PACK_ID,
-        "object_type": agr_curation.GENE_EXPRESSION_OBJECT_TYPE,
-        "payload_field_instructions": {"set": [{"field_path": "relation.name", "value": "is_expressed_in"}]},
-        "helper_selection": {
-            "field_path": "relation.name", "selected_value": "is_expressed_in",
-            "source_phrase": "expressed", "source_tool": "resolve_domain_field_term",
-            "authority": "selector_evidence", "lookup_status": "success",
-            "term_source": {"kind": "controlled_vocabulary", "vocabulary": "Expression Relation"},
-        },
-    }}
+    agent = Agent(name="Synthetic expression", model="gpt-6-sol", tools=[stage])
     observed = []
 
-    completed = asyncio.Event()
-    monkeypatch.setattr(runner, "write_stream_event", lambda event, **k:
-                        completed.set() if event["type"] == "TOOL_COMPLETE" else None)
-
     class Result:
-        final_output = "Controlled selection staging complete"
+        final_output = "Expression staging complete"
 
         def __init__(self, active):
             self.agent = active
 
         async def stream_events(self):
-            completed.clear()
-            ledger = resolver_call_ledger.get_active_resolver_call_ledger()
-            assert ledger is not parent
-            observed.append(ledger)
-            assert ledger.snapshot()["entry_count"] == 0
-            assert ledger.trace_id is not None
-            call_id = "resolver-" + ledger.trace_id
-            if resolved:
-                # Synthetic resolver boundary; real runner correlates completion
-                # and records its structured output, never a manually seeded ledger.
-                yield SimpleNamespace(type="run_item_stream_event", item=SimpleNamespace(
-                    type="tool_call_item", raw_item=SimpleNamespace(
-                        name="resolve_domain_field_term", call_id=call_id, arguments="{}",
-                    ),
-                ))
-                yield SimpleNamespace(type="run_item_stream_event", item=SimpleNamespace(
-                    type="tool_call_output_item", call_id=call_id, output=json.dumps(output),
-                ))
-                # Model boundaries normally separate resolve from staging. Wait
-                # for the runner to consume the synthetic completion first.
-                await completed.wait()
-            entry = ledger.find_validated_selection(field_path="relation.name", selected_value="is_expressed_in")
-            assert (entry is not None) is resolved
-            if entry is not None:
-                assert entry.tool_call_id == call_id
             arguments = json.dumps({
-                "pending_ref_id": "synthetic-expression", "evidence_record_ids": ["synthetic-evidence"],
+                "pending_ref_id": "synthetic-expression",
+                "evidence_record_ids": ["synthetic-evidence"],
                 "where_expressed_statement": "Synthetic expression observation",
-                "subject": {"source_phrase": "synthetic", "gene_symbol": "synthetic", "primary_external_id": None},
-                "reference": {"source_phrase": "synthetic paper", "reference_id": "PMID:39550471"},
-                "controlled_fields": [{"field_path": "relation.name", "selected_value": "is_expressed_in"}],
+                "rationale": "The paper reports this expression observation.",
+                "data_provider": "WB",
+                "subject": {"mention": "synthetic", "proposed_primary_external_id": None},
+                "reference": {"mention": "PMID:39550471"},
+                "controlled_fields": [{
+                    "field_path": "relation.name", "mention": "is_expressed_in", "proposed_curie": None,
+                }],
                 "condition_relations": None,
             })
             tool = self.agent.tools[0]
-            # Actual package stage tool in a fresh context proves the closure
-            # receives this same populated ledger across execution boundaries.
+            # Real package tool in a fresh Context must still use this run's bound workspace.
             value = await asyncio.create_task(tool.on_invoke_tool(ToolContext(
                 context=None, tool_name=tool.name, tool_call_id="stage", tool_arguments=arguments,
             ), arguments), context=Context())
-            payload = value.model_dump(mode="json")
+            assert value.model_dump(mode="json")["status"] == "ok"
             workspace = builder.get_active_extraction_builder_workspace()
-            if resolved:
-                assert payload["status"] == "ok"
-                candidate = next(iter(workspace.candidates.values()))
-                assert candidate.resolver_selection_refs == [call_id]
-                assert candidate.staged_fields["relation"]["name"] == "is_expressed_in"
-            else:
-                assert payload["status"] != "ok"
-                assert not workspace.candidates
+            observed.append(workspace)
+            candidate = next(iter(workspace.candidates.values()))
+            assert candidate.staged_fields["relation"]["mention"] == "is_expressed_in"
+            assert candidate.staged_fields["relation"]["name"] is None
+            assert candidate.staged_fields["relation"]["resolution_state"] == "unresolved"
+            assert candidate.staged_fields["relation"]["lookup_outcome"] == "not_validated"
+            if False:
+                yield None
 
     monkeypatch.setattr(runner.Runner, "run_streamed", lambda active, **k: Result(active))
-    parent = resolver_call_ledger.ResolverCallLedger(trace_id="parent")
-    token = resolver_call_ledger.set_active_resolver_call_ledger(parent)
+    parent = builder.ExtractionBuilderWorkspace(run_id="parent")
+    token = builder.set_active_extraction_builder_workspace(parent)
     try:
         for trace in ("first", "second"):
             await run_direct(runtime, agent, trace)
-            assert resolver_call_ledger.get_active_resolver_call_ledger() is parent
+            assert builder.get_active_extraction_builder_workspace() is parent
         assert observed[0] is not observed[1]
-        assert parent.snapshot()["entry_count"] == 0
+        assert [workspace.run_id for workspace in observed] == ["first", "second"]
+        assert not parent.candidates
+        assert agent.tools == [stage]
     finally:
-        resolver_call_ledger.reset_active_resolver_call_ledger(token)
+        builder.reset_active_extraction_builder_workspace(token)

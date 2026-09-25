@@ -9,6 +9,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from src.lib.domain_packs.resolvable_values import (
+    ResolvableValueError,
+    check_resolvable_list,
+    check_resolvable_value,
+)
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
@@ -18,11 +23,26 @@ from src.schemas.models.base import EvidenceRecord
 from src.schemas.evidence_workspace import normalize_workspace_records
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
+from src.lib.domain_packs.resolvable_values import (
+    LOOKUP_OUTCOME_KEY,
+    MENTION_KEY,
+    OUTCOME_NOT_VALIDATED,
+)
+
 from .constants import (
     GO_MATERIALIZER_ID,
     GO_MODEL_ID,
     GO_OBJECT_ROLE,
     GO_OBJECT_TYPE,
+)
+from .values import (
+    MAPPED_FIELDS,
+    PROPOSAL_FIELDS,
+    PROPOSED_CURIE_KEY,
+    RESOLVABLE_LIST_FIELDS,
+    RESOLVABLE_VALUE_FIELDS,
+    evidence_code_value,
+    qualifier_value,
 )
 
 
@@ -31,8 +51,15 @@ _GO_ASPECTS = frozenset(
 )
 _CURIE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*:[^\s:]+$")
 _GO_CURIE_PATTERN = re.compile(r"^GO:\d{7}$")
-_ECO_CURIE_PATTERN = re.compile(r"^ECO:\d{7}$")
-_EVIDENCE_CODE_PATTERN = re.compile(r"^[A-Z]{2,4}$")
+_RGD_CURIE_PATTERN = re.compile(r"^RGD:\d+$")
+_TAXON_PATTERN = re.compile(r"^NCBITaxon:\d+$")
+# The pattern a paper-stated identifier (``proposed_curie``) of each value follows.
+_PROPOSED_CURIE_PATTERNS = {
+    "gene_product": _RGD_CURIE_PATTERN,
+    "go_term": _GO_CURIE_PATTERN,
+    "reference_curie": _CURIE_PATTERN,
+    "with_from": _CURIE_PATTERN,
+}
 _EXCLUDED_EVIDENCE_SECTION_PATTERN = re.compile(
     r"\b(?:abstract|introduction|discussion|conclusions?)\b", re.IGNORECASE
 )
@@ -45,7 +72,6 @@ _SUPPORTED_EVIDENCE_FIELD_ROOTS = frozenset(
         "gene_product",
         "go_term",
         "evidence_code",
-        "evidence_eco_curie",
         "reference_curie",
         "with_from",
         "qualifiers",
@@ -53,28 +79,23 @@ _SUPPORTED_EVIDENCE_FIELD_ROOTS = frozenset(
         "negated",
         "rationale",
         "provider_context",
-        "resolution_state",
         "blocking_reasons",
     }
 )
 _REQUIRED_PAYLOAD_PATHS = (
     "gene_product.mention",
-    "gene_product.label",
     "gene_product.entity_type",
     "gene_product.taxon_curie",
-    "go_term.curie",
-    "go_term.label",
+    "go_term.mention",
     "go_term.aspect",
-    "evidence_code",
-    "evidence_eco_curie",
-    "reference_curie",
+    "evidence_code.mention",
+    "reference_curie.mention",
     "with_from",
     "qualifiers",
     "annotation_extensions",
     "negated",
     "rationale",
     "provider_context",
-    "resolution_state",
     "blocking_reasons",
 )
 
@@ -129,7 +150,6 @@ def materialize_go_builder_state(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]] | None = None,
-    resolver_entry_lookup: Any = None,
     produced_by: str = "rgd_go_paper_curator",
 ) -> GOMaterializationResult:
     """Build canonical ``DomainEnvelopeExtractionResult`` data from GO drafts."""
@@ -173,15 +193,6 @@ def materialize_go_builder_state(
             continue
         payload = copy.deepcopy(dict(payload))
         _validate_payload(payload, candidate_id=candidate_id, issues=issues)
-
-        _validate_source_grounding(
-            candidate,
-            staged_fields,
-            payload,
-            resolver_entry_lookup=resolver_entry_lookup,
-            candidate_id=candidate_id,
-            issues=issues,
-        )
 
         evidence_ids = _unique_strings(
             getattr(candidate, "evidence_record_ids", None)
@@ -272,9 +283,6 @@ def materialize_go_builder_state(
             }
         )
         retained_evidence_ids.extend(evidence_ids)
-        unresolved = payload["resolution_state"] == "unresolved" or bool(
-            payload["blocking_reasons"]
-        )
         objects.append(
             CuratableObjectEnvelope(
                 object_type=GO_OBJECT_TYPE,
@@ -282,11 +290,8 @@ def materialize_go_builder_state(
                 pending_ref_id=pending_ref_id,
                 model_ref=GO_MODEL_ID,
                 validation_guidance=staged_fields.get("validation_guidance"),
-                status=(
-                    CuratableObjectStatus.NEEDS_REVIEW
-                    if unresolved
-                    else CuratableObjectStatus.EXTRACTED
-                ),
+                # Every value awaits validation, so each proposal needs review.
+                status=CuratableObjectStatus.NEEDS_REVIEW,
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 definition_notes=[
                     "Review-only GO proposal; submission and export are unsupported."
@@ -319,12 +324,12 @@ def materialize_go_builder_state(
                     "mention": obj.payload["gene_product"]["mention"],
                     "why_ambiguous": "; ".join(obj.payload["blocking_reasons"]),
                     "recommended_followup": (
-                        "Resolve gene-product identity before curator acceptance."
+                        "Settle the blocking reasons before curator acceptance."
                     ),
                     "evidence_record_ids": list(obj.evidence_record_ids),
                 }
                 for obj in objects
-                if obj.payload["resolution_state"] == "unresolved"
+                if obj.payload["blocking_reasons"]
             ],
             "notes": [],
             "provenance": {
@@ -339,9 +344,7 @@ def materialize_go_builder_state(
             "candidate_count": len(normalized_candidate_ids),
             "kept_count": len(objects),
             "excluded_count": 0,
-            "ambiguous_count": sum(
-                obj.payload["resolution_state"] == "unresolved" for obj in objects
-            ),
+            "ambiguous_count": sum(bool(obj.payload["blocking_reasons"]) for obj in objects),
             "warnings": [],
         },
     }
@@ -373,8 +376,15 @@ def _validate_payload(
             issues.append(
                 _issue(
                     f"payload.{field_path}",
-                    "missing_required_payload_field",
-                    "GO candidate is missing a required contract field.",
+                    "missing_rationale"
+                    if field_path == "rationale"
+                    else "missing_required_payload_field",
+                    (
+                        "GO candidate is missing a rationale; patch the candidate "
+                        "with a rationale saying why you selected it."
+                    )
+                    if field_path == "rationale"
+                    else "GO candidate is missing a required contract field.",
                     candidate_id,
                 )
             )
@@ -388,81 +398,95 @@ def _validate_payload(
                 candidate_id,
             )
         )
-    resolution_state = payload.get("resolution_state")
-    if resolution_state not in {"resolved", "unresolved"}:
-        issues.append(
-            _issue(
-                "payload.resolution_state",
-                "invalid_resolution_state",
-                "resolution_state must be resolved or unresolved.",
-                candidate_id,
-            )
-        )
-    gene_product = payload.get("gene_product")
-    blockers = payload.get("blocking_reasons")
-    if isinstance(gene_product, Mapping):
-        has_curie = bool(str(gene_product.get("curie") or "").strip())
-        if resolution_state == "resolved" and not has_curie:
-            issues.append(
-                _issue(
-                    "payload.gene_product.curie",
-                    "resolved_identity_missing_curie",
-                    "Resolved gene-product identity requires a resolver-backed CURIE.",
-                    candidate_id,
-                )
-            )
-        if has_curie and not str(gene_product.get("curie")).startswith("RGD:"):
-            issues.append(
-                _issue(
-                    "payload.gene_product.curie",
-                    "invalid_rgd_gene_product_curie",
-                    "Resolved RGD gene-product identity must use an RGD CURIE.",
-                    candidate_id,
-                )
-            )
-        if resolution_state == "unresolved" and has_curie:
-            issues.append(
-                _issue(
-                    "payload.gene_product.curie",
-                    "unresolved_identity_has_curie",
-                    "Unresolved identity must not carry a guessed gene-product CURIE.",
-                    candidate_id,
-                )
-            )
-        if gene_product.get("taxon_curie") != "NCBITaxon:10116":
-            issues.append(
-                _issue(
-                    "payload.gene_product.taxon_curie",
-                    "invalid_rgd_taxon",
-                    "RGD GO paper recommendations require NCBITaxon:10116.",
-                    candidate_id,
-                )
-            )
-    identifier_checks = (
-        ("go_term.curie", _GO_CURIE_PATTERN, "invalid_go_curie"),
-        ("evidence_eco_curie", _ECO_CURIE_PATTERN, "invalid_eco_curie"),
-        ("reference_curie", _CURIE_PATTERN, "invalid_reference_curie"),
-    )
-    for field_path, pattern, reason in identifier_checks:
-        value = _path_value(payload, field_path)
-        if isinstance(value, str) and not pattern.fullmatch(value):
+    for field_path, identity_keys in RESOLVABLE_VALUE_FIELDS.items():
+        value = payload.get(field_path)
+        if value is None:
+            continue
+        try:
+            check_resolvable_value(value, identity_keys=identity_keys)
+        except ResolvableValueError as exc:
             issues.append(
                 _issue(
                     f"payload.{field_path}",
-                    reason,
-                    "Identifier does not match the required CURIE contract.",
+                    "invalid_resolvable_value",
+                    str(exc),
                     candidate_id,
                 )
             )
-    evidence_code = payload.get("evidence_code")
-    if isinstance(evidence_code, str) and not _EVIDENCE_CODE_PATTERN.fullmatch(
-        evidence_code
-    ):
+    for field_path, identity_keys in RESOLVABLE_LIST_FIELDS.items():
+        values = payload.get(field_path)
+        if not isinstance(values, list):
+            continue
+        try:
+            check_resolvable_list(values, identity_keys=identity_keys)
+        except ResolvableValueError as exc:
+            issues.append(
+                _issue(
+                    f"payload.{field_path}",
+                    "invalid_resolvable_value",
+                    str(exc),
+                    candidate_id,
+                )
+            )
+    for field_path in (*RESOLVABLE_VALUE_FIELDS, *RESOLVABLE_LIST_FIELDS):
+        value = payload.get(field_path)
+        for index, item in enumerate(value if isinstance(value, list) else [value]):
+            path = f"payload.{field_path}[{index}]" if isinstance(value, list) else f"payload.{field_path}"
+            if not isinstance(item, Mapping):
+                continue
+            if field_path in MAPPED_FIELDS:
+                if item != _mapped_value(field_path, item, aspect):
+                    issues.append(
+                        _issue(
+                            path,
+                            "mapped_value_mismatch",
+                            "The evidence code and qualifiers carry exactly the builder's "
+                            "table mapping of the chosen term.",
+                            candidate_id,
+                        )
+                    )
+                continue
+            if item.get(LOOKUP_OUTCOME_KEY) != OUTCOME_NOT_VALIDATED:
+                issues.append(
+                    _issue(
+                        path,
+                        "extraction_value_not_staged_for_validation",
+                        "Extraction stages every searchable GO value unresolved and not yet validated.",
+                        candidate_id,
+                    )
+                )
+            proposed = item.get(PROPOSED_CURIE_KEY)
+            if field_path in PROPOSAL_FIELDS and proposed is not None and not (
+                isinstance(proposed, str) and _PROPOSED_CURIE_PATTERNS[field_path].fullmatch(proposed)
+            ):
+                issues.append(
+                    _issue(
+                        f"{path}.{PROPOSED_CURIE_KEY}",
+                        "invalid_proposed_curie",
+                        "A paper-stated identifier is written with its prefix and a colon, "
+                        "for example RGD:619839, GO:0005515, PMID:12345678 or DOI:10.1000/xyz.",
+                        candidate_id,
+                    )
+                )
+            taxon = item.get("taxon_curie")
+            if field_path == "with_from" and taxon is not None and not (
+                isinstance(taxon, str) and _TAXON_PATTERN.fullmatch(taxon)
+            ):
+                issues.append(
+                    _issue(
+                        f"{path}.taxon_curie",
+                        "invalid_taxon_curie",
+                        "A With/From partner's species is an NCBI Taxon ID, for example NCBITaxon:9606.",
+                        candidate_id,
+                    )
+                )
+    gene_product = payload.get("gene_product")
+    if isinstance(gene_product, Mapping) and gene_product.get("taxon_curie") != "NCBITaxon:10116":
         issues.append(
             _issue(
-                "payload.evidence_code",
-                "invalid_evidence_code",
-                "Evidence code must be a canonical uppercase GO evidence code token.",
+                "payload.gene_product.taxon_curie",
+                "invalid_rgd_taxon",
+                "RGD GO paper recommendations require NCBITaxon:10116.",
                 candidate_id,
             )
         )
@@ -481,33 +505,12 @@ def _validate_payload(
                     candidate_id,
                 )
             )
-    with_from = payload.get("with_from")
-    if isinstance(with_from, list):
-        for index, value in enumerate(with_from):
-            if not isinstance(value, str) or not _CURIE_PATTERN.fullmatch(value):
-                issues.append(
-                    _issue(
-                        f"payload.with_from[{index}]",
-                        "invalid_with_from_curie",
-                        "With/From values must be source-backed CURIEs.",
-                        candidate_id,
-                    )
-                )
     if not isinstance(payload.get("negated"), bool):
         issues.append(
             _issue(
                 "payload.negated",
                 "invalid_negated_value",
                 "negated must be a boolean.",
-                candidate_id,
-            )
-        )
-    if resolution_state == "unresolved" and not blockers:
-        issues.append(
-            _issue(
-                "payload.blocking_reasons",
-                "unresolved_identity_missing_blocker",
-                "Unresolved identity requires an explicit blocking reason.",
                 candidate_id,
             )
         )
@@ -524,66 +527,15 @@ def _validate_payload(
                 candidate_id,
             )
         )
-    if isinstance(provider_context, Mapping):
-        comparison = provider_context.get("existing_annotation_context")
-        if not isinstance(comparison, Mapping) or comparison.get("status") not in {
-            "available",
-            "not_found",
-            "unavailable",
-        }:
-            issues.append(
-                _issue(
-                    "payload.provider_context.existing_annotation_context.status",
-                    "missing_existing_annotation_context",
-                    "Existing annotations must be compared or marked unavailable.",
-                    candidate_id,
-                )
-            )
-        elif comparison.get("status") in {"available", "not_found"} and not isinstance(
-            comparison.get("provenance"), Mapping
-        ):
-            issues.append(
-                _issue(
-                    "payload.provider_context.existing_annotation_context.provenance",
-                    "missing_existing_annotation_provenance",
-                    "Completed existing-annotation lookups must retain provenance.",
-                    candidate_id,
-                )
-            )
-        elif comparison.get("status") in {
-            "available",
-            "not_found",
-        } and not comparison.get("provenance"):
-            issues.append(
-                _issue(
-                    "payload.provider_context.existing_annotation_context.provenance",
-                    "missing_existing_annotation_provenance",
-                    "Completed existing-annotation lookups must retain provenance.",
-                    candidate_id,
-                )
-            )
-        elif (
-            comparison.get("status") == "unavailable"
-            and not str(comparison.get("note") or "").strip()
-        ):
-            issues.append(
-                _issue(
-                    "payload.provider_context.existing_annotation_context.note",
-                    "missing_existing_annotation_unavailable_note",
-                    "Unavailable existing annotations require an explicit status note.",
-                    candidate_id,
-                )
-            )
-        identity_resolution = provider_context.get("identity_resolution")
-        if not isinstance(identity_resolution, Mapping) or not identity_resolution:
-            issues.append(
-                _issue(
-                    "payload.provider_context.identity_resolution",
-                    "missing_identity_resolution_provenance",
-                    "Gene-product resolution output and provenance must be retained.",
-                    candidate_id,
-                )
-            )
+
+
+def _mapped_value(field_path: str, item: Mapping[str, Any], aspect: Any) -> Any:
+    mention = item.get(MENTION_KEY)
+    if not isinstance(mention, str) or not mention.strip():
+        return None
+    if field_path == "evidence_code":
+        return evidence_code_value(mention)
+    return qualifier_value(mention, aspect=aspect)
 
 
 def _normalized_evidence_records(
@@ -660,65 +612,6 @@ def _evidence_attached_to_candidate(
         and field_path.split(".", 1)[0] in _SUPPORTED_EVIDENCE_FIELD_ROOTS
         for target_ref, field_path in targets
     )
-
-
-def _validate_source_grounding(
-    candidate: Any,
-    staged_fields: Mapping[str, Any],
-    payload: Mapping[str, Any],
-    *,
-    resolver_entry_lookup: Any,
-    candidate_id: str,
-    issues: list[dict[str, Any]],
-) -> None:
-    grounding = staged_fields.get("source_grounding")
-    refs = list(getattr(candidate, "resolver_selection_refs", None) or [])
-    if not isinstance(grounding, Mapping) or grounding.get("payload") != payload:
-        issues.append(
-            _issue(
-                "source_grounding",
-                "stale_or_missing_source_grounding",
-                "Finalized GO payload values must match the tool-grounded staged snapshot.",
-                candidate_id,
-            )
-        )
-        return
-    requirements = grounding.get("requirements")
-    if not refs or not isinstance(requirements, list) or resolver_entry_lookup is None:
-        issues.append(
-            _issue(
-                "source_grounding",
-                "missing_tool_output_provenance",
-                "Finalized GO recommendations require run-scoped tool-output provenance.",
-                candidate_id,
-            )
-        )
-        return
-    entries = []
-    for ref in refs:
-        try:
-            entries.append(resolver_entry_lookup(ref))
-        except (KeyError, ValueError):
-            continue
-    for requirement in requirements:
-        if not isinstance(requirement, Mapping):
-            continue
-        allowed_tools = set(requirement.get("tool_names") or [])
-        value = requirement.get("value")
-        if not any(
-            getattr(entry, "tool_name", None) in allowed_tools
-            and callable(getattr(entry, "contains", None))
-            and entry.contains(value)
-            for entry in entries
-        ):
-            issues.append(
-                _issue(
-                    str(requirement.get("field_path") or "source_grounding"),
-                    "unobserved_tool_value",
-                    "A controlled GO value no longer matches its run-scoped tool output.",
-                    candidate_id,
-                )
-            )
 
 
 def _pending_ref_id(

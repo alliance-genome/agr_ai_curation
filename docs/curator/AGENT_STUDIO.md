@@ -97,7 +97,7 @@ Review these settings, manually or with AI Chat:
 | **Sharing** | Who can see the agent and which groups may run it |
 | **Output** | Whether to produce structured extraction, and which structure to use |
 
-New extraction drafts default to **GPT-5.6 Sol with medium reasoning**; GPT-6 Astra remains available if you select it. Studio AI Chat uses Astra with medium reasoning; validator agents retain their Terra settings. Existing saved agents and flow revisions retain their saved choices. Read **Model guidance** or choose **Ask AI Chat which model fits** if you want to change the model.
+New extraction drafts default to **GPT-6 Sol with medium reasoning**; GPT-6 Astra remains available if you select it. Studio AI Chat uses Astra with medium reasoning; validator agents also use GPT-6 Sol. Saved agents that used GPT-5.6 Sol or GPT-5.6 Terra were moved to GPT-6 Sol. Their reasoning level stayed the same where GPT-6 Sol offers it: a "minimal" setting became Low, and a reasoning setting that was turned off became Medium, which is what those agents were already using. Read **Model guidance** or choose **Ask AI Chat which model fits** if you want to change the model.
 
 **Visibility** and **Available to groups** serve different purposes: sharing controls discovery, while groups restrict execution. A restricted template or clone source may let you narrow group access without widening it.
 

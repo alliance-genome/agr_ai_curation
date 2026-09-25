@@ -36,7 +36,8 @@ DISEASE_LINKML_SCHEMA_URI = (
 #         AGMDiseaseAnnotation subtype chosen by the staged subject kind (the abstract
 #         DiseaseAnnotation is emitted ONLY when the subject kind is unknown -> validator_unresolved,
 #         which is NOT a structural finding).
-#   * D2: stage + resolve the subject (subject_entity_validation activated).
+#   * D2: stage + resolve the subject (the subject check routes it to the gene, allele or AGM
+#     validator by subject type).
 #   * D3: stage ECO evidence_code_curies[] (disease_evidence_code_lookup activated).
 #   * D5: per-subtype relation CV subsets.
 # D4 (bind single_reference from the loaded workspace document) is BLOCKED: there is no durable
@@ -91,11 +92,11 @@ DISEASE_SUBJECT_VALIDATOR_BINDING_ID = "disease_subject_materialization"
 DISEASE_REFERENCE_VALIDATOR_BINDING_ID = "disease_reference_materialization"
 DISEASE_EVIDENCE_CODE_VALIDATOR_BINDING_ID = "disease_evidence_code_lookup"
 
-# Optional-slot bindings (R4): annotation_type constant, genetic_sex CV, disease_qualifiers CV,
-# with_or_from gene reference. annotation_type is fixed to a constant and never extracted/staged;
-# the other three are optional, paper-supported extractor inputs validated through the active
-# CV / gene_validation agents and follow the existing `[0]` first-element convention for the
-# multivalued slots (disease_qualifier_names / with_gene_identifiers).
+# Optional-slot bindings (R4): annotation_type constant, genetic_sex CV, disease_qualifier_names CV,
+# with_or_from gene reference. annotation_type is fixed to a constant and never extracted; the
+# other three are optional, paper-supported extractor inputs validated through the active
+# CV / gene_validation agents, per element for the multivalued slots (disease_qualifier_names /
+# with_gene_identifiers).
 DISEASE_ANNOTATION_TYPE_CV_BINDING_ID = "disease_annotation_type_cv_lookup"
 DISEASE_GENETIC_SEX_CV_BINDING_ID = "disease_genetic_sex_cv_lookup"
 DISEASE_QUALIFIER_CV_BINDING_ID = "disease_qualifier_cv_lookup"
@@ -118,11 +119,11 @@ DISEASE_DEFINITION_NOTES = (
 REQUIRED_DISEASE_PAYLOAD_FIELDS = (
     "mention",
     "disease_annotation_object",
-    "disease_annotation_object.name",
+    "disease_annotation_object.mention",
     "role",
     "confidence",
     "data_provider",
-    "data_provider.abbreviation",
+    "data_provider.mention",
     "evidence_record_ids",
     "evidence_records",
 )

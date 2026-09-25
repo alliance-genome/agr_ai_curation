@@ -573,7 +573,7 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
     )
     monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", fake_chunk)
     monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", AsyncMock())
-    monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-6-sol")
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "low")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
@@ -581,7 +581,7 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
         return locator.FigureLocatorBatchOutput(
             candidates=[
                 locator.FigureLocatorCandidateOutput(
-                    candidate_id=chunk.id,
+                    candidate_id=f"c{position}",
                     mentions=(
                         [
                             locator.FigureLocatorMentionOutput(
@@ -590,14 +590,13 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
                                 kind="figure",
                                 number="1",
                                 panels=["A"],
-                                canonical_reference="Figure 1A",
                             )
                         ]
                         if "Fig. 1A" in candidate_text
                         else []
                     ),
                 )
-                for chunk, candidate_text in candidates
+                for position, (_chunk, candidate_text) in enumerate(candidates)
             ]
         )
 

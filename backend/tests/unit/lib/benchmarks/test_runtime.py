@@ -16,7 +16,7 @@ from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
 
 def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch):
     captured = {}
-    flow = SimpleNamespace(name="Canary", flow_definition={"nodes": []})
+    flow = SimpleNamespace(id="flow-canary", name="Canary", flow_definition={"nodes": []})
 
     monkeypatch.setattr(
         flow_executor,

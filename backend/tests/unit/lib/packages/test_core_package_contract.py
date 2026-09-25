@@ -17,6 +17,7 @@ RUNTIME_CONFIG_FILES = (
     "models.yaml",
     "providers.yaml",
     "tool_policy_defaults.yaml",
+    "tool_loading.yaml",
 )
 
 
@@ -71,6 +72,16 @@ def test_core_package_manifest_exports_foundation_runtime_assets_only():
             ExportKind.AGENT_STUDIO_PROMPT,
             "system",
             "config/agent_studio_system_prompt.md",
+        ),
+        (
+            ExportKind.TOOL_NAMESPACES,
+            "core_tool_namespaces",
+            "config/tool_namespaces.yaml",
+        ),
+        (
+            ExportKind.TOOL_LOADING,
+            "default_tool_loading",
+            "config/tool_loading.yaml",
         ),
         (ExportKind.AGENT, "curation_handoff", "agents/curation_handoff"),
         (
@@ -161,14 +172,13 @@ def test_shipped_catalog_defaults_to_sol_and_retains_alternative_routes():
     assert runtime_catalog == package_catalog
     assert [model["model_id"] for model in runtime_catalog] == [
         "gpt-6-astra",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
+        "gpt-6-sol",
         "deepseek/deepseek-v4-pro-0813",
         "google/gemini-3.7-flash",
         "qwen/qwen3.8-27b",
     ]
-    assert [model["default"] for model in runtime_catalog] == [False, True, False, False, False, False]
-    assert all(model["provider"] == "openrouter" for model in runtime_catalog[3:])
-    for model in runtime_catalog[:3]:
+    assert [model["default"] for model in runtime_catalog] == [False, True, False, False, False]
+    assert all(model["provider"] == "openrouter" for model in runtime_catalog[2:])
+    for model in runtime_catalog[:2]:
         assert model["reasoning_options"] == ["low", "medium", "high", "xhigh"]
         assert model["default_reasoning"] == ("low" if model["model_id"] == "gpt-6-astra" else "medium")

@@ -1,41 +1,30 @@
-"""Convert tool-verified gene extraction fixtures into domain envelopes."""
+"""Materialize gene builder state into canonical gene extraction output."""
 
 from __future__ import annotations
 
 import copy
 import re
 from collections.abc import Mapping
-from datetime import datetime
-from typing import Any, Callable, Literal, Sequence
+from typing import Any, Sequence
 
 from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StrictStr,
     ValidationError,
-    field_validator,
     model_validator,
 )
 
+from src.lib.domain_packs.resolvable_values import (
+    ResolvableValueError,
+    check_resolvable_value,
+    unresolved_value,
+)
 from src.lib.openai_agents.models import (
     GeneExtractionResultEnvelope as RuntimeGeneExtractionResultEnvelope,
 )
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DefinitionState,
-    DomainEnvelope,
-    FieldRef,
-    HistoryActorType,
-    HistoryEvent,
-    HistoryEventKind,
-    ObjectRef,
     SchemaRef,
-    ValidationFinding,
-    ValidationFindingSeverity,
-    ValidationFindingStatus,
 )
-from src.schemas.models.base import EvidenceRecord
 from src.schemas.evidence_workspace import normalize_workspace_records
 
 from ..schema_refs import (
@@ -45,9 +34,6 @@ from ..schema_refs import (
     PROVIDER_REFS_METADATA_KEY,
 )
 from .constants import (
-    GENE_DOMAIN_PACK_CONVERTER_ID,
-    GENE_DOMAIN_PACK_ID,
-    GENE_DOMAIN_PACK_VERSION,
     GENE_LINKML_SCHEMA_ID,
     GENE_LINKML_SCHEMA_NAME,
     GENE_LINKML_SCHEMA_URI,
@@ -56,22 +42,23 @@ from .constants import (
     GENE_MENTION_EVIDENCE_MODEL_ID,
     GENE_MENTION_EVIDENCE_OBJECT_TYPE,
     GENE_OBJECT_ROLE,
-    GENE_REFERENCE_TOOL_METHOD,
-    GENE_REFERENCE_TOOL_NAME,
     GENE_REFERENCE_VALIDATOR_BINDING_ID,
 )
 from .export import GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY
 
 
 _GENE_SOURCE_FILE = "model/schema/gene.yaml"
-_CORE_SOURCE_FILE = "model/schema/core.yaml"
+
+# The validated gene identity keys of a gene_mention_evidence object. The object itself is
+# the resolvable value (ALL-1283): ``mention`` is the paper wording, and only the gene validator
+# fills these keys and marks it resolved.
+GENE_IDENTITY_KEYS = ("primary_external_id", "gene_symbol", "taxon")
 
 # Scalar gene-identity hint fields the builder stages for the validator handoff. These are
 # evidence-backed PROPOSALS; the active gene validator binding owns final primary_external_id /
 # gene_symbol / taxon. Evidence locator fields (verified_quote, page, ...) are copied from the
 # verified evidence record, never authored by the model.
 _GENE_IDENTITY_HINT_FIELDS = (
-    "mention",
     "species",
     "taxon_hint",
     "data_provider_hint",
@@ -192,177 +179,6 @@ def _has_gene_identity_hint(payload: Mapping[str, Any]) -> bool:
     return False
 
 
-def _strip_required_string(value: object, field_name: str) -> object:
-    if not isinstance(value, str):
-        return value
-    normalized = value.strip()
-    if not normalized:
-        raise ValueError(f"{field_name} must not be empty")
-    return normalized
-
-
-def _strip_optional_string(value: object) -> object:
-    if value is None or not isinstance(value, str):
-        return value
-    normalized = value.strip()
-    return normalized or None
-
-
-class ToolVerifiedGeneEvidenceRecord(BaseModel):
-    """One quote verified by the document evidence tool."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    evidence_record_id: StrictStr
-    entity: StrictStr | None = None
-    verified_quote: StrictStr
-    page: int = Field(ge=1)
-    section: StrictStr
-    chunk_id: StrictStr
-    subsection: StrictStr | None = None
-    figure_reference: StrictStr | None = None
-
-    @field_validator(
-        "evidence_record_id",
-        "verified_quote",
-        "section",
-        "chunk_id",
-        mode="before",
-    )
-    @classmethod
-    def _validate_required_strings(cls, value: object, info) -> object:
-        return _strip_required_string(value, info.field_name)
-
-    @field_validator("entity", "subsection", "figure_reference", mode="before")
-    @classmethod
-    def _validate_optional_strings(cls, value: object) -> object:
-        return _strip_optional_string(value)
-
-
-class ToolVerifiedGeneMention(BaseModel):
-    """One normalized gene mention retained by the extractor."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    mention: StrictStr
-    primary_external_id: StrictStr
-    gene_symbol: StrictStr
-    taxon: StrictStr
-    species: StrictStr | None = None
-    confidence: Literal["high", "medium", "low"]
-    evidence_record_ids: list[StrictStr] = Field(min_length=1)
-    identity_resolution_notes: list[StrictStr] = Field(default_factory=list)
-
-    @field_validator("mention", "primary_external_id", "gene_symbol", "taxon", mode="before")
-    @classmethod
-    def _validate_required_strings(cls, value: object, info) -> object:
-        return _strip_required_string(value, info.field_name)
-
-    @field_validator("species", mode="before")
-    @classmethod
-    def _validate_optional_strings(cls, value: object) -> object:
-        return _strip_optional_string(value)
-
-    @field_validator("evidence_record_ids")
-    @classmethod
-    def _validate_evidence_ids(cls, value: list[StrictStr]) -> list[StrictStr]:
-        normalized: list[str] = []
-        seen: set[str] = set()
-        duplicates: list[str] = []
-        for raw_item in value:
-            item = str(raw_item).strip()
-            if not item:
-                raise ValueError("evidence_record_ids must not contain empty values")
-            if item in seen and item not in duplicates:
-                duplicates.append(item)
-            seen.add(item)
-            normalized.append(item)
-        if duplicates:
-            raise ValueError(
-                "evidence_record_ids contains duplicate entries: "
-                + ", ".join(sorted(duplicates))
-            )
-        return normalized
-
-    @field_validator("identity_resolution_notes")
-    @classmethod
-    def _validate_identity_resolution_notes(
-        cls,
-        value: list[StrictStr],
-    ) -> list[StrictStr]:
-        normalized_notes: list[str] = []
-        for item in value:
-            normalized = str(item).strip()
-            if not normalized:
-                raise ValueError(
-                    "identity_resolution_notes must not contain empty values"
-                )
-            normalized_notes.append(normalized)
-        return normalized_notes
-
-
-class ToolVerifiedGeneOutput(BaseModel):
-    """Canonical fixture input produced after gene lookup and evidence verification."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    envelope_id: StrictStr
-    document_id: StrictStr
-    produced_by: StrictStr
-    produced_at: datetime
-    gene_mentions: list[ToolVerifiedGeneMention] = Field(min_length=1)
-    evidence_records: list[ToolVerifiedGeneEvidenceRecord] = Field(min_length=1)
-    normalization_notes: list[StrictStr] = Field(default_factory=list)
-
-    @field_validator("envelope_id", "document_id", "produced_by", mode="before")
-    @classmethod
-    def _validate_required_strings(cls, value: object, info) -> object:
-        return _strip_required_string(value, info.field_name)
-
-    @field_validator("normalization_notes")
-    @classmethod
-    def _validate_normalization_notes(cls, value: list[StrictStr]) -> list[StrictStr]:
-        normalized_notes: list[str] = []
-        for item in value:
-            normalized = str(item).strip()
-            if not normalized:
-                raise ValueError("normalization_notes must not contain empty values")
-            normalized_notes.append(normalized)
-        return normalized_notes
-
-    @model_validator(mode="after")
-    def _validate_evidence_links(self) -> "ToolVerifiedGeneOutput":
-        evidence_ids = [item.evidence_record_id for item in self.evidence_records]
-        duplicate_ids = sorted(
-            {
-                evidence_id
-                for evidence_id in evidence_ids
-                if evidence_ids.count(evidence_id) > 1
-            }
-        )
-        if duplicate_ids:
-            raise ValueError(
-                "evidence_records contains duplicate evidence_record_id entries: "
-                + ", ".join(duplicate_ids)
-            )
-
-        evidence_id_set = set(evidence_ids)
-        missing_links = sorted(
-            {
-                evidence_id
-                for gene in self.gene_mentions
-                for evidence_id in gene.evidence_record_ids
-                if evidence_id not in evidence_id_set
-            }
-        )
-        if missing_links:
-            raise ValueError(
-                "gene_mentions references unknown evidence_record_ids: "
-                + ", ".join(missing_links)
-            )
-        return self
-
-
 def _gene_schema_ref() -> SchemaRef:
     return SchemaRef(
         schema_id=GENE_LINKML_SCHEMA_ID,
@@ -409,169 +225,6 @@ def _object_metadata() -> dict[str, Any]:
     }
 
 
-def _payload_for_gene_evidence(
-    gene: ToolVerifiedGeneMention,
-    evidence: ToolVerifiedGeneEvidenceRecord,
-    *,
-    normalization_notes: Sequence[str] = (),
-) -> dict[str, Any]:
-    identity_resolution_notes = (
-        list(gene.identity_resolution_notes)
-        or [str(note).strip() for note in normalization_notes if str(note).strip()]
-    )
-    payload: dict[str, Any] = {
-        "mention": gene.mention,
-        "primary_external_id": gene.primary_external_id,
-        "gene_symbol": gene.gene_symbol,
-        "taxon": gene.taxon,
-        "confidence": gene.confidence,
-        "evidence_record_id": evidence.evidence_record_id,
-        "verified_quote": evidence.verified_quote,
-        "page": evidence.page,
-        "section": evidence.section,
-        "chunk_id": evidence.chunk_id,
-    }
-    if identity_resolution_notes:
-        payload["identity_resolution_notes"] = identity_resolution_notes
-    if gene.species is not None:
-        payload["species"] = gene.species
-    if evidence.subsection is not None:
-        payload["subsection"] = evidence.subsection
-    if evidence.figure_reference is not None:
-        payload["figure_reference"] = evidence.figure_reference
-    return payload
-
-
-def _validation_finding(pending_ref_id: str) -> ValidationFinding:
-    return ValidationFinding(
-        severity=ValidationFindingSeverity.INFO,
-        status=ValidationFindingStatus.RESOLVED,
-        code="alliance.gene_reference.tool_verified",
-        message=f"Gene reference resolved by {GENE_REFERENCE_TOOL_NAME} before envelope conversion.",
-        field_ref=FieldRef(
-            object_ref=ObjectRef(
-                pending_ref_id=pending_ref_id,
-                object_type=GENE_MENTION_EVIDENCE_OBJECT_TYPE,
-            ),
-            field_path="primary_external_id",
-        ),
-        details={
-            "validator_binding_id": GENE_REFERENCE_VALIDATOR_BINDING_ID,
-            "source_tool": GENE_REFERENCE_TOOL_NAME,
-            "source_method": GENE_REFERENCE_TOOL_METHOD,
-            "blocking": False,
-            "grounded_slots": {
-                "primary_external_id": {
-                    "source_file": _CORE_SOURCE_FILE,
-                    "slot": "primary_external_id",
-                    "range": "string",
-                },
-                "gene_symbol": {
-                    "source_file": _GENE_SOURCE_FILE,
-                    "slot": "gene_symbol",
-                    "range": "GeneSymbolSlotAnnotation",
-                },
-                "taxon": {
-                    "source_file": _CORE_SOURCE_FILE,
-                    "slot": "taxon",
-                    "range": "NCBITaxonTerm",
-                },
-            },
-        },
-    )
-
-
-def tool_verified_gene_output_to_pending_envelope(
-    payload: Mapping[str, Any] | ToolVerifiedGeneOutput,
-) -> DomainEnvelope:
-    """Build a pending-ref envelope from canonical tool-verified gene output."""
-
-    source = (
-        payload
-        if isinstance(payload, ToolVerifiedGeneOutput)
-        else ToolVerifiedGeneOutput.model_validate(payload)
-    )
-    evidence_by_id = {
-        evidence.evidence_record_id: evidence
-        for evidence in source.evidence_records
-    }
-
-    extracted_objects: list[CuratableObjectEnvelope] = []
-    validation_findings: list[ValidationFinding] = []
-    history: list[HistoryEvent] = [
-        HistoryEvent(
-            event_type=HistoryEventKind.CREATED,
-            timestamp=source.produced_at,
-            actor_type=HistoryActorType.SYSTEM,
-            actor_id=GENE_DOMAIN_PACK_CONVERTER_ID,
-            message="Converted tool-verified gene extraction output to pending domain envelope.",
-        )
-    ]
-
-    object_index = 1
-    for gene in source.gene_mentions:
-        for evidence_id in gene.evidence_record_ids:
-            evidence = evidence_by_id[evidence_id]
-            pending_ref_id = f"gene-mention-evidence-{object_index}"
-            object_ref = ObjectRef(
-                pending_ref_id=pending_ref_id,
-                object_type=GENE_MENTION_EVIDENCE_OBJECT_TYPE,
-            )
-            extracted_objects.append(
-                CuratableObjectEnvelope(
-                    object_type=GENE_MENTION_EVIDENCE_OBJECT_TYPE,
-                    pending_ref_id=pending_ref_id,
-                    schema_ref=_gene_schema_ref(),
-                    definition_state=DefinitionState.STABLE,
-                    definition_notes=list(GENE_MENTION_EVIDENCE_DEFINITION_NOTES),
-                    payload=_payload_for_gene_evidence(
-                        gene,
-                        evidence,
-                        normalization_notes=source.normalization_notes,
-                    ),
-                    evidence_record_ids=[evidence_id],
-                    metadata=_object_metadata(),
-                )
-            )
-            validation_findings.append(_validation_finding(pending_ref_id))
-            history.append(
-                HistoryEvent(
-                    event_type=HistoryEventKind.OBJECT_EXTRACTED,
-                    timestamp=source.produced_at,
-                    actor_type=HistoryActorType.SYSTEM,
-                    actor_id=GENE_DOMAIN_PACK_CONVERTER_ID,
-                    message="Added non-blocking gene mention evidence.",
-                    object_ref=object_ref,
-                    details={
-                        "evidence_record_id": evidence.evidence_record_id,
-                        "validator_binding_id": GENE_REFERENCE_VALIDATOR_BINDING_ID,
-                    },
-                )
-            )
-            object_index += 1
-
-    return DomainEnvelope(
-        envelope_id=source.envelope_id,
-        domain_pack_id=GENE_DOMAIN_PACK_ID,
-        domain_pack_version=GENE_DOMAIN_PACK_VERSION,
-        schema_ref=_gene_schema_ref(),
-        extracted_objects=extracted_objects,
-        validation_findings=validation_findings,
-        history=history,
-        metadata={
-            "source_document_id": source.document_id,
-            "source_agent": source.produced_by,
-            "conversion": "tool_verified_gene_output_to_pending_envelope",
-            "evidence_records": [
-                evidence.model_dump(mode="json", exclude_none=True)
-                for evidence in source.evidence_records
-            ],
-            "non_blocking_validation": True,
-            "normalization_notes": source.normalization_notes,
-        },
-    )
-
-
 # ---------------------------------------------------------------------------------------
 # Builder-pattern materializer (Phase 1 migration).
 #
@@ -581,9 +234,6 @@ def tool_verified_gene_output_to_pending_envelope(
 # ``metadata_refs``). Unlike gene_expression there are NO resolver-backed controlled fields
 # (the gene validator owns identity) and NO mirror/projection fields, so this materializer has
 # no helper-selection or materializes_to_field_paths machinery.
-#
-# The envelope-pattern conversion above (``tool_verified_gene_output_to_pending_envelope``) is
-# intentionally LEFT in place; envelope-legacy deletion is a later phase.
 # ---------------------------------------------------------------------------------------
 
 
@@ -618,6 +268,11 @@ def validate_gene_builder_objects(
         payload = obj.payload if isinstance(obj.payload, Mapping) else {}
         if not _gene_clean_text(payload.get("mention")):
             errors.append(f"{location}.payload.mention is required")
+        else:
+            try:
+                check_resolvable_value(payload, identity_keys=GENE_IDENTITY_KEYS)
+            except ResolvableValueError as exc:
+                errors.append(f"{location}.payload: {exc}")
         if not _gene_clean_text(payload.get("confidence")):
             errors.append(f"{location}.payload.confidence is required")
         notes = payload.get("identity_resolution_notes")
@@ -778,18 +433,24 @@ def _gene_candidate_pending_ref_id(
 
 
 def _gene_evidence_object_payload(
+    mention: str,
     staged_fields: Mapping[str, Any],
     evidence_record: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build one gene_mention_evidence payload from staged hints + one verified evidence record."""
+    """Build one gene_mention_evidence payload from staged hints + one verified evidence record.
 
-    payload: dict[str, Any] = {}
+    The gene is staged unresolved (not validated yet) with the paper wording as its mention;
+    only the gene validator writes its identity.
+    """
+
+    payload: dict[str, Any] = unresolved_value(mention, identity_keys=GENE_IDENTITY_KEYS)
     for field_name in _GENE_IDENTITY_HINT_FIELDS:
         value = staged_fields.get(field_name)
         if value is not None and not (isinstance(value, str) and not value.strip()):
             payload[field_name] = value
     notes = staged_fields.get("identity_resolution_notes")
     payload["identity_resolution_notes"] = _gene_unique_strings(notes)
+    payload["rationale"] = _gene_clean_text(staged_fields.get("rationale"))
     payload["evidence_record_id"] = _gene_clean_text(evidence_record.get("evidence_record_id"))
     for field_name in _GENE_EVIDENCE_LOCATOR_FIELDS:
         value = evidence_record.get(field_name)
@@ -803,7 +464,6 @@ def materialize_gene_builder_state(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]] | None = None,
-    resolver_entry_lookup: Callable[[str], Any] | None = None,
     produced_by: str = "gene_extractor",
 ) -> GeneMaterializationResult:
     """Build canonical GeneExtractionResultEnvelope output from finalized builder state."""
@@ -859,6 +519,30 @@ def materialize_gene_builder_state(
                 )
             )
             continue
+        mention = _gene_clean_text(staged_fields.get("mention"))
+        if mention is None:
+            issues.append(
+                _gene_materialization_issue(
+                    field_path="mention",
+                    reason="missing_gene_mention",
+                    message="Finalized gene candidates require the gene's paper wording (mention).",
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
+        if _gene_clean_text(staged_fields.get("rationale")) is None:
+            issues.append(
+                _gene_materialization_issue(
+                    field_path="rationale",
+                    reason="missing_rationale",
+                    message=(
+                        "Finalized gene candidates require a rationale; "
+                        "patch the candidate with a rationale saying why you selected it."
+                    ),
+                    candidate_id=getattr(candidate, "candidate_id", None),
+                )
+            )
+            continue
 
         for evidence_id in evidence_ids:
             evidence_record = evidence_records_by_id.get(evidence_id)
@@ -895,7 +579,7 @@ def materialize_gene_builder_state(
                 if len(evidence_ids) == 1
                 else f"{candidate_pending_ref}-{object_index + 1}"
             )
-            payload = _gene_evidence_object_payload(staged_fields, evidence_record)
+            payload = _gene_evidence_object_payload(mention, staged_fields, evidence_record)
             evidence_position = next(
                 (
                     position
@@ -916,7 +600,7 @@ def materialize_gene_builder_state(
                 )
             raw_mentions.append(
                 {
-                    "mention": payload.get("mention") or candidate_pending_ref,
+                    "mention": mention,
                     "entity_type": "gene",
                     "evidence_record_ids": [evidence_id],
                 }
@@ -1000,10 +684,6 @@ def materialize_gene_builder_state(
 __all__ = [
     "GeneBuilderExtractionOutput",
     "GeneMaterializationResult",
-    "ToolVerifiedGeneEvidenceRecord",
-    "ToolVerifiedGeneMention",
-    "ToolVerifiedGeneOutput",
     "materialize_gene_builder_state",
     "normalize_gene_extraction_payload",
-    "tool_verified_gene_output_to_pending_envelope",
 ]

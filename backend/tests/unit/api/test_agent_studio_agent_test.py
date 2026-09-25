@@ -536,6 +536,37 @@ class TestAgentTestEndpoint:
         assert "boom stream" in caplog.text
         assert not any(event.get("type") == "DONE" for event in error_events)
 
+        # A curator-facing RUN_ERROR (custom agent over the per-group tool cap,
+        # ALL-1280) keeps its message; other runner errors stay generic.
+        cap_message = (
+            "This agent has 11 tools from the 'staged object corrections' group, and custom "
+            "agents can use at most 10 tools from one group. Please contact the AI Curation "
+            "developers for help setting up this agent."
+        )
+
+        async def _run_error_stream(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "cap-trace"}}
+            yield {"type": "RUN_ERROR", "data": {"message": cap_message, "error_type": "ToolGroupCapError"}}
+            yield {"type": "RUN_ERROR", "data": {"message": "internal detail", "error_type": "ValueError"}}
+
+        monkeypatch.setattr(api_module, "run_agent_streamed", _run_error_stream)
+        response = asyncio.run(
+            api_module.test_agent_endpoint(
+                agent_id="gene",
+                request=api_module.AgentTestRequest(input="test", session_id="sess-cap"),
+                user={"sub": "auth-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+        run_errors = [
+            event for event in _parse_sse_payloads(asyncio.run(_consume(response)))
+            if event.get("type") == "RUN_ERROR"
+        ]
+        assert [event["message"] for event in run_errors] == [
+            cap_message,
+            "Agent test failed unexpectedly.",
+        ]
+
 
 class TestAgentWorkshopSystemPrompt:
     """Tests for agent workshop context injection into Opus system prompt."""
@@ -626,10 +657,22 @@ class TestAgentWorkshopSystemPrompt:
         assert '"draft_tool_ids":["search_document","read_section","read_subsection","agr_curation_query"]' in system_prompt
         assert "proactively identify concrete prompt improvements during normal conversation" in system_prompt
         assert "requires no preliminary permission" in system_prompt
-        assert "distilled OpenAI-style prompt playbook" in system_prompt
-        assert "put core instructions first, then separate context/examples with clear delimiters" in system_prompt
-        assert "gpt-5.6-sol" in system_prompt
-        assert "gpt-5.6-terra" in system_prompt
+        # ALL-1292: the playbook is served by read_studio_guide on demand.
+        assert "read studio guide topic `prompt_playbook`" in system_prompt
+        assert "distilled OpenAI-style prompt playbook" not in system_prompt
+        from src.lib.agent_studio.studio_guide import read_studio_guide
+
+        playbook = read_studio_guide(
+            template=api_module._load_agent_studio_system_prompt_template(),
+            render_diagnostic_tools=str,
+            topic="prompt_playbook",
+        )
+        assert playbook["complete"] is True
+        assert "distilled OpenAI-style prompt playbook" in playbook["content"]
+        assert "put core instructions first, then separate context/examples with clear delimiters" in playbook["content"]
+        assert "gpt-6-sol" in system_prompt
+        assert "gpt-5.6-sol" not in system_prompt
+        assert "gpt-5.6-terra" not in system_prompt
         assert "authoritative recommendation source" in system_prompt
         assert "gpt-5.5" not in system_prompt
         assert "gpt-5.4-mini" not in system_prompt
@@ -667,7 +710,7 @@ class TestAgentWorkshopSystemPrompt:
         monkeypatch.setattr(
             api_module,
             "_load_agent_studio_system_prompt_template",
-            lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}\n{{USER_GREETING}}",
+            lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
         )
         description = "D" * 500
         context = ChatContext(
@@ -707,7 +750,7 @@ class TestAgentWorkshopSystemPrompt:
 
         system_prompt = prompt_builder.build_opus_system_prompt(
             context=None,
-            load_template=lambda: "Tools:\n{{PACKAGE_DIAGNOSTIC_TOOLS}}\n{{USER_GREETING}}",
+            load_template=lambda: "Tools:\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
             list_model_definitions=lambda: [],
             get_prompt_catalog=lambda: None,
             prepare_trace_context=lambda _trace_id: None,
@@ -827,7 +870,7 @@ class TestAgentWorkshopSystemPrompt:
                     draft_tool_ids=["search_document", "read_chunk", "record_evidence"],
                 ),
             ),
-            load_template=lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}\n{{USER_GREETING}}",
+            load_template=lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
             list_model_definitions=lambda: [],
             get_prompt_catalog=lambda: None,
             prepare_trace_context=lambda _trace_id: None,

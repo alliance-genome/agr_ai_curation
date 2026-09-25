@@ -882,7 +882,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
         custom_prompt="Prompt",
         group_prompt_overrides={},
         include_group_rules=True,
-        model_id="gpt-5.6-sol",
+        model_id="gpt-6-sol",
         model_temperature=0.1,
         model_reasoning=None,
         tool_ids=[
@@ -942,7 +942,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
         custom_prompt="Prompt",
         group_prompt_overrides={},
         include_group_rules=True,
-        model_id="gpt-5.6-sol",
+        model_id="gpt-6-sol",
         model_temperature=0.1,
         model_reasoning=None,
         tool_ids=[
@@ -1272,7 +1272,7 @@ def _restricted_custom_agent(**overrides):
         "instructions": "Current prompt",
         "group_prompt_overrides": {},
         "template_source": "system_template",
-        "model_id": "gpt-5.6-sol",
+        "model_id": "gpt-6-sol",
         "model_temperature": 0.1,
         "model_reasoning": None,
         "tool_ids": [],

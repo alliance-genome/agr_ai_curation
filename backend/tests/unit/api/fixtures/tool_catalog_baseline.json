@@ -87,20 +87,6 @@
           "search_go_terms",
           "map_curies_to_names"
         ]
-      },
-      "subject_entity_validation": {
-        "agent_name": "Subject Entity Validation Agent",
-        "description": "The Subject specialist confirms the affected entity \u2014 sending it to the gene, allele, or modified-organism path depending on what it is.",
-        "methods": [
-          "get_gene_by_id",
-          "search_genes",
-          "get_gene_by_exact_symbol",
-          "get_allele_by_id",
-          "search_alleles",
-          "get_allele_by_exact_symbol",
-          "map_entity_curies_to_info",
-          "map_entity_names_to_curies"
-        ]
       }
     },
     "agent_studio": {
@@ -456,8 +442,9 @@
           "type": "array[string]"
         }
       ],
-      "summary": "A single tool for looking up Alliance curation data. It offers many specific methods \u2014 search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them."
+      "summary": "A single tool for looking up Alliance curation data. It offers many specific methods \u2014 search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An ontology term search (search_ontology_terms, search_anatomy_terms, search_life_stage_terms, search_go_terms) matches term names and synonyms by exact, then prefix, then contains, then close spelling, returns at least 25 rows, and says how each row matched, along with the term's synonyms and definition; each row is a candidate to check, not a confirmed match. When a lookup returns more than fits in one reply, the reply comes in pages with instructions for continuing, and a single very large record is read back exactly in pieces, so no records or fields are dropped."
     },
+    "identity_lookup": true,
     "methods": {
       "get_allele_by_exact_symbol": {
         "description": "Find the allele whose official symbol exactly matches.",
@@ -789,7 +776,6 @@
       "search_ontology_terms": {
         "description": "Search ontology terms by name within one chosen kind of term (for example, mouse phenotype terms).",
         "example": {
-          "exact_match": true,
           "method": "search_ontology_terms",
           "ontology_term_type": "MPTerm",
           "term": "abnormal locomotor behavior"
@@ -890,6 +876,7 @@
       ],
       "summary": "Finds papers in the Alliance literature collection. Give it a known ID (such as a PubMed ID or DOI) to fetch the exact paper, or a title/citation to search for likely matches. It reports what it tried, the candidate papers it found, any cases where the match was unclear or nothing matched, and a plain status message."
     },
+    "identity_lookup": true,
     "methods": {
       "get_literature_reference": {
         "description": "Fetch one exact paper by a known identifier \u2014 a PubMed ID (PMID), DOI, Alliance reference ID, member-group reference ID, or exact title.",
@@ -1019,6 +1006,7 @@
       ],
       "summary": "Finds orthology relationships \u2014 genes that correspond to one another across different species \u2014 using Alliance of Genome Resources data."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Alliance Orthology API",
     "package_backed": true,
@@ -1098,6 +1086,12 @@
         {
           "description": "Optional source id or source key to restrict rows.",
           "name": "source_ref",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Column cursor returned for a wide plan.",
+          "name": "cursor",
           "required": false,
           "type": "string"
         }
@@ -1199,6 +1193,7 @@
       ],
       "summary": "Looks up chemical compound IDs and related information in ChEBI, the standard chemical-compound database hosted at EBI."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "ChEBI API",
     "package_backed": true,
@@ -1257,6 +1252,7 @@
       ],
       "summary": "Runs a direct database query to find Disease Ontology terms (DOID, the standard set of disease term IDs) and the relationships between them."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Curation Database SQL",
     "package_backed": true,
@@ -1617,10 +1613,10 @@
     "agent_methods": null,
     "binding_kind": "runtime_context_factory",
     "category": "Output",
-    "description": "Explain the bound CSV/TSV/JSON formatter workflow, available saved row sources, supported plan operations, and completion rules.",
+    "description": "Explain the bound CSV/TSV/JSON or chat formatter workflow, available saved row sources, supported plan operations, response budgets, and completion rules.",
     "documentation": {
       "parameters": [],
-      "summary": "Explain the bound CSV/TSV/JSON formatter workflow, available saved row sources, supported plan operations, and completion rules."
+      "summary": "Explain the bound CSV/TSV/JSON or chat formatter workflow, available saved row sources, supported plan operations, response budgets, and completion rules."
     },
     "methods": null,
     "name": "Explain Formatter Capabilities",
@@ -1689,6 +1685,39 @@
     },
     "methods": null,
     "name": "Finalize And Save",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
+  },
+  "finalize_chat_output": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Finalize a source-backed projection over every saved row and deliver the rendered chat table to the curator exactly once.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Projection plan JSON. Empty input uses the validated default projection.",
+          "name": "plan_json",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Brief curator-requested caveat shown below the table.",
+          "name": "notes",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "summary": "Finalize a source-backed projection over every saved row and deliver the rendered chat table to the curator exactly once."
+    },
+    "methods": null,
+    "name": "Finalize Chat Output",
     "package_backed": false,
     "required_context": [
       "formatter_bundle",
@@ -2450,7 +2479,7 @@
     "documentation": {
       "parameters": [
         {
-          "description": "Which agent's setup you want to look at.",
+          "description": "Which agent's setup you want to look at. A custom agent built in the Agent Workshop can always look up its own saved setup; other custom agents are only shown to curators who can already see them.",
           "name": "agent_id",
           "required": true,
           "type": "string"
@@ -2462,7 +2491,7 @@
           "type": "string"
         },
         {
-          "description": "The specific field to look at, when you want details on just one field.",
+          "description": "The specific field to look at, when you want details on just one field. An unknown field name returns an error with close matches instead of every field.",
           "name": "field_path",
           "required": false,
           "type": "string"
@@ -2474,19 +2503,43 @@
           "type": "string"
         },
         {
-          "description": "When an output schema has many fields, how many to show at once.",
-          "name": "field_limit",
+          "description": "How many entries to show on one page. Pages also stop early when they reach the size limit.",
+          "name": "limit",
           "required": false,
           "type": "integer"
         },
         {
-          "description": "Page marker from a previous call to fetch the next batch of fields.",
-          "name": "field_cursor",
+          "description": "Page marker from a previous answer, used to fetch the next page.",
+          "name": "cursor",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Limit the answer to one data package, useful when the same field name appears in several.",
+          "name": "domain_pack_id",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Limit the answer to one record type within the data packages.",
+          "name": "object_type",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Reference of one entry from a previous answer, to read that entry on its own.",
+          "name": "item_ref",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Which part of that entry to read when it was too large to show in full.",
+          "name": "detail_pointer",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Shows a read-only summary of how a configured agent is set up: its tools, its output structure, the specialists tied to it, the ontology rules on its fields, and field-by-field details. It only reports the setup; it does not run the agent or change anything."
+      "summary": "Shows a read-only summary of how a configured agent is set up: its tools, its output structure, the specialists tied to it, the ontology rules on its fields, and field-by-field details. Answers come back a page at a time and can be narrowed to one data package, record type, or field, so a question about one field only returns that field's rules. It only reports the setup; it does not run the agent or change anything."
     },
     "methods": null,
     "name": "Agent Contract Lookup",
@@ -2761,9 +2814,33 @@
           "name": "evidence_record_id",
           "required": true,
           "type": "string"
+        },
+        {
+          "description": "Which set-aside part to read back, as named in the previous reply.",
+          "name": "detail_path",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Where to continue reading a set-aside part, as given at the end of the previous piece.",
+          "name": "detail_cursor",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "Where to continue a long list inside the evidence, as given in the previous reply.",
+          "name": "result_offset",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "The fingerprint from the previous reply, so a change to the evidence is noticed instead of mixing old and new text.",
+          "name": "result_sha256",
+          "required": false,
+          "type": "string"
         }
       ],
-      "summary": "Returns the complete details of one saved piece of evidence from this run."
+      "summary": "Returns the complete details of one saved piece of evidence from this run. When a piece of evidence is too long to show in one reply (for example a very long quote), its long parts are set aside and read back exactly, one piece at a time, so nothing is cut off."
     },
     "methods": null,
     "name": "Get Recorded Evidence",
@@ -2939,6 +3016,7 @@
       ],
       "summary": "Retrieves typed existing GO annotations from the Gene Ontology Consortium API, preserving curator-comparison fields and source-record provenance without source fallback."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "GO Consortium Existing Annotations",
     "package_backed": true,
@@ -2979,6 +3057,12 @@
           "name": "limit",
           "required": false,
           "type": "integer"
+        },
+        {
+          "description": "Cursor returned by a prior distinct-value page.",
+          "name": "cursor",
+          "required": false,
+          "type": "string"
         }
       ],
       "summary": "Inspect distinct saved values and counts for one source field ref after optional projection filters."
@@ -3029,6 +3113,12 @@
           "type": "string"
         },
         {
+          "description": "The paper's own wording for this value, exactly as it will be recorded.",
+          "name": "source_phrase",
+          "required": true,
+          "type": "string"
+        },
+        {
           "description": "The Alliance group to scope species-specific anatomy context to.",
           "name": "data_provider",
           "required": false,
@@ -3067,6 +3157,7 @@
       ],
       "summary": "Shows one ontology term and a small, bounded set of nearby terms so the agent can walk the term tree and compare candidates. It is for exploring and comparing; the official term choice is settled separately with Resolve Domain Field Term."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Inspect Ontology Term",
     "package_backed": true,
@@ -3081,17 +3172,41 @@
     "agent_methods": null,
     "binding_kind": "runtime_context_factory",
     "category": "Output",
-    "description": "Inspect saved row-source counts, default columns, field refs, source ids/keys, bounded examples, and warnings for the bound export bundle.",
+    "description": "Inspect saved row-source counts, default column refs, source ids/keys, warnings, and one searchable, bounded page of the field catalog.",
     "documentation": {
       "parameters": [
         {
-          "description": "Maximum bounded examples to include per source.",
+          "description": "Optional text matched against field refs and labels.",
+          "name": "catalog_query",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Optional row source whose catalog fields to list.",
+          "name": "row_source",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Cursor returned by a prior catalog page.",
+          "name": "cursor",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Maximum catalog entries in this page.",
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "Short example previews per catalog field (default 1).",
           "name": "example_limit",
           "required": false,
           "type": "integer"
         }
       ],
-      "summary": "Inspect saved row-source counts, default columns, field refs, source ids/keys, bounded examples, and warnings for the bound export bundle."
+      "summary": "Inspect saved row-source counts, default column refs, source ids/keys, warnings, and one searchable, bounded page of the field catalog."
     },
     "methods": null,
     "name": "Inspect Output Artifacts",
@@ -3234,7 +3349,7 @@
           "type": "integer"
         }
       ],
-      "summary": "Shows the pieces of evidence saved so far in this run, so the agent can confirm the full set of support before finishing. Results come back one page at a time; step through the pages to see them all, or search by quote text to find a specific piece. Withdrawn evidence is left out unless it is explicitly included."
+      "summary": "Shows the pieces of evidence saved so far in this run, so the agent can confirm the full set of support before finishing. Results come back one page at a time; step through the pages to see them all, or search by quote text to find a specific piece. A page can end early when the reply reaches its size limit, and requests for very large pages are reduced to the configured maximum; the reply says what was applied and where to continue. Quotes are not repeated in the list; each piece can be read in full with Get Recorded Evidence. Withdrawn evidence is left out unless it is explicitly included."
     },
     "methods": null,
     "name": "List Recorded Evidence",
@@ -3686,7 +3801,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3729,7 +3844,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations; an evidence_code_curies update carries evidence_codes_value and a with_gene_identifiers update carries with_genes_value, shaped like the stage tool's lists. A subject_type update is exactly gene, allele or agm.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3772,7 +3887,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording; a standard-term field takes its paper wording plus, only when the paper prints one, the term's ID. Every corrected value stays UNRESOLVED until a specialist looks it up. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3815,7 +3930,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3852,7 +3967,7 @@
           "type": "string"
         },
         {
-          "description": "Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids.",
+          "description": "Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3883,11 +3998,13 @@
     "documentation": {
       "parameters": [
         {
+          "description": "The staged candidate to correct.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "Field corrections, each with field_path and value (or evidence_record_ids).\nA GO value (gene_product, go_term, reference_curie, each with_from entry) takes the\nsame shape as staging: the paper wording as `mention`, plus `proposed_curie`\nonly when the paper prints the identifier, and is staged unresolved again for\nvalidation. evidence_code takes the chosen code and qualifiers the list of\nchosen relations; the builder maps them with its own tables.\nA `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3930,7 +4047,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations. A subject_type update is exactly gene, allele or agm.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -3952,13 +4069,13 @@
     "agent_methods": null,
     "binding_kind": "runtime_context_factory",
     "category": "Output",
-    "description": "Validate and preview a source-backed projection plan without saving a file.",
+    "description": "Validate and preview a page of a source-backed projection without saving or delivering output.",
     "documentation": {
       "parameters": [
         {
-          "description": "Projection plan JSON using field refs and plan metadata.",
+          "description": "Projection plan JSON using field refs and plan metadata. Empty input previews the default or curator-fixed plan.",
           "name": "plan_json",
-          "required": true,
+          "required": false,
           "type": "string"
         },
         {
@@ -3966,9 +4083,15 @@
           "name": "limit",
           "required": false,
           "type": "integer"
+        },
+        {
+          "description": "Cursor returned by a prior preview page.",
+          "name": "cursor",
+          "required": false,
+          "type": "string"
         }
       ],
-      "summary": "Validate and preview a source-backed projection plan without saving a file."
+      "summary": "Validate and preview a page of a source-backed projection without saving or delivering output."
     },
     "methods": null,
     "name": "Preview Output Projection",
@@ -4065,6 +4188,7 @@
       ],
       "summary": "Looks up Gene Ontology (GO) term details \u2014 names, definitions, and relationships \u2014 from the QuickGO service."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "QuickGO API",
     "package_backed": true,
@@ -4087,9 +4211,15 @@
           "name": "chunk_id",
           "required": true,
           "type": "string"
+        },
+        {
+          "description": "Only for a passage shown in windows, where the next window starts, as given in the previous reply.",
+          "name": "span_offset",
+          "required": false,
+          "type": "integer"
         }
       ],
-      "summary": "Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence. This is the step where evidence is chosen, since the snippets selected here become the exact verified quote on a saved piece of evidence."
+      "summary": "Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence. This is the step where evidence is chosen, since the snippets selected here become the exact verified quote on a saved piece of evidence. A passage too long for one reply, such as a very long table, is shown in consecutive exact windows so every character and snippet is still reachable."
     },
     "methods": null,
     "name": "Read Chunk",
@@ -4103,6 +4233,51 @@
       "user_id"
     ],
     "source_file": "python/src/agr_ai_curation_alliance/tools/documents.py"
+  },
+  "read_output_value": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Read an exact, bounded slice of one saved value by row reference and field ref, with the offset of the next slice.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Runtime row reference such as object#1.",
+          "name": "row_ref",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Saved field ref to read.",
+          "name": "field_ref",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Character offset to start reading from.",
+          "name": "offset",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "Maximum characters in this slice.",
+          "name": "max_chars",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "summary": "Read an exact, bounded slice of one saved value by row reference and field ref, with the offset of the next slice."
+    },
+    "methods": null,
+    "name": "Read Output Value",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
   },
   "read_section": {
     "agent_methods": null,
@@ -4136,7 +4311,7 @@
           "type": "string"
         }
       ],
-      "summary": "Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. The individual passages it lists can then be read in full to pick out exact supporting quotes."
+      "summary": "Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. Long sections come back one page at a time; a page can end early when the reply reaches its size limit, and a single passage too long for one reply is listed for reading with Read Chunk. The individual passages it lists can then be read in full to pick out exact supporting quotes."
     },
     "methods": null,
     "name": "Read Section",
@@ -4189,7 +4364,7 @@
           "type": "string"
         }
       ],
-      "summary": "Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. The relevant passages can then be read in full to pick out exact supporting quotes."
+      "summary": "Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. Long subsections come back one page at a time; a page can end early when the reply reaches its size limit, and a single passage too long for one reply is listed for reading with Read Chunk. The relevant passages can then be read in full to pick out exact supporting quotes."
     },
     "methods": null,
     "name": "Read Subsection",
@@ -4319,6 +4494,7 @@
       ],
       "summary": "Confirms the one official standard term for a field, after the agent has explored candidates with the search and inspect tools. Its result is the trusted choice the agent can record, with a clear trail of how the term was decided."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Resolve Domain Field Term",
     "package_backed": true,
@@ -4416,6 +4592,7 @@
       ],
       "summary": "Distinguishes ordinary genes, precursor loci, and mature RNA products using current Alliance curation identity, RNAcentral, and miRBase evidence; returns ambiguity explicitly and never synthesizes an RGD CURIE."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Alliance Gene Product Resolver",
     "package_backed": true,
@@ -4605,7 +4782,7 @@
           "type": "enum"
         }
       ],
-      "summary": "Finds passages in the uploaded PDF that match a query. The default blended search combines meaning-based and exact-word matching, so it catches passages worded differently from the query (for example \"expressed in\" versus \"detected in\"). Exact-word matching is best for specific gene symbols, strains, alleles, probes, or identifiers, and very short queries automatically lean on exact-word matching. The search can be limited to particular sections, such as Results or figure legends. The matching passages can then be read in full to pick out exact supporting quotes."
+      "summary": "Finds passages in the uploaded PDF that match a query. The default blended search combines meaning-based and exact-word matching, so it catches passages worded differently from the query (for example \"expressed in\" versus \"detected in\"). Exact-word matching is best for specific gene symbols, strains, alleles, probes, or identifiers, and very short queries automatically lean on exact-word matching. The search can be limited to particular sections, such as Results or figure legends. The matching passages can then be read in full to pick out exact supporting quotes. Every match is listed in rank order; a match whose text does not fit in the reply is still listed, marked for reading in full with Read Chunk."
     },
     "methods": null,
     "name": "Search Document",
@@ -4693,6 +4870,7 @@
       ],
       "summary": "Casts a wide net for possible standard-term matches for one field, starting from a phrase backed by evidence in the paper. The results are suggestions to compare, not a final choice \u2014 the agent settles on the official term separately with Resolve Domain Field Term."
     },
+    "identity_lookup": true,
     "methods": null,
     "name": "Search Domain Field Terms",
     "package_backed": true,
@@ -4971,7 +5149,6 @@
       "summary": "Search ontology terms by name within one chosen kind of term (for example, mouse phenotype terms)."
     },
     "example": {
-      "exact_match": true,
       "method": "search_ontology_terms",
       "ontology_term_type": "MPTerm",
       "term": "abnormal locomotor behavior"
@@ -5080,7 +5257,7 @@
           "type": "string"
         },
         {
-          "description": "The exact wording for this entity as it appears in the paper.",
+          "description": "The exact wording for this allele as it appears in the paper. It is kept as the allele's paper wording, and the allele stays unresolved until the Allele Validation specialist confirms it.",
           "name": "mention",
           "required": true,
           "type": "string"
@@ -5096,6 +5273,12 @@
           "name": "source_mentions",
           "required": true,
           "type": "array"
+        },
+        {
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
         },
         {
           "default": null,
@@ -5164,14 +5347,8 @@
           "type": "string"
         },
         {
-          "description": "The exact wording for this entity as it appears in the paper.",
+          "description": "The disease exactly as the paper words it. It stays as the paper's wording and is kept even when no Disease Ontology term matches; the disease specialist decides the term.",
           "name": "mention",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "The disease name as the agent read it from the paper.",
-          "name": "disease_name",
           "required": true,
           "type": "string"
         },
@@ -5188,7 +5365,7 @@
           "type": "string"
         },
         {
-          "description": "The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).",
+          "description": "The Alliance group the agent chooses for this finding, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human); the data provider specialist confirms it.",
           "name": "data_provider",
           "required": true,
           "type": "string"
@@ -5206,29 +5383,35 @@
           "type": "array"
         },
         {
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
           "default": null,
-          "description": "The Disease Ontology ID (DOID, a standard disease term ID) the agent proposes, if it found one; the disease specialist confirms it.",
+          "description": "The Disease Ontology ID (DOID, a standard disease term ID), only when the paper itself prints it; the disease specialist checks it.",
           "name": "disease_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "What kind of thing has the disease association \u2014 a gene, an allele, or a whole modified organism (model). This choice decides what kind of record is produced.",
+          "description": "What has the disease association, exactly gene, allele or agm (a whole modified organism such as a strain or line). This choice decides what kind of record is produced and which specialist checks the subject.",
           "name": "subject_type",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The ID of the gene, allele, or model the disease is associated with.",
+          "description": "The ID of the gene, allele, or model the disease is associated with, only when the paper itself prints it; the subject specialist checks it.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The name of the gene, allele, or model the disease is associated with.",
+          "description": "The gene, allele, or model the disease is associated with, as the paper names it. Needed whenever a subject type or ID is given; it stays as the paper's wording.",
           "name": "subject_label",
           "required": false,
           "type": "any"
@@ -5242,7 +5425,7 @@
         },
         {
           "default": null,
-          "description": "The Evidence and Conclusion Ontology codes (ECO, a standard set of \"how was this shown\" codes) the agent proposes for this association.",
+          "description": "The evidence for this association, one entry per evidence code: mention is the evidence as the paper states it or the evidence code that fits (for example IMP), and curie is the Evidence and Conclusion Ontology ID (ECO) only when the paper itself prints it. The evidence code specialist finds the ECO term.",
           "name": "evidence_code_curies",
           "required": false,
           "type": "any"
@@ -5263,14 +5446,14 @@
         },
         {
           "default": null,
-          "description": "IDs of additional genes the paper says were involved together with the subject.",
+          "description": "Additional genes the paper says were involved together with the subject: mention is the gene as the paper names it, and gene_id its ID only when the paper itself prints it. The gene specialist finds each gene.",
           "name": "with_gene_identifiers",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (set only when the paper itself prints that ID, for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"
@@ -5326,31 +5509,43 @@
           "type": "string"
         },
         {
-          "description": "The gene whose expression was observed, with the exact phrase from the paper and the agent's proposed symbol/ID.",
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The Alliance member database for the paper's organism, by its abbreviation (such as ZFIN or WB). The data-provider specialist checks it against the Alliance provider list.",
+          "name": "data_provider",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The gene whose expression was observed, written as the paper names it. The gene specialist looks it up and fills in the confirmed gene.",
           "name": "subject",
           "required": true,
           "type": "any"
         },
         {
-          "description": "The paper the observation came from, with the exact phrase and its reference ID.",
+          "description": "The identifier of the paper the observation came from (such as a PMID or DOI), as the paper gives it. The reference specialist looks it up.",
           "name": "reference",
           "required": true,
           "type": "any"
         },
         {
-          "description": "The standard-term choices the agent made for this observation (such as the anatomy and developmental-stage terms), each paired with the value it selected. A term specialist confirms these.",
+          "description": "The standard-term choices for this observation (such as the anatomy and developmental-stage terms). Each carries the paper's own wording and, only when the paper itself prints one, the term's ID as a proposal. Each stays UNRESOLVED until a term specialist looks it up.",
           "name": "controlled_fields",
           "required": true,
           "type": "array"
         },
         {
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": true,
           "type": "any"
         }
       ],
-      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms."
+      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value is the paper's own wording and stays UNRESOLVED until a specialist looks it up; the agent never searches the database itself. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage."
     },
     "methods": null,
     "name": "Stage Gene Expression Observation",
@@ -5381,7 +5576,7 @@
           "type": "string"
         },
         {
-          "description": "The exact wording for this entity as it appears in the paper.",
+          "description": "The exact wording for this gene as it appears in the paper. It is kept as the gene's paper wording, and the gene stays unresolved until the Gene Validation specialist confirms it.",
           "name": "mention",
           "required": true,
           "type": "string"
@@ -5401,6 +5596,12 @@
         {
           "description": "How sure the agent is about this finding (high, medium, or low).",
           "name": "confidence",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
           "required": true,
           "type": "string"
         },
@@ -5496,13 +5697,19 @@
           "type": "array"
         },
         {
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
           "description": "Optional stable draft identifier for this object.",
           "name": "pending_ref_id",
           "required": false,
           "type": "string"
         },
         {
-          "description": "The source-paper label or mention when it differs from label.",
+          "description": "The paper's own wording for this object. It is kept as the paper wording; the label is never used in its place.",
           "name": "source_label",
           "required": false,
           "type": "string"
@@ -5526,7 +5733,7 @@
           "type": "string"
         },
         {
-          "description": "Class-specific evidence-backed payload fields.",
+          "description": "Class-specific evidence-backed payload fields. Write each value's paper wording in the class's paper_wording_fields; never write its system_written_payload_fields, which validation, the builder or the verified evidence record fill in.",
           "name": "payload",
           "required": false,
           "type": "object"
@@ -5538,7 +5745,7 @@
           "type": "object"
         }
       ],
-      "summary": "Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, and classification notes."
+      "summary": "Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, classification notes, and a rationale."
     },
     "methods": null,
     "name": "Stage Generic Object",
@@ -5563,94 +5770,96 @@
     "documentation": {
       "parameters": [
         {
+          "description": "Stable reference for this recommendation; evidence records\nattach to it.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The gene or gene product exactly as the paper words it.",
           "name": "gene_product_mention",
           "required": true,
           "type": "string"
         },
         {
-          "name": "gene_product_label",
-          "required": true,
-          "type": "string"
-        },
-        {
+          "description": "The kind of product the paper describes, for example\nprotein, gene, or mature_miRNA.",
           "name": "gene_product_entity_type",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The NCBI Taxon CURIE of the organism.",
           "name": "gene_product_taxon_curie",
           "required": true,
           "type": "string"
         },
         {
-          "name": "resolution_state",
+          "description": "The GO process, function, or location as the paper words it.",
+          "name": "go_term_mention",
           "required": true,
           "type": "string"
         },
         {
-          "name": "go_term_curie",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "name": "go_term_label",
-          "required": true,
-          "type": "string"
-        },
-        {
+          "description": "The GO aspect the claim is about: molecular_function,\nbiological_process, or cellular_component.",
           "name": "go_term_aspect",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The GO experimental evidence code you chose for the experiment:\nEXP, IDA, IPI, IMP, IGI, or IEP. The builder maps it to its ECO class.",
           "name": "evidence_code",
           "required": true,
           "type": "string"
         },
         {
-          "name": "evidence_eco_curie",
+          "description": "How the paper identifies itself, for example its title or a\nPMID or DOI printed on it.",
+          "name": "reference_mention",
           "required": true,
           "type": "string"
         },
         {
-          "name": "reference_curie",
-          "required": true,
-          "type": "string"
-        },
-        {
+          "description": "Why you selected this item, in your own words. Shown to curators in review, CSV/TSV exports and chat.",
           "name": "rationale",
           "required": true,
           "type": "string"
         },
         {
-          "name": "existing_annotation_status",
-          "required": true,
-          "type": "string"
-        },
-        {
+          "description": "Verified evidence record IDs supporting this recommendation.",
           "name": "evidence_record_ids",
           "required": true,
           "type": "array"
         },
         {
           "default": null,
-          "name": "gene_product_curie",
+          "description": "An RGD identifier (RGD:<digits>) only when the paper\nitself prints it for this gene product; leave it out otherwise.",
+          "name": "gene_product_proposed_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "A GO identifier (GO:<7 digits>) only when the paper itself\nprints it; leave it out otherwise.",
+          "name": "go_term_proposed_curie",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "description": "A PMID or DOI only when the paper itself prints it, for\nexample PMID:12345678; leave it out otherwise.",
+          "name": "reference_proposed_curie",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "description": "With/From entries, each with the paper's wording, its identifier only\nwhen the paper prints one, and the partner's species (taxon_curie, from the\nspecies tool) only when the paper states it.",
           "name": "with_from",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "GO relation qualifiers the evidence supports, chosen from the\nrelations allowed for the aspect: enables or contributes_to (molecular\nfunction); involved_in, acts_upstream_of, acts_upstream_of_positive_effect,\nacts_upstream_of_negative_effect, acts_upstream_of_or_within,\nacts_upstream_of_or_within_positive_effect or\nacts_upstream_of_or_within_negative_effect (biological process); part_of,\ncolocalizes_with, is_active_in or located_in (cellular component). Negation is\nits own field.",
           "name": "qualifiers",
           "required": false,
           "type": "any"
@@ -5669,31 +5878,8 @@
         },
         {
           "default": null,
+          "description": "Concrete reasons a curator must settle before acceptance, for\nexample a mature-RNA product the paper does not tie to one locus.",
           "name": "blocking_reasons",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "name": "existing_annotations",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "name": "existing_annotation_provenance",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "name": "existing_annotation_note",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "name": "identity_resolution",
           "required": false,
           "type": "any"
         },
@@ -5717,7 +5903,7 @@
           "type": "any"
         }
       ],
-      "summary": "Stages one typed GOCuratableObject recommendation with verified evidence, resolved or explicitly ambiguous identity, current-annotation context, and curator-visible limitations."
+      "summary": "Stages one typed GOCuratableObject recommendation with verified evidence, the paper's wording for each GO value, any identifier the paper itself prints (as a proposal for validation), and curator-visible limitations. It never looks anything up. The gene product, GO term, reference and With/From stay unresolved until validation confirms them, and the evidence code and qualifiers are mapped from fixed tables."
     },
     "methods": null,
     "name": "Stage GO Recommendation",
@@ -5766,64 +5952,69 @@
           "type": "array"
         },
         {
+          "description": "The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The phenotype term as the paper words it. It is kept as the paper wording and staged even when no ontology term matches; the phenotype term specialist decides the term.",
+          "name": "term_mention",
+          "required": true,
+          "type": "string"
+        },
+        {
           "default": null,
-          "description": "The ID of the gene, allele, or model that shows this phenotype.",
+          "description": "The ID of the gene, allele, or model that shows this phenotype, only when the paper itself prints it; a specialist checks it before it counts as the subject's ID.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The name of the gene, allele, or model that shows this phenotype.",
+          "description": "The gene, allele, or model that shows this phenotype, as the paper names it. Needed whenever any other subject detail is given.",
           "name": "subject_label",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "What kind of thing shows the phenotype \u2014 a gene, an allele, or a whole modified organism (model).",
+          "description": "What shows the phenotype, exactly gene, allele or agm (a whole modified organism such as a strain or line). It decides which specialist checks the subject.",
           "name": "subject_type",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The species ID of the affected entity, if stated.",
+          "description": "The NCBITaxon ID of the affected entity's species (for example NCBITaxon:6239), as the species lookup returns it; never a species name. Given together with data_provider and term_taxon_id.",
           "name": "subject_taxon",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The phenotype term ID the agent proposes, if it found one; a term specialist confirms it.",
+          "description": "The phenotype term ID, only when the paper itself prints it; a term specialist checks it, and it is never shown as the confirmed ID.",
           "name": "term_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The phenotype term name the agent proposes.",
-          "name": "term_label",
-          "required": false,
-          "type": "any"
-        },
-        {
-          "default": null,
-          "description": "The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).",
+          "description": "The Alliance group for the paper's species as the species lookup returns it, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human). Given together with term_taxon_id.",
           "name": "data_provider",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "The species ID tied to the proposed phenotype term, if relevant.",
+          "description": "The NCBITaxon ID of the paper's species (for example NCBITaxon:6239), as the species lookup returns it; never a species name. The phenotype term specialist needs it together with data_provider to choose the right phenotype ontology.",
           "name": "term_taxon_id",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
-          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (set only when the paper itself prints that ID, for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"
@@ -5899,17 +6090,23 @@
     "agent_methods": null,
     "binding_kind": "runtime_context_factory",
     "category": "Output",
-    "description": "Validate a projection plan over saved bundle fields. The file format is forced to the bound formatter type.",
+    "description": "Validate a projection plan over saved bundle fields. The output format is forced to the bound formatter type.",
     "documentation": {
       "parameters": [
         {
-          "description": "Projection plan JSON using field refs and plan metadata.",
+          "description": "Projection plan JSON using field refs and plan metadata. Empty input validates the default or curator-fixed plan.",
           "name": "plan_json",
-          "required": true,
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Column cursor returned for a wide plan.",
+          "name": "cursor",
+          "required": false,
           "type": "string"
         }
       ],
-      "summary": "Validate a projection plan over saved bundle fields. The file format is forced to the bound formatter type."
+      "summary": "Validate a projection plan over saved bundle fields. The output format is forced to the bound formatter type."
     },
     "methods": null,
     "name": "Validate Output Projection",

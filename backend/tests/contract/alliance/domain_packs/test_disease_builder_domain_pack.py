@@ -23,9 +23,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
+from src.lib.domain_packs.resolvable_values import (
+    NOT_VALIDATED_EXPLANATION,
+    OUTCOME_NOT_VALIDATED,
+    UNRESOLVED,
+)
 from src.lib.openai_agents.extraction_builder_workspace import (
     CANDIDATE_STATUS_VALID,
     ExtractionBuilderWorkspace,
@@ -33,6 +39,8 @@ from src.lib.openai_agents.extraction_builder_workspace import (
 from src.schemas.domain_envelope import field_path_exists
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
+# Identity lookups belong to validators; extraction never searches a database (2026-09-24).
+_IDENTITY_LOOKUP_TOOLS = {"search_domain_field_terms", "inspect_ontology_term", "resolve_domain_field_term"}
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
 if str(ALLIANCE_PYTHON_SRC) not in sys.path:
     sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
@@ -73,7 +81,6 @@ def _staged_fields(subject_type: str = "gene", subject_identifier: str = "FB:FBg
         "object_type": DISEASE_OBJECT_TYPE,
         "pending_ref_id": "disease-annotation-1",
         "mention": "Alzheimer's disease",
-        "disease_name": "Alzheimer's disease",
         "disease_curie": "DOID:10652",
         "role": "model_context",
         "confidence": "high",
@@ -82,13 +89,26 @@ def _staged_fields(subject_type: str = "gene", subject_identifier: str = "FB:FBg
         "subject_identifier": subject_identifier,
         "subject_label": "Appl",
         "disease_relation_name": "is_implicated_in",
-        "evidence_code_curies": ["ECO:0000315"],
+        "evidence_code_curies": [{"mention": "IMP"}],
         # R4 optional slots.
         "genetic_sex_name": "male",
         "disease_qualifier_names": ["severity_of", "onset_of"],
-        "with_gene_identifiers": ["FB:FBgn0000108", "FB:FBgn0003089"],
+        "with_gene_identifiers": [{"mention": "Appl", "gene_id": "FB:FBgn0000108"}, {"mention": "Bace"}],
         "source_mentions": ["a transgenic Drosophila model of Alzheimer's disease"],
+        "rationale": "APP and BACE over-expression reproduced core Alzheimer's features in this line.",
         "negated": False,
+    }
+
+
+def _staged(mention: str, **keys: Any) -> dict[str, Any]:
+    """A value as the builder stages it: paper wording, no validated identity."""
+
+    return {
+        **keys,
+        "mention": mention,
+        "resolution_state": UNRESOLVED,
+        "lookup_outcome": OUTCOME_NOT_VALIDATED,
+        "validator_explanation": NOT_VALIDATED_EXPLANATION,
     }
 
 
@@ -122,14 +142,12 @@ def _materialize_one_candidate(
         staged_fields=_staged_fields(subject_type=subject_type, subject_identifier=subject_identifier),
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     return materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
 
 
@@ -144,6 +162,15 @@ def test_disease_pack_loads_with_builder_fixture():
     assert fixture_ref is not None
     assert fixture_ref.path == "fixtures/alzheimers_builder_pending.yaml"
     assert DISEASE_GENE_OBJECT_TYPE in fixture_ref.object_types
+
+
+@pytest.mark.parametrize("subject_type", ["gene", "allele", "agm"])
+def test_fresh_disease_builder_output_passes_normalization_and_persistence(subject_type):
+    from tests.fixtures.fresh_extraction_output import assert_fresh_output_records_every_state
+
+    result = _materialize_one_candidate(subject_type=subject_type)
+    assert result.ok, result.summary()
+    assert_fresh_output_records_every_state(result.payload, adapter_key="disease", agent_key="disease_extractor")
 
 
 def test_disease_builder_materializes_concrete_gene_subtype():
@@ -173,23 +200,52 @@ def test_disease_builder_materializes_concrete_gene_subtype():
     assert annotation["evidence_record_ids"] == ["evidence-ad-1"]
     payload_obj = annotation["payload"]
     assert payload_obj["mention"] == "Alzheimer's disease"
-    # D2: subject carried inline.
-    assert payload_obj["disease_annotation_subject"]["subject_identifier"] == "FB:FBgn0000108"
-    assert payload_obj["disease_annotation_subject"]["subject_type"] == "gene"
-    # DOID staged.
-    assert payload_obj["disease_annotation_object"]["curie"] == "DOID:10652"
-    assert payload_obj["disease_annotation_object"]["name"] == "Alzheimer's disease"
-    # D3: ECO codes staged + snapshotted.
-    assert payload_obj["evidence_code_curies"] == ["ECO:0000315"]
+    # Every resolvable value is staged unresolved with its paper wording; extractor proposals
+    # never fill the validated keys (ALL-1283).
+    # D2: subject carried inline, named as the paper names it.
+    assert payload_obj["disease_annotation_subject"] == _staged(
+        "Appl",
+        subject_type="gene",
+        proposed_subject_identifier="FB:FBgn0000108",
+        subject_identifier=None,
+        subject_label=None,
+    )
+    # DOID staged as a proposal.
+    assert payload_obj["disease_annotation_object"] == _staged(
+        "Alzheimer's disease",
+        proposed_curie="DOID:10652",
+        curie=None,
+        name=None,
+    )
+    # D3: every evidence code is its own value, searched from the paper's evidence wording.
+    assert payload_obj["evidence_code_curies"] == [_staged("IMP", curie=None)]
     # D5: relation rides on the concrete object.
-    assert payload_obj["disease_relation_name"] == "is_implicated_in"
-    assert payload_obj["data_provider"]["abbreviation"] == "FB"
-    # R4: annotation_type is the constant curation method (always materialized).
-    assert payload_obj["annotation_type_name"] == "manually_curated"
-    # R4: the 3 optional extracted slots pass through to the concrete annotation payload.
-    assert payload_obj["genetic_sex_name"] == "male"
-    assert payload_obj["disease_qualifier_names"] == ["severity_of", "onset_of"]
-    assert payload_obj["with_gene_identifiers"] == ["FB:FBgn0000108", "FB:FBgn0003089"]
+    assert payload_obj["disease_relation"] == _staged("is_implicated_in", name=None)
+    assert payload_obj["data_provider"] == _staged("FB", abbreviation=None)
+    # R4: annotation_type is the constant curation method (always staged for validation).
+    assert payload_obj["annotation_type"] == _staged("manually_curated", name=None)
+    # R4: the 3 optional extracted slots are staged on the concrete annotation payload.
+    assert payload_obj["genetic_sex"] == _staged("male", name=None)
+    assert payload_obj["disease_qualifier_names"] == [
+        _staged("severity_of", name=None),
+        _staged("onset_of", name=None),
+    ]
+    # A with/from gene is its paper wording; a printed ID is only a proposal.
+    assert payload_obj["with_gene_identifiers"] == [
+        _staged("Appl", proposed_primary_external_id="FB:FBgn0000108", primary_external_id=None),
+        _staged("Bace", primary_external_id=None),
+    ]
+    # D4: nothing names the source reference, so single_reference is absent.
+    assert "single_reference" not in payload_obj
+    # The flat CV scalars became one value each; their previous keys are gone.
+    for previous_key in (
+        "disease_relation_name",
+        "disease_relation_vocabulary",
+        "disease_relation_id",
+        "annotation_type_name",
+        "genetic_sex_name",
+    ):
+        assert previous_key not in payload_obj
     # FULL alignment: NO blocked write/export posture on the concrete annotation metadata.
     assert "write_behavior" not in annotation["metadata"]
     assert "export_behavior" not in annotation["metadata"]
@@ -231,14 +287,12 @@ def test_disease_builder_unknown_subject_falls_back_to_abstract():
         staged_fields=staged,
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert result.ok, result.summary()
     by_type = {obj["object_type"] for obj in result.payload["curatable_objects"]}
@@ -274,7 +328,7 @@ def test_disease_builder_output_validates_against_object_contract():
 def test_empty_disease_materialization_is_explicit_but_orphan_objects_are_invalid():
     empty = materialize_disease_builder_state(
         workspace=ExtractionBuilderWorkspace(run_id="empty-disease"),
-        candidate_ids=[], evidence_records=[], resolver_entry_lookup=None,
+        candidate_ids=[], evidence_records=[],
     )
     assert empty.ok, empty.summary()
     assert empty.payload["curatable_objects"] == []
@@ -302,14 +356,12 @@ def test_disease_builder_rejects_evidence_record_not_in_metadata():
         staged_fields=_staged_fields(),
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-MISSING"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -330,14 +382,12 @@ def test_disease_builder_rejects_missing_mention():
         staged_fields=staged,
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert not result.ok
     assert any(
@@ -403,14 +453,12 @@ def test_disease_annotation_type_constant_is_always_materialized():
         staged_fields=staged,
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert result.ok, result.summary()
     annotation = next(
@@ -420,9 +468,10 @@ def test_disease_annotation_type_constant_is_always_materialized():
     )
     payload_obj = annotation["payload"]
     # Constant present...
-    assert payload_obj["annotation_type_name"] == "manually_curated"
+    assert payload_obj["annotation_type"]["mention"] == "manually_curated"
+    assert payload_obj["annotation_type"]["resolution_state"] == UNRESOLVED
     # ...and the omitted optional slots are NOT carried.
-    assert "genetic_sex_name" not in payload_obj
+    assert "genetic_sex" not in payload_obj
     assert "disease_qualifier_names" not in payload_obj
     assert "with_gene_identifiers" not in payload_obj
 
@@ -447,38 +496,47 @@ def test_disease_r4_optional_slot_bindings_are_active():
     assert annotation_type["input_fields"]["vocabulary"]["value"] == "Annotation Type"
     assert annotation_type["input_fields"]["term_name"]["source"] == "literal"
     assert annotation_type["input_fields"]["term_name"]["value"] == "manually_curated"
-    assert annotation_type["applies_to"]["field_paths"] == ["annotation_type_name"]
+    assert annotation_type["applies_to"]["field_paths"] == ["annotation_type.name"]
     assert annotation_type["expected_result_fields"] == {
-        "term_name": "annotation_type_name",
-        "vocabulary": "annotation_type_vocabulary",
-        "internal_id": "annotation_type_id",
+        "term_name": "annotation_type.name",
+        "vocabulary": "annotation_type.vocabulary",
+        "internal_id": "annotation_type.id",
     }
 
     # SLOT 2: genetic_sex — controlled_vocabulary, Genetic Sex, optional payload term_name.
     genetic_sex = bindings_by_id["disease_genetic_sex_cv_lookup"]
     assert genetic_sex["validator_agent"]["agent_id"] == "controlled_vocabulary_validation"
     assert genetic_sex["input_fields"]["vocabulary"]["value"] == "Genetic Sex"
-    assert genetic_sex["input_fields"]["term_name"]["path"] == "genetic_sex_name"
+    assert genetic_sex["input_fields"]["term_name"]["path"] == "genetic_sex.mention"
+    assert genetic_sex["expected_result_fields"] == {
+        "term_name": "genetic_sex.name",
+        "vocabulary": "genetic_sex.vocabulary",
+        "internal_id": "genetic_sex.id",
+    }
     assert genetic_sex["input_fields"]["term_name"]["required"] is False
 
-    # SLOT 3: disease_qualifiers — controlled_vocabulary, Disease Qualifier, multivalued bare path.
+    # SLOT 3: disease_qualifier_names — controlled_vocabulary, Disease Qualifier, multivalued bare path.
     qualifier = bindings_by_id["disease_qualifier_cv_lookup"]
     assert qualifier["validator_agent"]["agent_id"] == "controlled_vocabulary_validation"
     assert qualifier["input_fields"]["vocabulary"]["value"] == "Disease Qualifier"
-    assert qualifier["input_fields"]["term_name"]["path"] == "disease_qualifier_names"
+    assert qualifier["input_fields"]["term_name"]["path"] == "disease_qualifier_names.mention"
     assert qualifier["applies_to"]["field_paths"] == ["disease_qualifier_names"]
     assert qualifier["expected_result_fields"] == {
-        "term_name": "disease_qualifier_names"
+        "term_name": "disease_qualifier_names.name"
     }
 
     # SLOT 4: with_or_from — gene_validation, multivalued bare path, primary_external_id result key.
     with_gene = bindings_by_id["disease_with_gene_validation"]
     assert with_gene["validator_agent"]["agent_id"] == "gene_validation"
-    assert with_gene["input_fields"]["gene_id"]["path"] == "with_gene_identifiers"
+    assert with_gene["input_fields"]["mention"]["path"] == "with_gene_identifiers.mention"
+    assert with_gene["input_fields"]["proposed_gene_id"]["path"] == (
+        "with_gene_identifiers.proposed_primary_external_id"
+    )
+    assert "gene_id" not in with_gene["input_fields"]
     assert with_gene["input_fields"]["data_provider"]["context_only"] is True
     assert with_gene["applies_to"]["field_paths"] == ["with_gene_identifiers"]
     assert with_gene["expected_result_fields"] == {
-        "primary_external_id": "with_gene_identifiers"
+        "primary_external_id": "with_gene_identifiers.primary_external_id"
     }
 
     # Each new active binding has matching active capability metadata + the right policy posture.
@@ -491,7 +549,8 @@ def test_disease_r4_optional_slot_bindings_are_active():
         assert binding_id in active_validator_ids
         binding = bindings_by_id[binding_id]
         assert binding["required"] is True
-        assert binding["blocking"] is False
+        # ALL-1283: an unresolved value blocks the export, so it blocks readiness too.
+        assert binding["blocking"] is True
         assert binding["allow_opt_out"] is True
         assert binding["curator_override"] == {"allowed": False}
         # All 4 disease object types declare the binding so dispatch fires on the concrete subtypes.
@@ -539,12 +598,10 @@ def test_disease_extractor_agent_has_no_output_schema_and_builder_tools():
     tools = set(agent["tools"])
     assert "stage_disease_observation" in tools
     assert "finalize_disease_extraction" in tools
-    # Experimental-condition grounding tools (same as gene_expression's extractor).
-    assert {
-        "search_domain_field_terms",
-        "inspect_ontology_term",
-        "resolve_domain_field_term",
-    } <= tools
+    # Extraction never searches a database for an identity (2026-09-24); only species
+    # context lookup stays.
+    assert _IDENTITY_LOOKUP_TOOLS.isdisjoint(tools)
+    assert "agr_species_context_lookup" in tools
     assert "DiseaseExtractionResultEnvelope" not in str(agent.get("output_schema"))
 
 
@@ -555,11 +612,14 @@ def _staged_fields_with_conditions(**overrides: Any) -> dict[str, Any]:
             "condition_relation_type": "has_condition",
             "conditions": [
                 {
+                    "condition_class_mention": "chemical treatment",
                     "condition_class_curie": "ZECO:0000111",
+                    "condition_chemical_mention": "rapamycin",
                     "condition_chemical_curie": "CHEBI:9168",
                     "condition_summary": "treated with 3 pM rapamycin",
                 },
                 {
+                    "condition_class_mention": "temperature exposure",
                     "condition_class_curie": "ZECO:0000160",
                     "condition_free_text": "37 degrees C",
                 },
@@ -583,14 +643,12 @@ def test_disease_builder_materializes_staged_condition_relations():
         staged_fields=_staged_fields_with_conditions(validation_guidance="Check the explicitly described experimental conditions."),
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     result = materialize_disease_builder_state(
         workspace=workspace,
         candidate_ids=["disease-candidate-1"],
         evidence_records=_evidence_records(),
-        resolver_entry_lookup=None,
     )
     assert result.ok, result.summary()
 
@@ -616,14 +674,21 @@ def test_disease_builder_materializes_staged_condition_relations():
                if obj["object_type"].endswith(("Reference", "EvidenceQuote")))
     assert len(relations) == 1
     relation = relations[0]
-    # Materialized in the exact target shape the bindings read.
-    assert relation["condition_relation_type"] == {"name": "has_condition"}
+    # Every relation type and component is its own staged value: paper wording plus the
+    # proposed CURIE, never a validated identity.
+    assert relation["condition_relation_type"] == _staged("has_condition", name=None)
     conditions = relation["conditions"]
     assert len(conditions) == 2
-    assert conditions[0]["condition_class"] == {"curie": "ZECO:0000111"}
-    assert conditions[0]["condition_chemical"] == {"curie": "CHEBI:9168"}
+    assert conditions[0]["condition_class"] == _staged(
+        "chemical treatment", proposed_curie="ZECO:0000111", curie=None, name=None
+    )
+    assert conditions[0]["condition_chemical"] == _staged(
+        "rapamycin", proposed_curie="CHEBI:9168", curie=None, name=None
+    )
     assert conditions[0]["condition_summary"] == "treated with 3 pM rapamycin"
-    assert conditions[1]["condition_class"] == {"curie": "ZECO:0000160"}
+    assert conditions[1]["condition_class"] == _staged(
+        "temperature exposure", proposed_curie="ZECO:0000160", curie=None, name=None
+    )
     assert conditions[1]["condition_free_text"] == "37 degrees C"
     # Empty leaves are dropped (condition 2 had no chemical).
     assert "condition_chemical" not in conditions[1]
@@ -639,3 +704,575 @@ def test_disease_builder_omits_condition_relations_when_unstaged():
         if obj["object_type"] == DISEASE_GENE_OBJECT_TYPE
     )
     assert "condition_relations" not in annotation["payload"]
+
+
+# --- ALL-1298: per-item rationale -------------------------------------------------------------
+
+
+def _stage_kwargs(**overrides: Any) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "pending_ref_id": "disease-annotation-1",
+        "mention": "Alzheimer's disease",
+        "role": "model_context",
+        "confidence": "high",
+        "data_provider": "FB",
+        "evidence_record_ids": ["evidence-ad-1"],
+        "source_mentions": ["a transgenic Drosophila model of Alzheimer's disease"],
+        "rationale": "  APP and BACE over-expression reproduced core Alzheimer's features.  ",
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def _builder_tools_with_workspace(monkeypatch: Any) -> tuple[Any, ExtractionBuilderWorkspace]:
+    from agr_ai_curation_alliance.tools import disease_builder_tools as tools
+
+    workspace = ExtractionBuilderWorkspace(
+        run_id="disease-rationale-run",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        agent_id="disease_extractor",
+    )
+    monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
+    monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_: None)
+    return tools, workspace
+
+
+def test_stage_disease_tool_requires_rationale_with_shared_description():
+    from agr_ai_curation_alliance.tools.builder_rationale import RATIONALE_ARG_DESCRIPTION
+    from agr_ai_curation_alliance.tools.disease_builder_tools import (
+        patch_disease_observation,
+        stage_disease_observation,
+    )
+
+    schema = stage_disease_observation.params_json_schema
+    assert "rationale" in schema["required"]
+    assert schema["properties"]["rationale"]["description"] == RATIONALE_ARG_DESCRIPTION
+    patch_updates = patch_disease_observation.params_json_schema["properties"]["updates"]
+    assert "A `rationale` update must be non-empty; it cannot be cleared." in (
+        " ".join(patch_updates["description"].split())
+    )
+
+
+def test_stage_disease_observation_stores_stripped_rationale(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(**_stage_kwargs())
+
+    assert result.status == "ok"
+    staged = workspace.candidates[result.data["candidate_id"]].staged_fields
+    assert staged["rationale"] == "APP and BACE over-expression reproduced core Alzheimer's features."
+
+
+def test_stage_disease_observation_rejects_blank_rationale(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    blank = tools._stage_disease_observation_impl(**_stage_kwargs(rationale="   "))
+
+    assert blank.status == "error"
+    assert blank.data["validation_issues"][0]["field_path"] == "rationale"
+    assert workspace.candidates == {}
+
+
+def test_patch_disease_observation_rewrites_but_never_clears_rationale(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    candidate_id = tools._stage_disease_observation_impl(**_stage_kwargs()).data["candidate_id"]
+
+    rewritten = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[{"field_path": "rationale", "string_value": "Flies model the disease, not background."}],
+    )
+    assert rewritten.status == "ok"
+    assert workspace.candidates[candidate_id].staged_fields["rationale"] == (
+        "Flies model the disease, not background."
+    )
+
+    for value in ("  ", None):
+        cleared = tools._patch_disease_observation_impl(
+            candidate_id=candidate_id,
+            pending_ref_id="disease-annotation-1",
+            updates=[{"field_path": "rationale", "string_value": value}],
+        )
+        assert cleared.status == "error"
+        assert cleared.data["validation_issues"][0]["reason"] == "invalid_rationale"
+    assert workspace.candidates[candidate_id].staged_fields["rationale"] == (
+        "Flies model the disease, not background."
+    )
+
+
+def test_disease_builder_carries_rationale_onto_annotation_only():
+    result = _materialize_one_candidate()
+    assert result.ok, result.summary()
+
+    for obj in result.payload["curatable_objects"]:
+        if obj["object_type"] == DISEASE_GENE_OBJECT_TYPE:
+            assert obj["payload"]["rationale"] == _staged_fields()["rationale"]
+        else:
+            assert "rationale" not in obj["payload"]
+
+
+def test_disease_builder_rejects_new_candidate_without_rationale():
+    staged = _staged_fields()
+    del staged["rationale"]
+    workspace = ExtractionBuilderWorkspace(
+        run_id="disease-builder-no-rationale",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        agent_id="disease_extractor",
+    )
+    workspace.upsert_candidate(
+        candidate_id="disease-candidate-1",
+        staged_fields=staged,
+        pending_ref_ids=["disease-annotation-1"],
+        evidence_record_ids=["evidence-ad-1"],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    result = materialize_disease_builder_state(
+        workspace=workspace,
+        candidate_ids=["disease-candidate-1"],
+        evidence_records=_evidence_records(),
+    )
+    assert not result.ok
+    assert any(
+        issue["reason"] == "missing_rationale" and issue["message"].endswith("patch the candidate with a rationale saying why you selected it.")
+        for issue in result.issues
+    )
+
+
+def test_disease_annotations_declare_optional_rationale_in_rationale_group():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(DISEASE_DOMAIN_PACK_ID)
+    assert pack is not None
+    annotation_types = {
+        DISEASE_OBJECT_TYPE,
+        DISEASE_GENE_OBJECT_TYPE,
+        DISEASE_ALLELE_OBJECT_TYPE,
+        DISEASE_AGM_OBJECT_TYPE,
+    }
+    definitions = [
+        definition
+        for definition in pack.metadata.object_definitions
+        if definition.object_type in annotation_types
+    ]
+    assert {definition.object_type for definition in definitions} == annotation_types
+    for definition in definitions:
+        rationale = next(field for field in definition.fields if field.field_path == "rationale")
+        assert rationale.field_type == "string"
+        assert rationale.required is False
+        groups = definition.metadata["workspace_display"]["groups"]
+        rationale_group = next(group for group in groups if group["id"] == "rationale")
+        assert rationale_group["label"] == "Rationale"
+        assert rationale_group["fields"] == ["rationale"]
+
+
+def test_stored_disease_annotation_without_rationale_validates_without_new_findings():
+    from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(DISEASE_DOMAIN_PACK_ID)
+    assert pack is not None
+    current = load_domain_fixture_pack(BUILDER_FIXTURE_PATH).fixtures[0].envelope
+    stored_before_rationale = current.model_copy(deep=True)
+    for obj in stored_before_rationale.extracted_objects:
+        obj.payload.pop("rationale", None)
+    assert any("rationale" in obj.payload for obj in current.extracted_objects)
+
+    baseline = run_domain_envelope_structural_checks(current, pack)
+    legacy = run_domain_envelope_structural_checks(stored_before_rationale, pack)
+
+    assert [finding.code for finding in legacy.appended_findings] == [
+        finding.code for finding in baseline.appended_findings
+    ]
+
+
+# --- ALL-1283: extracted vs validated values -----------------------------------------------------
+
+
+def _materialize_staged(staged: dict[str, Any]) -> Any:
+    workspace = ExtractionBuilderWorkspace(
+        run_id="disease-resolvable-run",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        agent_id="disease_extractor",
+    )
+    workspace.upsert_candidate(
+        candidate_id="disease-candidate-1",
+        staged_fields=staged,
+        pending_ref_ids=["disease-annotation-1"],
+        evidence_record_ids=["evidence-ad-1"],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    return materialize_disease_builder_state(
+        workspace=workspace,
+        candidate_ids=["disease-candidate-1"],
+        evidence_records=_evidence_records(),
+    )
+
+
+def _annotation_payload(result: Any, object_type: str = DISEASE_GENE_OBJECT_TYPE) -> dict[str, Any]:
+    return next(
+        obj["payload"] for obj in result.payload["curatable_objects"] if obj["object_type"] == object_type
+    )
+
+
+def test_disease_term_name_is_never_filled_from_the_paper_mention():
+    """Regression (builder_conversion :286 and :594): without a proposed DO name the term's
+    name stays empty; the paper mention never becomes the term name."""
+
+    staged = _staged_fields()
+    staged.pop("disease_curie")
+
+    result = _materialize_staged(staged)
+
+    assert result.ok, result.summary()
+    term = _annotation_payload(result)["disease_annotation_object"]
+    assert term == _staged("Alzheimer's disease", curie=None, name=None)
+    term_object = next(
+        obj for obj in result.payload["curatable_objects"] if obj["object_type"] == DISEASE_TERM_OBJECT_TYPE
+    )
+    # The structural DOTerm reference holds only the paper wording (review S8).
+    assert set(term_object["payload"]) == {"mention", "source_mentions"}
+    assert term_object["payload"]["mention"] == "Alzheimer's disease"
+
+
+def test_disease_builder_requires_source_mentions_instead_of_reusing_the_mention():
+    """Regression (builder_conversion :695): missing source_mentions are a materialization
+    issue; the disease mention is never copied into them."""
+
+    staged = _staged_fields()
+    staged["source_mentions"] = []
+
+    result = _materialize_staged(staged)
+
+    assert not result.ok
+    assert [issue["reason"] for issue in result.issues] == ["missing_source_mentions"]
+
+
+def test_disease_builder_stores_an_extractor_doid_only_as_a_proposal():
+    result = _materialize_staged(_staged_fields())
+
+    term = _annotation_payload(result)["disease_annotation_object"]
+    assert term["proposed_curie"] == "DOID:10652"
+    assert term["curie"] is None
+    assert term["resolution_state"] == UNRESOLVED
+    assert term["lookup_outcome"] == OUTCOME_NOT_VALIDATED
+
+
+def test_disease_builder_without_subject_wording_leaves_the_subject_absent():
+    staged = _staged_fields()
+    for key in ("subject_label", "subject_identifier", "subject_type"):
+        staged.pop(key)
+
+    result = _materialize_staged(staged)
+
+    assert result.ok, result.summary()
+    payload = _annotation_payload(result, DISEASE_OBJECT_TYPE)
+    assert "disease_annotation_subject" not in payload
+    subject_object = next(
+        obj for obj in result.payload["curatable_objects"] if obj["object_type"] == DISEASE_SUBJECT_OBJECT_TYPE
+    )
+    assert set(subject_object["payload"]) == {"resolution_note"}
+    assert subject_object["metadata"]["validation_state"] == "blocked_missing_subject"
+
+
+def test_stage_disease_observation_stages_an_unmatched_value_as_written(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(
+        **_stage_kwargs(
+            subject_label="an unnamed mutant line",
+            subject_type="agm",
+            disease_relation_name="models the disease",
+        )
+    )
+
+    assert result.status == "ok"
+    staged = workspace.candidates[result.data["candidate_id"]].staged_fields
+    materialized = _materialize_staged({**staged, "evidence_record_ids": ["evidence-ad-1"]})
+    assert materialized.ok, materialized.summary()
+    payload = _annotation_payload(materialized, DISEASE_AGM_OBJECT_TYPE)
+    assert payload["disease_relation"] == _staged("models the disease", name=None)
+    assert payload["disease_annotation_subject"] == _staged(
+        "an unnamed mutant line", subject_type="agm", subject_identifier=None, subject_label=None
+    )
+
+
+def test_stage_disease_observation_rejects_subject_details_without_paper_wording(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(
+        **_stage_kwargs(subject_type="gene", subject_identifier="FB:FBgn0000108")
+    )
+
+    assert result.status == "error"
+    assert "subject_label" in result.data["validation_issues"][0]["message"]
+    assert workspace.candidates == {}
+
+
+def test_patch_disease_observation_rejects_clearing_the_subject_wording(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    candidate_id = tools._stage_disease_observation_impl(
+        **_stage_kwargs(subject_label="Appl", subject_type="gene")
+    ).data["candidate_id"]
+
+    result = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[{"field_path": "subject_label", "string_value": ""}],
+    )
+
+    assert result.status == "error"
+    assert result.data["validation_issues"][0]["reason"] == "missing_subject_wording"
+    assert workspace.candidates[candidate_id].staged_fields["subject_label"] == "Appl"
+
+
+def test_stage_disease_observation_rejects_a_condition_curie_without_paper_wording(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(
+        **_stage_kwargs(
+            condition_relations=[
+                {
+                    "condition_relation_type": "has_condition",
+                    "conditions": [{"condition_class_curie": "ZECO:0000111"}],
+                }
+            ]
+        )
+    )
+
+    assert result.status == "error"
+    assert "condition_class_mention" in result.data["validation_issues"][0]["message"]
+    assert workspace.candidates == {}
+
+
+def test_stage_disease_tool_documents_paper_wording_for_every_resolvable_input():
+    from agr_ai_curation_alliance.tools.disease_builder_tools import stage_disease_observation
+
+    properties = stage_disease_observation.params_json_schema["properties"]
+    assert "as the paper words it" in properties["mention"]["description"]
+    assert "as the paper names it" in properties["subject_label"]["description"]
+    # Extraction never proposes a term name; an ID is recorded only when the paper prints it.
+    assert "disease_name" not in properties
+    assert "paper itself prints" in properties["disease_curie"]["description"]
+    assert "paper itself prints" in properties["subject_identifier"]["description"]
+
+
+def _staged_contract_value_paths(node: Any, path: str = "") -> list[str]:
+    """Payload paths (indexes dropped) of every value stored with the contract state."""
+
+    from src.lib.domain_packs.resolvable_values import has_resolution_state
+
+    found = [path] if has_resolution_state(node) else []
+    if isinstance(node, Mapping):
+        for key, child in node.items():
+            found += _staged_contract_value_paths(child, f"{path}.{key}" if path else str(key))
+    elif isinstance(node, list):
+        for child in node:
+            found += _staged_contract_value_paths(child, path)
+    return found
+
+
+def test_every_staged_disease_value_is_declared_resolvable():
+    """Guard (ALL-1283 H1/F2): a validator write into an undeclared contract value raises, so
+    every value the builder stages with contract state is declared by the pack."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    metadata = load_alliance_domain_pack_registry().get_pack(DISEASE_DOMAIN_PACK_ID).metadata
+    for subject_type, identifier in (("gene", "FB:FBgn0000108"), ("allele", "FB:FBal0000001"),
+                                     ("agm", "FB:FBst0000001"), (None, None)):
+        staged = _staged_fields_with_conditions(subject_type=subject_type, subject_identifier=identifier)
+        if subject_type is None:
+            staged.pop("subject_type")
+            staged.pop("subject_identifier")
+        staged["condition_relations"][0]["conditions"].append({
+            f"{part}_{suffix}": f"{part} {suffix}"
+            for part in ("condition_class", "condition_id", "condition_chemical", "condition_taxon")
+            for suffix in ("mention", "curie")
+        })
+        result = _materialize_staged(staged)
+        assert result.ok, result.summary()
+        for obj in result.payload["curatable_objects"]:
+            declared = set(declared_resolvable_fields(metadata, obj["object_type"]))
+            staged_paths = set(_staged_contract_value_paths(obj["payload"]))
+            assert staged_paths <= declared, (obj["object_type"], sorted(staged_paths - declared))
+
+
+def test_structural_subject_and_term_references_are_not_resolvable_values():
+    """Review S8: no validator targets the DiseaseAnnotationSubject or DOTerm reference objects,
+    so they carry only the paper wording and never read as UNRESOLVED; the annotation holds the
+    validated value."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, has_resolution_state
+
+    metadata = load_alliance_domain_pack_registry().get_pack(DISEASE_DOMAIN_PACK_ID).metadata
+    result = _materialize_staged(_staged_fields())
+    assert result.ok, result.summary()
+    by_type = {obj["object_type"]: obj for obj in result.payload["curatable_objects"]}
+    for object_type in (DISEASE_SUBJECT_OBJECT_TYPE, DISEASE_TERM_OBJECT_TYPE):
+        assert declared_resolvable_fields(metadata, object_type) == {}
+        assert not has_resolution_state(by_type[object_type]["payload"])
+    assert by_type[DISEASE_SUBJECT_OBJECT_TYPE]["payload"] == {"mention": "Appl"}
+
+
+# --- Extraction never searches a database (2026-09-24) -------------------------------------------
+
+
+def test_disease_staging_takes_no_proposed_term_name_or_identity(monkeypatch):
+    """Extraction records paper wording plus IDs the paper prints; it never stages a proposed
+    term name or a validated identity key."""
+
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    for extra in ({"disease_name": "Alzheimer's disease"}, {"curie": "DOID:10652"}):
+        with pytest.raises(TypeError):
+            tools._stage_disease_observation_impl(**_stage_kwargs(**extra))
+    candidate_id = tools._stage_disease_observation_impl(
+        **_stage_kwargs(disease_curie="DOID:10652")
+    ).data["candidate_id"]
+
+    patched = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[{"field_path": "disease_name", "string_value": "Alzheimer's disease"}],
+    )
+    assert patched.status == "error"
+    staged = workspace.candidates[candidate_id].staged_fields
+    assert "disease_name" not in staged
+
+    term = next(
+        obj["payload"]["disease_annotation_object"]
+        for obj in _materialize_staged(dict(staged)).payload["curatable_objects"]
+        if "disease_annotation_object" in obj["payload"]
+    )
+    assert (term["proposed_curie"], term["curie"], term["name"]) == ("DOID:10652", None, None)
+    assert (term["resolution_state"], term["lookup_outcome"]) == (UNRESOLVED, OUTCOME_NOT_VALIDATED)
+
+
+# --- Review S1/S3 (integration-2): exact subject kinds, paper-worded evidence and with/from -------
+
+
+@pytest.mark.parametrize("subject_type", ["AGM", "Gene", "model", "affected_genomic_model"])
+def test_stage_disease_rejects_a_subject_type_the_subject_check_cannot_route(monkeypatch, subject_type):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(
+        **_stage_kwargs(subject_label="Appl", subject_type=subject_type)
+    )
+
+    assert result.status == "error"
+    assert "subject_type" in result.data["validation_issues"][0]["field_path"]
+    assert workspace.candidates == {}
+
+
+@pytest.mark.parametrize(
+    ("subject_type", "object_type"),
+    [("gene", "GeneDiseaseAnnotation"), ("allele", "AlleleDiseaseAnnotation"), ("agm", "AGMDiseaseAnnotation")],
+)
+def test_stage_disease_accepts_each_routable_subject_type(monkeypatch, subject_type, object_type):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(
+        **_stage_kwargs(subject_label="Appl", subject_type=subject_type)
+    )
+
+    assert result.status == "ok", result.data
+    staged = dict(workspace.candidates[result.data["candidate_id"]].staged_fields)
+    assert staged["subject_type"] == subject_type
+    assert _annotation_payload(_materialize_staged(staged), object_type)["disease_annotation_subject"][
+        "subject_type"
+    ] == subject_type
+
+
+def test_patch_disease_subject_type_must_stay_routable(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+    candidate_id = tools._stage_disease_observation_impl(
+        **_stage_kwargs(subject_label="Appl", subject_type="gene")
+    ).data["candidate_id"]
+
+    def patch(value):
+        return tools._patch_disease_observation_impl(
+            candidate_id=candidate_id,
+            pending_ref_id="disease-annotation-1",
+            updates=[{"field_path": "subject_type", "string_value": value}],
+        )
+
+    rejected = patch("AGM")
+    assert rejected.status == "error"
+    assert "exactly one of gene, allele, agm" in rejected.data["validation_issues"][0]["message"]
+    assert workspace.candidates[candidate_id].staged_fields["subject_type"] == "gene"
+    assert patch("agm").status == "ok"
+    assert workspace.candidates[candidate_id].staged_fields["subject_type"] == "agm"
+
+
+def test_stage_disease_evidence_and_with_from_are_paper_wording_plus_printed_ids(monkeypatch):
+    """Extraction never supplies an ECO or gene ID from memory: each entry is the paper's wording,
+    with an ID only when the paper prints it, and every value stays unvalidated."""
+
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    result = tools._stage_disease_observation_impl(
+        **_stage_kwargs(
+            evidence_code_curies=[{"mention": "IMP"}, {"mention": "author statement", "curie": "ECO:0000033"}],
+            with_gene_identifiers=[{"mention": "Psn"}, {"mention": "Appl", "gene_id": "FB:FBgn0000108"}],
+        )
+    )
+
+    assert result.status == "ok", result.data
+    staged = dict(workspace.candidates[result.data["candidate_id"]].staged_fields)
+    assert staged["evidence_code_curies"] == [
+        {"mention": "IMP"}, {"mention": "author statement", "curie": "ECO:0000033"},
+    ]
+    payload = next(
+        obj["payload"]
+        for obj in _materialize_staged(staged).payload["curatable_objects"]
+        if "evidence_code_curies" in obj["payload"]
+    )
+    assert payload["evidence_code_curies"] == [
+        _staged("IMP", curie=None),
+        _staged("author statement", proposed_curie="ECO:0000033", curie=None),
+    ]
+    assert payload["with_gene_identifiers"] == [
+        _staged("Psn", primary_external_id=None),
+        _staged("Appl", proposed_primary_external_id="FB:FBgn0000108", primary_external_id=None),
+    ]
+
+
+def test_disease_evidence_and_with_from_take_structured_entries_only(monkeypatch):
+    tools, workspace = _builder_tools_with_workspace(monkeypatch)
+
+    # A custom extractor whose prompt still describes plain string lists is told the entry shape.
+    bare = tools._stage_disease_observation_impl(**_stage_kwargs(evidence_code_curies=["ECO:0000315"]))
+    assert bare.status == "error"
+    message = bare.data["validation_issues"][0]["message"]
+    assert "evidence_code_curies entries are objects, not strings" in message
+    assert '"mention"' in message and '"curie"' in message
+    bare_genes = tools._stage_disease_observation_impl(**_stage_kwargs(with_gene_identifiers=["Psn"]))
+    assert '"gene_id"' in bare_genes.data["validation_issues"][0]["message"]
+    assert workspace.candidates == {}
+
+    candidate_id = tools._stage_disease_observation_impl(**_stage_kwargs()).data["candidate_id"]
+    string_patch = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[{"field_path": "evidence_code_curies", "string_list_value": ["IMP"]}],
+    )
+    assert string_patch.status == "error"
+    assert "evidence_codes_value" in string_patch.data["validation_issues"][0]["message"]
+    assert '"mention"' in string_patch.data["validation_issues"][0]["message"]
+    bare_value = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[{"field_path": "with_gene_identifiers", "with_genes_value": ["Psn"]}],
+    )
+    assert "with_gene_identifiers entries are objects" in bare_value.data["validation_issues"][0]["message"]
+
+    structured = tools._patch_disease_observation_impl(
+        candidate_id=candidate_id,
+        pending_ref_id="disease-annotation-1",
+        updates=[
+            {"field_path": "evidence_code_curies", "evidence_codes_value": [{"mention": "IGI"}]},
+            {"field_path": "with_gene_identifiers", "with_genes_value": [{"mention": "Psn"}]},
+        ],
+    )
+    assert structured.status == "ok", structured.data
+    staged = workspace.candidates[candidate_id].staged_fields
+    assert staged["evidence_code_curies"] == [{"mention": "IGI"}]
+    assert staged["with_gene_identifiers"] == [{"mention": "Psn"}]

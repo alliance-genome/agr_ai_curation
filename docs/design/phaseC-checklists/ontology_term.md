@@ -1,3 +1,48 @@
+# September 24, 2026: ontology-term validator search and closest fit (Sep 22 hotfix)
+
+This section supersedes the lookup-path, stop-rule and role pins in the historical
+record below. The OTV identifiers still hold for the coverage audit. After this
+hotfix, extraction never searches: every value arrives with the paper wording in
+`mention` (bound as `label`) and, only when the paper prints an ID, a proposed
+`curie`. The validator is the only searcher, and its lookup outcomes decide whether
+a value is demoted, so an empty search must not be reported as proof of absence.
+
+## Coverage audit
+
+| Previous rules | Current home and treatment |
+| --- | --- |
+| OTV-01 role ("final say", "yours to resolve well rather than as something to hand back") | `role`, rewritten on the allele model (ALL-1208): a clear unresolved result is a successful outcome. Scope limit folded into the role (OTV-08, OTV-34). |
+| OTV-02..06 goal, tool-evidence grounding, no guessing | `goal`, unchanged. |
+| OTV-07 inputs | `request_inputs`. `curie` is a paper-stated or fixed-choice proposal; a successful fetch does not tie it to the paper wording. `lookup_method` is now listed. Paper context (`source_mentions`, `evidence_quotes`, `evidence_summary`) drives variant searches and candidate judgement (OTV-16 reworded). |
+| OTV-11 narrowest helper, phenotype provider/taxon mapping | `lookup_workflow`, unchanged except that a binding's `lookup_method` is used first. |
+| OTV-12..15, OTV-18 gates and repeated `terms` | `term_decision`, unchanged. |
+| OTV-17, OTV-33 ambiguity | `term_decision`, stated once: only equally fitting candidates make the result ambiguous. |
+| OTV-20..25 bounded path | Six steps (invariants file): CURIE fetch, per-item `terms`, normal-mode search of the paper wording (exact mode only when the request sets `exact_match: true`), bounded source-supported variants (core phrase, singular/plural, abbreviation expansion stated in the paper; about four lookups per value), gates, evidence-based stop. The zero-results-means-unresolved step is deleted. |
+| OTV-28 lookup attempts | `result_contract`, plus truthful counts and outcomes: `not_found` only for an empty lookup, `success` whenever records came back; no-candidates, rejected, ambiguous and tool-failure cases stay distinct; an empty scoped search is not global absence. |
+| OTV-32 stop rule ("do not keep searching to improve phrasing") | Replaced by lookup step 6: stop when the evidence supports a decision, or bounded searches cannot distinguish the candidates. |
+| Hard-coded `finalize_ontology_term_lookup` | Replaced by "Complete the finalization tool required by the active runtime contract." Dispatch uses `finalize_validator_result` / `finalize_validator_batch_results`. |
+
+## Added: candidates are confirmed, closest fit
+
+- Every search row is a candidate to confirm against the paper wording and quotes,
+  whatever its `match_type` (exact synonym, prefix, contains, fuzzy). A fetched CURIE
+  is confirmed the same way (allele f726329a5 rule).
+- Closest fit (Chris, 2026-09-24, to be refined later): resolve to the same concept
+  or the nearest broader term that honestly contains it, never a narrower or
+  different concept, supported by the evidence quotes. Say when the result is a
+  closest fit rather than an exact match. Equal fits are ambiguous.
+
+## Tool support
+
+`agr_curation_query` ontology rows now carry the client's `match_type`,
+`match_score`, `matched_field`, synonyms and definition, and label searches return
+at least 25 rows so the client's fuzzy (trigram) tier is not crowded out by
+alphabetical prefix/contains hits.
+
+---
+
+## Historical Phase C coverage record
+
 # Phase C semantic-coverage checklist: `ontology_term` validator (Wave 3 — VALIDATOR skeleton)
 
 This is the **authoritative inventory source** for the outcome-first rewrite of

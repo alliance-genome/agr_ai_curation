@@ -313,7 +313,7 @@ def _candidate_matches_for_findings(
     findings: Sequence[DomainEnvelopeValidationFindingProjection],
 ) -> list[ValidationCandidateMatch]:
     matches: list[ValidationCandidateMatch] = []
-    seen: set[tuple[str | None, str]] = set()
+    seen: set[tuple[str | None, str | None]] = set()
     for finding in findings:
         raw_matches = finding.details.get("candidate_matches")
         if not isinstance(raw_matches, list):
@@ -322,8 +322,6 @@ def _candidate_matches_for_findings(
             if not isinstance(raw_match, Mapping):
                 continue
             match = _candidate_match_from_mapping(raw_match)
-            if match is None:
-                continue
             key = (match.identifier, match.label)
             if key in seen:
                 continue
@@ -334,33 +332,18 @@ def _candidate_matches_for_findings(
 
 def _candidate_match_from_mapping(
     raw_match: Mapping[str, Any],
-) -> ValidationCandidateMatch | None:
-    identifier = _optional_string(
-        raw_match.get("identifier")
-        or raw_match.get("candidate_id")
-        or raw_match.get("resolved_id")
-    )
-    label = _optional_string(
-        raw_match.get("label")
-        or raw_match.get("candidate_label")
-        or raw_match.get("resolved_label")
-        or raw_match.get("name")
-        or raw_match.get("symbol")
-        or identifier
-    )
-    if label is None:
-        return None
+) -> ValidationCandidateMatch:
+    """A validator candidate (``ValidatorCandidate``: value, label, score) as a match.
+
+    Each part reads its own key; a missing label stays missing (ALL-1283).
+    """
+
     score = raw_match.get("score")
     if not isinstance(score, (int, float)) or isinstance(score, bool):
         score = None
     return ValidationCandidateMatch(
-        label=label,
-        identifier=identifier,
-        matched_value=_optional_string(
-            raw_match.get("matched_value")
-            or raw_match.get("match_type")
-            or raw_match.get("matched_variant")
-        ),
+        label=_optional_string(raw_match.get("label")),
+        identifier=_optional_string(raw_match.get("value")),
         score=score,
     )
 

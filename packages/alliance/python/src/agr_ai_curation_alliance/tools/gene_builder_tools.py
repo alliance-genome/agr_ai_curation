@@ -5,8 +5,8 @@ shared ``finalize_builder_extraction`` orchestration. Mirrors the gene_expressio
 (``stage_gene_expression_observation`` etc. in ``agr_curation.py``) but adapted to the gene
 ``gene_mention_evidence`` target:
 
-  * NO resolver-backed controlled fields (the gene validator owns identity), so staging requires
-    evidence but NOT resolver selections (``require_resolver_selections=False``).
+  * NO controlled fields resolved at extraction (the gene validator owns identity); staging
+    requires evidence.
   * NO mirror/projection fields.
 
 Tool names match the gene extractor prompt/agent: ``stage_gene_mention_evidence``,
@@ -57,12 +57,17 @@ from agr_ai_curation_alliance.domain_packs.gene import (
 # keeps the gene tool-result shape identical to gene_expression (AgrQueryResult, ok/blocked).
 from .agr_curation import (
     AgrQueryResult,
+    _builder_finalization_summary,
     _builder_summary,
     _builder_candidate_list,
     _search_builder_candidates,
     _ok,
 )
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import (
+    document_rationale_arg,
+    normalize_rationale,
+)
 
 
 _GENE_CONFIDENCE_VALUES = frozenset({"high", "medium", "low"})
@@ -79,6 +84,7 @@ _GENE_PATCH_FIELD_PATHS = frozenset(
         "proposed_taxon",
         "confidence",
         "evidence_record_ids",
+        "rationale",
     }
 )
 
@@ -97,6 +103,7 @@ class GeneStageInput(_StrictToolModel):
     evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
     identity_resolution_notes: List[StrictStr] = Field(min_length=1, max_length=20)
     confidence: StrictStr
+    rationale: StrictStr
     species: Optional[StrictStr] = None
     taxon_hint: Optional[StrictStr] = None
     data_provider_hint: Optional[StrictStr] = None
@@ -127,6 +134,11 @@ class GeneStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("identity_resolution_notes must contain at least one non-empty value")
         return cleaned
+
+    @field_validator("rationale")
+    @classmethod
+    def _valid_rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
 
 class GenePatchUpdateInput(_StrictToolModel):
@@ -257,6 +269,7 @@ def _stage_payload_from_gene_input(stage_input: GeneStageInput) -> dict[str, Any
         "mention": stage_input.mention,
         "confidence": stage_input.confidence,
         "identity_resolution_notes": list(stage_input.identity_resolution_notes),
+        "rationale": stage_input.rationale,
     }
     for field_name in (
         "validation_guidance",
@@ -273,12 +286,14 @@ def _stage_payload_from_gene_input(stage_input: GeneStageInput) -> dict[str, Any
     return payload
 
 
+@document_rationale_arg
 def _stage_gene_mention_evidence_impl(
     pending_ref_id: str,
     mention: str,
     evidence_record_ids: List[str],
     identity_resolution_notes: List[str],
     confidence: str,
+    rationale: str,
     species: Optional[str] = None,
     taxon_hint: Optional[str] = None,
     data_provider_hint: Optional[str] = None,
@@ -314,6 +329,7 @@ def _stage_gene_mention_evidence_impl(
             evidence_record_ids=evidence_record_ids,
             identity_resolution_notes=identity_resolution_notes,
             confidence=confidence,
+            rationale=rationale,
             species=species,
             taxon_hint=taxon_hint,
             data_provider_hint=data_provider_hint,
@@ -337,7 +353,6 @@ def _stage_gene_mention_evidence_impl(
         staged_fields=payload,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -369,7 +384,12 @@ def _patch_gene_mention_evidence_impl(
     pending_ref_id: str,
     updates: List[Mapping[str, Any]],
 ) -> AgrQueryResult:
-    """Patch enumerated fields on one staged gene mention candidate."""
+    """Patch enumerated fields on one staged gene mention candidate.
+
+    Args:
+        updates: Field updates, each naming one allowed `field_path` with its new value.
+            A `rationale` update must be non-empty; it cannot be cleared.
+    """
 
     attempted_query = _attempt_query(
         "patch_gene_mention_evidence",
@@ -426,6 +446,17 @@ def _patch_gene_mention_evidence_impl(
                 )
             evidence_ids = new_ids
             continue
+        if update.field_path == "rationale":
+            try:
+                payload["rationale"] = normalize_rationale(update.string_value or "")
+            except ValueError as exc:
+                return _gene_validation_result(
+                    message=f"rationale patch rejected: {exc}.",
+                    issues=[{"field_path": "rationale", "reason": "invalid_rationale", "message": str(exc)}],
+                    method="patch_gene_mention_evidence",
+                    attempted_query=attempted_query,
+                )
+            continue
         _set_gene_patch_value(payload, update.field_path, update.string_value)
 
     workspace.upsert_candidate(
@@ -433,7 +464,6 @@ def _patch_gene_mention_evidence_impl(
         staged_fields=payload,
         pending_ref_ids=candidate.pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -481,7 +511,10 @@ def _discard_gene_mention_evidence_impl(
             method="discard_gene_mention_evidence",
             attempted_query=attempted_query,
         )
-    summary = _builder_summary(workspace, include_discarded=True)
+    summary = {
+        **_builder_summary(workspace, include_discarded=True),
+        "discarded_candidate_id": discard_input.candidate_id,
+    }
     _emit_gene_builder_event(
         "gene_builder.discard_completed",
         action="discard",
@@ -608,7 +641,6 @@ def _materialize_gene_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     """Domain materializer wrapper emitting gene builder events.
 
@@ -626,7 +658,6 @@ def _materialize_gene_with_events(
         workspace=workspace,
         candidate_ids=candidate_id_list,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     if not materialization.ok or materialization.payload is None:
         _emit_gene_builder_event(
@@ -657,8 +688,7 @@ def _finalize_gene_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
     """Finalize staged gene candidates through the builder handoff contract.
 
     Thin domain adapter: input validation + result shape live here; all structural
-    staging/finalize control flow is delegated to ``finalize_builder_extraction``. Gene has no
-    resolver-backed controlled fields, so ``require_resolver_selections=False``.
+    staging/finalize control flow is delegated to ``finalize_builder_extraction``.
     """
 
     attempted_query = _attempt_query("finalize_gene_extraction", candidate_ids=candidate_ids)
@@ -686,9 +716,7 @@ def _finalize_gene_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
         candidate_ids=candidate_ids,
         materialize=_materialize_gene_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="gene-envelope",
-        require_resolver_selections=False,
     )
 
     if not outcome.ok:
@@ -701,7 +729,7 @@ def _finalize_gene_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
 
     finalization = outcome.finalization
     summary = {
-        "builder_finalization": finalization.summary(),
+        "builder_finalization": _builder_finalization_summary(finalization.summary()),
         "builder": _builder_summary(workspace, include_discarded=True),
     }
     _emit_gene_builder_event(

@@ -123,7 +123,7 @@ def test_bundle_uses_saved_schema_for_types_and_optional_fields_even_without_rec
     assert len(bundle.rows_for_source("object")) == (0 if empty else 1)
 
 
-def test_existing_pair_join_and_conditional_consume_aligned_profile_values(profile_step):
+def test_existing_pair_join_consumes_aligned_profile_values(profile_step):
     step, _, profile = profile_step
     before = deepcopy(step)
     bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Profile", profile_resolver=lambda _: profile)
@@ -132,10 +132,9 @@ def test_existing_pair_join_and_conditional_consume_aligned_profile_values(profi
             {"key": "sources", "transform": {"type": "pair_join", "field_refs": [
                 "object.attribute.sources[].name", "object.attribute.sources[].identifier",
             ], "separator": "|", "pair_separator": ":"}},
-            {"key": "status", "transform": {"type": "conditional", "field_ref": "object.attribute.status",
-                "condition_op": "is_empty", "when_true": {"type": "literal", "value": "Not supplied"},
-                "when_false": {"type": "literal", "value": "Supplied"}}},
+            {"key": "status", "field_ref": "object.attribute.status"},
         ],
+        "missing_value": "Not supplied",
     })
     result = apply_projection_plan(bundle, plan)
     assert result.rows == [{"sources": "A:A:1|B|C:3", "status": "Not supplied"}]
@@ -146,8 +145,7 @@ def test_existing_pair_join_and_conditional_consume_aligned_profile_values(profi
     ("source_keys", False), ("source_extraction_result_ids", False),
     ("source_extraction_result_ids", True),
 ])
-@pytest.mark.parametrize("conditional", [False, True])
-def test_numeric_predicate_checks_only_selected_saved_profiles(profile_step, selector, shared_key, conditional):
+def test_numeric_predicate_checks_only_selected_saved_profiles(profile_step, selector, shared_key):
     from src.lib.flows.output_projection import validate_projection_plan
     numeric_step, numeric_receipt, numeric_profile = profile_step
     numeric_step.update(source_key="numeric-source", extraction_result_id="numeric-result")
@@ -181,15 +179,8 @@ def test_numeric_predicate_checks_only_selected_saved_profiles(profile_step, sel
     original = bundle.model_dump(mode="json")
     suffix = "source" if selector == "source_keys" else "result"
     plan_data = {"format": "tsv", "row_source": "object", selector: [f"numeric-{suffix}"],
-                 "columns": [{"key": "count", "field_ref": "object.attribute.count"}]}
-    if conditional:
-        plan_data["columns"] = [{"key": "count", "transform": {
-            "type": "conditional", "field_ref": "object.attribute.count", "condition_op": "gte", "value": 0,
-            "when_true": {"type": "literal", "value": "Yes"},
-            "when_false": {"type": "literal", "value": "No"},
-        }}]
-    else:
-        plan_data["filters"] = [{"field_ref": "object.attribute.count", "op": "gte", "value": 0}]
+                 "columns": [{"key": "count", "field_ref": "object.attribute.count"}],
+                 "filters": [{"field_ref": "object.attribute.count", "op": "gte", "value": 0}]}
     assert not validate_projection_plan(bundle, FlowOutputProjectionPlan.model_validate(plan_data))[0]
     if selector == "source_extraction_result_ids":
         union_plan = {**plan_data, "source_keys": [text_step["source_key"]], "row_strategy": "object_ledger"}
@@ -265,7 +256,7 @@ def test_selected_export_preserves_schema_empty_results_and_nested_values(profil
         assert rows[0] == ["stocks count", "stocks status", "stocks sources"]
         if not empty:
             assert rows[1][:2] == ["0", ""]
-            assert json.loads(rows[1][2])[1] == {"name": "B"}
+            assert rows[1][2] == "A (A:1) | B | C:3"
 
 
 def test_selected_export_keeps_sources_separate_and_rejects_stale_or_invented_fields(profile_step):
@@ -313,3 +304,35 @@ async def test_formatter_tools_cannot_override_selected_fields(profile_step):
     await invoke("finalize_and_save", {})
     assert len(saved) == 1
     assert len(saved[0]["projection"].columns) == 3
+
+
+@pytest.mark.parametrize("format", ["csv", "tsv"])
+def test_profile_rationale_is_a_declared_selectable_export_field(profile_step, format):
+    from src.lib.flows.export_fields import PROFILE_RATIONALE_EXPORT_FIELD
+    from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+    import csv
+    import io
+    step, _, profile = profile_step
+    step["node_id"] = "stocks"
+    objects = step["candidate"]["payload_json"]["curatable_objects"]
+    objects[0]["payload"]["rationale"] = "BDSC stock is named for this construct."
+    # A record staged before the builder required a rationale stays blank.
+    objects.append(deepcopy(objects[0]))
+    objects[1]["pending_ref_id"] = "record-2"
+    del objects[1]["payload"]["rationale"]
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Stock", profile_resolver=lambda _: profile)
+    artifact = bundle.artifacts[0]
+    assert PROFILE_RATIONALE_EXPORT_FIELD["ref"] in {field.ref for field in artifact.declared_fields}
+    assert artifact.default_object_refs[-1] == PROFILE_RATIONALE_EXPORT_FIELD["ref"]
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": format, "row_source": "object", "row_strategy": "wide_union",
+        "selection_mode": "selected_fields", "missing_value": "",
+        "selected_sources": [{"node_id": artifact.node_id, "schema_fingerprint": artifact.export_schema_fingerprint}],
+        "columns": [
+            {"key": "count", "field_ref": "object.attribute.count", "source_node_id": artifact.node_id},
+            {"key": "Rationale", "field_ref": PROFILE_RATIONALE_EXPORT_FIELD["ref"], "source_node_id": artifact.node_id},
+        ],
+    })
+    content = _projection_content_for_file_type(output_format=format, projection=apply_projection_plan(bundle, plan))
+    rows = list(csv.reader(io.StringIO(content), delimiter="," if format == "csv" else "\t"))
+    assert rows == [["count", "Rationale"], ["0", "BDSC stock is named for this construct."], ["0", ""]]

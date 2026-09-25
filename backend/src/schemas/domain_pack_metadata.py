@@ -503,6 +503,99 @@ class DomainPackValidatorGroupScope(DomainPackMetadataBaseModel):
         return self
 
 
+class DomainPackValidatorRouteSelector(DomainPackMetadataBaseModel):
+    """The one target payload value whose text chooses a binding's route."""
+
+    source: Literal["payload"]
+    path: str
+
+    @field_validator("path")
+    @classmethod
+    def _validate_path(cls, value: str) -> str:
+        return validate_field_path_syntax(value)
+
+
+class DomainPackValidatorRoute(DomainPackMetadataBaseModel):
+    """The validator and its input/result mapping for one routing value."""
+
+    validator_agent: DomainPackValidatorAgentRef
+    input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
+    expected_result_fields: dict[str, Any] = Field(default_factory=dict)
+    max_tool_calls: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("max_tool_calls", mode="before")
+    @classmethod
+    def _validate_max_tool_calls(cls, value: Any) -> Any:
+        return _resolve_env_backed_int(value, "validator_bindings.routes.max_tool_calls")
+
+    @model_validator(mode="after")
+    def _validate_dispatch_contract(self) -> "DomainPackValidatorRoute":
+        if not self.input_fields or not self.expected_result_fields:
+            raise ValueError(
+                "validator_bindings.routes entries must declare input_fields and "
+                "expected_result_fields"
+            )
+        return self
+
+
+def _validate_binding_routes(binding: Any) -> None:
+    """A routed binding chooses its validator and mappings per routing value.
+
+    The validator, inputs and results then live only on the routes, and an
+    unrouted value never falls back to another route.
+    """
+
+    if (binding.route_by is None) != (binding.routes is None):
+        raise ValueError(
+            "validator_bindings entries must declare route_by and routes together"
+        )
+    if binding.routes is None:
+        return
+    if not binding.routes:
+        raise ValueError("validator_bindings.routes must not be empty")
+    for route_value in binding.routes:
+        if not route_value.strip() or route_value != route_value.strip():
+            raise ValueError(
+                "validator_bindings.routes keys must be non-empty and carry no "
+                "surrounding whitespace"
+            )
+    shared = sorted(
+        name
+        for name in ("validator_agent", "input_fields", "expected_result_fields",
+                     "max_tool_calls", "custom_profile_reuse")
+        if name in binding.model_fields_set
+    )
+    if shared:
+        raise ValueError(
+            "routed validator_bindings entries declare "
+            f"{', '.join(shared)} on each route, not on the binding"
+        )
+    # The value that chose the route is never a validator result: a write-back
+    # there would send the next run to another validator.
+    route_path = _unindexed_path(binding.route_by.path)
+    written = [
+        (f"routes.{route_value}.expected_result_fields.{result_field}", field_path)
+        for route_value, route in binding.routes.items()
+        for result_field, field_path in route.expected_result_fields.items()
+    ] + [
+        (f"optional_result_fields.{result_field}", field_path)
+        for result_field, field_path in (getattr(binding, "optional_result_fields", None) or {}).items()
+    ]
+    for location, field_path in written:
+        if not isinstance(field_path, str):
+            continue
+        target = _unindexed_path(field_path)
+        if target == route_path or target.startswith(f"{route_path}."):
+            raise ValueError(
+                f"validator_bindings {location} writes '{field_path}', the route_by "
+                f"path '{binding.route_by.path}'; the routing value is never a validator result"
+            )
+
+
+def _unindexed_path(field_path: str) -> str:
+    return re.sub(r"\[\d+\]", "", field_path.strip())
+
+
 class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     """Executable package-scoped validator binding metadata."""
 
@@ -525,10 +618,26 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         ),
     )
     definition_notes: list[str] = Field(default_factory=list)
-    validator_agent: DomainPackValidatorAgentRef
+    validator_agent: Optional[DomainPackValidatorAgentRef] = None
     applies_to: DomainPackValidatorAppliesTo
     input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
+    route_by: Optional[DomainPackValidatorRouteSelector] = None
+    routes: Optional[dict[str, DomainPackValidatorRoute]] = None
+    optional_result_fields: Optional[dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Result fields the validator fills only when its lookup confirms them "
+            "(result field -> payload path); a missing one never demotes the result"
+        ),
+    )
+    runs_after: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Binding IDs in the same pack whose results this binding reads; it runs "
+            "once their results are written"
+        ),
+    )
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
     preflight_policy: Optional[
         Literal["provider_taxon_mapping_required"]
@@ -582,6 +691,57 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
                 )
         return value
 
+    @field_validator("runs_after")
+    @classmethod
+    def _validate_runs_after(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("validator_bindings.runs_after must list at least one binding_id")
+        for binding_id in value:
+            _validate_symbolic_name(binding_id, "validator_bindings.runs_after")
+        _require_unique(value, "validator_bindings.runs_after")
+        return value
+
+    @field_validator("optional_result_fields")
+    @classmethod
+    def _validate_optional_result_fields(
+        cls, value: Optional[dict[str, str]],
+    ) -> Optional[dict[str, str]]:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("validator_bindings.optional_result_fields must name at least one field")
+        for result_field, field_path in value.items():
+            if not str(result_field).strip() or not str(field_path).strip():
+                raise ValueError(
+                    "validator_bindings.optional_result_fields maps non-empty result fields "
+                    "to non-empty field paths"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def validate_optional_result_fields_are_not_expected(self) -> "DomainPackActiveValidatorBinding":
+        overlap = sorted(set(self.optional_result_fields or {}) & set(self.expected_result_fields))
+        if overlap:
+            raise ValueError(
+                "validator_bindings.optional_result_fields cannot repeat expected_result_fields: "
+                + ", ".join(overlap)
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_routes(self) -> "DomainPackActiveValidatorBinding":
+        """An active binding runs one validator, either its own or its routes'."""
+
+        _validate_binding_routes(self)
+        if self.routes is None and self.validator_agent is None:
+            raise ValueError(
+                "validator_bindings.active entries must declare validator_agent "
+                "or route_by with routes"
+            )
+        return self
+
     @model_validator(mode="after")
     def validate_blocking_policy(self) -> "DomainPackActiveValidatorBinding":
         """Require blocking validator policy to also be required."""
@@ -617,9 +777,16 @@ class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
     applies_to: Optional[DomainPackValidatorAppliesTo] = None
     input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
+    route_by: Optional[DomainPackValidatorRouteSelector] = None
+    routes: Optional[dict[str, DomainPackValidatorRoute]] = None
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
     group_scope: Optional[DomainPackValidatorGroupScope] = None
     definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT
+
+    @model_validator(mode="after")
+    def validate_routes(self) -> "DomainPackUnderDevelopmentValidatorBinding":
+        _validate_binding_routes(self)
+        return self
 
     @field_validator("max_tool_calls", mode="before")
     @classmethod
@@ -665,7 +832,103 @@ class DomainPackValidatorBindings(DomainPackMetadataBaseModel):
         return self
 
 
+_DISPLAY_ROLES = ("label", "id", "state", "mention")
+_DISPLAY_KEYS = frozenset({*_DISPLAY_ROLES, "resolved_states", "compose", "separator", "validated"})
+
+
+def _validate_display_spec(display: Any, where: str) -> None:
+    """A ``metadata.display`` declaration (see ``src.lib.flows.value_display``).
+
+    Roles are single leaf paths, never fallback lists; ``compose`` joins
+    declared parts and cannot be mixed with roles. A ``mention`` role declares
+    a resolvable value (``src.lib.domain_packs.resolvable_values``): its
+    mention, label and id are keys of the value itself, and its state is the
+    contract's ``resolution_state``, so it takes no ``state`` role. Checked
+    when a pack loads.
+    """
+
+    if not isinstance(display, dict) or not display:
+        raise ValueError(f"{where} must be a non-empty mapping")
+    unknown = sorted(set(display) - _DISPLAY_KEYS)
+    if unknown:
+        raise ValueError(f"{where} has unknown display key(s): {', '.join(unknown)}")
+    for role in _DISPLAY_ROLES:
+        if role in display and not (isinstance(display[role], str) and display[role].strip()):
+            raise ValueError(
+                f"{where}.{role} must be a single leaf path string; fallback lists are not supported"
+            )
+    if "separator" in display and not isinstance(display["separator"], str):
+        raise ValueError(f"{where}.separator must be a string")
+    if "compose" in display:
+        if any(key in display for key in (*_DISPLAY_ROLES, "resolved_states", "validated")):
+            raise ValueError(f"{where}.compose cannot be combined with label, id or state roles")
+        compose = display["compose"]
+        if not isinstance(compose, list) or not compose:
+            raise ValueError(f"{where}.compose must list at least one child path")
+        for index, entry in enumerate(compose):
+            entry_where = f"{where}.compose[{index}]"
+            if isinstance(entry, str) and entry.strip():
+                continue
+            if not isinstance(entry, dict) or set(entry) - {"path", "display"} or not entry:
+                raise ValueError(
+                    f"{entry_where}: a compose entry is a child path or a mapping of path and display"
+                )
+            path = entry.get("path")
+            if path is not None and not (isinstance(path, str) and path.strip()):
+                raise ValueError(f"{entry_where}: a compose entry path must be a non-empty string")
+            if "display" in entry:
+                _validate_display_spec(entry["display"], f"{entry_where}.display")
+            if path is None and not (
+                isinstance(entry.get("display"), dict)
+                and (entry["display"].get("label") or entry["display"].get("id"))
+            ):
+                raise ValueError(
+                    f"{entry_where}: a compose entry without a path reads the value itself "
+                    "and needs a display with a label or id role"
+                )
+        return
+    if not (display.get("label") or display.get("id")):
+        raise ValueError(f"{where} needs a label, id or compose declaration")
+    if "mention" in display:
+        if "state" in display or "resolved_states" in display:
+            raise ValueError(
+                f"{where}: a resolvable value (mention role) reads its state from resolution_state; "
+                "it takes no state or resolved_states"
+            )
+        for role in ("label", "id", "mention"):
+            if "." in str(display.get(role) or ""):
+                raise ValueError(
+                    f"{where}.{role}: a resolvable value's mention, label and id are keys of the value itself"
+                )
+    if "validated" in display:
+        validated = display["validated"]
+        if "mention" not in display:
+            raise ValueError(f"{where}.validated is only for a resolvable value (a mention role)")
+        roles = {display.get(role) for role in ("label", "id", "mention")}
+        if (
+            not isinstance(validated, list)
+            or not validated
+            or not all(isinstance(key, str) and key.strip() and "." not in key for key in validated)
+            or len(set(validated)) != len(validated)
+            or roles.intersection(validated)
+        ):
+            raise ValueError(
+                f"{where}.validated must list distinct keys of the value itself, "
+                "other than its label, id and mention"
+            )
+    if "state" in display:
+        states = display.get("resolved_states")
+        if not isinstance(states, list) or not states or not all(
+            isinstance(state, str) and state.strip() for state in states
+        ):
+            raise ValueError(f"{where}.state needs a non-empty resolved_states list of strings")
+    elif "resolved_states" in display:
+        raise ValueError(f"{where}.resolved_states needs a state role")
+
+
 def _validate_metadata_mapping(value: dict[str, Any]) -> dict[str, Any]:
+    if "display" in value:
+        _validate_display_spec(value["display"], "metadata.display")
     raw_bindings = value.get("validator_bindings")
     if raw_bindings is None:
         return value
@@ -874,6 +1137,15 @@ class DomainPackObjectDefinition(DomainPackMetadataBaseModel):
     @field_validator("metadata")
     @classmethod
     def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        for key in ("workspace_display", "supervisor_manifest"):
+            config = value.get(key)
+            if isinstance(config, dict) and "primary_label_fields" in config:
+                # A label chain fills an item's label from another field when the
+                # first is empty; the label is one declared field (ALL-1283).
+                raise ValueError(
+                    f"metadata.{key} declares primary_label_fields; "
+                    "declare a single primary_label_field instead"
+                )
         return _validate_metadata_mapping(value)
 
     @model_validator(mode="after")
@@ -917,6 +1189,77 @@ class DomainPackFixturePackRef(DomainPackMetadataBaseModel):
         ]
         _require_unique(validated, "fixture_packs.object_types")
         return validated
+
+
+def _resolvable_vocabulary_errors(metadata: "DomainPackMetadata") -> list[str]:
+    """A resolvable value's resolution_state and lookup_outcome leaves (including
+    those of a resolvable object root) are enums whose values are exactly the
+    shared controlled vocabularies (ALL-1283)."""
+
+    from src.lib.domain_packs.resolvable_values import (
+        LOOKUP_OUTCOME_KEY,
+        LOOKUP_OUTCOMES,
+        RESOLUTION_STATE_KEY,
+        RESOLUTION_STATES,
+    )
+
+    vocabularies = {RESOLUTION_STATE_KEY: RESOLUTION_STATES, LOOKUP_OUTCOME_KEY: LOOKUP_OUTCOMES}
+    enums = {item.enum_id: [value.value for value in item.values] for item in metadata.enum_definitions}
+    models = {item.model_id: item for item in metadata.model_definitions}
+    object_models = {item.object_type: item.model_ref for item in metadata.object_definitions}
+
+    def display(field: "DomainPackFieldDefinition") -> Any:
+        if field.metadata.get("display"):
+            return field.metadata["display"]
+        model_ref = field.model_ref or (
+            object_models.get(field.object_type_ref) if field.object_type_ref else None
+        )
+        model = models.get(model_ref) if model_ref else None
+        return model.metadata.get("display") if model is not None else None
+
+    errors: list[str] = []
+    for object_definition in metadata.object_definitions:
+        by_path = {field.field_path: field for field in object_definition.fields}
+        root_model = models.get(object_definition.model_ref) if object_definition.model_ref else None
+        for field in object_definition.fields:
+            parent_path, _, key = field.field_path.rpartition(".")
+            if key not in vocabularies:
+                continue
+            # Only a resolvable value's own leaves: under a declared field, or
+            # top-level leaves of an object whose root is declared resolvable.
+            if parent_path:
+                parent = by_path.get(parent_path)
+                parent_display = display(parent) if parent is not None else None
+            else:
+                parent_display = root_model.metadata.get("display") if root_model is not None else None
+            if not (isinstance(parent_display, dict) and parent_display.get("mention")):
+                continue
+            allowed = list(vocabularies[key])
+            if field.field_type is not DomainPackFieldType.ENUM or enums.get(field.enum_ref or "") != allowed:
+                errors.append(
+                    f"object_definitions.{object_definition.object_type}.fields.{field.field_path} "
+                    f"must be an enum field whose enum lists exactly {allowed}"
+                )
+    return errors
+
+
+def _resolvable_validated_key_errors(metadata: "DomainPackMetadata") -> list[str]:
+    """Each ``validated`` key of a declared resolvable value is a declared leaf of it."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    errors: list[str] = []
+    for object_definition in metadata.object_definitions:
+        declared_paths = {field.field_path for field in object_definition.fields}
+        for field_path, spec in declared_resolvable_fields(metadata, object_definition.object_type).items():
+            for key in spec.validated_keys:
+                leaf = f"{field_path}.{key}" if field_path else key
+                if leaf not in declared_paths:
+                    errors.append(
+                        f"object_definitions.{object_definition.object_type}: validated key "
+                        f"'{key}' of '{field_path or '<object root>'}' is not a declared field ({leaf})"
+                    )
+    return errors
 
 
 class DomainPackMetadata(DomainPackMetadataBaseModel):
@@ -1007,6 +1350,9 @@ class DomainPackMetadata(DomainPackMetadataBaseModel):
                         f"{field_location}.object_type_ref references unknown object_type "
                         f"'{field_definition.object_type_ref}'"
                     )
+
+        errors.extend(_resolvable_vocabulary_errors(self))
+        errors.extend(_resolvable_validated_key_errors(self))
 
         for fixture_pack in self.fixture_packs:
             for object_type in fixture_pack.object_types:

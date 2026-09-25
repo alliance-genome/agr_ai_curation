@@ -30,21 +30,7 @@ def policy_decision_contract(request, result_schema):
 
     def assemble_domain(payload, decision, _workspace):
         selected = request.selected_inputs
-        term = selected.get("go_term")
-        if not isinstance(term, dict):
-            raise ValueError("Policy request requires the supplied GO term")
-        facts = {
-            "proposed_evidence_code": selected.get("evidence_code"),
-            "proposed_evidence_eco_curie": selected.get("evidence_eco_curie"),
-            "proposed_aspect": term.get("aspect"),
-            "proposed_go_term_curie": term.get("curie"),
-            "proposed_with_from": deepcopy(selected.get("with_from", [])),
-            "proposed_qualifiers": deepcopy(selected.get("qualifiers", [])),
-            "proposed_annotation_extensions": deepcopy(selected.get("annotation_extensions", [])),
-            "proposed_negated": selected.get("negated"),
-            "proposed_rationale": selected.get("rationale"),
-            "proposed_resolution_state": selected.get("resolution_state"),
-        }
+        facts = result_schema.proposal_facts(selected)
         judgments = decision.scientific.model_dump()
         info = SimpleNamespace(context={"domain_validation_request": request})
         # Scientific values were validated by decision_schema. The final full

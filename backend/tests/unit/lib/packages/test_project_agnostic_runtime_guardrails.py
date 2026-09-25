@@ -126,9 +126,26 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # Direct-run context isolation exercises the real packaged expression builder.
+    Path("backend/tests/unit/lib/openai_agents/test_runner_direct_builder.py"),
     # Benchmark identity integration verifies the shipped provider-group mapping.
     Path("backend/tests/unit/lib/benchmarks/test_execution_context.py"),
     Path("backend/tests/unit/lib/benchmarks/test_curator_authorization.py"),
+    # Semantic chat-output fixture reproduces a curator's C. elegans
+    # gene-expression result (WormBase identifiers) for the payload hotfix.
+    Path("backend/tests/fixtures/flows/semantic_chat_output.py"),
+    # Standard display rendering is checked against the installed Alliance
+    # gene-expression pack and production value shapes (ALL-1282).
+    Path("backend/tests/unit/lib/flows/test_value_display.py"),
+    # Display edge cases render the installed Alliance packs' declarations (ALL-1290).
+    Path("backend/tests/unit/lib/flows/test_value_display_edge_cases.py"),
+    # Every phenotype term exports through the installed Alliance phenotype
+    # pack's phenotype_terms list field (ALL-1289).
+    Path("backend/tests/unit/lib/flows/test_phenotype_terms_export.py"),
+    # Custom-agent contract lookup exercises Alliance group visibility and
+    # packaged validator bindings (ALL-1295).
+    Path("backend/tests/unit/lib/test_agent_contract_custom_agents.py"),
+    Path("backend/tests/integration/persistence/test_agent_contract_custom_visibility_persistence.py"),
     # Immutable execution migrations preserve the shipped Alliance group prompts
     # and packaged builder identities, including historical access boundaries.
     Path("backend/tests/integration/persistence/test_agent_execution_revision_persistence.py"),
@@ -145,11 +162,13 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/agent_studio/test_group_tool_policy.py"),
     # Package-aware forward reconciliation for the Alliance-owned tool policy.
     Path("backend/tests/unit/test_alliance_tool_policy_reconciliation_migration.py"),
+    # Re-saving a legacy extractor withholds the Alliance lookup tools it
+    # inherited (ALL-1276 review S1/S4).
+    Path("backend/tests/integration/persistence/test_inherited_tool_policy_persistence.py"),
     # Bundled Alliance package contracts and prompt/tool policy coverage.
     Path("backend/tests/integration/persistence/test_validator_agent_identity_migration.py"),
     Path("backend/tests/unit/test_config_loaders.py"),
     Path("backend/tests/unit/test_gene_allele_validator_result_contract.py"),
-    Path("backend/tests/unit/test_subject_entity_validator_result_contract.py"),
     Path("backend/tests/unit/test_disease_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_domain_envelope_repair_prompt_contract.py"),
     Path("backend/tests/unit/test_gene_extractor_domain_envelope_contract.py"),
@@ -182,6 +201,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/packages/alliance/test_go_annotations_adapter.py"),
     Path("backend/tests/unit/lib/packages/alliance/test_go_builder_tools.py"),
     Path("backend/tests/unit/lib/packages/alliance/test_compact_record_adapters.py"),
+    Path("backend/tests/unit/lib/packages/alliance/test_compact_lookup_model_view.py"),
     Path("backend/tests/unit/lib/packages/test_alliance_agent_package.py"),
     Path("backend/tests/unit/lib/packages/test_alliance_literature_reference_tool.py"),
     Path("backend/tests/unit/lib/packages/test_core_package_contract.py"),
@@ -279,6 +299,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # These regressions intentionally exercise the installed Alliance domain pack.
     Path("backend/tests/unit/lib/domain_packs/test_supporting_evidence_contract.py"),
     Path("backend/tests/unit/lib/domain_packs/test_materialization.py"),
+    Path("backend/tests/unit/lib/domain_packs/test_pack_display_declarations.py"),
     Path("backend/tests/unit/lib/domain_packs/test_pack_workspace_display.py"),
     Path("backend/tests/unit/lib/domain_packs/test_validator_dispatch.py"),
     Path("backend/tests/unit/lib/domain_packs/test_validation_registry_metadata.py"),
@@ -385,9 +406,10 @@ def _reset_runtime_caches():
 
 
 def _reset_streaming_tool_caches(streaming_tools: ModuleType) -> None:
-    streaming_tools._tool_metadata_by_name.cache_clear()
+    from src.lib.packages import tool_roles
+
+    tool_roles.reset_cache()
     streaming_tools._tool_provider_adapter_factories.cache_clear()
-    streaming_tools.builder_finalization_tool_names.cache_clear()
     streaming_tools._run_state_tool_impls.cache_clear()
 
 

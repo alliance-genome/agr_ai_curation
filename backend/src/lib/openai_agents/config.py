@@ -8,8 +8,8 @@ Environment variable naming convention:
   AGENT_{AGENT_NAME}_{SETTING}
 
 Example:
-  AGENT_SUPERVISOR_MODEL=gpt-5.6-sol
-  AGENT_PDF_MODEL=gpt-5.6-sol
+  AGENT_SUPERVISOR_MODEL=gpt-6-astra
+  AGENT_PDF_MODEL=gpt-6-sol
   AGENT_PDF_TEMPERATURE=0.3
   AGENT_GENE_REASONING=medium
 
@@ -19,9 +19,12 @@ Provider Configuration:
   Unknown providers/models fail fast (no implicit fallback behavior).
 """
 
+import hashlib
+import json
 import logging
 import math
 import os
+import re
 from typing import Literal, Optional, TYPE_CHECKING, Union
 from dataclasses import dataclass
 
@@ -378,7 +381,7 @@ def get_model_for_agent(
     backed by their own direct ``OpenAIProvider`` client.
 
     Args:
-        model_name: The model name (e.g., "gpt-5.6-terra", "gemini-3-pro-preview")
+        model_name: The model name (e.g., "gpt-6-sol", "gemini-3-pro-preview")
 
     Returns:
         Model name string for native OpenAI, or a direct SDK model otherwise.
@@ -473,16 +476,11 @@ def is_gemini_model(model: str) -> bool:
     return model.startswith("gemini-")
 
 
-def is_gpt5_model(model: str) -> bool:
-    """Check if a model supports GPT-5 style reasoning."""
-    return model.startswith("gpt-5")
-
-
 def supports_reasoning(model: str) -> bool:
     """Check if a model supports reasoning/thinking mode.
 
     All supported models use reasoning:
-    - GPT-5.6 Sol/Terra - OpenAI reasoning
+    - GPT-6 Sol/Astra - OpenAI reasoning
     - Gemini 3 Pro Preview (gemini-3-pro-preview) - "low"/"high" thinking levels
 
     For Gemini 3 models, the OpenAI SDK's reasoning_effort parameter maps to:
@@ -498,8 +496,8 @@ def supports_reasoning(model: str) -> bool:
 def supports_temperature(model: str) -> bool:
     """Check if a model supports temperature parameter.
 
-    GPT-5 models don't support temperature when reasoning is enabled.
-    Gemini 3 models and most other models support temperature.
+    The model catalog (models.yaml) declares it; reasoning models such as
+    gpt-6-sol do not accept a temperature.
     """
     model_def = _get_model_definition(model)
     return bool(model_def.supports_temperature)
@@ -554,6 +552,22 @@ def require_model_reasoning_effort(
             f"'{model_def.model_id}'; allowed values: {allowed_text}"
         )
     return normalized  # type: ignore[return-value]
+
+
+def unsupported_reasoning_effort(model_def: object, value: object) -> Optional[ReasoningEffort]:
+    """Return the effort that would be sent but the catalog model does not accept.
+
+    Values that normalize to "no reasoning" are never sent, so they are not
+    reported here; only a real effort outside the model's options is.
+    """
+    effort = normalize_reasoning_effort(value)
+    if effort is None:
+        return None
+    if getattr(model_def, "supports_reasoning", False) and effort in tuple(
+        getattr(model_def, "reasoning_options", ()) or ()
+    ):
+        return None
+    return effort
 
 
 ReasoningSummaryStatus = Literal["present", "not_requested", "not_supported", "unavailable"]
@@ -670,6 +684,122 @@ def build_default_model_retry():
     )
 
 
+# =============================================================================
+# ALL-1284: stable prompt cache key
+# =============================================================================
+
+PROMPT_CACHE_KEY_FIELD = "prompt_cache_key"
+# The Agents SDK prefixes the keys it generates itself with this marker.
+SDK_GENERATED_PROMPT_CACHE_KEY_PREFIX = "agents-sdk:"
+PROMPT_CACHE_KEY_MAX_CHARS = 64
+_PROMPT_DIGEST_CHARS = 12
+_TOOL_SURFACE_DIGEST_CHARS = 8
+# ``<label>:p<prompt digest>`` as built from the agent's static prompt, then
+# ``<label>:p<prompt digest>t<tool surface digest>`` once bound to the tools a
+# request actually sends.
+_APPLICATION_PROMPT_CACHE_KEY = re.compile(
+    rf"(?P<prompt_key>.+:p[0-9a-f]{{{_PROMPT_DIGEST_CHARS}}})"
+    rf"(?:t[0-9a-f]{{{_TOOL_SURFACE_DIGEST_CHARS}}})?"
+)
+_PROMPT_CACHE_KEY_LABEL_MAX_CHARS = (
+    PROMPT_CACHE_KEY_MAX_CHARS - 2 - _PROMPT_DIGEST_CHARS - 1 - _TOOL_SURFACE_DIGEST_CHARS
+)
+
+
+@dataclass(frozen=True)
+class PromptCacheIdentity:
+    """What makes two model requests share a cacheable prompt prefix.
+
+    ``agent_key`` names the agent (or runtime surface). ``static_prompt`` is the
+    part of the instructions that is identical on every run of that agent (the
+    core, base, group and curator layers), or the saved definition those
+    instructions are rendered from; never per-run runtime context. The tool
+    surface is bound per request (``bind_prompt_cache_key_to_tool_surface``),
+    because tools are filtered and rebuilt after the settings are built.
+    """
+
+    agent_key: str
+    static_prompt: str
+
+    def __post_init__(self) -> None:
+        if not str(self.agent_key or "").strip():
+            raise ValueError("PromptCacheIdentity requires a non-empty agent_key")
+        if not str(self.static_prompt or "").strip():
+            raise ValueError(
+                f"PromptCacheIdentity for '{self.agent_key}' requires a non-empty static prompt"
+            )
+
+
+def build_prompt_cache_key(identity: PromptCacheIdentity, *, model: str) -> str:
+    """Return ``<agent key>:p<digest of agent key, model and static prompt>``.
+
+    The same agent, model and static prompt always yield the same key, across
+    runs, sessions and documents; any change to one of them yields a new key.
+    The readable agent-key label is bounded so the key, once bound to its tool
+    surface, stays within ``PROMPT_CACHE_KEY_MAX_CHARS``; the digest always
+    covers the full agent key.
+    """
+    agent_key = identity.agent_key.strip()
+    digest = hashlib.sha256(
+        "\x1f".join((agent_key, str(model).strip(), identity.static_prompt.strip())).encode(
+            "utf-8"
+        )
+    ).hexdigest()[:_PROMPT_DIGEST_CHARS]
+    return f"{agent_key[:_PROMPT_CACHE_KEY_LABEL_MAX_CHARS]}:p{digest}"
+
+
+def is_application_prompt_cache_key(prompt_cache_key: str) -> bool:
+    """Return whether ``prompt_cache_key`` was built by ``build_prompt_cache_key``."""
+    return _APPLICATION_PROMPT_CACHE_KEY.fullmatch(prompt_cache_key) is not None
+
+
+def tool_surface_digest(tool_definitions: list[dict]) -> str:
+    """Return a short digest of the tool definitions one request sends.
+
+    Order-independent: definitions are compared by their canonical JSON, so the
+    same tools rebuilt for another run (new closures, identical names,
+    descriptions and schemas) digest identically.
+    """
+    canonical = sorted(
+        json.dumps(definition, sort_keys=True, separators=(",", ":"), default=str)
+        for definition in tool_definitions
+    )
+    return hashlib.sha256("\n".join(canonical).encode("utf-8")).hexdigest()[
+        :_TOOL_SURFACE_DIGEST_CHARS
+    ]
+
+
+def bind_prompt_cache_key_to_tool_surface(prompt_cache_key: str, tool_surface: str) -> str:
+    """Return the application key for this prompt identity and tool surface.
+
+    Idempotent: a key already bound to a tool surface is re-bound to
+    ``tool_surface``, so the same request re-sent on retry keeps its key.
+    """
+    match = _APPLICATION_PROMPT_CACHE_KEY.fullmatch(prompt_cache_key)
+    if match is None:
+        raise ValueError(
+            f"'{prompt_cache_key}' is not an application prompt cache key"
+        )
+    return f"{match['prompt_key']}t{tool_surface}"
+
+
+def prompt_cache_extra_args(
+    identity: PromptCacheIdentity,
+    *,
+    model: str,
+    provider_override: Optional[str] = None,
+) -> Optional[dict[str, str]]:
+    """Return the ``ModelSettings.extra_args`` carrying the stable prompt cache key.
+
+    Only native OpenAI accepts ``prompt_cache_key``; OpenAI-compatible providers
+    get no extra request field (None).
+    """
+    provider = resolve_model_provider(model, provider_override)
+    if _get_provider_definition(provider).driver != "openai_native":
+        return None
+    return {PROMPT_CACHE_KEY_FIELD: build_prompt_cache_key(identity, model=model)}
+
+
 def build_model_settings(
     model: str,
     temperature: Optional[float] = None,
@@ -679,6 +809,8 @@ def build_model_settings(
     verbosity: Optional[str] = None,
     include_usage: Optional[bool] = None,
     provider_override: Optional[str] = None,
+    *,
+    prompt_cache: PromptCacheIdentity,
 ):
     """
     Build ModelSettings with appropriate reasoning and temperature for the model.
@@ -687,7 +819,7 @@ def build_model_settings(
     behavior across OpenAI and Gemini models.
 
     Reasoning is supported on:
-    - GPT-5.6 Sol/Terra models
+    - GPT-6 Sol/Astra models
     - Gemini 3 Pro Preview (gemini-3-pro-preview) - uses "low"/"high" thinking levels
 
     For Gemini 3, the OpenAI SDK's reasoning_effort parameter maps to:
@@ -695,13 +827,16 @@ def build_model_settings(
     - medium/high/xhigh -> "high" thinking level
 
     Args:
-        model: The model name (e.g., "gpt-5", "gemini-3-pro-preview")
+        model: The model name (e.g., "gpt-6-sol", "gemini-3-pro-preview")
         temperature: Optional temperature override (0.0-1.0)
         reasoning_effort: Optional reasoning effort for models that support it
         tool_choice: Optional tool choice mode ("auto", "required", etc.)
         parallel_tool_calls: Whether to allow parallel tool calls (ignored for Gemini)
         verbosity: Optional verbosity level ("low", etc.) - fixes structured output + reasoning
         include_usage: Whether to request usage accounting from the provider when supported
+        prompt_cache: The agent's static prompt identity. Native OpenAI requests
+            carry the stable ``prompt_cache_key`` derived from it, so the Agents SDK
+            does not generate a per-session or per-run key.
 
     Returns:
         ModelSettings instance
@@ -727,10 +862,10 @@ def build_model_settings(
             reasoning_kwargs["summary"] = summary
         reasoning = Reasoning(**reasoning_kwargs)
 
-    # GPT-5 models don't support temperature parameter, others do
+    # Only models whose catalog entry accepts a temperature are sent one
     effective_temperature = temperature if supports_temperature(model) else None
 
-    # Verbosity is needed for GPT-5 + reasoning to fix structured output issues
+    # Verbosity is sent only with reasoning, where it fixes structured output issues
     # See: https://github.com/langchain-ai/langchain/issues/32492
     effective_verbosity = verbosity if reasoning else None
 
@@ -758,6 +893,9 @@ def build_model_settings(
             None
             if getattr(provider_def, "telemetry_adapter", None) == "openrouter"
             else build_default_model_retry()
+        ),
+        extra_args=prompt_cache_extra_args(
+            prompt_cache, model=model, provider_override=provider
         ),
     )
 
@@ -814,7 +952,7 @@ def get_default_model() -> str:
 
     model_id = require_env(
         "DEFAULT_AGENT_MODEL",
-        hint="gpt-4o is retired; use a registered GPT-5.6 model such as gpt-5.6-terra or gpt-5.6-sol.",
+        hint="gpt-4o is retired; use a registered model such as gpt-6-sol or gpt-6-astra.",
     )
     _get_model_definition(model_id)  # validate the model is registered in models.yaml
     return model_id
@@ -823,9 +961,9 @@ def get_default_model() -> str:
 def get_default_temperature() -> Optional[float]:
     """Get the optional default temperature from DEFAULT_AGENT_TEMPERATURE (.env).
 
-    Temperature is optional and has no code default: GPT-5 ignores it, and agents
-    that need it (e.g. Gemini) declare it in their package agent.yaml. Returns
-    None when unset.
+    Temperature is optional and has no code default: reasoning models such as
+    gpt-6-sol do not accept it, and agents that need it (e.g. Gemini) declare it
+    in their package agent.yaml. Returns None when unset.
     """
     from src.lib.config.env import optional_env_float
 
@@ -1616,6 +1754,29 @@ def get_hierarchy_resolution_max_turns() -> int:
     return _get_single_shot_output_agent_max_turns("HIERARCHY_RESOLUTION_MAX_TURNS")
 
 
+def get_hierarchy_resolution_contract_retries() -> int:
+    """Correction attempts for the hierarchy section-number contract (HIERARCHY_RESOLUTION_CONTRACT_RETRIES).
+
+    The hierarchy classifier answers with input section numbers instead of
+    echoed titles. A missing, duplicate, or out-of-range number, or a parent
+    chain that does not reach a top-level section, triggers a correction retry;
+    after the budget is spent the result is rejected. Provider failures are not
+    retried. Default 2, matching FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES.
+    """
+    return max(0, _get_env_int_with_fallback("HIERARCHY_RESOLUTION_CONTRACT_RETRIES", 2))
+
+
+def get_hierarchy_resolution_preview_max_chars() -> int:
+    """Body-text preview length per section for the hierarchy classifier (HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS).
+
+    Each section title is sent with the opening of the first body text under
+    it, never the heading repeated. Longer text is cut and marked with "...";
+    stored document text is unaffected. 0 sends titles only. Default 100,
+    matching the preview length used before previews skipped headings.
+    """
+    return max(0, _get_env_int_with_fallback("HIERARCHY_RESOLUTION_PREVIEW_MAX_CHARS", 100))
+
+
 def get_figure_locator_resolution_max_turns() -> int:
     """Turn budget for the one-shot figure locator classifier.
 
@@ -1652,8 +1813,7 @@ def get_standard_chat_context_token_budget() -> int:
     """Model-live context budget for standard assistant chat (STANDARD_CHAT_CONTEXT_TOKEN_BUDGET).
 
     This is the budget the standard-chat compaction trigger compares against.
-    Default 400000 matches the current GPT-5 family context target used by the
-    supervisor; tune lower to compact sooner or higher when moving to a larger
+    Default 400000 matches the context target used by the supervisor; tune lower to compact sooner or higher when moving to a larger
     context model.
     """
     return max(1, _get_env_int_with_fallback("STANDARD_CHAT_CONTEXT_TOKEN_BUDGET", 400_000))
@@ -1852,45 +2012,13 @@ def get_supervisor_field_text_limit() -> int:
 
 
 def get_inspect_results_evidence_text_limit() -> int:
-    """Char limit for one inspect_results evidence text field.
+    """Char length of one inspect_results search snippet (INSPECT_RESULTS_EVIDENCE_TEXT_LIMIT).
 
-    Truncates quote/evidence text returned only by
-    inspect_results(action="evidence"). Default 500.
+    Search matches show a snippet of the matching evidence or field text marked
+    ``snippet_complete=false`` when shorter than the source; the complete text
+    is read with the match's ``read`` call. Default 500.
     """
     return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_EVIDENCE_TEXT_LIMIT", 500))
-
-
-def get_inspect_results_validation_detail_list_limit() -> int:
-    """Max list items returned inside one inspect_results validation detail value.
-
-    Bounds nested list values inside validation finding details returned to the
-    supervisor. Default 5.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback("INSPECT_RESULTS_VALIDATION_DETAIL_LIST_LIMIT", 5),
-    )
-
-
-def get_inspect_results_json_depth_limit() -> int:
-    """Max nested JSON depth returned by inspect_results detail views.
-
-    Bounds recursive JSON compaction for validation/evidence detail payloads.
-    Default 6.
-    """
-    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_JSON_DEPTH_LIMIT", 6))
-
-
-def get_inspect_results_json_object_item_limit() -> int:
-    """Max mapping keys returned by inspect_results compact JSON views.
-
-    Bounds object/mapping entries inside nested JSON returned to the supervisor.
-    Default 25.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback("INSPECT_RESULTS_JSON_OBJECT_ITEM_LIMIT", 25),
-    )
 
 
 def get_supervisor_max_list_limit() -> int:
@@ -3144,18 +3272,20 @@ def get_flow_projection_max_row_chars() -> int:
 
 
 def get_flow_projection_max_rows() -> int:
-    """Hard cap on rows a deterministic flow output projection emits (FLOW_PROJECTION_MAX_ROWS).
+    """Operational ceiling on rows a flow output projection emits (FLOW_PROJECTION_MAX_ROWS).
 
     Safety ceiling so a runaway projection cannot build an unbounded table.
-    Default 10000.
+    Finalized files and chat output above it fail explicitly rather than being
+    cut short; curator-requested max_rows limits are separate. Default 10000.
     """
     return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_ROWS", 10_000))
 
 
 def get_flow_chat_max_rows() -> int:
-    """Default file-formatter row inspection page size (FLOW_CHAT_MAX_ROWS).
+    """Default rows per formatter row-inspection page (FLOW_CHAT_MAX_ROWS).
 
-    Bounds inspection tool responses, not authored chat output. Default 50.
+    Delivered chat output is not limited by this value; application code
+    renders every requested row. Default 50.
     """
     return max(1, _get_env_int_with_fallback("FLOW_CHAT_MAX_ROWS", 50))
 
@@ -3415,3 +3545,305 @@ def log_agent_config(agent_name: str, config: AgentConfig) -> None:
         config.reasoning,
         config.tool_choice,
     )
+
+
+# =============================================================================
+# ALL-1277: Agent contract discovery bounds
+# =============================================================================
+
+_AGENT_CONTRACT_CLAMP_WARNINGS: set[tuple[str, str]] = set()
+
+
+def _warn_agent_contract_clamp_once(key: str, message: str, *args: object) -> None:
+    """Warn once per distinct (setting, raw environment value) clamp."""
+    marker = (key, str(os.getenv(key)))
+    if marker in _AGENT_CONTRACT_CLAMP_WARNINGS:
+        return
+    _AGENT_CONTRACT_CLAMP_WARNINGS.add(marker)
+    logger.warning(message, *args)
+
+
+def get_agent_contract_max_response_chars() -> int:
+    """Total serialized size budget for one get_agent_contract result.
+
+    Environment variable: AGENT_CONTRACT_MAX_RESPONSE_CHARS. Default 24000.
+    Pages stop early when the next item would exceed this budget and return an
+    explicit continuation cursor. Values below 4000 use 4000 so one bounded
+    item plus the response envelope always fits.
+    """
+    configured = _get_env_int_with_fallback("AGENT_CONTRACT_MAX_RESPONSE_CHARS", 24000)
+    if configured < 4000:
+        _warn_agent_contract_clamp_once(
+            "AGENT_CONTRACT_MAX_RESPONSE_CHARS",
+            "AGENT_CONTRACT_MAX_RESPONSE_CHARS=%s is below minimum 4000; using 4000",
+            configured,
+        )
+        return 4000
+    return configured
+
+
+def get_agent_contract_max_item_chars() -> int:
+    """Serialized size budget for one item inside a get_agent_contract page.
+
+    Environment variable: AGENT_CONTRACT_MAX_ITEM_CHARS. Default 8000. A larger
+    item is returned as an outline whose omitted values are read through
+    item_ref and detail_pointer drilldown. Clamped to 1000 at minimum and to
+    half of AGENT_CONTRACT_MAX_RESPONSE_CHARS at maximum; the default is capped
+    to that half silently, an explicit operator value is capped with a warning.
+    """
+    configured = _get_env_int_with_fallback("AGENT_CONTRACT_MAX_ITEM_CHARS", 8000)
+    maximum = get_agent_contract_max_response_chars() // 2
+    if configured < 1000:
+        _warn_agent_contract_clamp_once(
+            "AGENT_CONTRACT_MAX_ITEM_CHARS",
+            "AGENT_CONTRACT_MAX_ITEM_CHARS=%s is below minimum 1000; using 1000",
+            configured,
+        )
+        return 1000
+    if configured > maximum:
+        if os.getenv("AGENT_CONTRACT_MAX_ITEM_CHARS") is not None:
+            _warn_agent_contract_clamp_once(
+                "AGENT_CONTRACT_MAX_ITEM_CHARS",
+                "AGENT_CONTRACT_MAX_ITEM_CHARS=%s exceeds half of "
+                "AGENT_CONTRACT_MAX_RESPONSE_CHARS; using %s",
+                configured,
+                maximum,
+            )
+        return maximum
+    return configured
+
+
+# =============================================================================
+# ALL-1278: Bounded tool results
+# =============================================================================
+# Isolated package tools read these same variables directly (without importing
+# backend) through agr_ai_curation_runtime.tool_result_bounds and their own
+# modules; keep names and defaults aligned.
+
+def get_tool_result_max_bytes() -> int:
+    """Total serialized budget for one bounded model-facing tool result (TOOL_RESULT_MAX_BYTES).
+
+    Measured as UTF-8 bytes of the largest model-visible serialization (Python
+    string form and JSON with and without ASCII escaping), including page
+    metadata, descriptors and errors. Evidence, builder, document retrieval and
+    package lookup/query tools page by this budget and expose exact detail
+    chunks for anything larger. Default 32768 (about 8k tokens: under 1% of a
+    1M-token window and about 3% of a 272k window per result, while still
+    fitting a typical page of about 20 section passages or the default page of
+    most lookups). Minimum 2048, below which the compact page frame and
+    failure receipts cannot be expressed.
+    """
+    return max(2048, _get_env_int_with_fallback("TOOL_RESULT_MAX_BYTES", 32768))
+
+
+def get_evidence_list_max_limit() -> int:
+    """Largest page list_recorded_evidence serves (EVIDENCE_LIST_MAX_LIMIT).
+
+    Larger requested limits are clamped to this value and the response reports
+    the requested and effective limits plus the next offset. The byte budget
+    (TOOL_RESULT_MAX_BYTES) can end a page earlier. Default 100, matching the
+    historical default page (LIST_RECORDED_EVIDENCE_LIMIT).
+    """
+    return max(1, _get_env_int_with_fallback("EVIDENCE_LIST_MAX_LIMIT", 100))
+
+
+def get_builder_list_max_limit() -> int:
+    """Largest page the builder list_staged_*/find_staged_* tools serve (BUILDER_LIST_MAX_LIMIT).
+
+    Read directly by the isolated alliance package builder tools. Larger
+    requested limits are clamped with requested/effective counts and next
+    offset; the byte budget can end a page earlier. Default 100 (twice the
+    BUILDER_LIST_DEFAULT_LIMIT default page of 50).
+    """
+    return max(1, _get_env_int_with_fallback("BUILDER_LIST_MAX_LIMIT", 100))
+
+
+def get_section_read_page_max_chunks() -> int:
+    """Largest page of passages read_section/read_subsection serve (SECTION_READ_PAGE_MAX_CHUNKS).
+
+    Read directly by the isolated alliance package document tools. Larger
+    max_chunks requests are clamped with requested/effective counts and next
+    offset; the byte budget can end a page earlier. Default 100 (above the
+    SECTION_READ_MAX_CHUNKS default page of 30).
+    """
+    return max(1, _get_env_int_with_fallback("SECTION_READ_PAGE_MAX_CHUNKS", 100))
+
+
+# =============================================================================
+# ALL-1279: Effective model request measurement and provider field limits
+# =============================================================================
+
+def get_openai_instructions_max_chars() -> int:
+    """Max characters in one OpenAI Responses ``instructions`` field (OPENAI_INSTRUCTIONS_MAX_CHARS).
+
+    OpenAI rejects a Responses request whose ``instructions`` string is longer
+    than 1,048,576 characters (HTTP 400 observed in production on Sep 22 2026).
+    Requests over this limit are blocked before sending with an actionable
+    ``provider_request_blocked`` failure instead of a provider rejection. The
+    limit applies only to the native OpenAI provider's Responses
+    ``instructions`` field; other providers and fields are measured, not
+    blocked. Raise it only if OpenAI documents a higher ceiling. Default 1048576.
+    """
+    return max(1, _get_env_int_with_fallback("OPENAI_INSTRUCTIONS_MAX_CHARS", 1_048_576))
+
+
+def get_model_request_warning_estimated_tokens() -> int:
+    """Estimated model-visible tokens that trigger a request-size warning (MODEL_REQUEST_WARNING_ESTIMATED_TOKENS).
+
+    Warning only: the request is still sent. The estimate is characters / 4 over
+    instructions, input, initially visible tool definitions and output schema,
+    not provider-reported usage. The default sits well above the largest normal
+    curation requests seen in production (about 109k provider-reported input
+    tokens on Sep 22 2026) so ordinary scientific evidence reads stay quiet.
+    Default 250000.
+    """
+    return max(1, _get_env_int_with_fallback("MODEL_REQUEST_WARNING_ESTIMATED_TOKENS", 250_000))
+
+
+def get_model_request_tool_result_warning_chars() -> int:
+    """Characters in one tool result that trigger a request-size warning (MODEL_REQUEST_TOOL_RESULT_WARNING_CHARS).
+
+    Warning only: the request is still sent unchanged. Bounded tool responses
+    should stay far below this; a larger single result usually means a tool
+    returned a full dataset instead of a bounded inspection. Default 200000
+    (about 50k estimated tokens).
+    """
+    return max(1, _get_env_int_with_fallback("MODEL_REQUEST_TOOL_RESULT_WARNING_CHARS", 200_000))
+
+
+# =============================================================================
+# ALL-1275: Application-owned flow output rendering
+# =============================================================================
+
+def get_output_tool_max_response_chars() -> int:
+    """Total serialized chars one output-formatter tool response may return (OUTPUT_TOOL_MAX_RESPONSE_CHARS).
+
+    Applies to every formatter tool response (inventory/catalog pages, row and
+    value pages, previews, plans, errors and finalization receipts). Paged
+    tools fill pages up to this budget and return a continuation cursor; the
+    full data stays in the application-held bundle. Default 24000 (about 6k
+    tokens), a third of the 72k-char inventory that one production formatter
+    call returned for seven objects.
+    """
+    return max(2_000, _get_env_int_with_fallback("OUTPUT_TOOL_MAX_RESPONSE_CHARS", 24_000))
+
+
+def get_output_tool_catalog_page_size() -> int:
+    """Field-catalog entries per output-formatter inventory page (OUTPUT_TOOL_CATALOG_PAGE_SIZE).
+
+    Upper bound on catalog entries returned per page before the response budget
+    applies; later entries are reached through the returned cursor or a
+    catalog search. Default 40.
+    """
+    return max(1, _get_env_int_with_fallback("OUTPUT_TOOL_CATALOG_PAGE_SIZE", 40))
+
+
+def get_output_tool_value_read_chars() -> int:
+    """Max chars returned by one exact bounded value read (OUTPUT_TOOL_VALUE_READ_CHARS).
+
+    ``read_output_value`` returns an exact slice of one saved cell's serialized
+    value plus the next offset, so one giant field stays readable in order.
+    Default 8000.
+    """
+    return max(200, _get_env_int_with_fallback("OUTPUT_TOOL_VALUE_READ_CHARS", 8_000))
+
+
+def get_flow_output_chat_max_chars() -> int:
+    """Operational ceiling on application-rendered chat output chars (FLOW_OUTPUT_CHAT_MAX_CHARS).
+
+    Chat tables are rendered from every requested row by application code and
+    delivered to the UI and transcript once. Output above this ceiling fails
+    explicitly (reported to Sentry) instead of being cut short; the saved
+    results are unaffected. Curator-requested row limits are separate and
+    remain valid. Default 4000000.
+    """
+    return max(1_000, _get_env_int_with_fallback("FLOW_OUTPUT_CHAT_MAX_CHARS", 4_000_000))
+
+
+def get_flow_output_chat_notes_max_chars() -> int:
+    """Max chars of formatter-written notes appended to a chat table (FLOW_OUTPUT_CHAT_NOTES_MAX_CHARS).
+
+    Notes carry brief curator-requested caveats; table rows always come from
+    the saved results. Longer notes are rejected, not truncated. Default 1200.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_OUTPUT_CHAT_NOTES_MAX_CHARS", 1_200))
+
+
+# =============================================================================
+# ALL-1282: Standard display of structured curation values
+# =============================================================================
+
+def get_flow_output_split_list_max_columns() -> int:
+    """Operational ceiling on columns one split list field may expand into (FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS).
+
+    A projection column with ``split_list`` expands a list field into one
+    column per item (never extra rows). When the longest list needs more
+    columns than this, finalization fails explicitly instead of dropping items.
+    A curator ``max_columns`` on the column can only lower it. Default 20.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS", 20))
+
+
+# =============================================================================
+# ALL-1287: Supervisor result exploration pages
+# =============================================================================
+
+def get_inspect_results_object_page_size() -> int:
+    """Default page size for inspect_results object pages (INSPECT_RESULTS_OBJECT_PAGE_SIZE).
+
+    Rows returned by ``objects``, the evidence inventory and ``validator_results``
+    when no explicit limit is supplied. Every page also ends early at
+    TOOL_RESULT_MAX_BYTES and continues with ``next_call``. The supervisor starts
+    from the counts-only ``summary`` and filters, so a small default keeps
+    browsing cheap. Default 20.
+    """
+    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_OBJECT_PAGE_SIZE", 20))
+
+
+def get_inspect_results_object_max_page_size() -> int:
+    """Largest requested inspect_results object page (INSPECT_RESULTS_OBJECT_MAX_PAGE_SIZE).
+
+    Larger requested limits are clamped and reported in the page's ``limit``
+    block. Pages still end at TOOL_RESULT_MAX_BYTES. Default 100.
+    """
+    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_OBJECT_MAX_PAGE_SIZE", 100))
+
+
+# =============================================================================
+# ALL-1292: Agent Studio on-demand reference guide
+# =============================================================================
+
+def get_agent_studio_guide_chunk_max_chars() -> int:
+    """Max exact guide characters returned by one read_studio_guide chunk (AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS).
+
+    Reference topics moved out of the always-sent Agent Studio instructions
+    are read on demand; longer topics continue through ``next_call``. The
+    default leaves room for chunk metadata and JSON escaping beneath the
+    provider's default 12,000-character inline-result boundary; a value at or
+    above AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS is rejected because
+    every chunk would be compacted instead of returned. Default 8000.
+    """
+    chunk_max_chars = max(
+        1, _get_env_int_with_fallback("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS", 8_000)
+    )
+    if chunk_max_chars >= get_agent_studio_provider_tool_result_inline_max_chars():
+        raise ValueError(
+            "AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS must be below "
+            "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS"
+        )
+    return chunk_max_chars
+
+
+# =============================================================================
+# ALL-1280: Hosted tool search surface
+# =============================================================================
+
+def get_tool_surface_namespace_max_functions() -> int:
+    """Max function tools one agent may place in one hosted-search namespace (TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS).
+
+    OpenAI tool-search guidance keeps each namespace under ten functions so the
+    namespace description stays specific. Startup validation and the tool
+    surface compiler fail explicitly above this; tools are never dropped or
+    moved to another namespace. Default 10.
+    """
+    return max(1, _get_env_int_with_fallback("TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS", 10))

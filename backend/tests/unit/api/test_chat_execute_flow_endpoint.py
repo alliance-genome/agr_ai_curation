@@ -1013,6 +1013,88 @@ def test_execute_flow_endpoint_persists_and_replays_mixed_text_and_file_outputs(
     ] == terminal_types
 
 
+def test_execute_flow_endpoint_persists_full_rendered_chat_table_once(monkeypatch):
+    """ALL-1275: the application-rendered table reaches the curator and transcript
+    once and intact, while follow-up model history keeps only a bounded excerpt."""
+
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-large-chat",
+        turn_id="turn-flow-large-chat",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Large Chat Flow",
+        is_active=True,
+        visibility="private",
+        project_id=None,
+        shared_at=None,
+        execution_count=0,
+        last_executed_at=None,
+        flow_definition={},
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    rows = [f"| gene-{index} | anatomy term {index} (WBbt:{index:07d}) | \u2014 |" for index in range(400)]
+    table = "\n".join(["| Gene | Anatomy Terms | Life Stages |", "| --- | --- | --- |", *rows])
+    chat_event = {
+        "type": "CHAT_OUTPUT_READY",
+        "details": {
+            "output": table,
+            "output_length": len(table),
+            "formatter_node_id": "chat",
+            "source_node_ids": ["extract"],
+        },
+    }
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-large-chat"}}
+        yield {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "ask_chat_output_formatter_specialist", "success": True},
+            "internal": {"tool_output": json.dumps({"status": "ok", "delivered": True})},
+        }
+        yield dict(chat_event)
+        yield dict(chat_event)
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "completed", "failure_reason": None, "flow_run_id": "flow-run-large-chat"},
+        }
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+    response = asyncio.run(
+        chat.execute_flow_endpoint(request=request, db=db, user={"sub": "auth-sub", "cognito:groups": []})
+    )
+    events = asyncio.run(_consume_stream(response))
+
+    chat_events = [event for event in events if event["type"] == "CHAT_OUTPUT_READY"]
+    assert len(chat_events) == 1
+    assert chat_events[0]["details"]["output"] == table
+    repository = calls["repository"]
+    messages = repository.messages[("auth-sub", "session-flow-large-chat")]
+    summary_message = next(
+        message for message in messages if message.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
+    )
+    replayed = [
+        event
+        for event in summary_message.payload_json[chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY]
+        if event["type"] == "CHAT_OUTPUT_READY"
+    ]
+    assert len(replayed) == 1
+    assert replayed[0]["details"]["output"] == table
+    assert summary_message.payload_json["final_user_output"] == table
+    history_message = summary_message.payload_json[chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY]
+    assert rows[-1] not in history_message
+    assert len(history_message) < len(table) // 4
+    assert not any(
+        message.message_type != chat.FLOW_SUMMARY_MESSAGE_TYPE
+        and table in json.dumps(message.payload_json or {}, ensure_ascii=False)
+        for message in messages
+    )
+
+
 def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(

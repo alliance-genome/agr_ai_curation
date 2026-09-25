@@ -855,6 +855,109 @@ describe('FlowBuilder', () => {
     agentMetadataMocks.agents = {}
   })
 
+  it('keeps missing-instructions restoration disabled on a shared read-only flow', async () => {
+    const saved = buildFlowResponse({ is_owner: false, visibility: 'project' })
+    saved.flow_definition.nodes = [{
+      id: 'existing', type: 'agent', position: { x: 200, y: 120 },
+      data: { agent_id: 'gene_extractor', agent_display_name: 'Gene extractor', output_key: 'genes' },
+    }]
+    saved.flow_definition.edges = []
+    saved.flow_definition.entry_node_id = ''
+    serviceMocks.getFlow.mockResolvedValue(saved)
+    const ref = React.createRef<FlowAuthoringContextHandle>()
+    render(<FlowBuilder flowId={saved.id} authoringContextRef={ref} />)
+    const restore = await screen.findByRole('button', { name: 'Restore Initial Instructions' })
+    const before = ref.current!.captureAuthoringContext()
+    expect(restore).toBeDisabled()
+    fireEvent.click(restore)
+    expect(ref.current!.captureAuthoringContext()).toEqual(before)
+    expect(screen.queryByText('Unsaved changes — Save this flow to your account')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Clone to edit' })).toBeInTheDocument()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('restores missing instructions without deleting or connecting existing steps (cancel=%s)', async (cancel) => {
+    const saved = buildFlowResponse()
+    saved.flow_definition.nodes = [1, 2].map((i) => ({
+      id: `node_${i}`, type: 'agent' as const, position: { x: 200, y: i * 120 },
+      data: { agent_id: i === 1 ? 'allele_extractor' : 'gene_extractor', agent_display_name: `Extractor ${i}`, output_key: `result_${i}`, custom_instructions: 'Keep my text' },
+    }))
+    saved.flow_definition.edges = []
+    saved.flow_definition.entry_node_id = ''
+    serviceMocks.getFlow.mockResolvedValue(saved)
+    const ref = React.createRef<FlowAuthoringContextHandle>()
+    render(<FlowBuilder flowId={saved.id} authoringContextRef={ref} />)
+    const restore = await screen.findByRole('button', { name: 'Restore Initial Instructions' })
+    act(() => reactFlowMocks.onNodeClick?.({} as never, reactFlowMocks.nodes[0] as never))
+    const before = ref.current!.captureAuthoringContext()
+    nodePanelMocks.requestLeave.mockResolvedValue(!cancel)
+    await userEvent.click(restore)
+    if (cancel) {
+      expect(ref.current!.captureAuthoringContext()).toEqual(before)
+      expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+      return
+    }
+    await waitFor(() => expect(ref.current!.captureAuthoringContext().nodes).toHaveLength(3))
+    const after = ref.current!.captureAuthoringContext()
+    expect(after.nodes.slice(0, 2)).toEqual(before.nodes)
+    expect(after.edges).toEqual(before.edges)
+    expect(after.nodes[2].agent_id).toBe('task_input')
+    expect(screen.queryByRole('button', { name: 'Restore Initial Instructions' })).not.toBeInTheDocument()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+    expect(reactFlowMocks.nodes.find((node) => node.type === 'task_input')).toHaveProperty('deletable', false)
+  })
+
+  it.each(['apply', 'stale', 'post_failure'] as const)('reviews restoration without approving unfinished execution (%s)', async (mode) => {
+    const saved = buildFlowResponse()
+    saved.flow_definition.nodes = [{ id: 'node_1', type: 'agent', position: { x: 100, y: 200 },
+      data: { agent_id: 'gene_extractor', agent_display_name: 'Genes', output_key: 'genes', custom_instructions: 'Keep this' } }]
+    saved.flow_definition.entry_node_id = ''
+    serviceMocks.getFlow.mockResolvedValue(saved)
+    const ref = React.createRef<FlowAuthoringContextHandle>()
+    render(<FlowBuilder flowId={saved.id} authoringContextRef={ref} />)
+    await screen.findByRole('button', { name: 'Restore Initial Instructions' })
+    const captured = ref.current!.captureAuthoringContext()
+    const base = { version: '1.1' as const, entry_node_id: '', edges: [],
+      nodes: captured.nodes.map(({ id, type, position, ...data }) => ({ id, type, position, data })) }
+    const candidate = { ...base, entry_node_id: 'node_2', nodes: [...base.nodes, {
+      id: 'node_2', type: 'task_input' as const, position: { x: 250, y: 100 },
+      data: { agent_id: 'task_input', agent_display_name: 'Initial Instructions', output_key: 'task_input', task_instructions: 'Study all genes and alleles including controls.', custom_instructions: '' },
+    }] }
+    const contextFor = (definition: typeof base): ChatContext => ({
+      flow_id: captured.flowId, flow_name: captured.flowName, flow_description: captured.flowDescription,
+      flow_updated_at: captured.flowUpdatedAt,
+      flow_definition: { ...definition, nodes: definition.nodes.map(({ type, data, ...node }) => ({
+        ...node, node_type: type, ...data,
+        validation_attachments: data.validation_attachments?.map((item) => ({ ...item })),
+        validation_groups: data.validation_groups?.map((item) => ({ ...item })),
+      })) },
+    })
+    const proposal: FlowAuthoringProposal = {
+      contract_version: 'flow_authoring_proposal.v1', restoration_only: true,
+      base_draft_fingerprint: mode === 'stale' ? `sha256:${'0'.repeat(64)}` : await fingerprintFlowDraft(contextFor(base)),
+      candidate_draft_fingerprint: await fingerprintFlowDraft(contextFor(candidate)),
+      change_summary: 'Restore Initial Instructions only', diff: [], findings: [],
+      candidate: { name: captured.flowName, description: captured.flowDescription, flow_definition: candidate },
+    }
+    serviceMocks.validateFlowDraft.mockImplementation((_, phase) => Promise.resolve({
+      valid: false, restoration_only: !(mode === 'post_failure' && phase === 'post_apply'),
+      findings: [{ code: 'disconnected', severity: 'error', message: 'Connect the steps before saving.' }],
+    }))
+    let result
+    await act(async () => { result = await ref.current!.applyAuthoringProposal(proposal) })
+    expect(result).toMatchObject({ applied: mode === 'apply' })
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+    if (mode === 'apply') {
+      expect(ref.current!.captureAuthoringContext().nodes).toHaveLength(2)
+      expect(ref.current!.captureAuthoringContext().edges).toEqual([])
+      expect(serviceMocks.validateFlowDraft.mock.calls[0][4]).toMatchObject({ entry_node_id: '', nodes: [expect.objectContaining({ id: 'node_1' })] })
+      await userEvent.click(screen.getByRole('button', { name: 'Undo AI Chat flow proposal' }))
+    }
+    expect(ref.current!.captureAuthoringContext().nodes).toEqual(captured.nodes)
+  })
+
   it('blocks Chat and hides the canvas until recovery is chosen, then restores unfinished step instructions', async () => {
     const key = 'agr-studio-draft:v1:curator:flow'
     const saved = buildFlowResponse()
@@ -2092,28 +2195,12 @@ describe('FlowBuilder', () => {
 
   it('disables file action save shortcuts when there are no flow nodes', async () => {
     const user = userEvent.setup()
-
-    render(<FlowBuilder />)
-
-    await screen.findByText('1 step')
-
-    const canvas = screen.getByTestId('react-flow')
-    dispatchKeyboardShortcut(canvas, {
-      key: 'a',
-      ctrlKey: true,
-    })
-
-    await user.click(screen.getByText('Edit'))
-    expect(within(await screen.findByRole('menu')).getByText('Delete Selected (1)')).toBeInTheDocument()
-    await user.keyboard('{Escape}')
-
-    dispatchKeyboardShortcut(canvas, {
-      key: 'Delete',
-    })
-
-    await waitFor(() => {
-      expect(screen.queryByText('1 step')).not.toBeInTheDocument()
-    })
+    const empty = buildFlowResponse()
+    empty.flow_definition.nodes = []
+    empty.flow_definition.entry_node_id = ''
+    serviceMocks.getFlow.mockResolvedValue(empty)
+    render(<FlowBuilder flowId={empty.id} />)
+    await screen.findByRole('button', { name: 'Restore Initial Instructions' })
 
     const fileActions = screen.getByRole('toolbar', { name: 'File actions' })
     expect(within(fileActions).getByRole('button', { name: 'Save flow' })).toBeDisabled()
@@ -3249,7 +3336,7 @@ describe('FlowBuilder', () => {
     expect(within(await screen.findByRole('menu')).getByText('Delete Selected (1)')).toBeInTheDocument()
   }, 15000)
 
-  it('selects all and deletes selected flow elements only from the canvas shortcut context', async () => {
+  it('selects all but protects Initial Instructions from canvas deletion', async () => {
     const user = userEvent.setup()
 
     render(<FlowBuilder />)
@@ -3274,7 +3361,7 @@ describe('FlowBuilder', () => {
 
     expect(deleteEvent.defaultPrevented).toBe(true)
     await waitFor(() => {
-      expect(screen.queryByText('1 step')).not.toBeInTheDocument()
+      expect(screen.getByText('1 step')).toBeInTheDocument()
     })
   }, 15000)
 
@@ -3318,7 +3405,7 @@ describe('FlowBuilder', () => {
 
     await user.keyboard('{Delete}')
     await waitFor(() => {
-      expect(screen.queryByText('1 step')).not.toBeInTheDocument()
+      expect(screen.getByText('1 step')).toBeInTheDocument()
     })
   }, 15000)
 

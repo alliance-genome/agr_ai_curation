@@ -33,3 +33,5 @@ avoid_when:
 limitations:
   - "Requires an uploaded PDF document — cannot extract phenotypes from chat text alone"
   - "Wild-type/control observations are baselines, not phenotype assertions"
+  - "Records paper wording and paper-printed IDs without identity lookups; the active term validator can confirm phenotype terms, while subject and reference resolution remain under development. Extraction does not imply submission readiness."
+  - "An assertion can contain several phenotype terms. Export the complete term list to retain all of them; the primary display label is not the full list."

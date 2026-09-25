@@ -12,6 +12,9 @@ export {
 export type {
   DomainEnvelopeEvidenceAnchorProjection,
   DomainEnvelopeProjectionRef,
+  DomainEnvelopeReviewCuratorOverride,
+  DomainEnvelopeReviewFieldResolution,
+  DomainEnvelopeReviewResolvedValue,
   DomainEnvelopeReviewRow,
   DomainEnvelopeReviewRowsResponse,
   DomainEnvelopeReviewRowSummaryField,
@@ -24,6 +27,7 @@ export type {
   EvidenceSupportsDecision,
   FieldValidationResult,
   FieldValidationStatus,
+  ResolutionState,
   SubmissionDomainAdapter,
   SubmissionMode,
   SubmissionPayloadContract,
@@ -80,6 +84,10 @@ export type CurationCandidateAction = (typeof CURATION_CANDIDATE_ACTIONS)[number
 
 export const CURATION_ENVELOPE_FIELD_PATCH_OPERATIONS = [
   'replace',
+  // One atomic curator override of a resolvable value's identity keys (ALL-1283).
+  'replace_identity',
+  // Remove one element of a list of resolvable values (before = the stored element).
+  'remove',
 ] as const
 
 export type CurationEnvelopeFieldPatchOperation =

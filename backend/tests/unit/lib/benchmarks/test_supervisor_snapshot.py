@@ -46,12 +46,12 @@ def test_runtime_uses_frozen_supervisor_and_fails_if_a_step_disappears(monkeypat
     monkeypatch.setattr(executor, "get_all_agent_tools", tools)
     routes = {"supervisor": BenchmarkSuiteRoute(provider="openai", model="experiment", reasoning_effort="high")}
     with benchmark_route_plan(routes), benchmark_source_revisions({}, supervisor=frozen):
-        built = executor.create_flow_supervisor(NS(name="Flow"), document_id="paper", benchmark_routes=routes)
+        built = executor.create_flow_supervisor(NS(id="fixture-flow", name="Flow", flow_definition={}), document_id="paper", benchmark_routes=routes)
         assert built.instructions == "Saved document instructions"
         assert built.model_settings["temperature"] == 0.2
         assert built.model_settings["reasoning_effort"] == "high"
         assert not built.model_settings["parallel_tool_calls"]
         tools.return_value = ([], set(), [{"reason": "revoked"}], {})
         with pytest.raises(ValueError, match="no longer executable"):
-            executor.create_flow_supervisor(NS(name="Flow"), document_id="paper", benchmark_routes=routes)
+            executor.create_flow_supervisor(NS(id="fixture-flow", name="Flow", flow_definition={}), document_id="paper", benchmark_routes=routes)
     forbidden.assert_not_called()

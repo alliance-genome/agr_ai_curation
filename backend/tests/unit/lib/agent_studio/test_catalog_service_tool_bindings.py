@@ -1,7 +1,7 @@
 """Unit tests for catalog_service tool binding resolution."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -34,6 +34,8 @@ class _FakeTool:
 class _FakeFunctionTool:
     name: str
     on_invoke_tool: object
+    params_json_schema: dict = field(default_factory=dict)
+    strict_json_schema: bool = False
 
 
 class _FakeQuery:
@@ -63,6 +65,9 @@ class _FakePromptBundle:
     layers = ()
 
     def render(self):
+        return "instructions"
+
+    def static_prefix(self):
         return "instructions"
 
     def to_manifest(self):
@@ -299,7 +304,7 @@ def test_create_db_agent_propagates_tool_resolution_errors(monkeypatch):
         instructions="do work",
         group_prompt_overrides={},
         group_rules_enabled=False,
-        model_id="gpt-5.6-terra",
+        model_id="gpt-6-sol",
         model_temperature=0.1,
         model_reasoning="medium",
         output_schema_key=None,
@@ -493,7 +498,7 @@ def test_create_db_agent_requires_package_declared_lookup_tool_call(monkeypatch)
         instructions="validate genes",
         group_prompt_overrides={},
         group_rules_enabled=False,
-        model_id="gpt-5.6-terra",
+        model_id="gpt-6-sol",
         model_temperature=0.1,
         model_reasoning=None,
         output_schema_key=None,

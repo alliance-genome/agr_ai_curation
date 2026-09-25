@@ -236,7 +236,7 @@ def test_real_package_catalog_and_hydrated_recipes(monkeypatch):
     ) for definition in load_agent_definitions().values() if definition.model_config is not None]
     rows.append(NS(
         agent_key="custom_gene", name="Custom gene", description="Custom builder",
-        model_id="gpt-5.6-sol", model_reasoning="medium", visibility="private",
+        model_id="gpt-6-sol", model_reasoning="medium", visibility="private",
         tool_ids=["read_section", "stage_gene_mention_evidence", "finalize_gene_extraction"],
         template_source="gene_extractor",
     ))

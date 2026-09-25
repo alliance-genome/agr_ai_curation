@@ -147,12 +147,26 @@ def _as_reference_candidate(reference: Any, query: str) -> Dict[str, Any]:
         "title": title,
         "short_citation": citation,
         "cross_references": cross_references,
+        # The record's own PubMed ID and DOI, as its cross-references state them.
+        "pmid": _cross_reference(cross_references, "PMID"),
+        "doi": _cross_reference(cross_references, "DOI"),
         "source": raw.get("source"),
         "obsolete": raw.get("obsolete"),
         "matched_identifier": matched_identifier,
         "matched_title": matched_title,
         "matched_citation": matched_citation,
     }
+
+
+def _cross_reference(cross_references: List[Any], prefix: str) -> Optional[str]:
+    """The record's one cross-reference with this prefix, or None when it has none or several."""
+
+    matches = {
+        str(item).strip()
+        for item in cross_references
+        if str(item).strip().casefold().startswith(f"{prefix.casefold()}:")
+    }
+    return matches.pop() if len(matches) == 1 else None
 
 
 def _normalize_limit(limit: Optional[int]) -> int:

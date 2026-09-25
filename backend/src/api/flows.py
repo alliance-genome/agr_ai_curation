@@ -89,7 +89,8 @@ class _FlowDatabaseError(RuntimeError):
 class FlowDraftValidationRequest(BaseModel):
     """Exact, side-effect-free validation request used by proposal Apply."""
 
-    flow_definition: FlowDefinition
+    flow_definition: FlowDefinition | Dict[str, Any]
+    restoration_base: Dict[str, Any] | None = None
     phase: Literal["pre_apply", "post_apply"]
     expected_draft_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     current_draft_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
@@ -757,6 +758,25 @@ async def validate_flow_draft(
         expected_draft_fingerprint=request.expected_draft_fingerprint,
         current_draft_fingerprint=request.current_draft_fingerprint,
     )
+    restoration_findings = None
+    if request.restoration_base is not None:
+        from src.lib.agent_studio.flow_restoration import inspect_instruction_restoration
+
+        candidate = request.flow_definition
+        if isinstance(candidate, FlowDefinition):
+            candidate = candidate.model_dump(mode="json", exclude_unset=True)
+        restoration_findings = inspect_instruction_restoration(request.restoration_base, candidate)
+        if (restoration_findings is None
+                or request.expected_draft_fingerprint != request.current_draft_fingerprint):
+            raise HTTPException(status_code=422, detail="The draft is not an unchanged Initial Instructions restoration.")
+    if not isinstance(request.flow_definition, FlowDefinition):
+        from pydantic import ValidationError
+        try:
+            request.flow_definition = FlowDefinition.model_validate(
+                request.flow_definition, context={"instruction_restoration": restoration_findings is not None},
+            )
+        except ValidationError:
+            raise HTTPException(status_code=422, detail="The flow definition is invalid.") from None
     resolved = resolve_flow_execution_revisions(
         db, request.flow_definition, user_id=context.db_user_id,
         active_group_ids=active_group_ids,
@@ -781,7 +801,7 @@ async def validate_flow_draft(
 
     try:
         result = validate_flow_authoring_draft(
-            resolved.definition,
+            request.flow_definition if restoration_findings is not None else resolved.definition,
             context=context,
             resolve_agent=lambda agent_id, auth: _flow_agent_policy_entry(
                 agent_id,
@@ -795,6 +815,8 @@ async def validate_flow_draft(
             entries_by_node=resolved.entries_by_node,
             contract_findings=resolved.findings,
             projection_catalogs=resolved.projection_catalogs,
+            instruction_restoration=restoration_findings is not None,
+            hydrate_attachment_defaults=restoration_findings is None,
         )
     except Exception:
         report_authoring_validation_engine_failure(
@@ -811,7 +833,17 @@ async def validate_flow_draft(
         result.valid,
         len(result.findings),
     )
-    return result.to_dict()
+    response = result.to_dict()
+    if restoration_findings is not None and request.restoration_base is not None:
+        from src.lib.agent_studio.flow_restoration import inspect_instruction_restoration
+        from src.lib.agent_studio.flow_tools import _proposal_candidate_payload
+        preserved = result.candidate is not None and inspect_instruction_restoration(
+            request.restoration_base, _proposal_candidate_payload(result.candidate),
+        ) is not None
+        response["restoration_only"] = result.valid and preserved
+        response["valid"] = result.valid and preserved and not restoration_findings
+        response["findings"] += [finding.to_dict() for finding in restoration_findings]
+    return response
 
 
 @router.get("/{flow_id}", response_model=FlowResponse)

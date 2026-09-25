@@ -8,11 +8,16 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.lib.packages.tool_roles import (
+    extraction_identity_lookup_message,
+    identity_lookup_tools_on_extraction_agent,
+)
 from src.lib.agent_studio.agent_finalize_invariant import (
     validate_agent_finalize_tool_invariant,
 )
 from src.lib.config.models_loader import list_models, load_models
 from src.models.sql.agent import Agent as DBAgent
+from src.models.sql.agent_execution_revision import AgentExecutionRevision
 from src.models.sql.database import SessionLocal
 
 
@@ -70,6 +75,29 @@ def _fetch_active_agents() -> List[Any]:
             .order_by(DBAgent.agent_key.asc())
             .all()
         )
+    finally:
+        db.close()
+
+
+def _fetch_head_output_contracts(agents: List[Any]) -> Dict[Any, Tuple[str, Optional[str]]]:
+    """Output state and schema of each agent's head revision, as the runtime reads them."""
+    revision_ids = [
+        revision_id
+        for revision_id in (getattr(row, "execution_revision_id", None) for row in agents)
+        if revision_id is not None
+    ]
+    if not revision_ids:
+        return {}
+    db = SessionLocal()
+    try:
+        return {
+            revision.id: (revision.output_state, revision.output_schema_key)
+            for revision in db.query(
+                AgentExecutionRevision.id,
+                AgentExecutionRevision.output_state,
+                AgentExecutionRevision.output_schema_key,
+            ).filter(AgentExecutionRevision.id.in_(revision_ids))
+        }
     finally:
         db.close()
 
@@ -178,7 +206,8 @@ def build_agent_runtime_report(
 
     try:
         load_models()
-        known_model_ids = {model.model_id for model in list_models()}
+        models_by_id = {model.model_id: model for model in list_models()}
+        known_model_ids = set(models_by_id)
     except Exception as exc:
         return {
             "status": "unhealthy",
@@ -224,6 +253,7 @@ def build_agent_runtime_report(
     critical_tool_ids = document_tool_ids | package_required_tool_ids
 
     agents = _fetch_active_agents()
+    head_output_contracts = _fetch_head_output_contracts(agents)
     system_rows_by_key: Dict[str, Dict[str, Any]] = {}
 
     # First pass: gather canonicalized system template tool profiles.
@@ -309,10 +339,20 @@ def build_agent_runtime_report(
 
         reasoning = getattr(row, "model_reasoning", None)
         if isinstance(reasoning, str) and reasoning.strip():
-            from src.lib.openai_agents.config import normalize_reasoning_effort
+            from src.lib.openai_agents.config import (
+                normalize_reasoning_effort,
+                unsupported_reasoning_effort,
+            )
 
             if normalize_reasoning_effort(reasoning) is None:
                 row_warnings.append(f"Invalid model_reasoning '{reasoning}'")
+            elif model_id in models_by_id:
+                unsupported = unsupported_reasoning_effort(models_by_id[model_id], reasoning)
+                if unsupported is not None:
+                    row_errors.append(
+                        f"model_reasoning '{unsupported}' is not supported by model "
+                        f"'{model_id}'"
+                    )
 
         visibility = str(getattr(row, "visibility", "") or "").strip()
         user_id = getattr(row, "user_id", None)
@@ -334,6 +374,29 @@ def build_agent_runtime_report(
                 row_warnings.append(violation.detail)
             else:
                 row_errors.append(violation.detail)
+        # Group-scoped tools count too: an extraction agent may not gain a lookup for any group.
+        group_rule_tool_ids = [
+            str(rule.get("tool_id") or "")
+            for rule in ((getattr(row, "group_tool_policy", None) or {}).get("rules") or [])
+            if isinstance(rule, dict)
+        ]
+        # Classified from the head revision's saved output, as the runtime classifies it.
+        head_output_state, head_output_schema_key = head_output_contracts.get(
+            getattr(row, "execution_revision_id", None), (None, None)
+        )
+        identity_lookups = identity_lookup_tools_on_extraction_agent(
+            [*canonical_tool_ids, *group_rule_tool_ids],
+            output_state=head_output_state,
+            output_schema_key=head_output_schema_key,
+        )
+        if identity_lookups:
+            detail = extraction_identity_lookup_message(
+                f"Agent '{getattr(row, 'agent_key', '')}'", identity_lookups
+            )
+            if _should_warn_for_user_agent_contract_violation(strict=strict, visibility=visibility):
+                row_warnings.append(detail)
+            else:
+                row_errors.append(detail)
 
         if visibility == "project" and project_id is None:
             row_errors.append("project visibility requires project_id")

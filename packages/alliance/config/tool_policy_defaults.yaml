@@ -18,7 +18,7 @@ tool_policies:
     allow_attach: false
     allow_execute: true
     config:
-      system_managed_inheritance: true
+      system_managed_inheritance: false
 
   inspect_ontology_term:
     display_name: Inspect Ontology Term
@@ -28,7 +28,7 @@ tool_policies:
     allow_attach: false
     allow_execute: true
     config:
-      system_managed_inheritance: true
+      system_managed_inheritance: false
 
   resolve_domain_field_term:
     display_name: Resolve Domain Field Term
@@ -38,7 +38,7 @@ tool_policies:
     allow_attach: false
     allow_execute: true
     config:
-      system_managed_inheritance: true
+      system_managed_inheritance: false
 
   list_generic_object_classes:
     display_name: List Generic Object Classes

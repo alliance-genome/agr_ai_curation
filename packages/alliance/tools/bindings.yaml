@@ -13,12 +13,12 @@ tools:
       audit:
         display_name: Agent Contract Lookup
       documentation:
-        summary: 'Shows a read-only summary of how a configured agent is set up: its tools, its output structure, the specialists tied to it, the ontology rules on its fields, and field-by-field details. It only reports the setup; it does not run the agent or change anything.'
+        summary: 'Shows a read-only summary of how a configured agent is set up: its tools, its output structure, the specialists tied to it, the ontology rules on its fields, and field-by-field details. Answers come back a page at a time and can be narrowed to one data package, record type, or field, so a question about one field only returns that field''s rules. It only reports the setup; it does not run the agent or change anything.'
         parameters:
           - name: agent_id
             type: string
             required: true
-            description: Which agent's setup you want to look at.
+            description: Which agent's setup you want to look at. A custom agent built in the Agent Workshop can always look up its own saved setup; other custom agents are only shown to curators who can already see them.
           - name: topic
             type: string
             required: true
@@ -26,19 +26,35 @@ tools:
           - name: field_path
             type: string
             required: false
-            description: The specific field to look at, when you want details on just one field.
+            description: The specific field to look at, when you want details on just one field. An unknown field name returns an error with close matches instead of every field.
           - name: detail_level
             type: string
             required: false
             description: Choose a short overview or the full details.
-          - name: field_limit
+          - name: limit
             type: integer
             required: false
-            description: When an output schema has many fields, how many to show at once.
-          - name: field_cursor
+            description: How many entries to show on one page. Pages also stop early when they reach the size limit.
+          - name: cursor
             type: string
             required: false
-            description: Page marker from a previous call to fetch the next batch of fields.
+            description: Page marker from a previous answer, used to fetch the next page.
+          - name: domain_pack_id
+            type: string
+            required: false
+            description: Limit the answer to one data package, useful when the same field name appears in several.
+          - name: object_type
+            type: string
+            required: false
+            description: Limit the answer to one record type within the data packages.
+          - name: item_ref
+            type: string
+            required: false
+            description: Reference of one entry from a previous answer, to read that entry on its own.
+          - name: detail_pointer
+            type: string
+            required: false
+            description: Which part of that entry to read when it was too large to show in full.
   - tool_id: agr_curation_query
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query
@@ -50,12 +66,16 @@ tools:
         callable_factory: agr_ai_curation_alliance.tools.agr_curation:create_groq_agr_curation_query_tool
         description: Compact method and payload_json wrapper for Groq tool schema constraints
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
+      namespace: reference_data_lookup
       name: AGR Curation Query
       category: Database
       audit:
         display_name: AGR Curation Query
       documentation:
-        summary: A single tool for looking up Alliance curation data. It offers many specific methods — search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them.
+        summary: A single tool for looking up Alliance curation data. It offers many specific methods — search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An ontology term search (search_ontology_terms, search_anatomy_terms, search_life_stage_terms, search_go_terms) matches term names and synonyms by exact, then prefix, then contains, then close spelling, returns at least 25 rows, and says how each row matched, along with the term's synonyms and definition; each row is a candidate to check, not a confirmed match. When a lookup returns more than fits in one reply, the reply comes in pages with instructions for continuing, and a single very large record is read back exactly in pieces, so no records or fields are dropped.
         example_queries:
           - Find gene daf-2 in WormBase
           - Get allele information for e1370
@@ -276,7 +296,6 @@ tools:
             method: search_ontology_terms
             term: abnormal locomotor behavior
             ontology_term_type: MPTerm
-            exact_match: true
         map_curies_to_names:
           name: Map CURIEs to Names
           description: Turn a list of IDs into their human-readable names.
@@ -355,18 +374,6 @@ tools:
             - map_entity_curies_to_info
             - map_entity_names_to_curies
           description: The Affected Genomic Model (AGM) specialist confirms which modified organism a finding refers to, using its ID, name, and species.
-        subject_entity_validation:
-          agent_name: Subject Entity Validation Agent
-          methods:
-            - get_gene_by_id
-            - search_genes
-            - get_gene_by_exact_symbol
-            - get_allele_by_id
-            - search_alleles
-            - get_allele_by_exact_symbol
-            - map_entity_curies_to_info
-            - map_entity_names_to_curies
-          description: The Subject specialist confirms the affected entity — sending it to the gene, allele, or modified-organism path depending on what it is.
         gene_validation:
           agent_name: Gene Validation Agent
           methods: [search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id]
@@ -574,6 +581,7 @@ tools:
     description: Work out the species, the Alliance group, and the standard species ID for a paper, without looking up any genes or alleles.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      namespace: reference_data_lookup
       name: AGR Species Context Lookup
       category: Database
       audit:
@@ -608,6 +616,9 @@ tools:
     description: Search for candidate standard terms (from an ontology or controlled list) that could fill one specific field, based on a phrase the agent read in the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       name: Search Domain Field Terms
       category: Database
       audit:
@@ -662,6 +673,10 @@ tools:
     description: Look at one ontology term in detail, plus a limited view of its neighbors in the term tree (broader terms above it, narrower terms below it, or terms beside it).
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
+      namespace: ontology_term_lookup
       name: Inspect Ontology Term
       category: Database
       audit:
@@ -685,6 +700,10 @@ tools:
             type: string
             required: true
             description: The ID of the ontology term to look at.
+          - name: source_phrase
+            type: string
+            required: true
+            description: The paper's own wording for this value, exactly as it will be recorded.
           - name: data_provider
             type: string
             required: false
@@ -716,10 +735,13 @@ tools:
     description: Settle the official standard term for one field and return a confirmed value with its supporting trail, ready to use.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       name: Resolve Domain Field Term
       category: Database
-      # Run-state builder/resolver tool: platform closure-binds the active resolver ledger +
-      # builder workspace into this tool per run (streaming_tools._bind_run_state_into_tools).
+      # Run-state tool: platform closure-binds the builder workspace and evidence records
+      # into this tool per run (streaming_tools._bind_run_state_into_tools).
       builder_run_state: true
       audit:
         display_name: Resolve Domain Field Term
@@ -780,7 +802,7 @@ tools:
       audit:
         display_name: Stage Gene Expression Observation
       documentation:
-        summary: 'Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, a plain "where expressed" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms.'
+        summary: 'Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain "where expressed" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value is the paper''s own wording and stays UNRESOLVED until a specialist looks it up; the agent never searches the database itself. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage.'
         parameters:
           - name: pending_ref_id
             type: string
@@ -794,22 +816,30 @@ tools:
             type: string
             required: true
             description: A plain sentence describing where (and when) the gene was seen to be expressed, in the agent's words from the paper.
+          - name: rationale
+            type: string
+            required: true
+            description: The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
+          - name: data_provider
+            type: string
+            required: true
+            description: The Alliance member database for the paper's organism, by its abbreviation (such as ZFIN or WB). The data-provider specialist checks it against the Alliance provider list.
           - name: subject
             type: any
             required: true
-            description: The gene whose expression was observed, with the exact phrase from the paper and the agent's proposed symbol/ID.
+            description: The gene whose expression was observed, written as the paper names it. The gene specialist looks it up and fills in the confirmed gene.
           - name: reference
             type: any
             required: true
-            description: The paper the observation came from, with the exact phrase and its reference ID.
+            description: The identifier of the paper the observation came from (such as a PMID or DOI), as the paper gives it. The reference specialist looks it up.
           - name: controlled_fields
             type: array
             required: true
-            description: The standard-term choices the agent made for this observation (such as the anatomy and developmental-stage terms), each paired with the value it selected. A term specialist confirms these.
+            description: The standard-term choices for this observation (such as the anatomy and developmental-stage terms). Each carries the paper's own wording and, only when the paper itself prints one, the term's ID as a proposal. Each stays UNRESOLVED until a term specialist looks it up.
           - name: condition_relations
             type: any
             required: true
-            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.
+            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (an ID the agent proposes for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.
   - tool_id: patch_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:patch_gene_expression_observation
@@ -817,6 +847,7 @@ tools:
     description: Make small, allowed corrections to a draft gene-expression observation that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Gene Expression Observation
       category: Database
       builder_output_mode: domain
@@ -837,7 +868,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording; a standard-term field takes its paper wording plus, only when the paper prints one, the term's ID. Every corrected value stays UNRESOLVED until a specialist looks it up. A `rationale` update must be non-empty; it cannot be cleared.
   - tool_id: discard_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:discard_gene_expression_observation
@@ -845,6 +876,7 @@ tools:
     description: Drop one draft gene-expression observation from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Gene Expression Observation
       category: Database
       builder_output_mode: domain
@@ -897,6 +929,7 @@ tools:
     description: Find specific draft gene-expression observations by what they contain or by their id, without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Gene Expression Observations
       category: Database
       builder_output_mode: domain
@@ -993,7 +1026,7 @@ tools:
           - name: mention
             type: string
             required: true
-            description: The exact wording for this entity as it appears in the paper.
+            description: The exact wording for this gene as it appears in the paper. It is kept as the gene's paper wording, and the gene stays unresolved until the Gene Validation specialist confirms it.
           - name: evidence_record_ids
             type: array
             required: true
@@ -1006,6 +1039,10 @@ tools:
             type: string
             required: true
             description: How sure the agent is about this finding (high, medium, or low).
+          - name: rationale
+            type: string
+            required: true
+            description: The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: species
             type: any
             required: false
@@ -1043,6 +1080,7 @@ tools:
     description: Make small, allowed corrections to a draft gene that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Gene Mention Evidence
       category: Database
       builder_output_mode: domain
@@ -1063,7 +1101,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.
   - tool_id: discard_gene_mention_evidence
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:discard_gene_mention_evidence
@@ -1071,6 +1109,7 @@ tools:
     description: Drop one draft gene from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Gene Mention Evidence
       category: Database
       builder_output_mode: domain
@@ -1124,6 +1163,7 @@ tools:
     description: Find specific draft genes by what they contain or by their id, without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Gene Mention Evidence
       category: Database
       builder_output_mode: domain
@@ -1226,7 +1266,7 @@ tools:
       audit:
         display_name: Stage Generic Object
       documentation:
-        summary: Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, and classification notes.
+        summary: Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, classification notes, and a rationale.
         parameters:
           - name: class_key
             type: string
@@ -1244,6 +1284,10 @@ tools:
             type: array
             required: true
             description: Notes explaining why this class key fits the paper evidence.
+          - name: rationale
+            type: string
+            required: true
+            description: The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: pending_ref_id
             type: string
             required: false
@@ -1251,7 +1295,7 @@ tools:
           - name: source_label
             type: string
             required: false
-            description: The source-paper label or mention when it differs from label.
+            description: The paper's own wording for this object. It is kept as the paper wording; the label is never used in its place.
           - name: description
             type: string
             required: false
@@ -1267,7 +1311,7 @@ tools:
           - name: payload
             type: object
             required: false
-            description: Class-specific evidence-backed payload fields.
+            description: Class-specific evidence-backed payload fields. Write each value's paper wording in the class's paper_wording_fields; never write its system_written_payload_fields, which validation, the builder or the verified evidence record fill in.
           - name: attributes
             type: object
             required: false
@@ -1279,6 +1323,7 @@ tools:
     description: Make small corrections to a generic object that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Generic Object
       category: Database
       builder_output_mode: generic
@@ -1295,7 +1340,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids.
+            description: Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids. A `rationale` update must be non-empty; it cannot be cleared.
   - tool_id: discard_generic_object
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.generic_builder_tools:discard_generic_object
@@ -1303,6 +1348,7 @@ tools:
     description: Drop one staged generic object when it is wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Generic Object
       category: Database
       builder_output_mode: generic
@@ -1355,6 +1401,7 @@ tools:
     description: Find staged generic objects by content or id without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Generic Objects
       category: Database
       builder_output_mode: generic
@@ -1449,7 +1496,7 @@ tools:
           - name: mention
             type: string
             required: true
-            description: The exact wording for this entity as it appears in the paper.
+            description: The exact wording for this allele as it appears in the paper. It is kept as the allele's paper wording, and the allele stays unresolved until the Allele Validation specialist confirms it.
           - name: evidence_record_ids
             type: array
             required: true
@@ -1458,6 +1505,10 @@ tools:
             type: array
             required: true
             description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
+          - name: rationale
+            type: string
+            required: true
+            description: The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: normalized_hint
             type: any
             required: false
@@ -1490,6 +1541,7 @@ tools:
     description: Make small, allowed corrections to a draft allele that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Allele Observation
       category: Database
       builder_output_mode: domain
@@ -1510,7 +1562,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared.
   - tool_id: discard_allele_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:discard_allele_observation
@@ -1518,6 +1570,7 @@ tools:
     description: Drop one draft allele from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Allele Observation
       category: Database
       builder_output_mode: domain
@@ -1571,6 +1624,7 @@ tools:
     description: Find specific draft alleles by what they contain or by their id, without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Allele Observations
       category: Database
       builder_output_mode: domain
@@ -1677,51 +1731,54 @@ tools:
             type: array
             required: true
             description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
+          - name: rationale
+            type: string
+            required: true
+            description: The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
+          - name: term_mention
+            type: string
+            required: true
+            description: The phenotype term as the paper words it. It is kept as the paper wording and staged even when no ontology term matches; the phenotype term specialist decides the term.
           - name: subject_identifier
             type: any
             required: false
             default: null
-            description: The ID of the gene, allele, or model that shows this phenotype.
+            description: The ID of the gene, allele, or model that shows this phenotype, only when the paper itself prints it; a specialist checks it before it counts as the subject's ID.
           - name: subject_label
             type: any
             required: false
             default: null
-            description: The name of the gene, allele, or model that shows this phenotype.
+            description: The gene, allele, or model that shows this phenotype, as the paper names it. Needed whenever any other subject detail is given.
           - name: subject_type
             type: any
             required: false
             default: null
-            description: What kind of thing shows the phenotype — a gene, an allele, or a whole modified organism (model).
+            description: What shows the phenotype, exactly gene, allele or agm (a whole modified organism such as a strain or line). It decides which specialist checks the subject.
           - name: subject_taxon
             type: any
             required: false
             default: null
-            description: The species ID of the affected entity, if stated.
+            description: The NCBITaxon ID of the affected entity's species (for example NCBITaxon:6239), as the species lookup returns it; never a species name. Given together with data_provider and term_taxon_id.
           - name: term_curie
             type: any
             required: false
             default: null
-            description: The phenotype term ID the agent proposes, if it found one; a term specialist confirms it.
-          - name: term_label
-            type: any
-            required: false
-            default: null
-            description: The phenotype term name the agent proposes.
+            description: The phenotype term ID, only when the paper itself prints it; a term specialist checks it, and it is never shown as the confirmed ID.
           - name: data_provider
             type: any
             required: false
             default: null
-            description: The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).
+            description: The Alliance group for the paper's species as the species lookup returns it, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human). Given together with term_taxon_id.
           - name: term_taxon_id
             type: any
             required: false
             default: null
-            description: The species ID tied to the proposed phenotype term, if relevant.
+            description: The NCBITaxon ID of the paper's species (for example NCBITaxon:6239), as the species lookup returns it; never a species name. The phenotype term specialist needs it together with data_provider to choose the right phenotype ontology.
           - name: condition_relations
             type: any
             required: false
             default: null
-            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.
+            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (set only when the paper itself prints that ID, for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.
           - name: negated
             type: any
             required: false
@@ -1734,6 +1791,7 @@ tools:
     description: Make small, allowed corrections to a draft phenotype annotation that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Phenotype Observation
       category: Database
       builder_output_mode: domain
@@ -1754,7 +1812,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations. A subject_type update is exactly gene, allele or agm.
   - tool_id: discard_phenotype_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:discard_phenotype_observation
@@ -1762,6 +1820,7 @@ tools:
     description: Drop one draft phenotype annotation from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Phenotype Observation
       category: Database
       builder_output_mode: domain
@@ -1815,6 +1874,7 @@ tools:
     description: Find specific draft phenotype annotations by what they contain or by their id, without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Phenotype Observations
       category: Database
       builder_output_mode: domain
@@ -1884,7 +1944,7 @@ tools:
   # ---------------------------------------------------------------------------------------
   # Disease extractor builder tools (Phase 2 envelope -> builder migration, FULL LinkML alignment).
   # Per-domain module disease_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace.
-  # The active disease_ontology_term_lookup / subject_entity_validation / disease_relation_cv_lookup /
+  # The active disease_ontology_term_lookup / disease_subject_materialization / disease_relation_cv_lookup /
   # disease_evidence_code_lookup / disease_data_provider_lookup bindings resolve the staged inputs
   # inline, so there are NO resolver-backed controlled fields here.
   # ---------------------------------------------------------------------------------------
@@ -1913,11 +1973,7 @@ tools:
           - name: mention
             type: string
             required: true
-            description: The exact wording for this entity as it appears in the paper.
-          - name: disease_name
-            type: string
-            required: true
-            description: The disease name as the agent read it from the paper.
+            description: The disease exactly as the paper words it. It stays as the paper's wording and is kept even when no Disease Ontology term matches; the disease specialist decides the term.
           - name: role
             type: string
             required: true
@@ -1929,7 +1985,7 @@ tools:
           - name: data_provider
             type: string
             required: true
-            description: The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).
+            description: The Alliance group the agent chooses for this finding, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human); the data provider specialist confirms it.
           - name: evidence_record_ids
             type: array
             required: true
@@ -1938,26 +1994,30 @@ tools:
             type: array
             required: true
             description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
+          - name: rationale
+            type: string
+            required: true
+            description: The agent's own explanation of why it selected this item from the paper, written when it records the draft. Shown to curators in review, CSV/TSV exports and chat.
           - name: disease_curie
             type: any
             required: false
             default: null
-            description: The Disease Ontology ID (DOID, a standard disease term ID) the agent proposes, if it found one; the disease specialist confirms it.
+            description: The Disease Ontology ID (DOID, a standard disease term ID), only when the paper itself prints it; the disease specialist checks it.
           - name: subject_type
             type: any
             required: false
             default: null
-            description: What kind of thing has the disease association — a gene, an allele, or a whole modified organism (model). This choice decides what kind of record is produced.
+            description: What has the disease association, exactly gene, allele or agm (a whole modified organism such as a strain or line). This choice decides what kind of record is produced and which specialist checks the subject.
           - name: subject_identifier
             type: any
             required: false
             default: null
-            description: The ID of the gene, allele, or model the disease is associated with.
+            description: The ID of the gene, allele, or model the disease is associated with, only when the paper itself prints it; the subject specialist checks it.
           - name: subject_label
             type: any
             required: false
             default: null
-            description: The name of the gene, allele, or model the disease is associated with.
+            description: The gene, allele, or model the disease is associated with, as the paper names it. Needed whenever a subject type or ID is given; it stays as the paper's wording.
           - name: disease_relation_name
             type: any
             required: false
@@ -1967,7 +2027,7 @@ tools:
             type: any
             required: false
             default: null
-            description: The Evidence and Conclusion Ontology codes (ECO, a standard set of "how was this shown" codes) the agent proposes for this association.
+            description: 'The evidence for this association, one entry per evidence code: mention is the evidence as the paper states it or the evidence code that fits (for example IMP), and curie is the Evidence and Conclusion Ontology ID (ECO) only when the paper itself prints it. The evidence code specialist finds the ECO term.'
           - name: genetic_sex_name
             type: any
             required: false
@@ -1982,12 +2042,12 @@ tools:
             type: any
             required: false
             default: null
-            description: IDs of additional genes the paper says were involved together with the subject.
+            description: 'Additional genes the paper says were involved together with the subject: mention is the gene as the paper names it, and gene_id its ID only when the paper itself prints it. The gene specialist finds each gene.'
           - name: condition_relations
             type: any
             required: false
             default: null
-            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.
+            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature). Each entry has condition_relation_type (the relation term the agent chooses, usually has_condition) and conditions. Each condition may set condition_class_mention, condition_id_mention, condition_chemical_mention and condition_taxon_mention (the paper's wording for that part of the condition), each with an optional condition_class_curie, condition_id_curie, condition_chemical_curie or condition_taxon_curie (set only when the paper itself prints that ID, for the condition specialist to check; an ID is only accepted with its wording), plus condition_free_text (dose or other qualifier as written) and condition_summary. Left empty when the paper states no conditions.
           - name: negated
             type: any
             required: false
@@ -2000,6 +2060,7 @@ tools:
     description: Make small, allowed corrections to a draft disease annotation that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch Disease Observation
       category: Database
       builder_output_mode: domain
@@ -2020,7 +2081,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value.
+            description: The specific fields to correct on the draft, each paired with its new value. A `rationale` update must be non-empty; it cannot be cleared. A condition_relations update carries condition_relations_value, shaped like the stage tool's condition_relations; an evidence_code_curies update carries evidence_codes_value and a with_gene_identifiers update carries with_genes_value, shaped like the stage tool's lists. A subject_type update is exactly gene, allele or agm.
   - tool_id: discard_disease_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:discard_disease_observation
@@ -2028,6 +2089,7 @@ tools:
     description: Drop one draft disease annotation from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard Disease Observation
       category: Database
       builder_output_mode: domain
@@ -2081,6 +2143,7 @@ tools:
     description: Find specific draft disease annotations by what they contain or by their id, without listing the whole working set.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged Disease Observations
       category: Database
       builder_output_mode: domain
@@ -2156,10 +2219,11 @@ tools:
     description: Search the uploaded PDF for passages relevant to a query, using meaning-based matching, exact word matching, or a blend.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: document_reading
       name: Search Document
       category: Document
       documentation:
-        summary: Finds passages in the uploaded PDF that match a query. The default blended search combines meaning-based and exact-word matching, so it catches passages worded differently from the query (for example "expressed in" versus "detected in"). Exact-word matching is best for specific gene symbols, strains, alleles, probes, or identifiers, and very short queries automatically lean on exact-word matching. The search can be limited to particular sections, such as Results or figure legends. The matching passages can then be read in full to pick out exact supporting quotes.
+        summary: Finds passages in the uploaded PDF that match a query. The default blended search combines meaning-based and exact-word matching, so it catches passages worded differently from the query (for example "expressed in" versus "detected in"). Exact-word matching is best for specific gene symbols, strains, alleles, probes, or identifiers, and very short queries automatically lean on exact-word matching. The search can be limited to particular sections, such as Results or figure legends. The matching passages can then be read in full to pick out exact supporting quotes. Every match is listed in rank order; a match whose text does not fit in the reply is still listed, marked for reading in full with Read Chunk.
         parameters:
         - name: query
           type: string
@@ -2191,15 +2255,20 @@ tools:
     description: Read the full text of one passage from the PDF and get back the exact pieces of it that can be saved as evidence.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: document_reading
       name: Read Chunk
       category: PDF Extraction
       documentation:
-        summary: Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence. This is the step where evidence is chosen, since the snippets selected here become the exact verified quote on a saved piece of evidence.
+        summary: Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence. This is the step where evidence is chosen, since the snippets selected here become the exact verified quote on a saved piece of evidence. A passage too long for one reply, such as a very long table, is shown in consecutive exact windows so every character and snippet is still reachable.
         parameters:
         - name: chunk_id
           type: string
           required: true
           description: Which passage to read, taken from a search result or a section's list of passages.
+        - name: span_offset
+          type: integer
+          required: false
+          description: Only for a passage shown in windows, where the next window starts, as given in the previous reply.
   - tool_id: read_section
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_section_tool
@@ -2209,10 +2278,11 @@ tools:
     description: Read the full text of a named section of the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: document_reading
       name: Read Section
       category: PDF Extraction
       documentation:
-        summary: Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. The individual passages it lists can then be read in full to pick out exact supporting quotes.
+        summary: Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. Long sections come back one page at a time; a page can end early when the reply reaches its size limit, and a single passage too long for one reply is listed for reading with Read Chunk. The individual passages it lists can then be read in full to pick out exact supporting quotes.
         parameters:
         - name: section_name
           type: string
@@ -2239,10 +2309,11 @@ tools:
     description: Read the full text of a named subsection inside a section of the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: document_reading
       name: Read Subsection
       category: PDF Extraction
       documentation:
-        summary: Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. The relevant passages can then be read in full to pick out exact supporting quotes.
+        summary: Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. Long subsections come back one page at a time; a page can end early when the reply reaches its size limit, and a single passage too long for one reply is listed for reading with Read Chunk. The relevant passages can then be read in full to pick out exact supporting quotes.
         parameters:
         - name: section_name
           type: string
@@ -2273,6 +2344,7 @@ tools:
     description: Save one piece of supporting evidence from the PDF, using snippets picked out of a passage that was read.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Record Evidence
       category: PDF Extraction
       documentation:
@@ -2299,10 +2371,11 @@ tools:
     description: Review the evidence saved so far in this run before finishing, one page at a time.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: List Recorded Evidence
       category: PDF Extraction
       documentation:
-        summary: Shows the pieces of evidence saved so far in this run, so the agent can confirm the full set of support before finishing. Results come back one page at a time; step through the pages to see them all, or search by quote text to find a specific piece. Withdrawn evidence is left out unless it is explicitly included.
+        summary: Shows the pieces of evidence saved so far in this run, so the agent can confirm the full set of support before finishing. Results come back one page at a time; step through the pages to see them all, or search by quote text to find a specific piece. A page can end early when the reply reaches its size limit, and requests for very large pages are reduced to the configured maximum; the reply says what was applied and where to continue. Quotes are not repeated in the list; each piece can be read in full with Get Recorded Evidence. Withdrawn evidence is left out unless it is explicitly included.
         parameters:
         - name: include_discarded
           type: boolean
@@ -2337,15 +2410,32 @@ tools:
     description: Look at one saved piece of evidence from this run in full detail.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Get Recorded Evidence
       category: PDF Extraction
       documentation:
-        summary: Returns the complete details of one saved piece of evidence from this run.
+        summary: Returns the complete details of one saved piece of evidence from this run. When a piece of evidence is too long to show in one reply (for example a very long quote), its long parts are set aside and read back exactly, one piece at a time, so nothing is cut off.
         parameters:
         - name: evidence_record_id
           type: string
           required: true
           description: Which saved piece of evidence to look at.
+        - name: detail_path
+          type: string
+          required: false
+          description: Which set-aside part to read back, as named in the previous reply.
+        - name: detail_cursor
+          type: integer
+          required: false
+          description: Where to continue reading a set-aside part, as given at the end of the previous piece.
+        - name: result_offset
+          type: integer
+          required: false
+          description: Where to continue a long list inside the evidence, as given in the previous reply.
+        - name: result_sha256
+          type: string
+          required: false
+          description: The fingerprint from the previous reply, so a change to the evidence is noticed instead of mixing old and new text.
   - tool_id: attach_evidence_to_object
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_attach_evidence_to_object_tool
@@ -2355,6 +2445,7 @@ tools:
     description: Link a saved piece of evidence to the specific field it supports.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Attach Evidence To Object
       category: PDF Extraction
       documentation:
@@ -2385,6 +2476,7 @@ tools:
     description: Remove a link between a saved piece of evidence and a finding it was wrongly tied to.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Detach Evidence From Object
       category: PDF Extraction
       documentation:
@@ -2415,6 +2507,7 @@ tools:
     description: Withdraw a saved piece of evidence that turned out to be wrong or too weak, while keeping it in the run's history.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Discard Recorded Evidence
       category: PDF Extraction
       documentation:
@@ -2437,6 +2530,7 @@ tools:
     description: Update the editable notes on a saved piece of evidence.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
+      namespace: evidence_maintenance
       name: Update Evidence Metadata
       category: PDF Extraction
       documentation:
@@ -2466,6 +2560,10 @@ tools:
     description: Run a direct query against the Alliance Curation Database to look up Disease Ontology terms and how they relate to one another.
     source_file: python/src/agr_ai_curation_alliance/tools/sql.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
+      namespace: reference_data_lookup
       name: Curation Database SQL
       category: Database
       documentation:
@@ -2499,6 +2597,9 @@ tools:
     description: Look up a chemical compound in ChEBI (Chemical Entities of Biological Interest, a standard chemical database).
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       name: ChEBI API
       category: API
       documentation:
@@ -2575,7 +2676,7 @@ tools:
       audit:
         display_name: Stage GO Recommendation
       documentation:
-        summary: Stages one typed GOCuratableObject recommendation with verified evidence, resolved or explicitly ambiguous identity, current-annotation context, and curator-visible limitations.
+        summary: Stages one typed GOCuratableObject recommendation with verified evidence, the paper's wording for each GO value, any identifier the paper itself prints (as a proposal for validation), and curator-visible limitations. It never looks anything up. The gene product, GO term, reference and With/From stay unresolved until validation confirms them, and the evidence code and qualifiers are mapped from fixed tables.
   - tool_id: patch_go_recommendation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.go_builder_tools:patch_go_recommendation
@@ -2583,6 +2684,7 @@ tools:
     description: Correct an allowed field on a staged RGD GO recommendation.
     source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Patch GO Recommendation
       category: Database
       builder_output_mode: domain
@@ -2598,6 +2700,7 @@ tools:
     description: Discard a staged RGD GO recommendation that is unsupported or out of scope.
     source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Discard GO Recommendation
       category: Database
       builder_output_mode: domain
@@ -2628,6 +2731,7 @@ tools:
     description: Find an RGD GO draft by identity, evidence, content, or candidate ID.
     source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
     metadata:
+      namespace: staged_object_corrections
       name: Find Staged GO Recommendations
       category: Database
       builder_output_mode: domain
@@ -2659,6 +2763,9 @@ tools:
     description: Look up a Gene Ontology term in QuickGO.
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       name: QuickGO API
       category: API
       documentation:
@@ -2728,6 +2835,9 @@ tools:
     description: Fetch typed existing GO annotations for one validated gene CURIE.
     source_file: python/src/agr_ai_curation_alliance/tools/go_annotations.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
       name: GO Consortium Existing Annotations
       category: API
       documentation:
@@ -2791,6 +2901,10 @@ tools:
     description: Resolve genes, precursor loci, and mature RNA products to typed evidence-backed Alliance gene candidates.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_product_resolution.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
+      namespace: reference_data_lookup
       name: Alliance Gene Product Resolver
       category: Database
       documentation:
@@ -2857,6 +2971,10 @@ tools:
     description: Look up which genes are counterparts of each other across species (orthology).
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
+      namespace: reference_data_lookup
       name: Alliance Orthology API
       category: API
       documentation:
@@ -2885,6 +3003,10 @@ tools:
     description: Look up a paper in the Alliance literature collection by its ID, or find candidate papers by title or citation text.
     source_file: python/src/agr_ai_curation_alliance/tools/literature_references.py
     metadata:
+      # Searches a database or service for an identity: validators and lookup agents only;
+      # extraction agents cannot carry it.
+      identity_lookup: true
+      namespace: reference_data_lookup
       name: AGR Literature Reference Lookup
       category: Literature
       audit:

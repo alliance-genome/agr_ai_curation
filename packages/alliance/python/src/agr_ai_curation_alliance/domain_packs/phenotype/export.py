@@ -23,9 +23,12 @@ from .._export_utils import (
     canonical_json,
     list_value,
     malformed_payload_blocker,
-    mapping_value,
     missing_field_blockers,
     string_value,
+)
+from .._resolvable_payloads import (
+    export_condition_relations,
+    export_identity,
 )
 from ..schema_refs import ALLIANCE_LINKML_COMMIT
 from .constants import (
@@ -55,14 +58,20 @@ _SUBJECT_TARGETS = {
     },
 }
 
+# Each value must be present; whether it is resolved is checked per value below, so an
+# unresolved value blocks the export as unresolved rather than as missing.
 _REQUIRED_PHENOTYPE_FIELD_PATHS = (
     "phenotype_annotation_object",
-    "phenotype_annotation_subject.subject_type",
-    "phenotype_annotation_subject.subject_identifier",
-    "phenotype_terms[0].curie",
-    "single_reference.reference_id",
-    "data_provider.abbreviation",
+    "phenotype_annotation_subject",
+    "phenotype_terms",
+    "single_reference",
+    "data_provider",
 )
+_UNRESOLVED_VALUE_CODE = "alliance.phenotype.export.unresolved_value"
+_SUBJECT_IDENTITY_KEYS = ("subject_identifier", "subject_label")
+_TERM_IDENTITY_KEYS = ("curie", "label")
+_REFERENCE_IDENTITY_KEYS = ("reference_id", "title")
+_DATA_PROVIDER_IDENTITY_KEYS = ("abbreviation",)
 
 
 class PhenotypeAnnotationExportAdapter(DeterministicExportAdapter):
@@ -202,16 +211,72 @@ def _project_phenotype_candidate(
         message_prefix="Phenotype annotation export is missing required context",
     )
 
-    subject_type = string_value(
-        payload,
-        "phenotype_annotation_subject.subject_type",
+    subject, subject_blocker = export_identity(
+        candidate=candidate,
+        payload=payload,
+        field_path="phenotype_annotation_subject",
+        identity_keys=_SUBJECT_IDENTITY_KEYS,
+        code=_UNRESOLVED_VALUE_CODE,
+        label="Phenotype annotation subject",
+    )
+    reference, reference_blocker = export_identity(
+        candidate=candidate,
+        payload=payload,
+        field_path="single_reference",
+        identity_keys=_REFERENCE_IDENTITY_KEYS,
+        code=_UNRESOLVED_VALUE_CODE,
+        label="Source reference",
+    )
+    data_provider, data_provider_blocker = export_identity(
+        candidate=candidate,
+        payload=payload,
+        field_path="data_provider",
+        identity_keys=_DATA_PROVIDER_IDENTITY_KEYS,
+        code=_UNRESOLVED_VALUE_CODE,
+        label="Data provider",
+    )
+    blockers.extend(
+        blocker
+        for blocker in (subject_blocker, reference_blocker, data_provider_blocker)
+        if blocker is not None
+    )
+    phenotype_terms: list[dict[str, Any]] = []
+    for index in range(len(list_value(payload, "phenotype_terms"))):
+        term, term_blocker = export_identity(
+            candidate=candidate,
+            payload=payload,
+            field_path=f"phenotype_terms[{index}]",
+            identity_keys=_TERM_IDENTITY_KEYS,
+            code=_UNRESOLVED_VALUE_CODE,
+            label=f"Phenotype term {index + 1}",
+        )
+        if term_blocker is not None:
+            blockers.append(term_blocker)
+        elif term is not None:
+            phenotype_terms.append(term)
+    condition_relations, condition_blockers = export_condition_relations(
+        candidate=candidate, payload=payload, code=_UNRESOLVED_VALUE_CODE
+    )
+    blockers.extend(condition_blockers)
+
+    # The validator writes subject_type with the subject identity; it is read only once
+    # the subject is resolved.
+    subject_type = (
+        string_value(payload, "phenotype_annotation_subject.subject_type")
+        if subject is not None
+        else None
     )
     target = _SUBJECT_TARGETS.get(subject_type or "")
-    if subject_type and target is None:
+    # A present subject always gets an export target or a blocker; it is never dropped silently.
+    if subject is not None and target is None:
         blockers.append(
             adapter_blocker(
                 candidate=candidate,
-                code="alliance.phenotype.export.unsupported_subject_type",
+                code=(
+                    "alliance.phenotype.export.unsupported_subject_type"
+                    if subject_type
+                    else "alliance.phenotype.export.missing_subject_type"
+                ),
                 field_path="phenotype_annotation_subject.subject_type",
                 message=(
                     "Phenotype annotation subject must resolve to gene, allele, "
@@ -224,29 +289,24 @@ def _project_phenotype_candidate(
             )
         )
 
-    if blockers or target is None:
+    if (
+        blockers
+        or target is None
+        or subject is None
+        or reference is None
+        or data_provider is None
+    ):
         return None, blockers
-
-    subject = mapping_value(payload, "phenotype_annotation_subject")
-    phenotype_terms = list_value(payload, "phenotype_terms")
-    first_term = (
-        dict(phenotype_terms[0])
-        if phenotype_terms and isinstance(phenotype_terms[0], Mapping)
-        else {}
-    )
-    reference = mapping_value(payload, "single_reference")
-    data_provider = mapping_value(payload, "data_provider")
-    condition_relations = list_value(payload, "condition_relations")
 
     linkml_payload = {
         "phenotype_annotation_subject": {
             "subject_type": subject_type,
-            "primary_external_id": subject.get("subject_identifier"),
-            "label": subject.get("subject_label"),
-            "taxon": subject.get("taxon"),
+            "primary_external_id": subject["subject_identifier"],
+            "label": subject["subject_label"],
+            "taxon": string_value(payload, "phenotype_annotation_subject.taxon"),
         },
         "phenotype_annotation_object": payload["phenotype_annotation_object"],
-        "phenotype_terms": [first_term],
+        "phenotype_terms": phenotype_terms,
         "single_reference": reference,
         "negated": bool(payload.get("negated", False)),
         "data_provider": data_provider,
@@ -276,7 +336,7 @@ def _project_phenotype_candidate(
                     "phenotypeterms_id": {
                         "table": "public.ontologyterm",
                         "lookup_by": "curie",
-                        "value": first_term.get("curie"),
+                        "value": phenotype_terms[0]["curie"] if phenotype_terms else None,
                     },
                     "evidenceitem_id": {
                         "table": "public.reference",
@@ -291,7 +351,7 @@ def _project_phenotype_candidate(
                     target["subject_fk_column"]: {
                         "table": "public.biologicalentity",
                         "lookup_by": "primaryexternalid",
-                        "value": subject.get("subject_identifier"),
+                        "value": subject["subject_identifier"],
                     },
                 },
                 "term_join_table": "public.phenotypeannotation_ontologyterm",

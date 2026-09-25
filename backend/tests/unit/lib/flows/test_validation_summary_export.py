@@ -79,7 +79,8 @@ def test_same_source_only_and_no_row_expansion():
     assert len(result.rows) == 4
     assert [row["id"] for row in result.rows] == ["MGI:3716464", "", "", ""]
     assert result.rows[0]["paper_hint"] == "RRID:MGI:5487397"
-    assert len(result.rows[0]["evidence"]) == 1
+    # One evidence record, rendered as display text for this CSV projection.
+    assert result.rows[0]["evidence"] == 'evidence_record_id: ev-1; verified_quote: quote, "text"\nline'
     assert result.rows[2]["source"] == "result-1"
 
 
@@ -183,8 +184,10 @@ async def test_inventory_inspect_validate_preview_and_saved_csv(tmp_path):
     async def invoke(name, **kwargs):
         tool = next(tool for tool in tools if tool.name == name)
         return json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name=name), json.dumps(kwargs)))
-    inventory = await invoke("inspect_output_artifacts")
-    assert PREFIX + "resolved.curie" in {field["ref"] for field in inventory["inventory"]["field_catalog"]}
+    inventory = await invoke("inspect_output_artifacts", catalog_query="resolved.curie")
+    assert PREFIX + "resolved.curie" in {
+        field["ref"] for field in inventory["inventory"]["field_catalog"]["entries"]
+    }
     rejected = await invoke("inspect_output_rows", row_source="validation_finding", field_refs_json=json.dumps([
         "validation.target.input_values.mention", "validation.resolved_values.symbol",
         "validation.resolved_values.curie", "validation.status"]))
@@ -207,5 +210,6 @@ async def test_inventory_inspect_validate_preview_and_saved_csv(tmp_path):
     parsed = list(csv.DictReader(io.StringIO(path.read_text())))
     assert len(parsed) == 2
     assert parsed[0]["mention"] == projection.rows[0]["mention"]
-    assert json.loads(parsed[0]["evidence"]) == projection.rows[0]["evidence"]
+    assert parsed[0]["evidence"] == projection.rows[0]["evidence"]
+    assert "{" not in parsed[0]["evidence"]
     assert parsed[1]["id"] == ""

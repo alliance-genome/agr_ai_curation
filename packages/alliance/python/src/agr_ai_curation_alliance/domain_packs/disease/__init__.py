@@ -19,13 +19,7 @@ from .builder_conversion import (
 )
 from .conversion import (
     DiseaseExtractionOutput,
-    ToolVerifiedDiseaseAssertion,
-    ToolVerifiedDiseaseCondition,
-    ToolVerifiedDiseaseEvidenceRecord,
-    ToolVerifiedDiseaseOutput,
-    ToolVerifiedDiseaseSubject,
     disease_extraction_output_to_pending_envelope,
-    tool_verified_disease_output_to_pending_envelope,
     validate_disease_extraction_objects,
     validate_pending_disease_envelope,
 )
@@ -61,15 +55,9 @@ __all__ = [
     "DiseaseAnnotationSubmissionBlockerAdapter",
     "materialize_disease_builder_state",
     "validate_disease_builder_objects",
-    "ToolVerifiedDiseaseAssertion",
-    "ToolVerifiedDiseaseCondition",
-    "ToolVerifiedDiseaseEvidenceRecord",
-    "ToolVerifiedDiseaseOutput",
-    "ToolVerifiedDiseaseSubject",
     "disease_extraction_output_to_pending_envelope",
     "build_disease_annotation_export_payload",
     "get_disease_domain_pack_metadata_path",
-    "tool_verified_disease_output_to_pending_envelope",
     "validate_disease_extraction_objects",
     "validate_pending_disease_envelope",
 ]

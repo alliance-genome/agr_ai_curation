@@ -13,6 +13,7 @@ from src.lib.observability import runtime as runtime_observability
 from src.lib.prompts.context import (
     bind_prompt_run,
     clear_prompt_context,
+    commit_pending_prompts,
     get_used_prompt_runs,
     set_pending_prompts,
 )
@@ -498,7 +499,10 @@ async def test_run_agent_streamed_preserves_bound_prompt_runs_for_provided_agent
         lambda trace_id: captured.setdefault("trace_ids", []).append(trace_id),
     )
 
-    async def _fake_run_agent_with_tracing(**_kwargs):
+    async def _fake_run_agent_with_tracing(**kwargs):
+        # The real run commits the agent's prompts right before the SDK run
+        # starts (after the tool surface is compiled, ALL-1280).
+        runner.commit_pending_prompts(kwargs["agent"])
         yield {
             "type": "RUN_FINISHED",
             "data": {"response_length": 5, "tool_calls": 0, "agents_used": ["Flow Supervisor"]},
@@ -1522,3 +1526,187 @@ async def test_run_agent_streamed_normalizes_flow_context_roles(monkeypatch):
         {"role": "assistant", "content": "previous flow memory"},
         {"role": "user", "content": "hello"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_deferred_agent_run_commits_the_prompt_it_sends_and_recovers_bare_calls(monkeypatch):
+    """ALL-1280: a provided extractor with deferred tools, run by the chat runner."""
+    from agents import Agent, FunctionTool
+
+    from src.lib.config.tool_loading_loader import ToolLoadingPolicy
+    from src.lib.openai_agents import tool_surface
+
+    captured = {}
+
+    class _FakeProvider:
+        async def aclose(self):
+            return None
+
+    def _tool(name):
+        async def invoke(_ctx, _args):
+            return name
+
+        return FunctionTool(
+            name=name,
+            description=f"Run {name}",
+            params_json_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            on_invoke_tool=invoke,
+        )
+
+    namespaces = {
+        "record_evidence": ("evidence_maintenance", "Record and maintain evidence."),
+    }
+    monkeypatch.setattr(
+        tool_surface,
+        "resolve_tool_loading_policy",
+        lambda *_args: ToolLoadingPolicy(mode="deferred"),
+    )
+    monkeypatch.setattr(tool_surface, "model_supports_tool_search", lambda *_args: True)
+    monkeypatch.setattr(tool_surface, "declarative_namespace_resolver", lambda: namespaces.get)
+    _patch_common_runtime(monkeypatch, captured)
+    # This test observes the real prompt commit.
+    monkeypatch.setattr(runner, "commit_pending_prompts", commit_pending_prompts)
+    monkeypatch.setattr(runner, "get_max_turns", lambda: 4)
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "_build_request_openai_provider", lambda _client: _FakeProvider())
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
+    monkeypatch.setattr(runner, "provider_context_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(runner, "write_extraction_trace_event", lambda **event: event)
+    monkeypatch.setattr(runner, "write_stream_event", lambda *args, **kwargs: None)
+
+    def _run_streamed(agent, **kwargs):
+        captured["run_config"] = kwargs["run_config"]
+        captured["instructions"] = agent.instructions
+        captured["active_agent"] = agent
+        captured["used_prompt_runs"] = get_used_prompt_runs()
+        return _FakeRunResult(
+            [_raw_response_stream_event(_FakeTextDelta("done"))], final_output="done"
+        )
+
+    monkeypatch.setattr(runner.Runner, "run_streamed", _run_streamed)
+
+    agent = Agent(
+        name="Gene Extractor",
+        instructions="Extract genes.",
+        model="gpt-5.5",
+        tools=[_tool("read_chunk"), _tool("record_evidence")],
+    )
+    agent.tool_surface_runtime = "extractor"
+    clear_prompt_context()
+    bind_prompt_run(
+        agent,
+        set_pending_prompts(
+            agent.name,
+            [_prompt("extract prompt")],
+            effective_prompt_hash="hash-extract",
+            layer_manifest=_manifest("gene_extractor", "Extract genes.", "hash-extract"),
+        ),
+    )
+    try:
+        events = await _collect_events(
+            runner._run_agent_with_tracing(
+                agent=agent,
+                input_items=[{"role": "user", "content": "go"}],
+                user_id="user-1",
+                document_id=None,
+                document_name=None,
+                user_message="go",
+                trace_id="trace-deferred",
+            )
+        )
+    finally:
+        clear_prompt_context()
+
+    assert events[-1]["type"] == "RUN_FINISHED"
+    assert captured["active_agent"] is not agent
+    assert agent.instructions == "Extract genes."
+    note = tool_surface.deferred_tools_note(captured["active_agent"].tool_surface)
+    assert captured["instructions"] == f"Extract genes.\n\n{note}"
+    [used_run] = captured["used_prompt_runs"]
+    assert used_run.assembly.layer_manifest["layers"][-1]["content"] == note
+    assert captured["run_config"].tool_not_found_behavior == "return_error_to_model"
+    assert captured["run_config"].tool_error_formatter is not None
+
+
+def _staged_probe_impl() -> str:
+    from src.lib.openai_agents.extraction_builder_workspace import (
+        get_active_extraction_builder_workspace,
+    )
+
+    workspace = get_active_extraction_builder_workspace()
+    return f"staged run={workspace.run_id}"
+
+
+class _RunStateToolCallingRunResult:
+    final_output = "done"
+
+    def __init__(self, agent, captured):
+        self._agent = agent
+        self._captured = captured
+
+    async def stream_events(self):
+        tool = next(t for t in self._agent.tools if t.name == "stage_probe_observation")
+        self._captured["tool_output"] = await tool.on_invoke_tool(
+            SimpleNamespace(tool_name=tool.name, run_config=None), "{}"
+        )
+        if False:
+            yield None
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "stage"}]
+
+
+@pytest.mark.asyncio
+async def test_provided_builder_agent_without_profile_binds_run_state_tools(monkeypatch):
+    """Direct runs (Agent Studio Test, benchmarks) bind builder run state for every agent."""
+    import contextvars
+
+    from agents import function_tool
+
+    from src.lib.openai_agents import streaming_tools
+
+    @function_tool(name_override="stage_probe_observation")
+    def _package_stage_probe() -> str:
+        """Stage one probe observation."""
+        # Unbound package tools execute in the package subprocess, where none of
+        # the run's context exists.
+        return contextvars.Context().run(_staged_probe_impl)
+
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+    monkeypatch.setattr(runner, "get_max_turns", lambda: 4)
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
+    monkeypatch.setattr(
+        streaming_tools,
+        "_run_state_tool_impls",
+        lambda: {"stage_probe_observation": "probe.module:_stage_probe_observation_impl"},
+    )
+    monkeypatch.setattr(streaming_tools, "_import_callable", lambda _path: _staged_probe_impl)
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda agent, **_kwargs: _RunStateToolCallingRunResult(agent, captured),
+    )
+
+    events = await _collect_events(
+        runner.run_agent_streamed(
+            context_messages=[{"role": "user", "content": "stage one observation"}],
+            user_id="user-1",
+            session_id="custom-test-1",
+            agent=SimpleNamespace(
+                name="Domain Builder", model="gpt-4o", tools=[_package_stage_probe]
+            ),
+        )
+    )
+
+    assert events[-1]["type"] == "RUN_FINISHED"
+    output = str(captured["tool_output"])
+    assert output.startswith("staged run="), output

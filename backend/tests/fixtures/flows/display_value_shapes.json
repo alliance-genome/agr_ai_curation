@@ -1,0 +1,827 @@
+{
+  "_about": "Structured payload value shapes observed in production extraction results (latest 25 results per extractor, 2026-09-22 read-only inventory; key sets only). All values are synthetic. Consumers: ALL-1282 display rendering tests and the domain-pack display declaration lint.",
+  "packaged": [
+    {
+      "shape_id": "ge_full_with_conditions_and_stage",
+      "pack_id": "agr.alliance.gene_expression",
+      "object_type": "GeneExpressionAnnotation",
+      "payload": {
+        "data_provider": {
+          "abbreviation": "WB"
+        },
+        "date_created": "2026-09-22T00:00:00Z",
+        "internal": false,
+        "obsolete": false,
+        "expression_annotation_subject": {
+          "gene_symbol": "Y71G12B.17",
+          "primary_external_id": "WB:WBGene00022155",
+          "source_phrase": "Y71G12B.17"
+        },
+        "expression_experiment": {
+          "entity_assayed": {
+            "gene_symbol": "Y71G12B.17",
+            "primary_external_id": "WB:WBGene00022155"
+          },
+          "expression_assay_used": {
+            "curie": "MMO:0000672",
+            "name": "knock-in in situ reporter assay"
+          },
+          "single_reference": {
+            "reference_id": "PMID:10000001",
+            "source_phrase": "this study"
+          },
+          "unique_id": "synthetic-experiment-1"
+        },
+        "expression_pattern": {
+          "when_expressed": {
+            "developmental_stage_start": {
+              "curie": "WBls:0000038",
+              "name": "L4 larva"
+            }
+          },
+          "where_expressed": {
+            "anatomical_structure": {
+              "curie": "WBbt:0005733",
+              "name": "hypodermis"
+            }
+          }
+        },
+        "relation": {
+          "id": 1,
+          "name": "is_expressed_in",
+          "vocabulary": "gene_expression_relation"
+        },
+        "single_reference": {
+          "reference_id": "PMID:10000001",
+          "source_phrase": "this study"
+        },
+        "when_expressed_stage_name": "L4 larva",
+        "where_expressed_statement": "hypodermis",
+        "condition_relations": [
+          {
+            "condition_relation_type": {
+              "name": "has_condition"
+            },
+            "conditions": [
+              {
+                "condition_class": {
+                  "curie": "ZECO:0000160"
+                },
+                "condition_free_text": "heat shock at 34 C",
+                "condition_summary": "heat shock"
+              },
+              {
+                "condition_free_text": "grown on plates",
+                "condition_summary": "culture condition"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "shape_id": "ge_no_stage",
+      "pack_id": "agr.alliance.gene_expression",
+      "object_type": "GeneExpressionAnnotation",
+      "payload": {
+        "data_provider": {
+          "abbreviation": "WB"
+        },
+        "date_created": "2026-09-22T00:00:00Z",
+        "internal": false,
+        "obsolete": false,
+        "expression_annotation_subject": {
+          "gene_symbol": "Y71G12B.17",
+          "primary_external_id": "WB:WBGene00022155",
+          "source_phrase": "Y71G12B.17"
+        },
+        "expression_experiment": {
+          "entity_assayed": {
+            "gene_symbol": "Y71G12B.17",
+            "primary_external_id": "WB:WBGene00022155"
+          },
+          "expression_assay_used": {
+            "curie": "MMO:0000672",
+            "name": "knock-in in situ reporter assay"
+          },
+          "single_reference": {
+            "reference_id": "PMID:10000001",
+            "source_phrase": "this study"
+          },
+          "unique_id": "synthetic-experiment-1"
+        },
+        "expression_pattern": {
+          "where_expressed": {
+            "anatomical_structure": {
+              "curie": "WBbt:0005813",
+              "name": "seam cell"
+            },
+            "cellular_component": {
+              "curie": "GO:0005634",
+              "name": "nucleus"
+            }
+          }
+        },
+        "relation": {
+          "id": 1,
+          "name": "is_expressed_in",
+          "vocabulary": "gene_expression_relation"
+        },
+        "single_reference": {
+          "doi": "10.0000/synthetic.1",
+          "reference_id": "PMID:10000002",
+          "source_phrase": "prior work",
+          "title": "Synthetic reference title"
+        },
+        "where_expressed_statement": "hypodermis"
+      }
+    },
+    {
+      "shape_id": "ge_empty_where_expressed",
+      "pack_id": "agr.alliance.gene_expression",
+      "object_type": "GeneExpressionAnnotation",
+      "payload": {
+        "data_provider": {
+          "abbreviation": "WB"
+        },
+        "date_created": "2026-09-22T00:00:00Z",
+        "internal": false,
+        "obsolete": false,
+        "expression_annotation_subject": {
+          "gene_symbol": "Y71G12B.17",
+          "primary_external_id": "WB:WBGene00022155",
+          "source_phrase": "Y71G12B.17"
+        },
+        "expression_experiment": {
+          "entity_assayed": {
+            "gene_symbol": "Y71G12B.17",
+            "primary_external_id": "WB:WBGene00022155"
+          },
+          "expression_assay_used": {
+            "curie": "MMO:0000672",
+            "name": "knock-in in situ reporter assay"
+          },
+          "single_reference": {
+            "reference_id": "PMID:10000001",
+            "source_phrase": "this study"
+          },
+          "unique_id": "synthetic-experiment-1"
+        },
+        "expression_pattern": {
+          "where_expressed": {}
+        },
+        "relation": {
+          "id": 1,
+          "name": "is_expressed_in",
+          "vocabulary": "gene_expression_relation"
+        },
+        "single_reference": {
+          "curie": "AGRKB:101000000000001",
+          "reference_id": "PMID:10000003",
+          "source_phrase": "this study",
+          "title": "Synthetic reference title"
+        },
+        "when_expressed_stage_name": "L4 larva",
+        "where_expressed_statement": "hypodermis"
+      }
+    },
+    {
+      "shape_id": "disease_resolved_subject_with_conditions",
+      "pack_id": "agr.alliance.disease",
+      "object_type": "DiseaseAnnotation",
+      "payload": {
+        "annotation_kind": "disease_annotation",
+        "annotation_type_id": "1",
+        "annotation_type_name": "manually_curated",
+        "annotation_type_vocabulary": "annotation_type",
+        "confidence": "high",
+        "data_provider": {
+          "abbreviation": "MGI"
+        },
+        "disease_annotation_object": {
+          "curie": "DOID:0000001",
+          "name": "synthetic disease"
+        },
+        "disease_annotation_subject": {
+          "resolution_state": "pending_entity_resolution",
+          "subject_identifier": "MGI:0000001",
+          "subject_label": "Synth1",
+          "subject_type": "gene"
+        },
+        "disease_relation_id": "2",
+        "disease_relation_name": "is_implicated_in",
+        "disease_relation_vocabulary": "disease_relation",
+        "condition_relations": [
+          {
+            "condition_relation_type": {
+              "id": 3,
+              "name": "induced_by",
+              "vocabulary": "condition_relation"
+            },
+            "conditions": [
+              {
+                "condition_class": {
+                  "curie": "ZECO:0000111"
+                },
+                "condition_free_text": "chemical treatment",
+                "condition_summary": "chemical treatment"
+              },
+              {
+                "condition_free_text": "diet",
+                "condition_summary": "diet"
+              }
+            ]
+          }
+        ],
+        "disease_qualifier_names": [
+          "severity"
+        ],
+        "evidence_code_curies": [
+          "ECO:0000315"
+        ],
+        "evidence_record_ids": [
+          "ev-0001"
+        ]
+      }
+    },
+    {
+      "shape_id": "disease_unresolved_object_blocked_subject",
+      "pack_id": "agr.alliance.disease",
+      "object_type": "DiseaseAnnotation",
+      "payload": {
+        "annotation_kind": "disease_annotation",
+        "annotation_type_id": "1",
+        "annotation_type_name": "manually_curated",
+        "annotation_type_vocabulary": "annotation_type",
+        "confidence": "low",
+        "data_provider": {
+          "abbreviation": "RGD"
+        },
+        "disease_annotation_object": {
+          "name": "synthetic disease mention"
+        },
+        "disease_annotation_subject": {
+          "resolution_note": "Synthetic note.",
+          "resolution_state": "blocked_missing_subject"
+        },
+        "evidence_record_ids": [
+          "ev-0001"
+        ],
+        "evidence_records": [
+          {
+            "chunk_id": "chunk-0001",
+            "entity": "synthetic entity",
+            "evidence_record_id": "ev-0001",
+            "page": 3,
+            "section": "Results",
+            "subsection": "Expression",
+            "verified_quote": "Synthetic quote text."
+          },
+          {
+            "chunk_id": "chunk-0001",
+            "entity": "synthetic entity",
+            "evidence_record_id": "ev-0002",
+            "page": 3,
+            "section": "Results",
+            "subsection": "Expression",
+            "verified_quote": "Synthetic quote text.",
+            "figure_reference": "Figure 2"
+          },
+          {
+            "chunk_id": "chunk-0001",
+            "entity": "synthetic entity",
+            "evidence_record_id": "ev-0003",
+            "page": 3,
+            "section": "Results",
+            "verified_quote": "Synthetic quote text."
+          }
+        ],
+        "mention": "synthetic disease mention",
+        "negated": false,
+        "single_reference": {
+          "resolution_note": "Synthetic note.",
+          "resolution_state": "pending_reference_resolution"
+        }
+      }
+    },
+    {
+      "shape_id": "disease_labelled_unidentified_subject",
+      "pack_id": "agr.alliance.disease",
+      "object_type": "GeneDiseaseAnnotation",
+      "payload": {
+        "disease_annotation_object": {
+          "curie": "DOID:0000002",
+          "name": "synthetic disease two"
+        },
+        "disease_annotation_subject": {
+          "resolution_note": "Synthetic note.",
+          "resolution_state": "blocked_missing_subject",
+          "subject_label": "synth-2",
+          "subject_type": "gene"
+        },
+        "genetic_sex_name": "female",
+        "genetic_sex_vocabulary": "genetic_sex",
+        "data_provider": {
+          "abbreviation": "ZFIN"
+        }
+      }
+    },
+    {
+      "shape_id": "phenotype_pending_subject_and_term",
+      "pack_id": "agr.alliance.phenotype",
+      "object_type": "PhenotypeAnnotation",
+      "payload": {
+        "annotation_kind": "phenotype_annotation",
+        "condition_relations": [
+          {
+            "condition_relation_type": {
+              "name": "has_condition"
+            },
+            "conditions": [
+              {
+                "condition_class": {
+                  "curie": "ZECO:0000105"
+                },
+                "condition_free_text": "cold",
+                "condition_summary": "cold exposure"
+              },
+              {
+                "condition_class": {
+                  "curie": "ZECO:0000105"
+                },
+                "condition_id": {
+                  "curie": "ZECO:0000106"
+                },
+                "condition_free_text": "cold",
+                "condition_summary": "cold"
+              },
+              {
+                "condition_class": {
+                  "curie": "ZECO:0000105"
+                },
+                "condition_summary": "cold"
+              }
+            ]
+          }
+        ],
+        "data_provider": {
+          "abbreviation": "ZFIN"
+        },
+        "evidence_quote": {
+          "evidence_record_id": "ev-0001"
+        },
+        "evidence_record_ids": [
+          "ev-0001"
+        ],
+        "negated": false,
+        "phenotype_annotation_object": "synthetic phenotype statement",
+        "phenotype_annotation_subject": {
+          "resolution_note": "Synthetic note.",
+          "resolution_state": "pending_entity_resolution",
+          "subject_label": "synth-3",
+          "subject_type": "allele",
+          "taxon": "NCBITaxon:7955"
+        },
+        "phenotype_terms": [
+          {
+            "curie": null,
+            "export_state": "blocked_pending_ontology_resolution",
+            "label": "synthetic phenotype",
+            "ontology_lookup_hint": {
+              "data_provider": "ZFIN",
+              "evidence_record_id": "ev-0001",
+              "taxon_id": "NCBITaxon:7955"
+            },
+            "resolution_state": "pending_ontology_resolution",
+            "source_mentions": [
+              "synthetic phenotype"
+            ],
+            "write_blocked_reason": "phenotype term CURIE unresolved"
+          },
+          {
+            "curie": "ZP:0000001",
+            "export_state": "blocked_pending_ontology_resolution",
+            "label": "synthetic resolved phenotype",
+            "ontology_lookup_hint": {
+              "evidence_record_id": "ev-0001"
+            },
+            "resolution_state": "resolved",
+            "source_mentions": [
+              "resolved phenotype"
+            ],
+            "write_blocked_reason": "phenotype term CURIE unresolved"
+          }
+        ],
+        "single_reference": {},
+        "source_mentions": [
+          "synthetic phenotype"
+        ]
+      }
+    },
+    {
+      "shape_id": "phenotype_subject_label_only",
+      "pack_id": "agr.alliance.phenotype",
+      "object_type": "PhenotypeSubject",
+      "payload": {
+        "resolution_note": "Synthetic note.",
+        "resolution_state": "blocked_missing_subject",
+        "subject_label": "synth-4"
+      }
+    },
+    {
+      "shape_id": "phenotype_term_unresolved",
+      "pack_id": "agr.alliance.phenotype",
+      "object_type": "PhenotypeTerm",
+      "payload": {
+        "curie": null,
+        "export_state": "blocked_pending_ontology_resolution",
+        "label": "synthetic phenotype",
+        "ontology_lookup_hint": {
+          "evidence_record_id": "ev-0001"
+        },
+        "resolution_state": "pending_ontology_resolution",
+        "source_mentions": [
+          "synthetic phenotype"
+        ],
+        "write_blocked_reason": "phenotype term CURIE unresolved"
+      }
+    },
+    {
+      "shape_id": "phenotype_reference_empty",
+      "pack_id": "agr.alliance.phenotype",
+      "object_type": "Reference",
+      "payload": {}
+    },
+    {
+      "shape_id": "phenotype_evidence_quote",
+      "pack_id": "agr.alliance.phenotype",
+      "object_type": "EvidenceQuote",
+      "payload": {
+        "chunk_id": "chunk-0001",
+        "entity": "synthetic entity",
+        "evidence_record_id": "ev-0002",
+        "page": 3,
+        "section": "Results",
+        "subsection": "Expression",
+        "verified_quote": "Synthetic quote text.",
+        "figure_reference": "Figure 2"
+      }
+    },
+    {
+      "shape_id": "allele_association",
+      "pack_id": "agr.alliance.allele",
+      "object_type": "AllelePaperEvidenceAssociation",
+      "payload": {
+        "allele_label": "synth-5",
+        "association_kind": "allele_paper_evidence",
+        "evidence_record_ids": [
+          "ev-0001"
+        ],
+        "reference_title": "Synthetic reference title"
+      }
+    },
+    {
+      "shape_id": "allele_reference_candidate",
+      "pack_id": "agr.alliance.allele",
+      "object_type": "Allele",
+      "payload": {
+        "allele_symbol": "synth<5>",
+        "primary_external_id": "MGI:0000005",
+        "taxon": "NCBITaxon:10090"
+      }
+    },
+    {
+      "shape_id": "allele_mention",
+      "pack_id": "agr.alliance.allele",
+      "object_type": "AlleleMention",
+      "payload": {
+        "associated_gene": {
+          "symbol": "Synth5"
+        },
+        "mention": {
+          "normalized_hint": "synth5",
+          "text": "synth-5"
+        },
+        "source_mentions": [
+          "synth-5"
+        ],
+        "taxon": {
+          "curie": "NCBITaxon:10090"
+        }
+      }
+    },
+    {
+      "shape_id": "allele_reference_title",
+      "pack_id": "agr.alliance.allele",
+      "object_type": "Reference",
+      "payload": {
+        "title": "Synthetic reference title"
+      }
+    },
+    {
+      "shape_id": "allele_reference_filename",
+      "pack_id": "agr.alliance.allele",
+      "object_type": "Reference",
+      "payload": {
+        "filename": "synthetic_paper.pdf"
+      }
+    },
+    {
+      "shape_id": "allele_evidence_quote",
+      "pack_id": "agr.alliance.allele",
+      "object_type": "EvidenceQuote",
+      "payload": {
+        "chunk_id": "chunk-0001",
+        "entity": "synthetic entity",
+        "evidence_record_id": "ev-0001",
+        "page": 3,
+        "section": "Results",
+        "subsection": "Expression",
+        "verified_quote": "Synthetic quote text."
+      }
+    },
+    {
+      "shape_id": "gene_mention_with_divergence",
+      "pack_id": "gene",
+      "object_type": "gene_mention_evidence",
+      "payload": {
+        "chunk_id": "chunk-0001",
+        "evidence_record_id": "ev-0001",
+        "page": 3,
+        "section": "Results",
+        "subsection": "Expression",
+        "verified_quote": "Synthetic quote text.",
+        "confidence": "medium",
+        "data_provider_hint": "WB",
+        "gene_symbol": "synth-6",
+        "primary_external_id": "WB:WBGene00000006",
+        "identity_resolution_notes": [
+          "Synthetic note one.",
+          "Synthetic note two."
+        ],
+        "mention": "synth-6",
+        "proposed_gene_symbol": "synth-6a",
+        "proposed_taxon": "NCBITaxon:6239",
+        "species": "C. elegans",
+        "taxon": "NCBITaxon:6239",
+        "figure_reference": "Figure 1"
+      }
+    },
+    {
+      "shape_id": "go_resolved",
+      "pack_id": "agr.alliance.go",
+      "object_type": "GOCuratableObject",
+      "payload": {
+        "gene_product": {
+          "mention": "Synth7",
+          "label": "Synth7",
+          "curie": "RGD:0000007",
+          "entity_type": "protein_coding_gene",
+          "taxon_curie": "NCBITaxon:10116",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
+        "go_term": {
+          "mention": "nucleus",
+          "curie": "GO:0005634",
+          "label": "nucleus",
+          "aspect": "cellular_component",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
+        "evidence_code": {
+          "mention": "IDA",
+          "code": "IDA",
+          "eco_curie": "ECO:0000314",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
+        "reference": {
+          "mention": "PMID:10000007",
+          "curie": "PMID:10000007",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
+        "with_from": [],
+        "qualifiers": [
+          "located_in"
+        ],
+        "annotation_extensions": [],
+        "negated": false,
+        "rationale": "Synthetic rationale.",
+        "provider_context": {
+          "provider_key": "RGD",
+          "taxon_curie": "NCBITaxon:10116",
+          "review_lane": "rgd_go_curator_review",
+          "existing_annotation_context": {
+            "status": "none",
+            "annotations": [],
+            "provenance": {},
+            "note": "Synthetic note."
+          },
+          "identity_resolution": {
+            "method": "synthetic"
+          },
+          "hierarchy_limitations": [],
+          "section_limitations": []
+        },
+        "blocking_reasons": []
+      }
+    },
+    {
+      "shape_id": "go_unresolved_identity",
+      "pack_id": "agr.alliance.go",
+      "object_type": "GOCuratableObject",
+      "payload": {
+        "gene_product": {
+          "mention": "miR-synth",
+          "label": null,
+          "entity_type": "miRNA",
+          "taxon_curie": "NCBITaxon:10116",
+          "curie": null,
+          "resolution_state": "unresolved",
+          "lookup_outcome": "not_validated",
+          "validator_explanation": "Not validated yet."
+        },
+        "go_term": {
+          "mention": "biological_process",
+          "curie": "GO:0008150",
+          "label": "biological_process",
+          "aspect": "biological_process",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
+        "evidence_code": {
+          "mention": "IMP",
+          "code": "IMP",
+          "eco_curie": "ECO:0000315",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
+        "reference": {
+          "mention": "PMID:10000008",
+          "curie": "PMID:10000008",
+          "resolution_state": "resolved",
+          "lookup_outcome": "matched",
+          "validator_explanation": null
+        },
+        "with_from": [],
+        "qualifiers": [],
+        "annotation_extensions": [],
+        "negated": false,
+        "rationale": "Synthetic rationale.",
+        "provider_context": {
+          "provider_key": "RGD"
+        },
+        "blocking_reasons": [
+          "identity unresolved"
+        ]
+      }
+    }
+  ],
+  "custom_profiles": [
+    {
+      "shape_id": "custom_flat_attributes",
+      "payload": {
+        "class_key": "tumor_model",
+        "label": "synthetic model",
+        "semantic_class": "model",
+        "classification_notes": [
+          "Synthetic note."
+        ],
+        "attributes": {
+          "extracted_phrase": "synthetic phrase",
+          "model_type": "xenograft",
+          "organ_cell_type": "liver",
+          "section": "Methods",
+          "species": "Mus musculus",
+          "tumor_classification": "carcinoma"
+        }
+      }
+    },
+    {
+      "shape_id": "custom_list_attributes",
+      "payload": {
+        "class_key": "tumor_model",
+        "label": "synthetic model 2",
+        "semantic_class": "model",
+        "confidence": "high",
+        "description": "Synthetic description.",
+        "source_label": "synthetic",
+        "classification_notes": [],
+        "attributes": {
+          "extracted_phrase": [
+            "phrase one",
+            "phrase two"
+          ],
+          "model_type": [
+            "GEMM"
+          ],
+          "section_of_paper": [
+            "Results"
+          ],
+          "species": "Mus musculus",
+          "tumor_classification_term": "adenoma",
+          "organ_cell_type_of_origin": "colon"
+        }
+      }
+    },
+    {
+      "shape_id": "custom_array_of_objects",
+      "payload": {
+        "class_key": "allele_check",
+        "label": "synth-8",
+        "semantic_class": "allele",
+        "classification_notes": [],
+        "attributes": {
+          "entity_kind": "allele",
+          "source": "paper",
+          "synonyms": [
+            "synth8"
+          ],
+          "allele_checks": [
+            {
+              "confirmed_curie": "MGI:0000008",
+              "confirmed_symbol": "Synth8<tm1>",
+              "confirmed_taxon": "NCBITaxon:10090",
+              "mention": "synth-8",
+              "taxon_hint": "mouse"
+            },
+            {
+              "mention": "synth-8b"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape_id": "custom_nested_object_or_null",
+      "payload": {
+        "class_key": "allele_detail",
+        "label": "synth-9",
+        "semantic_class": "allele",
+        "classification_notes": [],
+        "attributes": {
+          "detail_allele_symbol": "synth-9",
+          "detail_associated_gene": "Synth9",
+          "detail_identification_notes": "Synthetic note.",
+          "detail_molecular_description": "point mutation",
+          "detail_origin_references": "Synthetic reference",
+          "detail_paper_allele_id": "a9",
+          "detail_study_role": "primary",
+          "detail_repository": {
+            "detail_repository_id": "REPO:0009",
+            "detail_repository_name": "Synthetic stock center"
+          }
+        }
+      }
+    },
+    {
+      "shape_id": "custom_nested_null",
+      "payload": {
+        "class_key": "allele_detail",
+        "label": "synth-10",
+        "semantic_class": "allele",
+        "classification_notes": [],
+        "attributes": {
+          "detail_allele_symbol": "synth-10",
+          "detail_repository": null
+        }
+      }
+    },
+    {
+      "shape_id": "generic_pdf_extraction_synonyms",
+      "payload": {
+        "class_key": "entity",
+        "label": "synth-11",
+        "semantic_class": "gene",
+        "classification_notes": [
+          "Synthetic note."
+        ],
+        "attributes": {
+          "source": "paper",
+          "synonyms": [
+            "synth11",
+            "SYN11"
+          ]
+        }
+      }
+    },
+    {
+      "shape_id": "generic_claim",
+      "payload": {
+        "class_key": "claim",
+        "label": "synthetic claim",
+        "claim_text": "Synthetic claim text.",
+        "claim_type": "finding",
+        "classification_notes": []
+      }
+    }
+  ]
+}

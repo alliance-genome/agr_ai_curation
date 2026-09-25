@@ -356,6 +356,27 @@ return {
 }
 ```
 
+### Result Size
+
+Every model-facing result must fit `TOOL_RESULT_MAX_BYTES` (measured as UTF-8
+bytes of its serialized form, metadata and errors included). Row limits alone
+are not enough: one wide record or long text value can exceed it.
+
+- Read-only tools that run in the package runner (most lookups and REST/SQL
+  tools) are served by the backend adapter: results that fit reach the model
+  unchanged, larger ones become pages with `result_page.next_call` and exact
+  `detail_path` chunks. Do not declare `result_offset`, `result_sha256`,
+  `detail_path` or `detail_cursor` yourself; the adapter reserves them.
+- Inline tools and tools that change run state (builders, evidence) must bound
+  their own results with `agr_ai_curation_runtime.tool_result_bounds`
+  (`clamp_page_limit`, `parse_offset`, `fit_page`, `detail_chunk`) and return
+  `budget_failure(...)` when even a compact result cannot fit.
+- Never truncate scientific text. Withhold a large value behind an exact
+  detail read, or end the page with an explicit continuation.
+
+See [TOOL_RESULT_BOUNDS_INVENTORY.md](./TOOL_RESULT_BOUNDS_INVENTORY.md) for
+every tool's disposition.
+
 ### Error Handling
 
 **Never raise exceptions** -- return error information in the response:
@@ -549,6 +570,7 @@ def test_my_tool_empty_query():
 - [ ] `@function_tool` decorator applied
 - [ ] Clear docstring for LLM tool selection
 - [ ] Error handling returns dict (not raises)
+- [ ] Model-facing result fits `TOOL_RESULT_MAX_BYTES` with explicit continuation (see Result Size) and the tool is listed in `TOOL_RESULT_BOUNDS_INVENTORY.md`
 - [ ] `tools/bindings.yaml` export added with correct `binding_kind` and `required_context`
 - [ ] Tool added to a package-owned agent `tools` list in `agent.yaml` or to `tool_ids` in DB
 - [ ] Upstream dependencies are merged/released or pinned before agent use

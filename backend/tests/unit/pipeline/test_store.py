@@ -142,7 +142,7 @@ async def test_store_chunks_to_weaviate_success_path():
                 "figure_locator_resolution": {
                     "schema_version": 1,
                     "prompt_version": "figure-locator-v1",
-                    "model": "gpt-5.6-terra",
+                    "model": "gpt-6-sol",
                     "reasoning": "low",
                     "status": "resolved",
                     "annotations": [

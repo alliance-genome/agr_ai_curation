@@ -79,6 +79,10 @@ from .config import (
     runtime_model_uses_provider,
 )
 from src.lib.runtime_payload_budget import provider_context_preflight
+from .model_request_measurement import (
+    call_measured_direct_request,
+    install_model_request_measurement,
+)
 from .extraction_trace_events import (
     clear_extraction_trace_run,
     get_current_extraction_trace_run,
@@ -93,12 +97,14 @@ from .extraction_builder_workspace import (
     set_active_extraction_builder_workspace,
     stage_extraction_payload,
 )
-from .resolver_call_ledger import (
-    ResolverCallLedger,
-    reset_active_resolver_call_ledger,
-    set_active_resolver_call_ledger,
-)
 from .guardrails import enforce_uncited_negative_guardrail
+from .tool_surface import (
+    apply_tool_surface,
+    canonical_tool_name,
+    record_tool_surface_prompt,
+    run_config_for_tool_surface,
+    tool_surface_trace_attributes,
+)
 from .models import Answer, file_ready_event_details
 from .evidence_summary import (
     build_record_evidence_summary_record,
@@ -280,9 +286,13 @@ def build_owned_openai_responses_resources() -> OwnedOpenAIResources:
     else:
         provider_kwargs["use_responses_websocket"] = False
 
+    provider = OpenAIProvider(**provider_kwargs)
+    # Request measurement classifies models this provider resolves as native
+    # OpenAI even if the default runner provider changes (ALL-1279).
+    provider._agr_provider_id = "openai"
     return OwnedOpenAIResources(
         client=client,
-        provider=OpenAIProvider(**provider_kwargs),
+        provider=provider,
     )
 
 
@@ -459,6 +469,7 @@ class SafeAsyncOpenAI(AsyncOpenAI):
         super().__init__(*args, **merged_kwargs)
         self._wrap_responses_api()
         self._wrap_chat_api()
+        self._wrap_responses_compact()
 
     def _wrap_responses_api(self):
         """Wrap responses.create to sanitize metadata."""
@@ -472,6 +483,26 @@ class SafeAsyncOpenAI(AsyncOpenAI):
                 return await original_create(*args, **kwargs)
 
             self.responses.create = safe_create
+
+    def _wrap_responses_compact(self):
+        """Measure SDK context-compaction requests sent through this client.
+
+        Agents SDK model calls are measured at model resolution; compaction is a
+        separate ``responses.compact`` request the SDK sends directly.
+        """
+        if hasattr(self, 'responses') and hasattr(self.responses, 'compact'):
+            original_compact = self.responses.compact
+
+            async def measured_compact(**kwargs):
+                return await call_measured_direct_request(
+                    surface="standard_chat_compaction",
+                    provider=get_default_runner_provider().provider_id,
+                    api="responses.compact",
+                    kwargs=kwargs,
+                    call=original_compact,
+                )
+
+            self.responses.compact = measured_compact
 
     def _wrap_chat_api(self):
         """Wrap chat.completions.create to sanitize metadata."""
@@ -513,6 +544,10 @@ SafeLangfuseAsyncOpenAI = SafeAsyncOpenAI
 # that handles metadata=None gracefully
 _default_client = SafeAsyncOpenAI()
 set_default_openai_client(_default_client)
+
+# Measure every model request (all runtimes, turns and retries) at the SDK's
+# per-turn model resolution; blocks known-invalid provider requests (ALL-1279).
+install_model_request_measurement()
 
 
 def _build_agents_run_config(
@@ -1320,8 +1355,6 @@ async def _run_agent_with_owned_resources(
         execution_receipt=getattr(agent, "execution_receipt", None),
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
-    resolver_call_ledger = ResolverCallLedger(trace_id=trace_id)
-    resolver_ledger_token = set_active_resolver_call_ledger(resolver_call_ledger)
     evidence_summary_tool_names: List[str] = []
     structured_tool_calls: List[SpecialistToolCall] = []
 
@@ -1468,33 +1501,34 @@ async def _run_agent_with_owned_resources(
 
     benchmark_route_token = set_benchmark_invocation_route(agent)
     try:
-        # Catalog package tools otherwise execute outside this process. Reuse
-        # the specialist's package-derived binding without mutating the caller.
-        if getattr(agent, "tools", None):
-            agent = _bind_run_state_into_tools(
-                copy(agent),
-                evidence_records=evidence_records,
-                builder_workspace=builder_workspace,
-                resolver_ledger=resolver_call_ledger,
-            )
-        if generic_profile is not None:
-            from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
+        from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
 
-            for tool in agent.tools:
-                if hasattr(tool, "profile_bound_schema"):
-                    assert_profile_tool_contract(tool)
-        result = Runner.run_streamed(
-            agent,
-            input=input_items,
-            max_turns=max_turns,
-            run_config=run_config,
-            session=sdk_session,
+        # Bind a caller-owned copy before compiling the final provider tool surface.
+        agent = _bind_run_state_into_tools(
+            copy(agent),
+            evidence_records=evidence_records,
+            builder_workspace=builder_workspace,
         )
+        for tool in agent.tools:
+            if hasattr(tool, "profile_bound_schema"):
+                assert_profile_tool_contract(tool)
+        # ALL-1280: compile the provider-facing tool surface LAST, after
+        # run-state rebinding, then commit the prompts the model receives.
+        tool_surface = apply_tool_surface(agent)
+        record_tool_surface_prompt(agent, tool_surface, target_agent=agent)
+        commit_pending_prompts(agent)
+        with tool_surface_trace_attributes(tool_surface):
+            result = Runner.run_streamed(
+                agent,
+                input=input_items,
+                max_turns=max_turns,
+                run_config=run_config_for_tool_surface(run_config, tool_surface),
+                session=sdk_session,
+            )
     except BaseException as exc:
         reset_benchmark_invocation_route(benchmark_route_token)
         reset_active_evidence_records(evidence_workspace_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
-        reset_active_resolver_call_ledger(resolver_ledger_token)
         reset_current_run_config(run_config_token)
         sentry_stream_finalization_status = (
             "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
@@ -1756,7 +1790,7 @@ async def _run_agent_with_owned_resources(
                         tool_calls_count += 1
                         is_generating = False  # Reset for next generation phase after tool completes
                         # Try multiple attributes to get tool name
-                        tool_name = (
+                        tool_name = canonical_tool_name(
                             getattr(item, "name", None) or
                             getattr(item, "tool_name", None) or
                             getattr(getattr(item, "raw_item", None), "name", None) or
@@ -1846,11 +1880,6 @@ async def _run_agent_with_owned_resources(
                                 evidence_records,
                                 [evidence_record],
                             )
-                        resolver_call_ledger.record_tool_output(
-                            tool_call_id=str(completed_tool.get("tool_id") or "") or None,
-                            tool_name=last_tool,
-                            output=output,
-                        )
                         structured_tool_calls.append(
                             SpecialistToolCall(
                                 tool_name=last_tool,
@@ -1917,25 +1946,9 @@ async def _run_agent_with_owned_resources(
                         )
                         yield tool_complete_event
 
-                        # Check if chat_output agent completed (for flow termination)
-                        # This signals that a chat-based flow has produced its final output
-                        if last_tool == "ask_chat_output_specialist":
-                            full_output = str(output) if output is not None else ""
-                            logger.info(
-                                "Chat output agent completed",
-                                extra={"trace_id": trace_id, "user_id": user_id},
-                            )
-                            chat_ready_event = {
-                                "type": "CHAT_OUTPUT_READY",
-                                "timestamp": _now_iso(),
-                                "details": {
-                                    "output": full_output,
-                                    "output_preview": output_preview,
-                                    "output_length": len(full_output),
-                                }
-                            }
-                            write_stream_event(chat_ready_event, trace_id=trace_id)
-                            yield chat_ready_event
+                        # Flow chat output is not emitted here: the chat-output tool
+                        # returns only a compact receipt, and the flow executor emits
+                        # CHAT_OUTPUT_READY once from the application-held rendering.
 
                         # Check if tool output contains FileInfo (file download).
                         # Runtime formatter projection tools return FileInfo as JSON.
@@ -2133,13 +2146,6 @@ async def _run_agent_with_owned_resources(
                 label="extraction_builder_workspace",
                 reset_fn=reset_active_extraction_builder_workspace,
                 token=builder_workspace_token,
-                trace_id=trace_id,
-                user_id=user_id,
-            )
-            _safe_reset_run_context_token(
-                label="resolver_call_ledger",
-                reset_fn=reset_active_resolver_call_ledger,
-                token=resolver_ledger_token,
                 trace_id=trace_id,
                 user_id=user_id,
             )
@@ -2652,20 +2658,18 @@ async def run_agent_streamed(
             current_user_request=user_message,
         )
         agent_name = agent.name
-        agent_for_prompt_commit = agent
     else:
         # Custom agent provided (e.g., flow supervisor)
         agent_name = getattr(agent, 'name', 'Custom Agent')
-        agent_for_prompt_commit = agent
         logger.info(
             "Using provided agent: %s",
             agent_name,
             extra={"user_id": user_id, "session_id": session_id},
         )
 
-    # Commit pending prompts for whichever agent we're using
-    # (supervisor runs immediately after creation, unlike specialists which are on-demand)
-    commit_pending_prompts(agent_for_prompt_commit)
+    # Pending prompts for this agent are committed right before its run starts
+    # (_run_agent_with_owned_resources), once the compiled tool surface has
+    # added any runtime prompt layer.
 
     def _emit_provider_context_preflight(trace_id: str) -> None:
         model_name = str(getattr(agent, "model", "") or "")

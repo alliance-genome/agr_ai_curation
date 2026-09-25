@@ -21,26 +21,44 @@ schema_refs:
           cache_script: scripts/testing/cache_agr_curation_schema.sh
           ref_kind: schema
 enum_definitions:
-  - enum_id: PhenotypeSubjectResolutionState
-    display_name: Phenotype subject resolution state
-    description: Resolution state for the biological entity that carries the phenotype assertion.
+  # Extracted vs validated values (ALL-1283): every resolvable value's status and lookup
+  # result use exactly the shared vocabularies (src.lib.domain_packs.resolvable_values).
+  - enum_id: ResolutionState
+    display_name: Resolution status
+    description: Whether a validator supplied the value's identity.
     values:
       - value: resolved
         label: Resolved
-      - value: pending_entity_resolution
-        label: Pending entity resolution
-      - value: blocked_missing_subject
-        label: Blocked missing subject
-    definition_state: in_development
-  - enum_id: PhenotypeTermResolutionState
-    display_name: Phenotype term resolution state
-    description: Resolution state for phenotype ontology candidates retained for validation.
+      - value: unresolved
+        label: Unresolved
+  - enum_id: LookupOutcome
+    display_name: Lookup result
+    description: What the validator lookup found for the value, or that no validator has run yet.
     values:
-      - value: resolved
-        label: Resolved
-      - value: pending_ontology_resolution
-        label: Pending ontology resolution
-    definition_state: in_development
+      - value: matched
+        label: Matched
+      - value: not_found
+        label: Not found
+      - value: ambiguous
+        label: Several matches
+      - value: conflict
+        label: Conflict
+      - value: blocked
+        label: Blocked
+      - value: transient
+        label: Temporary error
+      - value: invalid_schema
+        label: Invalid validator output
+      - value: missing_expected_result_field
+        label: Validator result incomplete
+      - value: rejected_candidates
+        label: Candidates rejected
+      - value: not_validated
+        label: Not validated yet
+      - value: legacy_unverified
+        label: Legacy, unverified
+      - value: curator_override
+        label: Curator override
 model_definitions:
   - model_id: PhenotypeAnnotationPayload
     display_name: Phenotype annotation payload
@@ -80,6 +98,13 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/core.yaml
             class: BiologicalEntity
+    metadata:
+      display:
+        label: subject_label
+        id: subject_identifier
+        mention: mention
+        validated:
+          - taxon
   - model_id: PhenotypeTermPayload
     display_name: Phenotype term payload
     description: Pending ontology term reference for a phenotype assertion.
@@ -96,6 +121,11 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/ontologyTerm.yaml
             class: PhenotypeTerm
+    metadata:
+      display:
+        label: label
+        id: curie
+        mention: mention
   - model_id: ReferencePayload
     display_name: Reference payload
     description: Pending literature reference object for phenotype evidence.
@@ -112,12 +142,20 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/reference.yaml
             class: Reference
+    metadata:
+      display:
+        label: title
+        id: reference_id
+        mention: mention
   - model_id: EvidenceQuotePayload
     display_name: Verified evidence quote payload
     description: Metadata-only payload preserving record_evidence-verified paper text and document location.
     definition_state: in_development
     definition_notes:
       - Provider-neutral evidence quote object; not a LinkML write target.
+    metadata:
+      display:
+        label: verified_quote
   - model_id: ConditionRelationPayload
     display_name: Condition relation payload
     description: Optional embedded condition relation context (relation type + its experimental conditions) for a phenotype assertion.
@@ -152,6 +190,37 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
             class: ExperimentalCondition
+    metadata:
+      # Every condition part reads "label (ID)" once validated, or UNRESOLVED; the paper wording
+      # of each part is its own field, never part of this cell.
+      display:
+        compose:
+          - condition_class
+          - condition_id
+          - condition_chemical
+          - condition_taxon
+          - condition_free_text
+        separator: "; "
+  - model_id: ConditionTermPayload
+    display_name: Condition term
+    description: One ontology term of an experimental condition (class, specific condition, chemical, or taxon).
+    definition_state: in_development
+    metadata:
+      display:
+        label: name
+        id: curie
+        mention: mention
+  - model_id: VocabularyTermPayload
+    display_name: Vocabulary term
+    description: One controlled vocabulary selection, such as a condition relation type.
+    definition_state: in_development
+    metadata:
+      display:
+        label: name
+        mention: mention
+        validated:
+          - vocabulary
+          - id
 object_definitions:
   - object_type: PhenotypeAnnotation
     display_name: Phenotype annotation
@@ -210,6 +279,10 @@ object_definitions:
             label: Experimental conditions
             fields:
               - condition_relations
+          - id: rationale
+            label: Rationale
+            fields:
+              - rationale
       export_behavior:
         status: blocked
         exportable: false
@@ -253,7 +326,6 @@ object_definitions:
       - field_path: phenotype_annotation_subject
         field_type: object_ref
         display_name: Phenotype annotation subject
-        required: true
         object_type_ref: PhenotypeSubject
         metadata:
           render_as: chip
@@ -272,6 +344,165 @@ object_definitions:
                 - genephenotypeannotation.phenotypeannotationsubject_id
                 - allelephenotypeannotation.phenotypeannotationsubject_id
                 - agmphenotypeannotation.phenotypeannotationsubject_id
+      - field_path: phenotype_annotation_subject.subject_identifier
+        field_type: string
+        display_name: Subject identifier
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+      - field_path: phenotype_annotation_subject.subject_label
+        field_type: string
+        display_name: Subject label
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+      - field_path: phenotype_annotation_subject.subject_type
+        field_type: string
+        display_name: Subject type
+      - field_path: phenotype_annotation_subject.taxon
+        field_type: string
+        display_name: Subject taxon
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: enter the identifier, name and taxon together; typing them marks this value as a curator override.'
+      - field_path: phenotype_annotation_subject.proposed_taxon
+        field_type: string
+        display_name: Subject proposed taxon
+        description: Extractor's proposed species, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
+      - field_path: phenotype_annotation_subject.mention
+        field_type: string
+        display_name: Subject paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: phenotype_annotation_subject.proposed_subject_identifier
+        field_type: string
+        display_name: Subject proposed identifier
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
+      - field_path: phenotype_annotation_subject.resolution_state
+        field_type: enum
+        display_name: Subject status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: phenotype_annotation_subject.lookup_outcome
+        field_type: enum
+        display_name: Subject lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: phenotype_annotation_subject.validator_explanation
+        field_type: string
+        display_name: Subject validator explanation
+        metadata:
+          protected: true
+      - field_path: phenotype_annotation_subject.validator_curator_message
+        field_type: string
+        display_name: Subject validator message
+        metadata:
+          protected: true
+      # phenotype_terms is the whole term list, so exports reach every term (joined cell or
+      # split columns) through the PhenotypeTerm display. It is multivalued, so the
+      # phenotype_term_ontology_validator fans out one lookup per term and writes each result
+      # back into phenotype_terms[i] itself (ALL-1283). The bare leaves below are the indexed
+      # write-back targets; the phenotype_terms[0] declarations stay for saved export layouts
+      # and the review workspace.
+      - field_path: phenotype_terms
+        field_type: object_ref
+        display_name: Phenotype terms
+        description: Every phenotype ontology term on the annotation, in extraction order.
+        object_type_ref: PhenotypeTerm
+        metadata:
+          multivalued: true
+          validatable: true
+          validator_binding_id: phenotype_term_ontology_validator
+          validator_state: active
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: PhenotypeAnnotation
+              slot: phenotype_terms
+              range: PhenotypeTerm
+              db_table: phenotypeannotation_ontologyterm
+      - field_path: phenotype_terms.curie
+        field_type: string
+        display_name: Phenotype term CURIE
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+      - field_path: phenotype_terms.label
+        field_type: string
+        display_name: Phenotype term label
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+      - field_path: phenotype_terms.source_mentions
+        field_type: array
+        display_name: Phenotype term source mentions
+        metadata:
+          protected: true
+      - field_path: phenotype_terms.ontology_lookup_hint.data_provider
+        field_type: string
+        display_name: Phenotype term lookup data provider
+        metadata:
+          protected: true
+      - field_path: phenotype_terms.ontology_lookup_hint.taxon_id
+        field_type: string
+        display_name: Phenotype term lookup taxon
+        metadata:
+          protected: true
+      - field_path: phenotype_terms.ontology_lookup_hint.evidence_record_id
+        field_type: string
+        display_name: Phenotype term lookup evidence record
+        metadata:
+          protected: true
+      - field_path: phenotype_terms.mention
+        field_type: string
+        display_name: Phenotype term paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: phenotype_terms.proposed_curie
+        field_type: string
+        display_name: Phenotype term proposed ID
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
+      - field_path: phenotype_terms.resolution_state
+        field_type: enum
+        display_name: Phenotype term status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: phenotype_terms.lookup_outcome
+        field_type: enum
+        display_name: Phenotype term lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: phenotype_terms.validator_explanation
+        field_type: string
+        display_name: Phenotype term validator explanation
+        metadata:
+          protected: true
+      - field_path: phenotype_terms.validator_curator_message
+        field_type: string
+        display_name: Phenotype term validator message
+        metadata:
+          protected: true
       - field_path: phenotype_terms[0]
         field_type: object_ref
         display_name: First phenotype ontology term
@@ -293,12 +524,13 @@ object_definitions:
       - field_path: phenotype_terms[0].curie
         field_type: string
         display_name: First phenotype term CURIE
-        description: Optional exact-CURIE fast path; label-backed pending candidates remain valid without it.
+        description: The phenotype term ID the ontology validator confirmed; empty until then.
         required: false
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           render_as: term-chip
           validator_binding_id: phenotype_term_ontology_validator
-          editable: true
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -314,13 +546,11 @@ object_definitions:
         field_type: string
         display_name: First phenotype term label
         description: >-
-          Display-only ontology label retained for curator review; Alliance
-          LinkML PhenotypeTerm has no label slot.
+          The ontology label the validator confirmed, retained for curator review;
+          Alliance LinkML PhenotypeTerm has no label slot. Empty until validated.
         metadata:
-          protected: true
-          curator_action_note: >-
-              Display-only label is not a LinkML edit target; updates grounded
-              phenotype term fields such as phenotype_terms[0].curie.
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: phenotype_terms[0].source_mentions
         field_type: array
         display_name: First phenotype term source mentions
@@ -337,36 +567,58 @@ object_definitions:
         field_type: string
         display_name: Phenotype term lookup data provider
         metadata:
-          validator_binding_id: phenotype_term_ontology_validator
           protected: true
       - field_path: phenotype_terms[0].ontology_lookup_hint.taxon_id
         field_type: string
         display_name: Phenotype term lookup taxon
         metadata:
-          validator_binding_id: phenotype_term_ontology_validator
           protected: true
       - field_path: phenotype_terms[0].ontology_lookup_hint.evidence_record_id
         field_type: string
         display_name: Phenotype term lookup evidence record
         metadata:
-          validator_binding_id: phenotype_term_ontology_validator
           protected: true
-      - field_path: phenotype_terms[0].export_state
+      - field_path: phenotype_terms[0].mention
         field_type: string
-        display_name: Phenotype term export state
+        display_name: First phenotype term paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
         metadata:
           protected: true
-          curator_action_note: Pending ontology candidates are blocked from export until validator resolution succeeds.
-      - field_path: phenotype_terms[0].write_blocked_reason
+      - field_path: phenotype_terms[0].proposed_curie
         field_type: string
-        display_name: Phenotype term write blocker
+        display_name: First phenotype term proposed ID
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
         metadata:
           protected: true
-          curator_action_note: Pending ontology candidates are blocked from write materialization until validator resolution succeeds.
+          exported: false
+      - field_path: phenotype_terms[0].resolution_state
+        field_type: enum
+        display_name: First phenotype term status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: phenotype_terms[0].lookup_outcome
+        field_type: enum
+        display_name: First phenotype term lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: phenotype_terms[0].validator_explanation
+        field_type: string
+        display_name: First phenotype term validator explanation
+        metadata:
+          protected: true
+      - field_path: phenotype_terms[0].validator_curator_message
+        field_type: string
+        display_name: First phenotype term validator message
+        metadata:
+          protected: true
       - field_path: single_reference
         field_type: object_ref
         display_name: Evidence reference
-        required: true
+        description: The source paper, present only when the extraction names it; resolved downstream from the workspace document.
         object_type_ref: Reference
         metadata:
           validator_binding_id: phenotype_reference_validator
@@ -382,10 +634,58 @@ object_definitions:
               range: Reference
               db_table: phenotypeannotation
               db_column: evidenceitem_id
+      - field_path: single_reference.reference_id
+        field_type: integer
+        display_name: Evidence reference ID
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+      - field_path: single_reference.title
+        field_type: string
+        display_name: Evidence reference title
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+      - field_path: single_reference.filename
+        field_type: string
+        display_name: Evidence reference filename
+      - field_path: single_reference.mention
+        field_type: string
+        display_name: Evidence reference paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: single_reference.resolution_state
+        field_type: enum
+        display_name: Evidence reference status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: single_reference.lookup_outcome
+        field_type: enum
+        display_name: Evidence reference lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: single_reference.validator_explanation
+        field_type: string
+        display_name: Evidence reference validator explanation
+        metadata:
+          protected: true
+      - field_path: single_reference.validator_curator_message
+        field_type: string
+        display_name: Evidence reference validator message
+        metadata:
+          protected: true
       - field_path: data_provider
         field_type: object
         display_name: Data provider
         metadata:
+          display:
+            label: abbreviation
+            mention: mention
           protected: true
           curator_action_note: Data provider is workflow context, not an extractor edit target.
           provider_refs:
@@ -414,6 +714,36 @@ object_definitions:
               range: string
               db_table: organization
               db_column: abbreviation
+      - field_path: data_provider.mention
+        field_type: string
+        display_name: Data provider paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: data_provider.resolution_state
+        field_type: enum
+        display_name: Data provider status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: data_provider.lookup_outcome
+        field_type: enum
+        display_name: Data provider lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: data_provider.validator_explanation
+        field_type: string
+        display_name: Data provider validator explanation
+        metadata:
+          protected: true
+      - field_path: data_provider.validator_curator_message
+        field_type: string
+        display_name: Data provider validator message
+        metadata:
+          protected: true
       - field_path: evidence_quote
         field_type: object_ref
         display_name: Verified evidence quote
@@ -452,6 +782,14 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Source mentions are paper evidence anchors, not normalized edit targets.
+      - field_path: rationale
+        field_type: string
+        display_name: Rationale
+        required: false
+        description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       # EXPERIMENTAL CONDITIONS: condition_relations[] is the OUTER multivalued list (one
       # ConditionRelation per entry: relation_type + its conditions[]). Declared multivalued so
       # the nested fan-out engine indexes condition_relations[i] when fanning the inner
@@ -463,6 +801,11 @@ object_definitions:
         display_name: Condition relations
         model_ref: ConditionRelationPayload
         metadata:
+          display:
+            compose:
+              - condition_relation_type
+              - conditions
+            separator: ": "
           render_as: sub-table
           hide_when_empty: true
           multivalued: true
@@ -476,10 +819,60 @@ object_definitions:
               slot: condition_relations
               range: ConditionRelation
               db_table: phenotypeannotation_conditionrelation
+      - field_path: condition_relations.condition_relation_type
+        field_type: object
+        display_name: Condition relation type
+        model_ref: VocabularyTermPayload
+        metadata:
+          definition_state_category: complete
+      - field_path: condition_relations.condition_relation_type.mention
+        field_type: string
+        display_name: Condition relation type paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: condition_relations.condition_relation_type.resolution_state
+        field_type: enum
+        display_name: Condition relation type status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: condition_relations.condition_relation_type.lookup_outcome
+        field_type: enum
+        display_name: Condition relation type lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: condition_relations.condition_relation_type.validator_explanation
+        field_type: string
+        display_name: Condition relation type validator explanation
+        metadata:
+          protected: true
+      - field_path: condition_relations.condition_relation_type.validator_curator_message
+        field_type: string
+        display_name: Condition relation type validator message
+        metadata:
+          protected: true
+      - field_path: condition_relations.condition_relation_type.vocabulary
+        field_type: string
+        display_name: Condition relation type vocabulary
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
+      - field_path: condition_relations.condition_relation_type.id
+        field_type: string
+        display_name: Condition relation type internal ID
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
       - field_path: condition_relations.condition_relation_type.name
         field_type: string
-        display_name: Condition relation type
+        display_name: Condition relation type name
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: enter the name, vocabulary and internal ID together; typing them marks this value as a curator override.'
           validatable: true
           validator_binding_id: phenotype_condition_relation_lookup
           validator_state: active
@@ -518,10 +911,55 @@ object_definitions:
               slot: conditions
               range: ExperimentalCondition
               db_table: conditionrelation_experimentalcondition
+      - field_path: condition_relations.conditions.condition_class
+        field_type: object
+        display_name: Condition class
+        model_ref: ConditionTermPayload
+        metadata:
+          definition_state_category: complete
+      - field_path: condition_relations.conditions.condition_class.mention
+        field_type: string
+        display_name: Condition class paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_class.proposed_curie
+        field_type: string
+        display_name: Condition class proposed ID
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
+      - field_path: condition_relations.conditions.condition_class.resolution_state
+        field_type: enum
+        display_name: Condition class status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_class.lookup_outcome
+        field_type: enum
+        display_name: Condition class lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_class.validator_explanation
+        field_type: string
+        display_name: Condition class validator explanation
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_class.validator_curator_message
+        field_type: string
+        display_name: Condition class validator message
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_class.curie
         field_type: string
         display_name: Condition class CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           # Per-condition component (ZECO). Grounded by the extractor via the term helper and
           # composed (not separately bound) by experimental_condition_validation at the condition grain.
           term_helper:
@@ -539,7 +977,6 @@ object_definitions:
                 - trigram_label
                 - trigram_synonym
                 - definition
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: zeco
@@ -558,10 +995,62 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_class.name
+        field_type: string
+        display_name: Condition class name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+      - field_path: condition_relations.conditions.condition_id
+        field_type: object
+        display_name: Condition
+        model_ref: ConditionTermPayload
+        metadata:
+          definition_state_category: complete
+      - field_path: condition_relations.conditions.condition_id.mention
+        field_type: string
+        display_name: Condition paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_id.proposed_curie
+        field_type: string
+        display_name: Condition proposed ID
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
+      - field_path: condition_relations.conditions.condition_id.resolution_state
+        field_type: enum
+        display_name: Condition status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_id.lookup_outcome
+        field_type: enum
+        display_name: Condition lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_id.validator_explanation
+        field_type: string
+        display_name: Condition validator explanation
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_id.validator_curator_message
+        field_type: string
+        display_name: Condition validator message
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_id.curie
         field_type: string
         display_name: Condition ID CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           # Per-condition component (ZECO/XCO). Grounded by the extractor; composed by the
           # condition-grain composite validator.
           term_helper:
@@ -579,7 +1068,6 @@ object_definitions:
                 - trigram_label
                 - trigram_synonym
                 - definition
-              unresolved_metadata_path: metadata.normalization_notes
             term_source:
               kind: ontology
               ontology_family: zeco
@@ -598,10 +1086,62 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_id.name
+        field_type: string
+        display_name: Condition name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+      - field_path: condition_relations.conditions.condition_chemical
+        field_type: object
+        display_name: Chemical
+        model_ref: ConditionTermPayload
+        metadata:
+          definition_state_category: complete
+      - field_path: condition_relations.conditions.condition_chemical.mention
+        field_type: string
+        display_name: Chemical paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_chemical.proposed_curie
+        field_type: string
+        display_name: Chemical proposed ID
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
+      - field_path: condition_relations.conditions.condition_chemical.resolution_state
+        field_type: enum
+        display_name: Chemical status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_chemical.lookup_outcome
+        field_type: enum
+        display_name: Chemical lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_chemical.validator_explanation
+        field_type: string
+        display_name: Chemical validator explanation
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_chemical.validator_curator_message
+        field_type: string
+        display_name: Chemical validator message
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_chemical.curie
         field_type: string
         display_name: Chemical CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           # ChEBI is an ontology term in the curation DB (db_table: ontologyterm, ontologytermtype
           # CHEBITerm); the composite validator resolves it via agr_curation_query get_ontology_term.
           definition_state_category: complete
@@ -615,10 +1155,62 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_chemical.name
+        field_type: string
+        display_name: Chemical name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+      - field_path: condition_relations.conditions.condition_taxon
+        field_type: object
+        display_name: Condition taxon
+        model_ref: ConditionTermPayload
+        metadata:
+          definition_state_category: complete
+      - field_path: condition_relations.conditions.condition_taxon.mention
+        field_type: string
+        display_name: Condition taxon paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_taxon.proposed_curie
+        field_type: string
+        display_name: Condition taxon proposed ID
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
+      - field_path: condition_relations.conditions.condition_taxon.resolution_state
+        field_type: enum
+        display_name: Condition taxon status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_taxon.lookup_outcome
+        field_type: enum
+        display_name: Condition taxon lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_taxon.validator_explanation
+        field_type: string
+        display_name: Condition taxon validator explanation
+        metadata:
+          protected: true
+      - field_path: condition_relations.conditions.condition_taxon.validator_curator_message
+        field_type: string
+        display_name: Condition taxon validator message
+        metadata:
+          protected: true
       - field_path: condition_relations.conditions.condition_taxon.curie
         field_type: string
         display_name: Taxon CURIE
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -630,6 +1222,13 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
+      - field_path: condition_relations.conditions.condition_taxon.name
+        field_type: string
+        display_name: Condition taxon name
+        description: The ontology name the condition validator confirmed; empty until then.
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
@@ -703,17 +1302,57 @@ object_definitions:
           source_file: model/schema/core.yaml
           class: BiologicalEntity
     fields:
+      - field_path: mention
+        field_type: string
+        display_name: Subject paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: proposed_subject_identifier
+        field_type: string
+        display_name: Subject proposed identifier
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
+      - field_path: proposed_taxon
+        field_type: string
+        display_name: Subject proposed taxon
+        description: Extractor's proposed species, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: resolution_state
         field_type: enum
-        display_name: Resolution state
-        required: true
-        enum_ref: PhenotypeSubjectResolutionState
+        display_name: Subject status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: lookup_outcome
+        field_type: enum
+        display_name: Subject lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: validator_explanation
+        field_type: string
+        display_name: Subject validator explanation
+        metadata:
+          protected: true
+      - field_path: validator_curator_message
+        field_type: string
+        display_name: Subject validator message
+        metadata:
+          protected: true
       - field_path: subject_identifier
         field_type: string
         display_name: Subject identifier
         metadata:
-          validator_binding_id: phenotype_subject_entity_validator
           editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
+          validator_binding_id: phenotype_subject_entity_validator
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -728,6 +1367,9 @@ object_definitions:
       - field_path: subject_label
         field_type: string
         display_name: Subject label
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: subject_type
         field_type: string
         display_name: Subject type
@@ -747,6 +1389,7 @@ object_definitions:
           validatable: true
           validator_binding_id: phenotype_subject_entity_validator
           editable: true
+          curator_action_note: 'Curator override: enter the identifier, name and taxon together; typing them marks this value as a curator override.'
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -777,7 +1420,6 @@ object_definitions:
     metadata:
       object_role: validated_reference
       validation_state: pending_ontology_resolution
-      validator_binding_id: phenotype_term_ontology_validator
       provider_refs:
         alliance_linkml:
           schema_ref: alliance.linkml
@@ -785,18 +1427,51 @@ object_definitions:
           source_file: model/schema/ontologyTerm.yaml
           class: PhenotypeTerm
     fields:
+      - field_path: mention
+        field_type: string
+        display_name: Phenotype term paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: proposed_curie
+        field_type: string
+        display_name: Phenotype term proposed ID
+        description: Extractor's proposed identifier, not validated. It is a validator input only, never shown or exported as the value.
+        metadata:
+          protected: true
+          exported: false
       - field_path: resolution_state
         field_type: enum
-        display_name: Resolution state
-        required: true
-        enum_ref: PhenotypeTermResolutionState
+        display_name: Phenotype term status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: lookup_outcome
+        field_type: enum
+        display_name: Phenotype term lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: validator_explanation
+        field_type: string
+        display_name: Phenotype term validator explanation
+        metadata:
+          protected: true
+      - field_path: validator_curator_message
+        field_type: string
+        display_name: Phenotype term validator message
+        metadata:
+          protected: true
       - field_path: curie
         field_type: string
         display_name: Term CURIE
-        description: Optional exact-CURIE fast path; pending label candidates use validator lookup.
+        description: A structural copy of the annotation's staged term; the validator resolves the annotation's own phenotype_terms.
         required: false
         metadata:
-          validator_binding_id: phenotype_term_ontology_validator
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -810,6 +1485,9 @@ object_definitions:
       - field_path: label
         field_type: string
         display_name: Curator-facing label
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: source_mentions
         field_type: array
         display_name: Source mentions
@@ -822,24 +1500,12 @@ object_definitions:
       - field_path: ontology_lookup_hint.data_provider
         field_type: string
         display_name: Lookup data provider
-        metadata:
-          validator_binding_id: phenotype_term_ontology_validator
       - field_path: ontology_lookup_hint.taxon_id
         field_type: string
         display_name: Lookup taxon
-        metadata:
-          validator_binding_id: phenotype_term_ontology_validator
       - field_path: ontology_lookup_hint.evidence_record_id
         field_type: string
         display_name: Lookup evidence record
-        metadata:
-          validator_binding_id: phenotype_term_ontology_validator
-      - field_path: export_state
-        field_type: string
-        display_name: Export state
-      - field_path: write_blocked_reason
-        field_type: string
-        display_name: Write blocked reason
   - object_type: Reference
     display_name: Reference
     description: Pending literature/reference object for the source paper.
@@ -873,6 +1539,8 @@ object_definitions:
         field_type: integer
         display_name: Reference ID
         metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
           validator_binding_id: phenotype_reference_validator
           provider_refs:
             alliance_linkml:
@@ -887,9 +1555,42 @@ object_definitions:
       - field_path: title
         field_type: string
         display_name: Title
+        metadata:
+          editable: true
+          curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
       - field_path: filename
         field_type: string
         display_name: Filename
+      - field_path: mention
+        field_type: string
+        display_name: Reference paper wording
+        description: How the paper words this value; kept as extracted and never replaced by the validated value.
+        metadata:
+          protected: true
+      - field_path: resolution_state
+        field_type: enum
+        display_name: Reference status
+        description: Resolved only when a validator supplied the identity; otherwise unresolved.
+        enum_ref: ResolutionState
+        metadata:
+          protected: true
+      - field_path: lookup_outcome
+        field_type: enum
+        display_name: Reference lookup result
+        description: What the validator lookup found, or that no validator has run yet.
+        enum_ref: LookupOutcome
+        metadata:
+          protected: true
+      - field_path: validator_explanation
+        field_type: string
+        display_name: Reference validator explanation
+        metadata:
+          protected: true
+      - field_path: validator_curator_message
+        field_type: string
+        display_name: Reference validator message
+        metadata:
+          protected: true
   - object_type: EvidenceQuote
     display_name: Verified evidence quote
     description: Metadata-only object preserving one record_evidence-verified phenotype quote and document locator.
@@ -982,32 +1683,37 @@ metadata:
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
+        # ALL-1283: the validator resolves each annotation term in place. phenotype_terms is
+        # multivalued, so the engine fans out one lookup per phenotype_terms[i]; the paper wording
+        # (mention) is the label input, the extractor's proposed CURIE the fast path, and the
+        # result is written back into that same term (resolved, or unresolved with the reason).
         applies_to:
           domain_pack_id: agr.alliance.phenotype
           object_types:
-            - PhenotypeTerm
+            - PhenotypeAnnotation
+          field_paths:
+            - phenotype_terms
         input_fields:
           curie:
             source: payload
-            path: curie
+            path: phenotype_terms.proposed_curie
             required: false
           label:
             source: payload
-            path: label
-            required: false
+            path: phenotype_terms.mention
           data_provider:
             source: payload
-            path: ontology_lookup_hint.data_provider
+            path: phenotype_terms.ontology_lookup_hint.data_provider
             required: false
             context_only: true
           taxon_id:
             source: payload
-            path: ontology_lookup_hint.taxon_id
+            path: phenotype_terms.ontology_lookup_hint.taxon_id
             required: false
             context_only: true
           evidence_record_id:
             source: payload
-            path: ontology_lookup_hint.evidence_record_id
+            path: phenotype_terms.ontology_lookup_hint.evidence_record_id
             required: false
             context_only: true
           source_mentions:
@@ -1056,8 +1762,8 @@ metadata:
                     - MP:0001569
                     - MP:0003733
         expected_result_fields:
-          curie: curie
-          label: label
+          curie: phenotype_terms.curie
+          label: phenotype_terms.label
         required: true
         blocking: false
         allow_opt_out: true
@@ -1096,7 +1802,7 @@ metadata:
             required: false
           term_name:
             source: payload
-            path: condition_relations.condition_relation_type.name
+            path: condition_relations.condition_relation_type.mention
             required: false
           source_mentions:
             source: payload
@@ -1153,7 +1859,7 @@ metadata:
           # context (does the class fit the relation?) and never re-looks-it-up.
           condition_relation_type:
             source: payload
-            path: condition_relations.condition_relation_type.name
+            path: condition_relations.condition_relation_type.mention
             required: false
             context_only: true
           # The whole ExperimentalCondition object for this element (component bundle).
@@ -1161,21 +1867,35 @@ metadata:
             source: payload
             path: condition_relations.conditions
             required: false
+          # Each component's paper wording (mention) and the CURIE the extractor proposed for it;
+          # the validated CURIE is only ever written back by this validator.
           condition_class_curie:
             source: payload
-            path: condition_relations.conditions.condition_class.curie
+            path: condition_relations.conditions.condition_class.proposed_curie
+            required: false
+          condition_class_name:
+            source: payload
+            path: condition_relations.conditions.condition_class.mention
             required: false
           condition_id_curie:
             source: payload
-            path: condition_relations.conditions.condition_id.curie
+            path: condition_relations.conditions.condition_id.proposed_curie
+            required: false
+          condition_id_name:
+            source: payload
+            path: condition_relations.conditions.condition_id.mention
             required: false
           condition_chemical_curie:
             source: payload
-            path: condition_relations.conditions.condition_chemical.curie
+            path: condition_relations.conditions.condition_chemical.proposed_curie
+            required: false
+          condition_chemical_name:
+            source: payload
+            path: condition_relations.conditions.condition_chemical.mention
             required: false
           condition_taxon_curie:
             source: payload
-            path: condition_relations.conditions.condition_taxon.curie
+            path: condition_relations.conditions.condition_taxon.proposed_curie
             required: false
           condition_free_text:
             source: payload
@@ -1198,12 +1918,20 @@ metadata:
             allow_multiple: true
             required: false
             context_only: true
-        # The composite resolves on the always-present condition_class (the experimental-variable
-        # TYPE every condition carries); condition_id (a more specific ZECO term) is OPTIONAL and
-        # absent in ~74% of curated conditions, so requiring it would false-negative the majority.
-        # The agent still reports unresolved if any PRESENT component (class/chemical/...) fails.
+        # Every component the paper states is decided on its own (field_resolutions, ALL-1283):
+        # its CURIE and name are written back, or it records why it stays unresolved. A component
+        # the paper does not state (condition_id is absent in ~74% of curated conditions) is
+        # never required and never written. The condition as a whole stays unresolved if any
+        # PRESENT component fails.
         expected_result_fields:
           condition_class_curie: condition_relations.conditions.condition_class.curie
+          condition_class_name: condition_relations.conditions.condition_class.name
+          condition_id_curie: condition_relations.conditions.condition_id.curie
+          condition_id_name: condition_relations.conditions.condition_id.name
+          condition_chemical_curie: condition_relations.conditions.condition_chemical.curie
+          condition_chemical_name: condition_relations.conditions.condition_chemical.name
+          condition_taxon_curie: condition_relations.conditions.condition_taxon.curie
+          condition_taxon_name: condition_relations.conditions.condition_taxon.name
         required: true
         blocking: false
         allow_opt_out: true
@@ -1216,10 +1944,7 @@ metadata:
     under_development:
       - binding_id: phenotype_subject_entity_validator
         display_name: Phenotype subject lookup
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: subject_entity_validation
-        state_explanation: Subject entity lookup routes explicit subject_type values to gene, allele, or AGM validation paths; binding remains under development until validator dispatch is reviewed end to end.
+        state_explanation: The subject routes by its subject type to the gene, allele, or AGM validator, searching the paper's wording; the binding remains under development until phenotype subject materialization is reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.phenotype
           object_types:
@@ -1227,26 +1952,71 @@ metadata:
           field_paths:
             - subject_identifier
             - subject_type
-        input_fields:
-          subject_type:
-            source: payload
-            path: subject_type
-          subject_identifier:
-            source: payload
-            path: subject_identifier
-          subject_label:
-            source: payload
-            path: subject_label
-            required: false
-          taxon:
-            source: payload
-            path: taxon
-            required: false
-        expected_result_fields:
-          subject_identifier: subject_identifier
-          subject_type: subject_type
-          subject_label: subject_label
-          taxon: taxon
+        route_by:
+          source: payload
+          path: subject_type
+        routes:
+          gene:
+            validator_agent:
+              package_id: agr.alliance
+              agent_id: gene_validation
+            input_fields:
+              mention:
+                source: payload
+                path: mention
+              proposed_gene_id:
+                source: payload
+                path: proposed_subject_identifier
+                required: false
+              proposed_taxon:
+                source: payload
+                path: proposed_taxon
+                required: false
+            expected_result_fields:
+              primary_external_id: subject_identifier
+              symbol: subject_label
+              taxon: taxon
+          allele:
+            validator_agent:
+              package_id: agr.alliance
+              agent_id: allele_validation
+            max_tool_calls: ${SUBJECT_ALLELE_VALIDATOR_MAX_TOOL_CALLS:-16}
+            input_fields:
+              mention:
+                source: payload
+                path: mention
+              normalized_hint:
+                source: payload
+                path: proposed_subject_identifier
+                required: false
+              taxon:
+                source: payload
+                path: proposed_taxon
+                required: false
+            expected_result_fields:
+              curie: subject_identifier
+              symbol: subject_label
+              taxon: taxon
+          agm:
+            validator_agent:
+              package_id: agr.alliance
+              agent_id: agm_validation
+            input_fields:
+              subject_identifier:
+                source: payload
+                path: proposed_subject_identifier
+                required: false
+              subject_label:
+                source: payload
+                path: mention
+              taxon:
+                source: payload
+                path: proposed_taxon
+                required: false
+            expected_result_fields:
+              agm_id: subject_identifier
+              label: subject_label
+              taxon: taxon
         definition_state: in_development
       - binding_id: phenotype_reference_validator
         display_name: Reference lookup
@@ -1281,7 +2051,7 @@ metadata:
             required: false
           title:
             source: payload
-            path: title
+            path: mention
             required: false
           source_document_id:
             source: envelope_metadata

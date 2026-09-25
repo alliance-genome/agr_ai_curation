@@ -3,10 +3,14 @@ import { resolveEnvelopeFieldPath } from '@/features/curation/workspace/workspac
 
 // Packages may narrow the decision surface through workspace_display. Without
 // a declaration every projected field remains visible, including new packages.
+
+// Rationale is displayed in row context, not as an editable decision column.
+export const HORIZONTAL_GRID_RATIONALE_FIELD_PATH = 'rationale'
 export function isHorizontalGridDecisionField(
   reviewRowMetadata: Record<string, unknown> | null,
   field: CurationDraftField,
 ): boolean {
+  if (resolveEnvelopeFieldPath(field) === HORIZONTAL_GRID_RATIONALE_FIELD_PATH) return false
   const display = reviewRowMetadata?.workspace_display
   if (display === undefined || display === null) {
     return true

@@ -284,7 +284,7 @@ def test_transient_lookup_exception_preserves_attempted_query(monkeypatch):
         go_aspect="molecular_function",
         exact_match=True,
         include_synonyms=False,
-        limit=7,
+        limit=30,
     )
     assert go_result.status == "error"
     assert go_result.lookup_status == "transient"
@@ -294,7 +294,7 @@ def test_transient_lookup_exception_preserves_attempted_query(monkeypatch):
         "go_aspect": "molecular_function",
         "exact_match": True,
         "include_synonyms": False,
-        "limit": 7,
+        "limit": 30,
     }
 
 
@@ -426,6 +426,78 @@ def test_query_ontology_search_methods(monkeypatch):
     go = query_fn(method="search_go_terms", term="molecular")
     assert go.status == "ok"
     assert go.count == 1
+
+
+@pytest.mark.parametrize(
+    ("method", "arguments"),
+    [
+        ("search_life_stage_terms", {"data_provider": "WB"}),
+        ("search_anatomy_terms", {"data_provider": "WB"}),
+        ("search_go_terms", {"go_aspect": "cellular_component"}),
+        ("search_ontology_terms", {"ontology_term_type": "WBLSTerm"}),
+    ],
+)
+def test_ontology_label_search_keeps_client_match_facts_and_fuzzy_room(
+    monkeypatch, method, arguments
+):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+    calls = []
+    fuzzy = SimpleNamespace(
+        curie="WBls:0000814",
+        name="C. elegans life stage occurring during gastrulation",
+        namespace="wbls",
+        definition="A life stage occurring during gastrulation.",
+        ontology_type="WBLSTerm",
+        synonyms=[],
+        match_type="trigram",
+        match_score=0.65,
+        matched_field="name",
+    )
+    synonym_hit = SimpleNamespace(
+        curie="WBls:0000010",
+        name="gastrulating embryo Ce",
+        namespace="wbls",
+        ontology_type="WBLSTerm",
+        synonyms=["gastrulating embryo"],
+        match_type="exact",
+    )
+
+    class FakeDb:
+        def __getattr__(self, name):
+            def search(**kwargs):
+                calls.append((name, kwargs))
+                return [fuzzy, synonym_hit]
+
+            return search
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.delenv("AGR_ONTOLOGY_SEARCH_MIN_LIMIT", raising=False)
+
+    result = query_fn(method=method, term="end of gastrulation", limit=10, **arguments)
+
+    assert result.status == "ok"
+    assert result.lookup_status == "success"
+    assert calls[-1][1]["limit"] == 25
+    assert "ontology_search_limit_raised:25" in result.warnings
+    first, second = result.data
+    assert first["match_type"] == "trigram"
+    assert first["match_score"] == 0.65
+    assert first["matched_field"] == "name"
+    assert first["definition"] == "A life stage occurring during gastrulation."
+    assert second["match_type"] == "exact"
+    assert second["synonyms"] == ["gastrulating embryo"]
+    assert "match_score" not in second
+
+    query_fn(method=method, term="gastrulation", **arguments)
+    assert calls[-1][1]["limit"] == 25
+    query_fn(method=method, term="gastrulation", limit=40, **arguments)
+    assert calls[-1][1]["limit"] == 40
 
 
 def test_query_get_ontology_term_uses_package_lookup(monkeypatch):

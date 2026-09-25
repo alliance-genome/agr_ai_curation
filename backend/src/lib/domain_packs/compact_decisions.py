@@ -223,7 +223,8 @@ class ValidatorDecisionWorkspace:
                 rows.setdefault(result_field, []).append(deepcopy(row))
         values = {}
         for slot, selection in decision.slots.items():
-            if slot not in request.expected_result_fields:
+            # Optional slots are filled only when the record confirms them; never required.
+            if slot not in request.expected_result_fields and slot not in (request.optional_result_fields or {}):
                 raise ValueError(f"Unexpected result slot: {slot}")
             if isinstance(selection, RecordValue):
                 _, record = self._record(request.request_id, selection.record_ref)
@@ -274,11 +275,18 @@ class ValidatorDecisionWorkspace:
             payload.update(additions)
         # Domain assembly may deterministically supply composite fields. Check
         # completeness only after those fields exist, never from model echoes.
-        payload["missing_expected_fields"] = [
-            name for name in request.expected_result_fields
-            if name not in payload["resolved_values"]
-            or payload["resolved_values"][name] is None or payload["resolved_values"][name] == ""
-        ]
+        # A composite result that decides each value itself (field_resolutions)
+        # reports the missing fields of the values it decided; values it did
+        # not decide are not written, so their expected fields are not missing.
+        if not payload.get("field_resolutions"):
+            payload["missing_expected_fields"] = [
+                name for name in request.expected_result_fields
+                if name not in payload["resolved_values"]
+                or payload["resolved_values"][name] is None or payload["resolved_values"][name] == ""
+            ]
         if payload["status"] == "resolved" and (payload["missing_expected_fields"] or decision.unresolved_questions):
             raise ValueError("Resolved decision still has missing fields or unresolved questions")
-        return contract.result_schema.model_validate(payload, context={"domain_validation_request": request})
+        result = contract.result_schema.model_validate(payload, context={"domain_validation_request": request})
+        if contract.assemble_domain is not None and result.field_resolutions:
+            result._assembled_field_completeness = True
+        return result

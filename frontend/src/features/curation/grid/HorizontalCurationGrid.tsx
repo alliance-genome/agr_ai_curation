@@ -32,7 +32,12 @@ import {
   type HorizontalGridModel,
   type HorizontalGridRow,
 } from './horizontalGridModel'
-import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import { HORIZONTAL_GRID_UNRESOLVED_TEXT } from './horizontalGridFormatting'
+import {
+  HorizontalGridOverrideBadge,
+  HorizontalGridRationaleLine,
+  HorizontalGridResolutionLines,
+} from './HorizontalGridCells'
 import { horizontalGridValidationPreviewCounts } from './horizontalGridValidationPreview'
 
 const CONTEXT_COLUMN_WIDTH = 220
@@ -82,6 +87,7 @@ function DefaultContextCell({ cell }: HorizontalGridContextRenderArgs) {
           {cell.value.secondaryLabel}
         </Typography>
       ) : null}
+      <HorizontalGridRationaleLine rationale={cell.value.rationale} />
     </Stack>
   );
 }
@@ -99,15 +105,21 @@ function DefaultFieldCell({ cell }: HorizontalGridFieldRenderArgs) {
     );
   }
 
-  const value = formatHorizontalGridValue(cell.value)
+  const value = cell.displayText
   return (
-    <Typography
-      aria-label={value === null ? 'Empty value' : undefined}
-      sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}
-      variant="body2"
-    >
-      {value ?? '—'}
-    </Typography>
+    <Stack sx={{ minWidth: 0 }} spacing={0.25}>
+      <Typography
+        aria-label={value === null ? 'Empty value' : undefined}
+        color={value === HORIZONTAL_GRID_UNRESOLVED_TEXT ? 'error.main' : undefined}
+        data-slot="field-value"
+        sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}
+        variant="body2"
+      >
+        {value ?? '—'}
+      </Typography>
+      <HorizontalGridOverrideBadge cell={cell} />
+      <HorizontalGridResolutionLines cell={cell} />
+    </Stack>
   )
 }
 

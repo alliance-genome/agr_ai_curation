@@ -9,8 +9,20 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from agents import function_tool
 
-from ..config import get_list_recorded_evidence_limit
+from ..config import get_evidence_list_max_limit, get_list_recorded_evidence_limit
 from ..evidence_summary import evidence_record_status
+from ..tool_result_bounds import (
+    ToolResultBudgetError,
+    bounded_json_result,
+    budget_failure,
+    clamp_page_limit,
+    fit_page,
+    invalid_cursor,
+    parse_offset,
+    report_budget_failure_result,
+    serialized_size,
+    tool_result_budget,
+)
 
 if TYPE_CHECKING:
     from ..guardrails import ToolCallTracker
@@ -363,12 +375,38 @@ def _record_list_summary(record: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _success(record: dict[str, Any], *, action: str) -> dict[str, Any]:
+def _oversized_list_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Identity-only stand-in for a summary too large for one page."""
+
     return {
-        "status": "ok",
-        "action": action,
-        "record": _record_summary(record),
+        "evidence_record_id": summary.get("evidence_record_id"),
+        "status": summary.get("status"),
+        "withheld": True,
+        "summary_bytes": serialized_size(summary),
+        "detail_tool": "get_recorded_evidence",
     }
+
+
+def _record_ack(response: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    """Attach the changed record's compact summary, or only its identity.
+
+    A summary can outgrow one response only through agent-authored metadata;
+    the change itself already happened, so acknowledge it with identity and
+    point at get_recorded_evidence rather than failing the mutation.
+    """
+
+    summary = _record_list_summary(record)
+    full = {**response, "record": summary}
+    if serialized_size(full) <= tool_result_budget():
+        return full
+    return {**response, "record": _oversized_list_summary(summary)}
+
+
+def _success(record: dict[str, Any], *, action: str) -> dict[str, Any]:
+    # Acknowledge the changed record's identity and attachment state only. The
+    # exact quote and provenance stay in the workspace; get_recorded_evidence
+    # reads them.
+    return _record_ack({"status": "ok", "action": action}, record)
 
 
 def _not_found(evidence_record_id: str) -> dict[str, Any]:
@@ -380,12 +418,14 @@ def _not_found(evidence_record_id: str) -> dict[str, Any]:
 
 
 def _discarded_error(record: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "status": "discarded",
-        "evidence_record_id": record.get("evidence_record_id"),
-        "message": "Discarded evidence cannot be attached, detached, or edited.",
-        "record": _record_summary(record),
-    }
+    return _record_ack(
+        {
+            "status": "discarded",
+            "evidence_record_id": record.get("evidence_record_id"),
+            "message": "Discarded evidence cannot be attached, detached, or edited.",
+        },
+        record,
+    )
 
 
 def _track(tracker: Optional["ToolCallTracker"], tool_name: str) -> None:
@@ -419,7 +459,11 @@ def create_list_recorded_evidence_tool(
         Discarded records are excluded by default. Use this to confirm the active
         evidence set matches final curatable objects before returning structured output.
         Results come back one page at a time: pass ``offset`` to step past evidence
-        you have already seen and read ``next_offset`` to continue.
+        you have already seen and read ``next_offset`` to continue. A page can end
+        before ``limit`` when the response reaches its size budget, and limits above
+        the configured maximum are clamped; ``requested_limit`` and ``effective_limit``
+        report what was applied. Quotes are omitted from the list; read one record
+        exactly with get_recorded_evidence.
 
         Args:
             include_discarded: Include evidence previously marked discarded.
@@ -455,21 +499,64 @@ def create_list_recorded_evidence_tool(
             records.append(_record_list_summary(record))
 
         total = len(records)
-        cap = max(1, int(limit)) if limit else _LIST_RECORDED_EVIDENCE_LIMIT
-        start = max(0, int(offset)) if offset else 0
-        returned = records[start : start + cap]
-        has_more = total > start + len(returned)
-        return {
-            "status": "ok",
-            "document_id": document_id,
-            "include_discarded": include_discarded,
-            "count": total,
-            "returned_count": len(returned),
-            "offset": start,
-            "next_offset": start + len(returned) if has_more else None,
-            "truncated": has_more,
-            "evidence_records": returned,
-        }
+        try:
+            cap, limit_metadata = clamp_page_limit(
+                limit,
+                default=_LIST_RECORDED_EVIDENCE_LIMIT,
+                maximum=get_evidence_list_max_limit(),
+            )
+            start = parse_offset(offset, total=total)
+        except ValueError as exc:
+            return invalid_cursor(str(exc), document_id=document_id, count=total)
+        budget = tool_result_budget()
+
+        def render(page: list[dict[str, Any]], returned: int) -> dict[str, Any]:
+            next_offset = start + returned
+            has_more = total > next_offset
+            if not has_more:
+                ended_by = "end"
+            elif returned >= cap:
+                ended_by = "limit"
+            else:
+                ended_by = "size_budget"
+            return {
+                "status": "ok",
+                "document_id": document_id,
+                "include_discarded": include_discarded,
+                "count": total,
+                "returned_count": returned,
+                "offset": start,
+                "next_offset": next_offset if has_more else None,
+                "truncated": has_more,
+                "page_ended_by": ended_by,
+                **limit_metadata,
+                "budget_bytes": budget,
+                "evidence_records": page,
+            }
+
+        try:
+            response, _ = fit_page(
+                records,
+                start=start,
+                limit=cap,
+                render=render,
+                budget=budget,
+                oversized=lambda summary, _index: _oversized_list_summary(summary),
+            )
+        except ToolResultBudgetError as exc:
+            failure = budget_failure(
+                tool_name="list_recorded_evidence",
+                measured=exc.measured,
+                limit=exc.limit,
+            )
+            report_budget_failure_result(
+                failure,
+                tool_name="list_recorded_evidence",
+                component="evidence_workspace",
+                correlation={"document_id": document_id},
+            )
+            return failure
+        return response
 
     return list_recorded_evidence
 
@@ -489,11 +576,25 @@ def create_get_recorded_evidence_tool(
     @function_tool
     async def get_recorded_evidence(
         evidence_record_id: str,
+        detail_path: str | None = None,
+        detail_cursor: int | None = None,
+        result_offset: int | None = None,
+        result_sha256: str | None = None,
     ) -> dict[str, Any]:
         """Fetch one active-run evidence record for detailed review.
 
+        The whole record is returned when it fits one response. A record too
+        large for that comes back with its long values withheld and a
+        result_page describing them; read each withheld value exactly with
+        detail_path, continuing from each chunk's next_cursor until complete,
+        and continue paged lists with the arguments in result_page.next_call.
+
         Args:
             evidence_record_id: Evidence record ID returned by record_evidence or list_recorded_evidence.
+            detail_path: Only for a withheld value: its detail_path from result_page.
+            detail_cursor: Character cursor for detail_path; use the previous chunk's next_cursor.
+            result_offset: Only when continuing a paged record: result_page.next_offset.
+            result_sha256: Only when continuing: result_page.result_sha256, so a changed record is reported.
         """
 
         _track(tracker, "get_recorded_evidence")
@@ -509,10 +610,43 @@ def create_get_recorded_evidence_tool(
             return _not_found(evidence_record_id)
         record_payload = deepcopy(record)
         record_payload.pop("evidence_revision_history", None)
-        return {
+        response = {
             "status": "ok",
+            "evidence_record_id": _optional_string(evidence_record_id),
             "record": record_payload,
         }
+        budget = tool_result_budget()
+        try:
+            bounded = bounded_json_result(
+                response,
+                budget=budget,
+                offset=result_offset,
+                expected_sha256=result_sha256,
+                detail_path=detail_path,
+                detail_cursor=detail_cursor,
+                body_key="record",
+                identity_keys=("status", "evidence_record_id"),
+            )
+        except ValueError as exc:
+            return invalid_cursor(
+                str(exc),
+                evidence_record_id=_optional_string(evidence_record_id),
+            )
+        except ToolResultBudgetError as exc:
+            failure = budget_failure(
+                tool_name="get_recorded_evidence",
+                measured=exc.measured,
+                limit=exc.limit,
+                field=detail_path,
+            )
+            report_budget_failure_result(
+                failure,
+                tool_name="get_recorded_evidence",
+                component="evidence_workspace",
+                correlation={"document_id": document_id},
+            )
+            return failure
+        return response if bounded is None else bounded
 
     return get_recorded_evidence
 
@@ -616,7 +750,6 @@ def create_detach_evidence_from_object_tool(
     *,
     workspace_records: list[dict[str, Any]] | None = None,
     allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
-    allow_detach: bool = True,
 ):
     """Create a tool for detaching evidence from an object or pending ref."""
 
@@ -646,12 +779,6 @@ def create_detach_evidence_from_object_tool(
         scope_error = _allowed_id_error(evidence_record_id, allowed_ids)
         if scope_error is not None:
             return scope_error
-        if not allow_detach:
-            return {
-                "status": "forbidden",
-                "evidence_record_id": _optional_string(evidence_record_id),
-                "message": "Validator evidence tools cannot detach scoped evidence from the current validation target.",
-            }
         record = _find_record(
             evidence_record_id,
             document_id=document_id,

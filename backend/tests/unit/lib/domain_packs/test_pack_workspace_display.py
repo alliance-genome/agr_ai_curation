@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+from src.lib.domain_packs.resolvable_values import unresolved_value
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
@@ -274,18 +277,20 @@ def test_allele_association_promotes_identifier_hides_routing():
 
 def test_disease_groups_hide_plumbing_and_keep_curatable():
     payload = {
-        "disease_annotation_object": {"curie": "DOID:0050200", "name": "x"},
-        "disease_annotation_subject": {
-            "subject_identifier": "WB:WBGene1",
-            "subject_type": "gene",
-            "subject_label": "pef-1",
-        },
-        "disease_relation_name": "is_implicated_in",
-        "evidence_code_curies": ["ECO:0000033"],
-        "data_provider": {"abbreviation": "WB"},
+        "disease_annotation_object": unresolved_value(
+            "x", identity_keys=("curie", "name"), proposed_curie="DOID:0050200"
+        ),
+        "disease_annotation_subject": unresolved_value(
+            "pef-1",
+            identity_keys=("subject_identifier", "subject_label"),
+            subject_type="gene",
+            proposed_subject_identifier="WB:WBGene1",
+        ),
+        "disease_relation": unresolved_value("is_implicated_in", identity_keys=("name",)),
+        "evidence_code_curies": [unresolved_value("ECO:0000033", identity_keys=("curie",))],
+        "data_provider": unresolved_value("WB", identity_keys=("abbreviation",)),
         "confidence": "high",
-        "annotation_type_vocabulary": "v",
-        "annotation_type_id": "i",
+        "annotation_type": unresolved_value("manually_curated", identity_keys=("name",)),
     }
 
     paths = _draft_paths(
@@ -295,21 +300,25 @@ def test_disease_groups_hide_plumbing_and_keep_curatable():
     )
 
     assert "disease_annotation_object.curie" in paths
+    # The paper wording is its own field beside the validated value.
+    assert "disease_annotation_object.mention" in paths
     assert "disease_annotation_subject.subject_identifier" in paths
+    assert "disease_annotation_subject.mention" in paths
     assert "evidence_code_curies" in paths
     assert "confidence" not in paths
-    assert "annotation_type_vocabulary" not in paths
-    assert "annotation_type_id" not in paths
+    assert "annotation_type.vocabulary" not in paths
+    assert "annotation_type.id" not in paths
 
 
 def test_disease_term_curie_workspace_field_stays_visible_when_empty():
     payload = {
-        "disease_annotation_object": {"name": "x"},
-        "disease_annotation_subject": {
-            "subject_identifier": "WB:WBGene1",
-            "subject_type": "gene",
-        },
-        "disease_relation_name": "is_implicated_in",
+        "disease_annotation_object": unresolved_value("x", identity_keys=("curie", "name")),
+        "disease_annotation_subject": unresolved_value(
+            "pef-1",
+            identity_keys=("subject_identifier", "subject_label"),
+            subject_type="gene",
+        ),
+        "disease_relation": unresolved_value("is_implicated_in", identity_keys=("name",)),
     }
 
     fields = _workspace_fields(
@@ -322,6 +331,7 @@ def test_disease_term_curie_workspace_field_stays_visible_when_empty():
     curie_field = by_path["disease_annotation_object.curie"]
     assert curie_field["value"] is None
     assert curie_field["metadata"]["render_as"] == "curie-chip"
+    assert by_path["disease_annotation_object.mention"]["value"] == "x"
 
 
 def test_phenotype_hides_lookup_hints_and_scaffolding():
@@ -413,3 +423,53 @@ def test_package_review_policies_reach_review_rows(pack_name, object_type, expec
     rows = DomainPackMetadataReviewRowMaterializer(metadata).materialize(envelope, envelope_revision=1)
     assert rows[0].metadata["workspace_display"].get("review_policy") == expected_policy
     assert envelope.extracted_objects[0].payload["confidence"] == "high"
+
+
+def _rationale_object_types() -> list[tuple[str, str]]:
+    return [
+        (pack_id, object_definition.object_type)
+        for pack_id in sorted(PACK_PATHS)
+        for object_definition in _pack(pack_id).object_definitions
+        if any(field.field_path == "rationale" for field in object_definition.fields)
+    ]
+
+
+def test_every_extracting_pack_declares_rationale():
+    assert {pack_id for pack_id, _ in _rationale_object_types()} == set(PACK_PATHS)
+
+
+@pytest.mark.parametrize(("pack_id", "object_type"), _rationale_object_types())
+def test_rationale_is_protected_read_only_for_curators(pack_id: str, object_type: str):
+    from src.lib.domain_envelopes.patches import _field_editability
+    from src.lib.flows.export_fields import _pack_export_fields
+
+    object_definition = next(
+        item for item in _pack(pack_id).object_definitions if item.object_type == object_type
+    )
+    field_definition = next(
+        field for field in object_definition.fields if field.field_path == "rationale"
+    )
+    assert field_definition.metadata == {
+        "protected": True,
+        "curator_action_note": "Written by the extraction agent; not editable.",
+    }
+    editable, policy = _field_editability(field_definition)
+    assert editable is False
+    assert policy["protected"] is True
+
+    rationale_fields = [
+        field for field in _workspace_fields(pack_id, object_type, {})
+        if field["field_path"] == "rationale"
+    ]
+    assert len(rationale_fields) == 1
+    assert rationale_fields[0]["value"] is None
+    assert rationale_fields[0]["metadata"]["read_only"] is True
+    assert rationale_fields[0]["metadata"]["protected"] is True
+
+    # Curator-facing policy metadata stays out of the export field catalog, so
+    # it does not move saved layouts' schema fingerprints.
+    export_field = next(
+        field for field in _pack_export_fields(SimpleNamespace(metadata=_pack(pack_id)))
+        if field["ref"] == f"object.pack.{object_type}.rationale"
+    )
+    assert "protected" not in json.dumps(export_field)

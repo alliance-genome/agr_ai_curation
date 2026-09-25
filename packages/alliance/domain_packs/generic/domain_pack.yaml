@@ -50,6 +50,17 @@ object_definitions:
           - source_label
           - description
           - confidence
+        groups:
+          - id: details
+            label: Details
+            fields:
+              - source_label
+              - description
+              - confidence
+          - id: rationale
+            label: Rationale
+            fields:
+              - rationale
     fields:
       - field_path: label
         field_type: string
@@ -69,18 +80,32 @@ object_definitions:
         field_type: string
         display_name: Source label
         description: Label or mention exactly as supported by the source document.
+        metadata:
+          hide_when_empty: true
       - field_path: description
         field_type: string
         display_name: Description
         description: Short evidence-backed description.
+        metadata:
+          hide_when_empty: true
       - field_path: confidence
         field_type: string
         display_name: Confidence
         description: Extractor confidence in the retained item.
+        metadata:
+          hide_when_empty: true
       - field_path: classification_notes
         field_type: array
         display_name: Classification notes
         description: Evidence-backed notes explaining why this class was selected.
+      - field_path: rationale
+        field_type: string
+        display_name: Rationale
+        required: false
+        description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
       - field_path: attributes
         field_type: object
         display_name: Attributes
@@ -114,6 +139,16 @@ object_definitions:
         summary_fields:
           - claim_text
           - confidence
+        groups:
+          - id: details
+            label: Details
+            fields:
+              - claim_text
+              - confidence
+          - id: rationale
+            label: Rationale
+            fields:
+              - rationale
     fields:
       - field_path: label
         field_type: string
@@ -130,6 +165,8 @@ object_definitions:
         display_name: Claim text
         description: Concise evidence-backed claim statement.
         required: true
+        metadata:
+          hide_when_empty: true
       - field_path: claim_type
         field_type: string
         display_name: Claim type
@@ -138,10 +175,20 @@ object_definitions:
         field_type: string
         display_name: Confidence
         description: Extractor confidence in the retained claim.
+        metadata:
+          hide_when_empty: true
       - field_path: classification_notes
         field_type: array
         display_name: Classification notes
         description: Evidence-backed notes explaining why this claim class was selected.
+      - field_path: rationale
+        field_type: string
+        display_name: Rationale
+        required: false
+        description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.
   - object_type: generic_reagent_candidate
     display_name: Generic reagent candidate
     description: Evidence-backed stock, construct, RNAi, transgene, antibody, plasmid, or other reagent candidate.
@@ -177,6 +224,18 @@ object_definitions:
           - source_identifier
           - count
           - reagent_type
+        groups:
+          - id: details
+            label: Details
+            fields:
+              - source
+              - source_identifier
+              - count
+              - reagent_type
+          - id: rationale
+            label: Rationale
+            fields:
+              - rationale
     fields:
       - field_path: label
         field_type: string
@@ -196,18 +255,26 @@ object_definitions:
         field_type: string
         display_name: Source
         description: Supplier, stock center, repository, author, or source stated in the paper.
+        metadata:
+          hide_when_empty: true
       - field_path: source_identifier
         field_type: string
         display_name: Source identifier
         description: RRID, stock number, Addgene identifier, or comparable source identifier.
+        metadata:
+          hide_when_empty: true
       - field_path: count
         field_type: integer
         display_name: Count
         description: Count reported or inferred from the curator's requested aggregation.
+        metadata:
+          hide_when_empty: true
       - field_path: reagent_type
         field_type: string
         display_name: Reagent type
         description: Broad reagent category.
+        metadata:
+          hide_when_empty: true
       - field_path: confidence
         field_type: string
         display_name: Confidence
@@ -216,3 +283,11 @@ object_definitions:
         field_type: array
         display_name: Classification notes
         description: Evidence-backed notes explaining why this reagent class was selected.
+      - field_path: rationale
+        field_type: string
+        display_name: Rationale
+        required: false
+        description: Curator-facing reason the extractor selected this item, written at extraction time.
+        metadata:
+          protected: true
+          curator_action_note: Written by the extraction agent; not editable.

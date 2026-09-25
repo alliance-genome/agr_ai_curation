@@ -70,11 +70,8 @@ def _raw_mentions_from_curatable_objects(objects: list[Any]) -> list[dict[str, A
         payload = raw_obj.get("payload")
         if not isinstance(payload, dict):
             continue
+        # Only the paper's own wording is a raw mention; a disease term name is never used instead.
         mention = str(payload.get("mention") or "").strip()
-        if not mention:
-            disease_object = payload.get("disease_annotation_object")
-            if isinstance(disease_object, dict):
-                mention = str(disease_object.get("name") or "").strip()
         evidence_record_ids = _string_list(
             raw_obj.get("evidence_record_ids")
         ) or _string_list(payload.get("evidence_record_ids"))

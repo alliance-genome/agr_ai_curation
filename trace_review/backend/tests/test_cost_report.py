@@ -136,3 +136,196 @@ def test_missing_usage_zero_cost_and_mismatched_totals():
     mismatch = usage_cost_summary({"usage": {"input": 10, "output": 5, "total": 20}})
     assert mismatch["total_tokens"] == 15
     assert mismatch["usage_issues"] == ["total_tokens_mismatch"]
+
+
+def test_model_request_measurement_events_add_no_calls_or_cost():
+    """ALL-1279: per-request measurement events are EVENT observations.
+
+    They carry provider usage for correlation only, so the exclusive cost
+    report must not count them as calls, add cost, or turn missing usage into
+    reported usage.
+    """
+    baseline = build_report(fixture(), start=START, end=END, filters={"environment": "production"})
+    traces = fixture()
+    measured = traces[0]["observations"][0]
+    for index in range(2):  # a retried request produces two measurement records
+        traces[0]["observations"].append({
+            "id": f"measurement-{index}", "traceId": measured["traceId"], "type": "EVENT",
+            "name": "extraction_trace_event", "startTime": START,
+            "metadata": {"event_payload": {
+                "event_type": "runtime.model_request_measurement",
+                "input_summary": {"preview": {
+                    "provider_response_id": "resp-a1e", "attempt": index + 1,
+                    "provider_usage": {"status": "reported", "input_tokens": 100, "output_tokens": 20},
+                    "model_visible": {"estimated_tokens": 30},
+                }},
+            }},
+        })
+    report = build_report(traces, start=START, end=END, filters={"environment": "production"})
+    assert report["totals"]["calls"] == baseline["totals"]["calls"] == 11
+    assert report["totals"]["total_cost"] == baseline["totals"]["total_cost"]
+    assert report["duplicate_observations"] == baseline["duplicate_observations"] == 1
+    assert report["totals"]["missing_usage_calls"] == baseline["totals"]["missing_usage_calls"]
+
+
+def attempt(key, usage_status, cost=None, usage=True, **context):
+    """One ALL-1288 model turn: cost_context declares usage_status and model_request_id."""
+    row = generation(key, "paper-A", "run-S", "extraction", cost,
+                     usage_status=usage_status, model_request_id="mr-" + key, **context)
+    if not usage:
+        del row["usage"]
+    return row
+
+
+def status_fixture():
+    return [{"observations": [
+        attempt("rec", "recorded", .5, provider_response_id="resp-rec"),
+        attempt("inc", "inconsistent", usage=False),
+        attempt("omit", "provider_omitted", usage=False, attempt_outcome="success"),
+        attempt("fail", "failed", usage=False, attempt_outcome="error"),
+        attempt("cancel", "cancelled", usage=False, attempt_outcome="cancelled"),
+    ]}]
+
+
+STATUS_COUNT_FIELDS = (
+    "recorded_usage_calls", "inconsistent_usage_calls", "provider_omitted_usage_calls",
+    "failed_usage_calls", "cancelled_usage_calls", "missing_status_unknown_usage_calls",
+)
+
+
+def test_declared_usage_statuses_are_counted_and_never_zero():
+    report = build_report(status_fixture(), start=START, end=END)
+    totals = report["totals"]
+    assert {field: totals[field] for field in STATUS_COUNT_FIELDS} == {
+        "recorded_usage_calls": 1, "inconsistent_usage_calls": 1,
+        "provider_omitted_usage_calls": 1, "failed_usage_calls": 1,
+        "cancelled_usage_calls": 1, "missing_status_unknown_usage_calls": 0,
+    }
+    assert totals["calls"] == 5
+    assert totals["missing_usage_calls"] == 4
+    assert totals["usage_complete"] is False
+    # Usage-less attempts are unpriced, not free: no complete total, subtotal kept.
+    assert totals["unpriced_calls"] == 4
+    assert totals["total_cost"] is None
+    assert Decimal(totals["priced_subtotal"]) == Decimal(".5")
+    assert totals["input_tokens"] == 100
+    by_span = {e["span_id"]: e for e in report["events"]}
+    assert {k: e["usage_status"] for k, e in by_span.items()} == {
+        "rec": "recorded", "inc": "inconsistent", "omit": "provider_omitted",
+        "fail": "failed", "cancel": "cancelled",
+    }
+    assert {e["model_request_id"] for e in by_span.values()} == {
+        "mr-rec", "mr-inc", "mr-omit", "mr-fail", "mr-cancel",
+    }
+    assert by_span["fail"]["usage_status_declared"] == "failed"
+
+
+def test_usage_status_is_a_report_dimension():
+    report = build_report(status_fixture(), start=START, end=END, group_by=("usage_status",))
+    rows = {row["usage_status"]: row for row in report["rows"]}
+    assert set(rows) == {"recorded", "inconsistent", "provider_omitted", "failed", "cancelled"}
+    assert rows["cancelled"]["cancelled_usage_calls"] == 1
+    assert rows["cancelled"]["total_cost"] is None
+    filtered = build_report(status_fixture(), start=START, end=END,
+                            filters={"usage_status": "failed"})
+    assert filtered["totals"]["calls"] == 1
+    exported = list(csv.DictReader(io.StringIO(report_csv(report))))
+    assert {r["usage_status"]: r["failed_usage_calls"] for r in exported}["failed"] == "1"
+
+
+def test_legacy_spans_without_status_keep_the_observed_classification():
+    traces = fixture()
+    legacy_missing = generation("legacy-missing", "paper-A", "run-A1", "extraction", None)
+    del legacy_missing["usage"]
+    # The pre-ALL-1288 emitter wrote "missing" without a cause.
+    old_missing = generation("old-missing", "paper-A", "run-A1", "extraction", None,
+                             usage_status="missing")
+    del old_missing["usage"]
+    legacy_inconsistent = generation("legacy-inconsistent", "paper-A", "run-A1", "extraction", None)
+    legacy_inconsistent["usage"] = {"input": 10, "output": 5, "total": 20}
+    traces[0]["observations"] += [legacy_missing, old_missing, legacy_inconsistent]
+    report = build_report(traces, start=START, end=END, filters={"environment": "production"})
+    totals = report["totals"]
+    assert totals["calls"] == 14
+    assert totals["recorded_usage_calls"] == 11
+    assert totals["missing_status_unknown_usage_calls"] == 2
+    assert totals["missing_usage_calls"] == 2
+    assert totals["inconsistent_usage_calls"] == 1
+    assert totals["provider_omitted_usage_calls"] == totals["failed_usage_calls"] == totals["cancelled_usage_calls"] == 0
+    assert Decimal(totals["priced_subtotal"]) == Decimal("6.45")
+    assert totals["total_cost"] is None
+    events = {e["span_id"]: e for e in report["events"]}
+    assert events["legacy-missing"]["usage_status_declared"] is None
+    assert events["legacy-missing"]["model_request_id"] is None
+    assert events["old-missing"]["usage_status"] == "missing_status_unknown"
+
+
+def test_fully_recorded_legacy_window_stays_usage_complete():
+    report = build_report(fixture(), start=START, end=END, filters={"environment": "production"})
+    assert report["totals"]["recorded_usage_calls"] == report["totals"]["calls"] == 11
+    assert report["totals"]["usage_complete"] is True
+    assert report["totals"]["total_cost"] == "6.45"
+
+
+def test_declared_recorded_without_retained_usage_is_not_recorded():
+    """A span that says usage was recorded but whose observation holds none is
+    never counted as recorded zero-token usage, and is never estimated."""
+    lost = attempt("lost", "recorded", usage=False)
+    declared_bad = attempt("declared-bad", "inconsistent")  # observation carries tokens
+    definitions = [{"id": "fixture", "matchPattern": "^fixture-model$", "startDate": START,
+                    "prices": {"input": .001, "output": .002}}]
+    report = build_report([{"observations": [lost, declared_bad]}], start=START, end=END,
+                          model_definitions=definitions)
+    events = {e["span_id"]: e for e in report["events"]}
+    assert events["lost"]["usage_status"] == "inconsistent"
+    assert events["lost"]["usage_status_declared"] == "recorded"
+    assert events["declared-bad"]["usage_status"] == "inconsistent"
+    for event in events.values():
+        assert event["cost"] is None
+        assert event["estimate_unavailable_reason"] == "missing_or_inconsistent_usage"
+    assert report["totals"]["inconsistent_usage_calls"] == 2
+    assert report["totals"]["recorded_usage_calls"] == 0
+    assert report["totals"]["usage_complete"] is False
+
+
+def test_model_request_id_deduplicates_attempts_without_provider_response_id():
+    cancelled = attempt("cancel", "cancelled", usage=False)
+    reexported = deepcopy(cancelled)
+    reexported["id"] = "cancel-reexported"
+    retry = attempt("cancel-retry", "cancelled", usage=False)
+    report = build_report([{"observations": [cancelled, reexported, retry]}], start=START, end=END)
+    assert report["duplicate_observations"] == 1
+    assert report["totals"]["calls"] == 2
+    assert report["totals"]["cancelled_usage_calls"] == 2
+
+
+def test_declared_usage_less_status_with_retained_usage_is_inconsistent():
+    """A span that declares no usable usage while its observation holds usage
+    or cost contradicts itself; it is reported inconsistent, not as declared."""
+    failed = attempt("failed-with-usage", "failed", .25, attempt_outcome="error")
+    omitted = attempt("omitted-with-usage", "provider_omitted")
+    cost_only = attempt("cancelled-with-cost", "cancelled", .1, usage=False)
+    cost_only["internalModelId"] = "fixture-model"
+    report = build_report([{"observations": [failed, omitted, cost_only]}], start=START, end=END)
+    events = {e["span_id"]: e for e in report["events"]}
+    assert {k: e["usage_status"] for k, e in events.items()} == {
+        "failed-with-usage": "inconsistent", "omitted-with-usage": "inconsistent",
+        "cancelled-with-cost": "inconsistent",
+    }
+    assert events["failed-with-usage"]["usage_status_declared"] == "failed"
+    assert report["totals"]["inconsistent_usage_calls"] == 3
+    assert report["totals"]["failed_usage_calls"] == report["totals"]["provider_omitted_usage_calls"] == 0
+    assert report["totals"]["usage_complete"] is False
+
+
+def test_csv_keeps_existing_column_order_and_appends_status_columns():
+    header = report_csv(build_report(status_fixture(), start=START, end=END)).splitlines()[0].split(",")
+    assert header[:14] == [
+        "agent_id", "agent_name", "calls", "known_runs", "known_papers", "missing_run_calls",
+        "unpriced_calls", "missing_usage_calls", "inconsistent_usage_calls",
+        "unknown_agent_calls", "unknown_paper_calls", "measured_cost", "estimated_cost",
+        "estimated_cost_upper",
+    ]
+    tail = header[header.index("trace_references") + 1:header.index("start")]
+    assert tail == ["recorded_usage_calls", "provider_omitted_usage_calls", "failed_usage_calls",
+                    "cancelled_usage_calls", "missing_status_unknown_usage_calls", "usage_complete"]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the live Terra figure-locator classifier against the labeled corpus."""
+"""Run the live GPT-6 Sol figure-locator classifier against the labeled corpus."""
 
 from __future__ import annotations
 

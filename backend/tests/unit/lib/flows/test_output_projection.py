@@ -4,6 +4,9 @@ from datetime import datetime, timezone
 
 import pytest
 from types import SimpleNamespace
+from typing import get_args
+
+from pydantic import ValidationError
 
 import src.lib.flows.output_projection as output_projection_module
 from src.lib.config import schema_discovery
@@ -384,6 +387,11 @@ def _completed_domain_source_step(
     return result
 
 
+# A validated gene-expression anatomy value (ALL-1283 contract).
+PVD = {"curie": "WBbt:0006831", "name": "PVD", "mention": "PVD", "resolution_state": "resolved",
+       "lookup_outcome": "matched", "validator_explanation": None}
+
+
 @pytest.mark.parametrize("selection_mode", ["guided", "selected_fields"])
 def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monkeypatch, selection_mode):
     import csv
@@ -405,10 +413,14 @@ def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monk
                 "object_type": "GeneExpressionAnnotation",
                 "object_id": object_id,
                 "payload": {
-                    "expression_annotation_subject": {"gene_symbol": symbol},
+                    "expression_annotation_subject": {
+                        "gene_symbol": symbol, "primary_external_id": None, "mention": symbol,
+                        "resolution_state": "resolved", "lookup_outcome": "matched",
+                        "validator_explanation": None,
+                    },
                     "expression_pattern": {
                         "where_expressed": {
-                            "anatomical_structure": {"curie": "WBbt:0006831", "name": "PVD"},
+                            "anatomical_structure": PVD,
                         },
                     },
                 },
@@ -429,7 +441,7 @@ def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monk
     assert gene_ref in {field.ref for field in artifact.declared_fields}
     assert [row[gene_ref] for row in artifact.rows_by_source["object"]] == ["dma-1", "dma-1", "tiam-1"]
     anatomy_ref = "object.pack.GeneExpressionAnnotation.expression_pattern.where_expressed.anatomical_structure"
-    assert artifact.rows_by_source["object"][0][anatomy_ref] == {"curie": "WBbt:0006831", "name": "PVD"}
+    assert artifact.rows_by_source["object"][0][anatomy_ref] == PVD
     plan = FlowOutputProjectionPlan.model_validate({
         "format": "csv", "row_source": "object", "row_strategy": "wide_union",
         "selection_mode": selection_mode,
@@ -446,7 +458,7 @@ def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monk
     rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8"))))
     assert len(rows) == 3
     assert [row["Gene"] for row in rows] == ["dma-1", "dma-1", "tiam-1"]
-    assert all(json.loads(row["Anatomy"]) == {"curie": "WBbt:0006831", "name": "PVD"} for row in rows)
+    assert all(row["Anatomy"] == "PVD (WBbt:0006831)" for row in rows)
     assert all(row["Stage"] == "" for row in rows)
 
 
@@ -1219,8 +1231,10 @@ def test_object_projection_supports_rename_omit_reorder_filter_sort_and_concat()
     assert result.rows == [
         {
             "gene_symbol": "BRCA1",
-            "gene_label": "BRCA1",
-            "evidence_record_ids": ["ev-1"],
+            # "Gene" declares no label in the gene pack: the label is empty,
+            # never a fallback to the symbol (Chris, Sep 22).
+            "gene_label": "",
+            "evidence_record_ids": "ev-1",
             "gene_ref": "TEST:GENE001 BRCA1",
         }
     ]
@@ -1265,13 +1279,7 @@ def test_projection_safe_derived_transforms_cover_supported_surface():
                 ),
                 FlowOutputColumnSpec(
                     key="display_name",
-                    transform=FlowOutputTransformSpec(
-                        type="first_non_empty",
-                        field_refs=[
-                            "object.payload.alias",
-                            "object.payload.symbol",
-                        ],
-                    ),
+                    field_ref="object.payload.symbol",
                 ),
                 FlowOutputColumnSpec(
                     key="evidence_ids",
@@ -1481,220 +1489,21 @@ def test_pair_join_does_not_broadcast_one_element_lists(
     ]
 
 
-def _conditional_source_plan() -> FlowOutputProjectionPlan:
-    return FlowOutputProjectionPlan(
-        format="tsv",
-        row_source="object",
-        source_extraction_result_ids=["extract-generic-1"],
-        columns=[
-            FlowOutputColumnSpec(
-                key="source",
-                transform=FlowOutputTransformSpec(
-                    type="conditional",
-                    field_ref="object.attribute.source_status",
-                    condition_op="eq",
-                    value="new_in_paper",
-                    when_true=FlowOutputTransformSpec(
-                        type="literal",
-                        value="New in paper",
-                    ),
-                    when_false=FlowOutputTransformSpec(
-                        type="pair_join",
-                        field_refs=[
-                            "object.attribute.source",
-                            "object.attribute.source_identifier",
-                        ],
-                        pair_separator=":",
-                        separator="|",
-                    ),
-                ),
-            )
-        ],
+@pytest.mark.parametrize("transform_type", ["first_non_empty", "conditional"])
+def test_projection_has_no_per_row_field_choice_transforms(transform_type):
+    """ALL-1283: a column maps to one field; outputs never choose between fields per row."""
+
+    assert transform_type not in get_args(
+        FlowOutputTransformSpec.model_fields["type"].annotation
     )
-
-
-def _conditional_source_bundle():
-    step = _completed_generic_pdf_step()
-    objects = step["candidate"].payload_json["extracted_objects"]
-    for item in objects:
-        payload = item["payload"]
-        payload["attributes"] = {
-            "source_status": "existing",
-            "source": payload["source"],
-            "source_identifier": payload["source_identifier"],
-        }
-    objects[0]["payload"]["attributes"].update(
-        {
-            "source_status": "new_in_paper",
-            "source": "This study",
-            "source_identifier": "New in paper",
-        }
+    with pytest.raises(ValidationError):
+        FlowOutputTransformSpec(
+            type=transform_type,
+            field_refs=["object.payload.alias", "object.payload.symbol"],
+        )
+    assert not {"when_true", "when_false", "condition_op"} & set(
+        FlowOutputTransformSpec.model_fields
     )
-    return build_flow_output_artifact_bundle(
-        completed_steps=[step],
-        flow_name="Two-column reagent extractor",
-        output_format="tsv",
-    )
-
-
-def test_conditional_selects_literal_or_pair_join_for_reported_source_rules():
-    bundle = _conditional_source_bundle()
-    rows = bundle.rows_for_source("object")
-    # The unselected pair_join branch must not validate or execute against this row.
-    rows[0]["object.attribute.source"] = ["This study"]
-    rows[0]["object.attribute.source_identifier"] = ["New in paper", "unused"]
-    rows[1]["object.attribute.source"] = "BDSC"
-    rows[1]["object.attribute.source_identifier"] = ["31612", "35446"]
-
-    result = apply_projection_plan(bundle, _conditional_source_plan())
-
-    assert result.rows == [
-        {"source": "New in paper"},
-        {"source": "BDSC:31612|BDSC:35446"},
-    ]
-
-
-@pytest.mark.parametrize(
-    ("source", "source_identifier", "expected"),
-    [
-        ("Gift from G-C Chen", None, "Gift from G-C Chen"),
-        (None, None, ""),
-        (["BDSC", "VDRC"], ["31612", "109733"], "BDSC:31612|VDRC:109733"),
-    ],
-)
-def test_conditional_false_branch_preserves_source_only_missing_and_list_values(
-    source,
-    source_identifier,
-    expected,
-):
-    bundle = _conditional_source_bundle()
-    row = bundle.rows_for_source("object")[1]
-    row["object.attribute.source"] = source
-    row["object.attribute.source_identifier"] = source_identifier
-
-    result = apply_projection_plan(bundle, _conditional_source_plan())
-
-    assert result.rows[1]["source"] == expected
-
-
-def test_conditional_rejects_missing_or_nested_branches():
-    with pytest.raises(ValueError, match="requires both when_true and when_false"):
-        FlowOutputTransformSpec(
-            type="conditional",
-            field_ref="object.attribute.source_status",
-            value="new_in_paper",
-            when_true=FlowOutputTransformSpec(type="literal", value="New in paper"),
-        )
-
-    with pytest.raises(ValueError, match="cannot contain another conditional"):
-        FlowOutputTransformSpec(
-            type="conditional",
-            field_ref="object.attribute.source_status",
-            value="new_in_paper",
-            when_true=FlowOutputTransformSpec(
-                type="conditional",
-                field_ref="object.attribute.source",
-                value="BDSC",
-                when_true=FlowOutputTransformSpec(type="literal", value="BDSC"),
-                when_false=FlowOutputTransformSpec(type="literal", value="Other"),
-            ),
-            when_false=FlowOutputTransformSpec(type="literal", value="Existing"),
-        )
-
-
-def test_conditional_in_uses_literal_values_without_treating_dotted_labels_as_refs():
-    bundle = _conditional_source_bundle()
-    plan = _conditional_source_plan()
-    conditional = plan.columns[0].transform
-    assert conditional is not None
-    conditional.condition_op = "in"
-    conditional.value = None
-    conditional.values = ["new_in_paper", "new.in.paper"]
-
-    errors, _, _ = output_projection_module.validate_projection_plan(bundle, plan)
-    result = apply_projection_plan(bundle, plan)
-
-    assert errors == []
-    assert result.rows[0]["source"] == "New in paper"
-
-
-def test_conditional_in_requires_values():
-    with pytest.raises(ValueError, match="operator 'in' requires values"):
-        FlowOutputTransformSpec(
-            type="conditional",
-            field_ref="object.attribute.source_status",
-            condition_op="in",
-            when_true=FlowOutputTransformSpec(type="literal", value="New in paper"),
-            when_false=FlowOutputTransformSpec(type="literal", value="Existing"),
-        )
-
-
-def test_nonconditional_transform_rejects_conditional_branches():
-    with pytest.raises(ValueError, match="supported only by conditional"):
-        FlowOutputTransformSpec(
-            type="literal",
-            value="Existing",
-            when_true=FlowOutputTransformSpec(type="literal", value="New in paper"),
-        )
-
-
-def test_conditional_ordered_comparison_reports_contextual_validation_error():
-    bundle = _conditional_source_bundle()
-    plan = _conditional_source_plan()
-    conditional = plan.columns[0].transform
-    assert conditional is not None
-    conditional.condition_op = "gt"
-    conditional.value = 1
-
-    errors, _, _ = output_projection_module.validate_projection_plan(bundle, plan)
-
-    assert errors == [
-        "Column 'source' conditional condition is invalid: Filter operator 'gt' "
-        "requires numeric values for field 'object.attribute.source_status'; got "
-        "non-numeric value 'new_in_paper'."
-    ]
-
-
-def test_conditional_warns_for_null_literal_branch():
-    bundle = _conditional_source_bundle()
-    plan = _conditional_source_plan()
-    conditional = plan.columns[0].transform
-    assert conditional is not None
-    conditional.when_true = FlowOutputTransformSpec(type="literal", value=None)
-
-    errors, warnings, _ = output_projection_module.validate_projection_plan(bundle, plan)
-
-    assert errors == []
-    assert "Column 'source' literal transform has a null value." in warnings
-
-
-def test_conditional_validates_branch_refs_and_pair_alignment():
-    bundle = _conditional_source_bundle()
-    plan = _conditional_source_plan()
-    conditional = plan.columns[0].transform
-    assert conditional is not None
-    false_branch = conditional.when_false
-    assert false_branch is not None
-    false_branch.field_refs[1] = "object.attribute.unknown_identifier"
-
-    errors, _, _ = output_projection_module.validate_projection_plan(bundle, plan)
-
-    assert errors == [
-        "Column 'source' transform uses unknown field_ref "
-        "'object.attribute.unknown_identifier'."
-    ]
-
-    false_branch.field_refs[1] = "object.attribute.source_identifier"
-    row = bundle.rows_for_source("object")[1]
-    row["object.attribute.source"] = ["BDSC"]
-    row["object.attribute.source_identifier"] = ["31612", "35446"]
-
-    errors, _, _ = output_projection_module.validate_projection_plan(bundle, plan)
-
-    assert errors == [
-        "Column 'source' pair_join cannot align list values with incompatible lengths "
-        "1 and 2; use equal-length lists or a scalar value."
-    ]
 
 
 def test_projection_membership_emptiness_contains_filters_and_sort_are_applied():
@@ -1996,7 +1805,7 @@ def test_group_by_is_rejected_for_flat_file_formats():
         flow_name="Projection Flow",
     )
 
-    with pytest.raises(ValueError, match="group_by is not supported for CSV.*choose JSON output"):
+    with pytest.raises(ValueError, match="group_by is not supported for CSV.*choose JSON/chat output"):
         apply_projection_plan(
             bundle,
             FlowOutputProjectionPlan(
@@ -2532,20 +2341,6 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
             "json",
             "TERM:0001",
         ),
-        (
-            "SubjectEntityValidationResult",
-            "subject_entity_validation",
-            {
-                "subject_candidates": [
-                    {
-                        "subject_identifier": "FB:FBgn0000001",
-                        "subject_type": "gene",
-                    }
-                ]
-            },
-            "csv",
-            "FB:FBgn0000001",
-        ),
     ],
 )
 def test_real_typed_validator_results_build_nonempty_file_bundles(
@@ -2601,7 +2396,8 @@ def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():
     )
 
     row = bundle.rows_for_source("object")[0]
-    assert row["object.label"] == "signaling"
+    # Every declared label field reads; one never stands in for another (ALL-1283).
+    assert row["object.label"] == "signaling; daf-16"
     assert row["object.payload.gene_id"] == "WB:WBGene00000898"
     assert row["object.payload.gene_symbol"] == "daf-16"
 
@@ -2752,3 +2548,42 @@ def test_canonical_validation_review_retains_candidates_and_field_identity():
         columns=[FlowOutputColumnSpec(key='candidates', field_ref='validation.candidate_matches')],
     ))
     assert any(r['candidates'] == candidates for r in exported.rows)
+
+
+def test_payload_refs_on_a_resolvable_root_read_the_legacy_rule():
+    """Gate: an object.payload column on an unverified legacy gene shows no unverified id."""
+
+    def gene_step(payload, metadata):
+        step = _completed_domain_step()
+        candidate = step["candidate"]
+        candidate.payload_json = {
+            "domain_pack_id": "gene",
+            "envelope_id": "env-gene-legacy",
+            "extracted_objects": [{
+                "object_type": "gene_mention_evidence", "object_id": "gene-legacy-1", "status": "validated",
+                "payload": payload, "metadata": metadata,
+            }],
+        }
+        return step
+
+    legacy = {"mention": "Appl", "primary_external_id": "FB:FBgn0000108", "gene_symbol": "Appl",
+              "taxon": "NCBITaxon:7227"}
+    plan = FlowOutputProjectionPlan(
+        format="csv", row_source="object",
+        columns=[
+            FlowOutputColumnSpec(key="id", header="ID", field_ref="object.payload.primary_external_id"),
+            FlowOutputColumnSpec(key="wording", header="Wording", field_ref="object.payload.mention"),
+        ],
+    )
+
+    def rows(metadata):
+        bundle = build_flow_output_artifact_bundle(
+            completed_steps=[gene_step(dict(legacy), metadata)], flow_name="Legacy Flow", output_format="csv",
+        )
+        return apply_projection_plan(bundle, plan).rows
+
+    # The paper wording reads as the legacy rule reads it, as an object.pack column would.
+    assert rows({}) == [{"id": "", "wording": "Appl (legacy, unverified)"}]
+    covered = {"validator_resolved_value_materialization": [
+        {"materialized_field_paths": ["primary_external_id", "gene_symbol", "taxon"]}]}
+    assert rows(covered) == [{"id": "FB:FBgn0000108", "wording": "Appl"}]

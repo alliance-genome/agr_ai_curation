@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from packaging.requirements import Requirement
+from sqlalchemy import create_engine
 
 from src.lib.packages.env_manager import PackageEnvironmentManager
 from . import SHIPPED_TOOLS_PACKAGE_EXPORTS, find_repo_root
@@ -484,6 +486,34 @@ def test_alliance_runtime_requirements_include_public_runtime_deps():
     assert "grpcio>=1.72.0" in requirements_text
 
 
+def test_alliance_sqlalchemy_pin_matches_backend_lock():
+    def sqlalchemy_requirement(path):
+        requirements = [
+            Requirement(line.strip())
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        return next(req for req in requirements if req.name.lower() == "sqlalchemy")
+
+    package_requirement = sqlalchemy_requirement(
+        REPO_ROOT / "packages" / "alliance" / "requirements" / "runtime.txt"
+    )
+    backend_requirement = sqlalchemy_requirement(BACKEND_ROOT / "requirements.lock.txt")
+    assert package_requirement.specifier == backend_requirement.specifier
+    assert len(package_requirement.specifier) == 1
+    assert next(iter(package_requirement.specifier)).operator == "=="
+
+
+def test_plain_postgresql_url_loads_installed_psycopg2_without_connecting():
+    # Constructing the engine loads the DBAPI but does not open a connection.
+    engine = create_engine("postgresql://fixture:fixture@127.0.0.1/fixture")
+    try:
+        assert engine.dialect.driver == "psycopg2"
+        assert engine.dialect.dbapi.__name__ == "psycopg2"
+    finally:
+        engine.dispose()
+
+
 def test_alliance_document_bindings_use_canonical_package_factories():
     bindings_path = REPO_ROOT / "packages" / "alliance" / "tools" / "bindings.yaml"
     bindings = yaml.safe_load(bindings_path.read_text(encoding="utf-8"))
@@ -599,8 +629,12 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
                 "score": 0.91,
                 "content": "Wingless expression expanded in the mutant tissue.",
                 "doc_items": [{"id": "bbox-search"}],
+                "content_withheld": None,
+                "content_chars": None,
             }
         ],
+        "error_code": None,
+        "result_bounds": None,
     }
     _assert_isolated_python(env_manager)
 
@@ -705,6 +739,7 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
                     "subsection": "Animals",
                     "char_count": 13,
                     "snippet": None,
+                    "content_withheld": None,
                 },
                 {
                     "chunk_id": "chunk-methods-2",
@@ -714,10 +749,19 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
                     "subsection": None,
                     "char_count": 13,
                     "snippet": None,
+                    "content_withheld": None,
                 },
             ],
             "doc_items": [{"id": "bbox-1"}, {"id": "bbox-2"}],
+            # ALL-1278: page bounds are reported alongside the unchanged content.
+            "page_ended_by": "end",
+            "requested_max_chunks": 30,
+            "effective_max_chunks": 30,
+            "max_chunks_clamped": False,
+            "budget_bytes": 32768,
         },
+        "error_code": None,
+        "result_bounds": None,
     }
     assert "evidence_spans" not in section_result.result["section"]["source_chunks"][0]
     # E2a guard: no full chunk text is echoed back in source_chunks entries.
@@ -1444,7 +1488,7 @@ class DatabaseMethods:
             and ontology_type == "GOTerm"
             and exact_match is True
             and include_synonyms is False
-            and limit == 3
+            and limit == 25
         ):
             return [self.get_ontology_term("GO:0003674")]
         return []

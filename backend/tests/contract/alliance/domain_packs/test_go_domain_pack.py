@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
@@ -18,6 +19,12 @@ from src.lib.domain_packs.materialization import (
     project_evidence_anchor_projections,
 )
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+from src.lib.domain_packs.resolvable_values import (
+    LEGACY_UNVERIFIED_SUFFIX,
+    OUTCOME_LEGACY_UNVERIFIED,
+    effective_payload,
+    resolvable_spec_from_display,
+)
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorRuntimeContext,
     dispatch_active_validator_bindings,
@@ -30,6 +37,11 @@ if str(ALLIANCE_PYTHON_SRC) not in sys.path:
     sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
 
 from agr_ai_curation_alliance.curation_adapters import register_curation_adapters  # noqa: E402
+from agr_ai_curation_alliance.domain_packs.go.legacy import (  # noqa: E402
+    PREVIOUS_FORMAT_FINDING_CODE,
+    previous_format_display_payload,
+    validate_go_envelope,
+)
 from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
     load_alliance_domain_pack_registry,
 )
@@ -82,6 +94,52 @@ def _validator_result(request, *, resolved: bool = True):
     }
 
 
+_IDENTITY_RESULTS = {
+    "go_gene_product_validation": {"primary_external_id": "RGD:3023", "gene_symbol": "Lta"},
+    "go_term_validation": {"curie": "GO:0005615", "name": "extracellular space"},
+    "go_reference_validation": {"curie": "AGRKB:101000000400377", "pmid": "PMID:12345678"},
+    "go_with_from_gene_validation": {"primary_external_id": "RGD:619839"},
+}
+
+
+def _identity_result(request, resolved_values):
+    return {
+        **_validator_result(request),
+        "resolved_values": resolved_values,
+        "lookup_attempts": [
+            {
+                "provider": "agr_curation_query",
+                "method": "search",
+                "query": dict(request.selected_inputs),
+                "result_count": 1,
+                "outcome": "success",
+            }
+        ],
+        "curator_message": None,
+        "explanation": "Fixture identity lookup.",
+    }
+
+
+def _go_runner(requests, *, policy_resolved: bool = True):
+    """Identity validators confirm their values; the policy answers as asked."""
+
+    def runner(request, *, binding):
+        requests.append(request)
+        if binding.binding_id == "rgd_go_evidence_policy_validation":
+            return _validator_result(request, resolved=policy_resolved)
+        return _identity_result(request, _IDENTITY_RESULTS[binding.binding_id])
+
+    return runner
+
+
+def _policy_findings(result):
+    return [
+        finding for finding in result.appended_findings
+        if (finding.details.get("validation_metadata") or {}).get("validator_binding_id")
+        == "rgd_go_evidence_policy_validation"
+    ]
+
+
 def test_go_pack_is_auto_discovered_and_review_only():
     registry = load_alliance_domain_pack_registry()
     pack = registry.get_pack("agr.alliance.go")
@@ -131,29 +189,23 @@ def test_rgd_policy_dispatch_materializes_established_finding_and_group_trace():
     envelope = fixtures.fixtures[0].envelope
     requests = []
 
-    def runner(request, *, binding):
-        requests.append(request)
-        return _validator_result(request)
-
     result = dispatch_active_validator_bindings(
         envelope,
         pack,
-        runner=runner,
+        runner=_go_runner(requests),
         runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
     )
 
-    assert len(requests) == 1, [
-        finding.model_dump(mode="json") for finding in result.appended_findings
-    ]
-    request = requests[0]
-    assert request.validator_binding_id == "rgd_go_evidence_policy_validation"
-    assert request.selected_inputs["evidence_code"] == "IDA"
+    # The policy runs last, after the gene product, GO term and reference are validated.
+    assert requests[-1].validator_binding_id == "rgd_go_evidence_policy_validation"
+    request = requests[-1]
+    assert request.selected_inputs["evidence_code"]["code"] == "IDA"
     assert request.selected_inputs["go_term"]["aspect"] == "cellular_component"
     assert request.selected_inputs["provider_context"]["provider_key"] == "RGD"
     assert request.selected_inputs["evidence_quotes"][0]["verified_quote"] == (
         "Lta protein was detected in the extracellular fraction."
     )
-    finding = result.appended_findings[0]
+    finding, = _policy_findings(result)
     assert finding.code == "domain_pack.validator_resolved"
     assert finding.status.value == "resolved"
     assert finding.object_ref is not None
@@ -162,7 +214,75 @@ def test_rgd_policy_dispatch_materializes_established_finding_and_group_trace():
         "authenticated_groups": ["RGD"],
         "group_context_identity": '["RGD"]',
     }
-    assert result.binding_audit[0]["eligibility_reason"] == "group_scope_satisfied"
+    assert {entry["eligibility_reason"] for entry in result.binding_audit} == {"group_scope_satisfied"}
+
+
+def test_the_policy_reads_the_identities_the_identity_validators_wrote():
+    """Extraction stages paper wording only; validation fills identities before the policy runs."""
+
+    from agr_ai_curation_alliance.domain_packs.go.values import (
+        gene_product_value,
+        go_term_value,
+        reference_value,
+        with_from_value,
+    )
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    obj = envelope.extracted_objects[0]
+    payload = copy.deepcopy(obj.payload)
+    payload["gene_product"] = gene_product_value(
+        "Lta", proposed_curie=None, entity_type=payload["gene_product"]["entity_type"],
+        taxon_curie="NCBITaxon:10116",
+    )
+    payload["go_term"] = go_term_value(
+        "extracellular fraction", proposed_curie=None, aspect=payload["go_term"]["aspect"],
+    )
+    payload["reference_curie"] = reference_value("Lta secretion in rat", proposed_curie="PMID:12345678")
+    payload["with_from"] = [with_from_value("UniProtKB:P01374", proposed_curie="UniProtKB:P01374")]
+    envelope = envelope.model_copy(
+        update={"extracted_objects": [obj.model_copy(update={"payload": payload})]}
+    )
+    requests = []
+    base_runner = _go_runner(requests)
+
+    def runner(request, *, binding):
+        if binding.binding_id == "go_with_from_gene_validation":
+            requests.append(request)
+            return {
+                **_identity_result(request, {}),
+                "status": "unresolved",
+                "lookup_attempts": [{
+                    "provider": "agr_curation_query", "method": "search_genes",
+                    "query": dict(request.selected_inputs), "result_count": 0, "outcome": "not_found",
+                }],
+                "explanation": "UniProtKB:P01374 is a protein accession, not a gene.",
+            }
+        return base_runner(request, binding=binding)
+
+    result = dispatch_active_validator_bindings(
+        envelope, pack, runner=runner,
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
+    )
+
+    by_binding = {request.validator_binding_id: request for request in requests}
+    assert by_binding["go_gene_product_validation"].selected_inputs["gene_symbol"] == "Lta"
+    assert by_binding["go_term_validation"].selected_inputs["go_aspect"] == payload["go_term"]["aspect"]
+    assert by_binding["go_reference_validation"].selected_inputs["curie"] == "PMID:12345678"
+    assert by_binding["go_reference_validation"].target.optional_fields == ["pmid", "doi"]
+    policy = by_binding["rgd_go_evidence_policy_validation"].selected_inputs
+    assert requests[-1].validator_binding_id == "rgd_go_evidence_policy_validation"
+    assert (policy["gene_product"]["curie"], policy["gene_product"]["label"]) == ("RGD:3023", "Lta")
+    assert policy["resolution_state"] == "resolved"
+    assert (policy["go_term"]["curie"], policy["go_term"]["resolution_state"]) == ("GO:0005615", "resolved")
+    assert policy["reference_curie"]["curie"] == "AGRKB:101000000400377"
+    assert (policy["reference_curie"]["pmid"], policy["reference_curie"]["doi"]) == ("PMID:12345678", None)
+    assert policy["with_from"][0]["lookup_outcome"] == "not_found"
+    stored = result.envelope.extracted_objects[0].payload
+    assert stored["reference_curie"]["resolution_state"] == "resolved"
+    assert stored["reference_curie"]["proposed_curie"] == "PMID:12345678"
+    assert stored["with_from"][0]["resolution_state"] == "unresolved"
 
 
 @pytest.mark.parametrize("active_groups", [(), ("MGI",), ("WB", "ZFIN")])
@@ -174,13 +294,13 @@ def test_rgd_policy_does_not_run_for_non_rgd_authenticated_groups(active_groups)
     result = dispatch_active_validator_bindings(
         fixtures.fixtures[0].envelope,
         pack,
-        runner=lambda *_args, **_kwargs: pytest.fail("RGD policy binding ran"),
+        runner=lambda *_args, **_kwargs: pytest.fail("an RGD GO binding ran"),
         runtime_context=ValidatorRuntimeContext(authenticated_groups=active_groups),
     )
 
     assert result.validator_agent_run_count == 0
     assert result.appended_findings == ()
-    assert result.binding_audit[0]["eligibility_reason"] == "group_not_satisfied"
+    assert {entry["eligibility_reason"] for entry in result.binding_audit} == {"group_not_satisfied"}
 
 
 def test_insufficient_evidence_materializes_the_approved_blocker_finding():
@@ -191,14 +311,11 @@ def test_insufficient_evidence_materializes_the_approved_blocker_finding():
     result = dispatch_active_validator_bindings(
         fixtures.fixtures[0].envelope,
         pack,
-        runner=lambda request, *, binding: _validator_result(
-            request,
-            resolved=False,
-        ),
+        runner=_go_runner([], policy_resolved=False),
         runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
     )
 
-    finding = result.appended_findings[0]
+    finding, = _policy_findings(result)
     assert finding.code == "domain_pack.validator_unresolved"
     assert finding.severity.value == "blocker"
     assert finding.status.value == "open"
@@ -248,7 +365,8 @@ def test_protein_fixture_survives_review_row_candidate_and_evidence_projection()
     assert row.display_label == "Lta"
     assert row.secondary_label == "extracellular space"
     assert row.validation_state == "clear"
-    assert payload["resolution_state"] == "resolved"
+    assert payload["gene_product"]["resolution_state"] == "resolved"
+    assert payload["gene_product"]["lookup_outcome"] == "matched"
 
     candidate_fields = {
         field.field_key: field.value
@@ -256,9 +374,9 @@ def test_protein_fixture_survives_review_row_candidate_and_evidence_projection()
     }
     assert candidate_fields["gene_product.curie"] == "RGD:3020"
     assert candidate_fields["go_term.curie"] == "GO:0005615"
-    assert candidate_fields["evidence_code"] == "IDA"
-    assert candidate_fields["evidence_eco_curie"] == "ECO:0000314"
-    assert candidate_fields["reference_curie"] == "AGRKB:101000000400377"
+    assert candidate_fields["evidence_code.code"] == "IDA"
+    assert candidate_fields["evidence_code.eco_curie"] == "ECO:0000314"
+    assert candidate_fields["reference_curie.curie"] == "AGRKB:101000000400377"
     assert candidate_fields["with_from"] == []
     assert candidate_fields["qualifiers"] == []
     assert candidate_fields["annotation_extensions"] == []
@@ -286,8 +404,9 @@ def test_ambiguous_mature_mirna_remains_unresolved_and_blocking_in_projection():
     payload = envelope.extracted_objects[0].payload
 
     assert payload["gene_product"]["mention"] == "rno-miR-21-5p"
-    assert "curie" not in payload["gene_product"]
-    assert payload["resolution_state"] == "unresolved"
+    assert payload["gene_product"]["curie"] is None
+    assert payload["gene_product"]["resolution_state"] == "unresolved"
+    assert payload["gene_product"]["lookup_outcome"] == "not_validated"
     assert len(payload["blocking_reasons"]) == 2
     assert envelope.validation_findings[0].severity.value == "blocker"
 
@@ -297,12 +416,15 @@ def test_ambiguous_mature_mirna_remains_unresolved_and_blocking_in_projection():
     )
     row = rows[0]
     assert row.validation_state == "blocked"
+    # The unresolved gene product is labelled as paper wording, never as the item.
+    assert row.display_label == "rno-miR-21-5p (paper wording)"
     candidate_fields = {
         field.field_key: field.value
         for field in workspace_pipeline._draft_fields_from_review_row(row)
     }
     assert candidate_fields["gene_product.mention"] == "rno-miR-21-5p"
-    assert candidate_fields["resolution_state"] == "unresolved"
+    assert candidate_fields["gene_product.resolution_state"] == "unresolved"
+    assert candidate_fields["gene_product.lookup_outcome"] == "not_validated"
     assert "gene_product.curie" in candidate_fields
     assert candidate_fields["gene_product.curie"] is None
     assert candidate_fields["blocking_reasons"] == payload["blocking_reasons"]
@@ -317,3 +439,434 @@ def test_ambiguous_mature_mirna_remains_unresolved_and_blocking_in_projection():
         "go_term",
         "rationale",
     }
+
+
+def _legacy_go_payload() -> dict:
+    """A GO proposal stored before ALL-1283: values without paper wording or contract state."""
+
+    _, fixtures = _contracts()
+    payload = copy.deepcopy(fixtures.fixtures[0].envelope.extracted_objects[0].payload)
+    payload["gene_product"] = {
+        "mention": "Lta protein",
+        "label": "Lta",
+        "curie": "RGD:3020",
+        "entity_type": "protein",
+        "taxon_curie": "NCBITaxon:10116",
+    }
+    payload["go_term"] = {
+        "curie": "GO:0005615",
+        "label": "extracellular space",
+        "aspect": "cellular_component",
+    }
+    payload["evidence_code"] = "IDA"
+    payload["evidence_eco_curie"] = "ECO:0000314"
+    payload["reference_curie"] = "AGRKB:101000000400377"
+    payload["resolution_state"] = "resolved"
+    return payload
+
+
+def test_legacy_gene_product_reads_as_legacy_unverified_without_a_validator_event():
+    metadata, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    legacy_object = envelope.extracted_objects[0].model_copy(
+        update={"payload": _legacy_go_payload()}
+    )
+    legacy_envelope = envelope.model_copy(update={"extracted_objects": [legacy_object]})
+
+    rows = DomainPackMetadataReviewRowMaterializer(metadata).materialize(
+        legacy_envelope, envelope_revision=1
+    )
+
+    assert rows[0].display_label == f"Lta protein {LEGACY_UNVERIFIED_SUFFIX}"
+    field = next(
+        item
+        for item in metadata.object_definitions[0].fields
+        if item.field_path == "gene_product"
+    )
+    spec = resolvable_spec_from_display(field.metadata["display"])
+    effective = effective_payload(
+        legacy_object.payload, {"gene_product": spec}, object_metadata=legacy_object.metadata
+    )
+    assert effective["gene_product"]["resolution_state"] == "unresolved"
+    assert effective["gene_product"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+    assert effective["gene_product"]["curie"] is None
+
+
+def _registered_go_materializer():
+    registry = CurationAdapterRegistry()
+    register_curation_adapters(registry)
+    return registry.get_review_row_materializer_for_domain_pack("agr.alliance.go")
+
+
+def test_previous_format_record_shows_its_stored_values_as_legacy_in_review():
+    """ALL-1302 review #2: old evidence code, ECO CURIE, reference and With/From are not blank."""
+
+    metadata, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    stored = {**_legacy_go_payload(), "with_from": ["RGD:619839"], "qualifiers": ["colocalizes_with"]}
+    legacy_object = envelope.extracted_objects[0].model_copy(update={"payload": stored})
+    legacy_envelope = envelope.model_copy(update={"extracted_objects": [legacy_object]})
+
+    rows = _registered_go_materializer().materialize(legacy_envelope, envelope_revision=1)
+
+    fields = {
+        field.field_key: field.value
+        for field in workspace_pipeline._draft_fields_from_review_row(rows[0])
+    }
+    assert fields["evidence_code.mention"] == f"IDA (ECO:0000314) {LEGACY_UNVERIFIED_SUFFIX}"
+    assert fields["evidence_code.code"] is None
+    assert fields["evidence_code.resolution_state"] == "unresolved"
+    assert fields["reference_curie.mention"] == f"AGRKB:101000000400377 {LEGACY_UNVERIFIED_SUFFIX}"
+    assert fields["reference_curie.curie"] is None
+    assert fields["with_from"][0]["mention"] == f"RGD:619839 {LEGACY_UNVERIFIED_SUFFIX}"
+    assert fields["with_from"][0]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+    assert fields["qualifiers"][0]["mention"] == f"colocalizes_with {LEGACY_UNVERIFIED_SUFFIX}"
+    assert fields["qualifiers"][0]["name"] is None
+    # The row label names the legacy wording; the core header rule adds its own suffix.
+    assert rows[0].display_label.startswith(f"Lta protein {LEGACY_UNVERIFIED_SUFFIX}")
+    assert legacy_object.payload == stored  # The stored record is never rewritten.
+    assert "evidence_eco_curie" not in previous_format_display_payload(stored)
+
+
+def test_previous_format_record_gets_one_clear_revalidation_finding():
+    """ALL-1302 review #2: re-validating an old record says to re-run extraction."""
+
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    legacy_object = envelope.extracted_objects[0].model_copy(update={"payload": _legacy_go_payload()})
+    legacy_envelope = envelope.model_copy(update={"extracted_objects": [legacy_object]})
+
+    finding, = validate_go_envelope(legacy_envelope)
+    assert finding.code == PREVIOUS_FORMAT_FINDING_CODE
+    assert finding.message == "Recorded in the previous GO format; re-run extraction to validate."
+    assert finding.severity.value == "blocker"
+    assert validate_go_envelope(envelope) == ()
+
+
+def test_previous_format_record_gets_exactly_the_one_clear_finding_on_revalidation():
+    """ALL-1302 review #2 with core (g): no selector or missing-field findings beside it."""
+
+    from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+    from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
+
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    legacy_object = envelope.extracted_objects[0].model_copy(update={"payload": _legacy_go_payload()})
+    legacy_envelope = envelope.model_copy(
+        update={"extracted_objects": [legacy_object], "validation_findings": []}
+    )
+
+    # The workspace hook order: package validator, structural checks, binding dispatch.
+    flagged, package_findings = append_validation_findings_to_envelope(
+        legacy_envelope, validate_go_envelope(legacy_envelope)
+    )
+    structural = run_domain_envelope_structural_checks(flagged, pack)
+    dispatched = dispatch_active_validator_bindings(
+        structural.envelope,
+        pack,
+        runner=lambda *_args, **_kwargs: pytest.fail("A previous-format record was sent to a validator"),
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
+    )
+
+    findings = [*package_findings, *structural.appended_findings, *dispatched.appended_findings]
+    assert [finding.code for finding in findings] == [PREVIOUS_FORMAT_FINDING_CODE]
+    assert findings[0].message == "Recorded in the previous GO format; re-run extraction to validate."
+    assert dispatched.validator_agent_run_count == 0
+
+
+def test_every_go_value_the_builder_stages_is_declared_resolvable():
+    """ALL-1302 declaration guard: core writes only into declared resolvable values (H1/F2)."""
+
+    from agr_ai_curation_alliance.domain_packs.go.values import (
+        RESOLVABLE_LIST_FIELDS,
+        RESOLVABLE_VALUE_FIELDS,
+    )
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    metadata, fixtures = _contracts()
+    declared = declared_resolvable_fields(metadata, "GOCuratableObject")
+    assert set(declared) == {*RESOLVABLE_VALUE_FIELDS, *RESOLVABLE_LIST_FIELDS}
+
+    def contract_paths(node, path=""):
+        if isinstance(node, list):
+            for item in node:
+                yield from contract_paths(item, path)
+        elif isinstance(node, dict):
+            if "resolution_state" in node and "lookup_outcome" in node:
+                yield path
+            for key, item in node.items():
+                yield from contract_paths(item, f"{path}.{key}" if path else key)
+
+    for fixture in fixtures.fixtures:
+        for obj in fixture.envelope.extracted_objects:
+            assert set(contract_paths(obj.payload)) <= set(declared)
+
+
+def _curator_patch(envelope, object_id, field_path, *, before, value, operation="replace"):
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, EnvelopeFieldPatchOperation
+
+    return EnvelopeFieldPatch(
+        patch_id=f"curator-field-patch:{operation}:{field_path}",
+        envelope_id=envelope.envelope_id,
+        expected_revision=1,
+        object_id=object_id,
+        operation=EnvelopeFieldPatchOperation(operation),
+        field_path=field_path,
+        before=before,
+        value=value,
+        reason="Curator override.",
+    )
+
+
+def _mirna_envelope():
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[1].envelope
+    return envelope, envelope.extracted_objects[0]
+
+
+@pytest.mark.parametrize(
+    ("field_path", "identity", "operation"),
+    [
+        ("gene_product.curie", {"curie": "RGD:2325", "label": "Mir21"}, "replace_identity"),
+        ("go_term.curie", {"curie": "GO:0005654", "label": "nucleoplasm"}, "replace_identity"),
+        ("evidence_code.code", {"code": "IMP", "eco_curie": "ECO:0000315"}, "replace_identity"),
+        (
+            "reference_curie.curie",
+            {"curie": "AGRKB:101000000999999", "pmid": "PMID:31415926", "doi": None},
+            "replace_identity",
+        ),
+    ],
+)
+def test_a_curator_identity_edit_on_a_go_value_is_a_curator_override(field_path, identity, operation):
+    """ALL-1302 override note: GO identity leaves are curator-editable, and an edit is an audited override.
+
+    Two-key values take both keys in one ``replace_identity`` patch (core 89e74a356).
+    """
+
+    from src.lib.domain_envelopes.patches import apply_curator_field_patch
+    from src.lib.domain_packs.resolvable_values import CURATOR_OVERRIDE_METADATA_KEY
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    envelope, obj = _mirna_envelope()
+    value_path, _, key = field_path.rpartition(".")
+    current = obj.payload[value_path]
+    if operation == "replace_identity":
+        before, value = {name: current.get(name) for name in identity}, identity
+    else:
+        before, value = current.get(key), identity[key]
+
+    result = apply_curator_field_patch(
+        envelope, pack,
+        _curator_patch(envelope, obj.object_id, field_path, before=before, value=value, operation=operation),
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1",
+    )
+
+    assert result.accepted, result.errors
+    edited = result.envelope.extracted_objects[0]
+    changed = edited.payload[value_path]
+    assert {name: changed[name] for name in identity} == identity
+    assert (changed["resolution_state"], changed["lookup_outcome"]) == ("resolved", "curator_override")
+    assert changed["curator_override"]["actor_id"] == "curator-1"
+    assert changed["mention"] == current["mention"]
+    audit, = edited.metadata[CURATOR_OVERRIDE_METADATA_KEY]
+    assert audit["field_path"] == field_path
+
+
+def test_a_go_curator_override_needs_both_the_identifier_and_the_name():
+    """Core 7df09b2c2: a single-leaf first override leaves the name empty and is rejected."""
+
+    from src.lib.domain_envelopes.patches import apply_curator_field_patch
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    envelope, obj = _mirna_envelope()
+
+    result = apply_curator_field_patch(
+        envelope, pack, _curator_patch(envelope, obj.object_id, "gene_product.curie", before=None, value="RGD:2325"),
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1",
+    )
+
+    assert not result.accepted
+    assert "Enter both the identifier and the name" in result.errors[0]
+
+
+def test_a_go_whole_value_override_may_not_change_other_keys():
+    """Core cbb92a769: a whole-value edit that changes gene_product.entity_type is rejected."""
+
+    from src.lib.domain_envelopes.patches import apply_curator_field_patch
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    envelope, obj = _mirna_envelope()
+    current = obj.payload["gene_product"]
+
+    result = apply_curator_field_patch(
+        envelope, pack,
+        _curator_patch(envelope, obj.object_id, "gene_product", before=current,
+                       value={**current, "curie": "RGD:2325", "label": "Mir21", "entity_type": "gene"}),
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1",
+    )
+
+    assert not result.accepted
+    assert "only the identifier and name can be changed" in result.errors[0]
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value"),
+    [
+        ("gene_product.mention", "a different wording"),
+        ("go_term.resolution_state", "resolved"),
+        ("evidence_code.lookup_outcome", "matched"),
+        ("gene_product.entity_type", "gene"),
+        ("gene_product.proposed_curie", "RGD:2325"),
+    ],
+)
+def test_go_paper_wording_and_validation_state_are_not_curator_editable(field_path, value):
+    from src.lib.domain_envelopes.patches import apply_curator_field_patch
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[1].envelope
+    obj = envelope.extracted_objects[0]
+    value_path, _, key = field_path.rpartition(".")
+
+    result = apply_curator_field_patch(
+        envelope, pack,
+        _curator_patch(envelope, obj.object_id, field_path, before=obj.payload[value_path].get(key), value=value),
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1",
+    )
+
+    assert not result.accepted
+
+
+def test_go_identity_leaves_are_the_editable_fields_and_the_catalog_ignores_it():
+    """Only identity leaves are editable; editable metadata is not in the export catalog."""
+
+    from src.lib.flows.export_fields import _pack_export_fields
+
+    metadata, _ = _contracts()
+    fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
+    editable = {path for path, field in fields.items() if field.metadata.get("editable")}
+    assert editable == {
+        "gene_product.curie", "gene_product.label", "go_term.curie", "go_term.label",
+        "evidence_code.code", "evidence_code.eco_curie", "reference_curie.curie",
+        "reference_curie.pmid", "reference_curie.doi", "with_from.curie", "qualifiers.name",
+    }
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    assert all("editable" not in str(entry) for entry in _pack_export_fields(pack))
+
+
+def test_with_from_species_comes_from_the_paper_never_a_fixed_provider():
+    """Review S1: a non-rat partner must not resolve to the rat gene."""
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    bindings = {
+        binding.binding_id: binding
+        for binding in DomainPackValidationRegistry.from_domain_pack(pack).bindings
+    }
+    with_from = bindings["go_with_from_gene_validation"]
+
+    assert "data_provider" not in with_from.input_fields
+    assert with_from.input_fields["taxon_hint"].path == "with_from.taxon_curie"
+    assert with_from.input_fields["evidence_quotes"].source == "evidence_record"
+    assert "go_with_from_gene_validation" in bindings["rgd_go_evidence_policy_validation"].runs_after
+    # Turning either optional check off still leaves the policy check blocking.
+    for binding_id in ("go_reference_validation", "go_with_from_gene_validation"):
+        assert "cannot be turned off" in bindings[binding_id].when_off
+
+
+def test_go_paper_stated_identifiers_are_declared_for_validators_only():
+    """Extraction never searches: a paper-stated ID is validator input, never a column or an identity."""
+
+    from src.lib.flows.export_fields import _pack_export_fields
+    from agr_ai_curation_alliance.domain_packs.go.values import PROPOSAL_FIELDS
+
+    metadata, _ = _contracts()
+    fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
+    proposals = {path for path in fields if path.endswith(".proposed_curie")}
+    assert proposals == {f"{value_path}.proposed_curie" for value_path in PROPOSAL_FIELDS}
+    for path in (*proposals, "with_from.taxon_curie"):
+        assert fields[path].metadata.get("exported") is False
+        assert fields[path].metadata.get("protected") is True
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    assert not [
+        entry for entry in _pack_export_fields(pack) if entry["payload_path"].endswith("proposed_curie")
+    ]
+
+
+def test_previous_format_go_records_export_through_the_registered_mapper():
+    """The GO legacy display mapper is registered, so flow exports read old records like review."""
+
+    from src.lib.flows.export_fields import PackagedExportSource
+
+    registry = CurationAdapterRegistry()
+    register_curation_adapters(registry)
+    assert registry.get_legacy_display_mapper_by_id("agr.alliance.go") is not None
+    mapper = registry.get_legacy_display_mapper_by_id("agr.alliance.go")
+    stored = {**_legacy_go_payload(), "qualifiers": ["colocalizes_with"]}
+    # The mapper only reshapes; it writes no state.
+    reshaped = mapper("GOCuratableObject", stored)
+    assert reshaped["evidence_code"] == {"code": "IDA", "eco_curie": "ECO:0000314"}
+    assert reshaped["qualifiers"] == [{"name": "colocalizes_with"}]
+
+    source = PackagedExportSource(load_alliance_domain_pack_registry().get_pack("agr.alliance.go"))
+    source.legacy_display_mapper = mapper
+    exported = source.effective_item({"object_type": "GOCuratableObject", "payload": stored, "metadata": {}})
+    assert exported["payload"]["evidence_code"]["mention"] == f"IDA (ECO:0000314) {LEGACY_UNVERIFIED_SUFFIX}"
+    assert exported["payload"]["reference_curie"]["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+    assert exported["payload"]["qualifiers"][0]["mention"] == f"colocalizes_with {LEGACY_UNVERIFIED_SUFFIX}"
+
+
+def test_a_curator_edit_never_makes_a_current_go_record_the_previous_format():
+    from agr_ai_curation_alliance.domain_packs.go.legacy import is_previous_format
+
+    _, fixtures = _contracts()
+    current = copy.deepcopy(fixtures.fixtures[0].envelope.extracted_objects[0].payload)
+    current["with_from"] = ["RGD:619839"]  # e.g. a hand-typed list entry
+    assert not is_previous_format(current)
+    assert is_previous_format(_legacy_go_payload())
+
+
+def test_no_overridable_go_value_has_a_protected_container():
+    """Core 73c6805fb: a protected container blocks curator overrides; GO's resolvable values stay overridable."""
+
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    metadata, _ = _contracts()
+    fields = {field.field_path: field for field in metadata.object_definitions[0].fields}
+    for value_path in declared_resolvable_fields(metadata, "GOCuratableObject"):
+        assert not fields[value_path].metadata.get("protected"), value_path
+
+
+def test_a_legacy_go_value_is_overridden_from_its_review_row_stored_identity():
+    """B5: the review row's stored identity is the stored one, so its override `before` matches."""
+
+    from src.lib.domain_envelopes.patches import apply_curator_field_patch
+
+    pack = load_alliance_domain_pack_registry().get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    legacy_object = envelope.extracted_objects[0].model_copy(update={"payload": _legacy_go_payload()})
+    legacy_envelope = envelope.model_copy(update={"extracted_objects": [legacy_object]})
+
+    [row] = _registered_go_materializer().materialize(legacy_envelope, envelope_revision=1)
+    [reading] = [
+        value
+        for field in row.metadata["workspace_fields"]
+        if field.get("resolution")
+        for value in field["resolution"]["values"]
+        if value["value_path"] == "gene_product"
+    ][:1]
+    assert reading["lookup_outcome"] == OUTCOME_LEGACY_UNVERIFIED
+    assert (reading["stored_identity"]["curie"], reading["stored_identity"]["label"]) == ("RGD:3020", "Lta")
+
+    identity = {**reading["stored_identity"], "curie": "RGD:3020", "label": "Lta"}
+    result = apply_curator_field_patch(
+        legacy_envelope, pack,
+        _curator_patch(legacy_envelope, legacy_object.object_id, "gene_product.curie",
+                       before=reading["stored_identity"], value=identity, operation="replace_identity"),
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1",
+    )
+    assert result.accepted, result.errors
+    gene_product = result.envelope.extracted_objects[0].payload["gene_product"]
+    assert (gene_product["lookup_outcome"], gene_product["mention"]) == ("curator_override", "Lta protein")

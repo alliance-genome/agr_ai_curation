@@ -18,6 +18,16 @@ from src.lib.openai_agents.agents import supervisor_agent
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+# Database lookups belong to validation; the extractor reads the paper only.
+_LOOKUP_TOOLS = (
+    "resolve_gene_product",
+    "agr_literature_reference_lookup",
+    "quickgo_api_call",
+    "go_api_call",
+    "agr_curation_query",
+    "search_domain_field_terms",
+    "inspect_ontology_term",
+)
 AGENT_DIR = REPO_ROOT / "packages" / "alliance" / "agents" / "rgd_go_paper_curator"
 FIXTURE_PATH = (
     REPO_ROOT
@@ -47,7 +57,6 @@ def test_rgd_go_paper_curator_is_registered_and_rgd_restricted():
     assert agent.output_schema is None
     assert agent.curation.adapter_key == "go"
     assert agent.curation.domain_pack_id == "agr.alliance.go"
-    assert "agr_literature_reference_lookup" in agent.tools
 
     manifest = load_package_manifest(
         REPO_ROOT / "packages" / "alliance" / "package.yaml"
@@ -57,23 +66,11 @@ def test_rgd_go_paper_curator_is_registered_and_rgd_restricted():
     assert (ExportKind.PROMPT, "rgd_go_paper_curator.system") in exports
 
 
-def test_rgd_identity_and_annotation_tools_are_group_scoped():
+def test_rgd_go_paper_curator_never_searches_a_database():
     agent = _agent()
 
-    assert "resolve_gene_product" not in agent.tools
-    assert "go_api_call" not in agent.tools
-    assert [rule.to_dict() for rule in agent.group_tool_policy.rules] == [
-        {
-            "tool_id": "resolve_gene_product",
-            "allowed_group_ids": ["RGD"],
-            "field_paths": ["gene_product"],
-        },
-        {
-            "tool_id": "go_api_call",
-            "allowed_group_ids": ["RGD"],
-            "field_paths": ["provider_context.existing_annotation_context"],
-        },
-    ]
+    assert not set(_LOOKUP_TOOLS).intersection(agent.tools)
+    assert agent.group_tool_policy.rules == []
 
 
 def test_rgd_go_paper_curator_denies_non_rgd_authenticated_contexts():
@@ -92,7 +89,7 @@ def test_rgd_go_paper_curator_denies_non_rgd_authenticated_contexts():
     )
 
 
-def test_prompt_requires_grounding_sections_and_canonical_lifecycle():
+def test_prompt_requires_paper_only_sections_and_canonical_lifecycle():
     prompt = yaml.safe_load((AGENT_DIR / "prompt.yaml").read_text(encoding="utf-8"))[
         "content"
     ]
@@ -102,16 +99,13 @@ def test_prompt_requires_grounding_sections_and_canonical_lifecycle():
         "Results, Methods, figure legends, tables",
         "Introduction and Discussion text",
         "never sufficient evidence",
-        "resolve_gene_product",
-        "agr_literature_reference_lookup",
-        "quickgo_api_call",
-        "go_api_call",
+        "never look anything up",
+        "Never write an identifier from memory or guess one",
         "record_evidence",
         "stage_go_recommendation",
         "finalize_go_extraction",
         "Never call `rgd_go_evidence_policy_validation`",
         "general-PDF fallback",
-        "Never synthesize an RGD CURIE",
         "completed candidate manifest",
         "GO:<digits>",
         "RGD:<digits>",
@@ -122,6 +116,8 @@ def test_prompt_requires_grounding_sections_and_canonical_lifecycle():
     ):
         assert required in normalized_prompt
 
+    for lookup in _LOOKUP_TOOLS:
+        assert lookup not in prompt
     assert "stage_disease_observation" not in prompt
     assert "finalize_disease_extraction" not in prompt
 

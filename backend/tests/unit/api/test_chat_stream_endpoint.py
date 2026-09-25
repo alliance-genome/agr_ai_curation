@@ -1896,7 +1896,29 @@ def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_
     assert events[-1]["error_type"] == "RuntimeError"
 
 
-def test_chat_stream_endpoint_sanitizes_runner_run_error_event(monkeypatch, caplog):
+_TOOL_GROUP_CAP_MESSAGE = (
+    "This agent has 11 tools from the 'staged object corrections' group, and custom "
+    "agents can use at most 10 tools from one group. Please contact the AI Curation "
+    "developers for help setting up this agent."
+)
+
+
+@pytest.mark.parametrize(
+    ("runner_message", "error_type", "shown_message"),
+    [
+        (
+            "runner exploded",
+            "RuntimeError",
+            "An error occurred. Please provide feedback using the ⋮ menu on this message, "
+            "then try your query again.",
+        ),
+        # Written for the curator (ALL-1280 custom agent over the tool-group cap).
+        (_TOOL_GROUP_CAP_MESSAGE, "ToolGroupCapError", _TOOL_GROUP_CAP_MESSAGE),
+    ],
+)
+def test_chat_stream_endpoint_sanitizes_runner_run_error_event(
+    monkeypatch, caplog, runner_message, error_type, shown_message
+):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -1927,7 +1949,7 @@ def test_chat_stream_endpoint_sanitizes_runner_run_error_event(monkeypatch, capl
         return False
 
     async def _run_agent_streamed(**_kwargs):
-        yield {"type": "RUN_ERROR", "data": {"message": "runner exploded", "error_type": "RuntimeError"}}
+        yield {"type": "RUN_ERROR", "data": {"message": runner_message, "error_type": error_type}}
 
     _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
     _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
@@ -1946,12 +1968,10 @@ def test_chat_stream_endpoint_sanitizes_runner_run_error_event(monkeypatch, capl
     events = asyncio.run(_consume_stream(response))
 
     assert [event["type"] for event in events] == ["turn_failed"]
-    assert (
-        events[0]["message"]
-        == "An error occurred. Please provide feedback using the ⋮ menu on this message, then try your query again."
-    )
-    assert "runner exploded" not in json.dumps(events)
-    assert "runner exploded" in caplog.text
+    assert events[0]["message"] == shown_message
+    if runner_message != shown_message:
+        assert runner_message not in json.dumps(events)
+    assert runner_message in caplog.text
 
 
 def test_preferred_flow_run_error_log_skips_duplicate_sentry_capture(monkeypatch, caplog):

@@ -35,6 +35,7 @@ from src.lib.database.postgres_connection_resolver import (
     get_postgres_connection_resolver,
 )
 from src.lib.observability.sentry import initialize_sentry_if_configured
+from src.lib.openai_agents.model_request_measurement import install_model_request_measurement
 from src.lib.runtime_entrypoint import maybe_prepare_package_tool_environments_on_start
 from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
@@ -319,6 +320,32 @@ async def lifespan(app: FastAPI):
         raise
     except Exception as e:
         logger.error("FATAL: Unexpected provider validation error: %s", e)
+        raise
+
+    # Deployment model settings (.env) must name catalog models and levels,
+    # like the unknown-model gate for active agents below.
+    try:
+        from src.lib.config.model_env_validation import validate_model_env
+
+        validate_model_env()
+        logger.info("Model environment settings validated against the model catalog")
+    except RuntimeError as e:
+        logger.error("FATAL: %s", e)
+        raise
+
+    # Validate hosted tool-search namespaces and loading policies (ALL-1280).
+    try:
+        from src.lib.openai_agents.tool_surface import validate_tool_surface_configuration
+
+        tool_surface_report = validate_tool_surface_configuration()
+        logger.info(
+            "Tool surface configuration validated (namespaces=%s namespaced_tools=%s policies=%s)",
+            tool_surface_report["namespace_count"],
+            tool_surface_report["namespaced_tool_count"],
+            tool_surface_report["policies"],
+        )
+    except Exception as e:
+        logger.error("FATAL: %s", e)
         raise
 
     try:
@@ -867,6 +894,9 @@ async def deep_health_check():
 
 def create_app() -> FastAPI:
     """Create a FastAPI application instance."""
+    # Every model request in this process is measured and checked against
+    # known provider field limits, independent of router import order (ALL-1279).
+    install_model_request_measurement()
     initialize_sentry_if_configured()
 
     application = FastAPI(

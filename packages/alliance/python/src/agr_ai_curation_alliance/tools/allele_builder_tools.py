@@ -9,9 +9,8 @@ target (Reference + AlleleMention + EvidenceQuote(s) + AllelePaperEvidenceAssoci
     selector context (normalized_hint / associated_gene / taxon) and source mentions; the active
     ``allele_mention_reference_validation`` binding resolves allele identity at validation time.
     The extractor NEVER stages an allele identifier or an Allele object.
-  * NO resolver-backed controlled fields (the allele validator owns identity, mutation-type SO
-    terms, and all CVs), so staging requires evidence but NOT resolver selections
-    (``require_resolver_selections=False``) — same posture as gene.
+  * NO controlled fields resolved at extraction (the allele validator owns identity,
+    mutation-type SO terms, and all CVs); staging requires evidence — same posture as gene.
   * NO mirror/projection fields (allele declares no ``materializes_to_field_paths``).
 
 Tool names match the allele extractor prompt/agent: ``stage_allele_observation``,
@@ -56,12 +55,17 @@ from agr_ai_curation_alliance.domain_packs.allele import (
 # Shared result/builder-summary helpers live in the sibling agr_curation module.
 from .agr_curation import (
     AgrQueryResult,
+    _builder_finalization_summary,
     _builder_summary,
     _builder_candidate_list,
     _search_builder_candidates,
     _ok,
 )
 from .builder_finalization import finalize_builder_extraction
+from .builder_rationale import (
+    document_rationale_arg,
+    normalize_rationale,
+)
 
 
 # Patch field paths that map staging-input names to allele candidate staged-field names.
@@ -76,6 +80,7 @@ _ALLELE_PATCH_FIELD_PATHS = frozenset(
         "reference_filename",
         "source_mentions",
         "evidence_record_ids",
+        "rationale",
     }
 )
 
@@ -101,6 +106,7 @@ class AlleleStageInput(_StrictToolModel):
             "verified quote/provenance stays in evidence_record_ids."
         ),
     )
+    rationale: StrictStr
     normalized_hint: Optional[StrictStr] = None
     associated_gene: Optional[StrictStr] = None
     taxon: Optional[StrictStr] = None
@@ -122,6 +128,11 @@ class AlleleStageInput(_StrictToolModel):
         if not cleaned:
             raise ValueError("source_mentions must contain at least one non-empty value")
         return cleaned
+
+    @field_validator("rationale")
+    @classmethod
+    def _valid_rationale(cls, value: str) -> str:
+        return normalize_rationale(value)
 
 
 class AllelePatchUpdateInput(_StrictToolModel):
@@ -167,7 +178,7 @@ class AlleleFindInput(_StrictToolModel):
 
 
 class AlleleFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(min_length=1, max_length=50)
+    candidate_ids: List[StrictStr] = Field(max_length=50)
 
 
 def _emit_allele_builder_event(
@@ -251,6 +262,7 @@ def _stage_payload_from_allele_input(stage_input: AlleleStageInput) -> dict[str,
         "pending_ref_id": stage_input.pending_ref_id,
         "mention": stage_input.mention,
         "source_mentions": list(stage_input.source_mentions),
+        "rationale": stage_input.rationale,
     }
     for field_name in (
         "validation_guidance",
@@ -266,11 +278,13 @@ def _stage_payload_from_allele_input(stage_input: AlleleStageInput) -> dict[str,
     return payload
 
 
+@document_rationale_arg
 def _stage_allele_observation_impl(
     pending_ref_id: str,
     mention: str,
     evidence_record_ids: List[str],
     source_mentions: List[str],
+    rationale: str,
     normalized_hint: Optional[str] = None,
     associated_gene: Optional[str] = None,
     taxon: Optional[str] = None,
@@ -303,6 +317,7 @@ def _stage_allele_observation_impl(
             mention=mention,
             evidence_record_ids=evidence_record_ids,
             source_mentions=source_mentions,
+            rationale=rationale,
             normalized_hint=normalized_hint,
             associated_gene=associated_gene,
             taxon=taxon,
@@ -325,7 +340,6 @@ def _stage_allele_observation_impl(
         staged_fields=payload,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -357,7 +371,12 @@ def _patch_allele_observation_impl(
     pending_ref_id: str,
     updates: List[Mapping[str, Any]],
 ) -> AgrQueryResult:
-    """Patch enumerated fields on one staged allele mention candidate."""
+    """Patch enumerated fields on one staged allele mention candidate.
+
+    Args:
+        updates: Field updates, each naming one allowed `field_path` with its new value.
+            A `rationale` update must be non-empty; it cannot be cleared.
+    """
 
     attempted_query = _attempt_query(
         "patch_allele_observation",
@@ -425,6 +444,17 @@ def _patch_allele_observation_impl(
                 )
             payload["source_mentions"] = new_mentions
             continue
+        if update.field_path == "rationale":
+            try:
+                payload["rationale"] = normalize_rationale(update.string_value or "")
+            except ValueError as exc:
+                return _allele_validation_result(
+                    message=f"rationale patch rejected: {exc}.",
+                    issues=[{"field_path": "rationale", "reason": "invalid_rationale", "message": str(exc)}],
+                    method="patch_allele_observation",
+                    attempted_query=attempted_query,
+                )
+            continue
         _set_allele_patch_value(payload, update.field_path, update.string_value)
 
     workspace.upsert_candidate(
@@ -432,7 +462,6 @@ def _patch_allele_observation_impl(
         staged_fields=payload,
         pending_ref_ids=candidate.pending_ref_ids,
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -480,7 +509,10 @@ def _discard_allele_observation_impl(
             method="discard_allele_observation",
             attempted_query=attempted_query,
         )
-    summary = _builder_summary(workspace, include_discarded=True)
+    summary = {
+        **_builder_summary(workspace, include_discarded=True),
+        "discarded_candidate_id": discard_input.candidate_id,
+    }
     _emit_allele_builder_event(
         "allele_builder.discard_completed",
         action="discard",
@@ -607,7 +639,6 @@ def _materialize_allele_with_events(
     workspace: Any,
     candidate_ids: Sequence[str],
     evidence_records: Sequence[Mapping[str, Any]],
-    resolver_entry_lookup: Optional[Any],
 ) -> Any:
     """Domain materializer wrapper emitting allele builder events.
 
@@ -625,7 +656,6 @@ def _materialize_allele_with_events(
         workspace=workspace,
         candidate_ids=candidate_id_list,
         evidence_records=evidence_records,
-        resolver_entry_lookup=resolver_entry_lookup,
     )
     if not materialization.ok or materialization.payload is None:
         _emit_allele_builder_event(
@@ -653,8 +683,7 @@ def _finalize_allele_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult
 
     Thin domain adapter: input validation + result shape live here; all structural
     staging/finalize control flow is delegated to ``finalize_builder_extraction``. Allele is
-    mention-only with the validator owning identity, so there are no resolver-backed controlled
-    fields and ``require_resolver_selections=False`` (same posture as gene).
+    mention-only with the validator owning identity (same posture as gene).
     """
 
     attempted_query = _attempt_query("finalize_allele_extraction", candidate_ids=candidate_ids)
@@ -682,9 +711,7 @@ def _finalize_allele_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult
         candidate_ids=candidate_ids,
         materialize=_materialize_allele_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
         materialized_candidate_prefix="allele-paper-evidence-association",
-        require_resolver_selections=False,
     )
 
     if not outcome.ok:
@@ -697,7 +724,7 @@ def _finalize_allele_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult
 
     finalization = outcome.finalization
     summary = {
-        "builder_finalization": finalization.summary(),
+        "builder_finalization": _builder_finalization_summary(finalization.summary()),
         "builder": _builder_summary(workspace, include_discarded=True),
     }
     _emit_allele_builder_event(

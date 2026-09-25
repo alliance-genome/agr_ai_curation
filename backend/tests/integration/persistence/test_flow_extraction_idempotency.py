@@ -110,7 +110,15 @@ def test_flow_persistence_concurrent_writers_converge_without_losing_outer_work(
             {
                 "object_type": "gene_mention_evidence",
                 "pending_ref_id": "gene-notch",
-                "payload": {"mention": "notch"},
+                "payload": {
+                    "mention": "notch",
+                    "gene_symbol": None,
+                    "primary_external_id": None,
+                    "taxon": None,
+                    "resolution_state": "unresolved",
+                    "lookup_outcome": "not_validated",
+                    "validator_explanation": "Not validated yet.",
+                },
                 "evidence_record_ids": [],
             }
         ],
