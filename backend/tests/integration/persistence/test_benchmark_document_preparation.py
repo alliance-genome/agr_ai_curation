@@ -25,6 +25,7 @@ from src.lib.benchmarks import preparation_service
 from src.lib.benchmarks import runtime as benchmark_runtime
 from src.lib.benchmarks.models import BenchmarkExecutionTarget
 from src.lib.document_context import DocumentContext
+from src.lib.cost_ledger.facts import TokenUsage
 from src.lib.openai_agents.provider_usage import (
     ProviderUsageRecord, begin_provider_invocation, complete_provider_invocation,
 )
@@ -239,6 +240,7 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
                 actual_provider="provider-a", actual_model="model-a",
                 routing_attempt=0, latency_ms=10, input_tokens=2, output_tokens=3,
                 total_tokens=5, billed_cost=None,
+                accounting_usage=TokenUsage(input_tokens=2, output_tokens=3, total_tokens=5),
             ))
             yield {"type": "STRUCTURED_RESULT", "data": {"result": {"records": [{"text": read.chunk.content}]}}}
             yield {"type": "RUN_FINISHED", "data": {"response": "Not the extraction envelope"}}
@@ -254,8 +256,13 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
             assert "Frozen scientific evidence." in executed.generated_envelope["records"][0]["text"]
             invocation = session.scalar(select(BenchmarkInvocation).where(BenchmarkInvocation.cell_id == cell_id))
             assert invocation is not None and invocation.route_slot == "agent:extractor"
-            assert invocation.total_tokens == 5
-            assert invocation.billed_amount is None
+            from src.lib.cost_ledger.benchmark_reads import read_benchmark_accounting
+            accounting = read_benchmark_accounting(
+                session, job_id=job_id, cell_id=cell_id, invocation_id=invocation.id,
+                owner_subject=session.get(BenchmarkJob, job_id).owner_subject,
+            )
+            assert accounting.usage.total_tokens == 5
+            assert accounting.recorded_charge is None
         receipt, execution_context = await preparation_service.prepare_job_document(
             job_id=job_id, snapshot_id=snapshot_id, lease_owner=lease_owner,
         )

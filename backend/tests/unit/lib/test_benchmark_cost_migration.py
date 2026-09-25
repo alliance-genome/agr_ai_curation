@@ -9,7 +9,8 @@ import pytest
 from src.lib.cost_ledger.benchmark_migration import plan_benchmark_cost_migration, verify_benchmark_cost_receipt
 from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
 from src.lib.cost_ledger.persistence import CostFacts
-from src.models.sql.benchmark import BenchmarkInvocation, BenchmarkInvocationStatus
+from src.models.sql.benchmark import BenchmarkInvocationStatus
+from src.lib.cost_ledger.benchmark_migration import HistoricalBenchmarkInvocation
 
 
 def invocation(**overrides):
@@ -19,7 +20,7 @@ def invocation(**overrides):
         input_tokens=None, output_tokens=None, total_tokens=None,
         billed_amount=None, billed_unit=None, billed_source=None,
     )
-    return BenchmarkInvocation(**{**values, **overrides})
+    return HistoricalBenchmarkInvocation(**{**values, **overrides})
 
 
 def plan(row, **overrides):

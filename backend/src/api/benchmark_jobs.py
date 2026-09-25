@@ -261,7 +261,7 @@ def get_cell(
         "description": "Canonical UTF-8 JSON bytes; hash the response body directly.",
         "content": {"application/json": {
             "schema": {"type": "object"},
-            "example": {"output": {"records": []}, "invocations": []},
+            "example": {"schema_version": 2, "output": {"records": []}, "invocations": []},
         }},
         "headers": {
             "X-Benchmark-Result-Digest": {"schema": {"type": "string"}},
@@ -302,7 +302,7 @@ def get_cell_result(
             headers={
                 "Cache-Control": "no-store",
                 "X-Benchmark-Result-Digest": artifact.digest,
-                "X-Benchmark-Artifact-Version": "1",
+                "X-Benchmark-Artifact-Version": artifact.version,
                 "X-Benchmark-Attempt-Count": str(artifact.attempt_count),
                 "X-Benchmark-Job-ID": str(artifact.job_id),
                 "X-Benchmark-Cell-ID": str(artifact.cell_id),

@@ -257,6 +257,8 @@ def test_event_replay_detects_pruned_holes_and_retains_preparation(monkeypatch):
 
 
 def test_invocation_api_pages_complete_telemetry_and_preserves_unknowns(monkeypatch):
+    from src.lib.cost_ledger.benchmark_writes import reserve_benchmark_accounting, complete_benchmark_accounting
+    from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
     monkeypatch.setenv("BENCHMARK_API_ENABLED", "true")
     monkeypatch.setenv("BENCHMARK_MAX_PAGE_SIZE", "1")
     owner = f"telemetry-owner-{uuid4()}"
@@ -272,21 +274,23 @@ def test_invocation_api_pages_complete_telemetry_and_preserves_unknowns(monkeypa
         cell.attempt_count = 1
         session.flush()
         for ordinal in range(2):
+            invocation_id = uuid4()
             session.add(BenchmarkInvocation(
-                id=uuid4(), cell_id=cell_id, ordinal=ordinal, attempt=1,
+                id=invocation_id, cell_id=cell_id, ordinal=ordinal, attempt=1,
                 route_slot="supervisor", request_digest="sha256:" + "a" * 64,
                 response_digest="sha256:" + "b" * 64,
                 sequence=ordinal + 1, status=BenchmarkInvocationStatus.SUCCEEDED,
                 started_at=datetime.now(timezone.utc), completed_at=datetime.now(timezone.utc),
                 requested_provider="synthetic", requested_model="requested-model",
                 actual_provider="synthetic", actual_model="actual-model",
-                input_tokens=None if ordinal == 0 else 0,
-                output_tokens=None if ordinal == 0 else 0,
-                total_tokens=None if ordinal == 0 else 0,
-                billed_amount=None if ordinal == 0 else Decimal("0"),
-                billed_unit=None if ordinal == 0 else "USD",
-                billed_source=None if ordinal == 0 else "synthetic-measurement",
             ))
+            session.flush()
+            reserve_benchmark_accounting(session, invocation_id=invocation_id,
+                                          model_request_id=None, owner_subject=owner)
+            if ordinal == 1:
+                complete_benchmark_accounting(session, invocation_id=invocation_id, owner_subject=owner,
+                                              usage=TokenUsage(0, 0, 0),
+                                              charge=RecordedCharge(Decimal("0"), "USD", "synthetic-measurement"))
         session.commit()
     app = FastAPI()
     app.dependency_overrides[require_benchmark_read] = lambda: {"sub": owner}
@@ -296,14 +300,19 @@ def test_invocation_api_pages_complete_telemetry_and_preserves_unknowns(monkeypa
         first = client.get(path, params={"limit": 100}).json()
         assert len(first["items"]) == 1
         assert first["next_after_ordinal"] == 0
-        assert first["items"][0]["total_tokens"] is None
-        assert first["items"][0]["billed_amount"] is None
+        assert first["schema_version"] == 2
+        assert first["items"][0]["accounting_reference"]["fact_revision"] == 0
+        assert "total_tokens" not in first["items"][0] and "billed_amount" not in first["items"][0]
+        first_facts = client.get(path + f"/{first['items'][0]['id']}/accounting").json()
+        assert first_facts["usage"]["total_tokens"] is None and first_facts["recorded_charge"] is None
         assert first["items"][0]["actual_model"] == "actual-model"
         second = client.get(path, params={"after_ordinal": first["next_after_ordinal"]}).json()
         assert len(second["items"]) == 1
         assert second["items"][0]["ordinal"] == 1
-        assert second["items"][0]["total_tokens"] == 0
-        assert Decimal(second["items"][0]["billed_amount"]) == Decimal("0")
+        assert second["items"][0]["accounting_reference"]["fact_revision"] == 1
+        second_facts = client.get(path + f"/{second['items'][0]['id']}/accounting").json()
+        assert second_facts["usage"]["total_tokens"] == 0
+        assert Decimal(second_facts["recorded_charge"]["amount"]) == Decimal("0")
         assert second["next_after_ordinal"] is None
         assert client.get(path, params={"after_ordinal": 1}).json()["items"] == []
         app.dependency_overrides[require_benchmark_read] = lambda: {"sub": "other-owner"}
@@ -667,8 +676,9 @@ def test_concurrent_api_submit_freezes_once_and_replay_needs_no_current_catalog(
         assert len(invocations) == int(not revoked)
         if not revoked:
             assert cell_detail["generated_envelope"] == {"records": [{"ok": True}]}
-            assert invocations[0]["total_tokens"] == 5
-            assert invocations[0]["billed_amount"] is None
+            accounting = client.get(cell_path + f"/invocations/{invocations[0]['id']}/accounting").json()
+            assert accounting["usage"]["total_tokens"] == 5
+            assert accounting["recorded_charge"] is None
         events = client.get(job_path + "/events")
         assert events.status_code == 200
         assert "job.status" in events.text

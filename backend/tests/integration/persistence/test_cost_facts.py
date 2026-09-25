@@ -239,9 +239,10 @@ def test_fact_migration_roundtrip_in_transactional_schema():
 @pytest.mark.parametrize("measured", [False, True])
 def test_benchmark_backfill_receipt_preserves_facts_and_replays_once(binding, measured):
     from src.lib.cost_ledger.benchmark_migration import plan_benchmark_cost_migration, verify_benchmark_cost_receipt
-    from src.models.sql.benchmark import BenchmarkInvocation, BenchmarkInvocationStatus
+    from src.models.sql.benchmark import BenchmarkInvocationStatus
+    from src.lib.cost_ledger.benchmark_migration import HistoricalBenchmarkInvocation
 
-    invocation = BenchmarkInvocation(
+    invocation = HistoricalBenchmarkInvocation(
         id=uuid4(), model_request_id=uuid4() if measured else None,
         status=BenchmarkInvocationStatus.FAILED, input_tokens=10, output_tokens=None,
         total_tokens=None, billed_amount=Decimal("0.000000000000123"),

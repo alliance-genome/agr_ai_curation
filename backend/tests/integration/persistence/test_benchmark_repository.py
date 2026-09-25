@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from alembic import command  # pyright: ignore[reportAttributeAccessIssue]
 from alembic.config import Config  # pyright: ignore[reportMissingImports]
 import pytest
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, update, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from src.lib.benchmarks.models import (
@@ -26,6 +26,7 @@ from src.lib.benchmarks.persistence import (
     BenchmarkCellCursor,
     BenchmarkLeaseLostError,
     BenchmarkRepository,
+    canonical_digest,
 )
 from src.models.sql.benchmark import (
     BenchmarkCell,
@@ -38,6 +39,8 @@ from src.models.sql.benchmark import (
     BenchmarkJobStatus,
 )
 from src.models.sql.database import SessionLocal
+from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
+from src.lib.cost_ledger.benchmark_reads import read_benchmark_accounting
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -198,9 +201,7 @@ def _run_to_terminal(db, job_id: UUID, *, billed_amount: Decimal | None = None) 
             status=BenchmarkInvocationStatus.SUCCEEDED,
             completed_at=now,
             response_digest=_digest("2"),
-            billed_amount=billed_amount,
-            billed_unit="credits" if billed_amount is not None else None,
-            billed_source="audit-fixture" if billed_amount is not None else None,
+            charge=RecordedCharge(billed_amount, "credits", "audit-fixture") if billed_amount is not None else None,
         )
         repository.append_event(
             job_id=job_id, event_type="cell.succeeded", payload={"cell_id": str(cell.id)}
@@ -216,6 +217,56 @@ def _run_to_terminal(db, job_id: UUID, *, billed_amount: Decimal | None = None) 
     return repository.complete_job(
         job_id=job_id, lease_owner=lease_owner, completed_at=now
     )
+
+
+@pytest.fixture
+def historical_cost_columns():
+    """Recreate only the pre-cutover accounting shape in this disposable test DB."""
+    columns = {"input_tokens": "integer", "output_tokens": "integer", "total_tokens": "integer",
+               "billed_amount": "numeric", "billed_unit": "varchar(32)", "billed_source": "varchar(64)"}
+    with SessionLocal() as db:
+        for name, sql_type in columns.items():
+            db.execute(text(f"ALTER TABLE benchmark_invocations ADD COLUMN {name} {sql_type}"))
+        db.execute(text("ALTER TABLE benchmark_invocations ADD CONSTRAINT ck_benchmark_invocations_billed_cost "
+                        "CHECK ((billed_amount IS NULL AND billed_unit IS NULL AND billed_source IS NULL) OR "
+                        "(billed_amount IS NOT NULL AND billed_unit IS NOT NULL AND billed_source IS NOT NULL))"))
+        db.commit()
+    try:
+        yield
+    finally:
+        with SessionLocal() as db:
+            for name in columns:
+                db.execute(text(f"ALTER TABLE benchmark_invocations DROP COLUMN {name}"))
+            db.commit()
+
+
+def _seed_historical_terminal(db, job_id, *, billed_amount):
+    """Seed old-schema evidence directly, without invoking the canonical writer."""
+    repo = BenchmarkRepository(db)
+    now = datetime.now(timezone.utc)
+    lease = uuid4()
+    assert repo.claim_next_job(lease_owner=lease, lease_expires_at=now + timedelta(minutes=5), now=now).id == job_id
+    while cell := repo.claim_next_cell(job_id=job_id, lease_owner=lease,
+                                       lease_expires_at=now + timedelta(minutes=5), now=now):
+        db.execute(text("INSERT INTO benchmark_invocations "
+                        "(id,cell_id,ordinal,attempt,route_slot,request_digest,response_digest,sequence,status,"
+                        "started_at,completed_at,billed_amount,billed_unit,billed_source) VALUES "
+                        "(:id,:cell,0,1,'supervisor',:digest,:digest,1,'succeeded',:now,:now,:amount,'credits','audit-fixture')"),
+                   {"id": uuid4(), "cell": cell.id, "digest": _digest("a"), "now": now, "amount": billed_amount})
+        # Preserve a genuine historical artifact, not a reserialized v2 result.
+        cell.status, cell.completed_at = BenchmarkCellStatus.SUCCEEDED, now
+        cell.lease_owner = cell.lease_expires_at = cell.lease_heartbeat_at = None
+        cell.generated_envelope, cell.envelope_size_bytes = {}, 2
+        cell.envelope_digest = canonical_digest({})
+        cell.result_artifact = b'{"invocations":[],"output":{}}'
+        cell.result_digest = canonical_digest({"invocations": [], "output": {}})
+        db.flush()
+    return repo.complete_job(job_id=job_id, lease_owner=lease, completed_at=now, now=now)
+
+
+def _historical_row(db, invocation_id):
+    from src.lib.cost_ledger.benchmark_migration import iter_benchmark_migration_rows
+    return next(row for row, *_ in iter_benchmark_migration_rows(db) if row.id == invocation_id)
 
 
 def test_model_request_binding_survives_commit_and_rejects_duplicate_or_stale_dispatch():
@@ -270,7 +321,7 @@ def test_model_request_binding_survives_commit_and_rejects_duplicate_or_stale_di
             repository.finish_invocation(
                 invocation_id=row.id, lease_owner=lease_owner,
                 status=BenchmarkInvocationStatus.SUCCEEDED, completed_at=now,
-                response_digest=_digest("2"), input_tokens=1, output_tokens=2, total_tokens=3,
+                response_digest=_digest("2"), usage=TokenUsage(input_tokens=1, output_tokens=2, total_tokens=3),
             )
         repository.finish_cell(
             cell_id=cell.id, lease_owner=lease_owner, status=BenchmarkCellStatus.SUCCEEDED,
@@ -925,12 +976,8 @@ def test_expired_cell_is_failed_once_while_queued_sibling_remains_claimable():
             actual_model="actual-model",
             routing_attempt=2,
             latency_ms=1234,
-            input_tokens=10,
-            output_tokens=20,
-            total_tokens=30,
-            billed_amount=Decimal("0.0012300"),
-            billed_unit="USD",
-            billed_source="provider",
+            usage=TokenUsage(input_tokens=10, output_tokens=20, total_tokens=30),
+            charge=RecordedCharge(Decimal("0.0012300"), "USD", "provider"),
         )
         envelope = {"records": [{"ok": True}]}
         repository.finish_cell(
@@ -950,9 +997,9 @@ def test_expired_cell_is_failed_once_while_queued_sibling_remains_claimable():
         assert terminal.status == BenchmarkJobStatus.COMPLETED_WITH_FAILURES
         assert sibling.envelope_digest is not None
         assert sibling.result_digest is not None
-        assert receipt.billed_amount == Decimal("0.0012300")
-        assert receipt.billed_unit == "USD"
-        assert receipt.billed_source == "provider"
+        accounting = read_benchmark_accounting(db, job_id=job.id, cell_id=sibling.id,
+                                               invocation_id=receipt.id, owner_subject="recovery-owner")
+        assert accounting.recorded_charge == RecordedCharge(Decimal("0.0012300"), "USD", "provider")
     finally:
         db.rollback()
         if job_id is not None:
@@ -1225,7 +1272,7 @@ def test_postgres_skip_locked_allows_only_one_job_claimant():
         first.close()
 
 
-def test_cost_audit_is_read_only_complete_across_pages_and_snapshot_consistent(monkeypatch):
+def test_cost_audit_is_read_only_complete_across_pages_and_snapshot_consistent(monkeypatch, historical_cost_columns):
     from sqlalchemy import text
     from src.lib.cost_ledger.benchmark_audit import audit_benchmark_costs
 
@@ -1235,7 +1282,7 @@ def test_cost_audit_is_read_only_complete_across_pages_and_snapshot_consistent(m
         with SessionLocal() as db:
             job = _create_job(db, owner="audit-private-owner", cells=3)
             job_ids.append(job.id)
-            _run_to_terminal(db, job.id, billed_amount=Decimal("0.000000000000000000123"))
+            _seed_historical_terminal(db, job.id, billed_amount=Decimal("0.000000000000000000123"))
             db.commit()
         with SessionLocal() as snapshot:
             snapshot.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
@@ -1273,7 +1320,7 @@ def test_cost_audit_is_read_only_complete_across_pages_and_snapshot_consistent(m
             cleanup.commit()
 
 
-def test_accounting_read_requires_owned_membership_and_verified_binding(monkeypatch):
+def test_accounting_read_requires_owned_membership_and_verified_binding(monkeypatch, historical_cost_columns):
     from src.lib.cost_ledger.benchmark_reads import BenchmarkAccountingUnavailable, read_benchmark_accounting
     from src.lib.cost_ledger.benchmark_migration import plan_benchmark_cost_migration
     from src.lib.cost_ledger.persistence import record_cost_facts
@@ -1287,13 +1334,13 @@ def test_accounting_read_requires_owned_membership_and_verified_binding(monkeypa
         with SessionLocal() as db:
             job = _create_job(db, owner=owner, cells=1)
             job_id = job.id
-            _run_to_terminal(db, job.id, billed_amount=Decimal("7"))
+            _seed_historical_terminal(db, job.id, billed_amount=Decimal("7"))
             row = db.scalar(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job.id))
             scope = dict(job_id=job.id, cell_id=row.cell_id, invocation_id=row.id, owner_subject=owner)
             # Inline charge exists, but no ledger binding: never serve old copies.
             with pytest.raises(BenchmarkAccountingUnavailable):
                 read_benchmark_accounting(db, **scope)
-            entry = plan_benchmark_cost_migration(row, deployment_id=deployment, source_namespace=namespace, owner_subject=owner)
+            entry = plan_benchmark_cost_migration(_historical_row(db, row.id), deployment_id=deployment, source_namespace=namespace, owner_subject=owner)
             binding = dict(deployment_id=deployment, source_namespace=namespace, owner_subject=owner,
                            attempt_id=entry.attempt_id, source_system="benchmark", source_id=str(row.id))
             record_cost_facts(db, **binding, usage=entry.usage, charge=entry.charge)
@@ -1326,7 +1373,7 @@ def test_accounting_read_requires_owned_membership_and_verified_binding(monkeypa
 
 
 @pytest.fixture
-def cost_backfill_case(monkeypatch):
+def cost_backfill_case(monkeypatch, historical_cost_columns):
     from sqlalchemy import text
     from src.lib.cost_ledger.benchmark_audit import audit_benchmark_costs
 
@@ -1336,7 +1383,7 @@ def cost_backfill_case(monkeypatch):
     monkeypatch.setenv("COST_MIGRATION_AUDIT_PAGE_SIZE", "1")
     with SessionLocal() as db:
         job = _create_job(db, owner="backfill-owner", cells=2)
-        _run_to_terminal(db, job.id, billed_amount=Decimal("7.000000000000000000123"))
+        _seed_historical_terminal(db, job.id, billed_amount=Decimal("7.000000000000000000123"))
         job_id = job.id
         db.commit()
     with SessionLocal() as audit:
@@ -1383,7 +1430,7 @@ def test_offline_backfill_parity_replay_and_write_fencing(cost_backfill_case):
         for row in db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job_id)):
             projection = read_benchmark_accounting(db, job_id=job_id, cell_id=row.cell_id,
                                                    invocation_id=row.id, owner_subject="backfill-owner")
-            assert projection.recorded_charge.amount == row.billed_amount == Decimal("7.000000000000000000123")
+            assert projection.recorded_charge.amount == _historical_row(db, row.id).billed_amount == Decimal("7.000000000000000000123")
             assert projection.usage.input_tokens is None
 
 
@@ -1413,7 +1460,7 @@ def test_backfill_existing_fact_conflict_preserves_only_original_data(cost_backf
         last = db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(
             BenchmarkCell.job_id == job_id,
         ).order_by(BenchmarkInvocation.id.desc())).first()
-        entry = plan_benchmark_cost_migration(last, **scope, owner_subject="backfill-owner")
+        entry = plan_benchmark_cost_migration(_historical_row(db, last.id), **scope, owner_subject="backfill-owner")
         record_cost_facts(db, **scope, owner_subject="backfill-owner", attempt_id=entry.attempt_id,
                           source_system="benchmark", source_id=str(last.id), usage=entry.usage,
                           charge=RecordedCharge(Decimal("8"), "credits", "audit-fixture"))

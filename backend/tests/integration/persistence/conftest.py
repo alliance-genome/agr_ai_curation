@@ -25,6 +25,8 @@ os.environ.setdefault("EMBEDDING_TOKEN_PREFLIGHT_ENABLED", "false")
 os.environ.setdefault("EMBEDDING_MODEL_TOKEN_LIMIT", "8191")
 os.environ.setdefault("EMBEDDING_TOKEN_SAFETY_MARGIN", "500")
 os.environ.setdefault("CONTENT_PREVIEW_CHARS", "1600")
+os.environ.setdefault("COST_LEDGER_DEPLOYMENT_ID", "persistence-test")
+os.environ.setdefault("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", "synthetic-benchmark")
 os.environ.setdefault("WEAVIATE_BATCH_REQUESTS_PER_MINUTE", "5000")
 os.environ["EMBEDDING_TOKEN_PREFLIGHT_ENABLED"] = "false"
 

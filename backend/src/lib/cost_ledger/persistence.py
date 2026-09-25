@@ -1,7 +1,7 @@
 """Caller-transaction-owned accounting additions with reproducible history.
 
 Internal repository, not producer authorization. Callers supply verified scope
-and maintain execution lease fencing. No independent commits or live writers.
+and maintain execution lease fencing. This repository never commits independently.
 """
 
 from dataclasses import dataclass, fields

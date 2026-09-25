@@ -19,6 +19,8 @@ from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.benchmarks.stage_measurements import StageStart, StageFinish
 from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
 from src.lib.cost_ledger.benchmark_writes import reserve_benchmark_accounting, complete_benchmark_accounting
+from src.lib.cost_ledger.benchmark_reads import read_benchmark_accounting
+from src.schemas.benchmark_artifacts import ArtifactInvocation, BenchmarkArtifact
 from src.lib.openai_agents.config import (
     get_benchmark_default_page_size,
     get_benchmark_event_retention_count,
@@ -179,6 +181,7 @@ class BenchmarkResultArtifact:
     attempt_count: int
     digest: str
     content: bytes
+    version: str = "1"
 
 
 class BenchmarkLeaseLostError(RuntimeError):
@@ -634,9 +637,17 @@ class BenchmarkRepository:
             or row.result_digest != f"sha256:{hashlib.sha256(content).hexdigest()}"
         ):
             raise BenchmarkResultArtifactError("result_artifact_corrupt")
+        try:
+            payload = json.loads(content)
+            version = payload.get("schema_version", 1)
+            if type(version) is not int or version not in (1, 2):
+                raise ValueError("Unsupported artifact version")
+        except (ValueError, AttributeError):
+            raise BenchmarkResultArtifactError("result_artifact_corrupt") from None
         return BenchmarkResultArtifact(
             job_id=job_id, cell_id=cell_id, attempt_count=row.attempt_count,
             digest=row.result_digest, content=content,
+            version=str(version),
         )
 
     def claim_next_job(
@@ -940,8 +951,24 @@ class BenchmarkRepository:
                     raise ValueError("output mismatch")
             except ValueError:
                 raise ValueError("benchmark result does not match its generated envelope") from None
+            # In-memory provider telemetry is not a second accounting store.
+            # Bind the scientific artifact to durable calls of this attempt only.
+            calls = self.session.scalars(select(BenchmarkInvocation).where(
+                BenchmarkInvocation.cell_id == cell.id,
+                BenchmarkInvocation.attempt == cell.attempt_count,
+            ).order_by(BenchmarkInvocation.ordinal))
+            references = []
+            for invocation in calls:
+                references.append(ArtifactInvocation(
+                    invocation_id=invocation.id,
+                    accounting_reference=read_benchmark_accounting(
+                        self.session, job_id=job.id, cell_id=cell.id,
+                        invocation_id=invocation.id, owner_subject=job.owner_subject,
+                    ).reference,
+                ))
+            stored = BenchmarkArtifact(output=outcome.output, invocations=tuple(references))
             artifact = json.dumps(
-                result, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                stored.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"),
                 allow_nan=False,
             ).encode("utf-8")
             if len(artifact) > get_benchmark_max_result_artifact_bytes():

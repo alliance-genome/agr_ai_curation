@@ -8,15 +8,16 @@ of a join to independently retained telemetry.
 """
 
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 import json
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import MetaData, Table, select
 from sqlalchemy.orm import Session
 
 from src.models.sql.benchmark import (
-    BenchmarkCell, BenchmarkCellStatus, BenchmarkInvocation, BenchmarkInvocationStatus,
+    BenchmarkCell, BenchmarkCellStatus, BenchmarkInvocationStatus,
     BenchmarkJob, BenchmarkJobStatus,
 )
 from src.lib.openai_agents.config import get_cost_migration_audit_page_size
@@ -32,22 +33,43 @@ TERMINAL_JOBS = (
 TERMINAL_CELLS = (BenchmarkCellStatus.SUCCEEDED, BenchmarkCellStatus.FAILED, BenchmarkCellStatus.CANCELLED)
 
 
+@dataclass(frozen=True)
+class HistoricalBenchmarkInvocation:
+    """Explicit pre-cutover schema record; never used by live execution."""
+
+    id: UUID
+    status: str
+    model_request_id: UUID | None
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    billed_amount: Decimal | None
+    billed_unit: str | None
+    billed_source: str | None
+
+
 def iter_benchmark_migration_rows(session: Session):
     """Bounded keyset traversal for a dedicated audit/backfill session."""
     cursor = None
     size = get_cost_migration_audit_page_size()
+    source = Table("benchmark_invocations", MetaData(), autoload_with=session.connection())
+    names = tuple(HistoricalBenchmarkInvocation.__dataclass_fields__)
+    if not set(names) <= set(source.c.keys()):
+        raise ValueError("Benchmark backfill requires the pre-cutover schema")
     while True:
-        query = select(BenchmarkInvocation, BenchmarkJob.owner_subject, BenchmarkJob.status, BenchmarkCell.status).join(
-            BenchmarkCell, BenchmarkCell.id == BenchmarkInvocation.cell_id,
-        ).join(BenchmarkJob, BenchmarkJob.id == BenchmarkCell.job_id).order_by(BenchmarkInvocation.id).limit(size)
+        query = select(*(source.c[name] for name in names), BenchmarkJob.owner_subject,
+                       BenchmarkJob.status.label("job_status"), BenchmarkCell.status.label("cell_status")).select_from(source).join(
+            BenchmarkCell, BenchmarkCell.id == source.c.cell_id,
+        ).join(BenchmarkJob, BenchmarkJob.id == BenchmarkCell.job_id).order_by(source.c.id).limit(size)
         if cursor is not None:
-            query = query.where(BenchmarkInvocation.id > cursor)
-        page = session.execute(query).all()
+            query = query.where(source.c.id > cursor)
+        page = session.execute(query).mappings().all()
         if not page:
             return
-        yield from page
-        cursor = page[-1][0].id
-        session.expunge_all()
+        for row in page:
+            yield (HistoricalBenchmarkInvocation(**{name: row[name] for name in names}),
+                   row["owner_subject"], row["job_status"], row["cell_status"])
+        cursor = page[-1]["id"]
 
 
 def migration_fingerprint_line(entry: "BenchmarkCostMigrationEntry") -> bytes:
@@ -68,7 +90,7 @@ class BenchmarkCostMigrationEntry:
 
 
 def plan_benchmark_cost_migration(
-    invocation: BenchmarkInvocation, *, deployment_id: str,
+    invocation: HistoricalBenchmarkInvocation, *, deployment_id: str,
     source_namespace: str, owner_subject: str,
 ) -> BenchmarkCostMigrationEntry:
     """Map one frozen invocation without inferring missing accounting facts.

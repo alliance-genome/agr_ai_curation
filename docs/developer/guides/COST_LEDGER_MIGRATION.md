@@ -2,8 +2,8 @@
 
 ## Unreleased writer cutover candidate
 
-This worktree contains an incomplete, breaking cutover candidate. **Do not merge
-or deploy it independently.** The reviewed read-side branch remains separate.
+This is a breaking, coordinated public/private cutover for 0.10.0, not a deployed
+migration. **Do not deploy either repository independently.**
 The benchmark repository now reserves the verified source/attempt binding before
 dispatch and writes canonical usage/charge facts in the same savepoint as
 lease-fenced invocation completion. It no longer writes inline cost columns.
@@ -16,14 +16,35 @@ longer returns token or billing columns. The page resolves references in one
 read-only repeatable-read snapshot, after ownership checks; unknown evidence is
 revision zero, while missing bindings fail explicitly. No inline fallback exists.
 
-Still required in this candidate: replace new artifact/import cost fields with
-versioned ledger references; update all consumers and historical
-fixtures; explicitly migrate and retire old columns after verified backfill;
-then run full integration and release gates. Existing artifact serializers and
-private invocation consumers are not yet converted and are not valid release
-consumers of this candidate. Historical backfill must run against the pre-cutover
-schema/writer checkpoint during maintenance, not against newly captured rows.
-Tests of the atomic writer boundary alone do not establish cutover readiness.
+New artifacts use schema version 2. Scientific output is unchanged; `invocations`
+contains only durable `invocation_id` and `accounting_reference` pairs for the
+current cell attempt, including terminal failed calls. The in-memory runtime
+outcome is not stored verbatim. Older raw artifact bytes and hashes remain intact;
+the download header identifies their actual version. Later ledger enrichment
+does not rewrite the artifact's pinned revision.
+
+The coordinated private portal accepts invocation-page v2 and artifact v2, checks
+their call/ledger identities, and writes `execution-import/v3` metadata containing
+references, not token or charge copies. Explicit historical v1/v2 import readers
+preserve old offline scientific evidence. New offline reports expose references
+and accounting unavailability, not fabricated zero costs; the separate authorized
+live accounting endpoint supplies current ledger facts without persisting them.
+
+Migration `d64c05e0925d` retires all six inline invocation accounting columns. It
+locks source and ledger tables, rejects active jobs, and requires every historical
+row to have the exact verified owner, source binding and facts before dropping
+anything. Missing bindings, wrong scope, inconsistent or changed facts abort the
+transaction. Empty new databases need no historical backfill. Downgrade is refused:
+restore a reviewed pre-cutover backup with matching images or use a forward fix.
+
+For existing databases: stop admission and workers; upgrade only through
+`c53c05e0925c`; configure verified scope; run the audit and explicit backfill below;
+retain the reviewed receipt; then upgrade through `d64c05e0925d` and switch both
+application and portal images before reopening admission. The backfill reads an
+explicit reflected pre-cutover schema and refuses to run after column retirement.
+Never run old writers after backfill or against the final schema. No shared
+database has been migrated by development tests. Release approval and integrated
+environment checks remain separate from local implementation validation.
 
 Status: implementation plan, not a deployed migration. This refines
 [cost ledger ownership](COST_LEDGER_OWNERSHIP.md) for ALL-540 and ALL-1311.
@@ -58,14 +79,14 @@ it through completion/failure. The `provider_usage` telemetry EVENT carries
 correlation reference, not another chargeable GENERATION. Unmeasured calls keep
 the identity unknown; no unrelated UUID is invented to suggest a verified join.
 
-Immutable result serialization remains unchanged. The durable benchmark row
+Historical immutable result serialization remains unchanged. The durable benchmark row
 retains its own invocation UUID and now has a nullable, unique `model_request_id`
 binding, committed by the observer before dispatch under the existing job/cell
 lease checks. Completion cannot rebind it through the repository API. Distinct
 measured retries get distinct bindings; duplicate bindings are rejected rather
 than silently accepted as another dispatch. This identity link is a prerequisite
 for preventing benchmark SQL and telemetry from creating two ledger events for
-one call; it is not yet a ledger ingestion implementation.
+one call; the lease-fenced writer now uses that identity for ledger ingestion.
 
 Migration `a31c05e0925a` adds only this binding and its uniqueness constraint.
 Historical rows retain null identity and unchanged usage/billing facts. PostgreSQL
@@ -187,9 +208,9 @@ OpenRouter adapter) preserves reported inclusive counts, cache reads/writes and
 reasoning details without synthesizing a missing total. Missing fields and values
 that are not nonnegative integers remain null; inconsistent reported combinations remain
 visible as inconsistent rather than being clamped. The telemetry event carries
-these facts in its `accounting_usage` envelope. Existing benchmark artifact
-serialization is unchanged; its legacy synthesized totals are not ledger inputs.
-This is source capture, not live database ingestion or a second cost store.
+these facts in its `accounting_usage` envelope. The benchmark observer writes those
+facts to the ledger; legacy synthesized display totals are not ledger inputs.
+New stored artifacts contain references, not these transient telemetry quantities.
 
 There is an explicit SDK coverage limitation: the installed Agents SDK `Usage`
 dataclass and its Chat Completions streaming conversion insert zero for missing
@@ -251,9 +272,9 @@ Successful projections and 503 responses are `Cache-Control: no-store`.
 
 Both identity environment settings default empty and must be set from verified
 deployment inventory at coordinated cutover. They are not automatic migration
-switches. No live ledger writer is enabled by setting them, and the endpoint does
-not give the private portal any database credentials. This read slice does not
-replace the current execution API/result fields or modify historical artifacts.
+switches. Canonical benchmark dispatch requires them; the coordinated application
+version selects the writer. The endpoint gives the private portal no database
+credentials and does not modify historical artifacts.
 
 `GET /api/v1/benchmarks/jobs/{job_id}/accounting` now derives a job-level summary
 from that same authorized ledger scope. It uses a repeatable-read, read-only
@@ -372,7 +393,7 @@ writing afterward. This runner preserves source columns and immutable artifacts,
 does not switch live writers, and explicitly reports that cutover is incomplete.
 Its temporary migration copy is not permission to operate two accounting owners.
 No shared database backfill has been performed; local tests use disposable data.
-Current execution API/result contracts remain unchanged pending consumer work.
+The canonical execution API/result contract changes are described above.
 
 The local storage primitive now adds `cost_fact_revisions` in migration
 `c53c05e0925c`. Each row contains only newly known token fields and/or a newly
@@ -400,8 +421,8 @@ The scoped read requires deployment, attempt and owner, but remains an internal
 repository method, not an authenticated public endpoint. Source admission,
 execution lifecycle/attribution, reviewed corrections, pricing valuations and
 conflict receipts still require implementation. Current facts can be inconsistent
-and must not be valued until reconciled. This slice does not backfill existing
-benchmark costs, remove existing fields, or enable any live writer/dual write.
+and must not be valued until reconciled. The separate explicit backfill and guarded
+retirement migration perform the historical cutover; no application dual write exists.
 Deploy only with the coordinated ownership/consumer cutover below. Downgrading
 `c53c05e0925c` destroys new fact history and is not a data-preserving recovery path.
 

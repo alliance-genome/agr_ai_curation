@@ -12,7 +12,7 @@ from src.lib.benchmarks.persistence import BenchmarkLeaseLostError, BenchmarkRep
 from src.lib.cost_ledger.benchmark_reads import read_benchmark_accounting
 from src.lib.cost_ledger.facts import CostFactConflict, RecordedCharge, TokenUsage
 from src.lib.cost_ledger.persistence import record_cost_facts
-from src.models.sql.benchmark import BenchmarkInvocation, BenchmarkInvocationStatus
+from src.models.sql.benchmark import BenchmarkCellStatus, BenchmarkInvocation, BenchmarkInvocationStatus
 from src.models.sql.cost_ledger import CostFactRevision, CostSourceReference
 from src.models.sql.database import SessionLocal
 from tests.integration.persistence.test_benchmark_repository import (
@@ -33,7 +33,19 @@ def owned_call(monkeypatch):
         cell = repo.claim_next_cell(job_id=job.id, lease_owner=lease,
                                     lease_expires_at=now + timedelta(minutes=5), now=now)
         db.commit()
-        yield db, repo, job, cell, lease, now, deployment
+        try:
+            yield db, repo, job, cell, lease, now, deployment
+        finally:
+            db.rollback()
+            future = now + timedelta(minutes=10)
+            repo.recover_expired_cells(now=future)
+            db.refresh(job)
+            job.lease_expires_at = future + timedelta(minutes=1)
+            db.flush()
+            repo.complete_job(job_id=job.id, lease_owner=lease, completed_at=future, now=future)
+            db.commit()
+            repo.delete_terminal_job(job_id=job.id, owner_subject="writer-owner")
+            db.commit()
 
 
 def append(case, *, measured=None):
@@ -82,7 +94,7 @@ def test_dispatch_binding_then_atomic_completion_without_inline_costs(owned_call
     after = read_benchmark_accounting(db, job_id=job.id, cell_id=cell.id,
                                      invocation_id=invocation.id, owner_subject="writer-owner")
     assert after.usage == usage and after.recorded_charge == charge
-    assert invocation.input_tokens is None and invocation.billed_amount is None
+    assert not hasattr(invocation, "input_tokens") and not hasattr(invocation, "billed_amount")
     assert invocation.model_request_id == measured_id
 
 
@@ -162,3 +174,35 @@ def test_failed_or_cancelled_call_retains_unknown_not_free_facts(owned_call, sta
                                           invocation_id=invocation.id, owner_subject="writer-owner")
     assert projection.reference.fact_revision == 0 and projection.recorded_charge is None
     assert invocation.status == status and fact_count(db, deployment) == 0
+
+
+@pytest.mark.parametrize("status", [BenchmarkInvocationStatus.SUCCEEDED, BenchmarkInvocationStatus.FAILED])
+def test_new_artifact_pins_all_terminal_calls_without_copying_costs(owned_call, status):
+    import json
+    from src.schemas.benchmark_artifacts import BenchmarkArtifact
+
+    db, repo, job, cell, lease, now, _ = owned_call
+    invocation = append(owned_call)
+    repo.finish_invocation(invocation_id=invocation.id, lease_owner=lease, status=status,
+                           completed_at=now, now=now,
+                           usage=TokenUsage(input_tokens=11),
+                           failure={"category": "fixture"} if status == BenchmarkInvocationStatus.FAILED else None,
+                           response_digest=_digest("b") if status == BenchmarkInvocationStatus.SUCCEEDED else None)
+    output = {"records": [{"scientific": "evidence"}]}
+    repo.finish_cell(cell_id=cell.id, lease_owner=lease, status=BenchmarkCellStatus.SUCCEEDED,
+                     completed_at=now, now=now, generated_envelope=output,
+                     result={"output": output, "invocations": []})
+    db.commit()
+    artifact = repo.get_result_artifact(cell_id=cell.id, job_id=job.id, owner_subject="writer-owner")
+    parsed = BenchmarkArtifact.model_validate_json(artifact.content)
+    assert artifact.version == "2" and parsed.output == output
+    assert len(parsed.invocations) == 1 and parsed.invocations[0].invocation_id == invocation.id
+    assert parsed.invocations[0].accounting_reference.fact_revision == 1
+    assert "input_tokens" not in artifact.content.decode() and "billed" not in artifact.content.decode()
+    bound = db.scalar(select(CostSourceReference).where(CostSourceReference.source_id == str(invocation.id)))
+    record_cost_facts(db, deployment_id=bound.deployment_id, source_namespace=bound.source_namespace,
+                      source_system="benchmark", source_id=str(invocation.id), attempt_id=bound.attempt_id,
+                      owner_subject="writer-owner", usage=TokenUsage(output_tokens=2))
+    db.commit()
+    assert repo.get_result_artifact(cell_id=cell.id, job_id=job.id, owner_subject="writer-owner").content == artifact.content
+    assert json.loads(artifact.content)["invocations"][0]["accounting_reference"]["fact_revision"] == 1

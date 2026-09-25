@@ -17,7 +17,10 @@ from sqlalchemy.orm import Session
 from src.lib.benchmarks.persistence import BenchmarkRepository
 from src.lib.benchmarks.worker import BenchmarkWorker
 from src.models.sql.database import SessionLocal, engine
-from tests.integration.persistence.test_benchmark_repository import _create_job, _run_to_terminal
+from tests.integration.persistence.test_benchmark_repository import (
+    _create_job, _run_to_terminal, historical_cost_columns as historical_cost_columns,
+    migrated_database as migrated_database,
+)
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -49,12 +52,6 @@ def test_benchmark_migration_upgrade_indexes_and_downgrade():
         "routing_attempt",
         "sequence",
         "latency_ms",
-        "input_tokens",
-        "output_tokens",
-        "total_tokens",
-        "billed_amount",
-        "billed_unit",
-        "billed_source",
     } <= {column["name"] for column in inspector.get_columns("benchmark_invocations")}
 
     expected_indexes = {
@@ -76,8 +73,11 @@ def test_benchmark_migration_upgrade_indexes_and_downgrade():
     for table, names in expected_indexes.items():
         assert names <= {item["name"] for item in inspector.get_indexes(table)}
 
-    command.downgrade(ALEMBIC_CONFIG, "d1e2f3a4b5c6")
-    assert TABLES.isdisjoint(inspect(engine).get_table_names())
+    assert not {"input_tokens", "output_tokens", "total_tokens", "billed_amount", "billed_unit", "billed_source"} & {
+        column["name"] for column in inspector.get_columns("benchmark_invocations")
+    }
+    with pytest.raises(RuntimeError, match="Forward-only accounting cutover"):
+        command.downgrade(ALEMBIC_CONFIG, "d1e2f3a4b5c6")
 
     command.upgrade(ALEMBIC_CONFIG, "head")
     assert TABLES <= set(inspect(engine).get_table_names())
@@ -91,8 +91,13 @@ def test_curator_context_upgrade_does_not_invent_historical_identity():
         job_id = job.id
         _run_to_terminal(session, job_id)
         session.commit()
-    command.downgrade(ALEMBIC_CONFIG, "i6j7k8l9m0n1")
-    command.upgrade(ALEMBIC_CONFIG, "head")
+    # Exercise the historical context migration itself, not the irreversible
+    # accounting cutover above it in the current revision graph.
+    migration = ScriptDirectory.from_config(ALEMBIC_CONFIG).get_revision("j7k8l9m0n1o2").module
+    with engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            migration.upgrade()
     try:
         with engine.connect() as connection:
             row = connection.execute(text(
@@ -121,7 +126,7 @@ def test_curator_context_upgrade_does_not_invent_historical_identity():
 
 @pytest.mark.parametrize("interrupt_backfill", [False, True])
 def test_telemetry_upgrade_backfills_terminal_invocations_and_restores_guards(
-    monkeypatch, interrupt_backfill,
+    monkeypatch, interrupt_backfill, historical_cost_columns,
 ):
     command.upgrade(ALEMBIC_CONFIG, "head")
     owner = f"migration-review-{uuid4()}"
