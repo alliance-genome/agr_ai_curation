@@ -17,8 +17,8 @@ auth_api = importlib.import_module("src.api.auth")
 TokenSet = importlib.import_module("src.auth.base").TokenSet
 
 
-def _request(headers=None, cookies=None, base_url="https://app.example.org/"):
-    return SimpleNamespace(headers=headers or {}, cookies=cookies or {}, base_url=base_url)
+def _request(headers=None, cookies=None, base_url="https://app.example.org/", query_params=None):
+    return SimpleNamespace(headers=headers or {}, cookies=cookies or {}, base_url=base_url, query_params=query_params or {})
 
 
 def _assert_logout_cookie_expired(set_cookie_headers, cookie_name):
@@ -178,7 +178,8 @@ async def test_callback_redirects_when_code_verifier_missing():
 
 
 @pytest.mark.asyncio
-async def test_callback_success_sets_auth_cookie_and_clears_pkce(monkeypatch):
+@pytest.mark.parametrize("destination,expected", [("home", "/"), ("cost", "/cost/"), ("https://evil.invalid", "/")])
+async def test_callback_success_sets_auth_cookie_and_clears_pkce(monkeypatch, destination, expected):
     class _Provider:
         async def handle_callback(self, _code, _verifier):
             return TokenSet(id_token="jwt-token")
@@ -194,14 +195,14 @@ async def test_callback_success_sets_auth_cookie_and_clears_pkce(monkeypatch):
     monkeypatch.setattr(auth_api, "get_secure_cookies", lambda: False)
 
     response = await auth_api.callback(
-        request=_request(cookies={"oauth_state": "state", "oauth_code_verifier": "verifier"}),
+        request=_request(cookies={"oauth_state": "state", "oauth_code_verifier": "verifier", "oauth_destination": destination}),
         response=Response(),
         code="code",
         state="state",
         db=object(),
     )
     assert response.status_code == 302
-    assert str(response.headers["location"]) == "/"
+    assert str(response.headers["location"]) == expected
     set_cookie_headers = response.headers.getlist("set-cookie")
     assert any(header.startswith("auth_token=jwt-token") for header in set_cookie_headers)
     assert any(header.startswith("oauth_state=") for header in set_cookie_headers)

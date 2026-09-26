@@ -12,7 +12,9 @@ services:
       - backend
 
   backend:
-    build: ./backend
+    build:
+      context: ..
+      dockerfile: trace_review/backend/Dockerfile
     network_mode: host  # Use host network to access VPN (EC2 Langfuse)
     # Environment loaded from shell (via Makefile) or optional local .env
     env_file:
@@ -45,5 +47,6 @@ services:
     profiles:
       - test
     build:
-      context: ./backend
+      context: ..
+      dockerfile: trace_review/backend/Dockerfile
       target: test

@@ -1,0 +1,55 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import CostApp, { moneyRange } from './CostApp';
+
+const totals = { attempt_count: 1, unknown_charge_attempts: 1, recorded_charges: [], outcomes: { completed: 1 },
+  usage: { total_tokens: { known_total: 100, unknown_attempts: 0, known_attempts: 1 } },
+  estimates: { lower: '0.000123456789', upper: '0.000123456789', priced_attempts: 1, unpriced_attempts: 0, unavailable_reasons: {} } };
+const report = { generated_at: '2026-09-26T12:00:00Z', deployment_id: 'synthetic', scope: 'time_window', totals,
+  pricing_snapshot_id: 'snapshot', pricing_source: 'synthetic fixture', pricing_captured_at: '2026-09-26T00:00:00Z', valuation_algorithm: 'fixture',
+  coverage: { excluded: ['infrastructure'] }, runs: [{ ...totals, session_id: 'conversation-one', run_id: 'turn-one', activity: 'interactive_chat', flow_run_id: null, started_at: '2026-09-26T12:00:00Z' }],
+  requests: [], pagination: { offset: 0, page_size: 50, request_count: 1, run_count: 1 } };
+
+beforeEach(() => { window.history.replaceState(null, '', '/cost/'); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+describe('admin cost presentation', () => {
+  it('keeps exact monetary strings and unknowns distinct from zero', () => {
+    expect(moneyRange('0.0000000000000123', '0.0000000000000123')).toBe('$0.0000000000000123');
+    expect(moneyRange('0', '0')).toBe('$0');
+    expect(moneyRange(null, null)).toBe('Not priced');
+  });
+  it.each([
+    '?start=2026-09-01T00%3A00%3A00Z&end=2026-09-10T00%3A00%3A00Z&activity=interactive_chat&offset=50',
+    '?end=2026-09-10T00%3A00%3A00Z&activity=interactive_chat',
+  ])('restores the originating overview query: %s', async (originalQuery) => {
+    window.history.replaceState(null, '', '/cost/' + originalQuery);
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => report });
+    vi.stubGlobal('fetch', fetcher);
+    render(<CostApp />);
+    expect(await screen.findByText('Selected window subtotal')).toBeInTheDocument();
+    expect(screen.getByText('Not reported')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Turn turn-one' }));
+    await waitFor(() => expect(fetcher).toHaveBeenLastCalledWith(expect.stringContaining('session_id=conversation-one&run_id=turn-one&snapshot_id=snapshot'), expect.anything()));
+    expect(window.location.search).not.toContain('start=');
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to overview' }));
+    await waitFor(() => expect(window.location.search).toBe(originalQuery));
+    await waitFor(() => expect(fetcher).toHaveBeenLastCalledWith('/api/admin/cost/reports' + originalQuery, expect.anything()));
+  });
+  it('distinguishes ordinary-user denial from authentication failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) }));
+    render(<CostApp />);
+    expect(await screen.findByText('Your account does not have admin access.')).toBeInTheDocument();
+    expect(screen.queryByText('Recorded charges')).not.toBeInTheDocument();
+  });
+  it('offers existing login for an expired session', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) }));
+    render(<CostApp />);
+    expect(await screen.findByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/api/auth/login?destination=cost');
+  });
+  it('shows empty coverage rather than a zero-dollar bill', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ...report, totals: { ...totals, attempt_count: 0 }, runs: [] }) }));
+    render(<CostApp />);
+    expect(await screen.findByText(/No recorded requests match/)).toBeInTheDocument();
+  });
+});

@@ -42,6 +42,7 @@ Start here for new developers:
 
 | Guide | Description |
 |-------|-------------|
+| [ADMIN_COST_SITE.md](guides/ADMIN_COST_SITE.md) | Admin-only cost explorer, shared versioned valuation, bounded reports and Docker setup |
 | [DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md) | Forward-only development policy: remove fallbacks, avoid compatibility shims, prefer explicit migrations |
 | [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) | Full architecture guide for repo contributors -- package loading, database runtime, loaders, deployment |
 | [DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md) | Domain-envelope architecture: source of truth, field paths, structural checks, validator dispatch, lookup attempts, curator review, materialization, export/submission, and Agent Studio metadata |

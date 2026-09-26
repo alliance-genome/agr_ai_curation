@@ -40,6 +40,10 @@ RUN KNOWN_PTH="a1_coverage.pth distutils-precedence.pth sphinxcontrib_jsmath-1.0
       echo "If legitimate, add to KNOWN_PTH whitelist in Dockerfile." && exit 1; \
     else echo "SECURITY: .pth whitelist check passed ($(echo $KNOWN_PTH | wc -w) known files)"; fi
 
+# Shared pure accounting valuation (also installed by TraceReview).
+COPY cost_pricing/ /tmp/cost_pricing/
+RUN pip install --no-cache-dir --no-deps /tmp/cost_pricing
+
 # Copy source code
 COPY src/ ./src/
 COPY main.py .

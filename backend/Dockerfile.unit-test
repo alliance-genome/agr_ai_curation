@@ -35,6 +35,9 @@ RUN pip install --no-cache-dir \
     pytest-xdist==3.8.0 \
     httpx
 
+COPY backend/cost_pricing/ /tmp/cost_pricing/
+RUN pip install --no-cache-dir --no-deps /tmp/cost_pricing
+
 # Copy source code and tests
 COPY backend/src/ ./src/
 COPY backend/tests/ ./tests/

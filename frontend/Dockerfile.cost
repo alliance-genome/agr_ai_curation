@@ -1,0 +1,14 @@
+FROM public.ecr.aws/docker/library/node:22-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY src/ ./src/
+COPY cost.html vite.cost.config.ts ./
+RUN npx vite build --config vite.cost.config.ts
+
+FROM public.ecr.aws/docker/library/nginx:stable-alpine
+COPY --from=build /app/dist-cost/ /usr/share/nginx/html/cost/
+COPY nginx.cost.conf /etc/nginx/conf.d/default.conf
+EXPOSE 8080
+USER 101:101
+HEALTHCHECK CMD wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1

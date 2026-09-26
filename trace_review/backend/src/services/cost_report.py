@@ -294,7 +294,7 @@ def build_report(
                     event["cost"] = None
                     event["pricing_status"] = "unpriced"
                 if event["cost"] is None and model_definitions is not None:
-                    from .model_prices import estimate
+                    from agr_cost_pricing import estimate
                     estimate_input = event
                     if assumed_service_tier and event["service_tier"] == "unknown":
                         estimate_input = {**event, "service_tier": assumed_service_tier}

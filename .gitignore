@@ -33,6 +33,9 @@ npm-debug.log*
 .npm
 .eslintcache
 frontend/dist/
+frontend/dist-cost/
+.impeccable/review/
+.impeccable/mocks/
 frontend/dist-codex-*/
 frontend/build/
 

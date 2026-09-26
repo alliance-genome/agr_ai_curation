@@ -1,0 +1,12 @@
+**
+!backend/
+!backend/cost_pricing/
+!backend/cost_pricing/**
+!trace_review/
+!trace_review/backend/
+!trace_review/backend/src/
+!trace_review/backend/src/**
+!trace_review/backend/requirements.txt
+**/.env*
+**/__pycache__/
+**/*.pyc
