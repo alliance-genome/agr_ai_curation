@@ -47,7 +47,7 @@ or rollup entity.
 The measured SDK and measured direct-client boundaries reserve before sending,
 retain provider-reported usage on completion and retain unknown usage after
 failed/cancelled attempts. Blocked-before-send requests are not reservations.
-Non-streaming OpenAI-compatible SDK calls retain reported token fields at the
+Streaming and non-streaming OpenAI-compatible SDK calls retain reported token fields at the
 existing raw-provider seam before SDK normalization loses cache-write details or
 inserts default zeros. Explicit provider zeros remain zero; omitted details stay
 unknown. SDK-only adapters without raw evidence retain the conservative unknown

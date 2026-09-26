@@ -89,12 +89,11 @@ async def test_raw_tier_survives_normalization_without_inference(monkeypatch, ap
     reserve.assert_called_once()
     assert sum("service_tiers" in call.kwargs for call in sink.finish.call_args_list) == 1
     assert sink.finish.call_args.kwargs["service_tiers"] == {"requested": requested, "effective": reported}
-    if not streamed:
-        usage = sink.finish.call_args.kwargs["usage"]
-        assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (7, 8, 15)
-        assert usage.cache_read_tokens == (0 if details else None)
-        assert usage.cache_write_tokens == (3 if details else None)
-        assert usage.reasoning_tokens == (0 if details else None)
+    usage = sink.finish.call_args.kwargs["usage"]
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (7, 8, 15)
+    assert usage.cache_read_tokens == (0 if details else None)
+    assert usage.cache_write_tokens == (3 if details else None)
+    assert usage.reasoning_tokens == (0 if details else None)
     assert measurement._provider_measurement.get() is None
 
 

@@ -114,8 +114,29 @@ def _observe_service_tier(measurement, response):
         measurement["effective_service_tier"] = value
 
 
+def _capture_raw_token_usage(measurement, response):
+    """Retain reported token fields before SDK normalization, never content/charges."""
+    if getattr(response, "type", None) in {"response.completed", "response.incomplete", "response.failed"}:
+        response = response.response
+    raw_usage = getattr(response, "usage", None)
+    if raw_usage is None:
+        return
+    dump = getattr(raw_usage, "model_dump", None)
+    raw_usage = dump(exclude_unset=True) if callable(dump) else raw_usage
+    if isinstance(raw_usage, Mapping):
+        # Provider adapters already capture charges; recover only token fields.
+        measurement["_raw_provider_usage"] = {
+            key: raw_usage[key] for key in (
+                "input_tokens", "output_tokens", "total_tokens",
+                "prompt_tokens", "completion_tokens",
+                "input_tokens_details", "output_tokens_details",
+                "prompt_tokens_details", "completion_tokens_details",
+            ) if key in raw_usage
+        }
+
+
 class _TierObservedStream:
-    """Forward raw SDK objects unchanged, retaining only provider tier evidence."""
+    """Forward raw SDK objects unchanged, retaining tier and token evidence."""
 
     def __init__(self, source, measurement):
         self._source = source
@@ -128,6 +149,7 @@ class _TierObservedStream:
     async def __anext__(self):
         item = await anext(self._iterator)
         _observe_service_tier(self._measurement, item)
+        _capture_raw_token_usage(self._measurement, item)
         return item
 
     def __getattr__(self, name):
@@ -157,23 +179,7 @@ def _install_service_tier_capture():
             if hasattr(response, "__aiter__"):
                 return _TierObservedStream(response, measurement)
             _observe_service_tier(measurement, response)
-            # Retain usage before the SDK drops cache-write fields and replaces
-            # omitted details with zero. Never retain response content here.
-            raw_usage = getattr(response, "usage", None)
-            if raw_usage is not None:
-                dump = getattr(raw_usage, "model_dump", None)
-                raw_usage = dump(exclude_unset=True) if callable(dump) else raw_usage
-                if isinstance(raw_usage, Mapping):
-                    # Provider adapters already capture charges. This seam only
-                    # recovers token fields lost by SDK normalization.
-                    measurement["_raw_provider_usage"] = {
-                        key: raw_usage[key] for key in (
-                            "input_tokens", "output_tokens", "total_tokens",
-                            "prompt_tokens", "completion_tokens",
-                            "input_tokens_details", "output_tokens_details",
-                            "prompt_tokens_details", "completion_tokens_details",
-                        ) if key in raw_usage
-                    }
+            _capture_raw_token_usage(measurement, response)
             return response
 
         observed._agr_service_tier_capture = True
@@ -1340,8 +1346,9 @@ class MeasuredModel(Model):
                     measurement,
                     outcome=(terminal_type or "response.completed").removeprefix("response."),
                     usage=usage_from_provider_payload(getattr(terminal_response, "usage", None)),
-                    raw_usage=getattr(terminal_response, "usage", None),
-                    sdk_normalized_usage=measurement.get("api") == "chat_completions",
+                    raw_usage=measurement.get("_raw_provider_usage", getattr(terminal_response, "usage", None)),
+                    sdk_normalized_usage=("_raw_provider_usage" not in measurement
+                                          and measurement.get("api") == "chat_completions"),
                     response_id=getattr(terminal_response, "id", None),
                     provider_request_id=getattr(terminal_response, "_request_id", None),
                 )
