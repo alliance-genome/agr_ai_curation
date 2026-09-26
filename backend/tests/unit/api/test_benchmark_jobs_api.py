@@ -30,6 +30,160 @@ def submission_body():
     return {"suite": suite, "plan": plan.model_dump(mode="json")}
 
 
+@pytest.mark.parametrize("mode", ["success", "empty", "unbound", "database", "denied", "disabled"])
+def test_invocation_page_exposes_only_pinned_ledger_references(monkeypatch, mode):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from sqlalchemy.exc import OperationalError
+    from src.lib.cost_ledger.facts import TokenUsage
+    from src.schemas.cost_ledger import CostFactsProjection, CostLedgerReference
+
+    monkeypatch.setenv("BENCHMARK_API_ENABLED", str(mode != "disabled").lower())
+    app = FastAPI()
+    def principal():
+        if mode == "denied":
+            raise HTTPException(403, "read capability required")
+        return {"sub": "service:portal"}
+    app.dependency_overrides[require_benchmark_read] = principal
+    app.include_router(benchmark_jobs.router)
+    job, cell = uuid4(), uuid4()
+    row = SimpleNamespace(
+        id=uuid4(), cell_id=cell, ordinal=3, attempt=1, route_slot="extractor",
+        request_digest="a" * 64, response_digest=None, requested_provider="openai",
+        requested_model="model", reasoning_effort=None, actual_provider=None,
+        actual_model=None, routing_attempt=None, sequence=1, latency_ms=None,
+        status="running", failure=None, started_at=datetime.now(timezone.utc), completed_at=None,
+        input_tokens=999, output_tokens=999, total_tokens=1998,
+        billed_amount="999", billed_unit="USD", billed_source="obsolete",
+    )
+    reference = CostLedgerReference(schema_version=1, deployment_id="fixture", attempt_id=uuid4(), fact_revision=0)
+    reader = Mock(return_value=CostFactsProjection(
+        schema_version=1, reference=reference, usage=TokenUsage(),
+        usage_status="missing", usage_issues=(), recorded_charge=None,
+    ))
+    if mode == "unbound":
+        reader.side_effect = benchmark_jobs.BenchmarkAccountingUnavailable("private binding")
+    elif mode == "database":
+        reader.side_effect = OperationalError("secret SQL", {}, Exception("credentials"))
+    repository = Mock()
+    repository.list_invocations.side_effect = [() if mode == "empty" else (row,), (row,)]
+    sessions = MagicMock()
+    monkeypatch.setattr(benchmark_jobs, "SessionLocal", sessions)
+    monkeypatch.setattr(benchmark_jobs, "BenchmarkRepository", Mock(return_value=repository))
+    monkeypatch.setattr(benchmark_jobs, "read_benchmark_accounting", reader)
+    monkeypatch.setattr(benchmark_jobs, "report_runtime_exception", Mock())
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/benchmarks/jobs/{job}/cells/{cell}/invocations?limit=1")
+    if mode in {"denied", "disabled"}:
+        assert response.status_code == (403 if mode == "denied" else 404)
+        sessions.assert_not_called()
+        reader.assert_not_called()
+        return
+    assert response.headers["cache-control"] == "no-store"
+    if mode in {"unbound", "database"}:
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "accounting_unavailable"
+        assert all(secret not in response.text for secret in ("private", "secret", "credentials", "obsolete"))
+        return
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == 2
+    if mode == "empty":
+        assert body["items"] == [] and body["next_after_ordinal"] is None
+        reader.assert_not_called()
+    else:
+        item = body["items"][0]
+        assert item["accounting_reference"] == reference.model_dump(mode="json")
+        assert not {"input_tokens", "output_tokens", "total_tokens", "billed_amount", "billed_unit", "billed_source"} & item.keys()
+        assert item["status"] == "running" and body["next_after_ordinal"] == 3
+        assert reader.call_args.kwargs == dict(job_id=job, cell_id=cell, invocation_id=row.id, owner_subject="service:portal")
+        assert repository.list_invocations.call_args_list[1].kwargs["after_ordinal"] == 3
+    session = sessions.return_value.__enter__.return_value
+    assert str(session.execute.call_args.args[0]) == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+    session.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("enabled, allowed", [(True, True), (True, False), (False, True)])
+@pytest.mark.parametrize("job_summary", [False, True])
+def test_accounting_requires_read_capability_and_api_gate(monkeypatch, enabled, allowed, job_summary):
+    from src.lib.cost_ledger.facts import TokenUsage
+    from src.schemas.cost_ledger import BenchmarkJobAccounting, CostFactsProjection, CostLedgerReference
+
+    monkeypatch.setenv("BENCHMARK_API_ENABLED", str(enabled).lower())
+    app = FastAPI()
+    def principal():
+        if not allowed:
+            raise HTTPException(403, "read capability required")
+        return {"sub": "service:portal"}
+    app.dependency_overrides[require_benchmark_read] = principal
+    app.include_router(benchmark_jobs.router)
+    projection = CostFactsProjection(
+        schema_version=1,
+        reference=CostLedgerReference(schema_version=1, deployment_id="fixture", attempt_id=uuid4(), fact_revision=0),
+        usage=TokenUsage(), usage_status="missing", usage_issues=(), recorded_charge=None,
+    )
+    job, cell, invocation = uuid4(), uuid4(), uuid4()
+    if job_summary:
+        projection = BenchmarkJobAccounting(job_id=job, invocation_count=0, attempt_count=0, usage={},
+                                            inconsistent_usage_attempts=0, recorded_charges=(), unknown_charge_attempts=0)
+    reader = Mock(return_value=projection)
+    sessions = MagicMock()
+    monkeypatch.setattr(benchmark_jobs, "SessionLocal", sessions)
+    monkeypatch.setattr(benchmark_jobs, "read_benchmark_job_accounting" if job_summary else "read_benchmark_accounting", reader)
+    with TestClient(app) as client:
+        suffix = "" if job_summary else f"/cells/{cell}/invocations/{invocation}"
+        result = client.get(f"/api/v1/benchmarks/jobs/{job}{suffix}/accounting?revision=0")
+    if enabled and allowed:
+        assert result.status_code == 200 and result.headers["cache-control"] == "no-store"
+        assert result.json() == projection.model_dump(mode="json")
+        expected = dict(job_id=job, owner_subject="service:portal")
+        if not job_summary:
+            expected.update(cell_id=cell, invocation_id=invocation, revision=0)
+        assert reader.call_args.kwargs == expected
+        if job_summary:
+            assert str(sessions.return_value.__enter__.return_value.execute.call_args.args[0]) == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+        sessions.return_value.__enter__.return_value.commit.assert_not_called()
+    else:
+        assert result.status_code == (404 if not enabled else 403)
+        reader.assert_not_called()
+        sessions.assert_not_called()
+
+
+@pytest.mark.parametrize("failure, expected", [("missing", 404), ("unbound", 503), ("database", 503), ("inconsistent", 503)])
+@pytest.mark.parametrize("job_summary", [False, True])
+def test_accounting_errors_do_not_leak_or_fabricate_cost(monkeypatch, failure, expected, job_summary):
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setenv("BENCHMARK_API_ENABLED", "true")
+    app = FastAPI()
+    app.dependency_overrides[require_benchmark_read] = lambda: {"sub": "service:portal"}
+    app.include_router(benchmark_jobs.router)
+    errors = {
+        "missing": LookupError("private source"),
+        "unbound": benchmark_jobs.BenchmarkAccountingUnavailable("private source"),
+        "database": OperationalError("secret SQL", {"secret": "private"}, Exception("credentials")),
+        "inconsistent": ValueError("private facts"),
+    }
+    monkeypatch.setattr(benchmark_jobs, "SessionLocal", MagicMock())
+    reader_name = "read_benchmark_job_accounting" if job_summary else "read_benchmark_accounting"
+    monkeypatch.setattr(benchmark_jobs, reader_name, Mock(side_effect=errors[failure]))
+    reporter = Mock()
+    monkeypatch.setattr(benchmark_jobs, "report_runtime_exception", reporter)
+    with TestClient(app) as client:
+        suffix = "" if job_summary else f"/cells/{uuid4()}/invocations/{uuid4()}"
+        result = client.get(f"/api/v1/benchmarks/jobs/{uuid4()}{suffix}/accounting")
+    assert result.status_code == expected
+    assert "private" not in result.text and "secret" not in result.text and "credentials" not in result.text
+    assert "recorded_charge" not in result.json()
+    if expected == 503:
+        assert result.headers["cache-control"] == "no-store"
+        assert result.json()["detail"]["code"] == "accounting_unavailable"
+    if reporter.called:
+        safe_error = reporter.call_args.args[0]
+        assert safe_error.__context__ is None and safe_error.__cause__ is None
+        assert "secret" not in str(safe_error) and "private" not in str(safe_error)
+
+
 @pytest.mark.parametrize("allowed", [True, False])
 def test_stage_page_preserves_unknowns_and_requires_read_capability(monkeypatch, allowed):
     from datetime import datetime, timezone

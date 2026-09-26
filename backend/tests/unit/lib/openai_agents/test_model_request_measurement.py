@@ -261,6 +261,61 @@ def test_sdk_model_resolution_is_measured():
 
 
 @pytest.mark.parametrize("streamed", [False, True])
+def test_benchmark_usage_joins_actual_measurement_for_concurrent_calls(published, monkeypatch, streamed):
+    from src.lib.openai_agents.benchmark_routing import (
+        BenchmarkTelemetryModel, set_benchmark_invocation_route, reset_benchmark_invocation_route,
+    )
+    from src.lib.openai_agents.provider_usage import capture_provider_usage
+    from src.lib.observability.cost_context import current_model_request
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event", lambda record: None,
+    )
+
+    class InterleavedModel(FakeResponsesHTTPModel):
+        async def get_response(self, *args, **kwargs):
+            await asyncio.sleep(0)
+            return await super().get_response(*args, **kwargs)
+
+        async def stream_response(self, *args, **kwargs):
+            await asyncio.sleep(0)
+            async for event in super().stream_response(*args, **kwargs):
+                yield event
+
+    async def invoke(number):
+        model = BenchmarkTelemetryModel(InterleavedModel([_final(response_id=f"response-{number}")]))
+        model._agr_provider_id = "openai"
+        agent = Agent(name=f"benchmark-{number}", model="gpt-test", instructions="Extract")
+        provider = SimpleNamespace(get_model=lambda _name: model, _agr_provider_id="openai")
+        token = set_benchmark_invocation_route(SimpleNamespace(
+            benchmark_route_slot="supervisor", benchmark_requested_provider="openai",
+            benchmark_requested_model="gpt-test", benchmark_reasoning_effort="low",
+        ))
+        try:
+            config = RunConfig(model_provider=provider, tracing_disabled=True)
+            if streamed:
+                result = Runner.run_streamed(agent, "Read", run_config=config)
+                async for _ in result.stream_events():
+                    pass
+            else:
+                await Runner.run(agent, "Read", run_config=config)
+        finally:
+            reset_benchmark_invocation_route(token)
+        assert current_model_request() == {}
+
+    async def execute():
+        with capture_provider_usage(max_records=2, max_failure_detail_chars=20) as records:
+            await asyncio.gather(invoke(1), invoke(2))
+        return records
+
+    records = asyncio.run(execute())
+    identities = {record.model_request_id for record in records}
+    assert len(records) == len(identities) == 2
+    assert None not in identities
+    assert identities == {item["measurement_id"] for item in published}
+
+
+@pytest.mark.parametrize("streamed", [False, True])
 @pytest.mark.parametrize("oversized", [False, True])
 @pytest.mark.parametrize("model_type,transport", [
     (FakeResponsesHTTPModel, "http"), (FakeResponsesWSModel, "websocket"),
@@ -679,6 +734,43 @@ def test_sdk_retry_attempts_are_each_measured(published):
         (2, "completed"),
     ]
     assert published[0]["provider_usage"] == {"status": "not_reported"}
+
+
+def test_benchmark_retry_has_distinct_joinable_request_ids(published, monkeypatch):
+    import httpx
+    from openai import APIConnectionError
+    from src.lib.openai_agents.benchmark_routing import (
+        BenchmarkTelemetryModel, set_benchmark_invocation_route, reset_benchmark_invocation_route,
+    )
+    from src.lib.openai_agents.provider_usage import capture_provider_usage
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event", lambda record: None,
+    )
+    failure = APIConnectionError(request=httpx.Request("POST", "https://example.invalid/responses"))
+    model = BenchmarkTelemetryModel(FakeResponsesHTTPModel([failure, _final()]))
+    model._agr_provider_id = "openai"
+    provider = SimpleNamespace(get_model=lambda _name: model, _agr_provider_id="openai")
+    agent = Agent(name="benchmark", model="gpt-test", instructions="Extract",
+                  model_settings=ModelSettings(
+                      retry=ModelRetrySettings(max_retries=2, policy=lambda _context: True),
+                  ))
+    token = set_benchmark_invocation_route(SimpleNamespace(
+        benchmark_route_slot="supervisor", benchmark_requested_provider="openai",
+        benchmark_requested_model="gpt-test", benchmark_reasoning_effort="low",
+    ))
+    try:
+        with capture_provider_usage(max_records=2, max_failure_detail_chars=20) as records:
+            asyncio.run(Runner.run(agent, "Read", run_config=RunConfig(
+                model_provider=provider, tracing_disabled=True,
+            )))
+    finally:
+        reset_benchmark_invocation_route(token)
+    assert [record.status for record in records] == ["failed", "completed"]
+    identities = [record.model_request_id for record in records]
+    assert identities == [item["measurement_id"] for item in published]
+    assert len(set(identities)) == 2
+    assert None not in identities
 
 
 # ---------------------------------------------------------------------------

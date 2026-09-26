@@ -18,6 +18,7 @@ from .agent import Agent, Project, ProjectMember
 from .agent_execution_revision import AgentExecutionRevision
 from .chat_message import ChatMessage
 from .chat_session import ChatSession
+from .cost_ledger import CostAttempt, CostFactRevision, CostSourceReference
 from .chat_route_preference import ChatRoutePreference
 from .flow_shortcut_preference import FlowShortcutPreference
 from .custom_agent import CustomAgentVersion
@@ -40,6 +41,9 @@ from .term_synonym import TermSynonym
 from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 
 __all__ = [
+    "CostAttempt",
+    "CostFactRevision",
+    "CostSourceReference",
     "Base",
     "Batch",
     "BatchDocument",

@@ -199,6 +199,12 @@ def test_owner_scoped_api_pagination_and_nonleaking_delete(monkeypatch):
         assert deletion.status_code == 409
         assert deletion.json()["detail"]["code"] == "lifecycle_conflict"
         assert client.get(prepared_path).status_code == 200
+        # The foreign-owner job must remain inaccessible above, but must not
+        # remain queued for a later worker/repository test to claim.
+        app.dependency_overrides[require_benchmark_cancel] = lambda: {"sub": other_owner}
+        app.dependency_overrides[require_benchmark_delete] = lambda: {"sub": other_owner}
+        assert client.post(f"/api/v1/benchmarks/jobs/{other_id}/cancel").status_code == 200
+        assert client.delete(f"/api/v1/benchmarks/jobs/{other_id}").status_code == 204
 
 
 def test_event_replay_detects_pruned_holes_and_retains_preparation(monkeypatch):
@@ -257,6 +263,8 @@ def test_event_replay_detects_pruned_holes_and_retains_preparation(monkeypatch):
 
 
 def test_invocation_api_pages_complete_telemetry_and_preserves_unknowns(monkeypatch):
+    from src.lib.cost_ledger.benchmark_writes import reserve_benchmark_accounting, complete_benchmark_accounting
+    from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
     monkeypatch.setenv("BENCHMARK_API_ENABLED", "true")
     monkeypatch.setenv("BENCHMARK_MAX_PAGE_SIZE", "1")
     owner = f"telemetry-owner-{uuid4()}"
@@ -272,21 +280,23 @@ def test_invocation_api_pages_complete_telemetry_and_preserves_unknowns(monkeypa
         cell.attempt_count = 1
         session.flush()
         for ordinal in range(2):
+            invocation_id = uuid4()
             session.add(BenchmarkInvocation(
-                id=uuid4(), cell_id=cell_id, ordinal=ordinal, attempt=1,
+                id=invocation_id, cell_id=cell_id, ordinal=ordinal, attempt=1,
                 route_slot="supervisor", request_digest="sha256:" + "a" * 64,
                 response_digest="sha256:" + "b" * 64,
                 sequence=ordinal + 1, status=BenchmarkInvocationStatus.SUCCEEDED,
                 started_at=datetime.now(timezone.utc), completed_at=datetime.now(timezone.utc),
                 requested_provider="synthetic", requested_model="requested-model",
                 actual_provider="synthetic", actual_model="actual-model",
-                input_tokens=None if ordinal == 0 else 0,
-                output_tokens=None if ordinal == 0 else 0,
-                total_tokens=None if ordinal == 0 else 0,
-                billed_amount=None if ordinal == 0 else Decimal("0"),
-                billed_unit=None if ordinal == 0 else "USD",
-                billed_source=None if ordinal == 0 else "synthetic-measurement",
             ))
+            session.flush()
+            reserve_benchmark_accounting(session, invocation_id=invocation_id,
+                                          model_request_id=None, owner_subject=owner)
+            if ordinal == 1:
+                complete_benchmark_accounting(session, invocation_id=invocation_id, owner_subject=owner,
+                                              usage=TokenUsage(0, 0, 0),
+                                              charge=RecordedCharge(Decimal("0"), "USD", "synthetic-measurement"))
         session.commit()
     app = FastAPI()
     app.dependency_overrides[require_benchmark_read] = lambda: {"sub": owner}
@@ -296,18 +306,37 @@ def test_invocation_api_pages_complete_telemetry_and_preserves_unknowns(monkeypa
         first = client.get(path, params={"limit": 100}).json()
         assert len(first["items"]) == 1
         assert first["next_after_ordinal"] == 0
-        assert first["items"][0]["total_tokens"] is None
-        assert first["items"][0]["billed_amount"] is None
+        assert first["schema_version"] == 2
+        assert first["items"][0]["accounting_reference"]["fact_revision"] == 0
+        assert "total_tokens" not in first["items"][0] and "billed_amount" not in first["items"][0]
+        first_facts = client.get(path + f"/{first['items'][0]['id']}/accounting").json()
+        assert first_facts["usage"]["total_tokens"] is None and first_facts["recorded_charge"] is None
         assert first["items"][0]["actual_model"] == "actual-model"
         second = client.get(path, params={"after_ordinal": first["next_after_ordinal"]}).json()
         assert len(second["items"]) == 1
         assert second["items"][0]["ordinal"] == 1
-        assert second["items"][0]["total_tokens"] == 0
-        assert Decimal(second["items"][0]["billed_amount"]) == Decimal("0")
+        assert second["items"][0]["accounting_reference"]["fact_revision"] == 1
+        second_facts = client.get(path + f"/{second['items'][0]['id']}/accounting").json()
+        assert second_facts["usage"]["total_tokens"] == 0
+        assert Decimal(second_facts["recorded_charge"]["amount"]) == Decimal("0")
         assert second["next_after_ordinal"] is None
         assert client.get(path, params={"after_ordinal": 1}).json()["items"] == []
         app.dependency_overrides[require_benchmark_read] = lambda: {"sub": "other-owner"}
         assert client.get(path).status_code == 404
+    with SessionLocal() as session:
+        # This read-only API fixture creates a running cell directly; settle it
+        # before removing its still-queued synthetic job.
+        cell = session.get(BenchmarkCell, cell_id)
+        cell.status = BenchmarkCellStatus.CANCELLED
+        cell.completed_at = datetime.now(timezone.utc)
+        cell.lease_owner = cell.lease_expires_at = cell.lease_heartbeat_at = None
+        session.flush()
+        repository = BenchmarkRepository(session)
+        repository.request_cancellation(job_id=job_id, owner_subject=owner,
+                                        requested_at=cell.completed_at)
+        session.commit()
+        repository.delete_terminal_job(job_id=job_id, owner_subject=owner)
+        session.commit()
 
 
 def test_rerun_reuses_frozen_inputs_and_context_and_replays_without_source_calls(monkeypatch):
@@ -428,6 +457,10 @@ def test_rerun_reuses_frozen_inputs_and_context_and_replays_without_source_calls
         original = session.get(BenchmarkJob, job_id)
         assert original.curator_context == original_context
         assert original.resolved_plan == original_plan
+        BenchmarkRepository(session).request_cancellation(
+            job_id=child.id, owner_subject=owner, requested_at=datetime.now(timezone.utc),
+        )
+        session.commit()
 
 
 def test_rerun_limit_applies_to_new_resolved_work_but_not_accepted_replay(monkeypatch):
@@ -483,6 +516,10 @@ def test_rerun_limit_applies_to_new_resolved_work_but_not_accepted_replay(monkey
     with SessionLocal() as session:
         children = session.scalars(select(BenchmarkJob).where(BenchmarkJob.rerun_of_job_id == job_id)).all()
         assert len(children) == 1
+        BenchmarkRepository(session).request_cancellation(
+            job_id=children[0].id, owner_subject=owner, requested_at=datetime.now(timezone.utc),
+        )
+        session.commit()
 
 
 @pytest.mark.parametrize("same_key,revoked", [(True, False), (True, True), (False, False)])
@@ -609,6 +646,11 @@ def test_concurrent_api_submit_freezes_once_and_replay_needs_no_current_catalog(
             )).all()
             assert len(snapshots) == 2 and len(set(snapshots)) == 1
             assert all(job.status == BenchmarkJobStatus.QUEUED for job in jobs)
+            for job in jobs:
+                BenchmarkRepository(session).request_cancellation(
+                    job_id=job.id, owner_subject=owner, requested_at=datetime.now(timezone.utc),
+                )
+            session.commit()
             return
 
     # Preserve other tests' retained jobs. Only constrain this worker's job
@@ -667,9 +709,13 @@ def test_concurrent_api_submit_freezes_once_and_replay_needs_no_current_catalog(
         assert len(invocations) == int(not revoked)
         if not revoked:
             assert cell_detail["generated_envelope"] == {"records": [{"ok": True}]}
-            assert invocations[0]["total_tokens"] == 5
-            assert invocations[0]["billed_amount"] is None
+            accounting = client.get(cell_path + f"/invocations/{invocations[0]['id']}/accounting").json()
+            assert accounting["usage"]["total_tokens"] == 5
+            assert accounting["recorded_charge"] is None
         events = client.get(job_path + "/events")
         assert events.status_code == 200
         assert "job.status" in events.text
         assert content not in events.text
+    with SessionLocal() as session:
+        BenchmarkRepository(session).delete_terminal_job(job_id=job_id, owner_subject=owner)
+        session.commit()

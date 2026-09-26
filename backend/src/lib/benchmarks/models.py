@@ -416,7 +416,7 @@ class ProviderUsage(StrictModel):
 
 
 class BenchmarkCellExecutionResult(StrictModel):
-    """Worker outcome retained verbatim as a successful suite-v2 cell artifact."""
+    """Transient worker outcome; persistence replaces usage with ledger references."""
 
     output: Any
     invocations: list[ProviderUsage]

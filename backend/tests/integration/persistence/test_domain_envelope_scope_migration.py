@@ -32,9 +32,8 @@ SECOND_ENVELOPE_ID = f"{ENVELOPE_ID}-second"
 
 
 @pytest.fixture
-def legacy_schema():
+def legacy_schema(historical_migration_database):
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
-    command.upgrade(config, "head")
     _cleanup_rows()
     engine.dispose()
     command.downgrade(config, PARENT_REVISION)

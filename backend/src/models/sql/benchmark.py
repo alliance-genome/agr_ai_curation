@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -18,7 +17,6 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
-    Numeric,
     String,
     UniqueConstraint,
     func,
@@ -391,13 +389,8 @@ class BenchmarkInvocation(Base):
     actual_model: Mapped[str | None] = mapped_column(String(255))
     routing_attempt: Mapped[int | None] = mapped_column(Integer)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_request_id: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True))
     latency_ms: Mapped[int | None] = mapped_column(Integer)
-    input_tokens: Mapped[int | None] = mapped_column(Integer)
-    output_tokens: Mapped[int | None] = mapped_column(Integer)
-    total_tokens: Mapped[int | None] = mapped_column(Integer)
-    billed_amount: Mapped[Decimal | None] = mapped_column(Numeric(), nullable=True)
-    billed_unit: Mapped[str | None] = mapped_column(String(32))
-    billed_source: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[BenchmarkInvocationStatus] = mapped_column(
         _status_enum(
             BenchmarkInvocationStatus, "ck_benchmark_invocations_status_values"
@@ -419,21 +412,12 @@ class BenchmarkInvocation(Base):
         CheckConstraint("parent_invocation_sequence IS NULL OR parent_invocation_sequence >= 1",
                         name="ck_benchmark_invocations_parent_sequence"),
         UniqueConstraint("cell_id", "ordinal", name="uq_benchmark_invocations_cell_ordinal"),
+        UniqueConstraint("model_request_id", name="uq_benchmark_invocations_model_request"),
         CheckConstraint("ordinal >= 0 AND attempt >= 1", name="ck_benchmark_invocations_order"),
         CheckConstraint(
             "sequence >= 1 AND (routing_attempt IS NULL OR routing_attempt >= 0) "
-            "AND (latency_ms IS NULL OR latency_ms >= 0) "
-            "AND (input_tokens IS NULL OR input_tokens >= 0) "
-            "AND (output_tokens IS NULL OR output_tokens >= 0) "
-            "AND (total_tokens IS NULL OR total_tokens >= 0) "
-            "AND (billed_amount IS NULL OR billed_amount >= 0)",
+            "AND (latency_ms IS NULL OR latency_ms >= 0)",
             name="ck_benchmark_invocations_telemetry_values",
-        ),
-        CheckConstraint(
-            "(billed_amount IS NULL AND billed_unit IS NULL AND billed_source IS NULL) OR "
-            "(billed_amount IS NOT NULL AND billed_unit IS NOT NULL "
-            "AND billed_source IS NOT NULL)",
-            name="ck_benchmark_invocations_billed_cost",
         ),
         CheckConstraint(
             "failure IS NULL OR jsonb_typeof(failure) = 'object'",

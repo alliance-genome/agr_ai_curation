@@ -10,6 +10,8 @@ import logging
 from threading import Lock
 from typing import Any, Iterator, Mapping, Optional, Protocol
 
+from src.lib.cost_ledger.facts import TokenUsage
+
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,9 @@ class ProviderUsageRecord:
     failure_detail: Optional[str] = None
     stage_execution_id: Optional[str] = None
     parent_invocation_sequence: Optional[int] = None
+    model_request_id: Optional[str] = None
+    # Canonical facts for the ledger adapter, not the legacy artifact projection.
+    accounting_usage: TokenUsage = dataclass_field(default_factory=TokenUsage)
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,7 @@ class PendingProviderInvocation:
     started_at: float
     stage_execution_id: Optional[str] = None
     parent_invocation_sequence: Optional[int] = None
+    model_request_id: Optional[str] = None
 
 
 class ProviderInvocationObserver(Protocol):
@@ -181,6 +187,7 @@ def begin_provider_invocation(
         capture.reserved += 1
         sequence = capture.reserved
     from src.lib.benchmarks.stage_measurements import current_stage
+    from src.lib.observability.cost_context import current_model_request
 
     stage = current_stage()
     pending = PendingProviderInvocation(
@@ -192,6 +199,7 @@ def begin_provider_invocation(
         started_at=started_at,
         stage_execution_id=str(stage.execution_id) if stage is not None else None,
         parent_invocation_sequence=stage.parent_invocation_sequence if stage is not None else None,
+        model_request_id=current_model_request().get("model_request_id"),
     )
     observer = _provider_invocation_observer.get()
     if observer is not None:
@@ -217,6 +225,7 @@ def complete_provider_invocation(
         failure_detail=None,
         stage_execution_id=pending.stage_execution_id,
         parent_invocation_sequence=pending.parent_invocation_sequence,
+        model_request_id=pending.model_request_id,
     )
     emit_provider_usage(completed)
     observer = _provider_invocation_observer.get()
@@ -260,6 +269,7 @@ def fail_provider_invocation(
         failure_detail=detail,
         stage_execution_id=pending.stage_execution_id,
         parent_invocation_sequence=pending.parent_invocation_sequence,
+        model_request_id=pending.model_request_id,
     )
     emit_provider_usage(failed)
     observer = _provider_invocation_observer.get()
@@ -272,13 +282,15 @@ def complete_generic_provider_invocation(
     response: Any,
     *,
     latency_ms: int,
+    sdk_normalized_usage: bool = False,
 ) -> None:
     """Complete a native/SDK call from its content-free response metadata."""
 
     if pending is None:
         return
     payload = _as_mapping(response)
-    usage = _as_mapping(payload.get("usage") or getattr(response, "usage", None))
+    raw_usage = payload.get("usage") or getattr(response, "usage", None)
+    usage = _as_mapping(raw_usage)
     input_tokens = _optional_int(
         usage.get("input_tokens", usage.get("prompt_tokens"))
     )
@@ -309,6 +321,7 @@ def complete_generic_provider_invocation(
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             billed_cost=None,
+            accounting_usage=_accounting_usage(raw_usage, sdk_normalized=sdk_normalized_usage),
         ),
     )
     register_provider_tool_calls(pending, response)
@@ -422,9 +435,18 @@ def _emit_provider_usage_trace_event(record: ProviderUsageRecord) -> None:
         return
 
     try:
+        metadata: dict[str, Any] = {"provider_usage": provider_usage_metadata(record)}
+        # Correlation belongs to the telemetry envelope, not the immutable
+        # benchmark result schema. That schema changes with the ledger cutover.
+        if record.model_request_id is not None:
+            metadata["model_request_id"] = record.model_request_id
+        metadata["accounting_usage"] = {
+            field.name: getattr(record.accounting_usage, field.name)
+            for field in fields(TokenUsage)
+        }
         langfuse.create_event(
             name="provider_usage",
-            metadata={"provider_usage": provider_usage_metadata(record)},
+            metadata=metadata,
             trace_context={"trace_id": trace_id},
         )
     except Exception as exc:
@@ -472,6 +494,35 @@ def _optional_int(value: Any) -> Optional[int]:
     if isinstance(value, int) and value >= 0:
         return value
     return None
+
+
+def _accounting_usage(raw_usage: Any, *, sdk_normalized: bool = False) -> TokenUsage:
+    """Preserve inclusive facts without synthesizing totals or absent details.
+
+    Agents SDK Usage inserts zeros for missing counts and nested details before
+    our non-streaming observer sees them. Those zeros are ambiguous, not proof
+    of free work. Raw response mappings/Pydantic objects preserve explicit zero.
+    This limitation needs earlier raw capture to recover exact zero on SDK calls.
+    """
+    from agents.usage import Usage
+
+    usage = _as_mapping(raw_usage)
+    sdk_normalized = sdk_normalized or isinstance(raw_usage, Usage)
+
+    def count(value: Any) -> int | None:
+        parsed = _optional_int(value)
+        return None if sdk_normalized and parsed == 0 else parsed
+
+    inputs = _as_mapping(usage.get("input_tokens_details", usage.get("prompt_tokens_details")))
+    outputs = _as_mapping(usage.get("output_tokens_details", usage.get("completion_tokens_details")))
+    return TokenUsage(
+        input_tokens=count(usage.get("input_tokens", usage.get("prompt_tokens"))),
+        output_tokens=count(usage.get("output_tokens", usage.get("completion_tokens"))),
+        total_tokens=count(usage.get("total_tokens")),
+        cache_read_tokens=count(inputs.get("cached_tokens")),
+        cache_write_tokens=count(inputs.get("cache_write_tokens")),
+        reasoning_tokens=count(outputs.get("reasoning_tokens")),
+    )
 
 
 def _optional_text(value: Any) -> Optional[str]:
@@ -534,6 +585,7 @@ def normalize_openrouter_usage(
         output_tokens=_optional_int(usage.get("completion_tokens")),
         total_tokens=_optional_int(usage.get("total_tokens")),
         billed_cost=_openrouter_billed_cost(usage),
+        accounting_usage=_accounting_usage(usage),
     )
 
 

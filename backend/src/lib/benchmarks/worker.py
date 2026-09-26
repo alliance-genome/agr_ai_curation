@@ -40,6 +40,7 @@ from src.lib.openai_agents.provider_usage import (
     observe_provider_invocations,
     provider_usage_metadata,
 )
+from src.lib.cost_ledger.facts import RecordedCharge
 from src.models.sql.benchmark import (
     BenchmarkCell,
     BenchmarkCellStatus,
@@ -195,6 +196,7 @@ class _DurableInvocationObserver:
                 started_at=started_at,
                 stage_execution_id=UUID(pending.stage_execution_id) if pending.stage_execution_id is not None else None,
                 parent_invocation_sequence=pending.parent_invocation_sequence,
+                model_request_id=UUID(pending.model_request_id) if pending.model_request_id is not None else None,
             )
             session.commit()
             self.invocation_ids[pending.sequence] = invocation.id
@@ -234,12 +236,8 @@ class _DurableInvocationObserver:
                 actual_model=record.actual_model,
                 routing_attempt=record.routing_attempt,
                 latency_ms=record.latency_ms,
-                input_tokens=record.input_tokens,
-                output_tokens=record.output_tokens,
-                total_tokens=record.total_tokens,
-                billed_amount=billed.amount if billed is not None else None,
-                billed_unit=billed.unit if billed is not None else None,
-                billed_source=billed.source if billed is not None else None,
+                usage=record.accounting_usage,
+                charge=RecordedCharge(billed.amount, billed.unit, billed.source) if billed is not None else None,
                 failure=failure,
             )
             session.commit()

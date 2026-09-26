@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.services.cost_report import build_report, report_csv
+from src.services.cost_report import build_report, cost_events, report_csv
 from src.services.langfuse_run_reconstruction import usage_cost_summary
 
 START = "2026-09-07T00:00:00Z"
@@ -45,6 +45,65 @@ def fixture():
     rows.append(deepcopy(rows[2]))
     rows.append(generation("dev", "paper-A", "dev-run", "extraction", 99, environment="dev"))
     return [{"observations": rows}]
+
+
+@pytest.mark.parametrize("encoded", [False, True])
+def test_openinference_export_preserves_cost_partitions(encoded):
+    traces = fixture()
+    for row in traces[0]["observations"]:
+        metadata = row["metadata"]
+        row["metadata"] = {
+            "attributes.metadata": json.dumps(metadata) if encoded else metadata,
+        }
+    expected = build_report(fixture(), start=START, end=END,
+                            group_by=("paper", "run_id", "agent_id"),
+                            filters={"environment": "production"})
+    actual = build_report(traces, start=START, end=END,
+                          group_by=("paper", "run_id", "agent_id"),
+                          filters={"environment": "production"})
+    actual["as_of"] = expected["as_of"]  # Report creation time is not accounting data.
+    assert actual == expected
+    assert report_csv(actual) == report_csv(expected)
+
+
+def test_exported_context_respects_direct_and_nearest_ancestor_precedence():
+    leaf = generation("leaf", None, None, "leaf-agent", 1,
+                      paper_category="not_associated")
+    direct = leaf["metadata"]["cost_context"]
+    leaf["parentObservationId"] = "owner"
+    leaf["metadata"] = {
+        "cost_context": direct,
+        "attributes.metadata": json.dumps({"cost_context": {
+            "agent_id": "must-not-win", "run_id": "must-not-win",
+        }}),
+    }
+    owner = {"id": "owner", "type": "AGENT", "metadata": {
+        "attributes.metadata": json.dumps({"cost_context": {
+            "agent_id": "owner-agent", "run_id": "owner-run",
+            "paper": {"namespace": "example", "id": "owner-paper"},
+            "paper_category": "paper",
+        }}),
+    }}
+    event = cost_events({"observations": [owner, leaf]})[0]
+    assert event["agent_id"] == "leaf-agent"
+    assert event["run_id"] is None  # Explicit unknown must not inherit another run.
+    assert event["paper_category"] == "not_associated"
+    assert event["paper"] is None
+    leaf["metadata"] = {}
+    inherited = cost_events({"observations": [owner, leaf]})[0]
+    assert inherited["agent_id"] == "owner-agent"
+    assert inherited["run_id"] == "owner-run"
+    assert inherited["paper"] == '["example","owner-paper"]'
+
+
+@pytest.mark.parametrize("embedded", ["{broken", "[]", "null", [], None])
+def test_invalid_exported_context_does_not_invent_attribution(embedded):
+    leaf = generation("leaf", None, None, "ignored", 1)
+    leaf["metadata"] = {"attributes.metadata": embedded}
+    event = cost_events({"observations": [leaf]})[0]
+    assert event["agent_id"] is None
+    assert event["run_id"] is None
+    assert event["paper_category"] == "unknown"
 
 
 @pytest.mark.parametrize("dimensions", [

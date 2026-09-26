@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 import hashlib
 import json
 from collections.abc import Mapping
@@ -18,6 +17,10 @@ from sqlalchemy.orm import Session
 from src.lib.benchmarks.models import BenchmarkCellExecutionResult, BenchmarkSuite, ResolvedBenchmarkPlan
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.benchmarks.stage_measurements import StageStart, StageFinish
+from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
+from src.lib.cost_ledger.benchmark_writes import reserve_benchmark_accounting, complete_benchmark_accounting
+from src.lib.cost_ledger.benchmark_reads import read_benchmark_accounting
+from src.schemas.benchmark_artifacts import ArtifactInvocation, BenchmarkArtifact
 from src.lib.openai_agents.config import (
     get_benchmark_default_page_size,
     get_benchmark_event_retention_count,
@@ -178,6 +181,7 @@ class BenchmarkResultArtifact:
     attempt_count: int
     digest: str
     content: bytes
+    version: str = "1"
 
 
 class BenchmarkLeaseLostError(RuntimeError):
@@ -633,9 +637,17 @@ class BenchmarkRepository:
             or row.result_digest != f"sha256:{hashlib.sha256(content).hexdigest()}"
         ):
             raise BenchmarkResultArtifactError("result_artifact_corrupt")
+        try:
+            payload = json.loads(content)
+            version = payload.get("schema_version", 1)
+            if type(version) is not int or version not in (1, 2):
+                raise ValueError("Unsupported artifact version")
+        except (ValueError, AttributeError):
+            raise BenchmarkResultArtifactError("result_artifact_corrupt") from None
         return BenchmarkResultArtifact(
             job_id=job_id, cell_id=cell_id, attempt_count=row.attempt_count,
             digest=row.result_digest, content=content,
+            version=str(version),
         )
 
     def claim_next_job(
@@ -939,8 +951,24 @@ class BenchmarkRepository:
                     raise ValueError("output mismatch")
             except ValueError:
                 raise ValueError("benchmark result does not match its generated envelope") from None
+            # In-memory provider telemetry is not a second accounting store.
+            # Bind the scientific artifact to durable calls of this attempt only.
+            calls = self.session.scalars(select(BenchmarkInvocation).where(
+                BenchmarkInvocation.cell_id == cell.id,
+                BenchmarkInvocation.attempt == cell.attempt_count,
+            ).order_by(BenchmarkInvocation.ordinal))
+            references = []
+            for invocation in calls:
+                references.append(ArtifactInvocation(
+                    invocation_id=invocation.id,
+                    accounting_reference=read_benchmark_accounting(
+                        self.session, job_id=job.id, cell_id=cell.id,
+                        invocation_id=invocation.id, owner_subject=job.owner_subject,
+                    ).reference,
+                ))
+            stored = BenchmarkArtifact(output=outcome.output, invocations=tuple(references))
             artifact = json.dumps(
-                result, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                stored.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"),
                 allow_nan=False,
             ).encode("utf-8")
             if len(artifact) > get_benchmark_max_result_artifact_bytes():
@@ -1071,6 +1099,7 @@ class BenchmarkRepository:
         started_at: datetime,
         stage_execution_id: UUID | None = None,
         parent_invocation_sequence: int | None = None,
+        model_request_id: UUID | None = None,
         now: datetime | None = None,
     ) -> BenchmarkInvocation:
         current = now or datetime.now(timezone.utc)
@@ -1117,11 +1146,17 @@ class BenchmarkRepository:
             sequence=sequence,
             stage_execution_id=stage_execution_id,
             parent_invocation_sequence=parent_invocation_sequence,
+            model_request_id=model_request_id,
             status=BenchmarkInvocationStatus.RUNNING,
             started_at=started_at,
         )
-        self.session.add(invocation)
-        self.session.flush()
+        with self.session.begin_nested():
+            self.session.add(invocation)
+            self.session.flush()
+            reserve_benchmark_accounting(
+                self.session, invocation_id=invocation.id, model_request_id=model_request_id,
+                owner_subject=job.owner_subject,
+            )
         return invocation
 
     def finish_invocation(
@@ -1136,12 +1171,8 @@ class BenchmarkRepository:
         actual_model: str | None = None,
         routing_attempt: int | None = None,
         latency_ms: int | None = None,
-        input_tokens: int | None = None,
-        output_tokens: int | None = None,
-        total_tokens: int | None = None,
-        billed_amount: Decimal | None = None,
-        billed_unit: str | None = None,
-        billed_source: str | None = None,
+        usage: TokenUsage = TokenUsage(),
+        charge: RecordedCharge | None = None,
         failure: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> BenchmarkInvocation:
@@ -1199,21 +1230,20 @@ class BenchmarkRepository:
                 raise ValueError("failed invocation requires only a failure object")
         elif response_digest is not None or failure is not None:
             raise ValueError("cancelled invocation stores no response or failure")
-        invocation.status = status
-        invocation.completed_at = completed_at
-        invocation.response_digest = response_digest
-        invocation.failure = failure
-        invocation.actual_provider = actual_provider
-        invocation.actual_model = actual_model
-        invocation.routing_attempt = routing_attempt
-        invocation.latency_ms = latency_ms
-        invocation.input_tokens = input_tokens
-        invocation.output_tokens = output_tokens
-        invocation.total_tokens = total_tokens
-        invocation.billed_amount = billed_amount
-        invocation.billed_unit = billed_unit
-        invocation.billed_source = billed_source
-        self.session.flush()
+        with self.session.begin_nested():
+            complete_benchmark_accounting(
+                self.session, invocation_id=invocation.id, owner_subject=job.owner_subject,
+                usage=usage, charge=charge,
+            )
+            invocation.status = status
+            invocation.completed_at = completed_at
+            invocation.response_digest = response_digest
+            invocation.failure = failure
+            invocation.actual_provider = actual_provider
+            invocation.actual_model = actual_model
+            invocation.routing_attempt = routing_attempt
+            invocation.latency_ms = latency_ms
+            self.session.flush()
         return invocation
 
     def list_stages(

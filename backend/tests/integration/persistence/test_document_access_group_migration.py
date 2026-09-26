@@ -17,9 +17,8 @@ from tests.pdf_document_test_support import ensure_test_pdf_owner
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_legacy_access_groups_migrate_without_widening_or_loss():
+def test_legacy_access_groups_migrate_without_widening_or_loss(historical_migration_database):
     alembic_config = Config(str(BACKEND_ROOT / "alembic.ini"))
-    command.upgrade(alembic_config, "head")
     with SessionLocal() as owner_session:
         owner_id = ensure_test_pdf_owner(
             owner_session,

@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
 
 from src.api.benchmark_auth import (
     require_benchmark_cancel,
@@ -40,12 +42,15 @@ from src.lib.benchmarks.persistence import (
 from src.models.sql.benchmark import BenchmarkJobStatus
 from src.models.sql.database import SessionLocal
 from src.schemas.benchmark_jobs import (
-    BenchmarkInvocationPage, BenchmarkInvocationResponse, BenchmarkRerunRequest,
+    BenchmarkInvocationExecution, BenchmarkInvocationPage, BenchmarkInvocationResponse, BenchmarkRerunRequest,
     BenchmarkSubmitRequest, admission_body_schema, lifecycle_error_responses,
     BenchmarkStagePage, BenchmarkStageResponse,
 )
 from src.schemas import benchmark_job_examples as examples
 from src.lib.openai_agents.config import get_benchmark_admission_max_bytes
+from src.lib.cost_ledger.benchmark_reads import BenchmarkAccountingUnavailable, read_benchmark_accounting
+from src.schemas.cost_ledger import BenchmarkJobAccounting, CostFactsProjection
+from src.lib.cost_ledger.benchmark_summary import read_benchmark_job_accounting
 
 
 AdmissionBody = TypeVar("AdmissionBody", bound=BaseModel)
@@ -256,7 +261,7 @@ def get_cell(
         "description": "Canonical UTF-8 JSON bytes; hash the response body directly.",
         "content": {"application/json": {
             "schema": {"type": "object"},
-            "example": {"output": {"records": []}, "invocations": []},
+            "example": {"schema_version": 2, "output": {"records": []}, "invocations": []},
         }},
         "headers": {
             "X-Benchmark-Result-Digest": {"schema": {"type": "string"}},
@@ -297,7 +302,7 @@ def get_cell_result(
             headers={
                 "Cache-Control": "no-store",
                 "X-Benchmark-Result-Digest": artifact.digest,
-                "X-Benchmark-Artifact-Version": "1",
+                "X-Benchmark-Artifact-Version": artifact.version,
                 "X-Benchmark-Attempt-Count": str(artifact.attempt_count),
                 "X-Benchmark-Job-ID": str(artifact.job_id),
                 "X-Benchmark-Cell-ID": str(artifact.cell_id),
@@ -336,29 +341,117 @@ def delete_job(job_id: UUID, principal: dict[str, Any] = Depends(require_benchma
 
 
 @router.get("/{job_id}/cells/{cell_id}/invocations", response_model=BenchmarkInvocationPage,
-            responses=examples.json_example({"items": [], "next_after_ordinal": None}))
+            responses=examples.json_example({"schema_version": 2, "items": [], "next_after_ordinal": None}))
 def list_invocations(
     job_id: UUID,
     cell_id: UUID,
+    response: Response,
     principal: dict[str, Any] = Depends(require_benchmark_read),
     after_ordinal: int = Query(default=-1, ge=-1),
     limit: int | None = Query(default=None, ge=1),
 ):
-    """Page all stored invocation telemetry, preserving unavailable values as null."""
-    with SessionLocal() as session:
-        repository = BenchmarkRepository(session)
-        rows = repository.list_invocations(
-            job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
-            after_ordinal=after_ordinal, limit=limit,
+    """Page execution evidence and pinned ledger references, never inline costs."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        with SessionLocal() as session:
+            session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+            repository = BenchmarkRepository(session)
+            rows = repository.list_invocations(
+                job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
+                after_ordinal=after_ordinal, limit=limit,
+            )
+            items = tuple(BenchmarkInvocationResponse(
+                **BenchmarkInvocationExecution.model_validate(row).model_dump(),
+                accounting_reference=read_benchmark_accounting(
+                    session, job_id=job_id, cell_id=cell_id, invocation_id=row.id,
+                    owner_subject=_owner(principal),
+                ).reference,
+            ) for row in rows)
+            has_more = bool(items) and bool(repository.list_invocations(
+                job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
+                after_ordinal=items[-1].ordinal, limit=1,
+            ))
+            return BenchmarkInvocationPage(
+                items=items, next_after_ordinal=items[-1].ordinal if has_more else None,
+            )
+    except BenchmarkAccountingUnavailable:
+        raise HTTPException(503, {"code": "accounting_unavailable", "message": "Benchmark accounting is unavailable"},
+                            headers={"Cache-Control": "no-store"}) from None
+    except (SQLAlchemyError, ValueError) as exc:
+        report_runtime_exception(
+            sanitized_benchmark_error("invocation_page_read", type(exc).__name__),
+            component="benchmark_api", operation="invocation_page_read",
         )
-        items = tuple(BenchmarkInvocationResponse.model_validate(row) for row in rows)
-        has_more = bool(items) and bool(repository.list_invocations(
-            job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
-            after_ordinal=items[-1].ordinal, limit=1,
-        ))
-        return BenchmarkInvocationPage(
-            items=items, next_after_ordinal=items[-1].ordinal if has_more else None,
+        raise HTTPException(503, {"code": "accounting_unavailable", "message": "Benchmark accounting is unavailable"},
+                            headers={"Cache-Control": "no-store"}) from None
+
+
+@router.get("/{job_id}/accounting", response_model=BenchmarkJobAccounting,
+            responses=examples.json_example({
+                "schema_version": 1, "job_id": "10000000-0000-0000-0000-000000000001",
+                "scope": "benchmark_invocations", "valuation": "recorded_charges_only",
+                "shared_preparation_accounting": "not_included",
+                "invocation_count": 1, "attempt_count": 1,
+                "usage": {key: {"known_total": None, "known_attempts": 0, "unknown_attempts": 1}
+                          for key in ("input_tokens", "output_tokens", "total_tokens", "cache_read_tokens",
+                                      "cache_write_tokens", "reasoning_tokens")},
+                "inconsistent_usage_attempts": 0, "recorded_charges": [], "unknown_charge_attempts": 1,
+            }))
+def get_job_accounting(
+    job_id: UUID, response: Response,
+    principal: dict[str, Any] = Depends(require_benchmark_read),
+):
+    """Current ledger totals for this job; no stored aggregate or cost estimate."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        with SessionLocal() as session:
+            session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+            return read_benchmark_job_accounting(session, job_id=job_id, owner_subject=_owner(principal))
+    except BenchmarkAccountingUnavailable:
+        raise HTTPException(503, {"code": "accounting_unavailable", "message": "Benchmark accounting is unavailable"},
+                            headers={"Cache-Control": "no-store"}) from None
+    except (SQLAlchemyError, ValueError) as exc:
+        report_runtime_exception(
+            sanitized_benchmark_error("job_accounting_read", type(exc).__name__),
+            component="benchmark_api", operation="job_accounting_read",
         )
+        raise HTTPException(503, {"code": "accounting_unavailable", "message": "Benchmark accounting is unavailable"},
+                            headers={"Cache-Control": "no-store"}) from None
+
+
+@router.get("/{job_id}/cells/{cell_id}/invocations/{invocation_id}/accounting",
+            response_model=CostFactsProjection,
+            responses=examples.json_example({
+                "schema_version": 1,
+                "reference": {"schema_version": 1, "deployment_id": "example-deployment",
+                              "attempt_id": "10000000-0000-0000-0000-000000000001", "fact_revision": 0},
+                "usage": {"input_tokens": None, "output_tokens": None, "total_tokens": None,
+                          "cache_read_tokens": None, "cache_write_tokens": None, "reasoning_tokens": None},
+                "usage_status": "missing", "usage_issues": [], "recorded_charge": None,
+            }))
+def get_invocation_accounting(
+    job_id: UUID, cell_id: UUID, invocation_id: UUID, response: Response,
+    principal: dict[str, Any] = Depends(require_benchmark_read),
+    revision: int | None = Query(default=None, ge=0),
+):
+    """Read shared ledger facts; latest returns a reference that can be pinned."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        with SessionLocal() as session:
+            return read_benchmark_accounting(
+                session, job_id=job_id, cell_id=cell_id, invocation_id=invocation_id,
+                owner_subject=_owner(principal), revision=revision,
+            )
+    except BenchmarkAccountingUnavailable:
+        raise HTTPException(503, {"code": "accounting_unavailable", "message": "Benchmark accounting is unavailable"},
+                            headers={"Cache-Control": "no-store"}) from None
+    except (SQLAlchemyError, ValueError) as exc:
+        report_runtime_exception(
+            sanitized_benchmark_error("accounting_read", type(exc).__name__),
+            component="benchmark_api", operation="accounting_read",
+        )
+        raise HTTPException(503, {"code": "accounting_unavailable", "message": "Benchmark accounting is unavailable"},
+                            headers={"Cache-Control": "no-store"}) from None
 
 
 @router.get("/{job_id}/cells/{cell_id}/stages", response_model=BenchmarkStagePage,

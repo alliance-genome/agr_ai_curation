@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from alembic import command  # pyright: ignore[reportAttributeAccessIssue]
 from alembic.config import Config  # pyright: ignore[reportMissingImports]
 import pytest
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, update, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from src.lib.benchmarks.models import (
@@ -26,6 +26,7 @@ from src.lib.benchmarks.persistence import (
     BenchmarkCellCursor,
     BenchmarkLeaseLostError,
     BenchmarkRepository,
+    canonical_digest,
 )
 from src.models.sql.benchmark import (
     BenchmarkCell,
@@ -38,6 +39,8 @@ from src.models.sql.benchmark import (
     BenchmarkJobStatus,
 )
 from src.models.sql.database import SessionLocal
+from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
+from src.lib.cost_ledger.benchmark_reads import read_benchmark_accounting
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -162,7 +165,7 @@ def _create_job(db, *, owner: str = "owner-a", cells: int = 3, rerun_of: UUID | 
     )
 
 
-def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
+def _run_to_terminal(db, job_id: UUID, *, billed_amount: Decimal | None = None) -> BenchmarkJob:
     repository = BenchmarkRepository(db)
     now = datetime.now(timezone.utc)
     lease_owner = uuid4()
@@ -198,6 +201,7 @@ def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
             status=BenchmarkInvocationStatus.SUCCEEDED,
             completed_at=now,
             response_digest=_digest("2"),
+            charge=RecordedCharge(billed_amount, "credits", "audit-fixture") if billed_amount is not None else None,
         )
         repository.append_event(
             job_id=job_id, event_type="cell.succeeded", payload={"cell_id": str(cell.id)}
@@ -213,6 +217,123 @@ def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
     return repository.complete_job(
         job_id=job_id, lease_owner=lease_owner, completed_at=now
     )
+
+
+@pytest.fixture
+def historical_cost_columns():
+    """Recreate only the pre-cutover accounting shape in this disposable test DB."""
+    columns = {"input_tokens": "integer", "output_tokens": "integer", "total_tokens": "integer",
+               "billed_amount": "numeric", "billed_unit": "varchar(32)", "billed_source": "varchar(64)"}
+    with SessionLocal() as db:
+        for name, sql_type in columns.items():
+            db.execute(text(f"ALTER TABLE benchmark_invocations ADD COLUMN {name} {sql_type}"))
+        db.execute(text("ALTER TABLE benchmark_invocations ADD CONSTRAINT ck_benchmark_invocations_billed_cost "
+                        "CHECK ((billed_amount IS NULL AND billed_unit IS NULL AND billed_source IS NULL) OR "
+                        "(billed_amount IS NOT NULL AND billed_unit IS NOT NULL AND billed_source IS NOT NULL))"))
+        db.commit()
+    try:
+        yield
+    finally:
+        with SessionLocal() as db:
+            for name in columns:
+                db.execute(text(f"ALTER TABLE benchmark_invocations DROP COLUMN {name}"))
+            db.commit()
+
+
+def _seed_historical_terminal(db, job_id, *, billed_amount):
+    """Seed old-schema evidence directly, without invoking the canonical writer."""
+    repo = BenchmarkRepository(db)
+    now = datetime.now(timezone.utc)
+    lease = uuid4()
+    assert repo.claim_next_job(lease_owner=lease, lease_expires_at=now + timedelta(minutes=5), now=now).id == job_id
+    while cell := repo.claim_next_cell(job_id=job_id, lease_owner=lease,
+                                       lease_expires_at=now + timedelta(minutes=5), now=now):
+        db.execute(text("INSERT INTO benchmark_invocations "
+                        "(id,cell_id,ordinal,attempt,route_slot,request_digest,response_digest,sequence,status,"
+                        "started_at,completed_at,billed_amount,billed_unit,billed_source) VALUES "
+                        "(:id,:cell,0,1,'supervisor',:digest,:digest,1,'succeeded',:now,:now,:amount,'credits','audit-fixture')"),
+                   {"id": uuid4(), "cell": cell.id, "digest": _digest("a"), "now": now, "amount": billed_amount})
+        # Preserve a genuine historical artifact, not a reserialized v2 result.
+        cell.status, cell.completed_at = BenchmarkCellStatus.SUCCEEDED, now
+        cell.lease_owner = cell.lease_expires_at = cell.lease_heartbeat_at = None
+        cell.generated_envelope, cell.envelope_size_bytes = {}, 2
+        cell.envelope_digest = canonical_digest({})
+        cell.result_artifact = b'{"invocations":[],"output":{}}'
+        cell.result_digest = canonical_digest({"invocations": [], "output": {}})
+        db.flush()
+    return repo.complete_job(job_id=job_id, lease_owner=lease, completed_at=now, now=now)
+
+
+def _historical_row(db, invocation_id):
+    from src.lib.cost_ledger.benchmark_migration import iter_benchmark_migration_rows
+    return next(row for row, *_ in iter_benchmark_migration_rows(db) if row.id == invocation_id)
+
+
+def test_model_request_binding_survives_commit_and_rejects_duplicate_or_stale_dispatch():
+    with SessionLocal() as db:
+        job = _create_job(db, owner="request-binding-owner", cells=1)
+        repository = BenchmarkRepository(db)
+        now, lease_owner = datetime.now(timezone.utc), uuid4()
+        repository.claim_next_job(
+            lease_owner=lease_owner, lease_expires_at=now + timedelta(minutes=5), now=now,
+        )
+        cell = repository.claim_next_cell(
+            job_id=job.id, lease_owner=lease_owner,
+            lease_expires_at=now + timedelta(minutes=5), now=now,
+        )
+        assert cell is not None
+        request_id = uuid4()
+
+        def append(ordinal, identity, owner=lease_owner):
+            return repository.append_invocation(
+                cell_id=cell.id, lease_owner=owner, ordinal=ordinal, attempt=1,
+                route_slot="supervisor", request_digest=_digest("1"),
+                requested_provider="openai", requested_model="fixture", reasoning_effort=None,
+                sequence=ordinal + 1, started_at=now, model_request_id=identity,
+            )
+
+        first = append(0, request_id)
+        with pytest.raises(IntegrityError, match="uq_benchmark_invocations_model_request"):
+            with db.begin_nested():
+                append(1, request_id)
+        with pytest.raises(BenchmarkLeaseLostError):
+            with db.begin_nested():
+                append(1, uuid4(), uuid4())
+        with pytest.raises(BenchmarkLeaseLostError):
+            with db.begin_nested():
+                repository.append_invocation(
+                    cell_id=cell.id, lease_owner=lease_owner, ordinal=1, attempt=1,
+                    route_slot="supervisor", request_digest=_digest("1"),
+                    requested_provider="openai", requested_model="fixture", reasoning_effort=None,
+                    sequence=2, started_at=now, model_request_id=uuid4(),
+                    now=now + timedelta(minutes=6),
+                )
+        retry_id = uuid4()
+        retry = append(1, retry_id)
+        unknowns = [append(2, None), append(3, None)]
+        ids = [row.id for row in [first, retry, *unknowns]]
+        db.commit()
+        with SessionLocal() as fresh:
+            assert [fresh.get(BenchmarkInvocation, key).model_request_id for key in ids] == [
+                request_id, retry_id, None, None,
+            ]
+        for row in [first, retry, *unknowns]:
+            repository.finish_invocation(
+                invocation_id=row.id, lease_owner=lease_owner,
+                status=BenchmarkInvocationStatus.SUCCEEDED, completed_at=now,
+                response_digest=_digest("2"), usage=TokenUsage(input_tokens=1, output_tokens=2, total_tokens=3),
+            )
+        repository.finish_cell(
+            cell_id=cell.id, lease_owner=lease_owner, status=BenchmarkCellStatus.SUCCEEDED,
+            completed_at=now, generated_envelope={"records": []},
+            result={"output": {"records": []}, "invocations": []},
+        )
+        repository.complete_job(job_id=job.id, lease_owner=lease_owner, completed_at=now)
+        db.commit()
+        db.refresh(first)
+        assert first.model_request_id == request_id
+        repository.delete_terminal_job(job_id=job.id, owner_subject="request-binding-owner")
+        db.commit()
 
 
 def test_curator_context_is_persisted_separately_and_immutable_while_queued():
@@ -855,12 +976,8 @@ def test_expired_cell_is_failed_once_while_queued_sibling_remains_claimable():
             actual_model="actual-model",
             routing_attempt=2,
             latency_ms=1234,
-            input_tokens=10,
-            output_tokens=20,
-            total_tokens=30,
-            billed_amount=Decimal("0.0012300"),
-            billed_unit="USD",
-            billed_source="provider",
+            usage=TokenUsage(input_tokens=10, output_tokens=20, total_tokens=30),
+            charge=RecordedCharge(Decimal("0.0012300"), "USD", "provider"),
         )
         envelope = {"records": [{"ok": True}]}
         repository.finish_cell(
@@ -880,9 +997,9 @@ def test_expired_cell_is_failed_once_while_queued_sibling_remains_claimable():
         assert terminal.status == BenchmarkJobStatus.COMPLETED_WITH_FAILURES
         assert sibling.envelope_digest is not None
         assert sibling.result_digest is not None
-        assert receipt.billed_amount == Decimal("0.0012300")
-        assert receipt.billed_unit == "USD"
-        assert receipt.billed_source == "provider"
+        accounting = read_benchmark_accounting(db, job_id=job.id, cell_id=sibling.id,
+                                               invocation_id=receipt.id, owner_subject="recovery-owner")
+        assert accounting.recorded_charge == RecordedCharge(Decimal("0.0012300"), "USD", "provider")
     finally:
         db.rollback()
         if job_id is not None:
@@ -1153,3 +1270,367 @@ def test_postgres_skip_locked_allows_only_one_job_claimant():
                 )
                 first.commit()
         first.close()
+
+
+def test_cost_audit_is_read_only_complete_across_pages_and_snapshot_consistent(monkeypatch, historical_cost_columns):
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_audit import audit_benchmark_costs
+
+    scope = dict(deployment_id="fixture-deployment", source_namespace="fixture-execution")
+    job_ids = []
+    try:
+        with SessionLocal() as db:
+            job = _create_job(db, owner="audit-private-owner", cells=3)
+            job_ids.append(job.id)
+            _seed_historical_terminal(db, job.id, billed_amount=Decimal("0.000000000000000000123"))
+            db.commit()
+        with SessionLocal() as snapshot:
+            snapshot.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+            monkeypatch.setenv("COST_MIGRATION_AUDIT_PAGE_SIZE", "1")
+            first = audit_benchmark_costs(snapshot, **scope)
+            assert first["planned_invocations"] >= 3
+            assert {"unit": "credits", "source": "audit-fixture", "amount": "3.69E-19", "invocations": 3} in first["recorded_charge_totals"]
+            assert not first["write_side_enabled"] and first["dry_run"]
+            assert "audit-private-owner" not in str(first)
+            monkeypatch.setenv("COST_MIGRATION_AUDIT_PAGE_SIZE", "2")
+            assert audit_benchmark_costs(snapshot, **scope) == first
+            with pytest.raises(DBAPIError):
+                with snapshot.begin_nested():
+                    snapshot.execute(text("UPDATE cost_attempts SET owner_subject = 'not-allowed'"))
+            with SessionLocal() as writer:
+                queued = _create_job(writer, owner="audit-queued-owner", cells=1)
+                job_ids.append(queued.id)
+                writer.commit()
+            assert audit_benchmark_costs(snapshot, **scope) == first
+        with SessionLocal() as fresh:
+            fresh.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+            updated = audit_benchmark_costs(fresh, **scope)
+            assert updated["active_jobs"] == first["active_jobs"] + 1
+            assert updated["cutover_blockers"]["active_jobs"] >= 1
+        with SessionLocal() as unsafe:
+            with pytest.raises(ValueError, match="read-only"):
+                audit_benchmark_costs(unsafe, **scope)
+    finally:
+        with SessionLocal() as cleanup:
+            for job_id in job_ids:
+                job = cleanup.get(BenchmarkJob, job_id)
+                if job.status == BenchmarkJobStatus.QUEUED:
+                    _run_to_terminal(cleanup, job_id)
+                BenchmarkRepository(cleanup).delete_terminal_job(job_id=job_id, owner_subject=job.owner_subject)
+            cleanup.commit()
+
+
+def test_accounting_read_requires_owned_membership_and_verified_binding(monkeypatch, historical_cost_columns):
+    from src.lib.cost_ledger.benchmark_reads import BenchmarkAccountingUnavailable, read_benchmark_accounting
+    from src.lib.cost_ledger.benchmark_migration import plan_benchmark_cost_migration
+    from src.lib.cost_ledger.persistence import record_cost_facts
+    from src.lib.cost_ledger.facts import TokenUsage
+
+    deployment, namespace, owner = uuid4().hex, "fixture-source", "accounting-owner"
+    monkeypatch.setenv("COST_LEDGER_DEPLOYMENT_ID", deployment)
+    monkeypatch.setenv("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", namespace)
+    job_id = None
+    try:
+        with SessionLocal() as db:
+            job = _create_job(db, owner=owner, cells=1)
+            job_id = job.id
+            _seed_historical_terminal(db, job.id, billed_amount=Decimal("7"))
+            row = db.scalar(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job.id))
+            scope = dict(job_id=job.id, cell_id=row.cell_id, invocation_id=row.id, owner_subject=owner)
+            # Inline charge exists, but no ledger binding: never serve old copies.
+            with pytest.raises(BenchmarkAccountingUnavailable):
+                read_benchmark_accounting(db, **scope)
+            entry = plan_benchmark_cost_migration(_historical_row(db, row.id), deployment_id=deployment, source_namespace=namespace, owner_subject=owner)
+            binding = dict(deployment_id=deployment, source_namespace=namespace, owner_subject=owner,
+                           attempt_id=entry.attempt_id, source_system="benchmark", source_id=str(row.id))
+            record_cost_facts(db, **binding, usage=entry.usage, charge=entry.charge)
+            first = read_benchmark_accounting(db, **scope)
+            assert first.recorded_charge.amount == Decimal("7") and first.reference.fact_revision == 1
+            record_cost_facts(db, **binding, usage=TokenUsage(input_tokens=10))
+            assert read_benchmark_accounting(db, **scope).reference.fact_revision == 2
+            assert read_benchmark_accounting(db, **scope, revision=1) == first
+            assert read_benchmark_accounting(db, **scope, revision=0).recorded_charge is None
+            for field, value in (("job_id", uuid4()), ("cell_id", uuid4()), ("invocation_id", uuid4()), ("owner_subject", "another-owner")):
+                with pytest.raises(LookupError):
+                    read_benchmark_accounting(db, **{**scope, field: value})
+            with pytest.raises(LookupError):
+                read_benchmark_accounting(db, **scope, revision=3)
+            monkeypatch.setenv("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", "wrong-source")
+            with pytest.raises(BenchmarkAccountingUnavailable):
+                read_benchmark_accounting(db, **scope)
+            monkeypatch.delenv("COST_LEDGER_DEPLOYMENT_ID")
+            with pytest.raises(BenchmarkAccountingUnavailable):
+                read_benchmark_accounting(db, **scope)
+            # Membership remains the first boundary even when unconfigured.
+            with pytest.raises(LookupError):
+                read_benchmark_accounting(db, **{**scope, "owner_subject": "another-owner"})
+            db.commit()
+    finally:
+        if job_id is not None:
+            with SessionLocal() as db:
+                BenchmarkRepository(db).delete_terminal_job(job_id=job_id, owner_subject=owner)
+                db.commit()
+
+
+@pytest.fixture
+def cost_backfill_case(monkeypatch, historical_cost_columns):
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_audit import audit_benchmark_costs
+
+    scope = dict(deployment_id=uuid4().hex, source_namespace="backfill-fixture")
+    monkeypatch.setenv("COST_LEDGER_DEPLOYMENT_ID", scope["deployment_id"])
+    monkeypatch.setenv("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", scope["source_namespace"])
+    monkeypatch.setenv("COST_MIGRATION_AUDIT_PAGE_SIZE", "1")
+    with SessionLocal() as db:
+        job = _create_job(db, owner="backfill-owner", cells=2)
+        _seed_historical_terminal(db, job.id, billed_amount=Decimal("7.000000000000000000123"))
+        job_id = job.id
+        db.commit()
+    with SessionLocal() as audit:
+        audit.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        receipt = audit_benchmark_costs(audit, **scope)
+    try:
+        yield scope, receipt, job_id
+    finally:
+        with SessionLocal() as db:
+            BenchmarkRepository(db).delete_terminal_job(job_id=job_id, owner_subject="backfill-owner")
+            db.commit()
+
+
+def _backfill_fact_count(db, scope):
+    from src.models.sql.cost_ledger import CostFactRevision
+    return db.scalar(select(func.count()).select_from(CostFactRevision).where(
+        CostFactRevision.deployment_id == scope["deployment_id"],
+    ))
+
+
+def test_offline_backfill_parity_replay_and_write_fencing(cost_backfill_case):
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_backfill import backfill_benchmark_costs
+    from src.lib.cost_ledger.benchmark_reads import read_benchmark_accounting
+
+    scope, audit, job_id = cost_backfill_case
+    args = {**scope, "expected_planned_facts_sha256": audit["planned_facts_sha256"]}
+    with SessionLocal() as migration:
+        receipt = backfill_benchmark_costs(migration, **args)
+        assert receipt["verified_invocations"] == 2
+        assert receipt["committed"] is False and receipt["writer_cutover_complete"] is False
+        with SessionLocal() as reader:
+            assert _backfill_fact_count(reader, scope) == 0
+        with SessionLocal() as blocked_writer:
+            blocked_writer.execute(text("SET LOCAL lock_timeout = '20ms'"))
+            with pytest.raises(DBAPIError):
+                blocked_writer.execute(text("UPDATE benchmark_invocations SET latency_ms = latency_ms WHERE false"))
+        migration.commit()
+    with SessionLocal() as replay:
+        assert backfill_benchmark_costs(replay, **args)["verified_invocations"] == 2
+        replay.commit()
+    with SessionLocal() as db:
+        assert _backfill_fact_count(db, scope) == 2
+        for row in db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job_id)):
+            projection = read_benchmark_accounting(db, job_id=job_id, cell_id=row.cell_id,
+                                                   invocation_id=row.id, owner_subject="backfill-owner")
+            assert projection.recorded_charge.amount == _historical_row(db, row.id).billed_amount == Decimal("7.000000000000000000123")
+            assert projection.usage.input_tokens is None
+
+
+def test_backfill_fingerprint_failure_rolls_back_all_pages_even_if_caught(cost_backfill_case):
+    from src.lib.cost_ledger.benchmark_backfill import BenchmarkBackfillError, backfill_benchmark_costs
+    from src.models.sql.cost_ledger import CostAttempt, CostSourceReference
+
+    scope, _, _ = cost_backfill_case
+    with SessionLocal() as migration:
+        with pytest.raises(BenchmarkBackfillError, match="source_fingerprint_changed"):
+            backfill_benchmark_costs(migration, **scope, expected_planned_facts_sha256="0" * 64)
+        migration.commit()
+    with SessionLocal() as db:
+        assert _backfill_fact_count(db, scope) == 0
+        for model in (CostAttempt, CostSourceReference):
+            assert db.scalar(select(func.count()).select_from(model).where(model.deployment_id == scope["deployment_id"])) == 0
+
+
+def test_backfill_existing_fact_conflict_preserves_only_original_data(cost_backfill_case):
+    from src.lib.cost_ledger.benchmark_backfill import backfill_benchmark_costs
+    from src.lib.cost_ledger.benchmark_migration import plan_benchmark_cost_migration
+    from src.lib.cost_ledger.facts import CostFactConflict, RecordedCharge
+    from src.lib.cost_ledger.persistence import record_cost_facts
+
+    scope, audit, job_id = cost_backfill_case
+    with SessionLocal() as db:
+        last = db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(
+            BenchmarkCell.job_id == job_id,
+        ).order_by(BenchmarkInvocation.id.desc())).first()
+        entry = plan_benchmark_cost_migration(_historical_row(db, last.id), **scope, owner_subject="backfill-owner")
+        record_cost_facts(db, **scope, owner_subject="backfill-owner", attempt_id=entry.attempt_id,
+                          source_system="benchmark", source_id=str(last.id), usage=entry.usage,
+                          charge=RecordedCharge(Decimal("8"), "credits", "audit-fixture"))
+        db.commit()
+    with SessionLocal() as migration:
+        with pytest.raises(CostFactConflict):
+            backfill_benchmark_costs(migration, **scope, expected_planned_facts_sha256=audit["planned_facts_sha256"])
+        migration.commit()
+    with SessionLocal() as db:
+        assert _backfill_fact_count(db, scope) == 1
+
+
+def test_backfill_rejects_queued_jobs_and_scope_mismatch(cost_backfill_case, monkeypatch):
+    from src.lib.cost_ledger.benchmark_backfill import BenchmarkBackfillError, backfill_benchmark_costs
+
+    scope, audit, _ = cost_backfill_case
+    args = {**scope, "expected_planned_facts_sha256": audit["planned_facts_sha256"]}
+    with SessionLocal() as db:
+        queued = _create_job(db, owner="backfill-queued", cells=1)
+        queued_id = queued.id
+        db.commit()
+    try:
+        with SessionLocal() as migration:
+            with pytest.raises(BenchmarkBackfillError, match="active_benchmark_jobs"):
+                backfill_benchmark_costs(migration, **args)
+            migration.commit()
+        monkeypatch.setenv("COST_LEDGER_DEPLOYMENT_ID", "wrong-deployment")
+        with SessionLocal() as migration:
+            with pytest.raises(BenchmarkBackfillError, match="verified_scope_configuration_required"):
+                backfill_benchmark_costs(migration, **args)
+        with SessionLocal() as db:
+            assert _backfill_fact_count(db, scope) == 0
+    finally:
+        with SessionLocal() as db:
+            _run_to_terminal(db, queued_id)
+            BenchmarkRepository(db).delete_terminal_job(job_id=queued_id, owner_subject="backfill-queued")
+            db.commit()
+
+
+def test_backfill_refuses_prelock_repeatable_read_snapshot(cost_backfill_case):
+    from sqlalchemy.orm import Session
+    from src.models.sql.database import engine
+    from src.lib.cost_ledger.benchmark_backfill import BenchmarkBackfillError, backfill_benchmark_costs
+
+    scope, audit, _ = cost_backfill_case
+    with Session(engine.execution_options(isolation_level="REPEATABLE READ")) as migration:
+        with pytest.raises(BenchmarkBackfillError, match="read_committed_required"):
+            backfill_benchmark_costs(migration, **scope, expected_planned_facts_sha256=audit["planned_facts_sha256"])
+        migration.commit()
+    with SessionLocal() as db:
+        assert _backfill_fact_count(db, scope) == 0
+
+
+@pytest.mark.parametrize("scenario", ["exact", "units", "duplicate", "unknown"])
+def test_job_accounting_uses_unique_ledger_attempts_and_exact_buckets(cost_backfill_case, monkeypatch, scenario):
+    from decimal import localcontext
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_summary import read_benchmark_job_accounting
+    from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
+    from src.lib.cost_ledger.persistence import record_cost_facts
+
+    scope, _, job_id = cost_backfill_case
+    monkeypatch.setenv("COST_LEDGER_READ_PAGE_SIZE", "1")
+    attempt_ids = [uuid4(), uuid4()]
+    if scenario == "duplicate":
+        attempt_ids[1] = attempt_ids[0]
+    with SessionLocal() as db:
+        invocations = list(db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job_id)))
+        for index, invocation in enumerate(invocations):
+            amount = Decimal("1000000000000000000000") if index == 0 else Decimal("0.000000000000000000123")
+            usage = TokenUsage(input_tokens=10, cache_read_tokens=2) if index == 0 else TokenUsage()
+            charge = RecordedCharge(amount, "credits", "fixture")
+            if scenario == "units" and index == 1:
+                charge = RecordedCharge(Decimal(0), "USD", "other-source")
+            if scenario in ("unknown", "duplicate") and index == 1:
+                charge = None
+            record_cost_facts(db, **scope, attempt_id=attempt_ids[index], owner_subject="backfill-owner",
+                              source_system="benchmark", source_id=str(invocation.id), usage=usage, charge=charge)
+        db.commit()
+    with SessionLocal() as db, localcontext() as context:
+        context.prec = 6
+        db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        report = read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+    assert report.invocation_count == 2
+    assert report.attempt_count == (1 if scenario == "duplicate" else 2)
+    assert report.usage["input_tokens"].known_total == 10
+    assert report.usage["input_tokens"].unknown_attempts == (0 if scenario == "duplicate" else 1)
+    assert report.usage["total_tokens"].known_total is None
+    assert report.unknown_charge_attempts == (1 if scenario == "unknown" else 0)
+    if scenario == "exact":
+        assert report.recorded_charges[0].amount == Decimal("1000000000000000000000.000000000000000000123")
+        assert '"amount":"1000000000000000000000.000000000000000000123"' in report.model_dump_json()
+    elif scenario == "units":
+        assert len(report.recorded_charges) == 2
+        assert report.recorded_charges[0].amount == 0
+        assert report.recorded_charges[0].unit == "USD"
+    else:
+        assert report.recorded_charges[0].amount == Decimal("1000000000000000000000")
+
+
+def test_job_accounting_rejects_missing_foreign_and_wrong_scope(cost_backfill_case, monkeypatch):
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_summary import read_benchmark_job_accounting
+    from src.lib.cost_ledger.benchmark_reads import BenchmarkAccountingUnavailable
+    from src.lib.cost_ledger.facts import TokenUsage
+    from src.lib.cost_ledger.persistence import record_cost_facts
+
+    scope, _, job_id = cost_backfill_case
+    with SessionLocal() as db:
+        with pytest.raises(ValueError, match="repeatable-read"):
+            read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+    with SessionLocal() as db:
+        db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        for owner, target in (("foreign-owner", job_id), ("backfill-owner", uuid4())):
+            with pytest.raises(LookupError):
+                read_benchmark_job_accounting(db, job_id=target, owner_subject=owner)
+        with pytest.raises(BenchmarkAccountingUnavailable):
+            read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+    with SessionLocal() as db:
+        invocations = list(db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job_id)))
+        for invocation in invocations:
+            record_cost_facts(db, **scope, attempt_id=uuid4(), owner_subject="foreign-owner",
+                              source_system="benchmark", source_id=str(invocation.id), usage=TokenUsage())
+        db.commit()
+    with SessionLocal() as db:
+        db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        with pytest.raises(BenchmarkAccountingUnavailable):
+            read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+        monkeypatch.setenv("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", "wrong-source")
+        with pytest.raises(BenchmarkAccountingUnavailable):
+            read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+        monkeypatch.setenv("COST_LEDGER_DEPLOYMENT_ID", "")
+        with pytest.raises(BenchmarkAccountingUnavailable):
+            read_benchmark_job_accounting(db, job_id=job_id, owner_subject="backfill-owner")
+
+
+def test_job_accounting_snapshot_empty_and_late_enrichment(cost_backfill_case, monkeypatch):
+    from sqlalchemy import text
+    from src.lib.cost_ledger.benchmark_summary import read_benchmark_job_accounting
+    from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
+    from src.lib.cost_ledger.persistence import record_cost_facts
+
+    scope, _, job_id = cost_backfill_case
+    monkeypatch.setenv("COST_LEDGER_READ_PAGE_SIZE", "1")
+    bindings = []
+    with SessionLocal() as db:
+        for invocation in db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == job_id)):
+            binding = dict(**scope, attempt_id=uuid4(), owner_subject="backfill-owner",
+                           source_system="benchmark", source_id=str(invocation.id))
+            record_cost_facts(db, **binding, usage=TokenUsage())
+            bindings.append(binding)
+        db.commit()
+    with SessionLocal() as reader:
+        reader.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        before = read_benchmark_job_accounting(reader, job_id=job_id, owner_subject="backfill-owner")
+        assert before.unknown_charge_attempts == 2
+        assert before.usage["input_tokens"].known_total is None
+        with SessionLocal() as writer:
+            record_cost_facts(writer, **bindings[0], usage=TokenUsage(input_tokens=0))
+            record_cost_facts(writer, **bindings[0], usage=TokenUsage(output_tokens=3, total_tokens=3),
+                              charge=RecordedCharge(Decimal(0), "credits", "fixture"))
+            record_cost_facts(writer, **bindings[1], usage=TokenUsage(input_tokens=1, cache_read_tokens=2))
+            writer.commit()
+        assert read_benchmark_job_accounting(reader, job_id=job_id, owner_subject="backfill-owner") == before
+    with SessionLocal() as reader:
+        reader.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        after = read_benchmark_job_accounting(reader, job_id=job_id, owner_subject="backfill-owner")
+        assert after.usage["input_tokens"].known_total == 1
+        assert after.usage["input_tokens"].known_attempts == 2
+        assert after.usage["output_tokens"].known_total == 3
+        assert after.recorded_charges[0].amount == 0 and after.recorded_charges[0].attempts == 1
+        assert after.unknown_charge_attempts == 1 and after.attempt_count == 2
+        assert after.inconsistent_usage_attempts == 1

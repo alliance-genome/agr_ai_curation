@@ -1,7 +1,6 @@
 """Explicit, token-free lifecycle response contracts."""
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
@@ -10,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.lib.benchmarks.models import BenchmarkSuite, FrozenStrictModel, ResolvedBenchmarkPlan
 
 from src.models.sql.benchmark import BenchmarkInvocationStatus
+from src.schemas.cost_ledger import CostLedgerReference
 
 
 class BenchmarkSubmitRequest(FrozenStrictModel):
@@ -81,7 +81,9 @@ def admission_body_schema(model: type[BaseModel], *, example: Any = None) -> dic
     }}}
 
 
-class BenchmarkInvocationResponse(BaseModel):
+class BenchmarkInvocationExecution(BaseModel):
+    """Execution evidence only; quantities and charges belong to the ledger."""
+
     model_config = ConfigDict(from_attributes=True, frozen=True)
 
     id: UUID
@@ -101,19 +103,18 @@ class BenchmarkInvocationResponse(BaseModel):
     routing_attempt: int | None
     sequence: int
     latency_ms: int | None
-    input_tokens: int | None
-    output_tokens: int | None
-    total_tokens: int | None
-    billed_amount: Decimal | None
-    billed_unit: str | None
-    billed_source: str | None
     status: BenchmarkInvocationStatus
     failure: dict[str, Any] | None
     started_at: datetime
     completed_at: datetime | None
 
 
+class BenchmarkInvocationResponse(BenchmarkInvocationExecution):
+    accounting_reference: CostLedgerReference
+
+
 class BenchmarkInvocationPage(BaseModel):
+    schema_version: Literal[2] = 2
     items: tuple[BenchmarkInvocationResponse, ...]
     next_after_ordinal: int | None
 

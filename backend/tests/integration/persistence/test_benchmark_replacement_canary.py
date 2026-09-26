@@ -163,7 +163,12 @@ def test_replacement_journey(isolated_database, monkeypatch, tmp_path, weaviate_
         assert b"-0.0" in artifact.content
         with SessionLocal() as db:
             rows = list(db.scalars(select(BenchmarkInvocation).join(BenchmarkCell).where(BenchmarkCell.job_id == UUID(job_id))))
-            assert len(rows) == 2 and all(row.billed_amount is None for row in rows)
+            from src.lib.cost_ledger.benchmark_reads import read_benchmark_accounting
+            assert len(rows) == 2
+            assert all(read_benchmark_accounting(
+                db, job_id=UUID(job_id), cell_id=row.cell_id, invocation_id=row.id,
+                owner_subject=f"service:{CLIENT}",
+            ).recorded_charge is None for row in rows)
             raw_job = db.get(BenchmarkJob, UUID(job_id))
             assert raw_job.owner_subject == f"service:{CLIENT}"
             assert raw_job.curator_context["subject"] == identity.subject

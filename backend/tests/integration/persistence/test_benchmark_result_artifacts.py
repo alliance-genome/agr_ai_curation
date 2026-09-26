@@ -38,7 +38,7 @@ def test_canonical_bytes_round_trip_and_terminal_immutability(monkeypatch):
                     "integer": 9007199254740993, "text": "β🧬"}
         result = {"output": envelope, "invocations": []}
         envelope["decimal_string"] = "0.000123"
-        expected = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        expected = json.dumps({"schema_version": 2, **result}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         repository.finish_cell(
             cell_id=cell.id, lease_owner=owner, status=BenchmarkCellStatus.SUCCEEDED,
             completed_at=now, generated_envelope=envelope, result=result,

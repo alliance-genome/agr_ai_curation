@@ -28,6 +28,7 @@ class TokenAnalysisAnalyzer:
             if not isinstance(provider_usage, dict):
                 continue
             billed_cost = provider_usage.get("billed_cost")
+            accounting_usage = metadata.get("accounting_usage")
             records.append(
                 {
                     "route_slot": provider_usage.get("route_slot"),
@@ -53,6 +54,15 @@ class TokenAnalysisAnalyzer:
                     "sequence": provider_usage.get("sequence"),
                     "status": provider_usage.get("status"),
                     "failure_detail": provider_usage.get("failure_detail"),
+                    "model_request_id": metadata.get("model_request_id"),
+                    "accounting_usage": (
+                        {field: accounting_usage.get(field) for field in (
+                            "input_tokens", "output_tokens", "total_tokens",
+                            "cache_read_tokens", "cache_write_tokens", "reasoning_tokens",
+                        )}
+                        if isinstance(accounting_usage, dict)
+                        else None
+                    ),
                 }
             )
         records.sort(

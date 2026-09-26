@@ -65,11 +65,10 @@ def sharing_db():
     engine.dispose()
 
 
-def test_alembic_upgrade_head_preserves_existing_private_flow():
+def test_alembic_upgrade_head_preserves_existing_private_flow(historical_migration_database):
     config = Config(str(Path(__file__).resolve().parents[3] / "alembic.ini"))
     engine = create_engine(os.environ["DATABASE_URL"])
     flow_id = uuid4()
-    command.upgrade(config, "head")
     command.downgrade(config, "n0o1p2q3r4s5")
     try:
         with engine.begin() as connection:
@@ -81,7 +80,7 @@ def test_alembic_upgrade_head_preserves_existing_private_flow():
         with engine.connect() as connection:
             assert connection.execute(text(
                 "SELECT version_num FROM alembic_version"
-            )).scalar_one() == "92a22b250925"
+            )).scalar_one() == "d64c05e0925d"
             assert connection.execute(text(
                 "SELECT visibility, project_id, shared_at FROM curation_flows WHERE id = :id"
             ), {"id": flow_id}).one() == ("private", None, None)

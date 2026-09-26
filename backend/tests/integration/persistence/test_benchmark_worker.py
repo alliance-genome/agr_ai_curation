@@ -31,6 +31,7 @@ from src.lib.benchmarks.snapshots import (
     materialize_and_freeze_plan_inputs,
 )
 from src.lib.benchmarks.worker import BenchmarkWorker
+from src.lib.cost_ledger.facts import TokenUsage
 from src.lib.openai_agents.provider_usage import (
     ProviderUsageRecord,
     begin_provider_invocation,
@@ -140,6 +141,7 @@ async def _emit_fake_provider_call(*, fail: bool = False) -> BenchmarkCellExecut
                 output_tokens=3,
                 total_tokens=5,
                 billed_cost=None,
+                accounting_usage=TokenUsage(input_tokens=2, output_tokens=3, total_tokens=5),
             ),
         )
     return BenchmarkCellExecutionResult(
@@ -418,7 +420,8 @@ def test_failed_cell_does_not_stop_sibling_and_exposes_no_partial_envelope():
             )
             assert artifact.digest == cells[1].result_digest
             assert artifact.digest == "sha256:" + hashlib.sha256(artifact.content).hexdigest()
-            outcome = BenchmarkCellExecutionResult.model_validate_json(artifact.content)
+            from src.schemas.benchmark_artifacts import BenchmarkArtifact
+            outcome = BenchmarkArtifact.model_validate_json(artifact.content)
             assert outcome.output == cells[1].generated_envelope
             assert outcome.invocations
             assert artifact.attempt_count == cells[1].attempt_count
