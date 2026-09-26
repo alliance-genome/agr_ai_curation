@@ -10,6 +10,24 @@ from src.schemas.cost_ledger import KnownTokenTotal, RecordedChargeTotal
 from .facts import RecordedCharge, TokenUsage, enrich_charge, enrich_usage
 from .decimal_math import add_exact
 
+
+def fold_fact_revisions(revisions):
+    """One canonical fold for totals, drill-down and exported valuations."""
+    usage, charge, last_revision = TokenUsage(), None, 0
+    for revision in revisions:
+        if revision is None:
+            continue
+        usage = enrich_usage(usage, TokenUsage(**{
+            field.name: getattr(revision, field.name) for field in fields(TokenUsage)
+        }))
+        if revision.billed_amount is not None:
+            charge = enrich_charge(charge, RecordedCharge(
+                revision.billed_amount, revision.billed_unit, revision.billed_source,
+            ))
+        last_revision = max(last_revision, revision.revision)
+    return usage, charge, last_revision
+
+
 def summarize_fact_rows(session: Session, query) -> dict:
     """Aggregate unique, ordered attempt/revision rows without stored totals."""
     totals, known, amounts, charge_counts = Counter(), Counter(), {}, Counter()
@@ -19,17 +37,7 @@ def summarize_fact_rows(session: Session, query) -> dict:
     rows = session.execute(query.execution_options(yield_per=get_cost_ledger_read_page_size()))
     try:
         for _, revisions in groupby(rows, key=lambda row: row[0]):
-            usage, charge = TokenUsage(), None
-            for _, revision in revisions:
-                if revision is None:
-                    continue
-                usage = enrich_usage(usage, TokenUsage(**{
-                    field.name: getattr(revision, field.name) for field in fields(TokenUsage)
-                }))
-                if revision.billed_amount is not None:
-                    charge = enrich_charge(charge, RecordedCharge(
-                        revision.billed_amount, revision.billed_unit, revision.billed_source,
-                    ))
+            usage, charge, _ = fold_fact_revisions(revision for _, revision in revisions)
             count += 1
             inconsistent += bool(usage.issues)
             for field in fields(TokenUsage):

@@ -2,17 +2,19 @@ FROM python:3.11-slim AS runtime-dependencies
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY trace_review/backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/cost_pricing/ /tmp/cost_pricing/
+RUN pip install --no-cache-dir --no-deps /tmp/cost_pricing
 
 
 FROM runtime-dependencies AS test
 
-COPY requirements-test.txt .
+COPY trace_review/backend/requirements-test.txt .
 RUN pip install --no-cache-dir -r requirements-test.txt
 
-COPY src/ ./src/
-COPY tests/ ./tests/
+COPY trace_review/backend/src/ ./src/
+COPY trace_review/backend/tests/ ./tests/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -23,7 +25,7 @@ CMD ["python", "-m", "pytest", "tests", "-q", "-o", "cache_dir=/tmp/trace-review
 
 FROM runtime-dependencies AS development
 
-COPY . .
+COPY trace_review/backend/ .
 
 EXPOSE 8001
 ENV BACKEND_PORT=8001

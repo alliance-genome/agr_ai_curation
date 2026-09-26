@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from src.services.cost_report import build_report
-from src.services.model_prices import estimate, matching_definition
+from agr_cost_pricing import estimate, matching_definition
 from src.services.langfuse_run_reconstruction import usage_cost_summary
 
 

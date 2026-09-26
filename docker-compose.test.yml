@@ -10,6 +10,21 @@
 #   or `backend-tests` when the change needs heavier integration or end-to-end coverage.
 
 services:
+  admin-cost-build-check:
+    profiles: [admin-cost]
+    network_mode: none
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.cost
+    entrypoint: [nginx, -t]
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:uid=101,gid=101
+      - /var/run:uid=101,gid=101
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
   benchmark-worker-test:
     build:
       context: ./backend

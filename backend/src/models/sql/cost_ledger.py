@@ -111,6 +111,17 @@ class CostFactRevision(Base):
     )
 
 
+class CostPriceSnapshot(Base):
+    """Immutable reviewed catalog; no copied usage or per-request valuation."""
+
+    __tablename__ = "cost_price_snapshots"
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class RuntimeCostRequest(Base):
     """One attribution record per measured request; accounting stays in facts."""
 

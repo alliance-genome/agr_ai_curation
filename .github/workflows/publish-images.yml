@@ -120,7 +120,7 @@ jobs:
             build_args: |
               TRACE_REVIEW_RUNTIME_VERSION=${{ needs.prepare.outputs.artifact_label }}
               TRACE_REVIEW_SOURCE_REVISION=${{ github.sha }}
-            context: trace_review/backend
+            context: .
             display_name: trace-review-backend
             dockerfile: trace_review/backend/Dockerfile.prod
             manifest_key: trace_review_backend

@@ -1,0 +1,12 @@
+**
+!backend/
+!backend/cost_pricing/
+!backend/cost_pricing/**
+!trace_review/
+!trace_review/backend/
+!trace_review/backend/**
+**/.env*
+**/__pycache__/
+**/.venv/
+**/.pytest_cache/
+**/*.pyc

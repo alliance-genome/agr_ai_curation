@@ -92,6 +92,7 @@ services:
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-langfuse-local-admin}
   # Frontend service (Nginx serving React app)
   frontend:
+    networks: [default, admin-cost]
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -131,8 +132,26 @@ services:
       retries: 3
       start_period: 10s
 
+  # Presentation only: shares backend admin auth, no database or provider secrets.
+  admin-cost:
+    networks: [admin-cost]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.cost
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:uid=101,gid=101
+      - /var/run:uid=101,gid=101
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      - backend
+
   # Unified Backend API service (OpenAI Agents SDK Chat + Weaviate Control Panel)
   backend:
+    networks: [default, admin-cost]
     pids_limit: 100
     # Security hardening 2026-03-24: drop all capabilities, block IMDS metadata access
     cap_drop:
@@ -710,6 +729,10 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - ./promtail-config.yml:/etc/promtail/config.yml:ro
       - promtail-positions:/var/lib/promtail
+
+networks:
+  admin-cost:
+    internal: true
 
 volumes:
   benchmark_snapshot_data:

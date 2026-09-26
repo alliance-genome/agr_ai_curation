@@ -1,0 +1,50 @@
+:root { color-scheme: light; }
+body { margin: 0; }
+::selection { background: #c9dff8; color: #102033; }
+a, .cost-link { color: #1565c0; text-underline-offset: .2em; }
+a:hover, .cost-link:hover { color: #0d47a1; }
+:focus-visible { outline: 3px solid #1565c0; outline-offset: 3px; }
+input { caret-color: #1565c0; }
+* { scrollbar-color: #637b97 #edf2f7; }
+.cost-header { display: flex; flex-wrap: wrap; gap: 1.5rem; padding: 1rem max(1.25rem, calc((100vw - 1320px)/2)); background: #1c5fb8; color: white; }
+.cost-header a { color: white; font-weight: 600; }
+.cost-main { max-width: 1320px; margin: auto; padding: 2rem 1.25rem; }
+.cost-title, .cost-scope, .cost-selection, .cost-pagination { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+h1 { font-size: 2rem; margin: 0; letter-spacing: -.02em; }
+h2 { font-size: 1.2rem; margin: 2rem 0 1rem; }
+p { max-width: 72ch; line-height: 1.55; }
+.cost-filters { display: flex; align-items: start; flex-wrap: wrap; gap: 1rem; margin: 1.5rem 0 2rem; padding: 1.25rem; background: white; border: 1px solid #cbd5df; border-radius: 12px; }
+.cost-filters > .MuiFormControl-root { min-width: 190px; }
+.cost-advanced { width: 100%; }
+summary { cursor: pointer; color: #1565c0; padding-block: .35rem; }
+.cost-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-top: 1rem; }
+.cost-filter-grid p { margin: 0; }
+.cost-scope p { margin: .4rem 0; color: #40566e; }
+.cost-actions { display: flex; gap: 1.25rem; }
+.cost-summary { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2rem; padding-block: 1rem 1.5rem; border-bottom: 1px solid #cbd5df; }
+.cost-summary h2 { margin-top: 1rem; }
+.cost-summary p { color: #40566e; }
+.cost-summary .cost-amount { font-size: 1.65rem; font-weight: 600; color: #102033; overflow-wrap: anywhere; margin: .5rem 0; }
+small { display: block; font-size: .8rem; color: #40566e; margin-top: .35rem; font-weight: 400; overflow-wrap: anywhere; }
+.cost-summary .cost-warning { color: #865100; }
+.cost-provenance { margin: 1rem 0; }
+code { font-size: .85em; overflow-wrap: anywhere; }
+.cost-selection { padding-block: .75rem; }
+.cost-table-wrap { width: 100%; overflow-x: auto; border: 1px solid #cbd5df; border-radius: 12px; background: white; }
+table { border-collapse: collapse; width: 100%; text-align: left; }
+th { background: #edf2f7; font-weight: 600; color: #102033; }
+th, td { padding: 1rem; vertical-align: top; border-bottom: 1px solid #dce3eb; }
+td { max-width: 330px; overflow-wrap: anywhere; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: #f4f8fc; }
+.cost-link { border: 0; padding: .15rem 0; background: none; cursor: pointer; text-decoration: underline; font: inherit; text-align: left; }
+.cost-pagination { padding-block: 1rem; }
+footer { color: #40566e; border-top: 1px solid #cbd5df; margin-top: 2rem; padding-top: 1rem; font-size: .85rem; }
+@media (max-width: 700px) {
+  .cost-main { padding: 1.5rem 1rem; }
+  .cost-summary { grid-template-columns: 1fr; gap: .5rem; }
+  .cost-summary > div + div { border-top: 1px solid #dce3eb; padding-top: .5rem; }
+  .cost-filters > .MuiFormControl-root { width: 100%; }
+  th, td { padding: .75rem; min-width: 145px; }
+  .cost-pagination { justify-content: center; }
+}

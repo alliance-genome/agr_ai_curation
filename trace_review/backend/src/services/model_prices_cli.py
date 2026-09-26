@@ -54,7 +54,7 @@ def main(argv=None):
     parser.add_argument("--at", required=True, help="Timestamp for effective-date matching")
     parser.add_argument("--apply", action="store_true", help="Explicitly create missing definitions; release-time action")
     args = parser.parse_args(argv)
-    from .model_prices import matching_definition
+    from agr_cost_pricing import matching_definition
     existing = export_models()
     supplied = json.loads(args.definitions.read_text()) if args.definitions else []
     pending = []

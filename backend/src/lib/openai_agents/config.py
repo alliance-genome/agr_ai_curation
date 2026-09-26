@@ -1599,6 +1599,30 @@ def get_cost_ledger_read_page_size() -> int:
     return max(1, _get_env_int_with_fallback("COST_LEDGER_READ_PAGE_SIZE", 200))
 
 
+def get_cost_price_import_max_bytes() -> int:
+    return max(1, _get_env_int_with_fallback("COST_PRICE_IMPORT_MAX_BYTES", 10485760))
+
+
+def get_cost_report_max_attempts() -> int:
+    return max(1, _get_env_int_with_fallback("COST_REPORT_MAX_ATTEMPTS", 10000))
+
+
+def get_cost_report_timeout_ms() -> int:
+    return max(1, _get_env_int_with_fallback("COST_REPORT_TIMEOUT_MS", 10000))
+
+
+def get_cost_report_max_window_days() -> int:
+    return max(1, _get_env_int_with_fallback("COST_REPORT_MAX_WINDOW_DAYS", 31))
+
+
+def get_cost_report_page_size() -> int:
+    return max(1, _get_env_int_with_fallback("COST_REPORT_PAGE_SIZE", 50))
+
+
+def get_cost_pricing_snapshot_id() -> str:
+    return os.getenv("COST_PRICING_SNAPSHOT_ID", "").strip()
+
+
 def get_cost_ledger_benchmark_source_namespace() -> str:
     """Verified benchmark execution source namespace within the deployment."""
     return os.getenv("COST_LEDGER_BENCHMARK_SOURCE_NAMESPACE", "").strip()

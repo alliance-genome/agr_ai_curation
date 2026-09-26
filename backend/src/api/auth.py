@@ -112,6 +112,11 @@ async def login(request: Request) -> RedirectResponse:
         raise HTTPException(status_code=503, detail="Authentication provider unavailable")
 
     redirect_response = RedirectResponse(url=authorize_url, status_code=302)
+    # Fixed destination allowlist, never an arbitrary return URL/open redirect.
+    redirect_response.set_cookie(
+        key="oauth_destination", value="cost" if request.query_params.get("destination") == "cost" else "home",
+        httponly=True, secure=get_secure_cookies(), samesite="lax", max_age=600,
+    )
     secure_cookies = get_secure_cookies()
     redirect_response.set_cookie(
         key="oauth_state",
@@ -176,7 +181,8 @@ async def callback(
     db_user = provision_user(db, principal)
     logger.info("User authenticated and provisioned: %s", db_user.auth_sub)
 
-    redirect_response = RedirectResponse(url="/", status_code=302)
+    redirect_response = RedirectResponse(url="/cost/" if request.cookies.get("oauth_destination") == "cost" else "/", status_code=302)
+    redirect_response.delete_cookie(key="oauth_destination")
     secure_cookies = get_secure_cookies()
     redirect_response.set_cookie(
         key="auth_token",

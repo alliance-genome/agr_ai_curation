@@ -426,7 +426,7 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend
-        run: npm run build
+        run: npm run build && npm run build:cost
 
       - name: Frontend Summary
         if: always()

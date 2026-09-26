@@ -113,6 +113,7 @@ services:
       LANGFUSE_INIT_USER_PASSWORD:
 
   frontend:
+    networks: [default, admin-cost]
     image: "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:${FRONTEND_IMAGE_TAG:?set a release or sha tag in the production env}"
     restart: unless-stopped
     environment:
@@ -139,7 +140,24 @@ services:
       retries: 3
       start_period: 10s
 
+  admin-cost:
+    networks: [admin-cost]
+    profiles: [admin-cost]
+    image: "${ADMIN_COST_IMAGE:-agr-ai-curation-admin-cost}:${ADMIN_COST_IMAGE_TAG:-unconfigured}"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:uid=101,gid=101
+      - /var/run:uid=101,gid=101
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      backend:
+        condition: service_healthy
+
   backend:
+    networks: [default, admin-cost]
     pids_limit: 200
     # Security hardening 2026-03-24: drop all capabilities, block IMDS metadata access
     cap_drop:
@@ -164,6 +182,17 @@ services:
       AGR_RUNTIME_ROOT: /runtime
       AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START: "${AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START:-true}"
       DEV_MODE: "false"
+      ADMIN_EMAILS: "${ADMIN_EMAILS:-}"
+      COST_LEDGER_RUNTIME_ENABLED: "${COST_LEDGER_RUNTIME_ENABLED:-false}"
+      COST_LEDGER_DEPLOYMENT_ID: "${COST_LEDGER_DEPLOYMENT_ID:-}"
+      COST_LEDGER_RUNTIME_SOURCE_NAMESPACE: "${COST_LEDGER_RUNTIME_SOURCE_NAMESPACE:-}"
+      COST_LEDGER_READ_PAGE_SIZE: "${COST_LEDGER_READ_PAGE_SIZE:-200}"
+      COST_PRICING_SNAPSHOT_ID: "${COST_PRICING_SNAPSHOT_ID:-}"
+      COST_PRICE_IMPORT_MAX_BYTES: "${COST_PRICE_IMPORT_MAX_BYTES:-10485760}"
+      COST_REPORT_MAX_ATTEMPTS: "${COST_REPORT_MAX_ATTEMPTS:-10000}"
+      COST_REPORT_TIMEOUT_MS: "${COST_REPORT_TIMEOUT_MS:-10000}"
+      COST_REPORT_MAX_WINDOW_DAYS: "${COST_REPORT_MAX_WINDOW_DAYS:-31}"
+      COST_REPORT_PAGE_SIZE: "${COST_REPORT_PAGE_SIZE:-50}"
       SENTRY_DSN: "${SENTRY_DSN:-}"
       SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
       SENTRY_RELEASE: "${SENTRY_RELEASE:-}"
@@ -758,6 +787,10 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - ./promtail-config.yml:/etc/promtail/config.yml:ro
       - promtail-positions:/var/lib/promtail
+
+networks:
+  admin-cost:
+    internal: true
 
 volumes:
   postgres_data:

@@ -28,6 +28,7 @@
   "scripts": {
     "start": "vite",
     "build": "vite build",
+    "build:cost": "vite build --config vite.cost.config.ts",
     "preview": "vite preview",
     "test": "vitest",
     "test:stable": "vitest run --pool=forks --no-file-parallelism --maxWorkers=1 --sequence.hooks=list --sequence.setupFiles=list",
