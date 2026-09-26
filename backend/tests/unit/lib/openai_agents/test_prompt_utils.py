@@ -24,6 +24,52 @@ format_sections_for_prompt = prompt_utils.format_sections_for_prompt
 inject_structured_output_instruction = prompt_utils.inject_structured_output_instruction
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inherited", [False, True])
+async def test_abstract_fallback_reserves_owned_cost_across_sync_worker(monkeypatch, inherited):
+    from src.lib.cost_ledger.runtime_context import RuntimeCostContext, current_runtime_cost_context, runtime_cost_scope
+    from src.lib.observability.cost_context import cost_scope
+    captured = []
+
+    async def empty(**kwargs):
+        return []
+
+    async def keyword(**kwargs):
+        return [{"text": "Abstract body", "chunk_index": 0}]
+
+    async def chunks(**kwargs):
+        return [{"text": "An abstract of a synthetic experiment."}]
+
+    async def complete(**kwargs):
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="A" * 80))])
+
+    async def close():
+        pass
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)), close=close)
+    monkeypatch.setattr("openai.AsyncOpenAI", lambda: client)
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-sol")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunks_by_parent_section", empty)
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.search_chunks_by_keyword", keyword)
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunks_from_index", chunks)
+    monkeypatch.setattr("src.lib.cost_ledger.runtime_writes.reserve_runtime_request",
+                        lambda measurement: captured.append(current_runtime_cost_context()))
+    parent = RuntimeCostContext("user-2", "session", "turn", "interactive_chat", invocation_id="parent") if inherited else None
+    with cost_scope({"run_id": "turn", "activity": "interactive_chat"} if inherited else {}), runtime_cost_scope(parent):
+        assert prompt_utils.fetch_document_abstract_sync("doc-2", "user-2") == "A" * 80
+        assert current_runtime_cost_context() == parent
+    assert len(captured) == 1
+    context = captured[0]
+    assert context is not None and context.owner_subject == "user-2" and context.invocation_id
+    if inherited:
+        assert context.session_id == "session" and context.run_id == "turn"
+        assert context.parent_invocation_id == "parent"
+    else:
+        assert context.session_id is None and context.document_id == "doc-2"
+        assert context.activity == "background"
+
+
 class DummyEnvelope:
     """Simple dummy output type for testing name extraction."""
 

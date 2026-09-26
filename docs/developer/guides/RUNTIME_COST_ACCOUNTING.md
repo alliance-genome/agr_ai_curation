@@ -8,8 +8,9 @@ counts, money, prompts or response contents.
 
 After upgrading to `b08d16f1037b`, set `COST_LEDGER_RUNTIME_ENABLED=true`,
 `COST_LEDGER_DEPLOYMENT_ID` and `COST_LEDGER_RUNTIME_SOURCE_NAMESPACE` to stable
-deployment-owned identifiers. The feature is off by default. Missing scope or
-failed reservation prevents dispatch when enabled. A completion-write failure
+deployment-owned identifiers. The feature is off by default. Within an owned
+runtime context, missing deployment configuration or a failed reservation prevents
+dispatch when enabled. Calls without a trusted owner are not recorded. A completion-write failure
 preserves the model result, logs a content-free error and leaves the committed
 attempt pending/unknown for investigation. It does not imply free work.
 
@@ -27,6 +28,12 @@ Document jobs carry authenticated subject, document ID and real job ID; nested
 classifiers inherit those values. Database integer user IDs are not auth subjects.
 Package workers hydrate and reset the same context rather than creating a second
 accounting collector.
+
+Document abstract fallback calls retain ownership across the synchronous worker
+handoff and receive their own invocation identity. Flow preparation shares the
+eventual flow/turn identity, so a paid abstract lookup before supervisor creation
+is included in that run. Standalone abstract lookup retains the owned document
+without inventing a conversation.
 
 Agent-run boundaries assign invocation IDs and record actual parent invocation
 IDs. Requests in the same invocation retain that ID across model turns and
