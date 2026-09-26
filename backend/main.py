@@ -28,6 +28,7 @@ from src.api.benchmark_assistant import router as benchmark_assistant_router
 from src.api.benchmark_onboarding import router as benchmark_onboarding_router
 from src.schemas.benchmark_job_examples import install_openapi_examples as install_benchmark_openapi_examples
 from src.api.admin import connections_router as admin_connections_router
+from src.api.admin.costs import router as admin_costs_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
 from src.lib.logging_config import configure_logging, create_request_context_middleware
@@ -951,6 +952,7 @@ def create_app() -> FastAPI:
     application.include_router(logs.router, prefix="/api", tags=["Logs"])
     application.include_router(admin_prompts_router, tags=["Admin - Prompts"])
     application.include_router(admin_connections_router, tags=["Admin - Health"])
+    application.include_router(admin_costs_router)
     application.include_router(benchmark_sources_router)
     application.include_router(benchmark_jobs_router)
     application.include_router(benchmark_catalog_router)

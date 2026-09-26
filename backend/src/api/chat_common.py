@@ -1301,6 +1301,7 @@ async def _run_resolved_chat_route(
             user_query=context_messages[-1]["content"],
             active_groups=active_groups,
             flow_run_id=route.flow_run_id,
+            cost_run_id=turn_id,
             chat_route_mode=route.mode,
             chat_route_target_id=route.target_id,
             inspection_context=inspection_context,

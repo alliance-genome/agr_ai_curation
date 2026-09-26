@@ -836,11 +836,18 @@ def record_outcome(
     response_id: str | None = None,
     provider_request_id: str | None = None,
     error_type: str | None = None,
+    raw_usage: Any = None,
+    sdk_normalized_usage: bool = False,
 ) -> None:
     """Attach the provider outcome/usage to the measurement and publish it once."""
 
     if measurement.get("_published"):
         return
+    accounting = measurement.get("_runtime_accounting")
+    if accounting is not None:
+        from src.lib.cost_ledger.runtime_writes import finish_runtime_request
+        finish_runtime_request(accounting, raw_usage=raw_usage, provider=measurement.get("provider"),
+                               sdk_normalized=sdk_normalized_usage, outcome=outcome)
     measurement["outcome"] = outcome
     measurement["provider_usage"] = dict(usage or {"status": "not_reported"})
     measurement["prompt_cache"]["cached_input_share"] = _cached_input_share(
@@ -1076,6 +1083,8 @@ class MeasuredModel(Model):
             prompt_cache_tool_surface=prompt_cache_tool_surface,
         )
         enforce_and_announce(measurement)
+        from src.lib.cost_ledger.runtime_writes import reserve_runtime_request
+        measurement["_runtime_accounting"] = reserve_runtime_request(measurement)
         return measurement
 
     def _observe_tool_surface(self, measurement: dict[str, Any], response: Any) -> None:
@@ -1118,7 +1127,8 @@ class MeasuredModel(Model):
             prompt_cache_tool_surface,
         )
         try:
-            with model_request_scope(_span_identity(measurement)):
+            from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope
+            with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")):
                 response = await self._inner.get_response(
                     system_instructions,
                     input,
@@ -1140,6 +1150,8 @@ class MeasuredModel(Model):
             measurement,
             outcome="completed",
             usage=usage_from_model_response(response),
+            raw_usage=getattr(response, "usage", None),
+            sdk_normalized_usage=True,
             response_id=getattr(response, "response_id", None),
             provider_request_id=getattr(response, "request_id", None),
         )
@@ -1188,9 +1200,10 @@ class MeasuredModel(Model):
         )
         terminal_response: Any = None
         terminal_type: str | None = None
+        from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope
         try:
             # The adapter opens this attempt's tracing span on its first step.
-            with model_request_scope(_span_identity(measurement)):
+            with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")):
                 event = await anext(stream, _STREAM_END)
             while event is not _STREAM_END:
                 event_type = getattr(event, "type", None)
@@ -1198,7 +1211,8 @@ class MeasuredModel(Model):
                     terminal_response = getattr(event, "response", None)
                     terminal_type = event_type
                 yield event
-                event = await anext(stream, _STREAM_END)
+                with runtime_attempt_scope(measurement.get("_runtime_accounting")):
+                    event = await anext(stream, _STREAM_END)
         except BaseException as exc:
             if terminal_response is None:
                 self._observe_tool_surface(measurement, None)
@@ -1209,21 +1223,24 @@ class MeasuredModel(Model):
                 )
             raise
         finally:
-            aclose = getattr(stream, "aclose", None)
-            if callable(aclose):
-                await aclose()
             if terminal_response is not None:
                 self._observe_tool_surface(measurement, terminal_response)
                 record_outcome(
                     measurement,
                     outcome=(terminal_type or "response.completed").removeprefix("response."),
                     usage=usage_from_provider_payload(getattr(terminal_response, "usage", None)),
+                    raw_usage=getattr(terminal_response, "usage", None),
+                    sdk_normalized_usage=measurement.get("api") == "chat_completions",
                     response_id=getattr(terminal_response, "id", None),
                     provider_request_id=getattr(terminal_response, "_request_id", None),
                 )
             else:
                 self._observe_tool_surface(measurement, None)
                 record_outcome(measurement, outcome="stream_closed_without_terminal_event")
+            aclose = getattr(stream, "aclose", None)
+            if callable(aclose):
+                with runtime_attempt_scope(measurement.get("_runtime_accounting")):
+                    await aclose()
 
 
 def _span_identity(measurement: Mapping[str, Any]) -> dict[str, Any]:
@@ -1374,6 +1391,8 @@ def measure_direct_request(
             measurement["model_visible"]["json_chars"]
         )
     enforce_and_announce(measurement)
+    from src.lib.cost_ledger.runtime_writes import reserve_runtime_request
+    measurement["_runtime_accounting"] = reserve_runtime_request(measurement)
     return measurement
 
 
@@ -1419,6 +1438,7 @@ async def call_measured_direct_request(
         measurement,
         outcome="completed",
         usage=usage_from_provider_payload(getattr(response, "usage", None)),
+        raw_usage=getattr(response, "usage", None),
         response_id=getattr(response, "id", None),
         provider_request_id=getattr(response, "_request_id", None),
     )

@@ -155,6 +155,9 @@ def _apply_backend_request_context(context: dict[str, Any]) -> None:
     in host-process execution paths.
     """
 
+    from src.lib.cost_ledger.runtime_context import RuntimeCostContext, set_runtime_cost_context
+    accounting = context.get("runtime_cost_context")
+    set_runtime_cost_context(RuntimeCostContext(**accounting) if accounting else None)
     if not context:
         return
 

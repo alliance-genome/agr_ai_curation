@@ -376,6 +376,7 @@ async def test_selected_rgd_flow_receives_current_message_and_surfaces_distinct_
     assert len(message) > 2000
     assert captured["user_query"] == message
     assert captured["flow_run_id"] == "flow-run-1"
+    assert captured["cost_run_id"] == "turn-1"
     assert captured["inspection_context"] is None
     internal_refs = [
         event["details"]

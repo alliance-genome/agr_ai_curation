@@ -4,6 +4,10 @@ The 0.10.0 shared-ledger direction is documented in
 [Cost ledger ownership](COST_LEDGER_OWNERSHIP.md). This CLI remains a read-only
 consumer; it is not a separate billing database.
 
+For opt-in durable ordinary conversation/flow ingestion and the admin session
+API, see [Runtime cost accounting](RUNTIME_COST_ACCOUNTING.md). TraceReview is
+still a separate read projection, not a second ledger writer.
+
 Cost attribution accepts both direct `metadata.cost_context` and the
 OpenInference JSON span attribute exported by Langfuse under the literal key
 `metadata["attributes.metadata"]`. Direct cost context takes precedence when
