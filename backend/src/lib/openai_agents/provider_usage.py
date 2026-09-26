@@ -509,7 +509,8 @@ def _accounting_usage(raw_usage: Any, *, sdk_normalized: bool = False) -> TokenU
     Agents SDK Usage inserts zeros for missing counts and nested details before
     our non-streaming observer sees them. Those zeros are ambiguous, not proof
     of free work. Raw response mappings/Pydantic objects preserve explicit zero.
-    This limitation needs earlier raw capture to recover exact zero on SDK calls.
+    The pinned provider seam captures raw usage when available; SDK-only adapters
+    still require this conservative fallback.
     """
     from agents.usage import Usage
 

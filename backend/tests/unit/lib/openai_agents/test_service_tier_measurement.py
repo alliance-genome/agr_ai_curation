@@ -19,7 +19,8 @@ from src.lib.openai_agents import model_request_measurement as measurement
 @pytest.mark.parametrize("api", ["responses", "chat", "policy_chat"])
 @pytest.mark.parametrize("streamed", [False, True])
 @pytest.mark.parametrize("reported", ["default", None])
-async def test_raw_tier_survives_normalization_without_inference(monkeypatch, api, streamed, reported):
+@pytest.mark.parametrize("details", [True, False])
+async def test_raw_tier_survives_normalization_without_inference(monkeypatch, api, streamed, reported, details):
     measurement.install_model_request_measurement()
     monkeypatch.setenv("LLM_DISABLED_PROVIDERS", "")
     sink = Mock()
@@ -48,6 +49,15 @@ async def test_raw_tier_survives_normalization_without_inference(monkeypatch, ap
             }
         if reported is not None:
             payload["service_tier"] = reported
+        if api == "responses":
+            if details:
+                payload["usage"]["input_tokens_details"]["cache_write_tokens"] = 3
+            else:
+                payload["usage"]["input_tokens_details"] = {}
+                payload["usage"]["output_tokens_details"] = {}
+        elif details:
+            payload["usage"]["prompt_tokens_details"] = {"cached_tokens": 0, "cache_write_tokens": 3}
+            payload["usage"]["completion_tokens_details"] = {"reasoning_tokens": 0}
         if streamed:
             event = {"type": "response.completed", "sequence_number": 1, "response": payload} if api == "responses" else payload
             return httpx.Response(200, headers={"content-type": "text/event-stream"},
@@ -79,6 +89,11 @@ async def test_raw_tier_survives_normalization_without_inference(monkeypatch, ap
     reserve.assert_called_once()
     assert sum("service_tiers" in call.kwargs for call in sink.finish.call_args_list) == 1
     assert sink.finish.call_args.kwargs["service_tiers"] == {"requested": requested, "effective": reported}
+    usage = sink.finish.call_args.kwargs["usage"]
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (7, 8, 15)
+    assert usage.cache_read_tokens == (0 if details else None)
+    assert usage.cache_write_tokens == (3 if details else None)
+    assert usage.reasoning_tokens == (0 if details else None)
     assert measurement._provider_measurement.get() is None
 
 
@@ -137,3 +152,8 @@ async def test_websocket_override_preserves_reported_tier(monkeypatch, streamed)
         else:
             await Runner.run(agent, "short", run_config=RunConfig(tracing_disabled=True))
     assert sink.finish.call_args.kwargs["service_tiers"] == {"requested": "fast", "effective": "priority"}
+    usage = sink.finish.call_args.kwargs["usage"]
+    assert usage.output_tokens == 0
+    assert usage.cache_read_tokens == 0
+    assert usage.reasoning_tokens == 0
+    assert usage.cache_write_tokens is None
