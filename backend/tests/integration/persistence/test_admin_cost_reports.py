@@ -69,6 +69,61 @@ def test_exact_totals_provenance_and_unknowns(fixture):
     assert result['scope'] == 'full_recorded_session_or_turn'
 
 
+def test_chat_view_includes_older_turns_before_aggregation_and_limit(fixture, monkeypatch):
+    deployment, session, snapshot, attempts = fixture
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        db.execute(text('UPDATE cost_attempts SET created_at = :older WHERE deployment_id = :deployment AND id = :attempt'),
+                   {'older': now - timedelta(days=10), 'deployment': deployment, 'attempt': attempts[0].attempt_id})
+        db.commit()
+    report = read(view='chats', start=now - timedelta(days=1), end=now, snapshot_id=snapshot)
+    assert report['scope'] == 'active_conversations_all_turns'
+    assert report['totals']['attempt_count'] == 3
+    [group] = report['groups']
+    assert group['id'] == session and group['run_count'] == 2
+    assert group['estimates']['lower'] == '0.0153500'
+    assert read(start=now - timedelta(days=1), end=now)['totals']['attempt_count'] == 2
+    monkeypatch.setenv('COST_REPORT_MAX_ATTEMPTS', '2')
+    with pytest.raises(ReportTooLarge):
+        read(view='chats', start=now - timedelta(days=1), end=now)
+
+
+def test_curator_groups_keep_deleted_identity_and_exact_filters(fixture):
+    _, session, snapshot, _ = fixture
+    report = read(session_id=session, snapshot_id=snapshot, view='curators')
+    [group] = report['groups']
+    assert group['id'] == group['label'] == 'owner'
+    assert group['attempt_count'] == 3 and group['run_count'] == 2
+    assert read(session_id=session, owner_subject='someone-else')['totals']['attempt_count'] == 0
+
+
+def test_flow_groups_combine_executions_not_other_activity(fixture):
+    _, session, snapshot, _ = fixture
+    for turn in ('flow-one', 'flow-two'):
+        with runtime_cost_scope(RuntimeCostContext('owner', session, turn, 'extraction_flow', 'saved-flow', turn)):
+            reserve_runtime_request({'measurement_id': str(uuid4()), 'provider': 'fixture', 'model': 'test'})
+    report = read(session_id=session, view='flows', snapshot_id=snapshot)
+    [group] = report['groups']
+    assert group['workflow_id'] == 'saved-flow'
+    assert group['run_count'] == group['attempt_count'] == 2
+    assert read(session_id=session, workflow_id='saved-flow')['totals']['attempt_count'] == 2
+
+
+def test_chat_active_via_flow_includes_every_turn_with_or_without_dates(fixture):
+    deployment, session, snapshot, _ = fixture
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        db.execute(text('UPDATE cost_attempts SET created_at = :older WHERE deployment_id = :deployment'),
+                   {'older': now - timedelta(days=10), 'deployment': deployment})
+        db.commit()
+    with runtime_cost_scope(RuntimeCostContext('owner', session, 'flow-turn', 'extraction_flow', 'flow', 'flow-run')):
+        reserve_runtime_request({'measurement_id': str(uuid4()), 'provider': 'fixture', 'model': 'test'})
+    for scope in ({'start': now - timedelta(days=1), 'end': datetime.now(timezone.utc)}, {'session_id': session}):
+        report = read(view='chats', snapshot_id=snapshot, **scope)
+        assert report['totals']['attempt_count'] == 4
+        assert report['groups'][0]['run_count'] == 3
+
+
 def test_runtime_metadata_round_trips_without_duplicate_attempt(fixture):
     _, session, snapshot, _ = fixture
     metadata = {'agent_id': 'helper', 'agent_name': 'Helper', 'agent_role': 'extraction',

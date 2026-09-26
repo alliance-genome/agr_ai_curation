@@ -103,12 +103,14 @@ def test_pagination_does_not_change_totals_or_export(monkeypatch):
     app = FastAPI()
     app.include_router(costs.router)
     app.dependency_overrides[costs.require_admin] = lambda: {}
-    report = {'requests': [{'attempt_id': str(i)} for i in range(3)], 'runs': [{'run_id': str(i)} for i in range(3)], 'totals': {'attempt_count': 3}}
+    report = {'groups': [{'id': str(i), 'attempt_count': 12} for i in range(3)], 'requests': [{'attempt_id': str(i)} for i in range(3)], 'runs': [{'run_id': str(i)} for i in range(3)], 'totals': {'attempt_count': 3}}
     monkeypatch.setattr(costs, '_report', lambda _: report)
     monkeypatch.setenv('COST_REPORT_PAGE_SIZE', '1')
     client = TestClient(app)
     page = client.get('/api/admin/cost/reports?session_id=test&offset=1')
     assert page.json()['requests'] == [{'attempt_id': '1'}]
+    assert page.json()['groups'] == [{'id': '1', 'attempt_count': 12}]
+    assert page.json()['pagination']['group_count'] == 3
     assert page.json()['totals']['attempt_count'] == 3
     exported = client.get('/api/admin/cost/export?session_id=test')
     assert exported.json() == report

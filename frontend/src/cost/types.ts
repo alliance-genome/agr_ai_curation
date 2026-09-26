@@ -32,6 +32,10 @@ export interface CostReport {
   pricing_source: string | null; pricing_captured_at: string | null; valuation_algorithm: string;
   coverage: { history: string; excluded: string[]; service_tier: string; external_services: Record<string, string> };
   filters: Record<string, string | null>;
-  totals: Totals; runs: Run[]; requests: CostRequest[];
-  pagination: { offset: number; page_size: number; request_count: number; run_count: number };
+  totals: Totals; runs: Run[]; requests: CostRequest[]; groups: OverviewGroup[];
+  pagination: { offset: number; page_size: number; request_count: number; run_count: number; group_count: number };
+}
+export interface OverviewGroup extends Totals {
+  id: string; label: string; workflow_id: string | null; session_id: string | null; run_id: string | null;
+  run_count: number; conversation_count: number; last_active: string;
 }

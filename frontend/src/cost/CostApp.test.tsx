@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import CostApp, { moneyRange } from './CostApp';
+import CostTheme from './CostTheme';
 
 const totals = { attempt_count: 1, unknown_charge_attempts: 1, recorded_charges: [], outcomes: { completed: 1 },
   usage: { total_tokens: { known_total: 100, unknown_attempts: 0, known_attempts: 1 } },
@@ -8,9 +9,10 @@ const totals = { attempt_count: 1, unknown_charge_attempts: 1, recorded_charges:
 const report = { generated_at: '2026-09-26T12:00:00Z', deployment_id: 'synthetic', scope: 'time_window', totals,
   pricing_snapshot_id: 'snapshot', pricing_source: 'synthetic fixture', pricing_captured_at: '2026-09-26T00:00:00Z', valuation_algorithm: 'fixture',
   coverage: { excluded: ['infrastructure'], external_services: { pdfx: 'provider_usage_and_charges_unavailable' } }, runs: [{ ...totals, session_id: 'conversation-one', run_id: 'turn-one', activity: 'interactive_chat', flow_run_id: null, started_at: '2026-09-26T12:00:00Z', agents: [] }],
-  requests: [], pagination: { offset: 0, page_size: 50, request_count: 1, run_count: 1 } };
+  groups: [{ ...totals, id: 'conversation-one', label: 'conversation-one', session_id: 'conversation-one', workflow_id: null, run_id: null, run_count: 2, conversation_count: 1, last_active: '2026-09-26T12:00:00Z' }],
+  requests: [], pagination: { offset: 0, page_size: 50, request_count: 1, run_count: 1, group_count: 1 } };
 
-beforeEach(() => { window.history.replaceState(null, '', '/cost/'); });
+beforeEach(() => { window.history.replaceState(null, '', '/cost/'); localStorage.clear(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('admin cost presentation', () => {
@@ -49,10 +51,42 @@ describe('admin cost presentation', () => {
     expect(screen.getByText('revision-a')).toBeVisible();
     expect(screen.getByRole('link', { name: 'Export JSON' })).toHaveAttribute('href', expect.stringContaining('session_id=conversation-one'));
   });
-  it('keeps exact monetary strings and unknowns distinct from zero', () => {
-    expect(moneyRange('0.0000000000000123', '0.0000000000000123')).toBe('$0.0000000000000123');
-    expect(moneyRange('0', '0')).toBe('$0');
+  it('rounds only displayed dollars to cents and keeps unknowns distinct from zero', () => {
+    expect(moneyRange('0.0000000000000123', '0.0000000000000123')).toBe('$0.00');
+    expect(moneyRange('0', '0')).toBe('$0.00');
+    expect(moneyRange('1.005', '1.005')).toBe('$1.01');
+    expect(moneyRange('0.1234', '0.9876')).toBe('$0.12 – $0.99');
+    expect(moneyRange('0.121', '0.124')).toBe('$0.12');
+    expect(moneyRange('1.23E-16', '1.23E-16')).toBe('$0.00');
     expect(moneyRange(null, null)).toBe('Not priced');
+  });
+  it('toggles and persists dark mode', () => {
+    const { unmount } = render(<CostTheme><p>Dashboard</p></CostTheme>);
+    fireEvent.click(screen.getByRole('button', { name: 'Dark mode' }));
+    expect(document.documentElement.dataset.costTheme).toBe('dark');
+    expect(localStorage.getItem('cost-theme:v1')).toBe('dark');
+    unmount();
+    render(<CostTheme><p>Dashboard</p></CostTheme>);
+    expect(screen.getByRole('button', { name: 'Dark mode' })).toHaveAttribute('aria-pressed', 'true');
+  });
+  it.each(['flows', 'chats', 'curators'])('offers a first-class %s view and preserves it when filtering', async (view) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => report }));
+    render(<CostApp />);
+    await screen.findByText('Selected window subtotal');
+    fireEvent.click(screen.getByRole('button', { name: view[0].toUpperCase() + view.slice(1) }));
+    await screen.findByRole('heading', { name: /Spend by/ });
+    expect(window.location.search).toContain(`view=${view}`);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+    await screen.findByRole('heading', { name: /Spend by/ });
+    expect(window.location.search).toContain(`view=${view}`);
+    fireEvent.click(screen.getByRole('button', { name: 'conversation-one' }));
+    await waitFor(() => expect(window.location.search).toContain(view === 'chats' ? 'session_id=conversation-one' : view === 'flows' ? 'workflow_id=conversation-one' : 'owner_subject=conversation-one'));
+    if (view === 'chats') {
+      expect(window.location.search).not.toContain('start=');
+      expect(window.location.search).not.toContain('run_id=');
+      fireEvent.click(await screen.findByRole('button', { name: 'Back to overview' }));
+      await waitFor(() => expect(window.location.search).toContain('view=chats'));
+    }
   });
   it.each([
     '?start=2026-09-01T00%3A00%3A00Z&end=2026-09-10T00%3A00%3A00Z&activity=interactive_chat&offset=50',

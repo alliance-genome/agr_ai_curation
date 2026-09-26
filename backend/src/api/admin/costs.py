@@ -36,7 +36,8 @@ def report_filters(start: datetime | None = None, end: datetime | None = None,
                    activity: str | None = None, agent_id: str | None = None,
                    flow_run_id: str | None = None, snapshot_id: str | None = None,
                    document_id: str | None = None, job_id: str | None = None,
-                   invocation_id: str | None = None):
+                   invocation_id: str | None = None, owner_subject: str | None = None,
+                   workflow_id: str | None = None, view: Literal["runs", "flows", "chats", "curators"] = "runs"):
     if (start is None) != (end is None):
         raise HTTPException(422, "Supply both start and end")
     if start is None and not session_id and not run_id:
@@ -48,7 +49,8 @@ def report_filters(start: datetime | None = None, end: datetime | None = None,
             raise HTTPException(422, "Date window exceeds COST_REPORT_MAX_WINDOW_DAYS")
     return dict(start=start, end=end, session_id=session_id, run_id=run_id, provider=provider,
                 model=model, activity=activity, agent_id=agent_id, flow_run_id=flow_run_id, snapshot_id=snapshot_id,
-                document_id=document_id, job_id=job_id, invocation_id=invocation_id)
+                document_id=document_id, job_id=job_id, invocation_id=invocation_id,
+                owner_subject=owner_subject, workflow_id=workflow_id, view=view)
 
 
 def _report(filters):
@@ -80,9 +82,11 @@ def cost_report(response: Response, offset: int = Query(0, ge=0),
     response.headers["Cache-Control"] = "no-store"
     # Summary is over the entire bounded selection, never the displayed page.
     return {**report, "requests": report["requests"][offset:offset + page_size],
+            "groups": report["groups"][offset:offset + page_size],
             "runs": report["runs"][offset:offset + page_size],
             "pagination": {"offset": offset, "page_size": page_size,
-                           "request_count": len(report["requests"]), "run_count": len(report["runs"])}}
+                           "request_count": len(report["requests"]), "run_count": len(report["runs"]),
+                           "group_count": len(report["groups"])}}
 
 
 def _csv_cell(value):
@@ -104,7 +108,7 @@ def export_cost_report(format: Literal["json", "csv"] = "json", filters: dict = 
     writer = csv.writer(stream)
     columns = ["deployment_id", "pricing_snapshot_id", "valuation_algorithm", "scope", "filters", "generated_at",
                "attempt_id", "fact_revision", "created_at", "session_id", "run_id", "activity", "flow_run_id", "document_id", "job_id",
-               "invocation_id", "parent_invocation_id",
+               "invocation_id", "parent_invocation_id", "owner_subject", "workflow_id",
                "operation_type", "candidate_count", "pagination_request",
                "provider", "model", "agent_id", "agent_name", "agent_role", "agent_revision", "node_id",
                "requested_service_tier", "effective_service_tier", "outcome", "usage_status", "input_tokens", "output_tokens",

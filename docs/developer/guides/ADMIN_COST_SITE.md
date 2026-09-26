@@ -94,6 +94,29 @@ or access-controlled tier).
 
 ## Read contract
 
+The first-class **Flows**, **Chats**, and **Curators** views use server-side
+`view=flows|chats|curators` grouping; `view=runs` is the default All activity view.
+Flows combine recorded executions by saved workflow ID (current saved name when
+available). Curators combine all activity by the canonical attempt's owner
+subject, using the current display name/email where available and retaining the
+identity if the user was deleted. No copied usage store or cached totals are added.
+
+Chats select conversations active through a chat or flow turn in the date window,
+then include **all recorded turns**, including turns outside the window. Other
+explicit filters still apply. This is labeled separately from window spend;
+do not add the Chats total to the Flows total, since the views can overlap.
+Studio-only sessions remain under All activity or the Agent Studio activity filter.
+The same request bound applies after expansion: overly large conversations are
+refused rather than silently truncated. Select a conversation for its full report,
+a flow for its runs, or a curator for their activity in the selected window.
+
+Dark mode uses the application's MUI theme and matching table/surface colors.
+It initially follows the browser's system preference and remembers an explicit
+toggle locally (`cost-theme:v1`); disabled browser storage does not block access.
+USD values display two decimal places. Tiny nonzero values may display `$0.00`,
+as noted in the UI. Ledger totals, JSON/CSV exports, and non-USD units retain
+their original precision. Unknown charges and unpriced estimates remain unknown.
+
 - `GET /api/admin/cost/access`: protected presentation access check.
 - `GET /api/admin/cost/reports`: bounded summary, run groups, paged requests.
 - `GET /api/admin/cost/export?format=json|csv`: complete bounded selection.
@@ -104,11 +127,11 @@ Select timezone-aware `start` inclusive and `end` exclusive, or `session_id`
 without dates for full recorded-session scope; add `run_id` to select one turn.
 A standalone `run_id` also permits background-run drill-down without a
 fabricated session. Additional filters: `provider`, `model`, `activity`, `agent_id`,
-`flow_run_id`, `document_id`, `job_id`, `invocation_id`; `__unknown__` selects null attribution. Every report is scoped to
+`flow_run_id`, `document_id`, `job_id`, `invocation_id`, `owner_subject`, `workflow_id`; `__unknown__` selects null attribution. Every report is scoped to
 the configured deployment; this is not an organization-wide billing report.
 
 Totals cover the entire bounded selection, not just the page. `offset` pages
-requests and run rows separately; their counts are explicit. Full-turn totals
+requests, run rows, and grouped rows separately; their counts are explicit. Full-turn totals
 are distinct from the selected-window subtotal. Colliding session owners are
 rejected instead of combining curators' conversations. Window length, request
 count, DB deadline, and page size are environment-configurable in `.env.example`.
