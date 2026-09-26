@@ -12,6 +12,8 @@ export interface Run extends Totals {
 export interface CostRequest {
   attempt_id: string; fact_revision: number; created_at: string; session_id: string; run_id: string;
   provider: string; model: string | null; agent_id: string | null; outcome: string; usage_status: string;
+  agent_name: string | null; agent_role: string | null; agent_revision: string | null; node_id: string | null;
+  requested_service_tier: string | null; effective_service_tier: string | null;
   usage: Record<string, number | null>;
   recorded_charge: { amount: string; unit: string; source: string } | null;
   estimate: { cost?: string; estimated_cost_upper?: string; estimate_unavailable_reason?: string; pricing_uncertainty?: string[] };

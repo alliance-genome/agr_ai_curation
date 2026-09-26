@@ -112,9 +112,14 @@ def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, pr
                          "created_at": created.isoformat(), "session_id": row.session_id, "run_id": row.run_id,
                          "activity": row.activity, "workflow_id": row.workflow_id, "flow_run_id": row.flow_run_id,
                          "provider": row.provider, "model": row.model, "agent_id": row.agent_id, "outcome": row.outcome,
+                         "agent_name": row.agent_name, "agent_role": row.agent_role,
+                         "agent_revision": row.agent_revision, "node_id": row.node_id,
+                         "requested_service_tier": row.requested_service_tier,
+                         "effective_service_tier": row.effective_service_tier,
                          "usage": asdict(usage), "usage_status": usage.status,
                          "recorded_charge": {**asdict(charge), "amount": str(charge.amount)} if charge else None,
-                         "estimate": value_usage(usage, provider=row.provider, model=row.model, timestamp=created, snapshot=snapshot)})
+                         "estimate": value_usage(usage, provider=row.provider, model=row.model, timestamp=created,
+                                                 snapshot=snapshot, effective_service_tier=row.effective_service_tier)})
     groups = defaultdict(list)
     for row in requests:
         groups[(row["session_id"], row["run_id"], row["activity"], row["flow_run_id"])].append(row)
@@ -126,7 +131,7 @@ def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, pr
             "pricing_captured_at": snapshot["captured_at"] if snapshot else None,
             "coverage": {"history": "since_runtime_accounting_enabled", "included": "ordinary_chat_and_flow_model_attempts",
                          "excluded": ["pre_enablement_history", "benchmark_attempts", "document_processing", "infrastructure", "invoice_reconciliation"],
-                         "service_tier": "not_recorded_ranges_where_supported", "truncated": False},
+                         "service_tier": "provider_reported_only_unknown_uses_ranges", "truncated": False},
             "totals": aggregate_requests(requests),
             "runs": [{"session_id": key[0], "run_id": key[1], "activity": key[2], "flow_run_id": key[3],
                       "started_at": min(row["created_at"] for row in rows), **aggregate_requests(rows)} for key, rows in groups.items()],

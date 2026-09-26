@@ -136,6 +136,12 @@ class RuntimeCostRequest(Base):
     provider: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str | None] = mapped_column(Text)
     agent_id: Mapped[str | None] = mapped_column(Text)
+    agent_name: Mapped[str | None] = mapped_column(Text)
+    agent_role: Mapped[str | None] = mapped_column(Text)
+    agent_revision: Mapped[str | None] = mapped_column(Text)
+    node_id: Mapped[str | None] = mapped_column(Text)
+    requested_service_tier: Mapped[str | None] = mapped_column(Text)
+    effective_service_tier: Mapped[str | None] = mapped_column(Text)
     outcome: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     __table_args__ = (
         ForeignKeyConstraint(["deployment_id", "attempt_id"],

@@ -76,7 +76,7 @@ def test_benchmark_migration_upgrade_indexes_and_downgrade():
     assert not {"input_tokens", "output_tokens", "total_tokens", "billed_amount", "billed_unit", "billed_source"} & {
         column["name"] for column in inspector.get_columns("benchmark_invocations")
     }
-    with pytest.raises(RuntimeError, match="Pricing provenance requires a forward migration"):
+    with pytest.raises(RuntimeError, match="Runtime attribution requires a forward migration"):
         command.downgrade(ALEMBIC_CONFIG, "d1e2f3a4b5c6")
 
     command.upgrade(ALEMBIC_CONFIG, "head")

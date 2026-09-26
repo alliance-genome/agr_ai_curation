@@ -54,6 +54,10 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
+import inspect
 import json
 import logging
 import threading
@@ -77,6 +81,91 @@ INSTRUCTIONS_COMPONENT = "openai_responses.instructions"
 INSTRUCTIONS_SETTING = "OPENAI_INSTRUCTIONS_MAX_CHARS"
 
 _MEASURED_FLAG = "_ai_curation_model_request_measured"
+_provider_measurement: ContextVar[dict[str, Any] | None] = ContextVar("provider_measurement", default=None)
+
+
+@contextmanager
+def provider_measurement_scope(measurement):
+    token = _provider_measurement.set(measurement)
+    try:
+        yield
+    finally:
+        _provider_measurement.reset(token)
+
+
+def _tier(value):
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _requested_tier(settings):
+    # The OpenAI client merges extra_body after ordinary request parameters.
+    for field in ("extra_body", "extra_args"):
+        values = getattr(settings, field, None)
+        if isinstance(values, Mapping) and "service_tier" in values:
+            return _tier(values["service_tier"])
+    return None
+
+
+def _observe_service_tier(measurement, response):
+    if getattr(response, "type", None) in {"response.completed", "response.incomplete", "response.failed"}:
+        response = response.response
+    value = _tier(getattr(response, "service_tier", None))
+    if value is not None:
+        measurement["effective_service_tier"] = value
+
+
+class _TierObservedStream:
+    """Forward raw SDK objects unchanged, retaining only provider tier evidence."""
+
+    def __init__(self, source, measurement):
+        self._source = source
+        self._iterator = source.__aiter__()
+        self._measurement = measurement
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        item = await anext(self._iterator)
+        _observe_service_tier(self._measurement, item)
+        return item
+
+    def __getattr__(self, name):
+        return getattr(self._source, name)
+
+
+def _install_service_tier_capture():
+    """Pinned SDK seam before ModelResponse/synthetic chat events drop tier data."""
+    from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+    from agents.models.openai_responses import OpenAIResponsesModel, OpenAIResponsesWSModel
+
+    def wrap(fetch):
+        signature = inspect.signature(fetch)
+
+        @wraps(fetch)
+        async def observed(*args, **kwargs):
+            measurement = _provider_measurement.get()
+            if measurement is None:
+                return await fetch(*args, **kwargs)
+            bound = signature.bind(*args, **kwargs)
+            measurement["requested_service_tier"] = _requested_tier(bound.arguments.get("model_settings"))
+            response = await fetch(*args, **kwargs)
+            if isinstance(response, tuple):
+                # Chat streaming returns a synthetic Response plus the raw stream.
+                synthetic, stream = response
+                return synthetic, _TierObservedStream(stream, measurement)
+            if hasattr(response, "__aiter__"):
+                return _TierObservedStream(response, measurement)
+            _observe_service_tier(measurement, response)
+            return response
+
+        observed._agr_service_tier_capture = True
+        return observed
+
+    for model_type in (OpenAIResponsesModel, OpenAIResponsesWSModel, OpenAIChatCompletionsModel):
+        fetch = model_type._fetch_response
+        if not getattr(fetch, "_agr_service_tier_capture", False):
+            model_type._fetch_response = wrap(fetch)
 _SDK_GET_MODEL: Any = None
 _MEASURED_GET_MODEL: Any = None
 _REPORTED_BLOCKS_MAX = 1024
@@ -847,7 +936,9 @@ def record_outcome(
     if accounting is not None:
         from src.lib.cost_ledger.runtime_writes import finish_runtime_request
         finish_runtime_request(accounting, raw_usage=raw_usage, provider=measurement.get("provider"),
-                               sdk_normalized=sdk_normalized_usage, outcome=outcome)
+                               sdk_normalized=sdk_normalized_usage, outcome=outcome,
+                               service_tiers={"requested": measurement.get("requested_service_tier"),
+                                              "effective": measurement.get("effective_service_tier")})
     measurement["outcome"] = outcome
     measurement["provider_usage"] = dict(usage or {"status": "not_reported"})
     measurement["prompt_cache"]["cached_input_share"] = _cached_input_share(
@@ -1064,6 +1155,7 @@ class MeasuredModel(Model):
         provider, api, transport = describe_model(self._inner, provider_hint=self._provider_hint)
         identity = _request_identity(self._agent)
         identity["attempt"] = self._attempts
+        identity["requested_service_tier"] = _requested_tier(model_settings)
         measurement = build_measurement(
             runtime="agents_sdk",
             provider=provider,
@@ -1128,7 +1220,7 @@ class MeasuredModel(Model):
         )
         try:
             from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope
-            with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")):
+            with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
                 response = await self._inner.get_response(
                     system_instructions,
                     input,
@@ -1203,15 +1295,17 @@ class MeasuredModel(Model):
         from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope
         try:
             # The adapter opens this attempt's tracing span on its first step.
-            with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")):
+            with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
                 event = await anext(stream, _STREAM_END)
             while event is not _STREAM_END:
                 event_type = getattr(event, "type", None)
                 if event_type in {"response.completed", "response.incomplete", "response.failed"}:
                     terminal_response = getattr(event, "response", None)
                     terminal_type = event_type
+                    if measurement.get("api") == "responses":
+                        _observe_service_tier(measurement, event)
                 yield event
-                with runtime_attempt_scope(measurement.get("_runtime_accounting")):
+                with runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
                     event = await anext(stream, _STREAM_END)
         except BaseException as exc:
             if terminal_response is None:
@@ -1239,7 +1333,7 @@ class MeasuredModel(Model):
                 record_outcome(measurement, outcome="stream_closed_without_terminal_event")
             aclose = getattr(stream, "aclose", None)
             if callable(aclose):
-                with runtime_attempt_scope(measurement.get("_runtime_accounting")):
+                with runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
                     await aclose()
 
 
@@ -1290,6 +1384,7 @@ def install_model_request_measurement() -> None:
     """
 
     global _SDK_GET_MODEL, _MEASURED_GET_MODEL
+    _install_service_tier_capture()
     from agents.run_internal import run_loop, turn_preparation
 
     if _MEASURED_GET_MODEL is None:

@@ -69,6 +69,28 @@ def test_exact_totals_provenance_and_unknowns(fixture):
     assert result['scope'] == 'full_recorded_session_or_turn'
 
 
+def test_runtime_metadata_round_trips_without_duplicate_attempt(fixture):
+    _, session, snapshot, _ = fixture
+    metadata = {'agent_id': 'helper', 'agent_name': 'Helper', 'agent_role': 'extraction',
+                'agent_revision': 'revision-a', 'node_id': 'step-a', 'requested_service_tier': 'flex'}
+    with runtime_cost_scope(RuntimeCostContext('owner', session, 'flow-turn', 'extraction_flow', 'flow', 'flow-run')):
+        attempt = reserve_runtime_request({'measurement_id': str(uuid4()), 'provider': 'fixture', 'model': 'test', **metadata})
+    args = dict(usage=TokenUsage(100, 20, 120, 0, 0, 0), charge=None, outcome='completed',
+                service_tiers={'requested': 'flex', 'effective': 'default'})
+    attempt.finish(**args)
+    attempt.finish(**args)
+    # An additional usage-only callback cannot erase provider tier evidence.
+    attempt.finish(usage=TokenUsage(), charge=None, outcome='completed')
+    report = read(session_id=session, run_id='flow-turn', snapshot_id=snapshot)
+    assert report['totals']['attempt_count'] == 1
+    [row] = report['requests']
+    assert {key: row[key] for key in metadata} == metadata
+    assert row['effective_service_tier'] == 'default'
+    assert row['fact_revision'] == 1
+    assert row['flow_run_id'] == 'flow-run'
+    assert row['recorded_charge'] is None
+
+
 def test_late_fact_enrichment_keeps_pinned_revision_reproducible(fixture):
     deployment, session, snapshot, attempts = fixture
     original = read(session_id=session, snapshot_id=snapshot)
