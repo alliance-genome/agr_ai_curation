@@ -199,6 +199,12 @@ def test_owner_scoped_api_pagination_and_nonleaking_delete(monkeypatch):
         assert deletion.status_code == 409
         assert deletion.json()["detail"]["code"] == "lifecycle_conflict"
         assert client.get(prepared_path).status_code == 200
+        # The foreign-owner job must remain inaccessible above, but must not
+        # remain queued for a later worker/repository test to claim.
+        app.dependency_overrides[require_benchmark_cancel] = lambda: {"sub": other_owner}
+        app.dependency_overrides[require_benchmark_delete] = lambda: {"sub": other_owner}
+        assert client.post(f"/api/v1/benchmarks/jobs/{other_id}/cancel").status_code == 200
+        assert client.delete(f"/api/v1/benchmarks/jobs/{other_id}").status_code == 204
 
 
 def test_event_replay_detects_pruned_holes_and_retains_preparation(monkeypatch):
@@ -317,6 +323,20 @@ def test_invocation_api_pages_complete_telemetry_and_preserves_unknowns(monkeypa
         assert client.get(path, params={"after_ordinal": 1}).json()["items"] == []
         app.dependency_overrides[require_benchmark_read] = lambda: {"sub": "other-owner"}
         assert client.get(path).status_code == 404
+    with SessionLocal() as session:
+        # This read-only API fixture creates a running cell directly; settle it
+        # before removing its still-queued synthetic job.
+        cell = session.get(BenchmarkCell, cell_id)
+        cell.status = BenchmarkCellStatus.CANCELLED
+        cell.completed_at = datetime.now(timezone.utc)
+        cell.lease_owner = cell.lease_expires_at = cell.lease_heartbeat_at = None
+        session.flush()
+        repository = BenchmarkRepository(session)
+        repository.request_cancellation(job_id=job_id, owner_subject=owner,
+                                        requested_at=cell.completed_at)
+        session.commit()
+        repository.delete_terminal_job(job_id=job_id, owner_subject=owner)
+        session.commit()
 
 
 def test_rerun_reuses_frozen_inputs_and_context_and_replays_without_source_calls(monkeypatch):
@@ -437,6 +457,10 @@ def test_rerun_reuses_frozen_inputs_and_context_and_replays_without_source_calls
         original = session.get(BenchmarkJob, job_id)
         assert original.curator_context == original_context
         assert original.resolved_plan == original_plan
+        BenchmarkRepository(session).request_cancellation(
+            job_id=child.id, owner_subject=owner, requested_at=datetime.now(timezone.utc),
+        )
+        session.commit()
 
 
 def test_rerun_limit_applies_to_new_resolved_work_but_not_accepted_replay(monkeypatch):
@@ -492,6 +516,10 @@ def test_rerun_limit_applies_to_new_resolved_work_but_not_accepted_replay(monkey
     with SessionLocal() as session:
         children = session.scalars(select(BenchmarkJob).where(BenchmarkJob.rerun_of_job_id == job_id)).all()
         assert len(children) == 1
+        BenchmarkRepository(session).request_cancellation(
+            job_id=children[0].id, owner_subject=owner, requested_at=datetime.now(timezone.utc),
+        )
+        session.commit()
 
 
 @pytest.mark.parametrize("same_key,revoked", [(True, False), (True, True), (False, False)])
@@ -618,6 +646,11 @@ def test_concurrent_api_submit_freezes_once_and_replay_needs_no_current_catalog(
             )).all()
             assert len(snapshots) == 2 and len(set(snapshots)) == 1
             assert all(job.status == BenchmarkJobStatus.QUEUED for job in jobs)
+            for job in jobs:
+                BenchmarkRepository(session).request_cancellation(
+                    job_id=job.id, owner_subject=owner, requested_at=datetime.now(timezone.utc),
+                )
+            session.commit()
             return
 
     # Preserve other tests' retained jobs. Only constrain this worker's job
@@ -683,3 +716,6 @@ def test_concurrent_api_submit_freezes_once_and_replay_needs_no_current_catalog(
         assert events.status_code == 200
         assert "job.status" in events.text
         assert content not in events.text
+    with SessionLocal() as session:
+        BenchmarkRepository(session).delete_terminal_job(job_id=job_id, owner_subject=owner)
+        session.commit()

@@ -16,9 +16,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[3]
 PREVIOUS_REVISION = "a823b1c2d3e4"
 
 
-def test_agent_allowed_group_ids_backfill_and_database_defaults():
+def test_agent_allowed_group_ids_backfill_and_database_defaults(historical_migration_database):
     alembic_config = Config(str(BACKEND_ROOT / "alembic.ini"))
-    command.upgrade(alembic_config, "head")
     legacy_agent_id = uuid4()
     default_agent_id = uuid4()
     legacy_version_id = uuid4()

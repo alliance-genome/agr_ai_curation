@@ -66,12 +66,11 @@ def _delete_fixture_rows(*, document_ids: list[UUID], auth_sub: str | None) -> N
         session.commit()
 
 
-def test_upgrade_reconciles_canonical_path_before_requiring_owner():
+def test_upgrade_reconciles_canonical_path_before_requiring_owner(historical_migration_database):
     config = _config()
     document_id = uuid4()
     auth_sub = f"test_pdf_owner_migration_{uuid4().hex}"
 
-    command.upgrade(config, "head")
     command.downgrade(config, PRIOR_HEAD)
     try:
         with SessionLocal() as session:
@@ -97,13 +96,12 @@ def test_upgrade_reconciles_canonical_path_before_requiring_owner():
         command.upgrade(config, "head")
 
 
-def test_upgrade_reports_all_bad_rows_without_partial_data_or_schema_changes():
+def test_upgrade_reports_all_bad_rows_without_partial_data_or_schema_changes(historical_migration_database):
     config = _config()
     valid_id = UUID("11111111-1111-1111-1111-111111111129")
     invalid_id = UUID("22222222-2222-2222-2222-222222222229")
     auth_sub = f"test_pdf_owner_atomic_{uuid4().hex}"
 
-    command.upgrade(config, "head")
     command.downgrade(config, PRIOR_HEAD)
     try:
         with SessionLocal() as session:

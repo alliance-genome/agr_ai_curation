@@ -11,6 +11,8 @@ because store.py validates them at module level.
 import os
 import inspect
 import asyncio
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from weaviate.classes.config import Configure, DataType, Property
@@ -36,6 +38,48 @@ TEST_WEAVIATE_PORT = int(os.environ.get("WEAVIATE_PORT", "8080"))
 TEST_WEAVIATE_SCHEME = os.environ.get("WEAVIATE_SCHEME", "http")
 TEST_TENANT_NAME = "test_persistence_user"
 TEST_USER_ID = "test-persistence-user"
+
+
+@pytest.fixture
+def historical_migration_database(monkeypatch):
+    """Exercise old upgrade paths without downgrading the forward-only ledger.
+
+    A uniquely owned database keeps legacy DDL and seeded rows away from the
+    session's current schema. Historical migrations inspect information_schema
+    without schema filters, so a separate schema is insufficient isolation.
+    """
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, event, text
+    from sqlalchemy.engine import make_url
+    from src.models.sql.database import engine, feedback_engine
+
+    database = f"migration_test_{uuid4().hex}"
+    url = make_url(os.environ["DATABASE_URL"])
+    admin = create_engine(url, isolation_level="AUTOCOMMIT")
+    with admin.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{database}"'))
+
+    def use_test_database(dialect, connection_record, args, kwargs):
+        kwargs["dbname"] = database
+
+    engine.dispose()
+    feedback_engine.dispose()
+    event.listen(engine, "do_connect", use_test_database)
+    event.listen(feedback_engine, "do_connect", use_test_database)
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setenv("DATABASE_URL", url.set(database=database).render_as_string(hide_password=False))
+            command.upgrade(Config(str(Path(__file__).resolve().parents[3] / "alembic.ini")), "c53c05e0925c")
+            yield
+    finally:
+        engine.dispose()
+        feedback_engine.dispose()
+        event.remove(engine, "do_connect", use_test_database)
+        event.remove(feedback_engine, "do_connect", use_test_database)
+        with admin.connect() as connection:
+            connection.execute(text(f'DROP DATABASE "{database}"'))
+        admin.dispose()
 
 
 @pytest.fixture(scope="session")

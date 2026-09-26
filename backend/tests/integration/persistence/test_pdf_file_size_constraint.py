@@ -56,7 +56,7 @@ def _document(file_size: int, *, user_id: int) -> PDFDocument:
     )
 
 
-def test_upgrade_from_prior_head_relaxes_former_ceiling():
+def test_upgrade_from_prior_head_relaxes_former_ceiling(historical_migration_database):
     alembic_config = Config(str(BACKEND_ROOT / "alembic.ini"))
     with SessionLocal() as owner_session:
         owner_id = ensure_test_pdf_owner(
