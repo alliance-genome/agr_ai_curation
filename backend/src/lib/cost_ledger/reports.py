@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from agr_cost_pricing import ALGORITHM_REVISION
-from sqlalchemy import and_, select, text
+from sqlalchemy import String, and_, cast, select, text
 
 from src.lib.cost_ledger.decimal_math import add_exact
 from src.lib.cost_ledger.pricing import load_snapshot, value_usage
@@ -15,6 +15,8 @@ from src.lib.openai_agents.config import (
     get_cost_report_max_attempts, get_cost_report_timeout_ms,
 )
 from src.models.sql.cost_ledger import CostAttempt, CostFactRevision, RuntimeCostRequest
+from src.models.sql.user import User
+from src.models.sql.curation_flow import CurationFlow
 
 
 class ReportTooLarge(ValueError):
@@ -62,7 +64,8 @@ def aggregate_requests(requests):
 
 def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, provider=None,
                    model=None, activity=None, agent_id=None, flow_run_id=None, snapshot_id=None,
-                   document_id=None, job_id=None, invocation_id=None):
+                   document_id=None, job_id=None, invocation_id=None, owner_subject=None,
+                   workflow_id=None, view="runs"):
     if db.scalar(text("SHOW transaction_read_only")) != "on" or db.scalar(text("SHOW transaction_isolation")) != "repeatable read":
         raise ValueError("Reports require read-only repeatable-read transactions")
     db.execute(text("SELECT set_config('statement_timeout', :timeout, true)"), {"timeout": str(get_cost_report_timeout_ms())})
@@ -78,12 +81,27 @@ def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, pr
         scope.append(CostAttempt.created_at < end)
     filters = dict(session_id=session_id, run_id=run_id, provider=provider, model=model,
                    activity=activity, agent_id=agent_id, flow_run_id=flow_run_id,
-                   document_id=document_id, job_id=job_id, invocation_id=invocation_id)
+                   document_id=document_id, job_id=job_id, invocation_id=invocation_id,
+                   owner_subject=owner_subject, workflow_id=workflow_id)
     for key, value in filters.items():
         if value is not None:
-            column = getattr(RuntimeCostRequest, key)
+            column = CostAttempt.owner_subject if key == "owner_subject" else getattr(RuntimeCostRequest, key)
             scope.append(column.is_(None) if value == "__unknown__" else column == value)
     joined = and_(RuntimeCostRequest.deployment_id == CostAttempt.deployment_id, RuntimeCostRequest.attempt_id == CostAttempt.id)
+    if view == "flows":
+        scope.append(RuntimeCostRequest.activity == "extraction_flow")
+    if view == "chats":
+        scope.append(RuntimeCostRequest.activity.in_(("interactive_chat", "extraction_flow")))
+        scope.append(RuntimeCostRequest.session_id.is_not(None))
+        # Dates select active conversations, not individual turns. Expand
+        # before the bounded read so lifetime totals cannot be truncated.
+        active_sessions = select(RuntimeCostRequest.session_id).join(CostAttempt, joined).where(*scope)
+        scope = [RuntimeCostRequest.deployment_id == deployment,
+                 RuntimeCostRequest.session_id.in_(active_sessions)]
+        for key, value in filters.items():
+            if value is not None:
+                column = CostAttempt.owner_subject if key == "owner_subject" else getattr(RuntimeCostRequest, key)
+                scope.append(column.is_(None) if value == "__unknown__" else column == value)
     if session_id:
         # Check full session identity even when report filters select one turn.
         owners = db.scalars(select(CostAttempt.owner_subject).join(RuntimeCostRequest, joined).where(
@@ -113,11 +131,12 @@ def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, pr
         ).order_by(CostFactRevision.attempt_id, CostFactRevision.revision)):
             revisions[revision.attempt_id].append(revision)
     requests = []
-    for row, created, _ in selected:
+    for row, created, owner in selected:
         usage, charge, revision = fold_fact_revisions(revisions[row.attempt_id])
         requests.append({"attempt_id": str(row.attempt_id), "fact_revision": revision,
                          "created_at": created.isoformat(), "session_id": row.session_id, "run_id": row.run_id,
                          "activity": row.activity, "workflow_id": row.workflow_id, "flow_run_id": row.flow_run_id,
+                         "owner_subject": owner,
                          "document_id": row.document_id, "job_id": row.job_id,
                          "invocation_id": row.invocation_id, "parent_invocation_id": row.parent_invocation_id,
                          "operation_type": row.operation_type, "candidate_count": row.candidate_count,
@@ -134,9 +153,20 @@ def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, pr
     groups = defaultdict(list)
     for row in requests:
         groups[(row["session_id"], row["run_id"], row["activity"], row["flow_run_id"], row["document_id"], row["job_id"])].append(row)
+    summaries = overview_groups(requests, view)
+    if view == "curators" and summaries:
+        names = {subject: name or email or subject for subject, name, email in db.execute(
+            select(User.auth_sub, User.display_name, User.email).where(User.auth_sub.in_([group["id"] for group in summaries])))}
+        for group in summaries:
+            group["label"] = names.get(group["id"], group["id"])
+    if view == "flows" and summaries:
+        names = {str(key): name for key, name in db.execute(select(CurationFlow.id, CurationFlow.name).where(
+            cast(CurationFlow.id, String).in_([group["workflow_id"] for group in summaries if group["workflow_id"]])))}
+        for group in summaries:
+            group["label"] = names.get(group["workflow_id"], group["label"])
     return {"schema_version": 1, "generated_at": datetime.now(timezone.utc).isoformat(),
-            "deployment_id": deployment, "scope": "time_window" if start is not None else "full_recorded_session_or_turn",
-            "filters": {**filters, "start": start.isoformat() if start else None, "end": end.isoformat() if end else None},
+            "deployment_id": deployment, "scope": "active_conversations_all_turns" if view == "chats" and start is not None else "time_window" if start is not None else "full_recorded_session_or_turn",
+            "filters": {**filters, "view": view, "start": start.isoformat() if start else None, "end": end.isoformat() if end else None},
             "pricing_snapshot_id": snapshot_id, "valuation_algorithm": ALGORITHM_REVISION,
             "pricing_source": snapshot["source"] if snapshot else None,
             "pricing_captured_at": snapshot["captured_at"] if snapshot else None,
@@ -147,10 +177,29 @@ def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, pr
                                                "bedrock_reranking": "api_calls_captured_billing_units_and_charges_unavailable"},
                          "service_tier": "provider_reported_only_unknown_uses_ranges", "truncated": False},
             "totals": aggregate_requests(requests),
+            "groups": summaries,
             "runs": [{"session_id": key[0], "run_id": key[1], "activity": key[2], "flow_run_id": key[3],
                       "document_id": key[4], "job_id": key[5], "agents": agent_groups(rows),
                       "started_at": min(row["created_at"] for row in rows), **aggregate_requests(rows)} for key, rows in groups.items()],
             "requests": requests}
+
+
+def overview_groups(requests, view):
+    """Fold the full bounded selection before pagination; never persist totals."""
+    if view == "runs":
+        return []
+    groups = defaultdict(list)
+    for row in requests:
+        key = (row["owner_subject"] if view == "curators" else row["session_id"] if view == "chats"
+               else row["workflow_id"] or row["flow_run_id"] or row["run_id"])
+        groups[key].append(row)
+    return [{"id": key, "label": key, "workflow_id": rows[0]["workflow_id"] if view == "flows" else None,
+             "session_id": rows[0]["session_id"] if view == "chats" else None,
+             "run_id": rows[0]["run_id"] if view == "flows" and not rows[0]["workflow_id"] else None,
+             "run_count": len({(row["session_id"], row["run_id"]) for row in rows}),
+             "conversation_count": len({row["session_id"] for row in rows if row["session_id"]}),
+             "last_active": max(row["created_at"] for row in rows), **aggregate_requests(rows)}
+            for key, rows in groups.items()]
 
 
 def agent_groups(requests):
