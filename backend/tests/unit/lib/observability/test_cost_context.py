@@ -2,6 +2,7 @@
 import asyncio
 import contextvars
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,6 +12,96 @@ from src.lib.observability.cost_context import (
     attach_agent_cost_identity, agent_identity, cost_scope, costed_stream,
     costed_call, costed_document_processing, current_cost_context, execution_context,
 )
+from src.lib.cost_ledger.runtime_context import (
+    RuntimeCostContext, current_runtime_cost_context, runtime_cost_scope,
+)
+
+
+@pytest.mark.asyncio
+async def test_nested_agent_invocations_have_real_parents_and_same_agent_wrapper_is_not_a_child():
+    @costed_call
+    async def inner(agent):
+        return current_runtime_cost_context()
+
+    @costed_call
+    async def outer(agent):
+        own = current_runtime_cost_context()
+        same = await inner(agent)
+        child = await inner(SimpleNamespace())
+        assert current_runtime_cost_context() == own
+        return own, same, child
+
+    with runtime_cost_scope(RuntimeCostContext("owner", "session", "turn", "interactive_chat")):
+        own, same, child = await outer(SimpleNamespace())
+    assert own is not None and child is not None
+    assert same == own
+    assert own.invocation_id and own.parent_invocation_id is None
+    assert child.invocation_id != own.invocation_id
+    assert child.parent_invocation_id == own.invocation_id
+    assert current_runtime_cost_context() is None
+
+
+@pytest.mark.asyncio
+async def test_studio_stream_accounts_real_turn_without_leaking_to_consumer():
+    cleanup = []
+
+    @costed_stream
+    async def stream(*, state, user_id, session_id, surface="agent_studio"):
+        try:
+            async def child():
+                return current_runtime_cost_context()
+            yield await asyncio.create_task(child())
+        finally:
+            cleanup.append(current_runtime_cost_context())
+
+    state = SimpleNamespace(cost_run_id="studio-turn")
+    events = stream(state=state, user_id="owner", session_id="session")
+    context = await anext(events)
+    assert context is not None
+    assert context.invocation_id
+    assert replace(context, invocation_id=None) == RuntimeCostContext("owner", "session", "studio-turn", "authoring")
+    assert current_runtime_cost_context() is None
+    await events.aclose()
+    assert cleanup == [context]
+    assert current_runtime_cost_context() is None
+    benchmark = stream(state=state, user_id="owner", session_id="session", surface="benchmark_assistant")
+    assert await anext(benchmark) is None
+    await benchmark.aclose()
+
+
+@pytest.mark.asyncio
+async def test_background_accounting_inherits_trusted_owner_and_resets_new_jobs(monkeypatch):
+    # Paper lookup is unrelated to trusted ownership and should not need a DB here.
+    monkeypatch.setattr("src.lib.observability.cost_context.execution_context", lambda **kw: {
+        **kw, "run_id": kw.get("run_id") or "standalone",
+    })
+
+    @costed_call
+    async def classifier(agent):
+        return current_runtime_cost_context()
+
+    @costed_document_processing
+    async def job(request):
+        return await classifier(SimpleNamespace())
+
+    parent = RuntimeCostContext("parent", "session", "turn", "interactive_chat", invocation_id="parent-call")
+    with runtime_cost_scope(parent):
+        nested = await classifier(SimpleNamespace())
+        assert nested is not None
+        assert nested.parent_invocation_id == "parent-call"
+        assert nested.invocation_id != "parent-call"
+        assert replace(nested, invocation_id="parent-call", parent_invocation_id=None) == parent
+        child = await job(SimpleNamespace(job_id="job", document_id="doc", user_id="job-owner"))
+        assert child is not None
+        assert replace(child, invocation_id=None) == RuntimeCostContext("job-owner", None, "job", "background", document_id="doc", job_id="job")
+        assert current_runtime_cost_context() == parent
+    assert current_runtime_cost_context() is None
+    agent = SimpleNamespace(cost_boundary={"user_id": "validator-owner"})
+    standalone = await classifier(agent)
+    assert standalone is not None
+    assert standalone.owner_subject == "validator-owner"
+    assert standalone.session_id is None
+    assert await classifier(SimpleNamespace(cost_boundary={"user_id": 123})) is None
 
 
 @pytest.mark.asyncio

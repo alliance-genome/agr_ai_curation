@@ -73,10 +73,12 @@ def test_runtime_metadata_round_trips_without_duplicate_attempt(fixture):
     _, session, snapshot, _ = fixture
     metadata = {'agent_id': 'helper', 'agent_name': 'Helper', 'agent_role': 'extraction',
                 'agent_revision': 'revision-a', 'node_id': 'step-a', 'requested_service_tier': 'flex'}
-    with runtime_cost_scope(RuntimeCostContext('owner', session, 'flow-turn', 'extraction_flow', 'flow', 'flow-run')):
+    with runtime_cost_scope(RuntimeCostContext('owner', session, 'flow-turn', 'extraction_flow', 'flow', 'flow-run',
+                                             invocation_id='child-invocation', parent_invocation_id='parent-invocation')):
         attempt = reserve_runtime_request({'measurement_id': str(uuid4()), 'provider': 'fixture', 'model': 'test', **metadata})
     args = dict(usage=TokenUsage(100, 20, 120, 0, 0, 0), charge=None, outcome='completed',
                 service_tiers={'requested': 'flex', 'effective': 'default'})
+    assert attempt is not None
     attempt.finish(**args)
     attempt.finish(**args)
     # An additional usage-only callback cannot erase provider tier evidence.
@@ -89,6 +91,11 @@ def test_runtime_metadata_round_trips_without_duplicate_attempt(fixture):
     assert row['fact_revision'] == 1
     assert row['flow_run_id'] == 'flow-run'
     assert row['recorded_charge'] is None
+    assert row['invocation_id'] == 'child-invocation'
+    assert row['parent_invocation_id'] == 'parent-invocation'
+    assert report['runs'][0]['agents'][0]['request_ids'] == [str(attempt.attempt_id)]
+    assert read(session_id=session, invocation_id='child-invocation')['totals']['attempt_count'] == 1
+    assert row['operation_type'] == 'model'
 
 
 def test_late_fact_enrichment_keeps_pinned_revision_reproducible(fixture):
@@ -132,3 +139,41 @@ def test_window_does_not_combine_collided_session_owners(fixture):
     now = datetime.now(timezone.utc)
     with pytest.raises(ValueError, match='Ambiguous'):
         read(start=now - timedelta(days=1), end=now, snapshot_id=snapshot)
+
+
+def test_background_owners_without_sessions_and_exclusive_agent_subtotals(fixture):
+    _, _, snapshot, _ = fixture
+    for owner in ("owner-a", "owner-b"):
+        for agent in ("classifier", "validator"):
+            context = RuntimeCostContext(owner, None, "job-" + owner, "background",
+                                         document_id="doc-" + owner, job_id="job-" + owner)
+            with runtime_cost_scope(context):
+                attempt = reserve_runtime_request({"measurement_id": str(uuid4()), "provider": "fixture",
+                                                   "model": "test", "agent_id": agent, "node_id": agent})
+            assert attempt is not None
+            attempt.finish(usage=TokenUsage(10, 2, 12, 0, 0, 0), charge=None, outcome="completed")
+    now = datetime.now(timezone.utc)
+    report = read(start=now - timedelta(days=1), end=now, activity="background", snapshot_id=snapshot)
+    assert report["totals"]["attempt_count"] == 4
+    assert len(report["runs"]) == 2
+    for run in report["runs"]:
+        assert run["session_id"] is None
+        assert run["job_id"] == run["run_id"]
+        assert sum(group["attempt_count"] for group in run["agents"]) == run["attempt_count"]
+        assert sum(Decimal(group["estimates"]["lower"]) for group in run["agents"]) == Decimal(run["estimates"]["lower"])
+        assert len({request for group in run["agents"] for request in group["request_ids"]}) == run["attempt_count"]
+    assert read(run_id="job-owner-a", snapshot_id=snapshot)["totals"]["attempt_count"] == 2
+    assert read(document_id="doc-owner-b", snapshot_id=snapshot)["totals"]["attempt_count"] == 2
+
+
+def test_turn_ids_are_scoped_to_conversation_but_background_runs_cannot_mix_owners(fixture):
+    _, _, snapshot, _ = fixture
+    for owner in ("a", "b"):
+        with runtime_cost_scope(RuntimeCostContext(owner, "session-" + owner, "same-turn", "authoring")):
+            reserve_runtime_request({"measurement_id": str(uuid4()), "provider": "fixture", "model": "test"})
+    assert read(run_id="same-turn", snapshot_id=snapshot)["totals"]["attempt_count"] == 2
+    for owner in ("a", "b"):
+        with runtime_cost_scope(RuntimeCostContext(owner, None, "colliding-job", "background")):
+            reserve_runtime_request({"measurement_id": str(uuid4()), "provider": "fixture", "model": "test"})
+    with pytest.raises(ValueError, match="Ambiguous runtime run ownership"):
+        read(run_id="colliding-job", snapshot_id=snapshot)

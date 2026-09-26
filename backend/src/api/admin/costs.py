@@ -34,20 +34,21 @@ def report_filters(start: datetime | None = None, end: datetime | None = None,
                    session_id: str | None = None, run_id: str | None = None,
                    provider: str | None = None, model: str | None = None,
                    activity: str | None = None, agent_id: str | None = None,
-                   flow_run_id: str | None = None, snapshot_id: str | None = None):
+                   flow_run_id: str | None = None, snapshot_id: str | None = None,
+                   document_id: str | None = None, job_id: str | None = None,
+                   invocation_id: str | None = None):
     if (start is None) != (end is None):
         raise HTTPException(422, "Supply both start and end")
-    if start is None and not session_id:
-        raise HTTPException(422, "Select a date window or a conversation")
-    if run_id and not session_id:
-        raise HTTPException(422, "A turn filter requires a conversation")
+    if start is None and not session_id and not run_id:
+        raise HTTPException(422, "Select a date window, conversation, or run")
     if start is not None:
         if start.tzinfo is None or end.tzinfo is None or end <= start:
             raise HTTPException(422, "Use timezone-aware start < end")
         if (end - start).total_seconds() > get_cost_report_max_window_days() * 86400:
             raise HTTPException(422, "Date window exceeds COST_REPORT_MAX_WINDOW_DAYS")
     return dict(start=start, end=end, session_id=session_id, run_id=run_id, provider=provider,
-                model=model, activity=activity, agent_id=agent_id, flow_run_id=flow_run_id, snapshot_id=snapshot_id)
+                model=model, activity=activity, agent_id=agent_id, flow_run_id=flow_run_id, snapshot_id=snapshot_id,
+                document_id=document_id, job_id=job_id, invocation_id=invocation_id)
 
 
 def _report(filters):
@@ -102,7 +103,9 @@ def export_cost_report(format: Literal["json", "csv"] = "json", filters: dict = 
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     columns = ["deployment_id", "pricing_snapshot_id", "valuation_algorithm", "scope", "filters", "generated_at",
-               "attempt_id", "fact_revision", "created_at", "session_id", "run_id", "activity", "flow_run_id",
+               "attempt_id", "fact_revision", "created_at", "session_id", "run_id", "activity", "flow_run_id", "document_id", "job_id",
+               "invocation_id", "parent_invocation_id",
+               "operation_type", "candidate_count", "pagination_request",
                "provider", "model", "agent_id", "agent_name", "agent_role", "agent_revision", "node_id",
                "requested_service_tier", "effective_service_tier", "outcome", "usage_status", "input_tokens", "output_tokens",
                "total_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens",

@@ -42,7 +42,8 @@ from src.lib.openai_agents.config import (
 )
 from src.lib.openai_agents.langfuse_client import get_langfuse, is_openai_agents_tracing_enabled
 from src.lib.observability.cost_context import (
-    agent_identity, attach_agent_cost_identity, cost_scope, execution_context,
+    agent_identity, attach_agent_cost_identity, cost_scope, costed_stream, execution_context,
+    runtime_context_for_boundary,
 )
 from src.lib.openai_agents.tool_surface import (
     ToolSurface,
@@ -449,6 +450,7 @@ def _proposal_review_behavior(state: AgentStudioRunState):
     return finish_at_review
 
 
+@costed_stream
 async def stream_agent_studio_run(
     *,
     instructions: str,
@@ -649,7 +651,12 @@ async def run_forced_agent_studio_tool(
             **agent_identity("agent_studio_suggestion", agent.name, "other"),
             "provider": "openai",
         })
-        with _studio_trace_scope(state=state, session_id=session_id, user_id=user_id), gen_ai_conversation_scope(session_id):
+        from src.lib.cost_ledger.runtime_context import runtime_agent_scope
+        accounting = runtime_context_for_boundary(
+            execution_context(activity="authoring_suggestion", run_id=state.cost_run_id),
+            owner_subject=user_id,
+        )
+        with runtime_agent_scope(accounting, agent), _studio_trace_scope(state=state, session_id=session_id, user_id=user_id), gen_ai_conversation_scope(session_id):
             with _tracked_agent_span(
                 agent_name="Agent Studio Suggestion Assistant",
                 model=AGENT_STUDIO_OPENAI_MODEL,

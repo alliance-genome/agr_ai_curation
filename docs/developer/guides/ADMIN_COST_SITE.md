@@ -1,6 +1,6 @@
 # Admin cost explorer
 
-The ordinary conversation/flow cost explorer reads the shared accounting ledger.
+The daily-use cost explorer reads the shared accounting ledger.
 It has no usage database, provider secrets, background collector or price list of
 its own. Benchmark accounting continues to use the same canonical facts; benchmark
 discovery/import and provider invoice reconciliation remain separate work.
@@ -101,9 +101,10 @@ or access-controlled tier).
   projection for current consumers.
 
 Select timezone-aware `start` inclusive and `end` exclusive, or `session_id`
-without dates for full recorded-session scope. Optional `run_id` requires the
-session. Additional filters: `provider`, `model`, `activity`, `agent_id`,
-`flow_run_id`; `__unknown__` selects null attribution. Every report is scoped to
+without dates for full recorded-session scope; add `run_id` to select one turn.
+A standalone `run_id` also permits background-run drill-down without a
+fabricated session. Additional filters: `provider`, `model`, `activity`, `agent_id`,
+`flow_run_id`, `document_id`, `job_id`, `invocation_id`; `__unknown__` selects null attribution. Every report is scoped to
 the configured deployment; this is not an organization-wide billing report.
 
 Totals cover the entire bounded selection, not just the page. `offset` pages
@@ -122,10 +123,19 @@ historical state. CSV includes corresponding provenance columns and neutralizes
 spreadsheet formula prefixes. Each export is a fresh consistent read, so new
 facts may appear after a displayed report; use its generated timestamp and pins.
 
+Run drill-down includes agent/step/revision groups with exclusive own-request
+subtotals and actual invocation/parent IDs. Inspecting an invocation selects its
+requests; Show full run restores the run scope. Groups never add parent summaries
+to child usage. Request IDs, job/document references and invocation links are
+also available in exports. A background run is not linked as a conversation.
+
 No prompts, results, paper contents or scientific artifacts are returned.
-Current coverage excludes pre-enablement history, benchmark listing, document
-processing charges, infrastructure and invoice reconciliation. Those exclusions
-are visible in the UI and report metadata.
+Coverage includes owned Studio authoring, standalone validation and measured
+document/background model calls in addition to chat and flows. Bedrock reranking
+API calls are visible with unknown token usage and charges; pagination calls are
+not asserted to be separately billable queries. Weaviate embedding and external
+PDFX usage/charges remain explicitly unavailable. Pre-enablement history,
+benchmark listing, infrastructure and invoice reconciliation stay excluded.
 
 ## Validation
 

@@ -9,9 +9,11 @@ Do not duplicate these functions in individual agent files.
 """
 
 import logging
+from contextvars import copy_context
 from typing import Optional, List, Dict, Any, Type
 
 from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+from src.lib.observability.cost_context import costed_document_processing
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 logger = logging.getLogger(__name__)
@@ -370,13 +372,17 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
                 call_measured_direct_request,
             )
 
-            response = await call_measured_direct_request(
-                surface="abstract_extraction",
-                provider="openai",
-                api="chat_completions",
-                kwargs=completion_kwargs,
-                call=client.chat.completions.create,
+            from src.lib.cost_ledger.runtime_context import (
+                child_invocation, current_runtime_cost_context, runtime_cost_scope,
             )
+            with runtime_cost_scope(child_invocation(current_runtime_cost_context())):
+                response = await call_measured_direct_request(
+                    surface="abstract_extraction",
+                    provider="openai",
+                    api="chat_completions",
+                    kwargs=completion_kwargs,
+                    call=client.chat.completions.create,
+                )
 
             content = response.choices[0].message.content
             if content is None:
@@ -420,6 +426,7 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
         return None
 
 
+@costed_document_processing
 async def fetch_document_abstract(
     document_id: str,
     user_id: str,
@@ -622,6 +629,7 @@ def fetch_document_abstract_sync(
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as pool:
             future = pool.submit(
+                copy_context().run,
                 asyncio.run,
                 fetch_document_abstract(document_id, user_id, hierarchy)
             )

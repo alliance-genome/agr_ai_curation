@@ -14,6 +14,52 @@ from src.lib.openai_agents.config import PromptCacheIdentity, build_prompt_cache
 _STUDIO_CACHE = PromptCacheIdentity(agent_key="agent_studio_authoring", static_prompt="Studio template")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["agent_studio", "benchmark_assistant"])
+async def test_real_sdk_studio_model_boundary_receives_trusted_accounting(monkeypatch, surface):
+    from unittest.mock import Mock
+    from agents import RunConfig
+    from src.lib.cost_ledger import runtime_writes
+    from src.lib.cost_ledger.runtime_context import current_runtime_cost_context
+    from tests.unit.lib.openai_agents.test_model_request_measurement import FakeResponsesHTTPModel, _final
+
+    model = FakeResponsesHTTPModel([_final()])
+    provider = SimpleNamespace(get_model=lambda _name: model)
+    monkeypatch.setattr(runtime, "build_owned_openai_responses_resources", lambda: SimpleNamespace(provider=provider))
+    monkeypatch.setattr(runtime, "_run_config", lambda **_kwargs: RunConfig(model_provider=provider, tracing_disabled=True))
+    monkeypatch.setattr(runtime, "_studio_trace_scope", lambda **_kwargs: nullcontext())
+    captured = []
+    sink = Mock()
+    def reserve(measurement):
+        context = current_runtime_cost_context()
+        captured.append((context, measurement))
+        return sink if context is not None else None
+    monkeypatch.setattr(runtime_writes, "reserve_runtime_request", reserve)
+    async def close(*_args, **_kwargs):
+        pass
+    monkeypatch.setattr(runtime, "close_owned_openai_resources", close)
+    state = runtime.AgentStudioRunState(trace_id="studio-fixture", cost_run_id="persisted-turn")
+    async for _ in runtime.stream_agent_studio_run(
+        instructions="Synthetic test", input_items=[{"role": "user", "content": "Synthetic test"}],
+        tools=[], state=state, session_id="owned-session", user_id="auth-sub", max_turns=1,
+        model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100, prompt_cache=_STUDIO_CACHE),
+        surface=surface,
+    ):
+        assert current_runtime_cost_context() is None
+    assert len(captured) == 1
+    context, measurement = captured[0]
+    if surface == "agent_studio":
+        assert context.owner_subject == "auth-sub"
+        assert context.session_id == "owned-session" and context.run_id == "persisted-turn"
+        assert context.invocation_id and context.parent_invocation_id is None
+        assert measurement["agent_id"] == "agent_studio_authoring"
+        assert sink.finish.call_args.kwargs["usage"].total_tokens == 940
+    else:
+        assert context is None
+        sink.finish.assert_not_called()
+    assert current_runtime_cost_context() is None
+
+
 def _tool_definition(name: str) -> dict:
     return {
         "name": name,

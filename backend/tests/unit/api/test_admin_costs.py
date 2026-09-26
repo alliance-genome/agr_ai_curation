@@ -75,7 +75,7 @@ def test_every_report_surface_authorized_before_read(monkeypatch, endpoint, stat
 
 
 @pytest.mark.parametrize('query', ['', '?start=2026-01-01T00:00:00Z', '?start=2026-01-01&end=2026-01-02',
-                                   '?start=2026-01-01T00:00:00Z&end=2026-06-01T00:00:00Z', '?run_id=turn'])
+                                   '?start=2026-01-01T00:00:00Z&end=2026-06-01T00:00:00Z', '?job_id=job'])
 def test_reports_require_bounded_scope(monkeypatch, query):
     app = FastAPI()
     app.include_router(costs.router)
@@ -84,6 +84,14 @@ def test_reports_require_bounded_scope(monkeypatch, query):
     monkeypatch.setattr(costs, '_report', read)
     assert TestClient(app).get('/api/admin/cost/reports' + query).status_code == 422
     read.assert_not_called()
+
+
+def test_background_run_scope_does_not_require_fabricated_session():
+    filters = costs.report_filters(run_id="job-run", document_id="doc", job_id="job")
+    assert filters["session_id"] is None
+    assert filters["run_id"] == "job-run"
+    assert filters["document_id"] == "doc"
+    assert filters["job_id"] == "job"
 
 
 @pytest.mark.parametrize('value', ['=1+1', ' +formula', '-cmd', '@SUM(1)', '\tword', '\rword', '\nword'])

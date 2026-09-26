@@ -4881,6 +4881,19 @@ async def execute_flow(
         f"user_id={user_id}, session_id={session_id}"
     )
     flow_run_id = flow_run_id or str(uuid4())
+    from dataclasses import replace
+    from src.lib.observability.cost_context import cost_scope, execution_context, runtime_context_for_boundary
+    from src.lib.cost_ledger.runtime_context import runtime_cost_scope
+
+    flow_cost_context = execution_context(
+        activity="extraction_flow", document_id=document_id, user_id=user_id,
+        workflow_id=str(flow.id), job_id=flow_run_id, run_id=cost_run_id,
+    )
+    preparation_accounting = runtime_context_for_boundary(
+        {**flow_cost_context, "job_id": None}, owner_subject=user_id, session_id=session_id,
+    )
+    if preparation_accounting is not None:
+        preparation_accounting = replace(preparation_accounting, flow_run_id=flow_run_id)
     set_current_session_id(session_id)
     set_current_user_id(str(user_id))
 
@@ -4899,7 +4912,8 @@ async def execute_flow(
     # The DocumentContext cache ensures we only hit Weaviate once even if called multiple times
     doc_context = None
     if document_id and user_id:
-        doc_context = DocumentContext.fetch(document_id, user_id, document_name)
+        with cost_scope(flow_cost_context), runtime_cost_scope(preparation_accounting):
+            doc_context = DocumentContext.fetch(document_id, user_id, document_name)
         logger.info(
             f"[Flow Executor] Pre-fetched document context: {doc_context.section_count()} sections, "
             f"abstract={'yes' if doc_context.abstract else 'no'}"
@@ -5002,11 +5016,7 @@ async def execute_flow(
     # Pass pre-fetched doc_context to avoid redundant Weaviate queries
     from src.lib.openai_agents.runner import run_agent_streamed
 
-    from src.lib.observability.cost_context import execution_context
-    supervisor.cost_execution_context = execution_context(
-        activity="extraction_flow", document_id=document_id, user_id=user_id,
-        workflow_id=str(flow.id), job_id=flow_run_id, run_id=cost_run_id,
-    )
+    supervisor.cost_execution_context = flow_cost_context
 
     flow_status = "completed"
     failure_reason: Optional[str] = None

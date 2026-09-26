@@ -573,7 +573,26 @@ def _rerank_chunks_with_bedrock(
     ranked_results: list[Any] = []
     seen_next_tokens: set[str] = set()
     while True:
-        response = client.rerank(**request_payload)
+        # Rerank reports neither token usage nor a charge. Record each actual
+        # API call (including pagination) without pretending calls are billing
+        # units or estimating tokens from the submitted documents.
+        from uuid import uuid4
+        from src.lib.cost_ledger.facts import TokenUsage
+        from src.lib.cost_ledger.runtime_writes import reserve_runtime_request
+        attempt = reserve_runtime_request({
+            "measurement_id": str(uuid4()), "provider": "bedrock", "model": model_arn,
+            "operation_type": "rerank", "candidate_count": len(candidate_chunks),
+            "pagination_request": "nextToken" in request_payload,
+        })
+        try:
+            response = client.rerank(**request_payload)
+        except BaseException:
+            if attempt is not None:
+                attempt.finish(usage=TokenUsage(), charge=None, outcome="error")
+            raise
+        else:
+            if attempt is not None:
+                attempt.finish(usage=TokenUsage(), charge=None, outcome="completed")
         if not isinstance(response, dict):
             raise RerankProviderError("bedrock_cohere", "malformed_response")
         page_results = response.get("results")

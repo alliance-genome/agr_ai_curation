@@ -7,13 +7,32 @@ const totals = { attempt_count: 1, unknown_charge_attempts: 1, recorded_charges:
   estimates: { lower: '0.000123456789', upper: '0.000123456789', priced_attempts: 1, unpriced_attempts: 0, unavailable_reasons: {} } };
 const report = { generated_at: '2026-09-26T12:00:00Z', deployment_id: 'synthetic', scope: 'time_window', totals,
   pricing_snapshot_id: 'snapshot', pricing_source: 'synthetic fixture', pricing_captured_at: '2026-09-26T00:00:00Z', valuation_algorithm: 'fixture',
-  coverage: { excluded: ['infrastructure'] }, runs: [{ ...totals, session_id: 'conversation-one', run_id: 'turn-one', activity: 'interactive_chat', flow_run_id: null, started_at: '2026-09-26T12:00:00Z' }],
+  coverage: { excluded: ['infrastructure'], external_services: { pdfx: 'provider_usage_and_charges_unavailable' } }, runs: [{ ...totals, session_id: 'conversation-one', run_id: 'turn-one', activity: 'interactive_chat', flow_run_id: null, started_at: '2026-09-26T12:00:00Z', agents: [] }],
   requests: [], pagination: { offset: 0, page_size: 50, request_count: 1, run_count: 1 } };
 
 beforeEach(() => { window.history.replaceState(null, '', '/cost/'); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('admin cost presentation', () => {
+  it('opens a background run without inventing a conversation and drills into its invocation', async () => {
+    const background = { ...report, runs: [{ ...report.runs[0], session_id: null, run_id: 'job-run',
+      document_id: 'document-one', job_id: 'job-one', activity: 'background', agents: [{ ...totals,
+        agent_id: 'validator', agent_name: 'Validator', agent_role: 'validation', node_id: null,
+        agent_revision: 'revision-one', invocation_id: 'child-call', parent_invocation_id: 'parent-call', request_ids: ['request-one'] }] }] };
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => background });
+    vi.stubGlobal('fetch', fetcher);
+    render(<CostApp />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Run job-run' }));
+    await screen.findByRole('heading', { name: 'Agents and flow steps' });
+    expect(window.location.search).toContain('run_id=job-run');
+    expect(window.location.search).not.toContain('session_id');
+    fireEvent.click(screen.getByText('Run job-run · 1 requests'));
+    expect(screen.getByText('parent-call')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect invocation' }));
+    await waitFor(() => expect(window.location.search).toContain('invocation_id=child-call'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show full run' }));
+    await waitFor(() => expect(window.location.search).not.toContain('invocation_id'));
+  });
   it.each(['default', null])('shows agent/step and distinct requested versus reported tier: %s', async (tier) => {
     window.history.replaceState(null, '', '/cost/?session_id=conversation-one');
     const request = { attempt_id: 'request-one', fact_revision: 1, created_at: report.generated_at,

@@ -8,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKeyConstraint, Index, Numeric, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKeyConstraint, Index, Numeric, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -128,11 +128,18 @@ class RuntimeCostRequest(Base):
     __tablename__ = "runtime_cost_requests"
     deployment_id: Mapped[str] = mapped_column(Text, primary_key=True)
     attempt_id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True), primary_key=True)
-    session_id: Mapped[str] = mapped_column(Text, nullable=False)
+    session_id: Mapped[str | None] = mapped_column(Text)
     run_id: Mapped[str] = mapped_column(Text, nullable=False)
     activity: Mapped[str] = mapped_column(Text, nullable=False)
     workflow_id: Mapped[str | None] = mapped_column(Text)
     flow_run_id: Mapped[str | None] = mapped_column(Text)
+    document_id: Mapped[str | None] = mapped_column(Text)
+    job_id: Mapped[str | None] = mapped_column(Text)
+    invocation_id: Mapped[str | None] = mapped_column(Text)
+    parent_invocation_id: Mapped[str | None] = mapped_column(Text)
+    operation_type: Mapped[str | None] = mapped_column(Text)
+    candidate_count: Mapped[int | None] = mapped_column(BigInteger)
+    pagination_request: Mapped[bool | None] = mapped_column(Boolean)
     provider: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str | None] = mapped_column(Text)
     agent_id: Mapped[str | None] = mapped_column(Text)

@@ -1,4 +1,4 @@
-# Ordinary conversation and flow accounting
+# Daily-use runtime accounting
 
 Opt-in runtime accounting uses the same canonical cost ledger as benchmarks.
 The measured model-request UUID is the attempt identity. Retries get separate
@@ -6,10 +6,11 @@ identities; replayed completion facts enrich the same attempt rather than add
 another charge. `runtime_cost_requests` stores attribution only, never token
 counts, money, prompts or response contents.
 
-After upgrading to `e75c05e0926e`, set `COST_LEDGER_RUNTIME_ENABLED=true`,
+After upgrading to `b08d16f1037b`, set `COST_LEDGER_RUNTIME_ENABLED=true`,
 `COST_LEDGER_DEPLOYMENT_ID` and `COST_LEDGER_RUNTIME_SOURCE_NAMESPACE` to stable
-deployment-owned identifiers. The feature is off by default. Missing scope or
-failed reservation prevents dispatch when enabled. A completion-write failure
+deployment-owned identifiers. The feature is off by default. Within an owned
+runtime context, missing deployment configuration or a failed reservation prevents
+dispatch when enabled. Calls without a trusted owner are not recorded. A completion-write failure
 preserves the model result, logs a content-free error and leaves the committed
 attempt pending/unknown for investigation. It does not imply free work.
 
@@ -19,6 +20,29 @@ provide the saved-flow and flow-execution identities. Contexts are inherited by
 nested async SDK tasks and reset between yielded events. Benchmark observers
 retain their own lease-fenced writer; runtime accounting does not write a second
 copy for them.
+
+Agent Studio uses the same trusted scope, with its persisted session/turn IDs.
+Suggestion submission has an owned run but no fabricated conversation. Standalone
+validation inherits the calling run or uses the server-owned agent boundary.
+Document jobs carry authenticated subject, document ID and real job ID; nested
+classifiers inherit those values. Database integer user IDs are not auth subjects.
+Package workers hydrate and reset the same context rather than creating a second
+accounting collector.
+
+Document abstract fallback calls retain ownership across the synchronous worker
+handoff and receive their own invocation identity. Flow preparation shares the
+eventual flow/turn identity, so a paid abstract lookup before supervisor creation
+is included in that run. Standalone abstract lookup retains the owned document
+without inventing a conversation.
+
+Agent-run boundaries assign invocation IDs and record actual parent invocation
+IDs. Requests in the same invocation retain that ID across model turns and
+structured retries. Synchronous-to-asynchronous owned-runner delegation does not
+create an extra invocation. Agent/step/revision subtotals are computed from
+canonical request rows and include only their own requests, never descendant
+totals. A missing parent or agent identity remains unknown, not guessed from
+timestamps or names. These identifiers are attribution, not another stored run
+or rollup entity.
 
 The measured SDK and measured direct-client boundaries reserve before sending,
 retain provider-reported usage on completion and retain unknown usage after
@@ -34,8 +58,13 @@ read-only repeatable-read snapshot, shared ledger aggregation and decimal-string
 money. Responses are not cached. A missing session returns 404, not a zero bill.
 Pending/completed/error outcome counts and known/unknown coverage are explicit.
 
-Coverage starts when enabled. This is not a historical backfill, provider invoice
-reconciliation, or proof of total application spend. Calls outside the trusted
-conversation boundary (including document processing), unmeasured clients,
-provider-internal retries, and shared preparation are not included. The admin
-mini-site and versioned price valuations remain separate consumers of this data.
+Coverage starts when each path is enabled; no history is reconstructed. Owned
+document processing captures measured classifier/model calls, not external PDFX
+or Weaviate embedding charges. Those services do not expose authoritative usage
+to these application boundaries; token preflight estimates are not billing facts.
+Bedrock reranking records each API call, candidate count and pagination flag in
+the same ledger. Its response does not expose token usage or a charge
+([AWS response contract](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html)).
+Those facts remain unknown; API calls and candidate counts are not claimed to be
+billable query units. Provider-internal retries, unmeasured external clients,
+infrastructure and invoice reconciliation remain outside this accounting.

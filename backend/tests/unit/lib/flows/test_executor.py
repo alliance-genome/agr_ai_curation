@@ -6065,6 +6065,30 @@ class TestExecuteFlowTermination:
     """Tests flow-level termination behavior for success and failure paths."""
 
     @pytest.mark.asyncio
+    async def test_document_prefetch_has_owned_flow_accounting_before_supervisor(self, monkeypatch):
+        from src.lib.cost_ledger.runtime_context import current_runtime_cost_context
+        from src.lib.observability.cost_context import current_cost_context
+        flow = _make_flow([_task_input_node(), _agent_node("n1", "gene")])
+        captured = []
+
+        def fetch(*args):
+            captured.append((current_runtime_cost_context(), current_cost_context()))
+            raise RuntimeError("prefetch sentinel")
+
+        monkeypatch.setattr("src.lib.flows.executor.DocumentContext.fetch", fetch)
+        stream = _executor_module().execute_flow(
+            flow, "owner", "session", document_id="document", cost_run_id="turn", flow_run_id="flow-run",
+        )
+        with pytest.raises(RuntimeError, match="prefetch sentinel"):
+            await anext(stream)
+        accounting, trace = captured[0]
+        assert accounting.owner_subject == "owner" and accounting.session_id == "session"
+        assert accounting.run_id == trace["run_id"] == "turn"
+        assert accounting.flow_run_id == "flow-run" and accounting.job_id is None
+        assert accounting.document_id == "document" and accounting.activity == "extraction_flow"
+        assert current_runtime_cost_context() is None
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("agent_id,reason,reason_code,advice", [
         ("pdf_extraction", "requires document", "document_required", "Open Documents"),
         ("allele_validation", "raw attachment-only policy reason", "attachment_only_validator",
