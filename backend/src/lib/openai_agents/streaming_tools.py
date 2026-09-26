@@ -6238,6 +6238,10 @@ async def run_specialist_with_events(
                         # NO output_guardrails - the original guardrail would trip with 0 tool calls
                         output_guardrails=[],
                     )
+                    from src.lib.observability.cost_context import (
+                        attach_agent_cost_identity, get_agent_cost_identity,
+                    )
+                    attach_agent_cost_identity(retry_agent, get_agent_cost_identity(runtime_agent))
                     benchmark_route_slot = getattr(
                         runtime_agent, "benchmark_route_slot", None
                     )

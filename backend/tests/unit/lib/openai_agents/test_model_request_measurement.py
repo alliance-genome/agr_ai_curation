@@ -593,6 +593,31 @@ def test_under_limit_request_passes_unchanged_with_usage(published, sentry_calls
     assert record["warnings"] == []
 
 
+@pytest.mark.parametrize("streamed", [False, True])
+def test_registered_agent_identity_reaches_model_measurement(published, streamed):
+    from src.lib.observability.cost_context import attach_agent_cost_identity, agent_identity
+
+    agent = Agent(name="Curator helper", instructions="short", model=FakeResponsesHTTPModel([_final()]))
+    attach_agent_cost_identity(agent, {
+        **agent_identity("registered-helper", agent.name, "extraction", "revision-a"),
+        "node_id": "step-a",
+    })
+    # Sentry's ordinary and streamed runner wrappers clone the starting agent.
+    async def run():
+        with cost_scope({"node_id": "parent-step", "run_id": "same-run"}):
+            if streamed:
+                result = Runner.run_streamed(agent.clone(), "short", run_config=RunConfig(tracing_disabled=True))
+                async for _ in result.stream_events():
+                    pass
+            else:
+                await Runner.run(agent.clone(), "short", run_config=RunConfig(tracing_disabled=True))
+    asyncio.run(run())
+    assert published[0]["agent_id"] == "registered-helper"
+    assert published[0]["agent_revision"] == "revision-a"
+    assert published[0]["node_id"] == "step-a"
+    assert published[0]["run_id"] == "same-run"
+
+
 def test_missing_provider_usage_is_not_reported_as_zero(published):
     model = FakeResponsesHTTPModel([ModelResponse(output=[_message("ok")], usage=Usage(), response_id="r")])
 

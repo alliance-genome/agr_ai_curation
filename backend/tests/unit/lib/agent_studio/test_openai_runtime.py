@@ -359,7 +359,8 @@ def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch, su
     assert captured["sentry"]["workflow"] == (
         "agent_studio_authoring" if surface == "agent_studio" else "benchmark_assistant"
     )
-    assert captured["agent"].cost_identity["agent_id"] == captured["sentry"]["workflow"]
+    from src.lib.observability.cost_context import get_agent_cost_identity
+    assert get_agent_cost_identity(captured["agent"])["agent_id"] == captured["sentry"]["workflow"]
     assert "input_preview" not in captured["sentry"]
     assert captured["sentry"]["span_data"] == {
         f"ai_curation.{surface}.input_item_count": 1,

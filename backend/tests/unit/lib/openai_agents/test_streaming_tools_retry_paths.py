@@ -685,6 +685,7 @@ async def test_structured_retry_request_replays_deferred_history_without_tool_se
     from agents import AgentOutputSchema, ModelSettings
     from agents.models.openai_responses import OpenAIResponsesModel
     from openai import AsyncOpenAI
+    from src.lib.observability.cost_context import attach_agent_cost_identity, get_agent_cost_identity
 
     class _DeferredHistoryRunResult(_FakeRunResult):
         def to_input_list(self):
@@ -704,10 +705,10 @@ async def test_structured_retry_request_replays_deferred_history_without_tool_se
     monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
 
     await streaming_tools.run_specialist_with_events(
-        agent=SimpleNamespace(
+        agent=attach_agent_cost_identity(SimpleNamespace(
             name="Structured Specialist", tools=[], output_type=_Envelope,
             instructions="", model="gpt-4o",
-        ),
+        ), {"agent_id": "specialist", "agent_revision": "revision-a", "node_id": "step-a"}),
         input_text="extract structured output",
         specialist_name="Structured Specialist",
         max_turns=3,
@@ -716,6 +717,9 @@ async def test_structured_retry_request_replays_deferred_history_without_tool_se
 
     retry_agent, retry_kwargs = calls[1]
     assert retry_agent.tools == []
+    assert get_agent_cost_identity(retry_agent.clone()) == {
+        "agent_id": "specialist", "agent_revision": "revision-a", "node_id": "step-a",
+    }
     request = OpenAIResponsesModel(
         model="gpt-4o", openai_client=AsyncOpenAI(api_key="test-key")
     )._build_response_create_kwargs(

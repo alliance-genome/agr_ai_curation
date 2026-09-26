@@ -933,20 +933,20 @@ def _publish(measurement: dict[str, Any]) -> None:
 
 def _request_identity(agent: Any | None) -> dict[str, Any]:
     from src.lib.context import get_current_session_id, get_current_trace_id
-    from src.lib.observability.cost_context import current_cost_context
+    from src.lib.observability.cost_context import current_cost_context, get_agent_cost_identity
 
     identity: dict[str, Any] = {}
     if agent is not None:
         identity["agent_name"] = getattr(agent, "name", None)
-        cost_identity = getattr(agent, "cost_identity", None)
+        cost_identity = get_agent_cost_identity(agent)
         if isinstance(cost_identity, Mapping):
-            identity["agent_id"] = cost_identity.get("agent_id")
-            identity["agent_role"] = cost_identity.get("agent_role")
+            for key in ("agent_id", "agent_role", "agent_revision", "node_id"):
+                identity[key] = cost_identity.get(key)
     identity["trace_id"] = get_current_trace_id()
     identity["session_id"] = get_current_session_id()
     cost_context = current_cost_context()
     for key in ("activity", "run_id", "workflow_id", "node_id", "job_id", "document_id"):
-        if cost_context.get(key) is not None:
+        if cost_context.get(key) is not None and identity.get(key) is None:
             identity[key] = cost_context.get(key)
     try:
         from agents.tracing import get_current_span, get_current_trace
