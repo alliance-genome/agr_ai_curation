@@ -1,9 +1,10 @@
 # Shared cost accounting ownership (0.10.0)
 
-Status: approved architectural direction; local identity/fact persistence is in
-development, with consumer migration and live ingestion still pending. This is
-not a deployed accounting service. Tracked by ALL-1310, with ALL-540 owning
-the ledger and ALL-1311 owning benchmark integration.
+Status: canonical identity/fact persistence and benchmark consumer cutover are
+implemented. [Ordinary chat/flow ingestion](RUNTIME_COST_ACCOUNTING.md) is opt-in;
+deployment acceptance, versioned pricing and the admin mini-site remain separate
+work. Tracked by ALL-1310, with ALL-540 owning the ledger and ALL-1311 owning
+benchmark integration.
 
 See [source inventory and migration plan](COST_LEDGER_MIGRATION.md) for existing
 writers/readers, the shared call-identity prerequisite and coordinated cutover.
