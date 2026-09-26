@@ -114,22 +114,27 @@ def costed_stream(function):
         values = arguments.arguments
         agent = values.get("agent")
         context = getattr(agent, "cost_execution_context", None)
-        if context is None:
+        state = values.get("state")
+        if state is not None and hasattr(state, "cost_run_id"):
+            context = execution_context(activity="authoring", run_id=state.cost_run_id)
+        elif context is None:
             context = execution_context(
                 activity="interactive_chat", document_id=values.get("document_id"),
                 user_id=values.get("user_id"), run_id=values.get("turn_id"),
             )
-        from src.lib.cost_ledger.runtime_context import RuntimeCostContext, runtime_cost_scope
+        from src.lib.cost_ledger.runtime_context import RuntimeCostContext, runtime_cost_scope, child_invocation
 
         owner, session_id = values.get("user_id"), values.get("session_id")
         accounting_context = RuntimeCostContext(
             owner_subject=str(owner), session_id=str(session_id), run_id=str(context["run_id"]),
             activity=str(context["activity"]), workflow_id=context.get("workflow_id"),
             flow_run_id=context.get("job_id"),
+            document_id=context.get("document_id"),
         ) if owner and session_id and context.get("run_id") else None
         from src.lib.openai_agents.provider_usage import has_provider_invocation_observer
-        if has_provider_invocation_observer():
+        if has_provider_invocation_observer() or values.get("surface") == "benchmark_assistant":
             accounting_context = None
+        accounting_context = child_invocation(accounting_context)
         stream = function(*args, **kwargs)
         try:
             while True:
@@ -198,18 +203,46 @@ def costed_call(function):
             document_id=boundary.get("document_id"), user_id=boundary.get("user_id"),
         )
 
+    @contextmanager
+    def scopes(agent):
+        from src.lib.cost_ledger.runtime_context import current_runtime_cost_context, runtime_agent_scope
+        context = context_for(agent)
+        boundary = getattr(agent, "cost_boundary", {})
+        accounting = current_runtime_cost_context() or runtime_context_for_boundary(
+            context, owner_subject=boundary.get("user_id"),
+        )
+        with cost_scope(context), runtime_agent_scope(accounting, agent):
+            yield
+
     if inspect.iscoroutinefunction(function):
         @wraps(function)
         async def asynchronous(agent, *args, **kwargs):
-            with cost_scope(context_for(agent)):
+            with scopes(agent):
                 return await function(agent, *args, **kwargs)
         return asynchronous
 
     @wraps(function)
     def synchronous(agent, *args, **kwargs):
-        with cost_scope(context_for(agent)):
+        with scopes(agent):
             return function(agent, *args, **kwargs)
     return synchronous
+
+
+def runtime_context_for_boundary(context, *, owner_subject, session_id=None):
+    """Build attribution only from a caller's trusted authenticated subject.
+
+    Tracing metadata never supplies ownership. Database integer user IDs are
+    deliberately rejected rather than being mistaken for auth subjects.
+    """
+    from src.lib.cost_ledger.runtime_context import RuntimeCostContext
+    from src.lib.openai_agents.provider_usage import has_provider_invocation_observer
+    if not isinstance(owner_subject, str) or not owner_subject or has_provider_invocation_observer():
+        return None
+    return RuntimeCostContext(
+        owner_subject=owner_subject, session_id=session_id, run_id=context["run_id"],
+        activity=context["activity"], workflow_id=context.get("workflow_id"),
+        document_id=context.get("document_id"), job_id=context.get("job_id"),
+    )
 
 
 def costed_document_processing(function):
@@ -220,15 +253,20 @@ def costed_document_processing(function):
         arguments = signature.bind(*args, **kwargs).arguments
         request = arguments.get("request")
         context = current_cost_context()
+        from src.lib.cost_ledger.runtime_context import current_runtime_cost_context, runtime_cost_scope
+        accounting = current_runtime_cost_context()
         job_id = getattr(request, "job_id", None)
+        owner = arguments.get("user_id") or getattr(request, "user_id", None)
         if job_id or not context.get("run_id"):
             context = execution_context(
                 activity="background",
                 document_id=arguments.get("document_id") or getattr(request, "document_id", None),
-                user_id=arguments.get("user_id") or getattr(request, "user_id", None),
+                user_id=owner,
                 run_id=str(job_id) if job_id else None,
                 job_id=str(job_id) if job_id else None,
             )
-        with cost_scope(context):
+        if job_id or accounting is None:
+            accounting = runtime_context_for_boundary(context, owner_subject=owner)
+        with cost_scope(context), runtime_cost_scope(accounting):
             return await function(*args, **kwargs)
     return wrapped

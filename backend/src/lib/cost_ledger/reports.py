@@ -61,7 +61,8 @@ def aggregate_requests(requests):
 
 
 def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, provider=None,
-                   model=None, activity=None, agent_id=None, flow_run_id=None, snapshot_id=None):
+                   model=None, activity=None, agent_id=None, flow_run_id=None, snapshot_id=None,
+                   document_id=None, job_id=None, invocation_id=None):
     if db.scalar(text("SHOW transaction_read_only")) != "on" or db.scalar(text("SHOW transaction_isolation")) != "repeatable read":
         raise ValueError("Reports require read-only repeatable-read transactions")
     db.execute(text("SELECT set_config('statement_timeout', :timeout, true)"), {"timeout": str(get_cost_report_timeout_ms())})
@@ -76,7 +77,8 @@ def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, pr
     if end is not None:
         scope.append(CostAttempt.created_at < end)
     filters = dict(session_id=session_id, run_id=run_id, provider=provider, model=model,
-                   activity=activity, agent_id=agent_id, flow_run_id=flow_run_id)
+                   activity=activity, agent_id=agent_id, flow_run_id=flow_run_id,
+                   document_id=document_id, job_id=job_id, invocation_id=invocation_id)
     for key, value in filters.items():
         if value is not None:
             column = getattr(RuntimeCostRequest, key)
@@ -94,10 +96,15 @@ def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, pr
     if len(selected) > get_cost_report_max_attempts():
         raise ReportTooLarge("Report exceeds request limit; narrow the date window or filters")
     owners_by_session = defaultdict(set)
+    owners_by_run = defaultdict(set)
     for row, _, owner in selected:
-        owners_by_session[row.session_id].add(owner)
+        if row.session_id is not None:
+            owners_by_session[row.session_id].add(owner)
+        owners_by_run[(row.session_id, row.run_id)].add(owner)
     if any(len(owners) > 1 for owners in owners_by_session.values()):
         raise ValueError("Ambiguous runtime session ownership")
+    if any(len(owners) > 1 for owners in owners_by_run.values()):
+        raise ValueError("Ambiguous runtime run ownership")
     revisions = defaultdict(list)
     if selected:
         for revision in db.scalars(select(CostFactRevision).where(
@@ -111,6 +118,10 @@ def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, pr
         requests.append({"attempt_id": str(row.attempt_id), "fact_revision": revision,
                          "created_at": created.isoformat(), "session_id": row.session_id, "run_id": row.run_id,
                          "activity": row.activity, "workflow_id": row.workflow_id, "flow_run_id": row.flow_run_id,
+                         "document_id": row.document_id, "job_id": row.job_id,
+                         "invocation_id": row.invocation_id, "parent_invocation_id": row.parent_invocation_id,
+                         "operation_type": row.operation_type, "candidate_count": row.candidate_count,
+                         "pagination_request": row.pagination_request,
                          "provider": row.provider, "model": row.model, "agent_id": row.agent_id, "outcome": row.outcome,
                          "agent_name": row.agent_name, "agent_role": row.agent_role,
                          "agent_revision": row.agent_revision, "node_id": row.node_id,
@@ -122,17 +133,38 @@ def runtime_report(db, *, start=None, end=None, session_id=None, run_id=None, pr
                                                  snapshot=snapshot, effective_service_tier=row.effective_service_tier)})
     groups = defaultdict(list)
     for row in requests:
-        groups[(row["session_id"], row["run_id"], row["activity"], row["flow_run_id"])].append(row)
+        groups[(row["session_id"], row["run_id"], row["activity"], row["flow_run_id"], row["document_id"], row["job_id"])].append(row)
     return {"schema_version": 1, "generated_at": datetime.now(timezone.utc).isoformat(),
             "deployment_id": deployment, "scope": "time_window" if start is not None else "full_recorded_session_or_turn",
             "filters": {**filters, "start": start.isoformat() if start else None, "end": end.isoformat() if end else None},
             "pricing_snapshot_id": snapshot_id, "valuation_algorithm": ALGORITHM_REVISION,
             "pricing_source": snapshot["source"] if snapshot else None,
             "pricing_captured_at": snapshot["captured_at"] if snapshot else None,
-            "coverage": {"history": "since_runtime_accounting_enabled", "included": "ordinary_chat_and_flow_model_attempts",
-                         "excluded": ["pre_enablement_history", "benchmark_attempts", "document_processing", "infrastructure", "invoice_reconciliation"],
+            "coverage": {"history": "since_each_runtime_path_enabled_no_backfill", "included": "chat_flow_authoring_and_owned_background_model_attempts",
+                         "excluded": ["pre_enablement_history", "benchmark_attempts", "infrastructure", "invoice_reconciliation"],
+                         "external_services": {"weaviate_embeddings": "provider_usage_and_charges_unavailable",
+                                               "pdfx": "provider_usage_and_charges_unavailable",
+                                               "bedrock_reranking": "api_calls_captured_billing_units_and_charges_unavailable"},
                          "service_tier": "provider_reported_only_unknown_uses_ranges", "truncated": False},
             "totals": aggregate_requests(requests),
             "runs": [{"session_id": key[0], "run_id": key[1], "activity": key[2], "flow_run_id": key[3],
+                      "document_id": key[4], "job_id": key[5], "agents": agent_groups(rows),
                       "started_at": min(row["created_at"] for row in rows), **aggregate_requests(rows)} for key, rows in groups.items()],
             "requests": requests}
+
+
+def agent_groups(requests):
+    """Exclusive request subtotals; groups never include child agent usage.
+
+    Registry/step/revision identity is not an invocation tree. Do not infer a
+    parent from display names, ordering, or the first request in a run.
+    """
+    groups = defaultdict(list)
+    for row in requests:
+        key = tuple(row[field] for field in ("agent_id", "node_id", "agent_revision", "invocation_id", "parent_invocation_id"))
+        groups[key].append(row)
+    return [{"agent_id": key[0], "node_id": key[1], "agent_revision": key[2],
+             "invocation_id": key[3], "parent_invocation_id": key[4],
+             "agent_name": rows[0]["agent_name"], "agent_role": rows[0]["agent_role"],
+             "request_ids": [row["attempt_id"] for row in rows],
+             **aggregate_requests(rows)} for key, rows in groups.items()]

@@ -7,10 +7,19 @@ export interface Totals {
   estimates: { currency: string; lower: string | null; upper: string | null; priced_attempts: number; unpriced_attempts: number; unavailable_reasons: Record<string, number> };
 }
 export interface Run extends Totals {
-  session_id: string; run_id: string; activity: string; flow_run_id: string | null; started_at: string;
+  session_id: string | null; run_id: string; activity: string; flow_run_id: string | null; started_at: string;
+  document_id: string | null; job_id: string | null; agents: AgentGroup[];
+}
+export interface AgentGroup extends Totals {
+  agent_id: string | null; agent_name: string | null; agent_role: string | null;
+  node_id: string | null; agent_revision: string | null;
+  invocation_id: string | null; parent_invocation_id: string | null; request_ids: string[];
 }
 export interface CostRequest {
-  attempt_id: string; fact_revision: number; created_at: string; session_id: string; run_id: string;
+  operation_type: string | null; candidate_count: number | null; pagination_request: boolean | null;
+  attempt_id: string; fact_revision: number; created_at: string; session_id: string | null; run_id: string;
+  document_id: string | null; job_id: string | null;
+  invocation_id: string | null; parent_invocation_id: string | null;
   provider: string; model: string | null; agent_id: string | null; outcome: string; usage_status: string;
   agent_name: string | null; agent_role: string | null; agent_revision: string | null; node_id: string | null;
   requested_service_tier: string | null; effective_service_tier: string | null;
@@ -21,7 +30,7 @@ export interface CostRequest {
 export interface CostReport {
   generated_at: string; deployment_id: string; scope: string; pricing_snapshot_id: string | null;
   pricing_source: string | null; pricing_captured_at: string | null; valuation_algorithm: string;
-  coverage: { history: string; excluded: string[]; service_tier: string };
+  coverage: { history: string; excluded: string[]; service_tier: string; external_services: Record<string, string> };
   filters: Record<string, string | null>;
   totals: Totals; runs: Run[]; requests: CostRequest[];
   pagination: { offset: number; page_size: number; request_count: number; run_count: number };

@@ -42,6 +42,7 @@ from pydantic import ValidationError
 
 from src.lib.curation_workspace.execution_provenance import capture_source_document
 from src.schemas.execution_provenance import ExtractionExecutionContext
+from src.lib.observability.cost_context import costed_call
 
 from .audit_labels import build_specialist_internal_friendly_name
 from .langfuse_client import is_openai_agents_tracing_enabled
@@ -4806,6 +4807,7 @@ def _formatter_saved_file_handoff(output: Any) -> Optional[Dict[str, Any]]:
             "file": file_ready_event_details(file_info)}
 
 
+@costed_call
 async def run_specialist_with_events(
     agent: Agent,
     input_text: str,

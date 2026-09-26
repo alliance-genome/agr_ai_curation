@@ -4306,7 +4306,7 @@ async def chat_with_opus(
 
     async def generate_stream():
         source_trace_id = request.context.trace_id if request.context else None
-        run_state = AgentStudioRunState(trace_id=uuid.uuid4().hex)
+        run_state = AgentStudioRunState(trace_id=uuid.uuid4().hex, cost_run_id=prepared_turn.turn_id)
         completed_tool_calls: List[Dict[str, Any]] = []
         domain_reference_events: List[Dict[str, Any]] = []
         workshop_proposal_state: dict = {}

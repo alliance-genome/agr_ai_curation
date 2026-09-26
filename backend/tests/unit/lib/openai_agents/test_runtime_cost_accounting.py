@@ -55,7 +55,7 @@ def test_benchmark_observer_is_not_given_runtime_writer(monkeypatch):
 def test_package_worker_restores_then_clears_attribution():
     from dataclasses import asdict
     from src.lib.packages.package_runner_entrypoint import _apply_backend_request_context
-    context = RuntimeCostContext('owner', 'session', 'turn', 'extraction_flow')
+    context = RuntimeCostContext('owner', None, 'job', 'background', document_id='doc', job_id='job')
     with runtime_cost_scope(None):
         _apply_backend_request_context({'runtime_cost_context': asdict(context)})
         assert current_runtime_cost_context() == context
@@ -95,6 +95,7 @@ def test_stream_context_isolated_and_flow_identity_preserved():
     asyncio.run(run())
     assert [c.owner_subject for c in observed] == ['a', 'b', 'a', 'b']
     assert observed[1].workflow_id == 'flow' and observed[1].flow_run_id == 'execution'
+    assert observed[1].job_id is None  # Trace job_id is the flow-run ID, not a document job.
 
 
 @pytest.mark.asyncio

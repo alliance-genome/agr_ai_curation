@@ -470,6 +470,11 @@ def test_rerank_chunks_raises_when_bedrock_returns_incomplete_results(monkeypatc
 
 def test_rerank_chunks_drains_bedrock_paginated_results(monkeypatch):
     calls = []
+    from unittest.mock import Mock
+    from src.lib.cost_ledger import runtime_writes
+    attempts = [Mock(), Mock()]
+    reservations = Mock(side_effect=attempts)
+    monkeypatch.setattr(runtime_writes, "reserve_runtime_request", reservations)
 
     class _Client:
         def rerank(self, **kwargs):
@@ -501,6 +506,15 @@ def test_rerank_chunks_drains_bedrock_paginated_results(monkeypatch):
     assert len(calls) == 2
     assert "nextToken" not in calls[0]
     assert calls[1]["nextToken"] == "page-2"
+    evidence = [call.args[0] for call in reservations.call_args_list]
+    assert len({item["measurement_id"] for item in evidence}) == 2
+    assert [item["pagination_request"] for item in evidence] == [False, True]
+    assert all(item["operation_type"] == "rerank" and item["candidate_count"] == 2 for item in evidence)
+    for attempt in attempts:
+        attempt.finish.assert_called_once()
+        assert attempt.finish.call_args.kwargs["usage"].status == "missing"
+        assert attempt.finish.call_args.kwargs["charge"] is None
+        assert attempt.finish.call_args.kwargs["outcome"] == "completed"
 
 
 def test_rerank_chunks_accepts_complete_bedrock_page_with_trailing_token(monkeypatch):
