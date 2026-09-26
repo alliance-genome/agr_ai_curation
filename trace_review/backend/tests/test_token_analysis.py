@@ -131,6 +131,8 @@ def test_token_analysis_decodes_bounded_provider_usage_without_generation():
             "sequence": 1,
             "status": "failed",
             "failure_detail": "ProviderError; status_code=503",
+            "model_request_id": None,
+            "accounting_usage": None,
         },
         {
             "route_slot": "validator:evidence",
@@ -152,5 +154,36 @@ def test_token_analysis_decodes_bounded_provider_usage_without_generation():
             "sequence": 2,
             "status": "completed",
             "failure_detail": None,
+            "model_request_id": None,
+            "accounting_usage": None,
         }
     ]
+
+
+def test_provider_usage_preserves_canonical_unknowns_and_request_identity():
+    canonical = {
+        "input_tokens": 10, "output_tokens": 0, "total_tokens": None,
+        "cache_read_tokens": 0, "cache_write_tokens": None, "reasoning_tokens": None,
+    }
+    analysis = TokenAnalysisAnalyzer.analyze({}, [{
+        "type": "EVENT",
+        "metadata": {
+            "provider_usage": {"sequence": 1, "total_tokens": 10},
+            "model_request_id": "d539c923-dc4c-4491-99d9-ce464401e210",
+            "accounting_usage": {**canonical, "unexpected_payload": "must not leak"},
+        },
+    }])
+    record = analysis["provider_usage"][0]
+    assert record["model_request_id"] == "d539c923-dc4c-4491-99d9-ce464401e210"
+    assert record["accounting_usage"] == canonical
+    assert record["total_tokens"] == 10
+    assert analysis["total_generations"] == 0  # An event is not another billed generation.
+
+
+def test_provider_usage_non_mapping_accounting_is_unavailable():
+    for value in (None, "invalid", []):
+        records = TokenAnalysisAnalyzer._provider_usage([{
+            "metadata": {"provider_usage": {}, "accounting_usage": value},
+        }])
+        assert records[0]["accounting_usage"] is None
+        assert records[0]["model_request_id"] is None
