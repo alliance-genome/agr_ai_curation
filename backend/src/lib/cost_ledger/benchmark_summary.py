@@ -1,9 +1,5 @@
 """Owner-scoped job summaries derived from ledger facts, never persisted totals."""
 
-from collections import Counter
-from dataclasses import fields
-from decimal import Decimal
-from itertools import groupby
 from uuid import UUID
 
 from sqlalchemy import String, and_, cast, func, select, text
@@ -11,14 +7,12 @@ from sqlalchemy.orm import Session
 
 from src.lib.openai_agents.config import (
     get_cost_ledger_benchmark_source_namespace, get_cost_ledger_deployment_id,
-    get_cost_ledger_read_page_size,
 )
 from src.models.sql.benchmark import BenchmarkCell, BenchmarkInvocation, BenchmarkJob
 from src.models.sql.cost_ledger import CostAttempt, CostFactRevision, CostSourceReference
-from src.schemas.cost_ledger import BenchmarkJobAccounting, KnownTokenTotal, RecordedChargeTotal
+from src.schemas.cost_ledger import BenchmarkJobAccounting
 from .benchmark_reads import BenchmarkAccountingUnavailable
-from .facts import RecordedCharge, TokenUsage, enrich_charge, enrich_usage
-from .decimal_math import add_exact
+from .summary import summarize_fact_rows
 
 
 def read_benchmark_job_accounting(session: Session, *, job_id: UUID, owner_subject: str) -> BenchmarkJobAccounting:
@@ -63,47 +57,7 @@ def read_benchmark_job_accounting(session: Session, *, job_id: UUID, owner_subje
         CostFactRevision.attempt_id == attempts.c.attempt_id,
     )).order_by(attempts.c.attempt_id, CostFactRevision.revision)
 
-    totals, known, amounts, charge_counts = Counter(), Counter(), {}, Counter()
-    count = inconsistent = unknown_charge = 0
-    # SQL distinct attempts avoids counting one billable call twice when it has
-    # multiple verified source references. Server cursor bounds fetched rows.
-    rows = session.execute(query.execution_options(yield_per=get_cost_ledger_read_page_size()))
-    try:
-        for _, revisions in groupby(rows, key=lambda row: row[0]):
-            usage, charge = TokenUsage(), None
-            for _, revision in revisions:
-                if revision is None:
-                    continue
-                usage = enrich_usage(usage, TokenUsage(**{
-                    field.name: getattr(revision, field.name) for field in fields(TokenUsage)
-                }))
-                if revision.billed_amount is not None:
-                    charge = enrich_charge(charge, RecordedCharge(
-                        revision.billed_amount, revision.billed_unit, revision.billed_source,
-                    ))
-            count += 1
-            inconsistent += bool(usage.issues)
-            for field in fields(TokenUsage):
-                value = getattr(usage, field.name)
-                if value is not None:
-                    totals[field.name] += value
-                    known[field.name] += 1
-            if charge is None:
-                unknown_charge += 1
-            else:
-                key = (charge.unit, charge.source)
-                amounts[key] = add_exact(amounts.get(key, Decimal(0)), charge.amount)
-                charge_counts[key] += 1
-    finally:
-        rows.close()
     return BenchmarkJobAccounting(
-        job_id=job_id, invocation_count=invocation_count, attempt_count=count,
-        usage={field.name: KnownTokenTotal(
-            known_total=totals[field.name] if known[field.name] else None,
-            known_attempts=known[field.name], unknown_attempts=count - known[field.name],
-        ) for field in fields(TokenUsage)},
-        inconsistent_usage_attempts=inconsistent, unknown_charge_attempts=unknown_charge,
-        recorded_charges=tuple(RecordedChargeTotal(unit=unit, source=source, amount=amount,
-                                                 attempts=charge_counts[(unit, source)])
-                               for (unit, source), amount in sorted(amounts.items())),
+        job_id=job_id, invocation_count=invocation_count,
+        **summarize_fact_rows(session, query),
     )

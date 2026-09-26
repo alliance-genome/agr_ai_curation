@@ -18,7 +18,7 @@ from .agent import Agent, Project, ProjectMember
 from .agent_execution_revision import AgentExecutionRevision
 from .chat_message import ChatMessage
 from .chat_session import ChatSession
-from .cost_ledger import CostAttempt, CostFactRevision, CostSourceReference
+from .cost_ledger import CostAttempt, CostFactRevision, CostSourceReference, RuntimeCostRequest
 from .chat_route_preference import ChatRoutePreference
 from .flow_shortcut_preference import FlowShortcutPreference
 from .custom_agent import CustomAgentVersion
@@ -44,6 +44,7 @@ __all__ = [
     "CostAttempt",
     "CostFactRevision",
     "CostSourceReference",
+    "RuntimeCostRequest",
     "Base",
     "Batch",
     "BatchDocument",

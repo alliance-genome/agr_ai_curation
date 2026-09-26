@@ -141,6 +141,10 @@ class PackageToolRunner:
         from src.lib.observability.cost_context import current_cost_context
         request_context = dict(context or {})
         request_context["cost_context"] = current_cost_context()
+        from dataclasses import asdict
+        from src.lib.cost_ledger.runtime_context import current_runtime_cost_context
+        accounting_context = current_runtime_cost_context()
+        request_context["runtime_cost_context"] = asdict(accounting_context) if accounting_context else None
         request = RunnerRequest(
             protocol_version=PROTOCOL_VERSION,
             package_id=package.package_id,

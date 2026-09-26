@@ -119,19 +119,30 @@ def costed_stream(function):
                 activity="interactive_chat", document_id=values.get("document_id"),
                 user_id=values.get("user_id"), run_id=values.get("turn_id"),
             )
+        from src.lib.cost_ledger.runtime_context import RuntimeCostContext, runtime_cost_scope
+
+        owner, session_id = values.get("user_id"), values.get("session_id")
+        accounting_context = RuntimeCostContext(
+            owner_subject=str(owner), session_id=str(session_id), run_id=str(context["run_id"]),
+            activity=str(context["activity"]), workflow_id=context.get("workflow_id"),
+            flow_run_id=context.get("job_id"),
+        ) if owner and session_id and context.get("run_id") else None
+        from src.lib.openai_agents.provider_usage import has_provider_invocation_observer
+        if has_provider_invocation_observer():
+            accounting_context = None
         stream = function(*args, **kwargs)
         try:
             while True:
                 # Do not leave request context installed while the caller
                 # processes a yielded event or advances another stream.
-                with cost_scope(context):
+                with cost_scope(context), runtime_cost_scope(accounting_context):
                     try:
                         event = await anext(stream)
                     except StopAsyncIteration:
                         return
                 yield event
         finally:
-            with cost_scope(context):
+            with cost_scope(context), runtime_cost_scope(accounting_context):
                 await stream.aclose()
     return wrapped
 

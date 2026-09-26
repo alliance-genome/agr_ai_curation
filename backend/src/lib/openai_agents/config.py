@@ -1585,6 +1585,15 @@ def get_cost_ledger_deployment_id() -> str:
     return os.getenv("COST_LEDGER_DEPLOYMENT_ID", "").strip()
 
 
+def get_cost_ledger_runtime_enabled() -> bool:
+    """Opt in only after the runtime ledger schema and deployment scope exist."""
+    return _get_env_bool("COST_LEDGER_RUNTIME_ENABLED", False)
+
+
+def get_cost_ledger_runtime_source_namespace() -> str:
+    return os.getenv("COST_LEDGER_RUNTIME_SOURCE_NAMESPACE", "").strip()
+
+
 def get_cost_ledger_read_page_size() -> int:
     """Rows fetched per shared ledger report cursor; not a total coverage cap."""
     return max(1, _get_env_int_with_fallback("COST_LEDGER_READ_PAGE_SIZE", 200))

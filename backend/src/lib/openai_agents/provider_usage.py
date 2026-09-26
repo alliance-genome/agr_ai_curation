@@ -108,6 +108,11 @@ _provider_invocation_observer: ContextVar[Optional[ProviderInvocationObserver]] 
 )
 
 
+def has_provider_invocation_observer() -> bool:
+    """Whether a durable execution-specific writer already owns this attempt."""
+    return _provider_invocation_observer.get() is not None
+
+
 @contextmanager
 def observe_provider_invocations(
     observer: ProviderInvocationObserver,
@@ -153,6 +158,8 @@ def capture_provider_usage(
 def emit_provider_usage(record: ProviderUsageRecord) -> None:
     """Capture a record and publish its bounded fields to the active trace."""
 
+    from src.lib.cost_ledger.runtime_writes import record_runtime_provider_usage
+    record_runtime_provider_usage(record)
     capture = _provider_usage_records.get()
     if capture is not None:
         with capture.lock:

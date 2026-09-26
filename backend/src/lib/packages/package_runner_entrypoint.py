@@ -155,12 +155,15 @@ def _apply_backend_request_context(context: dict[str, Any]) -> None:
     in host-process execution paths.
     """
 
-    if not context:
-        return
-
     try:
         context_module = importlib.import_module("src.lib.context")
     except ImportError:
+        return
+
+    from src.lib.cost_ledger.runtime_context import RuntimeCostContext, set_runtime_cost_context
+    accounting = context.get("runtime_cost_context")
+    set_runtime_cost_context(RuntimeCostContext(**accounting) if accounting else None)
+    if not context:
         return
 
     clear_context = getattr(context_module, "clear_context", None)
