@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import CostApp, { moneyRange } from './CostApp';
 import CostTheme from './CostTheme';
+import Button from '@mui/material/Button';
+import { getContrastRatio } from '@mui/material/styles';
 
 const totals = { attempt_count: 1, unknown_charge_attempts: 1, recorded_charges: [], outcomes: { completed: 1 },
   usage: { total_tokens: { known_total: 100, unknown_attempts: 0, known_attempts: 1 } },
@@ -68,6 +70,16 @@ describe('admin cost presentation', () => {
     unmount();
     render(<CostTheme><p>Dashboard</p></CostTheme>);
     expect(screen.getByRole('button', { name: 'Dark mode' })).toHaveAttribute('aria-pressed', 'true');
+  });
+  it('keeps dark filled button labels readable without darkening outlined text', () => {
+    localStorage.setItem('cost-theme:v1', 'dark');
+    render(<CostTheme><Button variant="contained">Apply</Button><Button variant="outlined">Other view</Button></CostTheme>);
+    const filled = getComputedStyle(screen.getByRole('button', { name: 'Apply' }));
+    // jsdom retains MUI color variables rather than resolving them like a browser.
+    const label = filled.getPropertyValue('--variant-containedColor');
+    expect(getContrastRatio(label, filled.getPropertyValue('--variant-containedBg'))).toBeGreaterThanOrEqual(4.5);
+    const outlined = getComputedStyle(screen.getByRole('button', { name: 'Other view' }));
+    expect(outlined.getPropertyValue('--variant-outlinedColor')).toBe('#3b82f6');
   });
   it.each(['flows', 'chats', 'curators'])('offers a first-class %s view and preserves it when filtering', async (view) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => report }));
