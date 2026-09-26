@@ -2,13 +2,17 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.encoders import jsonable_encoder
 from decimal import Decimal
+import logging
 from sqlalchemy import text
 
 from src.api.admin.auth import require_admin
 from src.lib.cost_ledger.runtime_reads import read_runtime_accounting
 from src.models.sql.database import SessionLocal
+from src.lib.http_errors import raise_sanitized_http_exception
+from src.lib.observability.runtime import sanitized_runtime_error
 
 router = APIRouter(prefix="/api/admin/cost", tags=["Admin - Cost"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/sessions/{session_id}")
@@ -23,4 +27,12 @@ def session_accounting(session_id: str, response: Response, run_id: str | None =
     except LookupError:
         raise HTTPException(404, "Runtime accounting not found", headers={"Cache-Control": "no-store"}) from None
     except ValueError:
-        raise HTTPException(503, "Runtime accounting unavailable", headers={"Cache-Control": "no-store"}) from None
+        try:
+            raise_sanitized_http_exception(
+                logger, status_code=503, detail="Runtime accounting unavailable",
+                log_message="Runtime accounting read unavailable",
+                exc=sanitized_runtime_error("Runtime accounting read unavailable"),
+            )
+        except HTTPException as error:
+            error.headers = {"Cache-Control": "no-store"}
+            raise

@@ -20,10 +20,20 @@ from src.lib.openai_agents.config import (
 )
 from src.models.sql.cost_ledger import RuntimeCostRequest
 from src.models.sql.database import SessionLocal
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 
 logger = logging.getLogger(__name__)
 
 _active_attempt: ContextVar["RuntimeAccountingAttempt | None"] = ContextVar("active_runtime_cost_attempt", default=None)
+
+
+def _report_failure(operation: str, run_id: str) -> None:
+    report_runtime_exception(
+        sanitized_runtime_error("Runtime cost accounting unavailable"),
+        component="runtime_cost_ledger", operation=operation, context={"run_id": run_id},
+    )
+    logger.error("Runtime cost accounting unavailable operation=%s", operation,
+                 extra={"sentry_skip_event": True})
 
 
 @contextmanager
@@ -54,8 +64,8 @@ def finish_runtime_request(attempt, *, raw_usage, provider, sdk_normalized, outc
         usage = _accounting_usage(raw_usage, sdk_normalized=sdk_normalized)
         billed = _openrouter_billed_cost(_as_mapping(raw_usage)) if provider == "openrouter" else None
         charge = RecordedCharge(billed.amount, billed.unit, billed.source) if billed else None
-    except (TypeError, ValueError) as exc:
-        logger.error("Runtime cost usage unavailable error_type=%s", type(exc).__name__)
+    except (TypeError, ValueError):
+        _report_failure("usage_unavailable", attempt.run_id)
         return
     attempt.finish(usage=usage, charge=charge, outcome=outcome)
 
@@ -66,6 +76,7 @@ class RuntimeAccountingAttempt:
     namespace: str
     owner: str
     attempt_id: UUID
+    run_id: str
 
     def finish(self, *, usage: TokenUsage, charge: RecordedCharge | None, outcome: str) -> None:
         try:
@@ -80,12 +91,11 @@ class RuntimeAccountingAttempt:
                     raise LookupError("Runtime accounting reservation missing")
                 row.outcome = outcome
                 db.commit()
-        except Exception as exc:
+        except Exception:
             # The model has already executed: preserve its result/error. The
             # committed reservation/facts remain available; no missing value is
             # converted to zero, including after an earlier raw-usage enrichment.
-            logger.error("Runtime cost completion unavailable attempt=%s error_type=%s",
-                         self.attempt_id, type(exc).__name__)
+            _report_failure("completion_failed", self.run_id)
 
 
 def reserve_runtime_request(measurement: dict) -> RuntimeAccountingAttempt | None:
@@ -103,7 +113,7 @@ def reserve_runtime_request(measurement: dict) -> RuntimeAccountingAttempt | Non
     if not deployment or not namespace:
         raise RuntimeError("Runtime cost accounting scope is not configured")
     attempt = RuntimeAccountingAttempt(deployment, namespace, context.owner_subject,
-                                       UUID(measurement["measurement_id"]))
+                                       UUID(measurement["measurement_id"]), context.run_id)
     with SessionLocal() as db:
         bind_cost_source(
             db, deployment_id=deployment, source_namespace=namespace, source_system="runtime",

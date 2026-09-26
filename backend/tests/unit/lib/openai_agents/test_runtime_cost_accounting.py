@@ -151,3 +151,29 @@ def test_failed_model_request_retains_unknown_attempt(monkeypatch):
     sink.finish.assert_called_once()
     assert sink.finish.call_args.kwargs['usage'].status == 'missing'
     assert sink.finish.call_args.kwargs['outcome'] == 'provider_error'
+
+
+@pytest.mark.parametrize('operation', ['usage_unavailable', 'completion_failed'])
+def test_accounting_failure_alert_is_sanitized(monkeypatch, caplog, operation):
+    from uuid import uuid4
+    from src.lib.cost_ledger.facts import TokenUsage
+    attempt = runtime_writes.RuntimeAccountingAttempt('deployment', 'namespace', 'owner', uuid4(), 'run')
+    capture = Mock()
+    monkeypatch.setattr(runtime_writes, 'report_runtime_exception', capture)
+    def fail(*args, **kwargs):
+        raise ValueError('secret SQL curator text')
+    if operation == 'completion_failed':
+        monkeypatch.setattr(runtime_writes, 'SessionLocal', fail)
+        attempt.finish(usage=TokenUsage(), charge=None, outcome='completed')
+    else:
+        from src.lib.openai_agents import provider_usage
+        monkeypatch.setattr(provider_usage, '_accounting_usage', fail)
+        runtime_writes.finish_runtime_request(attempt, raw_usage={}, provider='fixture',
+                                              sdk_normalized=False, outcome='completed')
+    capture.assert_called_once()
+    error = capture.call_args.args[0]
+    assert error.__context__ is None and error.__cause__ is None
+    assert 'secret SQL' not in str(error) + caplog.text
+    assert capture.call_args.kwargs['operation'] == operation
+    assert capture.call_args.kwargs['context'] == {'run_id': 'run'}
+    assert caplog.records[-1].sentry_skip_event is True
