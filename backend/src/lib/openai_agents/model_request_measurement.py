@@ -157,6 +157,23 @@ def _install_service_tier_capture():
             if hasattr(response, "__aiter__"):
                 return _TierObservedStream(response, measurement)
             _observe_service_tier(measurement, response)
+            # Retain usage before the SDK drops cache-write fields and replaces
+            # omitted details with zero. Never retain response content here.
+            raw_usage = getattr(response, "usage", None)
+            if raw_usage is not None:
+                dump = getattr(raw_usage, "model_dump", None)
+                raw_usage = dump(exclude_unset=True) if callable(dump) else raw_usage
+                if isinstance(raw_usage, Mapping):
+                    # Provider adapters already capture charges. This seam only
+                    # recovers token fields lost by SDK normalization.
+                    measurement["_raw_provider_usage"] = {
+                        key: raw_usage[key] for key in (
+                            "input_tokens", "output_tokens", "total_tokens",
+                            "prompt_tokens", "completion_tokens",
+                            "input_tokens_details", "output_tokens_details",
+                            "prompt_tokens_details", "completion_tokens_details",
+                        ) if key in raw_usage
+                    }
             return response
 
         observed._agr_service_tier_capture = True
@@ -1242,8 +1259,8 @@ class MeasuredModel(Model):
             measurement,
             outcome="completed",
             usage=usage_from_model_response(response),
-            raw_usage=getattr(response, "usage", None),
-            sdk_normalized_usage=True,
+            raw_usage=measurement.get("_raw_provider_usage", getattr(response, "usage", None)),
+            sdk_normalized_usage="_raw_provider_usage" not in measurement,
             response_id=getattr(response, "response_id", None),
             provider_request_id=getattr(response, "request_id", None),
         )
