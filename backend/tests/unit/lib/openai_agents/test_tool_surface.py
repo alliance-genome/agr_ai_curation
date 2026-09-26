@@ -965,7 +965,8 @@ def _extractor_agent(definition, *, model="gpt-6-sol"):
         tools=[_tool(name) for name in definition.tools],
     )
     agent.agent_key = definition.agent_id
-    agent.cost_identity = {"agent_id": definition.agent_id, "agent_role": "extraction"}
+    from src.lib.observability.cost_context import attach_agent_cost_identity
+    attach_agent_cost_identity(agent, {"agent_id": definition.agent_id, "agent_role": "extraction"})
     return agent
 
 
@@ -1094,7 +1095,8 @@ def test_custom_extractor_uses_the_extractor_policy():
         tools=[_tool("read_chunk"), _tool("patch_gene_mention_evidence"), _tool("finalize_gene_extraction")],
     )
     agent.agent_key = "ca_custom_extractor"
-    agent.cost_identity = {"agent_id": "ca_custom_extractor", "agent_role": "extraction"}
+    from src.lib.observability.cost_context import attach_agent_cost_identity
+    attach_agent_cost_identity(agent, {"agent_id": "ca_custom_extractor", "agent_role": "extraction"})
 
     surface = apply_tool_surface(agent)
 
@@ -1113,7 +1115,8 @@ def test_named_tool_choice_stays_eager():
         model_settings=ModelSettings(tool_choice="patch_gene_mention_evidence"),
         tools=[_tool("read_chunk"), _tool("patch_gene_mention_evidence"), _tool("find_staged_gene_mention_evidence")],
     )
-    agent.cost_identity = {"agent_id": "ca_named", "agent_role": "extraction"}
+    from src.lib.observability.cost_context import attach_agent_cost_identity
+    attach_agent_cost_identity(agent, {"agent_id": "ca_named", "agent_role": "extraction"})
 
     surface = apply_tool_surface(agent)
 

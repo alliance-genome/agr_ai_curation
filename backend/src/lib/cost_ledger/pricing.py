@@ -77,13 +77,13 @@ def load_snapshot(db, identifier: str | None):
     return payload
 
 
-def value_usage(usage, *, provider, model, timestamp, snapshot):
+def value_usage(usage, *, provider, model, timestamp, snapshot, effective_service_tier=None):
     if snapshot is None:
         return {"estimate_unavailable_reason": "no_pricing_snapshot"}
     if not model:
         return {"estimate_unavailable_reason": "model_not_recorded"}
     event = {"usage_status": usage.status, "model": model, "timestamp": timestamp.isoformat(),
-             "service_tier": "unknown", "usage": {**asdict(usage),
+             "service_tier": effective_service_tier, "usage": {**asdict(usage),
              "uncached_input_tokens": usage.uncached_input_tokens}}
     try:
         result = estimate(event, snapshot["providers"].get(provider, []))

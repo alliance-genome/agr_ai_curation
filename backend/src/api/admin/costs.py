@@ -103,7 +103,8 @@ def export_cost_report(format: Literal["json", "csv"] = "json", filters: dict = 
     writer = csv.writer(stream)
     columns = ["deployment_id", "pricing_snapshot_id", "valuation_algorithm", "scope", "filters", "generated_at",
                "attempt_id", "fact_revision", "created_at", "session_id", "run_id", "activity", "flow_run_id",
-               "provider", "model", "agent_id", "outcome", "usage_status", "input_tokens", "output_tokens",
+               "provider", "model", "agent_id", "agent_name", "agent_role", "agent_revision", "node_id",
+               "requested_service_tier", "effective_service_tier", "outcome", "usage_status", "input_tokens", "output_tokens",
                "total_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens",
                "recorded_amount", "recorded_unit", "recorded_source", "estimated_usd_lower", "estimated_usd_upper", "estimate_unavailable_reason"]
     writer.writerow(columns)

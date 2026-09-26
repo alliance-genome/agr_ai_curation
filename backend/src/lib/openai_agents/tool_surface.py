@@ -704,7 +704,8 @@ def runtime_for_agent(agent: Any) -> str:
     declared = getattr(agent, "tool_surface_runtime", None)
     if declared:
         return str(declared)
-    identity = getattr(agent, "cost_identity", None)
+    from src.lib.observability.cost_context import get_agent_cost_identity
+    identity = get_agent_cost_identity(agent)
     role = identity.get("agent_role") if isinstance(identity, Mapping) else None
     return {
         "extraction": "extractor",
@@ -715,7 +716,8 @@ def runtime_for_agent(agent: Any) -> str:
 
 
 def _agent_key(agent: Any) -> str:
-    identity = getattr(agent, "cost_identity", None)
+    from src.lib.observability.cost_context import get_agent_cost_identity
+    identity = get_agent_cost_identity(agent)
     return str(
         getattr(agent, "agent_key", None)
         or (identity.get("agent_id") if isinstance(identity, Mapping) else None)

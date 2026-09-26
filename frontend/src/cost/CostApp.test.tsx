@@ -14,6 +14,22 @@ beforeEach(() => { window.history.replaceState(null, '', '/cost/'); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('admin cost presentation', () => {
+  it.each(['default', null])('shows agent/step and distinct requested versus reported tier: %s', async (tier) => {
+    window.history.replaceState(null, '', '/cost/?session_id=conversation-one');
+    const request = { attempt_id: 'request-one', fact_revision: 1, created_at: report.generated_at,
+      agent_id: 'helper', agent_name: 'Gene helper', agent_role: 'extraction', agent_revision: 'revision-a', node_id: 'step-2',
+      provider: 'openai', model: 'test', requested_service_tier: 'flex', effective_service_tier: tier,
+      usage: { total_tokens: 100 }, recorded_charge: null, estimate: {}, outcome: 'completed' };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ...report, requests: [request] }) }));
+    render(<CostApp />);
+    expect(await screen.findByText('Gene helper')).toBeInTheDocument();
+    expect(screen.getByText('Flow step: step-2')).toBeInTheDocument();
+    expect(screen.getByText('Requested tier: flex')).toBeInTheDocument();
+    expect(screen.getByText(`Reported tier: ${tier ?? 'Unknown'}`)).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Request details'));
+    expect(screen.getByText('revision-a')).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Export JSON' })).toHaveAttribute('href', expect.stringContaining('session_id=conversation-one'));
+  });
   it('keeps exact monetary strings and unknowns distinct from zero', () => {
     expect(moneyRange('0.0000000000000123', '0.0000000000000123')).toBe('$0.0000000000000123');
     expect(moneyRange('0', '0')).toBe('$0');

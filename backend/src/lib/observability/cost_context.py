@@ -147,16 +147,27 @@ def costed_stream(function):
     return wrapped
 
 
+def get_agent_cost_identity(agent) -> dict[str, Any]:
+    """Read identity from SDK-preserved hooks, including Sentry's Agent.clone()."""
+    identity = getattr(getattr(agent, "hooks", None), "cost_identity", None)
+    return dict(identity) if isinstance(identity, Mapping) else {}
+
+
 def attach_agent_cost_identity(agent, identity: Mapping[str, Any]):
     """Attach registry identity to the SDK agent span without name classification."""
     from agents import AgentHooks
     from opentelemetry import trace
 
     identity = dict(identity)
-    agent.cost_identity = identity
     previous = getattr(agent, "hooks", None)
 
     class CostHooks(AgentHooks):
+        @property
+        def cost_identity(self):
+            # Agent.clone() preserves hooks but drops dynamically attached agent
+            # attributes. Keep one canonical identity here, not a second store.
+            return dict(identity)
+
         async def on_start(self, context, running_agent):
             span = trace.get_current_span()
             if span.is_recording():
@@ -180,7 +191,7 @@ def costed_call(function):
         inherited = current_cost_context()
         if inherited.get("run_id"):
             return inherited
-        identity = getattr(agent, "cost_identity", {})
+        identity = get_agent_cost_identity(agent)
         boundary = getattr(agent, "cost_boundary", {})
         return execution_context(
             activity="standalone_validation" if identity.get("agent_role") == "validation" else "background",

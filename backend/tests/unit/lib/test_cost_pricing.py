@@ -24,6 +24,29 @@ def test_decimal_independent_of_ambient_precision():
     assert result["cost"] == result["estimated_cost_upper"]
 
 
+def test_runtime_valuation_uses_only_effective_tier_to_narrow_range():
+    from datetime import datetime, timezone
+    from src.lib.cost_ledger.facts import TokenUsage
+    from src.lib.cost_ledger.pricing import value_usage
+    prices = catalog()
+    prices[0]['pricingTiers'] = [
+        {'name': tier, 'priority': i, 'isDefault': tier == 'default',
+         'conditions': [] if tier == 'default' else [
+             {'source': 'model_parameters', 'key': 'service_tier', 'operator': 'in', 'values': [tier]}],
+         'prices': dict.fromkeys(prices[0]['prices'], rate)}
+        for i, (tier, rate) in enumerate([('flex', '0.0005'), ('priority', '0.002'), ('default', '0.001')])
+    ]
+    args = dict(provider='fixture', model='test', timestamp=datetime.now(timezone.utc),
+                snapshot={'currency': 'USD', 'providers': {'fixture': prices}})
+    usage = TokenUsage(100, 20, 120, 0, 0, 0)
+    unknown = value_usage(usage, **args)
+    assert Decimal(unknown['cost']) == Decimal('0.06')
+    assert Decimal(unknown['estimated_cost_upper']) == Decimal('0.24')
+    known = value_usage(usage, effective_service_tier='default', **args)
+    assert Decimal(known['cost']) == Decimal('0.12')
+    assert known['cost'] == known['estimated_cost_upper']
+
+
 def test_unknown_cache_is_not_zero():
     sample = event()
     sample["usage"]["cache_write_tokens"] = None

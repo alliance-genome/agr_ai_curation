@@ -58,7 +58,8 @@ def record_runtime_provider_usage(record) -> None:
     )
 
 
-def finish_runtime_request(attempt, *, raw_usage, provider, sdk_normalized, outcome) -> None:
+def finish_runtime_request(attempt, *, raw_usage, provider, sdk_normalized, outcome,
+                           service_tiers=None) -> None:
     from src.lib.openai_agents.provider_usage import _accounting_usage, _as_mapping, _openrouter_billed_cost
     try:
         usage = _accounting_usage(raw_usage, sdk_normalized=sdk_normalized)
@@ -67,7 +68,8 @@ def finish_runtime_request(attempt, *, raw_usage, provider, sdk_normalized, outc
     except (TypeError, ValueError):
         _report_failure("usage_unavailable", attempt.run_id)
         return
-    attempt.finish(usage=usage, charge=charge, outcome=outcome)
+    attempt.finish(usage=usage, charge=charge, outcome=outcome,
+                   service_tiers=service_tiers)
 
 
 @dataclass(frozen=True)
@@ -78,7 +80,8 @@ class RuntimeAccountingAttempt:
     attempt_id: UUID
     run_id: str
 
-    def finish(self, *, usage: TokenUsage, charge: RecordedCharge | None, outcome: str) -> None:
+    def finish(self, *, usage: TokenUsage, charge: RecordedCharge | None, outcome: str,
+               service_tiers: dict | None = None) -> None:
         try:
             with SessionLocal() as db:
                 record_cost_facts(
@@ -90,6 +93,13 @@ class RuntimeAccountingAttempt:
                 if row is None:
                     raise LookupError("Runtime accounting reservation missing")
                 row.outcome = outcome
+                if service_tiers is not None:
+                    row.requested_service_tier = service_tiers["requested"]
+                    effective = service_tiers["effective"]
+                    if effective is not None and row.effective_service_tier not in (None, effective):
+                        raise ValueError("Conflicting provider service tier for one attempt")
+                    if effective is not None:
+                        row.effective_service_tier = effective
                 db.commit()
         except Exception:
             # The model has already executed: preserve its result/error. The
@@ -126,6 +136,9 @@ def reserve_runtime_request(measurement: dict) -> RuntimeAccountingAttempt | Non
             workflow_id=context.workflow_id, flow_run_id=context.flow_run_id,
             provider=measurement["provider"], model=measurement.get("model"),
             agent_id=measurement.get("agent_id"), outcome="pending",
+            agent_name=measurement.get("agent_name"), agent_role=measurement.get("agent_role"),
+            agent_revision=measurement.get("agent_revision"), node_id=measurement.get("node_id"),
+            requested_service_tier=measurement.get("requested_service_tier"),
         ))
         db.commit()
     return attempt

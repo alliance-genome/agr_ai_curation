@@ -68,9 +68,29 @@ explicit selected snapshot.
 Inclusive input/output counts are partitioned without double-counting cache or
 reasoning. Unknown cache/reasoning counts produce justified lower/upper bounds
 where the rate conditions permit, otherwise an explicit unavailable reason.
-Service tier is currently unknown in runtime attribution: supported alternatives
-produce a range. Estimates are independent of recorded charges and never summed
+New requests retain requested and provider-reported effective service tiers
+separately. Only the effective tier is used for valuation; requesting Flex does
+not prove that Flex served the request. Missing provider tier evidence leaves
+supported alternatives as a range. Estimates are independent of recorded charges and never summed
 with them. Credits are not silently converted into USD. Missing is not zero.
+
+## Runtime attribution
+
+Each measured request carries the registered agent ID, display name, role,
+revision and flow node ID where available. Identity lives on the existing agent
+hooks so SDK/Sentry cloning retains it; structured retries inherit the specialist
+identity. Supervisors need not have a flow node. The request drill-down and
+JSON/CSV exports expose these fields without storing prompts or scientific data.
+
+Tier capture runs at the existing SDK measurement boundary, observing native
+Responses (HTTP/WebSocket) and Chat Completions before SDK normalization can drop
+provider metadata. Requested tiers reflect the effective request settings,
+including provider policy and extra-body overrides. A missing requested tier is
+not specified, while a missing effective tier is unknown—not assumed standard.
+This is forward-only capture: no backfill or historical reconstruction is run.
+Catalog tier conditions must cover only supported pricing modes; a default tier
+must not silently price an unsupported reported mode (for example a negotiated
+or access-controlled tier).
 
 ## Read contract
 

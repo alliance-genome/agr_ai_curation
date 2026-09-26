@@ -13,6 +13,31 @@ from src.lib.observability.cost_context import (
 )
 
 
+@pytest.mark.asyncio
+async def test_clone_preserves_identity_and_existing_agent_hooks():
+    from agents import Agent, AgentHooks
+    from src.lib.observability.cost_context import get_agent_cost_identity
+
+    calls = []
+    class ExistingHooks(AgentHooks):
+        async def on_start(self, context, agent):
+            calls.append("start")
+
+        async def on_end(self, context, agent, output):
+            calls.append("end")
+
+    identity = agent_identity("helper", "Helper", "extraction", "revision")
+    agent = attach_agent_cost_identity(Agent(name="Helper", hooks=ExistingHooks()), identity)
+    cloned = agent.clone()
+    identity["agent_id"] = "mutated"
+    get_agent_cost_identity(cloned)["agent_id"] = "also-mutated"
+    assert get_agent_cost_identity(cloned)["agent_id"] == "helper"
+    assert not hasattr(agent, "cost_identity")
+    await cloned.hooks.on_start(None, cloned)
+    await cloned.hooks.on_end(None, cloned, "done")
+    assert calls == ["start", "end"]
+
+
 def test_verified_paper_uses_subject_ownership_and_preserves_artifact(monkeypatch):
     from src.models.sql import database
     db = MagicMock()
@@ -76,7 +101,7 @@ async def test_stream_does_not_leak_at_yield_or_error():
 
 @pytest.mark.asyncio
 async def test_standalone_validation_and_fresh_rerun():
-    agent = SimpleNamespace(cost_identity={"agent_role": "validation"})
+    agent = attach_agent_cost_identity(SimpleNamespace(), {"agent_role": "validation"})
     @costed_call
     async def call(agent):
         return current_cost_context()

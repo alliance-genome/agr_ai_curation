@@ -117,6 +117,9 @@ def test_csv_export_preserves_exact_amounts_and_provenance(monkeypatch):
         'filters': {'session_id': 'test'}, 'generated_at': '2026-09-26T00:00:00Z',
         'requests': [{
             'attempt_id': 'request-1', 'fact_revision': 2, 'model': '=formula',
+            'agent_id': 'helper', 'agent_name': '=untrusted name', 'agent_role': 'extraction',
+            'agent_revision': 'revision-a', 'node_id': 'step-a',
+            'requested_service_tier': 'flex', 'effective_service_tier': 'default',
             'usage': {'input_tokens': 10, 'cache_write_tokens': None},
             'recorded_charge': {'amount': '0.000000000000000123', 'unit': 'USD', 'source': 'provider'},
             'estimate': {'cost': '0.0001', 'estimated_cost_upper': '0.0002'},
@@ -135,3 +138,9 @@ def test_csv_export_preserves_exact_amounts_and_provenance(monkeypatch):
     assert rows[0]['fact_revision'] == '2'
     assert rows[0]['cache_write_tokens'] == ''
     assert rows[0]['model'] == "'=formula"
+    assert rows[0]['agent_name'] == "'=untrusted name"
+    assert rows[0]['agent_id'] == 'helper'
+    assert rows[0]['agent_revision'] == 'revision-a'
+    assert rows[0]['node_id'] == 'step-a'
+    assert rows[0]['requested_service_tier'] == 'flex'
+    assert rows[0]['effective_service_tier'] == 'default'
