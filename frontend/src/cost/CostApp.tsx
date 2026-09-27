@@ -29,15 +29,10 @@ function initialQuery() {
 
 function Summary({ totals }: { totals: Totals }) {
   return <section className="cost-summary" aria-label="Cost summary">
-    <div><h2>Recorded charges</h2>
-      {totals.recorded_charges.length ? totals.recorded_charges.map(charge => <p className="cost-amount" key={`${charge.unit}:${charge.source}`}>
-        {chargeAmount(charge.amount, charge.unit)}<small>{charge.attempts} requests · {charge.source}</small>
-      </p>) : <p className="cost-amount">Not reported</p>}
-      <p>{totals.unknown_charge_attempts} of {totals.attempt_count} requests have no recorded charge. Unknown does not mean free.</p>
-    </div>
-    <div><h2>Independent estimate</h2><p className="cost-amount">{moneyRange(totals.estimates.lower, totals.estimates.upper)}</p>
-      <p>{totals.estimates.priced_attempts} of {totals.attempt_count} requests priced in USD. Estimates are not added to recorded charges.</p>
-      {totals.estimates.unpriced_attempts > 0 ? <p className="cost-warning">{totals.estimates.unpriced_attempts} unpriced requests — this estimate is incomplete.</p> : null}
+    <div><h2>Calculated cost</h2><p className="cost-amount">{moneyRange(totals.estimates.lower, totals.estimates.upper)}</p>
+      <p>Recorded usage × pricing catalog. Ranges reflect missing pricing details, such as the actual service tier; this is not an invoice total.</p>
+      <Coverage totals={totals} />
+      {totals.estimates.unpriced_attempts > 0 ? <p className="cost-warning">This subtotal excludes unpriced requests. Inspect the request breakdown or coverage details for missing usage or pricing.</p> : null}
     </div>
     <div><h2>Usage coverage</h2><p className="cost-amount">{totals.attempt_count} requests</p>
       <p>{totals.usage.total_tokens.known_total?.toLocaleString() ?? 'Unknown'} reported tokens · {totals.usage.total_tokens.unknown_attempts} requests missing token totals.</p>
@@ -46,20 +41,33 @@ function Summary({ totals }: { totals: Totals }) {
   </section>;
 }
 
+function Coverage({ totals }: { totals: Totals }) {
+  return <span>{totals.estimates.priced_attempts}/{totals.attempt_count} requests priced
+    {totals.estimates.unpriced_attempts > 0 ? <small className="cost-warning">{totals.estimates.unpriced_attempts} unpriced — subtotal incomplete</small> : null}
+  </span>;
+}
+
+function ProviderCharges({ totals }: { totals: Totals }) {
+  return <details><summary>Provider-reported charges</summary>
+    {totals.recorded_charges.map(charge => <p key={`${charge.unit}:${charge.source}`}>{chargeAmount(charge.amount, charge.unit)} · {charge.attempts} requests · {charge.source}</p>)}
+    <p>{totals.attempt_count - totals.unknown_charge_attempts} of {totals.attempt_count} requests have a provider-reported charge. A missing provider charge does not prevent calculation from usage and pricing. These amounts are separate from, and never added to, calculated costs.</p>
+  </details>;
+}
+
 function AgentBreakdown({ runs, onSelect }: { runs: Run[]; onSelect: (run: Run, invocation: string) => void }) {
   return <section aria-label="Agent and step subtotals"><h2>Agents and flow steps</h2>
     <p>Each subtotal includes only that invocation’s own requests, not its children. Parent links reflect recorded execution; missing links are not inferred.</p>
     {runs.map(run => <details key={`${run.run_id}:${run.document_id}:${run.job_id}`}>
       <summary>Run {shortId(run.run_id)} · {run.attempt_count} requests</summary>
       <div className="cost-table-wrap" role="region" aria-label="Agent subtotals" tabIndex={0}>
-        <table><thead><tr><th>Agent / step</th><th>Parent invocation</th><th>Own requests</th><th>Own recorded charges</th><th>Own estimated USD</th></tr></thead>
+        <table><thead><tr><th>Agent / step</th><th>Parent invocation</th><th>Own requests</th><th>Own calculated cost (USD)</th><th>Billing details</th></tr></thead>
           <tbody>{run.agents.map(group => <tr key={JSON.stringify([group.agent_id, group.node_id, group.agent_revision, group.invocation_id])}>
             <td>{group.agent_name ?? group.agent_id ?? 'Unknown agent'}<small>{group.node_id ? `Flow step: ${group.node_id}` : 'No flow step recorded'}</small>
               <small>Revision: <code>{group.agent_revision ?? 'Unknown'}</code></small><small>Invocation: <code>{group.invocation_id ?? 'Not recorded'}</code></small></td>
             <td>{group.parent_invocation_id ? <code>{group.parent_invocation_id}</code> : 'No parent recorded'}</td>
             <td>{group.attempt_count}{group.invocation_id ? <small><button className="cost-link" onClick={() => onSelect(run, group.invocation_id!)}>Inspect invocation</button></small> : null}</td>
-            <td>{group.recorded_charges.length ? group.recorded_charges.map(charge => <p key={`${charge.unit}:${charge.source}`}>{chargeAmount(charge.amount, charge.unit)}<small>{charge.source}</small></p>) : 'Unknown'}</td>
-            <td>{moneyRange(group.estimates.lower, group.estimates.upper)}<small>{group.estimates.priced_attempts}/{group.attempt_count} priced · {group.unknown_charge_attempts} charges unknown</small></td>
+            <td>{moneyRange(group.estimates.lower, group.estimates.upper)}<small><Coverage totals={group} /></small></td>
+            <td><ProviderCharges totals={group} /></td>
           </tr>)}</tbody></table>
       </div>
     </details>)}
@@ -174,9 +182,10 @@ export default function CostApp() {
         <Summary totals={report.totals} />
         <p className="cost-display-note">Dollars are rounded to cents; small nonzero costs may display as $0.00. Exports retain full precision.</p>
         <details className="cost-provenance"><summary>Coverage and pricing provenance</summary>
-          <p>New requests capture their executing agent and flow step when available. Pricing uses the provider-reported service tier, not the requested tier. Missing tier information appears as a range where supported. These are estimates, not invoice reconciliation.</p>
+          <ProviderCharges totals={report.totals} />
+          <p>New requests capture their executing agent and flow step when available. Pricing uses the provider-reported service tier, not the requested tier. Missing tier information appears as a range where supported. Calculated costs use recorded usage and catalog rates; they are not invoice reconciliation.</p>
           <p>Excluded: {report.coverage.excluded.map(displayName).join(', ')}.</p>
-          {Object.entries(report.coverage.external_services).map(([service, coverage]) => <p key={service}>{displayName(service)}: {displayName(coverage)}. These costs are not included in the estimate.</p>)}
+          {Object.entries(report.coverage.external_services).map(([service, coverage]) => <p key={service}>{displayName(service)}: {displayName(coverage)}. These costs are not included in calculated costs.</p>)}
           <p>Pricing snapshot: <code>{report.pricing_snapshot_id ?? 'Not configured'}</code><br/>Algorithm: <code>{report.valuation_algorithm}</code><br/>Source: {report.pricing_source ?? 'None'}<br/>Catalog captured: {report.pricing_captured_at ?? 'Unknown'}</p>
           {Object.entries(report.totals.estimates.unavailable_reasons).map(([reason, count]) => <p key={reason}>{count} requests: {displayName(reason)}</p>)}
           <p>JSON exports include exact request IDs, fact revision cutoffs and independent valuations. Refresh to read new facts; totals are not live.</p>
@@ -186,19 +195,19 @@ export default function CostApp() {
         {grouped ? <p>{view === 'chats' ? 'Dates select conversations active in the window. Costs include all recorded turns, including turns outside the window; other filters still apply.' : view === 'flows' ? 'Each saved flow includes all of its executions in the selected window. Select a flow to inspect its runs.' : 'All recorded activities in the selected window, grouped by the curator who initiated them. Select a curator to inspect their activity.'}</p> : null}
         {!detailed && (parameters.has('owner_subject') || parameters.has('workflow_id')) ? <p>Selected {parameters.has('owner_subject') ? 'curator' : 'flow'}: <code>{parameters.get('owner_subject') ?? parameters.get('workflow_id')}</code></p> : null}
         {report.totals.attempt_count === 0 ? <Alert severity="info">No recorded requests match these filters. Try a wider window or check that runtime accounting is enabled.</Alert> : <div className="cost-table-wrap" role="region" aria-label={detailed ? 'Request breakdown' : 'Run breakdown'} tabIndex={0}>
-          {grouped ? <table><thead><tr><th>{view === 'flows' ? 'Flow' : view === 'chats' ? 'Conversation' : 'Curator'}</th><th>{view === 'chats' ? 'Turns' : 'Runs / turns'}</th><th>Requests</th><th>Estimated USD</th><th>Coverage</th></tr></thead><tbody>{report.groups.map(group => <tr key={group.id}>
+          {grouped ? <table><thead><tr><th>{view === 'flows' ? 'Flow' : view === 'chats' ? 'Conversation' : 'Curator'}</th><th>{view === 'chats' ? 'Turns' : 'Runs / turns'}</th><th>Requests</th><th>Calculated cost (USD)</th><th>Coverage</th></tr></thead><tbody>{report.groups.map(group => <tr key={group.id}>
             <td><button className="cost-link" onClick={() => selectGroup(group)}>{group.label === group.id ? shortId(group.id) : group.label}</button><small>{view === 'flows' ? group.workflow_id ? 'Selected window' : 'Saved flow not recorded' : view === 'curators' ? `${group.conversation_count} conversations` : 'All recorded turns'}</small><small>Last active {new Date(group.last_active).toLocaleString()}</small></td>
-            <td>{group.run_count}</td><td>{group.attempt_count}</td><td>{moneyRange(group.estimates.lower, group.estimates.upper)}</td><td>{group.estimates.priced_attempts}/{group.attempt_count} priced<small>{group.unknown_charge_attempts} charges unknown</small></td>
-          </tr>)}</tbody></table> : detailed ? <table><thead><tr><th>Request / agent</th><th>Provider / model</th><th>Usage</th><th>Recorded charge</th><th>Estimated USD</th><th>Outcome</th></tr></thead><tbody>{report.requests.map(row => <tr key={row.attempt_id}>
+            <td>{group.run_count}</td><td>{group.attempt_count}</td><td>{moneyRange(group.estimates.lower, group.estimates.upper)}</td><td><Coverage totals={group} /></td>
+          </tr>)}</tbody></table> : detailed ? <table><thead><tr><th>Request / agent</th><th>Provider / model</th><th>Usage</th><th>Calculated cost (USD)</th><th>Billing details</th><th>Outcome</th></tr></thead><tbody>{report.requests.map(row => <tr key={row.attempt_id}>
             <td>{row.operation_type === 'rerank' ? 'Reranking API call' : row.agent_name ?? row.agent_id ?? 'Unknown agent'}<small>{row.node_id ? `Flow step: ${row.node_id}` : 'No flow step recorded'}</small>
               {row.operation_type === 'rerank' ? <small>{row.candidate_count ?? 'Unknown'} candidates · {row.pagination_request ? 'Pagination request' : 'Initial request'}. API calls are not billing units.</small> : null}
               <details><summary>Request details</summary><p>Agent ID: <code>{row.agent_id ?? 'Unknown'}</code><br/>Role: {row.agent_role ?? 'Unknown'}<br/>Agent revision: <code>{row.agent_revision ?? 'Unknown'}</code><br/>Request: <code>{row.attempt_id}</code><br/>Fact revision {row.fact_revision}<br/>{new Date(row.created_at).toLocaleString()}</p></details></td>
             <td>{row.provider}<small>{row.model ?? 'Unknown model'}</small><small>Reported tier: {row.effective_service_tier ?? 'Unknown'}</small><small>Requested tier: {row.requested_service_tier ?? 'Not specified'}</small></td><td>{row.usage.total_tokens?.toLocaleString() ?? 'Unknown'} tokens<details><summary>Token buckets</summary>{Object.entries(row.usage).map(([key, value]) => <p key={key}>{displayName(key)}: {value ?? 'Unknown'}</p>)}</details></td>
-            <td>{row.recorded_charge ? chargeAmount(row.recorded_charge.amount, row.recorded_charge.unit) : 'Unknown'}<small>{row.recorded_charge?.source}</small></td>
-            <td>{moneyRange(row.estimate.cost, row.estimate.estimated_cost_upper)}<small>{row.estimate.estimate_unavailable_reason ? displayName(row.estimate.estimate_unavailable_reason) : row.estimate.pricing_uncertainty?.map(displayName).join(', ')}</small></td><td>{displayName(row.outcome)}</td>
-          </tr>)}</tbody></table> : <table><thead><tr><th>Conversation / turn</th><th>Activity</th><th>Requests</th><th>Estimated USD</th><th>Coverage</th></tr></thead><tbody>{report.runs.map(row => <tr key={`${row.session_id}:${row.run_id}:${row.flow_run_id}`}>
+            <td>{moneyRange(row.estimate.cost, row.estimate.estimated_cost_upper)}<small>{row.estimate.estimate_unavailable_reason ? displayName(row.estimate.estimate_unavailable_reason) : row.estimate.pricing_uncertainty?.map(displayName).join(', ')}</small></td>
+            <td><details><summary>Provider-reported charge</summary><p>{row.recorded_charge ? chargeAmount(row.recorded_charge.amount, row.recorded_charge.unit) : 'Not supplied'}<small>{row.recorded_charge?.source}</small></p></details></td><td>{displayName(row.outcome)}</td>
+          </tr>)}</tbody></table> : <table><thead><tr><th>Conversation / turn</th><th>Activity</th><th>Requests</th><th>Calculated cost (USD)</th><th>Coverage</th></tr></thead><tbody>{report.runs.map(row => <tr key={`${row.session_id}:${row.run_id}:${row.flow_run_id}`}>
             <td>{row.session_id ? <button className="cost-link" onClick={() => drill(row.session_id)}>{shortId(row.session_id)}</button> : 'No conversation'}<small><button className="cost-link" onClick={() => drill(row.session_id, row.run_id)}>{row.session_id ? 'Turn' : 'Run'} {shortId(row.run_id)}</button></small><small>{new Date(row.started_at).toLocaleString()}</small>{row.document_id ? <small>Document <code>{row.document_id}</code></small> : null}{row.job_id ? <small>Job <code>{row.job_id}</code></small> : null}</td>
-            <td>{displayName(row.activity)}{row.flow_run_id ? <small>Flow run {shortId(row.flow_run_id)}</small> : null}</td><td>{row.attempt_count}</td><td>{moneyRange(row.estimates.lower, row.estimates.upper)}</td><td>{row.estimates.priced_attempts}/{row.attempt_count} priced<small>{row.unknown_charge_attempts} charges unknown</small></td>
+            <td>{displayName(row.activity)}{row.flow_run_id ? <small>Flow run {shortId(row.flow_run_id)}</small> : null}</td><td>{row.attempt_count}</td><td>{moneyRange(row.estimates.lower, row.estimates.upper)}</td><td><Coverage totals={row} /></td>
           </tr>)}</tbody></table>}
         </div>}
         <div className="cost-pagination"><Button disabled={report.pagination.offset === 0} onClick={() => page(-1)}>Previous page</Button><span>{rowCount} {detailed ? 'requests' : grouped ? view === 'chats' ? 'conversations' : view : 'turns'} · Page {Math.floor(report.pagination.offset / report.pagination.page_size) + 1}</span><Button disabled={report.pagination.offset + report.pagination.page_size >= rowCount} onClick={() => page(1)}>Next page</Button></div>

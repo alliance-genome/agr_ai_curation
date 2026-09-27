@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import CostApp, { moneyRange } from './CostApp';
 import CostTheme from './CostTheme';
 import Button from '@mui/material/Button';
@@ -18,6 +18,30 @@ beforeEach(() => { window.history.replaceState(null, '', '/cost/'); localStorage
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('admin cost presentation', () => {
+  it('leads with calculated costs without treating absent provider charges as unpriced', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => report }));
+    render(<CostApp />);
+    const summary = await screen.findByRole('region', { name: 'Cost summary' });
+    expect(within(summary).getByRole('heading', { name: 'Calculated cost' })).toBeVisible();
+    expect(within(summary).getByText('$0.00')).toBeVisible();
+    expect(within(summary).getByText('1/1 requests priced')).toBeVisible();
+    expect(screen.queryByText(/charges unknown/)).not.toBeInTheDocument();
+    expect(within(summary).queryByText(/unpriced/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Coverage and pricing provenance'));
+    fireEvent.click(screen.getByText('Provider-reported charges'));
+    expect(screen.getByText(/0 of 1 requests have a provider-reported charge/)).toBeVisible();
+  });
+  it('keeps incomplete calculated subtotals and their reasons explicit', async () => {
+    const partial = { ...totals, estimates: { ...totals.estimates, priced_attempts: 0, unpriced_attempts: 1,
+      lower: null, upper: null, unavailable_reasons: { model_not_recorded: 1 } } };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ...report, totals: partial }) }));
+    render(<CostApp />);
+    const summary = await screen.findByRole('region', { name: 'Cost summary' });
+    expect(within(summary).getByText('Not priced')).toBeVisible();
+    expect(within(summary).getByText('1 unpriced — subtotal incomplete')).toBeVisible();
+    fireEvent.click(screen.getByText('Coverage and pricing provenance'));
+    expect(screen.getByText('1 requests: model not recorded')).toBeVisible();
+  });
   it('opens a background run without inventing a conversation and drills into its invocation', async () => {
     const background = { ...report, runs: [{ ...report.runs[0], session_id: null, run_id: 'job-run',
       document_id: 'document-one', job_id: 'job-one', activity: 'background', agents: [{ ...totals,
@@ -109,7 +133,7 @@ describe('admin cost presentation', () => {
     vi.stubGlobal('fetch', fetcher);
     render(<CostApp />);
     expect(await screen.findByText('Selected window subtotal')).toBeInTheDocument();
-    expect(screen.getByText('Not reported')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Calculated cost' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Turn turn-one' }));
     await waitFor(() => expect(fetcher).toHaveBeenLastCalledWith(expect.stringContaining('session_id=conversation-one&run_id=turn-one&snapshot_id=snapshot'), expect.anything()));
     expect(window.location.search).not.toContain('start=');

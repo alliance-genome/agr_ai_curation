@@ -28,7 +28,7 @@ summary { cursor: pointer; color: var(--cost-link); padding-block: .35rem; }
 .cost-filter-grid p { margin: 0; }
 .cost-scope p { margin: .4rem 0; color: var(--cost-muted); }
 .cost-actions { display: flex; gap: 1.25rem; }
-.cost-summary { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2rem; padding-block: 1rem 1.5rem; border-bottom: 1px solid var(--cost-border); }
+.cost-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; padding-block: 1rem 1.5rem; border-bottom: 1px solid var(--cost-border); }
 .cost-summary h2 { margin-top: 1rem; }
 .cost-summary p { color: var(--cost-muted); }
 .cost-summary .cost-amount { font-size: 1.65rem; font-weight: 600; color: var(--cost-ink); overflow-wrap: anywhere; margin: .5rem 0; }
