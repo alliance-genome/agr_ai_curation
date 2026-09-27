@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 
+from src.api.benchmark_document_conversions import router as conversions_router
 from src.api.benchmark_sources import router
 
 
@@ -43,3 +44,36 @@ def test_benchmark_source_materialization_openapi_contract():
         "created_at",
     }.issubset(response["required"])
     assert "content" not in response["properties"]
+
+
+def test_benchmark_document_conversion_openapi_contract():
+    app = FastAPI()
+    app.include_router(conversions_router)
+    schema = app.openapi()
+    base = "/api/v1/benchmarks/sources/document-conversions"
+
+    start = schema["paths"][base]["post"]
+    assert set(start["requestBody"]["content"]) == {"application/pdf", "application/json"}
+    abc = start["requestBody"]["content"]["application/json"]["schema"]
+    assert abc["required"] == ["abc_reference"] and abc["additionalProperties"] is False
+    assert abc["properties"]["abc_reference"]["pattern"] == "^AGRKB:[0-9]+$"
+    headers = {parameter["name"] for parameter in start["parameters"]}
+    assert {"Idempotency-Key", "X-Benchmark-Content-Digest",
+            "X-Benchmark-Curator-Authorization"} <= headers
+    accepted = start["responses"]["202"]["content"]["application/json"]["schema"]
+    assert accepted["$ref"].endswith("/BenchmarkDocumentConversionAccepted")
+
+    status = schema["paths"][f"{base}/{{conversion_id}}"]["get"]
+    response = status["responses"]["200"]["content"]["application/json"]["schema"]
+    assert response["$ref"].endswith("/BenchmarkDocumentConversionStatus")
+    components = schema["components"]["schemas"]
+    assert set(components["BenchmarkDocumentConversionAccepted"]["required"]) == {
+        "conversion_id", "status",
+    }
+    assert set(components["BenchmarkDocumentConversionStatus"]["properties"]) == {
+        "conversion_id", "status", "error", "snapshot", "conversion_identity",
+        "created_at", "completed_at",
+    }
+    assert "X-Benchmark-Curator-Authorization" not in {
+        parameter["name"] for parameter in status.get("parameters", ())
+    }

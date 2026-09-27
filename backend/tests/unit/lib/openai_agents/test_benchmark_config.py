@@ -42,6 +42,7 @@ def test_benchmark_operational_defaults(monkeypatch):
         "BENCHMARK_ROOT",
         "BENCHMARK_SOURCE_TIMEOUT_SECONDS",
         "BENCHMARK_MAX_INPUT_BYTES",
+        "BENCHMARK_DOCUMENT_CONVERSION_STALE_SECONDS",
         "BENCHMARK_DELEGATED_SOURCE_AUTH_MAX_BYTES",
         "BENCHMARK_MAX_MATERIALIZED_SUBMISSION_BYTES",
         "BENCHMARK_SNAPSHOT_STORE_BACKEND",
@@ -76,6 +77,7 @@ def test_benchmark_operational_defaults(monkeypatch):
     assert config.get_benchmark_root() == ""
     assert config.get_benchmark_source_timeout_seconds() == 30
     assert config.get_benchmark_max_input_bytes() == 52_428_800
+    assert config.get_benchmark_document_conversion_stale_seconds() == 7200
     assert config.get_benchmark_delegated_source_auth_max_bytes() == 8_192
     assert config.get_benchmark_max_materialized_submission_bytes() == 262_144_000
     assert config.get_benchmark_snapshot_store_backend() == "filesystem"
@@ -108,6 +110,7 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     monkeypatch.setenv("BENCHMARK_ROOT", "  /tmp/custom-benchmarks  ")
     monkeypatch.setenv("BENCHMARK_SOURCE_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_MAX_INPUT_BYTES", "0")
+    monkeypatch.setenv("BENCHMARK_DOCUMENT_CONVERSION_STALE_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_DELEGATED_SOURCE_AUTH_MAX_BYTES", "0")
     monkeypatch.setenv("BENCHMARK_MAX_MATERIALIZED_SUBMISSION_BYTES", "0")
     monkeypatch.setenv("BENCHMARK_SNAPSHOT_STORE_BACKEND", "  S3 ")
@@ -136,6 +139,7 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     assert config.get_benchmark_root() == "/tmp/custom-benchmarks"
     assert config.get_benchmark_source_timeout_seconds() == 0.1
     assert config.get_benchmark_max_input_bytes() == 1
+    assert config.get_benchmark_document_conversion_stale_seconds() == 1
     assert config.get_benchmark_delegated_source_auth_max_bytes() == 1
     assert config.get_benchmark_max_materialized_submission_bytes() == 1
     assert config.get_benchmark_snapshot_store_backend() == "s3"
@@ -264,3 +268,11 @@ def test_every_benchmark_capability_has_independent_scope_and_group_config(monke
 
     with pytest.raises(ValueError, match="Unknown benchmark capability"):
         config.get_benchmark_oidc_capability_scopes("benchmark:unknown")
+
+
+def test_document_conversion_stale_window_is_documented():
+    workspace_root = Path("/workspace")
+    if not (workspace_root / ".env.example").exists():
+        workspace_root = REPOSITORY_ROOT
+    env_example = (workspace_root / ".env.example").read_text(encoding="utf-8")
+    assert "\nBENCHMARK_DOCUMENT_CONVERSION_STALE_SECONDS=7200\n" in env_example

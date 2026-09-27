@@ -22,6 +22,7 @@ from src.api.benchmark_sources import (
     install_benchmark_input_resolvers,
     router as benchmark_sources_router,
 )
+from src.api.benchmark_document_conversions import router as benchmark_document_conversions_router
 from src.api.benchmark_jobs import router as benchmark_jobs_router
 from src.api.benchmark_catalog import router as benchmark_catalog_router
 from src.api.benchmark_assistant import router as benchmark_assistant_router
@@ -552,6 +553,10 @@ async def lifespan(app: FastAPI):
     recovered_batch_count = schedule_startup_batch_recovery()
     logger.info("Batch recovery startup scan dispatched %d batch(es)", recovered_batch_count)
 
+    from src.lib.benchmarks.document_conversions import reconcile_stale_conversions
+
+    reconcile_stale_conversions()
+
     from src.lib.curation_workspace.submission_attempt_cleanup import (
         schedule_submission_attempt_cleanup,
         stop_submission_attempt_cleanup,
@@ -954,6 +959,7 @@ def create_app() -> FastAPI:
     application.include_router(admin_connections_router, tags=["Admin - Health"])
     application.include_router(admin_costs_router)
     application.include_router(benchmark_sources_router)
+    application.include_router(benchmark_document_conversions_router)
     application.include_router(benchmark_jobs_router)
     application.include_router(benchmark_catalog_router)
     application.include_router(benchmark_assistant_router)

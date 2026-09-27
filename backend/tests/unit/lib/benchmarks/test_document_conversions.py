@@ -1,6 +1,7 @@
 """Unit checks for benchmark document conversion records, guards, and the conversion service."""
 
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -14,11 +15,13 @@ import pytest
 
 from src.lib.benchmarks.document_conversions import (
     ABC_NOT_FOUND_MESSAGE,
+    STALE_CONVERSION_MESSAGE,
     ConversionStateError,
     DocumentConversionRepository,
     DocumentConversionService,
     conversion_identity,
     identity_version,
+    reconcile_stale_conversions,
     run_conversion,
 )
 from src.lib.benchmarks.document_inputs import decode_frozen_document
@@ -729,3 +732,36 @@ async def test_conversion_finished_elsewhere_while_running_is_not_overwritten():
     assert repository.mark_succeeded.called
     assert repository.failed == []
     assert not report.called
+
+
+def test_stale_conversions_are_failed_by_age_window_with_a_plain_reason(monkeypatch):
+    calls = []
+    committed = []
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def commit(self):
+            committed.append(True)
+
+    class Repository:
+        def fail_stale_running(self, db, *, reason, created_before):
+            calls.append((reason, created_before))
+            return (conversion_id,)
+
+    conversion_id = uuid4()
+    now = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setenv("BENCHMARK_DOCUMENT_CONVERSION_STALE_SECONDS", "600")
+
+    failed = reconcile_stale_conversions(
+        session_factory=Session, repository=Repository(), now=now,
+    )
+
+    assert failed == (conversion_id,)
+    assert calls == [(STALE_CONVERSION_MESSAGE, now - timedelta(seconds=600))]
+    assert STALE_CONVERSION_MESSAGE == "The conversion was interrupted. Start it again."
+    assert committed == [True]

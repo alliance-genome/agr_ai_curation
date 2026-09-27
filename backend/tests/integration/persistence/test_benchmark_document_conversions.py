@@ -396,3 +396,96 @@ async def test_service_records_oversize_as_failed_without_identity_or_snapshot(s
                 BenchmarkInputSnapshot.owner_subject == scope["owner"],
             )
         ) is None
+
+
+@pytest.fixture
+def conversion_api(scope, tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api import benchmark_document_conversions as api
+    from src.api.benchmark_auth import require_benchmark_source_read
+    from src.api.benchmark_curator import require_benchmark_source_curator
+
+    principal = {"sub": scope["owner"], "client_id": "portal-client"}
+    dispatched = []
+
+    async def run_conversion(conversion_id, *, authorized_group_ids):
+        dispatched.append((conversion_id, tuple(authorized_group_ids)))
+
+    monkeypatch.setattr(api, "get_benchmark_enabled", lambda: True)
+    monkeypatch.setattr(api, "run_conversion", run_conversion)
+    monkeypatch.setenv("BENCHMARK_SNAPSHOT_STORE_BACKEND", "filesystem")
+    monkeypatch.setenv("BENCHMARK_SNAPSHOT_STORE_PATH", str(tmp_path))
+    application = FastAPI()
+    application.dependency_overrides[require_benchmark_source_read] = lambda: principal
+    application.dependency_overrides[require_benchmark_source_curator] = (
+        lambda: scope["curators"][0]
+    )
+    application.include_router(api.router)
+    with TestClient(application) as client:
+        yield client, application, dispatched, tmp_path
+
+
+def _post_pdf(client, content, key="api-key"):
+    return client.post("/api/v1/benchmarks/sources/document-conversions", content=content, headers={
+        "Content-Type": "application/pdf", "Idempotency-Key": key,
+        "X-Benchmark-Content-Digest": "sha256:" + hashlib.sha256(content).hexdigest(),
+    })
+
+
+def test_api_records_replays_conflicts_and_scopes_conversions(scope, conversion_api):
+    from src.api.benchmark_auth import require_benchmark_source_read
+
+    client, application, dispatched, root = conversion_api
+    pdf = b"%PDF-1.7\nsynthetic api paper"
+    first = _post_pdf(client, pdf)
+    assert first.status_code == 202, first.text
+    conversion_id = first.json()["conversion_id"]
+    with SessionLocal() as db:
+        row = db.get(BenchmarkDocumentConversion, conversion_id)
+        assert (row.status, row.owner_subject, row.curator_subject) == (
+            "queued", scope["owner"], scope["curators"][0].subject,
+        )
+        assert (root / row.source_blob_reference).read_bytes() == pdf
+    assert dispatched == [(row.id, ("group-alpha",))]
+
+    replay = _post_pdf(client, pdf)
+    assert replay.status_code == 202 and replay.json()["conversion_id"] == conversion_id
+    assert _post_pdf(client, pdf + b" changed").status_code == 409
+    assert len(dispatched) == 1
+
+    status = client.get(f"/api/v1/benchmarks/sources/document-conversions/{conversion_id}")
+    assert status.status_code == 200
+    assert status.json()["status"] == "queued" and status.json()["snapshot"] is None
+
+    application.dependency_overrides[require_benchmark_source_read] = lambda: {
+        "sub": scope["other_owner"], "client_id": "other-client",
+    }
+    foreign = client.get(f"/api/v1/benchmarks/sources/document-conversions/{conversion_id}")
+    assert foreign.status_code == 404
+
+
+def test_api_fails_conversions_older_than_the_stale_window_before_creating(scope, conversion_api):
+    client, _, _, _ = conversion_api
+    repository = DocumentConversionRepository()
+    with SessionLocal() as db:
+        stale, _ = _pdf(repository, db, scope, key="stale-key", digest=DIGEST_A)
+        fresh, _ = _pdf(repository, db, scope, key="fresh-key", digest=DIGEST_B)
+        repository.mark_running(db, stale.id)
+        db.execute(
+            text("UPDATE benchmark_document_conversions SET created_at = :created WHERE id = :id"),
+            {"created": datetime.now(timezone.utc) - timedelta(hours=3), "id": stale.id},
+        )
+        db.commit()
+        stale_id, fresh_id = stale.id, fresh.id
+
+    assert _post_pdf(client, b"%PDF-1.7\nnew paper", key="new-key").status_code == 202
+
+    with SessionLocal() as db:
+        stale = db.get(BenchmarkDocumentConversion, stale_id)
+        fresh = db.get(BenchmarkDocumentConversion, fresh_id)
+        assert (stale.status, stale.error_code, stale.error_message) == (
+            "failed", "interrupted", "The conversion was interrupted. Start it again.",
+        )
+        assert fresh.status == "queued"

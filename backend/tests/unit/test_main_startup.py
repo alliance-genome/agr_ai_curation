@@ -56,6 +56,15 @@ def test_create_app_registers_benchmark_sources_without_loading_catalog(monkeypa
         route.path == "/api/v1/benchmarks/sources/materialize"
         for route in application.routes
     )
+    assert {
+        (route.path, method)
+        for route in application.routes
+        if route.path.startswith("/api/v1/benchmarks/sources/document-conversions")
+        for method in getattr(route, "methods", ())
+    } == {
+        ("/api/v1/benchmarks/sources/document-conversions", "POST"),
+        ("/api/v1/benchmarks/sources/document-conversions/{conversion_id}", "GET"),
+    }
 
 
 class TestPdfExtractionTimeoutValidation:
@@ -295,6 +304,10 @@ class TestLifespan:
              patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False), \
              patch("src.lib.batch.recovery.schedule_startup_batch_recovery", return_value=0), \
              patch(
+                 "src.lib.benchmarks.document_conversions.reconcile_stale_conversions",
+                 return_value=(),
+             ) as mock_reconcile_conversions, \
+             patch(
                  "src.lib.curation_workspace.submission_attempt_cleanup.schedule_submission_attempt_cleanup"
              ) as mock_schedule_submission_cleanup, \
              patch(
@@ -313,6 +326,7 @@ class TestLifespan:
                 "get_optional_connections": mock_get_optional_connections,
                 "check_required_health": mock_check_required_health,
                 "schedule_submission_cleanup": mock_schedule_submission_cleanup,
+                "reconcile_conversions": mock_reconcile_conversions,
                 "stop_submission_cleanup": mock_stop_submission_cleanup,
             }
 
@@ -347,6 +361,18 @@ class TestLifespan:
             mock_subsystems["stop_submission_cleanup"].assert_not_awaited()
 
         mock_subsystems["stop_submission_cleanup"].assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
+    async def test_fails_interrupted_benchmark_document_conversions_at_startup(
+        self, mock_init, mock_conn_cls, mock_subsystems
+    ):
+        connection, _ = make_connection()
+        mock_conn_cls.return_value = connection
+
+        async with _main_module().lifespan(FastAPI()):
+            mock_subsystems["reconcile_conversions"].assert_called_once_with()
 
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")
@@ -679,6 +705,10 @@ async def test_lifespan_supports_core_only_runtime_packages(
          ), \
          patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False), \
          patch("src.lib.batch.recovery.schedule_startup_batch_recovery", return_value=0), \
+         patch(
+             "src.lib.benchmarks.document_conversions.reconcile_stale_conversions",
+             return_value=(),
+         ), \
          patch(
              "src.lib.curation_workspace.submission_attempt_cleanup.schedule_submission_attempt_cleanup"
          ), \

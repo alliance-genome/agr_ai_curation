@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -60,7 +60,10 @@ from src.lib.document_sources.models import (
 from src.lib.document_sources.registry import get_configured_document_source_provider
 from src.lib.exceptions import ConfigurationError, PDFCancellationError, PDFParsingError
 from src.lib.observability.runtime import report_runtime_exception
-from src.lib.openai_agents.config import get_benchmark_max_input_bytes
+from src.lib.openai_agents.config import (
+    get_benchmark_document_conversion_stale_seconds,
+    get_benchmark_max_input_bytes,
+)
 from src.lib.pipeline.pdfx_parser import PDFXParser
 from src.models.sql.benchmark import BenchmarkDocumentConversion, BenchmarkInputSnapshot
 from src.models.sql.database import SessionLocal
@@ -301,8 +304,10 @@ class DocumentConversionRepository:
     ) -> tuple[UUID, ...]:
         """Fail queued or running conversions created before ``created_before``.
 
-        Used at process startup: work created before this process started can
-        no longer be running anywhere, so it is recorded as interrupted.
+        Several API worker processes may run conversions at once, so a process
+        start time says nothing about another process's work. Callers pass an
+        age cutoff (see ``reconcile_stale_conversions``): unfinished work older
+        than it is treated as lost and recorded as interrupted.
         """
 
         _require_text(reason, name="error message", max_length=_MAX_ERROR_MESSAGE_LENGTH)
@@ -324,6 +329,33 @@ class DocumentConversionRepository:
             .execution_options(synchronize_session=False)
         ).all()
         return tuple(failed_ids)
+
+
+STALE_CONVERSION_MESSAGE = "The conversion was interrupted. Start it again."
+
+
+def reconcile_stale_conversions(
+    *,
+    session_factory: Callable[[], Any] = SessionLocal,
+    repository: DocumentConversionRepository | None = None,
+    now: datetime | None = None,
+) -> tuple[UUID, ...]:
+    """Fail unfinished conversions older than the configured stale window.
+
+    Runs at API startup and before each new conversion. Nothing is retried:
+    the caller starts a new conversion if it still wants one.
+    """
+
+    current = now or datetime.now(timezone.utc)
+    cutoff = current - timedelta(seconds=get_benchmark_document_conversion_stale_seconds())
+    with session_factory() as db:
+        failed = (repository or DocumentConversionRepository()).fail_stale_running(
+            db, reason=STALE_CONVERSION_MESSAGE, created_before=cutoff,
+        )
+        db.commit()
+    if failed:
+        logger.warning("Marked %d interrupted benchmark document conversion(s) failed", len(failed))
+    return failed
 
 
 # --- Conversion service -----------------------------------------------------
