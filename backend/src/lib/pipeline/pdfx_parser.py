@@ -250,8 +250,14 @@ class PDFXParser:
         process_id_callback: Optional[ProcessIdCallback] = None,
         cancel_requested_callback: Optional[CancelRequestedCallback] = None,
         observability_callback: Optional[ObservabilityCallback] = None,
+        *,
+        save_artifacts: bool = True,
     ) -> Dict[str, Any]:
-        """Parse PDF through PDF extraction service and return pipeline elements."""
+        """Parse PDF through PDF extraction service and return pipeline elements.
+
+        When ``save_artifacts`` is False, nothing is written under the per-user
+        PDF storage directory and both returned artifact paths are ``None``.
+        """
         del extraction_strategy
         del enable_table_extraction
 
@@ -465,6 +471,13 @@ class PDFXParser:
                 page_provenance.receipt() if page_provenance is not None else None
             ),
         }
+
+        if not save_artifacts:
+            return {
+                "elements": cleaned_elements,
+                "pdfx_json_path": None,
+                "processed_json_path": None,
+            }
 
         pdfx_json_path = await self._save_pdfx_json(raw_payload, document_id, user_id)
         processed_json_path = await self._save_processed_json(cleaned_elements, document_id, user_id)
