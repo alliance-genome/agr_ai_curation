@@ -9,6 +9,7 @@ from fastapi.responses import Response
 from typing import Dict, Any, List, Optional, Tuple
 
 from ..observability import report_failure, session_failure_scope
+from ..config import get_transient_cache_ttl_seconds
 from ..models.requests import AnalyzeTraceRequest, TraceSource
 from ..models.responses import SessionTraceExportResponse
 from ..services.trace_extractor import TraceExtractor, TraceNotFoundError, ScoreProviderError
@@ -46,7 +47,6 @@ from .domain_envelope_responses import domain_envelope_response_views
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-TRANSIENT_CACHE_TTL_SECONDS = 15
 ALL_VIEWS = [
     "summary", "conversation", "tool_calls",
     "pdf_citations", "token_analysis", "agent_context", "trace_summary",
@@ -146,7 +146,7 @@ def _store_trace_cache(cache_manager: Any, trace_id: str, cache_data: Dict[str, 
         trace_id,
         cache_data,
         cache_status="transient",
-        ttl_seconds=TRANSIENT_CACHE_TTL_SECONDS,
+        ttl_seconds=get_transient_cache_ttl_seconds(),
     )
     logger.info("Trace %s looks in-flight; cached transiently", trace_id)
     return "transient"

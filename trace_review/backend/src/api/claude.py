@@ -37,6 +37,7 @@ from ..services.langfuse_run_reconstruction import (
     serialize_payload,
 )
 from ..config import (
+    get_transient_cache_ttl_seconds,
     get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
@@ -179,7 +180,6 @@ async def _authorize_claude_trace_request(
 
 router = APIRouter(dependencies=[Depends(_authorize_claude_trace_request)])
 LOGGER = logging.getLogger(__name__)
-TRANSIENT_CACHE_TTL_SECONDS = 15
 TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
 TRACE_REVIEW_AGGREGATE_PAGE_SIZE = get_agent_studio_trace_review_aggregate_page_size()
 TRACE_REVIEW_SUMMARY_MAX_CHARS = get_agent_studio_trace_review_summary_max_chars()
@@ -1445,7 +1445,7 @@ async def _ensure_trace_analyzed(
                 trace_id,
                 cache_data,
                 cache_status="transient",
-                ttl_seconds=TRANSIENT_CACHE_TTL_SECONDS,
+                ttl_seconds=get_transient_cache_ttl_seconds(),
             )
         return cache_data
 

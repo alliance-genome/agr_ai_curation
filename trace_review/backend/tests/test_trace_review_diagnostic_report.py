@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -87,6 +88,35 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
                 response = await endpoint("trace-extraction-123", self._make_request(), **kwargs)
                 self.assertEqual(response.data["filters"]["session_discovery"], meta)
                 self.assertEqual([call.args[0] for call in analyze.call_args_list], ["trace-extraction-123", "allowed-sibling"])
+
+    @patch("src.analyzers.extraction_timeline.ExtractionTimelineAnalyzer.load_durable_events", return_value=[])
+    async def test_both_apis_honor_transient_ttl_without_changing_stable_cache(self, _events):
+        for configured, transient_seconds in ((None, 15), ("47", 47), ("0", 1)):
+            for api in (traces, claude):
+                for stable in (False, True):
+                    with self.subTest(configured=configured, api=api.__name__, stable=stable):
+                        request = self._make_request()
+                        trace_data = self._make_trace_data()
+                        trace_data["raw_trace"]["output"] = {"answer": "done"} if stable else None
+                        with patch.dict(os.environ):
+                            os.environ.pop("TRACE_REVIEW_TRANSIENT_CACHE_TTL_SECONDS", None)
+                            if configured is not None:
+                                os.environ["TRACE_REVIEW_TRANSIENT_CACHE_TTL_SECONDS"] = configured
+                            with patch.object(api, "TraceExtractor") as extractor_cls:
+                                extractor_cls.return_value.extract_complete_trace.return_value = trace_data
+                                if api is traces:
+                                    await traces.analyze_trace(
+                                        AnalyzeTraceRequest(trace_id="trace-extraction-123", source="local"), request,
+                                    )
+                                else:
+                                    await claude._ensure_trace_analyzed("trace-extraction-123", request, source="local")
+                        cache = request.app.state.cache_manager
+                        cached = cache.get("trace-extraction-123")
+                        self.assertIsNotNone(cached)
+                        duration = (datetime.fromisoformat(cached["expires_at"]) -
+                                    datetime.fromisoformat(cached["cached_at"])).total_seconds()
+                        self.assertEqual(duration, 3600 if stable else transient_seconds)
+                        self.assertEqual(cache.get_status("trace-extraction-123"), "stable" if stable else "transient")
 
     def _make_request(self) -> Any:
         cache_manager = CacheManager(ttl_hours=1)

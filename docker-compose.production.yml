@@ -602,6 +602,7 @@ services:
       BACKEND_PORT: "${TRACE_REVIEW_BACKEND_PORT:-8001}"
       FRONTEND_URL: "${TRACE_REVIEW_FRONTEND_URL:-http://localhost:3001}"
       CACHE_TTL_HOURS: "${TRACE_REVIEW_CACHE_TTL_HOURS:-1}"
+      TRACE_REVIEW_TRANSIENT_CACHE_TTL_SECONDS: "${TRACE_REVIEW_TRANSIENT_CACHE_TTL_SECONDS:-15}"
       EXTRACTION_TRACE_EVENT_DIR: "${EXTRACTION_TRACE_EVENT_DIR:-/runtime/state/extraction_trace_events}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
