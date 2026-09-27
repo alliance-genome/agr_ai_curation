@@ -489,3 +489,27 @@ def test_api_fails_conversions_older_than_the_stale_window_before_creating(scope
             "failed", "interrupted", "The conversion was interrupted. Start it again.",
         )
         assert fresh.status == "queued"
+
+
+def test_api_status_shows_a_conversion_older_than_the_stale_window_as_interrupted(
+    scope, conversion_api,
+):
+    client, _, _, _ = conversion_api
+    repository = DocumentConversionRepository()
+    with SessionLocal() as db:
+        stale, _ = _pdf(repository, db, scope, key="stale-read-key", digest=DIGEST_A)
+        repository.mark_running(db, stale.id)
+        db.execute(
+            text("UPDATE benchmark_document_conversions SET created_at = :created WHERE id = :id"),
+            {"created": datetime.now(timezone.utc) - timedelta(hours=3), "id": stale.id},
+        )
+        db.commit()
+        stale_id = stale.id
+
+    response = client.get(f"/api/v1/benchmarks/sources/document-conversions/{stale_id}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "failed" and body["snapshot"] is None
+    assert body["error"] == {
+        "code": "interrupted", "message": "The conversion was interrupted. Start it again.",
+    }

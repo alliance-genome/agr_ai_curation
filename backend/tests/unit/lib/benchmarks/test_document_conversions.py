@@ -24,6 +24,7 @@ from src.lib.benchmarks.document_conversions import (
     reconcile_stale_conversions,
     run_conversion,
 )
+from src.config import get_app_version
 from src.lib.benchmarks.document_inputs import decode_frozen_document
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.document_sources.models import (
@@ -419,6 +420,7 @@ def test_identity_version_is_sha256_of_canonical_json():
     assert identity == {
         "input_kind": "pdf", "parser": "pdfx", "methods": ["grobid", "marker"],
         "merge": True, "content_format": "merged_markdown", "page_provenance_receipt": RECEIPT,
+        "application_version": get_app_version(),
     }
     expected = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -471,6 +473,7 @@ async def test_pdf_conversion_freezes_json_owned_by_the_calling_service():
     assert identity == {
         "input_kind": "pdf", "parser": "pdfx", "methods": ["grobid", "marker"], "merge": True,
         "content_format": "merged_markdown", "page_provenance_receipt": RECEIPT,
+        "application_version": get_app_version(),
     }
     assert source.version == source.provenance.version == identity_version(identity)
     assert row.status == "succeeded"
@@ -603,6 +606,9 @@ async def test_abc_main_text_is_used_before_the_pdf_with_ai_curation_access():
     assert identity["abc_artifact"] == {
         "id": "md-1",
         "checksum": "sha256:" + hashlib.sha256(MAIN_TEXT.encode("utf-8")).hexdigest(),
+    }
+    assert identity["abc_access"] == {
+        "source_artifact_id": "pdf-1", "scope": "global", "group_ids": [],
     }
     assert frozen["source"].version == identity_version(identity)
 
@@ -765,3 +771,69 @@ def test_stale_conversions_are_failed_by_age_window_with_a_plain_reason(monkeypa
     assert calls == [(STALE_CONVERSION_MESSAGE, now - timedelta(seconds=600))]
     assert STALE_CONVERSION_MESSAGE == "The conversion was interrupted. Start it again."
     assert committed == [True]
+
+
+def test_identity_changes_with_the_application_version(monkeypatch):
+    def identity():
+        return conversion_identity(
+            input_kind="pdf", parser="pdfx", methods=["grobid"], merge=True,
+            content_format="merged_markdown", page_provenance_receipt=None,
+        )
+
+    monkeypatch.setenv("APP_VERSION", "0.9.21")
+    first = identity()
+    monkeypatch.setenv("APP_VERSION", "0.9.22")
+    second = identity()
+
+    assert first["application_version"] == "0.9.21"
+    assert second["application_version"] == "0.9.22"
+    assert identity_version(first) != identity_version(second)
+
+
+@pytest.mark.asyncio
+async def test_abc_restricted_pdf_records_the_authorizing_access_policy():
+    row = _abc_row()
+    provider = _FakeABCProvider(
+        artifacts=[_source_pdf(scope=SourceAccessScope.RESTRICTED,
+                               groups=("group-beta", "group-alpha"))],
+        downloads={"pdf-1": PDF_BYTES},
+    )
+    service, repository, recorder = _service(row)
+    parser_patch, _parsers = _parser_patch()
+
+    with parser_patch, _provider_patch(provider):
+        await service.run(row.id, authorized_group_ids=("group-alpha",))
+
+    assert repository.failed == []
+    [succeeded] = repository.succeeded
+    identity = succeeded["identity"]
+    assert identity["abc_access"] == {
+        "source_artifact_id": "pdf-1", "scope": "restricted",
+        "group_ids": ["group-alpha", "group-beta"],
+    }
+    [frozen] = recorder.frozen
+    assert frozen["source"].version == identity_version(identity)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", [b"", b"<html>not a pdf</html>", b"%PDF-" + b"x" * 64],
+                         ids=["empty", "not-pdf", "oversize"])
+async def test_unusable_abc_pdf_fails_as_invalid_document_without_reporting(
+    content, monkeypatch,
+):
+    import src.lib.document_sources.identifier_import as identifier_import
+
+    monkeypatch.setattr(identifier_import, "MAX_PDF_FILE_SIZE_BYTES", 32)
+    row = _abc_row()
+    provider = _FakeABCProvider(artifacts=[_source_pdf()], downloads={"pdf-1": content})
+    service, repository, recorder = _service(row)
+    parser_patch, parsers = _parser_patch()
+
+    with parser_patch, _provider_patch(provider), \
+            patch(f"{_SERVICE_MODULE}.report_runtime_exception") as report:
+        await service.run(row.id, authorized_group_ids=())
+
+    assert parsers == [] and recorder.frozen == []
+    [(code, _message)] = repository.failed
+    assert code == "invalid_document"
+    report.assert_not_called()

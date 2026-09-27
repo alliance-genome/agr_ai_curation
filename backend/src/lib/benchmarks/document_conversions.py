@@ -29,6 +29,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from src.config import get_app_version
 from src.lib.benchmarks.document_inputs import decode_frozen_document
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.benchmarks.input_resolvers import (
@@ -415,6 +416,23 @@ def _extraction_failed() -> _ConversionFailure:
     return _ConversionFailure("extraction_failed", "Text could not be extracted from the PDF.")
 
 
+def _invalid_abc_pdf() -> _ConversionFailure:
+    return _ConversionFailure(
+        "invalid_document",
+        "The Alliance literature database PDF for this paper is empty, too large, "
+        "or not a PDF.",
+    )
+
+
+def _abc_access(source_artifact: Any) -> dict[str, Any]:
+    policy = source_artifact.access_policy
+    return {
+        "source_artifact_id": source_artifact.artifact_id,
+        "scope": policy.scope.value,
+        "group_ids": sorted(policy.group_ids),
+    }
+
+
 def _invalid_document() -> _ConversionFailure:
     return _ConversionFailure("invalid_document", "The converted document has no usable text.")
 
@@ -445,11 +463,15 @@ def conversion_identity(
     page_provenance_receipt: dict[str, Any] | None,
     abc_artifact: dict[str, str] | None = None,
     abc_figure_metadata: list[dict[str, str]] | None = None,
+    abc_access: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe everything that determined a conversion's output elements.
 
     ``methods`` and ``merge`` are the PDF extraction settings and are ``None``
-    when ABC main text was used instead of PDF extraction.
+    when ABC main text was used instead of PDF extraction. The application
+    version is included so the identity changes when the pipeline changes.
+    ``abc_access`` records the access policy of the ABC source artifact that
+    the requesting curator's groups were authorized against, for audit.
     """
 
     identity: dict[str, Any] = {
@@ -459,7 +481,10 @@ def conversion_identity(
         "merge": merge,
         "content_format": content_format,
         "page_provenance_receipt": page_provenance_receipt,
+        "application_version": get_app_version(),
     }
+    if abc_access is not None:
+        identity["abc_access"] = abc_access
     if abc_artifact is not None:
         identity["abc_artifact"] = abc_artifact
     if abc_figure_metadata:
@@ -745,7 +770,10 @@ async def _convert_abc_reference(
         pdf_bytes = await provider.download_artifact(
             selected.source_artifact.artifact_id, request_bearer_token=None,
         )
-        _validate_source_pdf_bytes(pdf_bytes)
+        try:
+            _validate_source_pdf_bytes(pdf_bytes)
+        except DocumentSourceError:
+            raise _invalid_abc_pdf() from None
         elements, pdfx_identity = await _parse_pdf(pdf_bytes, job)
         return _ConvertedDocument(
             elements=elements,
@@ -755,6 +783,7 @@ async def _convert_abc_reference(
                     "id": selected.source_artifact.artifact_id,
                     "checksum": _sha256(pdf_bytes),
                 },
+                abc_access=_abc_access(selected.source_artifact),
                 **pdfx_identity,
             ),
         )
@@ -813,6 +842,7 @@ async def _convert_abc_main_text(
             page_provenance_receipt=None,
             abc_artifact={"id": converted.artifact_id, "checksum": _sha256(markdown_bytes)},
             abc_figure_metadata=figure_identity,
+            abc_access=_abc_access(selected.source_artifact),
         ),
     )
 

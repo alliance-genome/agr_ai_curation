@@ -237,6 +237,8 @@ async def start_document_conversion(
 
 def _read_conversion(conversion_id: UUID, owner: str) -> BenchmarkDocumentConversionStatus:
     try:
+        # A conversion lost to a restart must not read as unfinished forever.
+        reconcile_stale_conversions()
         with SessionLocal() as db:
             row = DocumentConversionRepository().get_for_owner(db, conversion_id, owner)
             if row is None:

@@ -399,3 +399,25 @@ def test_source_scope_is_required_before_the_body_is_read(harness, monkeypatch):
     assert post_pdf(harness.client).status_code == 403
     assert harness.client.get(f"{BASE}/{uuid4()}").status_code == 403
     assert harness.repository.rows == {}
+
+
+def test_status_reads_reconcile_stale_conversions_first(harness, monkeypatch):
+    conversion_id = UUID(post_pdf(harness.client).json()["conversion_id"])
+    harness.repository.rows[conversion_id].status = "running"
+    harness.events.clear()
+
+    def reconcile():
+        harness.events.append("reconcile")
+        harness.repository.rows[conversion_id].__dict__.update(
+            status="failed", error_code="interrupted",
+            error_message="The conversion was interrupted. Start it again.",
+            completed_at=datetime(2026, 9, 27, 3, tzinfo=timezone.utc),
+        )
+        return (conversion_id,)
+
+    monkeypatch.setattr(api, "reconcile_stale_conversions", reconcile)
+    body = harness.client.get(f"{BASE}/{conversion_id}").json()
+    assert harness.events == ["reconcile"]
+    assert body["status"] == "failed"
+    assert body["error"] == {"code": "interrupted",
+                             "message": "The conversion was interrupted. Start it again."}

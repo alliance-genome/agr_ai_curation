@@ -115,7 +115,16 @@ include `not_found` (the ABC paper has no usable text or PDF), `access_denied`,
 `BENCHMARK_MAX_INPUT_BYTES`), `storage_unavailable`, `conversion_failed`, and
 `interrupted`. Queued or running conversions older than
 `BENCHMARK_DOCUMENT_CONVERSION_STALE_SECONDS` are marked `interrupted` at API
-startup and before each new conversion.
+startup, before each new conversion, and whenever a conversion's status is
+read, so a conversion lost to a restart shows as failed on the next poll.
+
+`conversion_identity` records what produced the elements: the parser and its
+settings, the AI Curation application version (`APP_VERSION`), the page
+provenance receipt for PDF extraction, and for ABC papers the artifact used
+(`abc_artifact`) and the access policy of the ABC source artifact the curator's
+groups were authorized against (`abc_access`: artifact ID, scope and group IDs).
+The snapshot `source_version` is the SHA-256 of that identity, so it changes
+when the application version changes.
 
 How this differs from a curator's document import:
 
@@ -133,6 +142,16 @@ How this differs from a curator's document import:
   running or has failed it parses the PDF instead of waiting or stopping.
 - Conversion uses the deployment's configured document-source provider, as
   curator imports do.
+
+Trust boundary for group-restricted ABC papers: access is checked once, when
+the conversion runs, against the requesting curator's groups. After that the
+snapshot, and its content through
+`GET /api/v1/benchmarks/sources/snapshots/{snapshot_id}/content` and the
+`frozen_snapshot` resolver, is readable by the owning service without any
+further group check. The owning service must therefore restrict reuse of an
+ABC-derived conversion to the curator who requested it (recorded as
+`curator_subject` in the snapshot reference). `abc_access` in the conversion
+identity records which access policy authorized the conversion.
 
 The snapshot store may use the durable filesystem backend or a private,
 versioned S3 bucket configured with `BENCHMARK_SNAPSHOT_STORE_BACKEND` and the
