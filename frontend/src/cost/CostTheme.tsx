@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react';
-import { ThemeProvider } from '@mui/material/styles';
+import { createTheme, ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import Button from '@mui/material/Button';
 import { createAppTheme } from '../theme';
@@ -16,7 +16,18 @@ function initialMode(): Mode {
 
 export default function CostTheme({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState(initialMode);
-  const theme = useMemo(() => createAppTheme(mode), [mode]);
+  const theme = useMemo(() => {
+    const base = createAppTheme(mode);
+    return mode === 'light' ? base : createTheme(base, {
+      components: { MuiButton: { styleOverrides: { root: {
+        '&.MuiButton-contained.MuiButton-colorPrimary': {
+          // Keep brighter blue for outlined text; white filled labels need darker blue.
+          '--variant-containedBg': base.palette.primary.dark,
+          '&:hover': { backgroundColor: base.palette.primary.dark },
+        },
+      } } } },
+    });
+  }, [mode]);
   useEffect(() => {
     document.documentElement.dataset.costTheme = mode;
     return () => { delete document.documentElement.dataset.costTheme; };
