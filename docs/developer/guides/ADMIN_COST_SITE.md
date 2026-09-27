@@ -117,6 +117,16 @@ USD values display two decimal places. Tiny nonzero values may display `$0.00`,
 as noted in the UI. Ledger totals, JSON/CSV exports, and non-USD units retain
 their original precision. Unknown charges and unpriced estimates remain unknown.
 
+The dashboard leads with **Calculated cost**: recorded usage valued against the
+selected pricing catalog. This remains an estimate for billing purposes, not an
+invoice total; uncertainty ranges and exclusions still apply. Coverage counts
+requests with a calculation, not requests with a provider-reported dollar charge.
+Unpriced requests explicitly make the subtotal incomplete. Provider-reported
+charges are available in the coverage details and request/agent breakdowns, kept
+separate and never added to calculated amounts. Absence of a provider-reported
+charge alone is not a missing-cost warning. API/export field names and exact
+valuation values are unchanged.
+
 - `GET /api/admin/cost/access`: protected presentation access check.
 - `GET /api/admin/cost/reports`: bounded summary, run groups, paged requests.
 - `GET /api/admin/cost/export?format=json|csv`: complete bounded selection.
