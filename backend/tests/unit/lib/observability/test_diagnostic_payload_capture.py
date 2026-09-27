@@ -117,6 +117,78 @@ class TestCredentialsStayRedacted:
 
 
 class TestSentryStructuredErrorDetail:
+    @pytest.mark.parametrize("setting", [None, "false", "true"])
+    def test_before_send_applies_content_policy_to_persistence_details(self, monkeypatch, setting):
+        from src.lib.observability.sentry import before_send
+        from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+
+        if setting is None:
+            monkeypatch.delenv("SENTRY_CONTENT_REDACTION_ENABLED", raising=False)
+        else:
+            monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", setting)
+        content = "Adgrl1 was detected in embryonic brain"
+        error_text = f"IntegrityError [SQL: INSERT INTO extraction_results] [parameters: ('{content}',)]"
+        error = SpecialistOutputError(
+            specialist_name="allele_extractor",
+            output_type_name="inline_extraction_persistence",
+            message=error_text,
+            details=[{
+                "reason": "inline_extraction_persistence_failed",
+                "error": error_text + " " + _fake_bearer_header() + " " + _fake_openai_key(),
+            }],
+        )
+        event = {
+            "message": error_text,
+            "exception": {"values": [{"type": type(error).__name__, "value": str(error)}]},
+        }
+
+        sent = before_send(event, {"exc_info": (type(error), error, None)})
+
+        assert sent is not None
+        detail = sent["contexts"]["error_detail"]
+        assert detail["exception_type"] == "SpecialistOutputError"
+        assert _fake_openai_key() not in str(sent)
+        assert "abcdef0123456789xyz" not in str(sent)
+        if setting == "true":
+            assert content not in str(sent)
+            assert detail["details"][0]["error"] == "[Filtered]"
+            assert sent["message"] == "[Filtered]"
+            assert sent["exception"]["values"][0]["value"] == "[Filtered]"
+        else:
+            assert content in detail["details"][0]["error"]
+            assert detail["details"][0]["reason"] == "inline_extraction_persistence_failed"
+            assert sent["message"] == error_text
+        assert content in error.details[0]["error"], "redaction must not mutate the exception"
+
+    def test_enabled_redaction_covers_chained_issues_and_unknown_fields(self, monkeypatch):
+        from src.lib.agent_studio.profile_conformance import EnvelopeIntegrityError
+        from src.lib.observability.sentry import before_send
+        from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+        from src.schemas.evidence_workspace import EvidenceIntegrityError
+
+        monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "true")
+        content = "synthetic extracted document content"
+        cause = EnvelopeIntegrityError([{
+            "field_path": content, "message": content,
+            "nested": {"value": [content, {"error": content}]},
+        }])
+        cause.__cause__ = EvidenceIntegrityError("invalid evidence", unknown_fields=(content,))
+        error = SpecialistOutputError("extractor", "output")
+        error.__cause__ = cause
+
+        sent = before_send({}, {"exc_info": (type(error), error, None)})
+
+        assert sent is not None
+        detail = sent["contexts"]["error_detail"]
+        assert content not in str(sent)
+        assert detail["exception_type"] == "SpecialistOutputError"
+        assert detail["code"] == "envelope_integrity"
+        assert detail["cause_types"] == [
+            "SpecialistOutputError", "EnvelopeIntegrityError", "EvidenceIntegrityError",
+        ]
+        assert detail["issues"][0]["message"] == "[Filtered]"
+        assert detail["unknown_fields"] == ["[Filtered]"]
+
     def test_conformance_issues_reach_the_event(self):
         from src.lib.agent_studio.profile_conformance import ProfileConformanceError
         from src.lib.observability.sentry import _structured_error_detail
