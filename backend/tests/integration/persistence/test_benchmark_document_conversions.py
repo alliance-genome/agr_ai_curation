@@ -1,21 +1,30 @@
 """Real PostgreSQL semantics for benchmark document conversion records."""
 
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from alembic import command  # pyright: ignore[reportAttributeAccessIssue]
 from alembic.config import Config  # pyright: ignore[reportMissingImports]
 import pytest
-from sqlalchemy import delete, inspect, text
+from sqlalchemy import delete, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
 from src.lib.benchmarks.document_conversions import (
     ConversionIdempotencyConflict,
     ConversionStateError,
     DocumentConversionRepository,
+    DocumentConversionService,
 )
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
+from src.lib.benchmarks.snapshots import (
+    BenchmarkSnapshotError,
+    BenchmarkSnapshotRepository,
+    FileSystemBenchmarkSnapshotStore,
+)
 from src.models.sql.benchmark import BenchmarkDocumentConversion, BenchmarkInputSnapshot
 from src.models.sql.database import SessionLocal, engine
 from src.models.sql.user import User
@@ -294,3 +303,96 @@ def test_database_rejects_inconsistent_rows(scope):
                         id=uuid4(), **base, **values,
                     ))
         db.rollback()
+
+
+# --- Conversion service against real PostgreSQL ------------------------------
+
+
+SERVICE_PDF = b"%PDF-1.4\n%synthetic service fixture\n"
+SERVICE_ELEMENTS = [
+    {"index": 0, "type": "NarrativeText", "text": "Synthetic body.", "metadata": {}},
+]
+
+
+class _StubParser:
+    methods = "grobid,marker"
+    merge_enabled = True
+    download_variant = "merged"
+
+    async def parse_pdf_document(self, file_path, document_id, user_id, *, save_artifacts):
+        assert save_artifacts is False and file_path.read_bytes() == SERVICE_PDF
+        return {
+            "elements": SERVICE_ELEMENTS, "pdfx_json_path": None,
+            "processed_json_path": None, "page_provenance": None,
+        }
+
+
+def _queued_pdf_conversion(scope, store):
+    digest = "sha256:" + hashlib.sha256(SERVICE_PDF).hexdigest()
+    blob_reference = store.put(digest=digest, content=SERVICE_PDF)
+    repository = DocumentConversionRepository()
+    with SessionLocal() as db:
+        row, _ = repository.create_or_get(
+            db,
+            owner_subject=scope["owner"],
+            service_principal="portal-client",
+            curator=scope["curators"][0],
+            input_kind="pdf",
+            source_digest=digest,
+            source_blob_reference=blob_reference,
+            abc_reference=None,
+            idempotency_key=f"service-{uuid4()}",
+        )
+        db.commit()
+        return row.id
+
+
+@pytest.mark.asyncio
+async def test_service_freezes_converted_pdf_as_snapshot_owned_by_the_service(scope, tmp_path):
+    store = FileSystemBenchmarkSnapshotStore(tmp_path)
+    conversion_id = _queued_pdf_conversion(scope, store)
+    service = DocumentConversionService(snapshot_store_factory=lambda: store)
+
+    with patch("src.lib.benchmarks.document_conversions.PDFXParser", _StubParser):
+        await service.run(conversion_id, authorized_group_ids=())
+
+    with SessionLocal() as db:
+        row = DocumentConversionRepository().get_for_owner(db, conversion_id, scope["owner"])
+        assert row.status == "succeeded" and row.error_code is None
+        assert row.conversion_identity["parser"] == "pdfx"
+        snapshot = db.get(BenchmarkInputSnapshot, row.snapshot_id)
+        assert snapshot.owner_subject == scope["owner"]
+        assert snapshot.owner_subject != scope["curators"][0].subject
+        assert snapshot.service_principal == "portal-client"
+        assert snapshot.content_type == "application/json"
+        assert snapshot.resolver_id == "document_conversion"
+        content = BenchmarkSnapshotRepository(db, store).read_verified(
+            snapshot.id, owner_subject=scope["owner"],
+        )
+        assert json.loads(content) == SERVICE_ELEMENTS
+        with pytest.raises(BenchmarkSnapshotError):
+            BenchmarkSnapshotRepository(db, store).read_verified(
+                snapshot.id, owner_subject=scope["curators"][0].subject,
+            )
+
+
+@pytest.mark.asyncio
+async def test_service_records_oversize_as_failed_without_identity_or_snapshot(scope, tmp_path):
+    store = FileSystemBenchmarkSnapshotStore(tmp_path)
+    conversion_id = _queued_pdf_conversion(scope, store)
+    service = DocumentConversionService(
+        snapshot_store_factory=lambda: store, max_input_bytes=lambda: len(SERVICE_PDF),
+    )
+
+    with patch("src.lib.benchmarks.document_conversions.PDFXParser", _StubParser):
+        await service.run(conversion_id, authorized_group_ids=())
+
+    with SessionLocal() as db:
+        row = DocumentConversionRepository().get_for_owner(db, conversion_id, scope["owner"])
+        assert (row.status, row.error_code) == ("failed", "oversize_payload")
+        assert row.snapshot_id is None and row.conversion_identity is None
+        assert db.scalar(
+            select(BenchmarkInputSnapshot.id).where(
+                BenchmarkInputSnapshot.owner_subject == scope["owner"],
+            )
+        ) is None

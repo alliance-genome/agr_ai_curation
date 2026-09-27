@@ -256,7 +256,9 @@ class PDFXParser:
         """Parse PDF through PDF extraction service and return pipeline elements.
 
         When ``save_artifacts`` is False, nothing is written under the per-user
-        PDF storage directory and both returned artifact paths are ``None``.
+        PDF storage directory and both returned artifact paths are ``None``;
+        the compact page-provenance receipt (or ``None``) is returned instead
+        under ``page_provenance``.
         """
         del extraction_strategy
         del enable_table_extraction
@@ -477,6 +479,7 @@ class PDFXParser:
                 "elements": cleaned_elements,
                 "pdfx_json_path": None,
                 "processed_json_path": None,
+                "page_provenance": raw_payload["page_provenance"],
             }
 
         pdfx_json_path = await self._save_pdfx_json(raw_payload, document_id, user_id)

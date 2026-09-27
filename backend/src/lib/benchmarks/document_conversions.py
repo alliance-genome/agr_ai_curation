@@ -3,21 +3,70 @@
 A conversion record is owned by the calling benchmark service subject. Reads
 and idempotency keys are scoped to that owner; the requesting curator is
 recorded separately. Failed conversions are terminal and never retried.
+
+The conversion service turns an uploaded PDF, or an Alliance literature (ABC)
+paper, into the application's standard pipeline elements and freezes them as
+an ``application/json`` benchmark input snapshot owned by the calling service.
 """
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
+import json
+import logging
+from pathlib import Path
 import re
+import tempfile
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from src.lib.benchmarks.document_inputs import decode_frozen_document
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
+from src.lib.benchmarks.input_resolvers import (
+    BenchmarkSourceMetadata,
+    BenchmarkSourceProvenance,
+    MaterializedBenchmarkInput,
+)
+from src.lib.benchmarks.observability import sanitized_benchmark_error
+from src.lib.benchmarks.snapshots import (
+    BenchmarkSnapshotError,
+    BenchmarkSnapshotRepository,
+    configured_benchmark_snapshot_store,
+)
+from src.lib.document_sources.figure_metadata import normalize_provider_figure_metadata_sidecar
+from src.lib.document_sources.identifier_import import (
+    ReferenceImportDecisionStatus,
+    _validate_source_pdf_bytes,
+    select_reference_import_candidate,
+)
+from src.lib.document_sources.ingestion import (
+    DocumentSourceIngestionError,
+    provider_markdown_to_pipeline_elements,
+)
+from src.lib.document_sources.models import (
+    DocumentSourceAccessDenied,
+    DocumentSourceError,
+    DocumentSourceProvider,
+)
+from src.lib.document_sources.registry import get_configured_document_source_provider
+from src.lib.exceptions import ConfigurationError, PDFCancellationError, PDFParsingError
+from src.lib.observability.runtime import report_runtime_exception
+from src.lib.openai_agents.config import get_benchmark_max_input_bytes
+from src.lib.pipeline.pdfx_parser import PDFXParser
 from src.models.sql.benchmark import BenchmarkDocumentConversion, BenchmarkInputSnapshot
+from src.models.sql.database import SessionLocal
+
+
+logger = logging.getLogger(__name__)
 
 
 INPUT_KIND_PDF = "pdf"
@@ -275,3 +324,488 @@ class DocumentConversionRepository:
             .execution_options(synchronize_session=False)
         ).all()
         return tuple(failed_ids)
+
+
+# --- Conversion service -----------------------------------------------------
+
+CONVERSION_RESOLVER_ID = "document_conversion"
+CONVERSION_REFERENCE_SCHEMA = "document_conversion/v1"
+CONVERTED_CONTENT_TYPE = "application/json"
+PARSER_PDFX = "pdfx"
+PARSER_ABC_MAIN_TEXT = "abc_main_text"
+ABC_MAIN_TEXT_CONTENT_FORMAT = "provider_markdown"
+ABC_NOT_FOUND_MESSAGE = (
+    "The Alliance literature database has no usable text or PDF for this paper."
+)
+
+
+class _ConversionFailure(Exception):
+    """A known, terminal failure with a plain curator-facing message."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(code)
+        self.code = code
+        self.message = message
+
+
+def _not_found() -> _ConversionFailure:
+    return _ConversionFailure("not_found", ABC_NOT_FOUND_MESSAGE)
+
+
+def _abc_access_denied() -> _ConversionFailure:
+    return _ConversionFailure(
+        "access_denied",
+        "The Alliance literature database does not allow this curator's groups "
+        "to read this paper.",
+    )
+
+
+def _abc_ambiguous() -> _ConversionFailure:
+    return _ConversionFailure(
+        "ambiguous_source",
+        "The Alliance literature database has more than one equally preferred "
+        "text or PDF for this paper.",
+    )
+
+
+def _abc_unavailable() -> _ConversionFailure:
+    return _ConversionFailure(
+        "source_unavailable",
+        "The Alliance literature database could not provide this paper.",
+    )
+
+
+def _uploaded_pdf_unavailable() -> _ConversionFailure:
+    return _ConversionFailure("source_unavailable", "The uploaded PDF is unavailable.")
+
+
+def _extraction_failed() -> _ConversionFailure:
+    return _ConversionFailure("extraction_failed", "Text could not be extracted from the PDF.")
+
+
+def _invalid_document() -> _ConversionFailure:
+    return _ConversionFailure("invalid_document", "The converted document has no usable text.")
+
+
+def _oversize() -> _ConversionFailure:
+    return _ConversionFailure(
+        "oversize_payload",
+        "The converted document exceeds the benchmark input size limit.",
+    )
+
+
+def _storage_unavailable() -> _ConversionFailure:
+    return _ConversionFailure(
+        "storage_unavailable", "The converted document could not be stored."
+    )
+
+
+_UNEXPECTED_FAILURE = ("conversion_failed", "The document could not be converted.")
+
+
+def conversion_identity(
+    *,
+    input_kind: str,
+    parser: str,
+    methods: list[str] | None,
+    merge: bool | None,
+    content_format: str,
+    page_provenance_receipt: dict[str, Any] | None,
+    abc_artifact: dict[str, str] | None = None,
+    abc_figure_metadata: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Describe everything that determined a conversion's output elements.
+
+    ``methods`` and ``merge`` are the PDF extraction settings and are ``None``
+    when ABC main text was used instead of PDF extraction.
+    """
+
+    identity: dict[str, Any] = {
+        "input_kind": input_kind,
+        "parser": parser,
+        "methods": methods,
+        "merge": merge,
+        "content_format": content_format,
+        "page_provenance_receipt": page_provenance_receipt,
+    }
+    if abc_artifact is not None:
+        identity["abc_artifact"] = abc_artifact
+    if abc_figure_metadata:
+        identity["abc_figure_metadata"] = abc_figure_metadata
+    return identity
+
+
+def identity_version(identity: dict[str, Any]) -> str:
+    """Return the sha256 hex digest of the identity's canonical JSON."""
+
+    canonical = json.dumps(
+        identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _sha256(content: bytes) -> str:
+    return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+@dataclass(frozen=True, slots=True)
+class _ConversionJob:
+    """Detached copy of the fields a running conversion needs."""
+
+    id: UUID
+    owner_subject: str
+    service_principal: str
+    curator_subject: str
+    curator_db_user_id: int
+    input_kind: str
+    source_digest: str | None
+    source_blob_reference: str | None
+    abc_reference: str | None
+
+    @classmethod
+    def from_row(cls, row: Any) -> "_ConversionJob":
+        return cls(
+            id=row.id,
+            owner_subject=row.owner_subject,
+            service_principal=row.service_principal,
+            curator_subject=row.curator_subject,
+            curator_db_user_id=row.curator_db_user_id,
+            input_kind=row.input_kind,
+            source_digest=row.source_digest,
+            source_blob_reference=row.source_blob_reference,
+            abc_reference=row.abc_reference,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _ConvertedDocument:
+    elements: list[dict[str, Any]]
+    identity: dict[str, Any]
+
+
+class DocumentConversionService:
+    """Run one queued conversion to a terminal state; never retries."""
+
+    def __init__(
+        self,
+        *,
+        session_factory: Callable[[], Any] = SessionLocal,
+        repository: Any | None = None,
+        snapshot_store_factory: Callable[[], Any] = configured_benchmark_snapshot_store,
+        snapshot_repository_factory: Callable[[Session, Any], Any] = BenchmarkSnapshotRepository,
+        max_input_bytes: Callable[[], int] = get_benchmark_max_input_bytes,
+    ) -> None:
+        self._session_factory = session_factory
+        self._repository = repository or DocumentConversionRepository()
+        self._snapshot_store_factory = snapshot_store_factory
+        self._snapshot_repository_factory = snapshot_repository_factory
+        self._max_input_bytes = max_input_bytes
+
+    async def run(
+        self, conversion_id: UUID, *, authorized_group_ids: Sequence[str]
+    ) -> None:
+        """Convert and freeze one queued conversion created by the API layer.
+
+        ``authorized_group_ids`` are the requesting curator's active groups;
+        they gate which ABC source PDFs may be used, exactly as for curator
+        ABC imports.
+        """
+
+        try:
+            job = await asyncio.to_thread(self._start, conversion_id)
+        except (ConversionStateError, LookupError):
+            logger.info("Benchmark document conversion %s is not queued; skipping", conversion_id)
+            return
+        except Exception as exc:
+            _report("document_conversion_start", exc)
+            return
+
+        try:
+            converted = await self._convert(job, tuple(authorized_group_ids))
+            source = await asyncio.to_thread(self._materialize, job, converted)
+            await asyncio.to_thread(self._freeze_and_succeed, job, source, converted.identity)
+        except ConversionStateError:
+            # Another process already finished this row (for example the
+            # startup sweep); its snapshot transaction was rolled back.
+            logger.info("Benchmark document conversion %s finished elsewhere", job.id)
+        except _ConversionFailure as failure:
+            logger.warning(
+                "Benchmark document conversion %s failed: %s",
+                job.id,
+                failure.code,
+                extra={"sentry_skip_event": True},
+            )
+            await self._fail(job.id, failure.code, failure.message)
+        except Exception as exc:
+            _report("document_conversion", exc)
+            code, message = _UNEXPECTED_FAILURE
+            await self._fail(job.id, code, message)
+
+    def _start(self, conversion_id: UUID) -> _ConversionJob:
+        with self._session_factory() as db:
+            row = self._repository.mark_running(db, conversion_id)
+            job = _ConversionJob.from_row(row)
+            db.commit()
+        return job
+
+    async def _fail(self, conversion_id: UUID, code: str, message: str) -> None:
+        try:
+            await asyncio.to_thread(self._record_failure, conversion_id, code, message)
+        except ConversionStateError:
+            logger.info(
+                "Benchmark document conversion %s already finished; failure not recorded",
+                conversion_id,
+            )
+        except Exception as exc:
+            _report("document_conversion_failure_record", exc)
+
+    def _record_failure(self, conversion_id: UUID, code: str, message: str) -> None:
+        with self._session_factory() as db:
+            self._repository.mark_failed(db, conversion_id, code=code, message=message)
+            db.commit()
+
+    async def _convert(
+        self, job: _ConversionJob, authorized_group_ids: tuple[str, ...]
+    ) -> _ConvertedDocument:
+        if job.input_kind == INPUT_KIND_PDF:
+            content = await asyncio.to_thread(self._read_uploaded_pdf, job)
+            elements, pdfx_identity = await _parse_pdf(content, job)
+            return _ConvertedDocument(
+                elements=elements,
+                identity=conversion_identity(input_kind=INPUT_KIND_PDF, **pdfx_identity),
+            )
+        if job.input_kind == INPUT_KIND_ABC_REFERENCE:
+            return await _convert_abc_reference(job, authorized_group_ids)
+        raise ValueError("Unsupported conversion input kind")
+
+    def _read_uploaded_pdf(self, job: _ConversionJob) -> bytes:
+        try:
+            content = self._snapshot_store_factory().read(
+                blob_reference=job.source_blob_reference,
+                max_bytes=self._max_input_bytes(),
+            )
+        except BenchmarkSnapshotError:
+            raise _uploaded_pdf_unavailable() from None
+        if _sha256(content) != job.source_digest:
+            raise _uploaded_pdf_unavailable()
+        return content
+
+    def _materialize(
+        self, job: _ConversionJob, converted: _ConvertedDocument
+    ) -> MaterializedBenchmarkInput:
+        content = json.dumps(converted.elements, ensure_ascii=False).encode("utf-8")
+        if len(content) > self._max_input_bytes():
+            raise _oversize()
+        try:
+            decode_frozen_document(content, content_type=CONVERTED_CONTENT_TYPE)
+        except (ValueError, UnicodeDecodeError):
+            raise _invalid_document() from None
+
+        reference_fields: dict[str, str] = {
+            "schema": CONVERSION_REFERENCE_SCHEMA,
+            "input_kind": job.input_kind,
+            "curator_subject": job.curator_subject,
+        }
+        if job.input_kind == INPUT_KIND_PDF:
+            reference_fields["source_digest"] = str(job.source_digest)
+        else:
+            reference_fields["abc_reference"] = str(job.abc_reference)
+        reference = json.dumps(reference_fields, sort_keys=True, separators=(",", ":"))
+        version = identity_version(converted.identity)
+        digest = _sha256(content)
+        provenance = BenchmarkSourceProvenance(
+            resolver=CONVERSION_RESOLVER_ID, reference=reference, version=version, digest=digest,
+        )
+        return MaterializedBenchmarkInput(
+            resolver=CONVERSION_RESOLVER_ID,
+            reference=reference,
+            version=version,
+            digest=digest,
+            content=content.decode("utf-8"),
+            metadata=BenchmarkSourceMetadata(
+                content_type=CONVERTED_CONTENT_TYPE, content_bytes=len(content),
+            ),
+            provenance=provenance,
+        )
+
+    def _freeze_and_succeed(
+        self,
+        job: _ConversionJob,
+        source: MaterializedBenchmarkInput,
+        identity: dict[str, Any],
+    ) -> None:
+        with self._session_factory() as db:
+            try:
+                snapshot = self._snapshot_repository_factory(
+                    db, self._snapshot_store_factory()
+                ).freeze_input(
+                    source,
+                    owner_subject=job.owner_subject,
+                    service_principal=job.service_principal,
+                )
+                self._repository.mark_succeeded(
+                    db, job.id, snapshot_id=snapshot.id, identity=identity,
+                )
+                db.commit()
+            except (BenchmarkSnapshotError, SQLAlchemyError, OSError) as exc:
+                db.rollback()
+                _report("document_conversion_snapshot", exc)
+                raise _storage_unavailable() from None
+            except Exception:
+                db.rollback()
+                raise
+
+
+async def _parse_pdf(
+    content: bytes, job: _ConversionJob
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Extract PDF text with a fresh parser and no per-user artifacts."""
+
+    try:
+        parser = PDFXParser()
+        with tempfile.TemporaryDirectory(prefix="benchmark-conversion-") as directory:
+            pdf_path = Path(directory) / "document.pdf"
+            pdf_path.write_bytes(content)
+            result = await parser.parse_pdf_document(
+                pdf_path,
+                document_id=str(job.id),
+                user_id=str(job.curator_db_user_id),
+                save_artifacts=False,
+            )
+    except (PDFParsingError, PDFCancellationError, ConfigurationError):
+        raise _extraction_failed() from None
+    return result["elements"], {
+        "parser": PARSER_PDFX,
+        "methods": [method for method in parser.methods.split(",") if method],
+        "merge": parser.merge_enabled,
+        "content_format": f"{parser.download_variant}_markdown",
+        "page_provenance_receipt": result["page_provenance"],
+    }
+
+
+async def _convert_abc_reference(
+    job: _ConversionJob, authorized_group_ids: tuple[str, ...]
+) -> _ConvertedDocument:
+    """Use the curator ABC import selection with the application's own ABC access."""
+
+    try:
+        provider = get_configured_document_source_provider()
+    except DocumentSourceError as exc:
+        _report("document_conversion_source", exc)
+        raise _abc_unavailable() from None
+    try:
+        decision = await select_reference_import_candidate(
+            provider=provider,
+            identifier=str(job.abc_reference),
+            authorized_group_ids=authorized_group_ids,
+            request_bearer_token=None,
+            allow_conversion_request=False,
+        )
+        if decision.status == ReferenceImportDecisionStatus.ACCESS_DENIED:
+            raise _abc_access_denied()
+        if decision.status == ReferenceImportDecisionStatus.AMBIGUOUS_MATCH:
+            raise _abc_ambiguous()
+        selected = decision.selected
+        if selected is None:
+            raise _not_found()
+        if selected.converted_artifact is not None:
+            return await _convert_abc_main_text(provider, selected)
+        pdf_bytes = await provider.download_artifact(
+            selected.source_artifact.artifact_id, request_bearer_token=None,
+        )
+        _validate_source_pdf_bytes(pdf_bytes)
+        elements, pdfx_identity = await _parse_pdf(pdf_bytes, job)
+        return _ConvertedDocument(
+            elements=elements,
+            identity=conversion_identity(
+                input_kind=INPUT_KIND_ABC_REFERENCE,
+                abc_artifact={
+                    "id": selected.source_artifact.artifact_id,
+                    "checksum": _sha256(pdf_bytes),
+                },
+                **pdfx_identity,
+            ),
+        )
+    except DocumentSourceAccessDenied:
+        raise _abc_access_denied() from None
+    except DocumentSourceIngestionError:
+        raise _invalid_document() from None
+    except DocumentSourceError as exc:
+        _report("document_conversion_source", exc)
+        raise _abc_unavailable() from None
+    finally:
+        try:
+            await provider.aclose()
+        except Exception as cleanup_error:
+            logger.warning(
+                "Document-source provider cleanup failed: %s", type(cleanup_error).__name__,
+            )
+
+
+async def _convert_abc_main_text(
+    provider: DocumentSourceProvider, selected: Any
+) -> _ConvertedDocument:
+    """Convert provider main-text Markdown exactly as curator ABC imports do."""
+
+    converted = selected.converted_artifact
+    markdown_bytes = await provider.download_artifact(
+        converted.artifact_id, request_bearer_token=None,
+    )
+    figure_entries = []
+    figure_identity = []
+    for artifact in selected.provider_metadata_artifacts:
+        raw = await provider.download_artifact(artifact.artifact_id, request_bearer_token=None)
+        figure_identity.append({"id": artifact.artifact_id, "checksum": _sha256(raw)})
+        try:
+            figure_entries.append(
+                normalize_provider_figure_metadata_sidecar(
+                    raw, metadata_artifact_id=artifact.artifact_id,
+                )
+            )
+        except ValueError:
+            raise _invalid_document() from None
+    try:
+        elements, _warnings = provider_markdown_to_pipeline_elements(
+            markdown_bytes.decode("utf-8"), tuple(figure_entries),
+        )
+    except UnicodeDecodeError:
+        raise _invalid_document() from None
+    return _ConvertedDocument(
+        elements=elements,
+        identity=conversion_identity(
+            input_kind=INPUT_KIND_ABC_REFERENCE,
+            parser=PARSER_ABC_MAIN_TEXT,
+            methods=None,
+            merge=None,
+            content_format=ABC_MAIN_TEXT_CONTENT_FORMAT,
+            page_provenance_receipt=None,
+            abc_artifact={"id": converted.artifact_id, "checksum": _sha256(markdown_bytes)},
+            abc_figure_metadata=figure_identity,
+        ),
+    )
+
+
+def _report(operation: str, exc: BaseException) -> None:
+    """Report only the operation and exception type, never provider or SQL text."""
+
+    try:
+        report_runtime_exception(
+            sanitized_benchmark_error(operation, type(exc).__name__),
+            component="benchmark_document_conversion",
+            operation=operation,
+        )
+    except Exception:
+        logger.warning("Benchmark conversion failure reporting is unavailable")
+
+
+async def run_conversion(
+    conversion_id: UUID, *, authorized_group_ids: Sequence[str]
+) -> None:
+    """Background entry point: run one conversion; never raises, never retries."""
+
+    try:
+        await DocumentConversionService().run(
+            conversion_id, authorized_group_ids=authorized_group_ids,
+        )
+    except Exception as exc:
+        _report("document_conversion_run", exc)

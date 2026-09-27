@@ -414,6 +414,54 @@ async def test_parse_without_saving_artifacts_returns_elements_and_writes_nothin
     assert [element["text"] for element in result["elements"]] == ["Results", "Body"]
     assert result["pdfx_json_path"] is None
     assert result["processed_json_path"] is None
+    assert result["page_provenance"] is None
+    assert list(storage_root.rglob("*")) == []
+
+
+@pytest.mark.asyncio
+async def test_parse_without_saving_artifacts_returns_page_provenance_receipt(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "true")
+    storage_root = tmp_path / "pdf_storage"
+    storage_root.mkdir()
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: storage_root)
+    receipt = {
+        "schema": "pdfx-merged-page-provenance",
+        "contract_version": "merged-page-provenance-v1",
+        "record_sha256": "b" * 64,
+        "expected_page_count": 1,
+        "range_count": 1,
+        "summary": {},
+    }
+
+    class _Provenance:
+        def page_for_byte_offset(self, byte_offset):
+            del byte_offset
+            return 1
+
+        def receipt(self):
+            return receipt
+
+    async def _download_page_provenance(*_args, **_kwargs):
+        return _Provenance()
+
+    parser = PDFXParser()
+    _stub_successful_extraction(monkeypatch, parser, "# Results\n\nBody\n")
+    monkeypatch.setattr(parser, "_download_page_provenance", _download_page_provenance)
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    result = await parser.parse_pdf_document(
+        pdf_path,
+        "doc-receipt",
+        "user-receipt",
+        save_artifacts=False,
+    )
+
+    assert result["page_provenance"] == receipt
     assert list(storage_root.rglob("*")) == []
 
 
