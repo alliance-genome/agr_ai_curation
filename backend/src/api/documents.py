@@ -45,7 +45,7 @@ from ..lib.document_sources.identifier_import import (
 from ..lib.document_sources.provenance import build_document_source_provenance
 from ..lib.document_sources.registry import get_document_source_provider_metadata
 from ..lib.http_errors import log_exception, raise_sanitized_http_exception
-from ..lib.observability.runtime import report_runtime_exception
+from ..lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from ..lib.pdf_jobs import service as pdf_job_service
 from ..lib.pdf_jobs.upload_execution_service import (
     UploadExecutionService,
@@ -2178,6 +2178,20 @@ async def stream_document_progress(
                 yield f"data: {json.dumps(timeout_data)}\n\n"
 
         except Exception as e:
+            try:
+                report_runtime_exception(
+                    sanitized_runtime_error("Document progress stream failed"),
+                    component="documents",
+                    operation="stream_document_progress",
+                    tags={"phase": "progress_stream"},
+                    context={"exception_type": type(e).__name__},
+                )
+            except Exception:
+                # Reporting must not prevent the terminal, client-safe SSE event.
+                logger.warning(
+                    "Failed to report document progress stream failure",
+                    extra={"sentry_skip_event": True},
+                )
             log_exception(
                 logger,
                 message=f"Error in SSE stream for document {document_id}",

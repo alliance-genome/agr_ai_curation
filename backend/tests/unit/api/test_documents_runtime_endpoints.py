@@ -1565,6 +1565,8 @@ async def test_identifier_routes_fail_before_service_when_dev_curator_unavailabl
 
 @pytest.mark.asyncio
 async def test_stream_document_progress_returns_not_found_event(monkeypatch):
+    reporter = MagicMock()
+    monkeypatch.setattr(documents, "report_runtime_exception", reporter)
     doc_id = str(uuid4())
     monkeypatch.setenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")
     monkeypatch.setenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS", "1")
@@ -1579,6 +1581,8 @@ async def test_stream_document_progress_returns_not_found_event(monkeypatch):
     payload = await _collect_stream(response)
     assert "Document not found" in payload
     assert doc_id in payload
+
+    reporter.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1617,8 +1621,11 @@ async def test_stream_document_progress_emits_final_completed_event(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_stream_document_progress_sanitizes_stream_errors(monkeypatch, caplog):
+@pytest.mark.parametrize("reporting_fails", [False, True])
+async def test_stream_document_progress_sanitizes_stream_errors(monkeypatch, caplog, reporting_fails):
     doc_id = str(uuid4())
+    reporter = MagicMock(side_effect=RuntimeError("private reporting failure") if reporting_fails else None)
+    monkeypatch.setattr(documents, "report_runtime_exception", reporter)
 
     async def _status(*_args, **_kwargs):
         raise RuntimeError("progress backend unavailable")
@@ -1644,6 +1651,22 @@ async def test_stream_document_progress_sanitizes_stream_errors(monkeypatch, cap
     assert '"error": "Failed to stream document progress"' in payload
     assert "progress backend unavailable" not in payload
     assert "progress backend unavailable" in caplog.text
+
+    reporter.assert_called_once()
+    reported = reporter.call_args.args[0]
+    assert str(reported) == "Document progress stream failed"
+    assert reported.__traceback__ is not None
+    assert reported.__context__ is None
+    assert reported.__cause__ is None
+    assert reporter.call_args.kwargs == {
+        "component": "documents",
+        "operation": "stream_document_progress",
+        "tags": {"phase": "progress_stream"},
+        "context": {"exception_type": "RuntimeError"},
+    }
+    assert "private reporting failure" not in payload
+    assert "private reporting failure" not in caplog.text
+    assert all(getattr(record, "sentry_skip_event", False) for record in caplog.records)
 
 
 @pytest.mark.asyncio

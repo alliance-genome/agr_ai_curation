@@ -184,6 +184,11 @@ def get_langfuse_search_request_limit() -> int:
     )
 
 
+def get_transient_cache_ttl_seconds() -> int:
+    """Bound how long incomplete trace output is reused before refetching."""
+    return max(1, int(os.getenv("TRACE_REVIEW_TRANSIENT_CACHE_TTL_SECONDS", "15")))
+
+
 def get_session_trace_page_size() -> int:
     """Return the observation page size for session discovery."""
     return max(1, int(os.getenv("TRACE_REVIEW_SESSION_TRACE_PAGE_SIZE", "100")))

@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
 import pytest
@@ -82,6 +82,8 @@ def test_progress_stream_returns_not_found_event_when_document_missing(client: T
 
 
 def test_progress_stream_emits_waiting_and_timeout(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    reporter = Mock()
+    monkeypatch.setattr(documents, "report_runtime_exception", reporter)
     monkeypatch.setenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")
     monkeypatch.setenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS", "1")
 
@@ -99,6 +101,8 @@ def test_progress_stream_emits_waiting_and_timeout(client: TestClient, monkeypat
     timeout_events = [event for event in events if event.get("stage") == "timeout"]
     assert timeout_events
     assert timeout_events[-1]["final"] is True
+
+    reporter.assert_not_called()
 
 
 def test_progress_stream_emits_completed_final_event(client: TestClient):

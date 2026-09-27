@@ -17,6 +17,11 @@ class TraceReviewPreflightTests(unittest.TestCase):
             state=SimpleNamespace(cache_manager=CacheManager(ttl_hours=1))
         )
 
+    def test_transient_cache_ttl_rejects_malformed_configuration(self):
+        with patch.dict(os.environ, {"TRACE_REVIEW_TRANSIENT_CACHE_TTL_SECONDS": "invalid"}):
+            with self.assertRaises(ValueError):
+                config.get_transient_cache_ttl_seconds()
+
     def test_diagnostics_redact_url_credentials(self):
         langfuse_url = "https://{}@langfuse.example.org:3000".format(
             "diagnostic-user:diagnostic-token"
