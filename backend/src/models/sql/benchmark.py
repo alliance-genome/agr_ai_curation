@@ -114,6 +114,97 @@ class BenchmarkInputSnapshot(Base):
     )
 
 
+class BenchmarkDocumentConversion(Base):
+    """One service-owned request to convert a paper into a frozen benchmark input.
+
+    The owning service subject scopes reads and idempotency. The curator who
+    requested the conversion is recorded separately and never owns the result.
+    """
+
+    __tablename__ = "benchmark_document_conversions"
+
+    id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    owner_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    service_principal: Mapped[str] = mapped_column(String(255), nullable=False)
+    curator_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    curator_db_user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False
+    )
+    input_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_digest: Mapped[str | None] = mapped_column(String(71))
+    source_blob_reference: Mapped[str | None] = mapped_column(String(2048))
+    abc_reference: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(String(512))
+    snapshot_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("benchmark_input_snapshots.id", ondelete="RESTRICT"),
+    )
+    conversion_identity: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_subject",
+            "idempotency_key",
+            name="uq_benchmark_document_conversions_owner_key",
+        ),
+        CheckConstraint(
+            "char_length(owner_subject) > 0 AND char_length(service_principal) > 0 "
+            "AND char_length(curator_subject) > 0 AND char_length(idempotency_key) > 0",
+            name="ck_benchmark_document_conversions_identity",
+        ),
+        CheckConstraint(
+            "input_kind IN ('pdf', 'abc_reference')",
+            name="ck_benchmark_document_conversions_input_kind",
+        ),
+        CheckConstraint(
+            "(input_kind = 'pdf' AND source_digest IS NOT NULL "
+            "AND source_digest ~ '^sha256:[0-9a-f]{64}$' AND source_blob_reference IS NOT NULL "
+            "AND char_length(source_blob_reference) > 0 AND abc_reference IS NULL) OR "
+            "(input_kind = 'abc_reference' AND abc_reference IS NOT NULL "
+            "AND abc_reference ~ '^AGRKB:[0-9]+$' "
+            "AND source_digest IS NULL AND source_blob_reference IS NULL)",
+            name="ck_benchmark_document_conversions_input_fields",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed')",
+            name="ck_benchmark_document_conversions_status",
+        ),
+        CheckConstraint(
+            "(status = 'queued' AND started_at IS NULL AND completed_at IS NULL "
+            "AND snapshot_id IS NULL AND conversion_identity IS NULL "
+            "AND error_code IS NULL AND error_message IS NULL) OR "
+            "(status = 'running' AND started_at IS NOT NULL AND completed_at IS NULL "
+            "AND snapshot_id IS NULL AND conversion_identity IS NULL "
+            "AND error_code IS NULL AND error_message IS NULL) OR "
+            "(status = 'succeeded' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
+            "AND snapshot_id IS NOT NULL AND conversion_identity IS NOT NULL "
+            "AND jsonb_typeof(conversion_identity) = 'object' "
+            "AND error_code IS NULL AND error_message IS NULL) OR "
+            "(status = 'failed' AND completed_at IS NOT NULL AND snapshot_id IS NULL "
+            "AND conversion_identity IS NULL AND error_code IS NOT NULL AND error_message IS NOT NULL "
+            "AND char_length(error_code) > 0 AND char_length(error_message) > 0)",
+            name="ck_benchmark_document_conversions_status_fields",
+        ),
+        Index(
+            "ix_benchmark_document_conversions_unfinished",
+            "created_at",
+            "id",
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        Index("ix_benchmark_document_conversions_snapshot", "snapshot_id"),
+    )
+
+
 class BenchmarkJob(Base):
     """One immutable-on-completion benchmark plan and its execution counters."""
 
