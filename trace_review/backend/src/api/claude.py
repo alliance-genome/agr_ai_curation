@@ -1450,6 +1450,7 @@ async def _ensure_trace_analyzed(
         return cache_data
 
     except Exception as e:
+        report_failure("analysis", source=source, trace_id=trace_id)
         raise HTTPException(
             status_code=500,
             detail=f"Error analyzing trace: {str(e)}"

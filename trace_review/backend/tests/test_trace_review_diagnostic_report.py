@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import tempfile
@@ -7,6 +8,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
+from fastapi import HTTPException
+
 from src.analyzers.extraction_timeline import ExtractionTimelineAnalyzer
 from src.api import claude, traces
 from src.api.extraction_timeline_helpers import load_extraction_timeline_context
@@ -15,6 +18,79 @@ from src.services.cache_manager import CacheManager
 
 
 class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
+    @patch("src.observability._client")
+    @patch("src.api.claude.TraceExtractor")
+    @patch("src.analyzers.extraction_timeline.ExtractionTimelineAnalyzer.load_durable_events", return_value=[])
+    async def test_claude_analysis_failures_report_without_changing_results(
+        self, _events, extractor_cls, reporter,
+    ):
+        trace_id = "private-trace-id"
+        for stage in ("analyzer", "cache"):
+            for capture_fails in (False, True):
+                for stored_feedback in (False, True):
+                    with self.subTest(stage=stage, capture_fails=capture_fails,
+                                      stored_feedback=stored_feedback):
+                        request = self._make_request()
+                        trace_data = self._make_trace_data(trace_id)
+                        trace_data["raw_trace"]["input"] = "private-trace-content"
+                        extractor_cls.return_value.extract_complete_trace.return_value = trace_data
+                        reporter.reset_mock()
+                        reporter.capture_event.side_effect = (
+                            RuntimeError("private-capture-error") if capture_fails else None
+                        )
+                        target = (
+                            claude.ConversationAnalyzer if stage == "analyzer"
+                            else request.app.state.cache_manager
+                        )
+                        method = "extract_conversation" if stage == "analyzer" else "set"
+                        artifacts = {"trace_data": {"trace_id": trace_id}}
+                        with patch.object(target, method, side_effect=RuntimeError("private-error")):
+                            if stored_feedback:
+                                context = await load_extraction_timeline_context(
+                                    trace_id=trace_id, feedback_id="private-feedback",
+                                    include_sibling_traces=False,
+                                    load_cached_data=lambda: claude._ensure_trace_analyzed(
+                                        trace_id, request, source="local",
+                                    ),
+                                    load_sibling_trace_ids=Mock(),
+                                    load_sibling_cached_data=AsyncMock(),
+                                    fallback_exceptions=(HTTPException,),
+                                    authorized_feedback_artifacts=artifacts,
+                                )
+                                self.assertEqual(context.cached_data, {
+                                    "raw_trace": {"id": trace_id, "name": "Stored feedback trace artifact"},
+                                    "observations": [],
+                                })
+                                self.assertIs(context.feedback_artifacts, artifacts)
+                            else:
+                                with self.assertRaises(HTTPException) as caught:
+                                    await claude._ensure_trace_analyzed(trace_id, request, source="local")
+                                self.assertEqual(caught.exception.status_code, 500)
+                                self.assertEqual(caught.exception.detail, "Error analyzing trace: private-error")
+                        reporter.capture_event.assert_called_once()
+                        event = reporter.capture_event.call_args.args[0]
+                        self.assertEqual(event, {
+                            "level": "error",
+                            "message": "TraceReview analysis failed",
+                            "fingerprint": ["trace_review", "analysis"],
+                            "tags": {"component": "trace_review", "operation": "analysis", "source": "local"},
+                            "contexts": {"trace_review": {
+                                "trace_id_hash": hashlib.sha256(trace_id.encode()).hexdigest(),
+                            }},
+                        })
+                        self.assertNotIn("private-", str(reporter.capture_event.call_args))
+
+    @patch("src.observability._client")
+    @patch("src.api.claude.TraceExtractor")
+    async def test_claude_extraction_failure_is_not_reported_as_analysis(self, extractor_cls, reporter):
+        extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError("private-error")
+        with self.assertRaises(HTTPException) as caught:
+            await claude._ensure_trace_analyzed("private-trace", self._make_request(), source="local")
+        self.assertEqual(caught.exception.status_code, 503)
+        reporter.capture_event.assert_called_once()
+        self.assertEqual(reporter.capture_event.call_args.args[0]["tags"]["operation"], "extraction")
+        self.assertNotIn("private-", str(reporter.capture_event.call_args))
+
     @patch("src.analyzers.extraction_timeline.ExtractionTimelineAnalyzer.load_durable_events", return_value=[])
     async def test_group_context_views_use_only_canonical_opaque_ids(self, _events):
         for metadata, expected_groups in (
