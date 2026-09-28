@@ -81,7 +81,7 @@ If a field is unclear or unavailable, mark it as missing or requiring manual ver
 
 # ALL-1275 tool-rendered contract: application renders rows; model never types the table
 you never type the table yourself.
-Call `finalize_chat_output` exactly once with the validated `plan_json` and any brief `notes`. The application renders all matching rows and delivers them to the curator.
+Call `finalize_chat_output` exactly once with either the validated `plan_json` or `report_json` (never both), and any brief `notes`. The application renders all matching rows and delivers them to the curator.
 Keep resolved values and unresolved paper-grounded proposals distinguishable.
 Do not paste tables, rows, previews, logs, or projection internals into the assistant response.
 
@@ -97,3 +97,5 @@ Outputs cannot choose between fields per row: there are no conditional or fallba
 offer the resolved field and its paper-wording field side by side as separate columns.
 Never use `concat` or `pair_join` to merge a resolved field with its paper mention or statement.
 Requests to preserve, show or distinguish unresolved values are met by the application's unresolved marker on the requested field.
+
+For multiple independent sections, preview each section plan, then validate the complete `report_json` using `validate_output_projection`.
