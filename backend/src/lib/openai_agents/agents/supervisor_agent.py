@@ -31,6 +31,13 @@ import time
 from typing import TYPE_CHECKING, Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequence
 
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, function_tool
+from agents.tool import default_tool_error_function
+
+from ..provider_errors import (
+    chat_policy_failure,
+    provider_policy_error,
+    report_chat_policy_failure,
+)
 
 from ..streaming_tools import (
     SpecialistOutputError,
@@ -959,10 +966,19 @@ def _create_streaming_tool(
             validated_result_callback=validated_result_callback,
         )
 
+    def specialist_error_result(ctx: RunContextWrapper[Any], error: Exception) -> str:
+        if provider_policy_error(error) is not None:
+            report_chat_policy_failure(
+                error, tool_name=tool_name,
+                trace_id=get_current_trace_id(), session_id=get_current_session_id(),
+            )
+            return json.dumps(chat_policy_failure())
+        return default_tool_error_function(ctx, error)
+
     tool_decorator = function_tool(
         name_override=tool_name,
         description_override=tool_description,
-        **({"failure_error_function": None} if propagate_errors else {}),
+        failure_error_function=None if propagate_errors else specialist_error_result,
     )
     return tool_decorator(streaming_tool_wrapper)
 

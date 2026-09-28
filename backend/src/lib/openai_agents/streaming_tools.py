@@ -125,6 +125,7 @@ from src.lib.prompts.context import (
     commit_pending_prompts,
 )
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
+from src.lib.openai_agents.provider_errors import provider_policy_error
 from src.lib.context import (
     get_current_session_id,
     get_current_trace_id,
@@ -5293,6 +5294,8 @@ async def run_specialist_with_events(
             )
     except BaseException as exc:
         reset_benchmark_invocation_route(benchmark_route_token)
+        if provider_policy_error(exc) is not None:
+            builder_workspace.mark_aborted(reason="provider_content_policy: bio_policy")
         sentry_stream_finalization_status = (
             "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
         )
@@ -5854,7 +5857,9 @@ async def run_specialist_with_events(
             e,
             total_event_count,
             event_type_counts,
-            extra={"sentry_skip_event": terminal_failure_capture_owned()},
+            extra={"sentry_skip_event": (
+                terminal_failure_capture_owned() or provider_policy_error(e) is not None
+            )},
         )
         builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
         raise

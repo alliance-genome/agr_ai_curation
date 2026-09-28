@@ -3981,3 +3981,50 @@ def test_specialist_answer_handoff_preserves_exact_scientific_text(wrapped):
         output, expected_output_type=None,
     )
     assert result == (answer.strip() if wrapped else answer)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["stream", "creation"])
+async def test_policy_failure_aborts_staged_workspace_without_finalization(monkeypatch, caplog, phase):
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    workspaces = []
+    persisted = []
+
+    def refuse():
+        workspace = streaming_tools.get_active_extraction_builder_workspace()
+        workspaces.append(workspace)
+        # A stream can fail after work has already been staged.
+        workspace.upsert_candidate(candidate_id="staged-only", staged_fields={})
+        raise ResponsesWebSocketError({
+            "type": "error", "error": {"type": "invalid_request_error",
+            "code": "bio_policy", "message": "PRIVATE PROVIDER PAYLOAD", "param": None},
+        })
+
+    class RefusedStream:
+        async def stream_events(self):
+            if False:
+                yield None
+            refuse()
+
+    def run_streamed(*args, **kwargs):
+        if phase == "creation":
+            refuse()
+        return RefusedStream()
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", run_streamed)
+    monkeypatch.setattr(streaming_tools, "persist_inline_validated_extraction_result", lambda **kw: persisted.append(kw))
+    agent = SimpleNamespace(name="PDF Specialist", tools=[], output_type=None, instructions="", model="gpt-4o")
+    with pytest.raises(ResponsesWebSocketError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent, input_text="extract", specialist_name=agent.name, max_turns=3,
+        )
+    assert workspaces[0].state == "aborted"
+    assert workspaces[0].finalization is None
+    assert len(workspaces[0].candidates) == 1
+    assert persisted == []
+    assert not any(event["type"] == "FILE_READY" for event in streaming_tools.get_collected_events())
+    records = [record for record in caplog.records if "stream error:" in record.message]
+    assert len(records) == (1 if phase == "stream" else 0)
+    assert all(record.sentry_skip_event for record in records)

@@ -158,6 +158,11 @@ from src.models.sql.database import SessionLocal
 # Request-scoped context for tools (trace_id captured via closure)
 from src.lib.context import set_current_trace_id, set_current_run_config, reset_current_run_config
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
+from src.lib.openai_agents.provider_errors import (
+    chat_policy_failure,
+    provider_policy_error,
+    report_chat_policy_failure,
+)
 from src.lib.observability.cost_context import costed_call, costed_stream
 from src.lib.observability.sentry import (
     application_owned_terminal_failure_capture,
@@ -3015,6 +3020,21 @@ async def run_agent_streamed(
                             output=trace_final_output,
                         )
                         raise
+                    if provider_policy_error(e) is not None:
+                        report_chat_policy_failure(
+                            e, tool_name=None, trace_id=trace_id, session_id=session_id,
+                        )
+                        failure = chat_policy_failure()
+                        root_span.update(output=failure, level="ERROR", status_message=failure["message"])
+                        trace_final_output = failure
+                        _set_langfuse_trace_io(langfuse, root_span, output=failure)
+                        run_error_event = {
+                            "type": "RUN_ERROR",
+                            "data": {**failure, "trace_id": trace_id},
+                        }
+                        write_stream_event(run_error_event, trace_id=trace_id)
+                        yield run_error_event
+                        return
                     logger.error(
                         "Run error: %s",
                         e,

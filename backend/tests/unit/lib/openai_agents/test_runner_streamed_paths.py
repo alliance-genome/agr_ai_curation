@@ -1710,3 +1710,66 @@ async def test_provided_builder_agent_without_profile_binds_run_state_tools(monk
     assert events[-1]["type"] == "RUN_FINISHED"
     output = str(captured["tool_output"])
     assert output.startswith("staged run="), output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type,code,is_policy", [
+    ("invalid_request_error", "bio_policy", True),
+    ("invalid_request_error", "context_length_exceeded", False),
+    ("server_error", None, False),
+])
+async def test_chat_propagated_provider_failure(monkeypatch, error_type, code, is_policy):
+    from agents import UserError
+    from agents.models.openai_responses import ResponsesWebSocketError
+    from src.lib.openai_agents import provider_errors
+
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "flush_agent_configs", lambda _span: 0)
+
+    class RootSpan:
+        trace_id = "trace-policy"
+        id = "span-policy"
+
+        def update(self, **kwargs):
+            pass
+
+    class Langfuse:
+        def start_as_current_observation(self, **kwargs):
+            return _FakeContextManager(RootSpan())
+
+    monkeypatch.setattr(runner, "get_langfuse", lambda: Langfuse())
+    monkeypatch.setattr(runner, "propagate_attributes", lambda **kw: _FakeContextManager())
+    reports = []
+    notifications = []
+    monkeypatch.setattr(provider_errors, "report_runtime_exception", lambda *a, **kw: reports.append((a, kw)))
+
+    async def notify(**kwargs):
+        notifications.append(kwargs)
+
+    async def fail(**kwargs):
+        if False:
+            yield None
+        try:
+            raise ResponsesWebSocketError({"type": "error", "error": {
+                "type": error_type, "code": code, "message": "PRIVATE PROVIDER PAYLOAD", "param": None,
+            }})
+        except ResponsesWebSocketError as exc:
+            raise UserError("PRIVATE SDK WRAPPER") from exc
+
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", fail)
+    monkeypatch.setattr(runner, "notify_tool_failure", notify)
+    events = await _collect_events(runner.run_agent_streamed(
+        context_messages=[{"role": "user", "content": "extract"}], user_id="user-policy",
+    ))
+    await asyncio.sleep(0)
+    terminal = next(event for event in events if event["type"] == "RUN_ERROR")
+    assert len(reports) == int(is_policy)
+    assert len(notifications) == int(not is_policy)
+    if is_policy:
+        assert terminal["data"]["retryable"] is False
+        assert terminal["data"]["failure_category"] == "provider_content_policy"
+        assert "PRIVATE" not in str(events)
+        assert "Please try again" not in str(events)
+    else:
+        assert terminal["data"]["message"] == "PRIVATE SDK WRAPPER"

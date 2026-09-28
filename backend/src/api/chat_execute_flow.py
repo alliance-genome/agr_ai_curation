@@ -30,6 +30,7 @@ from src.lib.executable_runs import (
     executable_run_manager,
 )
 from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
+from src.lib.openai_agents.provider_errors import is_provider_content_policy_refusal
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.observability.runtime import report_runtime_exception
 from src.lib.observability.sentry import (
@@ -69,23 +70,12 @@ def _extract_execute_flow_runtime_identifiers(
     return flow_run_id, trace_id
 
 
-_PROVIDER_CONTENT_POLICY_CODES = frozenset({"bio_policy"})
 _PROVIDER_CONTENT_POLICY_MESSAGE = (
     "The AI provider's automatic safety check flagged this request as possible "
     "biological risk and stopped the flow. This check is run by the provider, "
     "not by AI Curation, and it can flag routine research content. Please report "
     "the paper using the feedback button so we can follow up."
 )
-
-
-def _is_provider_content_policy_refusal(error: BaseException) -> bool:
-    """Return whether a provider error is an automatic content-policy refusal."""
-    from agents.models.openai_responses import ResponsesWebSocketError
-
-    return (
-        isinstance(error, ResponsesWebSocketError)
-        and error.code in _PROVIDER_CONTENT_POLICY_CODES
-    )
 
 
 def _flow_execution_error_message(exc: Exception) -> tuple[str, str | None]:
@@ -97,7 +87,7 @@ def _flow_execution_error_message(exc: Exception) -> tuple[str, str | None]:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, ResponsesWebSocketError):
-            if _is_provider_content_policy_refusal(current):
+            if is_provider_content_policy_refusal(current):
                 return _PROVIDER_CONTENT_POLICY_MESSAGE, "openai"
             if current.error_type in {"server_error", "service_unavailable_error"}:
                 return (
@@ -136,7 +126,7 @@ def _flow_failure_tags(
             tool_name = current.tool_name or tool_name
             failure_category = "specialist_output_invalid"
             break
-        if _is_provider_content_policy_refusal(current):
+        if is_provider_content_policy_refusal(current):
             failure_category = "provider_content_policy"
             break
         current = current.__cause__ or current.__context__

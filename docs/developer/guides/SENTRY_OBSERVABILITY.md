@@ -305,6 +305,18 @@ chain (with cycle protection), retaining that technical identity and the
 `specialist_output_invalid` category. It does not extract metadata from error
 messages or publish custom-agent display names. Unknown origins remain unknown.
 
+Ordinary chat recognizes typed OpenAI `bio_policy` refusals through SDK exception
+chains using the classifier shared with saved flows. The caught specialist tool
+formatter returns a structured `provider_content_policy` outcome with
+`retryable=false`; propagated chat failures emit the same safe outcome in
+`RUN_ERROR`. These terminal boundaries own the sanitized Sentry report, with
+provider/category tags and fixed error-code/retryability context. The specialist
+stream log remains a breadcrumb for this category, and captured exceptions use
+the shared duplicate guard. Aborted extraction staging is retained internally
+but is not published as finalized output. Curator guidance identifies the
+provider safety check and directs feedback instead of retrying. Saved-flow
+messaging and unrelated provider-error handling are unchanged.
+
 Tool-failure notifications use canonical `ai_curation.trace.id_hash` and
 `ai_curation.chat.session_id_hash` tags. Final redaction removes raw application
 identifier tags, while preserving Sentry's native `contexts.trace` identifiers.
