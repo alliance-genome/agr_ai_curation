@@ -41,9 +41,9 @@ This does not change the live release validation sequence.
 
 Backend test images, the frontend `nginx-runtime-base` contract image, and the
 TraceReview test image use separate GitHub Actions BuildKit cache scopes.
-The frontend base uses the Docker Official Images ECR mirror
-(`public.ecr.aws/docker/library/nginx:alpine`), matching the Node builder
-namespace. Registry metadata requests can still occur on cached builds; caching does not
+The frontend nginx base uses the upstream Docker Official Image
+(`docker.io/library/nginx:alpine`) to avoid the ECR data-limit failure observed
+on GitHub runners. Registry metadata requests can still occur on cached builds; caching does not
 guarantee availability during a registry outage.
 
 `scripts/testing/ci_image_scope.py` selects the nginx runtime contract from the
@@ -74,7 +74,8 @@ docker compose -f trace_review/docker-compose.yml run --rm --build backend-tests
 ```
 
 GitHub Actions builds the same `test` target with a dedicated BuildKit Actions
-cache, then runs Compose with `--no-build` so it uses that loaded image. The
+cache, verifies that image is loaded, then runs Compose with `--pull never`
+and without `--build` so it reuses the loaded image. The
 profiled test service does not join the VPN-facing development backend, load its optional `.env`, or
 require real Langfuse credentials. Test dependencies remain outside the
 published TraceReview image, which continues to use `backend/Dockerfile.prod`.

@@ -256,7 +256,9 @@ jobs:
           cache-to: type=gha,mode=max,scope=trace-review-backend-test,ignore-error=true
 
       - name: Run complete TraceReview backend suite
-        run: docker compose -p trace_review -f trace_review/docker-compose.yml run --rm --no-build backend-tests
+        run: |
+          docker image inspect trace_review-backend-tests:latest > /dev/null
+          docker compose -p trace_review -f trace_review/docker-compose.yml run --rm --pull never backend-tests
 
       - name: Cleanup TraceReview test resources
         if: always()
