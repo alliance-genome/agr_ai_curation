@@ -426,6 +426,22 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
         return None
 
 
+def _report_abstract_context_failure(operation: str, strategy: str, message: str) -> None:
+    """Report optional-context failures without exposing document/provider content."""
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error(message),
+            component="abstract_context",
+            operation=operation,
+            context={"strategy": strategy},
+            level="error",
+        )
+    except Exception:
+        # Observability must not change the optional-context result.
+        pass
+    logger.warning(message, extra={"sentry_skip_event": True})
+
+
 @costed_document_processing
 async def fetch_document_abstract(
     document_id: str,
@@ -452,6 +468,18 @@ async def fetch_document_abstract(
         get_chunks_by_parent_section,
         search_chunks_by_keyword
     )
+
+    failure_reported = False
+
+    def report_failure(strategy: str) -> None:
+        nonlocal failure_reported
+        # A dependency outage can fail every strategy. Report only the first
+        # failure, even if a later strategy succeeds or capture is unavailable.
+        if not failure_reported:
+            failure_reported = True
+            _report_abstract_context_failure(
+                "retrieval_failed", strategy, "Document abstract retrieval failed"
+            )
 
     # Build list of section names to try
     # Priority: LLM-identified section first, then common names
@@ -486,8 +514,8 @@ async def fetch_document_abstract(
                         f"{len(texts)} chunks, {len(abstract_text)} chars"
                     )
                     return abstract_text
-        except Exception as e:
-            logger.warning("Error fetching abstract section '%s': %s", section_name, e)
+        except Exception:
+            report_failure("section")
             continue
 
     # Strategy 3: Keyword search fallback
@@ -562,8 +590,8 @@ async def fetch_document_abstract(
                     )
                     return combined_text
 
-        except Exception as e:
-            logger.warning("Error in keyword search for '%s': %s", keyword, e)
+        except Exception:
+            report_failure("keyword")
             continue
 
     # Strategy 4: Last resort - send first 5 chunks to LLM
@@ -592,8 +620,8 @@ async def fetch_document_abstract(
                     )
                     return extracted
 
-    except Exception as e:
-        logger.warning('Error in last-resort abstract extraction: %s', e)
+    except Exception:
+        report_failure("first_chunks")
 
     logger.debug('No abstract found for document %s...', document_id[:8])
     return None
@@ -634,6 +662,8 @@ def fetch_document_abstract_sync(
                 fetch_document_abstract(document_id, user_id, hierarchy)
             )
             return future.result(timeout=10)
-    except Exception as e:
-        logger.warning('Error in sync abstract fetch: %s', e)
+    except Exception:
+        _report_abstract_context_failure(
+            "sync_fetch_failed", "sync_worker", "Synchronous document abstract fetch failed"
+        )
         return None

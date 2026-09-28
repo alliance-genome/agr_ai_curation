@@ -506,6 +506,15 @@ exception chains, omit provider payloads, and mark companion logs to avoid dupli
 promotion. Optional extraction results and cancellation behavior are unchanged when
 reporting is unavailable. Langfuse remains the source for model-call detail.
 
+Abstract-context retrieval reports the first unexpected strategy failure per
+fetch with component `abstract_context`, operation `retrieval_failed`, and a
+fixed strategy label, even when a later strategy succeeds. Synchronous worker
+and timeout failures use `sync_fetch_failed`. Both paths use chain-free,
+fixed-message exceptions and companion warnings that skip log promotion;
+document text, section titles, identifiers, and provider errors are omitted.
+Empty results and cancellation stay quiet, and capture failures preserve the
+optional-context result.
+
 Benchmark document conversion reports extraction configuration errors and PDFX
 errors carrying provider-boundary failure metadata with component
 `benchmark_document_conversion` and operations `document_conversion_configuration`

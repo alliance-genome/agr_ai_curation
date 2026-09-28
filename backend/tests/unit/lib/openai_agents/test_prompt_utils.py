@@ -638,3 +638,136 @@ def test_fetch_document_abstract_sync_contains_worker_runtime_error_under_runnin
 
     # A worker RuntimeError is a failed fetch, not a missing event loop.
     assert asyncio.run(_from_running_loop()) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["section", "keyword", "consecutive", "first_chunks", "all", "empty", "cancelled"])
+@pytest.mark.parametrize("capture_fails", [False, True])
+async def test_abstract_retrieval_reporting(monkeypatch, caplog, failure, capture_fails):
+    from unittest.mock import AsyncMock
+
+    report = Mock(side_effect=RuntimeError("SECRET capture") if capture_fails else None)
+    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
+    error = RuntimeError("SECRET document query credentials")
+    section = AsyncMock(return_value=[])
+    keyword = AsyncMock(return_value=[])
+    chunks = AsyncMock(return_value=[])
+    if failure in {"section", "all"}:
+        section.side_effect = error
+    if failure in {"keyword", "all"}:
+        keyword.side_effect = error
+    if failure in {"consecutive", "first_chunks", "all"}:
+        chunks.side_effect = error
+    if failure == "consecutive":
+        keyword.return_value = [{"text": "abstract SECRET body", "chunk_index": 2}]
+    if failure == "cancelled":
+        section.side_effect = asyncio.CancelledError()
+    for name, mock in [
+        ("get_chunks_by_parent_section", section),
+        ("search_chunks_by_keyword", keyword),
+        ("get_chunks_from_index", chunks),
+    ]:
+        monkeypatch.setattr("src.lib.weaviate_client.chunks." + name, mock)
+
+    if failure == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await prompt_utils.fetch_document_abstract("SECRET doc", "SECRET user")
+    else:
+        assert await prompt_utils.fetch_document_abstract(
+            "SECRET doc", "SECRET user", {"abstract_section_title": "SECRET title"}
+        ) is None
+    if failure in {"empty", "cancelled"}:
+        report.assert_not_called()
+        assert not [r for r in caplog.records if r.name == prompt_utils.__name__]
+    else:
+        report.assert_called_once()
+        exc = report.call_args.args[0]
+        assert str(exc) == "Document abstract retrieval failed"
+        assert exc.__traceback__ is not None
+        assert exc.__cause__ is None and exc.__context__ is None
+        assert report.call_args.kwargs == {
+            "component": "abstract_context",
+            "operation": "retrieval_failed",
+            "context": {"strategy": {
+                "section": "section", "all": "section", "keyword": "keyword",
+                "consecutive": "keyword", "first_chunks": "first_chunks",
+            }[failure]},
+            "level": "error",
+        }
+        warnings = [r for r in caplog.records if r.name == prompt_utils.__name__]
+        assert len(warnings) == 1
+        assert warnings[0].sentry_skip_event is True
+    assert "SECRET" not in caplog.text
+    assert "SECRET" not in str(report.call_args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture_fails", [False, True])
+async def test_abstract_retrieval_reports_failure_before_success(monkeypatch, capture_fails):
+    from unittest.mock import AsyncMock
+
+    report = Mock(side_effect=RuntimeError("capture failed") if capture_fails else None)
+    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
+    section = AsyncMock(side_effect=[RuntimeError("private content"), [{"text": "abstract result"}]])
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunks_by_parent_section", section)
+    assert await prompt_utils.fetch_document_abstract("doc", "user") == "abstract result"
+    report.assert_called_once()
+
+
+@pytest.mark.parametrize("running_loop", [False, True])
+@pytest.mark.parametrize("error_type", [RuntimeError, TimeoutError])
+@pytest.mark.parametrize("capture_fails", [False, True])
+def test_abstract_sync_failure_reporting(monkeypatch, caplog, running_loop, error_type, capture_fails):
+    report = Mock(side_effect=RuntimeError("SECRET capture") if capture_fails else None)
+    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
+
+    async def failed_fetch(*args):
+        raise error_type("SECRET worker payload")
+
+    monkeypatch.setattr(prompt_utils, "fetch_document_abstract", failed_fetch)
+
+    async def from_loop():
+        return prompt_utils.fetch_document_abstract_sync("SECRET doc", "SECRET user")
+
+    result = asyncio.run(from_loop()) if running_loop else prompt_utils.fetch_document_abstract_sync("SECRET doc", "SECRET user")
+    assert result is None
+    report.assert_called_once()
+    exc = report.call_args.args[0]
+    assert str(exc) == "Synchronous document abstract fetch failed"
+    assert exc.__traceback__ is not None
+    assert exc.__cause__ is None and exc.__context__ is None
+    assert report.call_args.kwargs == {
+        "component": "abstract_context", "operation": "sync_fetch_failed",
+        "context": {"strategy": "sync_worker"}, "level": "error",
+    }
+    assert "SECRET" not in caplog.text
+    assert all(getattr(record, "sentry_skip_event", False) for record in caplog.records)
+
+
+@pytest.mark.parametrize("capture_fails", [False, True])
+def test_abstract_sync_future_timeout_reporting(monkeypatch, caplog, capture_fails):
+    import concurrent.futures
+
+    report = Mock(side_effect=RuntimeError("SECRET capture") if capture_fails else None)
+    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
+    future = Mock()
+    future.result.side_effect = concurrent.futures.TimeoutError("SECRET timeout")
+
+    class Pool:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def submit(self, run_context, run_async, coro):
+            coro.close()
+            return future
+
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: object())
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", Pool)
+    assert prompt_utils.fetch_document_abstract_sync("doc", "user") is None
+    future.result.assert_called_once_with(timeout=10)
+    report.assert_called_once()
+    assert report.call_args.kwargs["operation"] == "sync_fetch_failed"
+    assert "SECRET" not in caplog.text
