@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -49,6 +50,13 @@ class _SessionAttributes(SpanProcessor):
 
     def on_start(self, span, parent_context=None):
         span.set_attribute("session.id", "session-A")
+
+
+@pytest.fixture
+def cost_failure_report(monkeypatch):
+    report = MagicMock()
+    monkeypatch.setattr("src.lib.observability.cost_tracing.report_runtime_exception", report)
+    return report
 
 
 @pytest.fixture
@@ -213,7 +221,7 @@ def test_payload_free_trace_records_usage_from_the_sdk_span(exporter, published)
     assert json.loads(span.attributes["langfuse.observation.usage_details"]) == EXCLUSIVE
 
 
-def test_cancelled_stream_records_explicit_cancelled_status(exporter, published):
+def test_cancelled_stream_records_explicit_cancelled_status(exporter, published, cost_failure_report):
     started = asyncio.Event()
 
     async def hanging():
@@ -248,9 +256,10 @@ def test_cancelled_stream_records_explicit_cancelled_status(exporter, published)
     assert cost["model_request_id"] == record["measurement_id"]
     assert "llm.model_name" not in span.attributes
     _assert_no_usage(span)
+    cost_failure_report.assert_not_called()
 
 
-def test_retried_turn_records_failed_attempt_and_usage_once(exporter, published):
+def test_retried_turn_records_failed_attempt_and_usage_once(exporter, published, cost_failure_report):
     failure = APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
     agent = _agent(
         _FakeResponsesModel([failure, _response()]),
@@ -271,9 +280,10 @@ def test_retried_turn_records_failed_attempt_and_usage_once(exporter, published)
     _assert_recorded(completed, published[1])
     assert _cost(completed)["attempt"] == 2
     assert failed_cost["attempt_id"] != _cost(completed)["attempt_id"]
+    cost_failure_report.assert_not_called()
 
 
-def test_provider_omitted_usage_is_explicit_not_zero(exporter, published):
+def test_provider_omitted_usage_is_explicit_not_zero(exporter, published, cost_failure_report):
     _run(_agent(_FakeResponsesModel([_response(usage=None)])))
 
     [span] = _generations(exporter)
@@ -282,9 +292,10 @@ def test_provider_omitted_usage_is_explicit_not_zero(exporter, published):
     assert cost["attempt_outcome"] == "success"
     assert published[0]["provider_usage"] == {"status": "not_reported"}
     _assert_no_usage(span)
+    cost_failure_report.assert_not_called()
 
 
-def test_chat_completions_zero_usage_substitute_is_provider_omitted(exporter):
+def test_chat_completions_zero_usage_substitute_is_provider_omitted(exporter, cost_failure_report):
     # The SDK stores Usage() zeros (requests=0) when a Chat Completions provider omits usage.
     zeros = {"requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
              "input_tokens_details": {"cached_tokens": 0},
@@ -296,6 +307,7 @@ def test_chat_completions_zero_usage_substitute_is_provider_omitted(exporter):
     [span] = _generations(exporter)
     assert _cost(span)["usage_status"] == "provider_omitted"
     _assert_no_usage(span)
+    cost_failure_report.assert_not_called()
 
 
 @pytest.mark.parametrize("enabled", [True, False])
@@ -306,3 +318,37 @@ def test_specialist_without_parent_config_follows_tracing_state(monkeypatch, ena
 
     assert config.tracing_disabled is (not enabled)
     assert config.trace_include_sensitive_data is True
+
+
+@pytest.mark.parametrize("capture_fails", [False, True])
+@pytest.mark.parametrize("span_kind", ["response", "generation"])
+def test_enrichment_failure_reports_and_finishes_span(monkeypatch, exporter, caplog, capture_fails, span_kind):
+    from agents import response_span
+    from src.lib.observability import cost_tracing
+
+    sensitive = "private provider payload token=secret-fixture"
+    monkeypatch.setattr(CostTracingProcessor, "_enrich_generation", MagicMock(side_effect=ValueError(sensitive)))
+    report = MagicMock(side_effect=RuntimeError("capture unavailable") if capture_fails else None)
+    monkeypatch.setattr(cost_tracing, "report_runtime_exception", report)
+
+    with trace("enrichment-failure"):
+        with response_span(_response()) if span_kind == "response" else generation_span(model="test-model"):
+            pass
+
+    [span] = _generations(exporter)
+    assert span.name == span_kind
+    assert span.end_time is not None
+    assert span.attributes["session.id"] == "session-A"
+    report.assert_called_once()
+    error = report.call_args.args[0]
+    assert str(error) == "Cost telemetry enrichment failed"
+    assert error.__traceback__ is not None
+    assert error.__context__ is error.__cause__ is None
+    assert report.call_args.kwargs == {
+        "component": "cost_tracing", "operation": "span_enrichment_failed",
+        "context": {"exception_type": "ValueError"},
+    }
+    assert sensitive not in caplog.text
+    assert sensitive not in str(report.call_args)
+    warning = next(record for record in caplog.records if record.name == cost_tracing.__name__)
+    assert warning.sentry_skip_event is True

@@ -16,6 +16,7 @@ from openinference.instrumentation.openai_agents._processor import OpenInference
 from opentelemetry.metrics import get_meter
 
 from .cost_context import current_cost_context, current_model_request
+from .runtime import report_runtime_exception, sanitized_runtime_error
 
 logger = logging.getLogger(__name__)
 _missing_usage = get_meter(__name__).create_counter("ai_curation.model_usage_missing")
@@ -101,7 +102,20 @@ class CostTracingProcessor(OpenInferenceTracingProcessor):
                 enriched = self._enrich_generation(span, current)
             except Exception as exc:
                 # Avoid exception contents, which may contain provider payloads.
-                logger.warning("Cost telemetry enrichment failed (%s)", type(exc).__name__)
+                try:
+                    report_runtime_exception(
+                        sanitized_runtime_error("Cost telemetry enrichment failed"),
+                        component="cost_tracing",
+                        operation="span_enrichment_failed",
+                        context={"exception_type": type(exc).__name__},
+                    )
+                except Exception:
+                    # Reporting must not prevent the original span from ending.
+                    pass
+                logger.warning(
+                    "Cost telemetry enrichment failed (%s)", type(exc).__name__,
+                    extra={"sentry_skip_event": True},
+                )
             else:
                 # Span-start identity (trace/session/user) is pinned too; cost
                 # attributes go last so they are the newest of all.

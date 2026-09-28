@@ -276,3 +276,56 @@ async def test_pinned_sdk_processor_attaches_nearest_agent_and_exclusive_usage(s
     finally:
         set_trace_processors([])
         provider.shutdown()
+
+
+@pytest.mark.parametrize("capture_fails", [False, True])
+def test_attribution_lookup_failure_reports_sanitized_error(monkeypatch, caplog, capture_fails):
+    from src.lib.observability import cost_context
+    from src.models.sql import database
+
+    sensitive = "SELECT private_document WHERE token='secret-fixture'"
+    db = MagicMock()
+    db.__enter__.return_value = db
+    db.query.side_effect = RuntimeError(sensitive)
+    monkeypatch.setattr(database, "SessionLocal", lambda: db)
+    report = MagicMock(side_effect=RuntimeError("capture unavailable") if capture_fails else None)
+    monkeypatch.setattr(cost_context, "report_runtime_exception", report)
+
+    result = execution_context(activity="interactive_chat", document_id="artifact", user_id="owner", run_id="run")
+
+    assert result["paper_category"] == "artifact_only"
+    assert result["document_id"] == "artifact"
+    assert result["run_id"] == "run"
+    assert "paper" not in result
+    db.__exit__.assert_called_once()
+    report.assert_called_once()
+    error = report.call_args.args[0]
+    assert str(error) == "Paper cost attribution lookup failed"
+    assert error.__traceback__ is not None
+    assert error.__context__ is error.__cause__ is None
+    assert report.call_args.kwargs == {
+        "component": "cost_context", "operation": "attribution_lookup_failed",
+        "context": {"exception_type": "RuntimeError"},
+    }
+    assert sensitive not in caplog.text
+    assert sensitive not in str(report.call_args)
+    warning = next(record for record in caplog.records if record.name == cost_context.__name__)
+    assert warning.sentry_skip_event is True
+
+
+@pytest.mark.parametrize("document_id,user_id", [(None, "owner"), ("artifact", None), ("artifact", "owner")])
+def test_missing_attribution_does_not_report(monkeypatch, document_id, user_id):
+    from src.lib.observability import cost_context
+    from src.models.sql import database
+
+    db = MagicMock()
+    db.__enter__.return_value = db
+    db.query.return_value.join.return_value.filter.return_value.one_or_none.return_value = None
+    monkeypatch.setattr(database, "SessionLocal", lambda: db)
+    report = MagicMock()
+    monkeypatch.setattr(cost_context, "report_runtime_exception", report)
+
+    result = execution_context(activity="interactive_chat", document_id=document_id, user_id=user_id)
+
+    assert result["paper_category"] == ("artifact_only" if document_id else "not_associated")
+    report.assert_not_called()
