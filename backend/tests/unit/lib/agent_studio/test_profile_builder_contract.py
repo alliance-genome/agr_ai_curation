@@ -56,7 +56,30 @@ def test_missing_installed_generic_builder_blocks_transition(monkeypatch):
         profile_builder_tool_ids(["record_evidence"])
 
 
-def test_profile_save_repairs_head_before_snapshot_without_rewriting_old_revision(monkeypatch):
+@pytest.mark.parametrize("policy_state", ["enabled", "disabled", "missing", "uninstalled"])
+def test_profile_save_validates_builder_execution_without_attach_permission(monkeypatch, policy_state):
+    from unittest.mock import MagicMock
+    from src.lib.agent_studio import custom_agent_service as service
+
+    db = MagicMock()
+    builders = profile_builder_tool_ids([])
+    db.execute.return_value.scalars.return_value.all.return_value = [
+        SimpleNamespace(tool_key=tool, allow_execute=policy_state != "disabled", allow_attach=False)
+        for tool in builders if policy_state != "missing"
+    ]
+    monkeypatch.setattr(service, "has_tool_binding", lambda tool: policy_state != "uninstalled")
+    original = ["read_chunk", "stage_allele_observation", "finalize_allele_extraction"]
+    if policy_state == "enabled":
+        assert service._prepare_execution_tool_ids(
+            db, original, output_contract=profile_output(),
+        ) == ["read_chunk", *builders]
+    else:
+        with pytest.raises(ValueError, match="unavailable for execution"):
+            service._prepare_execution_tool_ids(db, original, output_contract=profile_output())
+    assert original == ["read_chunk", "stage_allele_observation", "finalize_allele_extraction"]
+
+
+def test_profile_save_records_prepared_tools_without_rewriting_old_revision(monkeypatch):
     from src.lib.agent_studio import custom_agent_service as service
     from src.lib.agent_studio import execution_snapshot, execution_revision_service
     output = profile_output()
@@ -90,6 +113,7 @@ def test_profile_save_repairs_head_before_snapshot_without_rewriting_old_revisio
 
     monkeypatch.setattr(execution_snapshot, "capture_execution_snapshot", capture)
     monkeypatch.setattr(execution_revision_service, "append_execution_revision", append)
+    head.tool_ids = profile_builder_tool_ids(head.tool_ids)
     service._record_execution_save(
         None, head, expected_revision_id="old-pin", previous_output=output,
         previous_snapshot=previous,

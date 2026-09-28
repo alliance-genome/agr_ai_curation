@@ -73,6 +73,25 @@ def execution_db(profile_db, request):  # noqa: F811 - pytest injects the import
     return db, agent_id, other_id, profile_revision
 
 
+@pytest.fixture
+def builder_policies(execution_db, monkeypatch):
+    from src.lib.agent_studio.profile_builder_contract import profile_builder_tool_ids
+    from src.lib.agent_studio import tool_policy_service
+    from src.models.sql.tool_policy import ToolPolicy
+
+    db, *_ = execution_db
+    ToolPolicy.__table__.create(db.connection())
+    policies = [ToolPolicy(
+        tool_key=tool, display_name=tool, description="Test", category="Test",
+        curator_visible=False, allow_attach=False, allow_execute=True,
+    ) for tool in profile_builder_tool_ids([])]
+    db.add_all(policies)
+    db.flush()
+    monkeypatch.setenv("TOOL_POLICY_CACHE_TTL_SECONDS", "0")
+    monkeypatch.setattr(tool_policy_service, "_tool_policy_service", None)
+    return policies
+
+
 @pytest.mark.parametrize(
     "execution_db",
     [[
@@ -347,10 +366,10 @@ def test_saved_profile_builds_real_closed_agent_from_postgres(execution_db, monk
         }:
             db.add(ToolPolicy(tool_key=tool_key, display_name=tool_key, description="Test",
                               category="Test", curator_visible=False, allow_attach=False, allow_execute=True))
-        revision = service._record_execution_save(
-            db, head, expected_revision_id=old_revision.id,
-            previous_output=saved.output_contract, previous_snapshot=saved,
-        )
+        db.flush()
+        service.update_custom_agent(db, head, expected_revision_id=old_revision.id)
+        from src.lib.agent_studio.execution_revision_service import get_execution_revision
+        revision, _ = get_execution_revision(db, head.id, head.execution_revision_id, 1, active_group_ids=[])
         db.flush()
         db.refresh(old_revision)
         assert old_revision.snapshot == old_bytes
@@ -464,7 +483,77 @@ def test_restore_cannot_broaden_current_inherited_access(execution_db):
     assert head.execution_revision_id == first.id
 
 
-def test_workshop_create_update_profile_binding_and_atomic_rollback(execution_db):
+@pytest.mark.parametrize("policy_state", ["disabled", "missing"])
+@pytest.mark.parametrize("transition", ["create", "new_profile", "existing_profile", "revise_profile", "unchanged"])
+def test_builder_policy_rejection_precedes_all_save_mutations(
+    execution_db, builder_policies, policy_state, transition,
+):
+    from copy import deepcopy
+    from src.lib.agent_studio import custom_agent_service as service
+    from src.lib.agent_studio.execution_revision_service import get_execution_revision
+    from src.models.sql.agent_execution_revision import AgentExecutionRevision
+    from src.models.sql.generic_extraction_profile import GenericExtractionProfile, GenericExtractionProfileRevision
+    from src.schemas.agent_execution_revision import AgentOutputContract, GenericProfilePin
+    from src.schemas.generic_extraction_profile import GenericProfileContract
+
+    db, _, _, existing_profile = execution_db
+    contract = GenericProfileContract(name="Details", semantic_class="detail", fields=[])
+    head = service.create_custom_agent(
+        db, 1, "Policy test", model_id="gpt-6-sol", custom_prompt="Keep curator settings.",
+        include_group_rules=False,
+        new_generic_profile=contract if transition in {"revise_profile", "unchanged"} else None,
+    )
+    revision_id = head.execution_revision_id
+    row, snapshot = get_execution_revision(db, head.id, revision_id, 1, active_group_ids=[])
+    original = deepcopy(row.snapshot)
+    policy = next(p for p in builder_policies if p.tool_key == "finalize_generic_extraction")
+    if policy_state == "missing":
+        db.delete(policy)
+    else:
+        policy.allow_execute = False
+    db.flush()
+    models = [Agent, AgentExecutionRevision, GenericExtractionProfile, GenericExtractionProfileRevision]
+    counts = [db.scalar(sa.select(sa.func.count()).select_from(model)) for model in models]
+    changes = {}
+    if transition == "new_profile":
+        changes["new_generic_profile"] = contract
+    elif transition == "existing_profile":
+        changes["output_contract"] = AgentOutputContract(
+            output_state="structured_extraction", output_mode="profile_bound_generic",
+            generic_profile_ref=GenericProfilePin(
+                profile_id=existing_profile.profile_id, profile_revision_id=existing_profile.id,
+                revision=existing_profile.revision, fingerprint=existing_profile.fingerprint,
+            ),
+        )
+    elif transition == "revise_profile":
+        changes["revise_generic_profile"] = {
+            "base": snapshot.output_contract.generic_profile_ref,
+            "contract": contract.model_copy(update={"description": "Must not persist"}),
+        }
+    # No rollback/savepoint around the rejection: the service must not mutate.
+    with pytest.raises(ValueError, match="Builder tool.*unavailable for execution"):
+        if transition == "create":
+            service.create_custom_agent(
+                db, 1, "Rejected create", model_id="gpt-6-sol", custom_prompt="Extract details.",
+                include_group_rules=False, new_generic_profile=contract,
+            )
+        else:
+            service.update_custom_agent(
+                db, head, expected_revision_id=revision_id, name="Must not persist",
+                model_temperature=0.7, **changes,
+            )
+    db.flush()
+    db.refresh(head)
+    db.refresh(row)
+    assert head.execution_revision_id == revision_id
+    assert head.name == "Policy test"
+    assert head.model_temperature == snapshot.model_temperature
+    assert head.tool_ids == snapshot.tool_ids
+    assert row.snapshot == original
+    assert [db.scalar(sa.select(sa.func.count()).select_from(model)) for model in models] == counts
+
+
+def test_workshop_create_update_profile_binding_and_atomic_rollback(execution_db, builder_policies):
     from src.lib.agent_studio import custom_agent_service as service
     from src.lib.agent_studio.execution_revision_service import (
         get_execution_revision, ExecutionRevisionConflictError,
@@ -526,7 +615,7 @@ def test_workshop_create_update_profile_binding_and_atomic_rollback(execution_db
     assert db.scalar(sa.select(Agent).where(Agent.name == "Rolled back")) is None
 
 
-def test_workshop_profile_revision_is_atomic_and_keeps_other_agent_pins(execution_db, monkeypatch):
+def test_workshop_profile_revision_is_atomic_and_keeps_other_agent_pins(execution_db, monkeypatch, builder_policies):
     from src.lib.agent_studio import custom_agent_service as service, execution_snapshot
     from src.lib.agent_studio.execution_revision_service import get_execution_revision
     from src.lib.agent_studio.generic_profile_service import ProfileConflictError
@@ -583,7 +672,7 @@ def test_workshop_profile_revision_is_atomic_and_keeps_other_agent_pins(executio
     assert head.execution_revision_id == saved_id
 
 
-def test_clone_api_preserves_profile_pin_and_records_explicit_edits(execution_db, monkeypatch):
+def test_clone_api_preserves_profile_pin_and_records_explicit_edits(execution_db, monkeypatch, builder_policies):
     import asyncio
     from types import SimpleNamespace
     from src.api import agent_studio_custom as api
@@ -693,7 +782,7 @@ def test_restore_rejects_a_revision_whose_model_left_the_catalog(execution_db, m
     assert head.execution_revision_id == second_id
 
 
-def test_custom_clone_preserves_snapshot_profile_and_inherited_access(execution_db, monkeypatch):
+def test_custom_clone_preserves_snapshot_profile_and_inherited_access(execution_db, monkeypatch, builder_policies):
     from src.lib.agent_studio import custom_agent_service as service
     from src.lib.agent_studio.execution_revision_service import get_execution_revision
     from src.models.sql.custom_agent import CustomAgentVersion
@@ -892,7 +981,7 @@ def test_edit_preserves_saved_inherited_tools_and_group_policy(execution_db, mon
     assert revision.snapshot == saved.model_dump(mode="json")
 
 
-def test_normal_save_round_trips_all_output_modes_atomically(execution_db, monkeypatch):
+def test_normal_save_round_trips_all_output_modes_atomically(execution_db, monkeypatch, builder_policies):
     from pydantic import create_model
     from src.lib.prompts import assembly
     from src.lib.agent_studio import custom_agent_service as service

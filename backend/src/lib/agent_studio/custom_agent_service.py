@@ -909,6 +909,52 @@ def _selected_output_schema(output_contract, new_generic_profile, schema, schema
     return schema
 
 
+def _prepare_execution_tool_ids(
+    db, tool_ids, *, output_contract=None, new_generic_profile=None,
+    revise_generic_profile=None, previous_output=None, schema_provided=False,
+    output_schema_key=None,
+):
+    """Resolve and validate mechanical tools before any agent/profile mutation."""
+    from sqlalchemy import select
+    from src.models.sql.tool_policy import ToolPolicy
+    from src.lib.agent_studio.profile_builder_contract import (
+        declared_builder_tool_ids, profile_builder_tool_ids,
+    )
+
+    if new_generic_profile is not None or revise_generic_profile is not None:
+        output_mode = "profile_bound_generic"
+        output_state = "structured_extraction"
+    else:
+        if output_contract is not None:
+            selected = AgentOutputContract.model_validate(output_contract)
+        elif schema_provided or previous_output is None:
+            selected = initial_output_contract(output_schema_key)
+        else:
+            selected = previous_output
+        output_mode = selected.output_mode
+        output_state = selected.output_state
+    if output_mode == "profile_bound_generic":
+        tool_ids = profile_builder_tool_ids(list(tool_ids))
+        builders = set(tool_ids) & declared_builder_tool_ids("generic")
+        # Use current rows, as pinned runtime construction does, not the UI cache.
+        policies = db.execute(
+            select(ToolPolicy).where(ToolPolicy.tool_key.in_(builders))
+        ).scalars().all()
+        executable = {policy.tool_key for policy in policies if policy.allow_execute}
+        unavailable = sorted(
+            tool for tool in builders if tool not in executable or not has_tool_binding(tool)
+        )
+        if unavailable:
+            raise ValueError(f"Builder tool(s) unavailable for execution: {', '.join(unavailable)}")
+    elif (
+        output_state == "none" and previous_output is not None
+        and previous_output.output_mode in {"profile_bound_generic", "unprofiled_generic"}
+    ):
+        generic_builders = declared_builder_tool_ids("generic")
+        tool_ids = [tool for tool in tool_ids if tool not in generic_builders]
+    return list(tool_ids)
+
+
 def _record_execution_save(
     db, agent, *, expected_revision_id, output_contract=None, new_generic_profile=None,
     revise_generic_profile=None,
@@ -955,20 +1001,6 @@ def _record_execution_save(
         selected = initial_agent_output_contract(agent)
     else:
         selected = previous_output
-    if selected.output_mode == "profile_bound_generic":
-        from src.lib.agent_studio.profile_builder_contract import profile_builder_tool_ids
-
-        agent.tool_ids = profile_builder_tool_ids(list(agent.tool_ids or []))
-    elif (
-        selected.output_state == "none" and previous_output is not None
-        and previous_output.output_mode in {"profile_bound_generic", "unprofiled_generic"}
-    ):
-        # An explicit transition out of custom extraction removes only its
-        # mechanical generic builders, not document/evidence capabilities.
-        from src.lib.agent_studio.profile_builder_contract import declared_builder_tool_ids
-
-        generic_builders = declared_builder_tool_ids("generic")
-        agent.tool_ids = [tool for tool in (agent.tool_ids or []) if tool not in generic_builders]
     saved = capture_execution_snapshot(db, agent, selected, active_group_ids=active_group_ids)
     mode = default_export_execution_mode if default_export_execution_mode is not None else (
         previous_snapshot.default_export_execution_mode if previous_snapshot is not None else None
@@ -1148,6 +1180,11 @@ def create_custom_agent(
         )
     else:
         effective_tool_ids = _merge_system_managed_tool_ids([], parent_tool_ids, **effective_output)
+    effective_tool_ids = _prepare_execution_tool_ids(
+        db, effective_tool_ids, output_contract=output_contract,
+        new_generic_profile=new_generic_profile,
+        output_schema_key=effective_output_schema_key,
+    )
     _validate_output_schema_excludes_finalize_tool(
         output_schema_key=effective_output_schema_key,
         tool_ids=list(effective_tool_ids),
@@ -1187,7 +1224,7 @@ def create_custom_agent(
             "category": effective_category,
         },
         prevalidated_tool_ids=list(effective_tool_ids),
-        inherited_tool_ids=parent_tool_ids,
+        inherited_tool_ids=[*parent_tool_ids, *_system_managed_tool_ids(db, effective_tool_ids)],
         trusted_output_schema_keys=(
             [str(parent_defaults["output_schema_key"])]
             if parent_defaults.get("output_schema_key")
@@ -1660,6 +1697,13 @@ def update_custom_agent(
                 "explicit override. "
                 "Re-attach at least one tool before saving."
             )
+    next_tool_ids = _prepare_execution_tool_ids(
+        db, next_tool_ids, output_contract=output_contract,
+        new_generic_profile=new_generic_profile, revise_generic_profile=revise_generic_profile,
+        previous_output=previous_output,
+        schema_provided=output_schema_key_provided or output_schema_key is not None,
+        output_schema_key=next_output_schema_key,
+    )
     _validate_output_schema_excludes_finalize_tool(
         output_schema_key=next_output_schema_key,
         tool_ids=list(next_tool_ids),
@@ -1725,7 +1769,7 @@ def update_custom_agent(
             "category": getattr(custom_agent, "category", None),
         },
         prevalidated_tool_ids=(list(next_tool_ids) if tool_ids is not None else []),
-        inherited_tool_ids=inherited_system_tool_ids,
+        inherited_tool_ids=[*inherited_system_tool_ids, *_system_managed_tool_ids(db, next_tool_ids)],
     )
 
     if visibility is not None:
@@ -1751,8 +1795,7 @@ def update_custom_agent(
         custom_agent.model_temperature = float(model_temperature)
     if model_reasoning_provided or model_reasoning is not None:
         custom_agent.model_reasoning = model_reasoning
-    if tool_ids is not None:
-        custom_agent.tool_ids = next_tool_ids
+    custom_agent.tool_ids = next_tool_ids
     if output_schema_key_provided or output_schema_key is not None or output_contract is not None or new_generic_profile is not None or revise_generic_profile is not None:
         custom_agent.output_schema_key = next_output_schema_key
 
