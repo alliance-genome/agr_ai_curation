@@ -1170,7 +1170,10 @@ def _report_invalid_record(value: Mapping[str, Any], *, identity_checked: bool) 
         )
     except Exception:
         # Observability must not prevent reading the remaining envelope values.
-        pass
+        _log.warning(
+            "Invalid persisted resolution record reporting unavailable",
+            extra={"sentry_skip_event": True},
+        )
     _log.warning(
         "Stored resolvable value breaks the contract and reads as unresolved",
         extra={"sentry_skip_event": True},

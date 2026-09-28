@@ -1774,7 +1774,7 @@ def test_invalid_record_capture_is_private_and_best_effort(monkeypatch, caplog, 
 
     from src.lib.domain_packs import resolvable_values as values
 
-    capture = Mock(side_effect=RuntimeError("reporting unavailable") if capture_fails else None)
+    capture = Mock(side_effect=RuntimeError("PRIVATE reporting failure") if capture_fails else None)
     monkeypatch.setattr(values, "report_runtime_exception", capture)
     stored = resolved_value("PRIVATE paper wording", {"curie": "PRIVATE:1", "name": "PRIVATE label"})
     stored["lookup_outcome"] = "PRIVATE damaged outcome"
@@ -1800,6 +1800,12 @@ def test_invalid_record_capture_is_private_and_best_effort(monkeypatch, caplog, 
     }
     assert "PRIVATE" not in str(capture.call_args)
     assert "PRIVATE" not in caplog.text
+    reporting_warnings = [
+        record for record in caplog.records
+        if record.getMessage() == "Invalid persisted resolution record reporting unavailable"
+    ]
+    assert len(reporting_warnings) == int(capture_fails)
+    assert all(record.levelname == "WARNING" and record.exc_info is None for record in reporting_warnings)
     assert all(record.sentry_skip_event for record in caplog.records)
     # A display copy is not a second damaged stored record.
     capture.reset_mock()
