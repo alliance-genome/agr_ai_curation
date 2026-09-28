@@ -549,9 +549,13 @@ async def test_hybrid_search_retry_adapter_branches(monkeypatch):
     assert calls == [(None, None, None)]
 
 
-# --- ALL-1246: single retry on Weaviate gRPC DEADLINE_EXCEEDED ---
+# --- Shared logical-search retry for deadlines and embedding resets ---
 
 _SEARCH_QUERY_SENTINEL = "QUERY-TEXT-SENTINEL-91b2 allele mentions in methods"
+_EMBEDDING_RESET = (
+    'vectorize search vector: remote client vectorize: send POST request: '
+    'Post "https://api.openai.com/v1/embeddings": read tcp: read: connection reset by peer'
+)
 
 
 class _FakeRpcError(grpc.RpcError):
@@ -631,10 +635,11 @@ def _search_records(caplog, level):
     [
         _weaviate_query_error(grpc.StatusCode.DEADLINE_EXCEEDED),
         _weaviate_query_error(None, message="Deadline Exceeded"),
+        _weaviate_query_error(grpc.StatusCode.UNKNOWN, message=_EMBEDDING_RESET),
     ],
-    ids=["grpc-status", "message-fallback"],
+    ids=["grpc-status", "message-fallback", "embedding-reset"],
 )
-async def test_hybrid_search_retries_once_after_deadline_exceeded(monkeypatch, caplog, first_error):
+async def test_hybrid_search_retries_once_after_transient_failure(monkeypatch, caplog, first_error):
     caplog.set_level(logging.INFO, logger=chunks.logger.name)
 
     results, collection = await _run_hybrid_search(
@@ -643,28 +648,37 @@ async def test_hybrid_search_retries_once_after_deadline_exceeded(monkeypatch, c
 
     assert [chunk["id"] for chunk in results] == ["chunk-1"]
     assert collection.query.hybrid.call_count == 2
+    assert collection.query.hybrid.call_args_list[0] == collection.query.hybrid.call_args_list[1]
     assert _search_records(caplog, logging.ERROR) == []
     warnings = [
         record for record in _search_records(caplog, logging.WARNING)
-        if getattr(record, "operation", None) == "weaviate_hybrid_search_deadline_retry"
+        if getattr(record, "operation", None) == "weaviate_hybrid_search_transient_retry"
     ]
     assert len(warnings) == 1
     assert warnings[0].attempt == 1
     assert isinstance(warnings[0].duration_ms, float)
     assert warnings[0].exc_info is None
+    assert warnings[0].sentry_skip_event is True
     assert "QUERY-TEXT-SENTINEL" not in warnings[0].getMessage()
     assert "QUERY-TEXT-SENTINEL" not in repr(vars(warnings[0]))
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_reports_second_deadline_failure_without_sentry_event(monkeypatch, caplog):
+@pytest.mark.parametrize("first_reset,second_reset", [(False, False), (True, True), (False, True), (True, False)])
+async def test_hybrid_search_reports_second_transient_failure_without_sentry_event(
+    monkeypatch, caplog, first_reset, second_reset,
+):
     caplog.set_level(logging.INFO, logger=chunks.logger.name)
     deadline = grpc.StatusCode.DEADLINE_EXCEEDED
 
     with pytest.raises(WeaviateQueryError) as raised:
         await _run_hybrid_search(
             monkeypatch,
-            [_weaviate_query_error(deadline), _weaviate_query_error(deadline)],
+            [
+                _weaviate_query_error(grpc.StatusCode.UNKNOWN, message=_EMBEDDING_RESET)
+                if reset else _weaviate_query_error(deadline)
+                for reset in (first_reset, second_reset)
+            ],
         )
 
     assert raised.value.chunk_collection.query.hybrid.call_count == 2
@@ -682,8 +696,18 @@ async def test_hybrid_search_reports_second_deadline_failure_without_sentry_even
         _weaviate_query_error(grpc.StatusCode.INTERNAL, message="Deadline Exceeded"),
         _weaviate_query_error(None, message="index not found"),
         RuntimeError("Deadline Exceeded"),
+        _weaviate_query_error(grpc.StatusCode.UNKNOWN, message="vectorize: invalid API key"),
+        _weaviate_query_error(grpc.StatusCode.UNKNOWN, message="Deadline Exceeded"),
+        _weaviate_query_error(grpc.StatusCode.UNAVAILABLE, message=_EMBEDDING_RESET),
+        _weaviate_query_error(grpc.StatusCode.INTERNAL, message=_EMBEDDING_RESET),
+        _weaviate_query_error(None, message=_EMBEDDING_RESET),
+        RuntimeError(_EMBEDDING_RESET),
     ],
-    ids=["unavailable", "grpc-status-wins-over-message", "other-query-error", "not-a-query-error"],
+    ids=[
+        "unavailable", "grpc-status-wins-over-message", "other-query-error", "not-a-query-error",
+        "unknown-non-transient", "unknown-deadline-text", "unavailable-reset", "internal-reset",
+        "reset-without-status", "reset-not-a-query-error",
+    ],
 )
 async def test_hybrid_search_does_not_retry_other_errors(monkeypatch, caplog, error):
     caplog.set_level(logging.INFO, logger=chunks.logger.name)
@@ -694,25 +718,30 @@ async def test_hybrid_search_does_not_retry_other_errors(monkeypatch, caplog, er
     assert raised.value.chunk_collection.query.hybrid.call_count == 1
     assert not [
         record for record in caplog.records
-        if getattr(record, "operation", None) == "weaviate_hybrid_search_deadline_retry"
+        if getattr(record, "operation", None) == "weaviate_hybrid_search_transient_retry"
     ]
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_deadline_retry_budget_spans_lexical_first_attempts(monkeypatch, caplog):
+@pytest.mark.parametrize("first_reset,second_reset", [(False, False), (True, True), (False, True), (True, False)])
+async def test_hybrid_search_transient_retry_budget_spans_lexical_first_attempts(
+    monkeypatch, caplog, first_reset, second_reset,
+):
     caplog.set_level(logging.INFO, logger=chunks.logger.name)
     deadline = grpc.StatusCode.DEADLINE_EXCEEDED
 
-    # Attempt 1 times out and its single retry returns no rows, so the
+    # Attempt 1 fails transiently and its single retry returns no rows, so the
     # lexical-first adapter moves on; the adapter's next attempt must not get
-    # a second deadline retry.
+    # a second transient retry.
     with pytest.raises(WeaviateQueryError) as raised:
         await _run_hybrid_search(
             monkeypatch,
             [
-                _weaviate_query_error(deadline),
+                _weaviate_query_error(grpc.StatusCode.UNKNOWN, message=_EMBEDDING_RESET)
+                if first_reset else _weaviate_query_error(deadline),
                 SimpleNamespace(objects=[]),
-                _weaviate_query_error(deadline),
+                _weaviate_query_error(grpc.StatusCode.UNKNOWN, message=_EMBEDDING_RESET)
+                if second_reset else _weaviate_query_error(deadline),
                 _hybrid_response(),
             ],
             strategy="hybrid_lexical_first",
@@ -721,5 +750,5 @@ async def test_hybrid_search_deadline_retry_budget_spans_lexical_first_attempts(
     assert raised.value.chunk_collection.query.hybrid.call_count == 3
     assert len([
         record for record in caplog.records
-        if getattr(record, "operation", None) == "weaviate_hybrid_search_deadline_retry"
+        if getattr(record, "operation", None) == "weaviate_hybrid_search_transient_retry"
     ]) == 1

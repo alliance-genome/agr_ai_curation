@@ -462,12 +462,14 @@ async def get_chunk_neighbor_ids(
     return await asyncio.to_thread(_fetch)
 
 
-def _is_weaviate_deadline_exceeded(error: BaseException) -> bool:
-    """Return whether a Weaviate query failed on the gRPC client deadline.
+def _is_retryable_weaviate_query_error(error: BaseException) -> bool:
+    """Recognize deadlines and server-side embedding connection resets.
 
     weaviate-client raises WeaviateQueryError inside its RpcError handler, so the
     gRPC error is only on ``__context__``. Its status code decides when present;
-    the "Deadline Exceeded" message is the fallback.
+    the "Deadline Exceeded" message is used when no status is available.
+    UNKNOWN is retryable only for the observed connection-reset signature.
+    UNAVAILABLE retries belong to weaviate-client.
     """
 
     if not isinstance(error, WeaviateQueryError):
@@ -480,7 +482,10 @@ def _is_weaviate_deadline_exceeded(error: BaseException) -> bool:
         except Exception:
             status = None
         if isinstance(status, StatusCode):
-            return status == StatusCode.DEADLINE_EXCEEDED
+            return status == StatusCode.DEADLINE_EXCEEDED or (
+                status == StatusCode.UNKNOWN
+                and "connection reset by peer" in str(error).lower()
+            )
     return "deadline exceeded" in str(error).lower()
 
 
@@ -560,15 +565,15 @@ async def hybrid_search_chunks(
         logger.info("Detected short/symbol-like query; enabling BM25 boost while preserving rerank/MMR")
         use_bm25_boost = True
 
-    # One deadline retry per logical search, shared by every attempt the
+    # One transient retry per logical search, shared by every attempt the
     # lexical-first retry adapter makes. UNAVAILABLE is already retried inside
     # weaviate-client, and other errors are not retried.
-    deadline_retry_available = True
+    transient_retry_available = True
 
     def _search(alpha_override: Optional[float] = None,
                 rerank_override: Optional[bool] = None,
                 mmr_override: Optional[bool] = None) -> List[Dict[str, Any]]:
-        nonlocal deadline_retry_available
+        nonlocal transient_retry_available
         try:
             search_start = time.monotonic()
             search_id = uuid4().hex
@@ -713,16 +718,17 @@ async def hybrid_search_chunks(
                     response = collection.query.hybrid(**query_params)
                 except WeaviateQueryError as query_error:
                     if not (
-                        deadline_retry_available
-                        and _is_weaviate_deadline_exceeded(query_error)
+                        transient_retry_available
+                        and _is_retryable_weaviate_query_error(query_error)
                     ):
                         raise
-                    deadline_retry_available = False
+                    transient_retry_available = False
                     logger.warning(
-                        "Weaviate hybrid query exceeded its deadline; retrying once search_id=%s",
+                        "Weaviate hybrid query failed transiently; retrying once search_id=%s",
                         search_id,
                         extra={
-                            "operation": "weaviate_hybrid_search_deadline_retry",
+                            "operation": "weaviate_hybrid_search_transient_retry",
+                            "sentry_skip_event": True,
                             "attempt": 1,
                             "duration_ms": round(
                                 (time.monotonic() - weaviate_start) * 1000, 1

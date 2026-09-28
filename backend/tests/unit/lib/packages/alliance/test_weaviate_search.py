@@ -762,36 +762,48 @@ async def test_read_subsection_bounds_pages_and_filters(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_tool_reports_one_sentry_event_after_deadline_retry_fails(monkeypatch, caplog):
-    """ALL-1246: a failed search retries once and emits no duplicate Sentry event.
-
-    ALL-933 (main) removed search_document's legacy error-summary fallback, so the
-    failure now propagates to canonical runtime failure reporting, which owns the
-    single Sentry event. ALL-1246's guarantees still hold on that path: exactly one
-    deadline retry, exactly one retry WARNING, and the chunks.py "Search failed"
-    ERROR stays Sentry-skipped so the search path raises no Sentry event of its own.
-    """
+@pytest.mark.parametrize(
+    "failure_kinds",
+    [
+        ("deadline", "deadline"), ("reset", "reset"), ("deadline", "reset"),
+        ("reset", "deadline"), ("unknown",),
+    ],
+    ids=["deadlines", "resets", "deadline-reset", "reset-deadline", "unknown-non-transient"],
+)
+async def test_search_tool_terminal_failure_has_one_capture_owner(monkeypatch, caplog, failure_kinds):
+    """Search failures propagate to runtime capture without duplicate log events."""
     import asyncio
     import logging
     from contextlib import contextmanager
     from unittest.mock import MagicMock, patch
 
     import grpc
+    import sentry_sdk
     from weaviate.exceptions import WeaviateQueryError
 
     import src.lib.weaviate_client.chunks as chunks
-    from src.lib.observability.sentry import _with_safe_log_record_metadata
+    from src.lib.observability.runtime import report_runtime_exception
+    from src.lib.observability.sentry import _with_safe_log_record_metadata, before_send
 
-    class _DeadlineRpcError(grpc.RpcError):
+    class _SearchRpcError(grpc.RpcError):
+        def __init__(self, status):
+            self.status = status
+
         def code(self):
-            return grpc.StatusCode.DEADLINE_EXCEEDED
+            return self.status
 
-    def _deadline_error():
+    def _query_error(kind):
+        status = grpc.StatusCode.DEADLINE_EXCEEDED if kind == "deadline" else grpc.StatusCode.UNKNOWN
+        message = {
+            "deadline": "Deadline Exceeded",
+            "reset": 'vectorize: Post "https://api.openai.com/v1/embeddings": read: connection reset by peer',
+            "unknown": "vectorize: invalid API key",
+        }[kind]
         try:
             try:
-                raise _DeadlineRpcError()
+                raise _SearchRpcError(status)
             except grpc.RpcError:
-                raise WeaviateQueryError("Deadline Exceeded", "GRPC search")
+                raise WeaviateQueryError(message, "GRPC search")
         except WeaviateQueryError as error:
             return error
 
@@ -807,25 +819,47 @@ async def test_search_tool_reports_one_sentry_event_after_deadline_retry_fails(m
     connection = MagicMock()
     connection.session.side_effect = _session
     collection = MagicMock()
-    collection.query.hybrid.side_effect = [_deadline_error(), _deadline_error()]
+    errors = [_query_error(kind) for kind in failure_kinds]
+    collection.query.hybrid.side_effect = errors
     caplog.set_level(logging.INFO)
 
     tool = weaviate_search.create_search_tool("doc-12345678", "user-1")
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
-         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
-        with pytest.raises(WeaviateQueryError):
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())) as tenant_collections:
+        with pytest.raises(WeaviateQueryError) as raised:
             await tool(query="Methods allele search", section_keywords=["Methods"])
 
-    assert collection.query.hybrid.call_count == 2
+    assert raised.value is errors[-1]
+    assert collection.query.hybrid.call_count == len(failure_kinds)
+    assert tenant_collections.call_count == 1
+    assert tenant_collections.call_args.args[1] == "user-1"
+    if len(failure_kinds) == 2:
+        # Includes the same document/section filters and ranking parameters.
+        assert collection.query.hybrid.call_args_list[0] == collection.query.hybrid.call_args_list[1]
     error_records = [record for record in caplog.records if record.levelno >= logging.ERROR]
     assert {record.name for record in error_records} == {chunks.logger.name}
     sentry_eligible = [
-        record for record in error_records
+        record for record in caplog.records if record.levelno >= logging.WARNING
         if _with_safe_log_record_metadata({}, {"log_record": record}) is not None
     ]
     assert sentry_eligible == []
     assert len([
         record for record in caplog.records
-        if getattr(record, "operation", None) == "weaviate_hybrid_search_deadline_retry"
+        if getattr(record, "operation", None) == "weaviate_hybrid_search_transient_retry"
         and record.levelno == logging.WARNING
-    ]) == 1
+    ]) == len(failure_kinds) - 1
+
+    # Exercise the canonical terminal reporting facade with an in-memory SDK
+    # transport. The exhausted tool must leave its exception eligible for it.
+    events = []
+    with sentry_sdk.Client(
+        dsn="http://public@example.invalid/1", transport=events.append,
+        before_send=before_send, default_integrations=False, include_local_variables=False,
+    ) as client, sentry_sdk.new_scope() as scope:
+        scope.set_client(client)
+        assert report_runtime_exception(
+            raised.value, component="test_search_runtime", operation="search_failed",
+        )
+        client.flush()
+    assert len(events) == 1
+    assert events[0]["level"] == "error"

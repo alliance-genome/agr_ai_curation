@@ -382,9 +382,14 @@ Explicit lexical modes still force alpha `0`. Backend Weaviate connections use
 the client query timeout. The same timeout also governs batch deletes, tenant
 reads, aggregates and HTTP GET requests; connection-init and insert timeouts
 keep the library defaults. When a hybrid search hits the gRPC
-`DEADLINE_EXCEEDED` deadline, the backend retries the query once per logical
-search and logs a `weaviate_hybrid_search_deadline_retry` warning. Other errors
-are not retried. Each
+`DEADLINE_EXCEEDED` deadline or a wrapped gRPC `UNKNOWN` error containing
+`connection reset by peer` from server-side embedding retrieval, the backend
+retries the identical query once per logical search. Deadlines and resets share
+that single retry across all lexical-first attempts. The
+`weaviate_hybrid_search_transient_retry` warning is excluded from Sentry event
+promotion; terminal failures propagate to the canonical runtime reporter.
+Other `UNKNOWN` errors are not retried, and `UNAVAILABLE` retries remain owned
+by weaviate-client. Each
 search emits a structured `weaviate_retrieval_ranking_audit` log record. The
 record contains a query fingerprint, effective alpha, stage timings, and
 content-free candidate ranks before reranking, after reranking, and after MMR.
