@@ -1718,10 +1718,12 @@ async def test_provided_builder_agent_without_profile_binds_run_state_tools(monk
     ("invalid_request_error", "context_length_exceeded", False),
     ("server_error", None, False),
 ])
-async def test_chat_propagated_provider_failure(monkeypatch, error_type, code, is_policy):
+async def test_chat_propagated_provider_failure(monkeypatch, caplog, error_type, code, is_policy):
+    import sentry_sdk
+    from sentry_sdk.integrations.logging import LoggingIntegration
     from agents import UserError
     from agents.models.openai_responses import ResponsesWebSocketError
-    from src.lib.openai_agents import provider_errors
+    from src.lib.observability import sentry
 
     captured = {}
     _patch_common_runtime(monkeypatch, captured)
@@ -1742,12 +1744,11 @@ async def test_chat_propagated_provider_failure(monkeypatch, error_type, code, i
     monkeypatch.setattr(runner, "propagate_attributes", lambda **kw: _FakeContextManager())
     reports = []
     notifications = []
-    monkeypatch.setattr(provider_errors, "report_runtime_exception", lambda *a, **kw: reports.append((a, kw)))
 
     async def notify(**kwargs):
         notifications.append(kwargs)
 
-    async def fail(**kwargs):
+    async def fail():
         if False:
             yield None
         try:
@@ -1757,16 +1758,40 @@ async def test_chat_propagated_provider_failure(monkeypatch, error_type, code, i
         except ResponsesWebSocketError as exc:
             raise UserError("PRIVATE SDK WRAPPER") from exc
 
-    monkeypatch.setattr(runner, "_run_agent_with_tracing", fail)
+    async def close():
+        pass
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda: SimpleNamespace(close=close))
+    monkeypatch.setattr(runner, "_build_request_openai_provider", lambda client: SimpleNamespace(aclose=close))
+    monkeypatch.setattr(runner, "RunConfig", lambda **kw: SimpleNamespace(**kw))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner.Runner, "run_streamed", lambda *a, **kw: SimpleNamespace(stream_events=fail))
     monkeypatch.setattr(runner, "notify_tool_failure", notify)
-    events = await _collect_events(runner.run_agent_streamed(
-        context_messages=[{"role": "user", "content": "extract"}], user_id="user-policy",
-    ))
-    await asyncio.sleep(0)
+    caplog.set_level(logging.ERROR)
+    # Exercise the actual producer log before terminal capture, with real serialization.
+    with sentry_sdk.Client(
+        dsn="http://public@example.invalid/1", transport=reports.append,
+        before_send=sentry.before_send, include_local_variables=False,
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        default_integrations=False,
+    ) as client, sentry_sdk.isolation_scope() as scope:
+        scope.set_client(client)
+        events = await _collect_events(runner.run_agent_streamed(
+            context_messages=[{"role": "user", "content": "extract"}], user_id="user-policy",
+        ))
+        await asyncio.sleep(0)
+        client.flush()
     terminal = next(event for event in events if event["type"] == "RUN_ERROR")
-    assert len(reports) == int(is_policy)
+    producer = next(record for record in caplog.records if record.message.startswith("SDK producer error:"))
+    assert producer.sentry_skip_event is is_policy
     assert len(notifications) == int(not is_policy)
     if is_policy:
+        assert len(reports) == 1
+        assert reports[0]["tags"]["provider"] == "openai"
+        assert reports[0]["tags"]["failure_category"] == "provider_content_policy"
+        assert reports[0]["contexts"]["runtime_exception"]["error_code"] == "bio_policy"
+        assert reports[0]["contexts"]["runtime_exception"]["retryable"] is False
+        assert "PRIVATE" not in repr(reports)
         assert terminal["data"]["retryable"] is False
         assert terminal["data"]["failure_category"] == "provider_content_policy"
         assert "PRIVATE" not in str(events)

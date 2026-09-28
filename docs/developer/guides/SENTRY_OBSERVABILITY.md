@@ -311,7 +311,8 @@ formatter returns a structured `provider_content_policy` outcome with
 `retryable=false`; propagated chat failures emit the same safe outcome in
 `RUN_ERROR`. These terminal boundaries own the sanitized Sentry report, with
 provider/category tags and fixed error-code/retryability context. The specialist
-stream log remains a breadcrumb for this category, and captured exceptions use
+stream and SDK producer logs remain breadcrumbs for this category before terminal
+capture, and captured exceptions use
 the shared duplicate guard. Aborted extraction staging is retained internally
 but is not published as finalized output. Curator guidance identifies the
 provider safety check and directs feedback instead of retrying. Saved-flow

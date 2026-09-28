@@ -1592,7 +1592,12 @@ async def _run_agent_with_owned_resources(
                     extra={
                         "trace_id": trace_id,
                         "user_id": user_id,
-                        "sentry_skip_event": defer_terminal_failure_capture,
+                        # Chat's terminal boundary owns policy capture, just as
+                        # the flow boundary owns explicitly deferred failures.
+                        "sentry_skip_event": (
+                            defer_terminal_failure_capture
+                            or provider_policy_error(e) is not None
+                        ),
                     },
                     exc_info=True,
                 )
