@@ -486,6 +486,13 @@ report_runtime_exception(
 )
 ```
 
+Hierarchy resolution reports caught setup and provider failures with component
+`hierarchy_resolution` and operation `resolve_hierarchy`. The report contains a
+fixed, chain-free error and the original exception class, without provider text
+or document content. Already captured section-index contract failures are not
+reported again. The companion error log skips event promotion, and flat-document
+results remain unchanged if reporting is unavailable.
+
 Abstract extraction reports request and configuration failures at error level;
 abstract-client and owned runner provider/client cleanup failures report at warning
 level. These paths use `sanitized_runtime_error()` with fixed messages and severed

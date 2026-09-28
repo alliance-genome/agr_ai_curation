@@ -10,6 +10,32 @@ from src.lib.observability.cost_context import cost_scope
 from src.lib.pipeline import hierarchy_resolution as hierarchy
 
 
+@pytest.fixture
+def runtime_reports(monkeypatch):
+    reports = []
+
+    def capture(exc, **kwargs):
+        reports.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(hierarchy, "report_runtime_exception", capture)
+    return reports
+
+
+def _assert_runtime_report(reports, exception_type):
+    assert len(reports) == 1
+    exc, kwargs = reports[0]
+    assert str(exc) == "LLM hierarchy resolution failed"
+    assert exc.__traceback__ is not None
+    assert exc.__cause__ is None
+    assert exc.__context__ is None
+    assert kwargs == {
+        "component": "hierarchy_resolution",
+        "operation": "resolve_hierarchy",
+        "context": {"exception_type": exception_type},
+    }
+
+
 @pytest.mark.asyncio
 async def test_resolve_document_hierarchy_returns_none_when_no_section_titles():
     elements = [
@@ -296,7 +322,7 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_hierarchy_rejects_an_uncatalogued_model_before_any_request(monkeypatch):
+async def test_hierarchy_rejects_an_uncatalogued_model_before_any_request(monkeypatch, runtime_reports):
     """Request shape comes from the catalog, never from a model-name prefix."""
     output = hierarchy.HierarchyOutput(
         sections=[hierarchy.SectionClassification(idx=0, is_top_level=True)],
@@ -316,10 +342,11 @@ async def test_hierarchy_rejects_an_uncatalogued_model_before_any_request(monkey
 
     assert result == ([], None, None)
     assert "user_prompt" not in captured
+    _assert_runtime_report(runtime_reports, "ValueError")
 
 
 @pytest.mark.asyncio
-async def test_hierarchy_rejects_a_reasoning_effort_the_model_does_not_accept(monkeypatch):
+async def test_hierarchy_rejects_a_reasoning_effort_the_model_does_not_accept(monkeypatch, runtime_reports):
     output = hierarchy.HierarchyOutput(
         sections=[hierarchy.SectionClassification(idx=0, is_top_level=True)],
         abstract_idx=0,
@@ -339,6 +366,7 @@ async def test_hierarchy_rejects_a_reasoning_effort_the_model_does_not_accept(mo
 
     assert result == ([], None, None)
     assert "user_prompt" not in captured
+    _assert_runtime_report(runtime_reports, "ValueError")
 
 
 @pytest.mark.asyncio
@@ -360,7 +388,7 @@ async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_call_llm_for_hierarchy_handles_runtime_exception(monkeypatch):
+async def test_call_llm_for_hierarchy_handles_runtime_exception(monkeypatch, runtime_reports):
     _install_fake_agent_modules(monkeypatch, final_output=None, raise_error=True)
     sentry_calls = []
 
@@ -385,6 +413,7 @@ async def test_call_llm_for_hierarchy_handles_runtime_exception(monkeypatch):
     assert sections == []
     assert abstract_title is None
     assert raw is None
+    _assert_runtime_report(runtime_reports, "RuntimeError")
     assert ("data", "ai_curation.validation.status", "error") in sentry_calls
     assert (
         "data",
@@ -1027,11 +1056,9 @@ async def test_contract_retry_without_output_reports_failure_once(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("accepted", [True, False])
-async def test_reported_contract_failure_marks_the_logged_error_as_captured(
-    monkeypatch, hierarchy_env, caplog, accepted
+async def test_reported_contract_failure_is_not_captured_twice(
+    monkeypatch, hierarchy_env, caplog, accepted, runtime_reports
 ):
-    # The outer logger.error(exc_info=True) event is dropped by Sentry's
-    # before_send only when the reporter marked the raised error as captured.
     invalid = _paper_output(**_INVALID_SECTION_INDEX_OUTPUTS["missing"])
     _install_sequenced_runner(monkeypatch, [invalid, invalid])
     _sentry_recorder(monkeypatch)
@@ -1047,7 +1074,41 @@ async def test_reported_contract_failure_marks_the_logged_error_as_captured(
     record = next(
         r for r in caplog.records if "LLM hierarchy resolution failed" in r.getMessage()
     )
-    error = record.exc_info[1]
-    assert isinstance(error, ValueError)
-    assert "section index contract" in str(error)
-    assert getattr(error, "_ai_curation_sentry_captured", False) is accepted
+    assert record.exc_info is None
+    assert record.sentry_skip_event is True
+    if accepted:
+        assert runtime_reports == []
+    else:
+        _assert_runtime_report(runtime_reports, "ValueError")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reporting", ["accepted", "unavailable", "raises"])
+async def test_provider_failure_preserves_flat_document_and_redacts_report(
+    monkeypatch, hierarchy_env, caplog, runtime_reports, reporting
+):
+    _install_fake_agent_modules(monkeypatch, final_output=None)
+    _sentry_recorder(monkeypatch)
+    from src.lib.openai_agents import runner
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("private document text Bearer fake-secret")
+
+    monkeypatch.setattr(runner, "run_agent_with_owned_openai_resources", fail)
+    if reporting != "accepted":
+        def unavailable(*args, **kwargs):
+            if reporting == "raises":
+                raise RuntimeError("private reporting failure")
+            return False
+
+        monkeypatch.setattr(hierarchy, "report_runtime_exception", unavailable)
+    elements = [{"text": "private document text", "metadata": {"section_title": "Intro"}}]
+    updated, metadata = await hierarchy.resolve_document_hierarchy(elements)
+
+    assert updated is elements
+    assert updated == [{"text": "private document text", "metadata": {"section_title": "Intro"}}]
+    assert metadata is None
+    if reporting == "accepted":
+        _assert_runtime_report(runtime_reports, "RuntimeError")
+    assert "private" not in caplog.text
+    assert "fake-secret" not in caplog.text
