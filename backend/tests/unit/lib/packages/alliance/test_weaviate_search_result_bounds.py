@@ -183,3 +183,21 @@ async def test_oversized_chunk_reads_in_exact_span_windows(monkeypatch):
     assert len(windows) > 1
     assert "".join(windows) == text
     assert len(span_ids) == len(set(span_ids)) == page["total_spans"]
+
+
+@pytest.mark.asyncio
+async def test_pdf_provenance_stays_exact_inside_the_page_budget(monkeypatch):
+    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "8192")
+    chunks = _chunks(12, chars=80)
+    for chunk in chunks:
+        chunk["doc_items"] = [
+            {"page": chunk["page_number"], "bbox": [float(i), 2.0, 3.0, 4.0]}
+            for i in range(25)
+        ]
+    _patch_sections(monkeypatch, chunks)
+    tool = weaviate_search.create_read_section_tool("doc-1", "user-1")
+    ids, pages = await _read_all(tool, "Results", max_chunks=10**6)
+    assert ids == [chunk["id"] for chunk in chunks]
+    boxes = [item for page in pages for item in page.section.doc_items]
+    assert boxes == [item for chunk in chunks for item in chunk["doc_items"]]
+    assert all(serialized_size(page) <= 8192 for page in pages)

@@ -9,9 +9,7 @@ Sentry through the shared payload-contract helper.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Mapping
 from typing import Any
 
 from agr_ai_curation_runtime.tool_result_bounds import (
@@ -29,6 +27,8 @@ from agr_ai_curation_runtime.tool_result_bounds import (
     detail_chunk,
     fit_page,
     fit_text_window,
+    full_tool_results_requested,
+    full_tool_results_are_requested,
     invalid_cursor,
     is_budget_failure,
     json_pointer_for_row,
@@ -46,31 +46,6 @@ from .config import get_tool_result_max_bytes
 
 # Arguments a bounded package lookup accepts in addition to its own inputs.
 RESULT_VIEW_ARGUMENTS = ("result_offset", "result_sha256", "detail_path", "detail_cursor")
-
-_FULL_TOOL_RESULTS_REQUESTED: ContextVar[bool] = ContextVar(
-    "full_tool_results_requested",
-    default=False,
-)
-
-
-@contextmanager
-def full_tool_results_requested() -> Iterator[None]:
-    """Let an application-side capture receive a lookup's complete result.
-
-    Validator lookup capture stores the complete provider response and then
-    serves the model its own bounded view; the package adapter must not page
-    the result underneath it.
-    """
-
-    token = _FULL_TOOL_RESULTS_REQUESTED.set(True)
-    try:
-        yield
-    finally:
-        _FULL_TOOL_RESULTS_REQUESTED.reset(token)
-
-
-def full_tool_results_are_requested() -> bool:
-    return _FULL_TOOL_RESULTS_REQUESTED.get()
 
 
 def tool_result_budget() -> int:

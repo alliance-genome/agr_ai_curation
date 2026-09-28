@@ -9,8 +9,10 @@ Supports two trace formats:
    - Tool results appear in input arrays as type="function_call_output" with matching call_id
 """
 import ast
+import io
 import json
 import re
+import tokenize
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -52,16 +54,25 @@ class ToolResultParser:
         }
 
         try:
-            # First, try to parse as JSON (for simple JSON results)
+            # Dict/list results can be JSON or the SDK's str(output) Python literal.
             if raw_result.strip().startswith("{") or raw_result.strip().startswith("["):
                 try:
                     json_data = json.loads(raw_result)
-                    result["parsed"] = {"json_data": json_data}
-                    result["summary"] = cls._generate_json_summary(json_data)
-                    result["parse_status"] = "full"
-                    return result
                 except json.JSONDecodeError:
-                    pass  # Not valid JSON, continue with repr parsing
+                    json_data = ast.literal_eval(raw_result.strip())
+                result["parsed"] = {"json_data": json_data}
+                result["summary"] = cls._generate_json_summary(json_data)
+                result["parse_status"] = "full"
+                return result
+
+            # AgrQueryResult is a Pydantic model whose SDK string has literal
+            # field values separated by whitespace. Parse every field exactly.
+            if re.match(r"\s*status=", raw_result):
+                parsed = cls._parse_literal_fields(raw_result)
+                result["parsed"] = parsed
+                result["summary"] = cls._generate_summary(parsed, raw_result)
+                result["parse_status"] = "full"
+                return result
 
             # Try to parse the Python repr structure
             parsed = cls._parse_repr(raw_result)
@@ -75,6 +86,42 @@ class ToolResultParser:
             result["summary"] = raw_result[:100] + "..." if len(raw_result) > 100 else raw_result
             result["parse_status"] = "unparsed"
 
+        return result
+
+    @classmethod
+    def _parse_literal_fields(cls, text: str) -> Dict[str, Any]:
+        """Read top-level name=literal fields without evaluating traced code.
+
+        Token boundaries preserve escaped quotes, Unicode, nested containers,
+        and field-looking text inside strings. Nonliteral values fail closed.
+        """
+        tokens = [
+            (token.type, token.string)
+            for token in tokenize.generate_tokens(io.StringIO(text.strip()).readline)
+            if token.type not in (tokenize.NEWLINE, tokenize.NL, tokenize.ENDMARKER)
+        ]
+        starts = []
+        depth = 0
+        for index, (kind, value) in enumerate(tokens):
+            if (
+                depth == 0
+                and kind == tokenize.NAME
+                and tokens[index + 1:index + 2] == [(tokenize.OP, "=")]
+            ):
+                starts.append(index)
+            if kind == tokenize.OP:
+                if value in ("[", "{", "("):
+                    depth += 1
+                elif value in ("]", "}", ")"):
+                    depth -= 1
+        if not starts or starts[0] != 0:
+            raise ValueError("Expected literal result fields")
+        result = {}
+        for start, end in zip(starts, starts[1:] + [len(tokens)]):
+            name = tokens[start][1]
+            if name in result:
+                raise ValueError("Duplicate result field")
+            result[name] = ast.literal_eval(tokenize.untokenize(tokens[start + 2:end]))
         return result
 
     @classmethod
@@ -171,40 +218,9 @@ class ToolResultParser:
         if summary_match:
             result["summary"] = summary_match.group(1)
 
-        # Extract status if present
-        status_match = re.search(r"status='([^']*)'", text)
-        if status_match:
-            result["status"] = status_match.group(1)
-
-        # Extract count if present
-        count_match = re.search(r"count=(\d+)", text)
-        if count_match:
-            result["count"] = int(count_match.group(1))
-
-        # Extract warnings from agr_curation_query results.
-        warnings_match = re.search(
-            r"warnings=(None|\[.*?\])(?=\s+message=)", text, re.DOTALL
-        )
-        if warnings_match:
-            warnings_text = warnings_match.group(1)
-            if warnings_text == "None":
-                result["warnings"] = None
-            else:
-                warnings = ast.literal_eval(warnings_text)
-                if isinstance(warnings, list) and all(
-                    isinstance(warning, str) for warning in warnings
-                ):
-                    result["warnings"] = warnings
-        if "message=None" in text:
-            result["message"] = None
-
         # Parse hits array for search_document
         if "hits=[" in text:
             result["hits"] = cls._parse_chunk_hits(text)
-
-        # Parse data array for agr_curation_query
-        if "data=[" in text:
-            result["data"] = cls._parse_data_array(text)
 
         # Parse SectionContent for read_section
         if "SectionContent(" in text:
@@ -395,47 +411,6 @@ class ToolResultParser:
         return hits
 
     @classmethod
-    def _parse_data_array(cls, text: str) -> List[Dict]:
-        """Parse data=[{...}] array"""
-        data = []
-
-        # Find the data array content
-        data_match = re.search(r"data=\[(.*?)\](?:\s+count=|\s*$)", text, re.DOTALL)
-        if not data_match:
-            return data
-
-        data_content = data_match.group(1).strip()
-        if not data_content:
-            return data
-
-        # Try to parse as JSON-like dicts
-        # Find dict patterns {...}
-        dict_pattern = r"\{([^{}]+)\}"
-        for dict_match in re.finditer(dict_pattern, data_content):
-            dict_str = "{" + dict_match.group(1) + "}"
-            try:
-                # Convert Python-style to JSON-style
-                json_str = dict_str.replace("'", '"').replace("True", "true").replace("False", "false").replace("None", "null")
-                parsed_dict = json.loads(json_str)
-                data.append(parsed_dict)
-            except json.JSONDecodeError:
-                # If JSON parsing fails, try manual extraction
-                item = {}
-                for kv in re.finditer(r"'(\w+)':\s*'?([^',}]+)'?", dict_match.group(1)):
-                    key, value = kv.group(1), kv.group(2).strip("'")
-                    if value == "True":
-                        value = True
-                    elif value == "False":
-                        value = False
-                    elif value.isdigit():
-                        value = int(value)
-                    item[key] = value
-                if item:
-                    data.append(item)
-
-        return data
-
-    @classmethod
     def _generate_summary(cls, parsed: Dict, raw: str) -> str:
         """Generate a human-readable summary from parsed data."""
         parts = []
@@ -478,7 +453,11 @@ class ToolResultParser:
         if "count" in parsed:
             parts.append(f"Count: {parsed['count']}")
 
-        if "data" in parsed and parsed["data"]:
+        if (
+            isinstance(parsed.get("data"), list)
+            and parsed["data"]
+            and isinstance(parsed["data"][0], dict)
+        ):
             # Show first item's key info
             first = parsed["data"][0]
             if "symbol" in first:

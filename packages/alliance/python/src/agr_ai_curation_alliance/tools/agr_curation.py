@@ -62,10 +62,14 @@ from agr_ai_curation_alliance.domain_packs.gene_expression.resolvable import (
 )
 from agr_ai_curation_runtime.tool_result_bounds import (
     ToolResultBudgetError,
+    bounded_json_result,
     budget_failure,
     clamp_page_limit,
+    content_sha256,
+    detail_chunk,
     env_positive_int,
     fit_page,
+    full_tool_results_are_requested,
     invalid_cursor,
     parse_offset,
     serialized_size,
@@ -5958,6 +5962,13 @@ def _oversized_builder_candidate(candidate: Mapping[str, Any]) -> Dict[str, Any]
         "status": candidate.get("status"),
         "withheld": True,
         "summary_bytes": serialized_size(candidate),
+        "detail_read": {
+            "candidate_id": candidate.get("candidate_id"),
+            "detail_path": "candidate",
+            "detail_cursor": 0,
+            "result_sha256": content_sha256(candidate),
+            "include_discarded": candidate.get("status") == "discarded",
+        },
         "pending_ref_count": len(candidate.get("pending_ref_ids") or []),
         "evidence_record_count": len(candidate.get("evidence_record_ids") or []),
         "validation_error_count": len(candidate.get("validation_errors") or []),
@@ -6097,6 +6108,9 @@ def _search_builder_candidates(
     limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
     decorate: Optional[Any] = None,
+    detail_path: Optional[str] = None,
+    detail_cursor: Optional[int] = None,
+    result_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Pageable search over staged candidates for the ``find_staged_*`` tools.
 
@@ -6160,6 +6174,35 @@ def _search_builder_candidates(
                 },
             }
         )
+
+    if detail_path is not None or detail_cursor is not None or result_sha256 is not None:
+        # Resolve only through this invocation's workspace and the same filters
+        # as the list. Read the exact summary (including decorations), never
+        # expose the intentionally redacted staged scientific fields.
+        if not candidate_id or detail_path != "candidate" or len(matched) != 1:
+            return {
+                **invalid_cursor("Detail reads require one matching candidate_id and detail_path='candidate'."),
+                "matched_candidate_count": len(matched),
+            }
+        candidate = matched[0] if decorate is None else decorate(matched[0])
+        wrapper_bytes = serialized_size(_ok(data={}, count=1, lookup_status=LOOKUP_STATUS_SUCCESS))
+        try:
+            detail = detail_chunk(
+                {"candidate": candidate},
+                path="candidate",
+                cursor=detail_cursor,
+                expected_sha256=result_sha256,
+                budget=tool_result_max_bytes() - wrapper_bytes,
+                extra={"matched_candidate_count": 1},
+            )
+            return {**detail, "matched_candidate_count": 1}
+        except ValueError as exc:
+            return {**invalid_cursor(str(exc)), "matched_candidate_count": 1}
+        except ToolResultBudgetError as exc:
+            return {
+                **budget_failure(tool_name="builder_candidate_detail", measured=exc.measured, limit=exc.limit),
+                "matched_candidate_count": 1,
+            }
 
     return _builder_page(
         workspace,
@@ -6558,8 +6601,14 @@ def _find_staged_gene_expression_observations_impl(
     include_discarded: bool = False,
     limit: int = 50,
     offset: int = 0,
+    detail_path: Optional[str] = None,
+    detail_cursor: Optional[int] = None,
+    result_sha256: Optional[str] = None,
 ) -> AgrQueryResult:
-    """Find specific staged gene-expression observation drafts by content or id, one page at a time."""
+    """Find specific staged gene-expression observation drafts by content or id, one page at a time.
+
+    Use a withheld summary's detail_read arguments with this tool to read its
+    exact JSON in chunks; retain result_sha256 and advance detail_cursor."""
 
     attempted_query = _attempt_query(
         "find_staged_gene_expression_observations",
@@ -6606,6 +6655,9 @@ def _find_staged_gene_expression_observations_impl(
         include_discarded=find_input.include_discarded,
         limit=find_input.limit,
         offset=find_input.offset,
+        detail_path=detail_path,
+        detail_cursor=detail_cursor,
+        result_sha256=result_sha256,
     )
     _emit_gene_expression_builder_event(
         "gene_expression_builder.find_completed",
@@ -6808,10 +6860,12 @@ def create_groq_agr_curation_query_tool():
         description_override=(
             "Query AGR curation DB. Provide method and payload_json. "
             "payload_json must be a JSON object string containing any optional AGR args "
-            "(gene_symbol, allele_symbol, data_provider, term, go_aspect, limit, etc)."
+            "(gene_symbol, allele_symbol, data_provider, term, go_aspect, limit, etc). "
+            "For bounded continuation include result_offset/result_sha256 or "
+            "detail_path/detail_cursor from the previous result in payload_json."
         ),
     )
-    def agr_curation_query_groq(method: str, payload_json: str) -> AgrQueryResult:
+    def agr_curation_query_groq(method: str, payload_json: str) -> Any:
         payload_raw = (payload_json or "").strip()
         if not payload_raw:
             payload: Dict[str, Any] = {}
@@ -6827,7 +6881,23 @@ def create_groq_agr_curation_query_tool():
         forwarded_kwargs: Dict[str, Any] = {
             key: payload.get(key) for key in _AGR_QUERY_OPTIONAL_ARG_KEYS
         }
-        return _AGR_QUERY_CALLABLE(method=method, **forwarded_kwargs)
+        result = _AGR_QUERY_CALLABLE(method=method, **forwarded_kwargs)
+        if full_tool_results_are_requested():
+            return result
+        body = result.model_dump(mode="json")
+        try:
+            bounded = bounded_json_result(
+                body, budget=tool_result_max_bytes(),
+                offset=payload.get("result_offset"),
+                expected_sha256=payload.get("result_sha256"),
+                detail_path=payload.get("detail_path"),
+                detail_cursor=payload.get("detail_cursor"),
+            )
+        except ValueError as exc:
+            return invalid_cursor(str(exc))
+        except ToolResultBudgetError as exc:
+            return budget_failure(tool_name="agr_curation_query", measured=exc.measured, limit=exc.limit)
+        return result if bounded is None else bounded
 
     return agr_curation_query_groq
 

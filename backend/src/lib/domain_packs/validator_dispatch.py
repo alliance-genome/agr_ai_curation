@@ -2645,8 +2645,6 @@ def _build_finalize_validator_result_tool(
         else:
             finalization_state.accepted_result = None
         payload = _validator_finalization_tool_payload(feedback)
-        if compact_runtime is not None:
-            payload.pop("validator_result", None)
         return payload
 
     if compact_runtime is not None:
@@ -2916,20 +2914,17 @@ def _validator_finalization_tool_payload(
     feedback: _ValidatorFinalizationFeedback,
 ) -> dict[str, Any]:
     accepted = feedback.accepted_result is not None or bool(feedback.accepted_results)
+    if accepted:
+        # The canonical result is already stored in finalization_state. The
+        # validator supplied it in this call; echoing it adds no information.
+        return {"status": "accepted", "message": "Validator result accepted."}
     payload: dict[str, Any] = {
-        "status": "accepted" if accepted else "rejected",
+        "status": "rejected",
         "message": feedback.message,
+        "repair_instructions": list(feedback.repair_instructions),
     }
-    if feedback.accepted_result is not None:
-        payload["validator_result"] = feedback.accepted_result.model_dump(mode="json")
-    elif feedback.accepted_results:
-        payload["validator_results"] = [
-            result.model_dump(mode="json") for result in feedback.accepted_results
-        ]
-    else:
-        payload["repair_instructions"] = list(feedback.repair_instructions)
-        if feedback.result_errors:
-            payload["result_errors"] = list(feedback.result_errors)
+    if feedback.result_errors:
+        payload["result_errors"] = list(feedback.result_errors)
     return payload
 
 

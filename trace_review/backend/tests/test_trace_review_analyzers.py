@@ -318,7 +318,7 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
             "Bulk symbols truncated: processed first 2 of 3",
             result["summary"],
         )
-        self.assertEqual(result["parse_status"], "partial")
+        self.assertEqual(result["parse_status"], "full")
 
     def test_tool_calls_keep_repeated_no_id_calls_from_separate_generations(self):
         observations = [
@@ -1068,6 +1068,57 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertTrue(diagnostics["bibliography_found"])
         self.assertEqual(diagnostics["bibliography_entry_numbers"], [1])
         self.assertEqual(diagnostics["mapping_status"], "no_markers")
+
+
+class LiteralToolResultTests(unittest.TestCase):
+    def test_literal_result_fields_preserve_nested_values_and_escapes(self):
+        fields = {
+            'status': 'ok',
+            'data': {'detail': {'content': 'Ω 😀 O\'Brien "quoted" \\ \n count=99 data={}',
+                                'next_cursor': 100, 'complete': False}},
+            'count': 1, 'warnings': ['brackets [x] and message=None'],
+            'message': 'exact message', 'lookup_status': 'success',
+            'coverage': {'missing': None, 'rows': [{'values': [1, True, False]}]},
+        }
+        raw = ' '.join(f'{key}={value!r}' for key, value in fields.items())
+        result = ToolResultParser.parse(raw)
+        self.assertEqual(result['parse_status'], 'full')
+        self.assertEqual(result['parsed'], fields)
+        self.assertEqual(result['raw'], raw)
+
+    def test_list_and_empty_mapping_model_data_are_exact(self):
+        for data in ({}, [], [{'nested': {'notes': ['Ω', None, False]}}]):
+            with self.subTest(data=data):
+                raw = f"status='ok' data={data!r} count=0 warnings=None message=None"
+                result = ToolResultParser.parse(raw)
+                self.assertEqual(result['parse_status'], 'full')
+                self.assertEqual(result['parsed']['data'], data)
+
+    def test_literal_dictionary_and_json_share_the_structured_contract(self):
+        data = {'status': 'ok', 'result_ref': 'ref', 'data': [{'Ω': None}],
+                'page': {'next_cursor': 5, 'complete': False}}
+        for raw in (repr(data), json.dumps(data)):
+            with self.subTest(raw=raw):
+                result = ToolResultParser.parse(raw)
+                self.assertEqual(result['parse_status'], 'full')
+                self.assertEqual(result['parsed'], {'json_data': data})
+                self.assertEqual(result['raw'], raw)
+
+    def test_malformed_or_executable_values_remain_raw_without_execution(self):
+        from unittest.mock import patch
+
+        for raw in (
+            "{'data': __import__('os').getcwd()}",
+            "status='ok' data=__import__('os').getcwd() count=1",
+            "status='ok' data={'broken': [1}",
+            "status='ok' data={} data={'duplicate': True}",
+        ):
+            with self.subTest(raw=raw), patch('os.getcwd') as getcwd:
+                result = ToolResultParser.parse(raw)
+                getcwd.assert_not_called()
+                self.assertEqual(result['parse_status'], 'unparsed')
+                self.assertIsNone(result['parsed'])
+                self.assertEqual(result['raw'], raw)
 
 
 if __name__ == "__main__":

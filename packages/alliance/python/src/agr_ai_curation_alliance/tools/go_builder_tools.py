@@ -932,7 +932,14 @@ def _find_staged_go_recommendations_impl(
     include_discarded: bool = False,
     limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
+    detail_path: Optional[str] = None,
+    detail_cursor: Optional[int] = None,
+    result_sha256: Optional[str] = None,
 ) -> AgrQueryResult:
+    """Find staged GO recommendations or read a withheld summary exactly.
+
+    Pass its detail_read arguments, retain result_sha256 and advance detail_cursor.
+    """
     attempted_query = _attempt_query(
         "find_staged_go_recommendations",
         field_value_contains=field_value_contains,
@@ -976,6 +983,9 @@ def _find_staged_go_recommendations_impl(
         include_discarded=find_input.include_discarded,
         limit=find_input.limit,
         offset=find_input.offset,
+        detail_path=detail_path,
+        detail_cursor=detail_cursor,
+        result_sha256=result_sha256,
     )
     _emit_go_builder_event(
         "go_builder.find_completed",

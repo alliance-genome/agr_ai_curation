@@ -622,3 +622,58 @@ def test_search_genes_uses_batched_detail_lookup(monkeypatch):
     assert result.status == "ok"
     assert captured["calls"] == [["FB:FBgn0000044", "FB:FBgn0000046"]]
     assert [entry["symbol"] for entry in result.data] == ["Act57B", "Act87E"]
+
+
+def test_groq_wrapper_pages_unicode_and_preserves_full_capture(monkeypatch):
+    import json
+    from agr_ai_curation_runtime.tool_result_bounds import serialized_size
+    from src.lib.openai_agents.tool_result_bounds import full_tool_results_requested
+
+    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")
+    data = [{"id": i, "text": "β😀表达" * 10} for i in range(30)]
+    complete = agr_curation.AgrQueryResult(status="ok", data=data)
+    monkeypatch.setattr(agr_curation, "_AGR_QUERY_CALLABLE", lambda **kwargs: complete)
+    tool = agr_curation.create_groq_agr_curation_query_tool()
+    invoke = agr_curation._unwrap_function_tool_callable(tool, "agr_curation_query_groq")
+    view = {}
+    rows = []
+    while True:
+        result = invoke(method="search_genes", payload_json=json.dumps(view))
+        assert serialized_size(result) <= 2048
+        rows.extend(result["data"])
+        page = result["result_page"]
+        if page["next_call"] is None:
+            break
+        view = page["next_call"]
+    assert rows == data
+    with full_tool_results_requested():
+        assert invoke(method="search_genes", payload_json="{}") is complete
+    invalid = invoke(method="search_genes", payload_json='{"result_offset": -1}')
+    assert invalid["error_code"] == "invalid_result_cursor"
+
+
+def test_groq_wrapper_reads_oversized_record_exactly_and_checks_hash(monkeypatch):
+    import json
+    from agr_ai_curation_runtime.tool_result_bounds import canonical_json, serialized_size
+
+    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")
+    data = [{"id": "gene", "text": "β😀表达" * 1000}]
+    complete = agr_curation.AgrQueryResult(status="ok", data=data)
+    monkeypatch.setattr(agr_curation, "_AGR_QUERY_CALLABLE", lambda **kwargs: complete)
+    invoke = agr_curation._unwrap_function_tool_callable(
+        agr_curation.create_groq_agr_curation_query_tool(), "agr_curation_query_groq",
+    )
+    first = invoke(method="search_genes", payload_json="{}")
+    view = {**first["result_page"]["detail_call"], "detail_path": "data.0"}
+    parts = []
+    while True:
+        result = invoke(method="search_genes", payload_json=json.dumps(view))
+        assert serialized_size(result) <= 2048
+        detail = result["detail"]
+        parts.append(detail["content"])
+        if detail["complete"]:
+            break
+        view["detail_cursor"] = detail["next_cursor"]
+    assert "".join(parts) == canonical_json(data[0])
+    data[0]["text"] = "changed"
+    assert invoke(method="search_genes", payload_json=json.dumps(view))["error_code"] == "stale_result_cursor"

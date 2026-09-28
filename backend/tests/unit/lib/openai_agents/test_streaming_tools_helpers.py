@@ -3970,3 +3970,14 @@ async def test_chat_domain_envelope_dispatch_fails_closed_without_curation_adapt
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
         )
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_specialist_answer_handoff_preserves_exact_scientific_text(wrapped):
+    """B2 disposition: authored answers are semantic handoffs, not retrieval pages."""
+    answer = "β-catenin 表达 😀\n" * 5000
+    output = json.dumps({"answer": answer}) if wrapped else answer
+    result = streaming_tools._reduce_specialist_output_for_supervisor(
+        output, expected_output_type=None,
+    )
+    assert result == (answer.strip() if wrapped else answer)

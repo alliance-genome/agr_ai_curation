@@ -3052,7 +3052,8 @@ def test_validator_finalization_feedback_accepts_valid_result():
 
     assert payload["status"] == "accepted"
     assert feedback.accepted_result is not None
-    assert payload["validator_result"]["request_id"] == request.request_id
+    assert feedback.accepted_result.request_id == request.request_id
+    assert "validator_result" not in payload
 
 
 def test_validator_finalization_feedback_rejects_resolved_without_success_lookup():
@@ -4344,3 +4345,23 @@ def test_allowed_term_list_checks_identifier_fields_not_per_element_labels():
     # A result field named as an identifier is checked even when its write leaf is not.
     request = request.model_copy(update={"expected_result_fields": {"id": "stage_term_ref"}})
     assert violations({"id": "UBERON:0000092"}) == ["id"]
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_accepted_validator_receipt_does_not_echo_large_result(batch):
+    from src.lib.domain_packs.validator_dispatch import _ValidatorFinalizationFeedback
+    from src.lib.openai_agents.tool_result_bounds import serialized_size
+
+    request = _verbose_validation_request()
+    feedback = _validator_result_finalization_feedback(_result_payload(request), request=request)
+    explanation = "β-Catenin 表达 😀 " * 10000
+    result = feedback.accepted_result.model_copy(update={"explanation": explanation})
+    feedback = _ValidatorFinalizationFeedback(
+        accepted_result=None if batch else result,
+        accepted_results=(result,) * 100 if batch else (),
+        message="Accepted.",
+    )
+    receipt = _validator_finalization_tool_payload(feedback)
+    assert receipt["status"] == "accepted"
+    assert serialized_size(receipt) < 2048
+    assert (feedback.accepted_results[0] if batch else feedback.accepted_result).explanation == explanation
