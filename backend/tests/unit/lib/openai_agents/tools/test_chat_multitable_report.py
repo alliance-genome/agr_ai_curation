@@ -151,16 +151,15 @@ async def test_six_source_report_preserves_each_table_and_terminal_persistence()
 
 
 @pytest.mark.asyncio
-async def test_combined_report_character_ceiling_and_heading_escaping(monkeypatch):
+async def test_combined_report_character_ceiling_and_verbatim_scientific_headings(monkeypatch):
     r = report()
-    r["sections"][0]["heading"] = "[Genes](https://invalid.example) <b>"
+    r["sections"][0]["heading"] = "C. elegans gene-disease (GO) & phenotypes"
     with chat_output_delivery_scope() as delivery:
         receipt, _ = await _call(_tool(_chat_tools(_rows_bundle(2)), "finalize_chat_output"),
                                 {"report_json": json.dumps(r)})
         assert receipt["delivered"]
         assert delivery.output is not None
-        assert "<b>" not in delivery.output
-        assert "\\[Genes\\]" in delivery.output
+        assert "## C. elegans gene-disease (GO) & phenotypes\n\n" in delivery.output
         rendered_length = len(delivery.output)
     monkeypatch.setattr(formatter, "get_flow_output_chat_max_chars", lambda: rendered_length - 1)
     monkeypatch.setattr(formatter, "report_payload_contract_violation", lambda *a, **k: None)

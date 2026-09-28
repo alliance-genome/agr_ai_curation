@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import html
 import json
 import re
 from collections import Counter
@@ -1603,9 +1602,9 @@ def build_output_formatter_tools(
                     f"Chat report exceeds the aggregate {row_limit}-row ceiling. No partial output was delivered.",
                     measured=total_rows, limit=row_limit, setting="FLOW_PROJECTION_MAX_ROWS", unit="rows",
                 )
-            # Headings are labels, never model-authored Markdown/HTML content.
-            safe_heading = re.sub(r"([\\`*_{}\[\]()#+.!|>~-])", r"\\\1", html.escape(heading))
-            content = f"## {safe_heading}\n\n{projection.chat_output or ''}"
+            # Chat and transcript consumers display plain text. Preserve scientific
+            # punctuation; single-line validation prevents extra rows/sections.
+            content = f"## {heading}\n\n{projection.chat_output or ''}"
             total_chars += len(content) + (2 if contents else 0)
             char_limit = get_flow_output_chat_max_chars()
             if total_chars > char_limit:

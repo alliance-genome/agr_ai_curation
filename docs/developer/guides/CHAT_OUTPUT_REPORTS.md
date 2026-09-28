@@ -44,7 +44,7 @@ all sections obey `FLOW_PROJECTION_MAX_ROWS` (repeated sources count each time),
 and the complete rendered report including headings/notes obeys
 `FLOW_OUTPUT_CHAT_MAX_CHARS`. Oversized reports fail explicitly, never silently
 truncate. Heading length uses `FLOW_OUTPUT_CHAT_NOTES_MAX_CHARS`; headings are
-single-line escaped labels. All settings are documented in `.env.example`.
+single-line plain-text labels, preserving scientific punctuation. All settings are documented in `.env.example`.
 
 One application-held report travels through the existing `CHAT_OUTPUT_READY`
 and durable transcript paths. The main chat currently displays the Markdown
