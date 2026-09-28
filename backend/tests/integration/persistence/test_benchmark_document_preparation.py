@@ -452,8 +452,14 @@ async def test_blocked_snapshot_read_allows_worker_heartbeats_and_timeout(monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("checkpoint", ["start_pipeline", "finish_pipeline", "append_stage", "finish_stage"])
-async def test_blocked_checkpoint_sql_allows_heartbeat_timeout_and_fences_late_write(monkeypatch, checkpoint):
+@pytest.mark.parametrize("checkpoint,during_body", [
+    ("start_pipeline", False), ("finish_pipeline", False),
+    ("append_stage", False), ("finish_stage", False),
+    ("finish_pipeline", True), ("finish_stage", True),
+])
+async def test_blocked_checkpoint_sql_allows_heartbeat_timeout_and_fences_late_write(
+    monkeypatch, checkpoint, during_body,
+):
     import asyncio
     import threading
     from sqlalchemy import text
@@ -517,7 +523,7 @@ async def test_blocked_checkpoint_sql_allows_heartbeat_timeout_and_fences_late_w
     def heartbeat(self, **kwargs):
         nonlocal heartbeat_count
         owned = heartbeat_leases(self, **kwargs)
-        if entered.is_set() and not released.is_set():
+        if (during_body or entered.is_set()) and not released.is_set():
             heartbeat_count += int(owned)
         return owned
 
@@ -531,6 +537,8 @@ async def test_blocked_checkpoint_sql_allows_heartbeat_timeout_and_fences_late_w
 
     async def execute(*args):
         async with measure_stage(StageIdentity("extractor", "extraction")):
+            if during_body:
+                await asyncio.Event().wait()
             return SimpleNamespace(output={}, invocations=())
 
     worker = BenchmarkWorker(
@@ -556,7 +564,8 @@ async def test_blocked_checkpoint_sql_allows_heartbeat_timeout_and_fences_late_w
     try:
         assert await asyncio.to_thread(locked.wait, 2)
         await worker._execute_cell(cell_id)
-        assert entered.is_set() and not released.is_set(), "timeout waited for blocked SQL"
+        assert not released.is_set(), "timeout waited for blocked SQL"
+        assert entered.is_set() is not during_body
         assert heartbeat_count > 0
         with SessionLocal() as session:
             cell = session.get(BenchmarkCell, cell_id)
@@ -564,15 +573,23 @@ async def test_blocked_checkpoint_sql_allows_heartbeat_timeout_and_fences_late_w
             assert cell.failure["category"] == "timeout"
         released.set()
         await blocker
-        assert await asyncio.to_thread(closed.wait, 5)
-        assert len(late_errors) == 1
+        if not during_body:
+            assert await asyncio.to_thread(closed.wait, 5)
+        assert len(late_errors) == (0 if during_body else 1)
         with SessionLocal() as session:
             stages = list(session.scalars(select(BenchmarkStage).where(BenchmarkStage.cell_id == cell_id)))
             assert all(stage.status != "running" for stage in stages)
             if checkpoint in ("start_pipeline", "append_stage"):
                 assert stages == []
-            if checkpoint == "finish_stage":
+            if checkpoint == "finish_stage" or during_body:
                 assert stages[0].status == "interrupted"
+            if during_body:
+                assert stages[0].failure_type == "CellTerminated"
+                assert stages[0].completed_at is None
+                assert stages[0].elapsed_ms is None
+                cell = session.get(BenchmarkCell, cell_id)
+                assert cell.pipeline_completed_at is None
+                assert cell.pipeline_elapsed_ms is None
     finally:
         released.set()
         await blocker

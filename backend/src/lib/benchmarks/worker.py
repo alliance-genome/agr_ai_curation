@@ -330,14 +330,22 @@ class BenchmarkWorker:
         started_at = _utcnow()
         clock_start = monotonic()
         await asyncio.to_thread(self._start_pipeline, cell.id, cell.attempt_count, started_at)
+        cancelled = False
         try:
             return await self._execute_authorized_target(executor, resolved, run_id, cell)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
-            completed_at = _utcnow()
-            elapsed_ms = max(0, round((monotonic() - clock_start) * 1000))
-            await asyncio.to_thread(
-                self._finish_pipeline, cell.id, cell.attempt_count, completed_at, elapsed_ms,
-            )
+            # wait_for waits for cancellation to unwind. Starting another SQL
+            # wait here would prevent timeout terminalization indefinitely.
+            # Leave incomplete timing unknown; terminalization owns interruption.
+            if not cancelled:
+                completed_at = _utcnow()
+                elapsed_ms = max(0, round((monotonic() - clock_start) * 1000))
+                await asyncio.to_thread(
+                    self._finish_pipeline, cell.id, cell.attempt_count, completed_at, elapsed_ms,
+                )
 
     def _start_pipeline(self, cell_id: UUID, attempt: int, started_at: datetime) -> None:
         with self.session_factory() as session:

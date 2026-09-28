@@ -208,6 +208,13 @@ async def test_async_stage_preserves_timing_failure_and_context(monkeypatch, err
         else:
             await run()
         assert current_stage() is None
+    if isinstance(error, asyncio.CancelledError):
+        # The synchronous validator still completes; the cancelled async parent
+        # remains unfinished for durable cell terminalization to interrupt.
+        observer.completed.assert_called_once()
+        child = observer.completed.call_args.args[0]
+        assert child.elapsed_ms == 200 and child.status == "failed"
+        return
     child, parent = [call.args[0] for call in observer.completed.call_args_list]
     assert child.elapsed_ms == 200 and parent.elapsed_ms == 500
     assert child.status == "failed" and child.failure_type == "ValueError"

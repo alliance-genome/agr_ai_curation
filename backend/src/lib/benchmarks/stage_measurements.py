@@ -216,4 +216,9 @@ class _StageMeasurement:
     async def __aexit__(self, exc_type: type[BaseException] | None, exc: BaseException | None,
                         traceback: TracebackType | None) -> None:
         if self.observer is not None:
-            await asyncio.to_thread(self.observer.completed, self._finish(exc))
+            finished = self._finish(exc)
+            # Reset caller context even on cancellation, but do not start a new
+            # SQL wait while unwinding it. Cell terminalization marks unfinished
+            # stages interrupted without fabricating completed timing.
+            if not isinstance(exc, asyncio.CancelledError):
+                await asyncio.to_thread(self.observer.completed, finished)

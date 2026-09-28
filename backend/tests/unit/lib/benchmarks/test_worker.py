@@ -791,3 +791,57 @@ async def test_pipeline_checkpoint_failure_prevents_success(monkeypatch, checkpo
     instance._finish_successful_cell.assert_not_called()
     if checkpoint == "start_pipeline":
         instance._execute_authorized_target.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint", ["finish_pipeline", "finish_stage"])
+@pytest.mark.parametrize("stop", ["timeout", "cancel"])
+async def test_body_cancellation_does_not_wait_for_completion_sql(monkeypatch, checkpoint, stop):
+    import threading
+    from src.lib.benchmarks.stage_measurements import (
+        StageIdentity, current_stage, measure_stage, observe_stages,
+    )
+    from src.lib.benchmarks.worker import _DurableStageObserver
+
+    release = threading.Event()
+    body_started = asyncio.Event()
+    repository = MagicMock()
+    getattr(repository, checkpoint).side_effect = lambda **kwargs: release.wait(2)
+    monkeypatch.setattr("src.lib.benchmarks.worker.BenchmarkRepository", lambda session: repository)
+    instance = BenchmarkWorker(session_factory=MagicMock())
+    instance.cell_timeout_seconds = 0.1
+    monkeypatch.setattr(instance, "heartbeat_seconds", 0.01)
+    instance._renew_leases = MagicMock()
+    cell = MagicMock(id=uuid4(), job_id=uuid4(), attempt_count=1)
+    observer = _DurableStageObserver(
+        cell=cell, lease_owner=instance.worker_id, session_factory=instance.session_factory,
+    )
+    contexts_after_cancel = []
+
+    async def execute(*args):
+        with observe_stages(observer):
+            try:
+                async with measure_stage(StageIdentity("extractor", "extraction")):
+                    body_started.set()
+                    await asyncio.Event().wait()
+            finally:
+                contexts_after_cancel.append(current_stage())
+
+    instance._execute_authorized_target = execute
+    task = asyncio.create_task(instance._run_with_heartbeat(AsyncMock(), MagicMock(), cell))
+    try:
+        await asyncio.wait_for(body_started.wait(), 1)
+        if stop == "cancel":
+            task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=0.5)
+        assert task in done, "cancellation unwind waited for a fresh completion checkpoint"
+        with pytest.raises(TimeoutError if stop == "timeout" else asyncio.CancelledError):
+            await task
+        repository.finish_pipeline.assert_not_called()
+        repository.finish_stage.assert_not_called()
+        assert contexts_after_cancel == [None]
+        if stop == "timeout":
+            instance._renew_leases.assert_called()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
