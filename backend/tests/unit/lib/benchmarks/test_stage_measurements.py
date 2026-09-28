@@ -84,17 +84,18 @@ async def test_parallel_children_keep_parent_without_inheriting_sibling_context(
     entered = []
 
     async def child(name):
-        with measure_stage(StageIdentity(name, "validation", binding_id=name)) as active:
+        async with measure_stage(StageIdentity(name, "validation", binding_id=name)) as active:
             entered.append(active)
             if len(entered) == 2:
                 ready.set()
             await ready.wait()
             assert current_stage() is active
 
-    with observe_stages(observer), measure_stage(StageIdentity("source", "extraction")) as parent:
-        assert parent is not None
-        await asyncio.gather(child("one"), child("two"))
-        assert current_stage() is parent
+    with observe_stages(observer):
+        async with measure_stage(StageIdentity("source", "extraction")) as parent:
+            assert parent is not None
+            await asyncio.gather(child("one"), child("two"))
+            assert current_stage() is parent
     assert len({stage.execution_id for stage in entered}) == 2
     assert {stage.parent_execution_id for stage in entered} == {parent.execution_id}
     assert observer.completed.call_count == 3
@@ -150,7 +151,7 @@ async def test_provider_calls_retain_dispatch_stage_after_context_changes(monkey
     pending_by_node = {}
 
     async def invoke(node):
-        with measure_stage(StageIdentity(node, "validation", node_id=node, agent_id="same")) as stage:
+        async with measure_stage(StageIdentity(node, "validation", node_id=node, agent_id="same")) as stage:
             pending = begin_provider_invocation(
                 requested_provider="fixture", requested_model="fixture", route_slot="agent:same", started_at=1.0,
             )
@@ -174,3 +175,51 @@ async def test_provider_calls_retain_dispatch_stage_after_context_changes(monkey
         parsed = ProviderUsage.model_validate(provider_usage_metadata(record))
         assert str(parsed.stage_execution_id) == record.stage_execution_id
         assert parsed.billed_cost is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [None, ValueError("private payload"), asyncio.CancelledError()])
+async def test_async_stage_preserves_timing_failure_and_context(monkeypatch, error):
+    from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
+
+    observer = Mock()
+    ticks = iter([10.0, 10.1, 10.3, 10.5])
+    monkeypatch.setattr("src.lib.benchmarks.stage_measurements.monotonic", lambda: next(ticks))
+
+    async def run():
+        async with measure_stage(StageIdentity("parent", "supervisor")) as parent:
+            assert parent is not None
+
+            def validate():
+                with measure_stage(StageIdentity("child", "validation"), parent_invocation_sequence=4):
+                    child = current_stage()
+                    assert child is not None
+                    assert child.parent_execution_id == parent.execution_id
+                    record_handled_stage_failure(ValueError("private payload"))
+            await asyncio.to_thread(validate)
+            assert current_stage() is parent
+            if error is not None:
+                raise error
+
+    with observe_stages(observer):
+        if error is not None:
+            with pytest.raises(type(error)):
+                await run()
+        else:
+            await run()
+        assert current_stage() is None
+    if isinstance(error, asyncio.CancelledError):
+        # The synchronous validator still completes; the cancelled async parent
+        # remains unfinished for durable cell terminalization to interrupt.
+        observer.completed.assert_called_once()
+        child = observer.completed.call_args.args[0]
+        assert child.elapsed_ms == 200 and child.status == "failed"
+        return
+    child, parent = [call.args[0] for call in observer.completed.call_args_list]
+    assert child.elapsed_ms == 200 and parent.elapsed_ms == 500
+    assert child.status == "failed" and child.failure_type == "ValueError"
+    assert child.start.parent_invocation_sequence == 4
+    assert parent.status == ("succeeded" if error is None else (
+        "failed" if isinstance(error, Exception) else "interrupted"
+    ))
+    assert "private payload" not in repr(child) + repr(parent)

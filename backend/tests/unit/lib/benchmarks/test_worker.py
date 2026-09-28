@@ -13,6 +13,57 @@ from src.lib.benchmarks.persistence import BenchmarkLeaseLostError
 from src.lib.benchmarks.worker import BenchmarkWorker, _report_failure
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint", ["start_pipeline", "finish_pipeline"])
+async def test_blocked_pipeline_checkpoint_allows_heartbeat_and_timeout(monkeypatch, checkpoint):
+    import threading
+    from src.lib.benchmarks import worker
+
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    loop_thread = threading.get_ident()
+    session_threads = []
+
+    def session_factory():
+        session_threads.append(threading.get_ident())
+        session = MagicMock()
+        session.__enter__.return_value = session
+        return session
+
+    def blocked(**kwargs):
+        entered.set()
+        try:
+            assert release.wait(5)
+        finally:
+            finished.set()
+
+    repository = MagicMock()
+    getattr(repository, checkpoint).side_effect = blocked
+    monkeypatch.setattr(worker, "BenchmarkRepository", lambda db: repository)
+    instance = BenchmarkWorker(session_factory=session_factory)
+    monkeypatch.setattr(instance, "heartbeat_seconds", 0.01)
+    instance.cell_timeout_seconds = 0.2
+    instance._execute_authorized_target = AsyncMock(return_value="result")
+    heartbeats = []
+    monkeypatch.setattr(instance, "_renew_leases", lambda *args: heartbeats.append(entered.is_set() and not release.is_set()))
+    cell = MagicMock(id=uuid4(), job_id=uuid4(), attempt_count=2)
+    watchdog = threading.Timer(2, release.set)
+    watchdog.start()
+    try:
+        with pytest.raises(TimeoutError):
+            await instance._run_with_heartbeat(AsyncMock(), MagicMock(), cell)
+        assert entered.is_set() and not release.is_set()
+        assert any(heartbeats)
+        assert all(thread != loop_thread for thread in session_threads)
+        if checkpoint == "start_pipeline":
+            instance._execute_authorized_target.assert_not_awaited()
+            repository.finish_pipeline.assert_not_called()
+    finally:
+        release.set()
+        watchdog.cancel()
+        if entered.is_set():
+            assert await asyncio.to_thread(finished.wait, 5)
+
+
 @pytest.mark.parametrize("measured", [False, True])
 def test_invocation_observer_persists_measured_identity_before_dispatch(monkeypatch, measured):
     from src.lib.benchmarks import worker
@@ -75,8 +126,10 @@ def test_invocation_observer_passes_canonical_facts_not_display_defaults(monkeyp
     session.commit.assert_called_once()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True])
 @pytest.mark.parametrize("failure_at", [None, "start", "finish", "commit"])
-def test_stage_observer_commits_boundaries_and_retains_swallowed_failure(monkeypatch, failure_at):
+async def test_stage_observer_commits_boundaries_and_retains_swallowed_failure(monkeypatch, failure_at, async_mode):
     from src.lib.benchmarks import worker
     from src.lib.benchmarks.stage_measurements import StageIdentity, measure_stage, observe_stages
 
@@ -92,14 +145,18 @@ def test_stage_observer_commits_boundaries_and_retains_swallowed_failure(monkeyp
     elif failure_at == "commit":
         session.commit.side_effect = error
     observer = worker._DurableStageObserver(
-        cell=SimpleNamespace(id=uuid4(), attempt_count=2), lease_owner=uuid4(),
+        cell=MagicMock(id=uuid4(), attempt_count=2), lease_owner=uuid4(),
         session_factory=lambda: session,
     )
     executed = []
     with observe_stages(observer):
         try:
-            with measure_stage(StageIdentity("extractor", "extraction")):
-                executed.append(True)
+            if async_mode:
+                async with measure_stage(StageIdentity("extractor", "extraction")):
+                    executed.append(True)
+            else:
+                with measure_stage(StageIdentity("extractor", "extraction")):
+                    executed.append(True)
         except BenchmarkLeaseLostError:
             pass  # Simulate a normal validator converting an error to output.
     if failure_at:
@@ -623,3 +680,168 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
     assert "synthetic-private-value" not in serialized
     assert "00000000-0000-0000-0000-000000000001" not in serialized
     assert [value["type"] for value in event["exception"]["values"]] == ["_BenchmarkWorkerError"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint", ["append_stage", "finish_stage"])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_async_stage_checkpoint_acknowledgement_and_cancellation(monkeypatch, checkpoint, cancel):
+    import threading
+    from contextlib import contextmanager
+    from src.lib.benchmarks import worker
+    from src.lib.benchmarks.stage_measurements import StageIdentity, current_stage, measure_stage, observe_stages
+
+    entered, release, closed = threading.Event(), threading.Event(), threading.Event()
+    loop_thread = threading.get_ident()
+    operations = []
+
+    @contextmanager
+    def session_factory():
+        owner = threading.get_ident()
+        assert owner != loop_thread
+        session = MagicMock()
+        session.commit.side_effect = lambda: operations.append("commit")
+        try:
+            yield session
+        finally:
+            assert threading.get_ident() == owner
+            if entered.is_set():
+                closed.set()
+
+    def blocked(**kwargs):
+        entered.set()
+        assert release.wait(5)
+
+    repository = MagicMock()
+    getattr(repository, checkpoint).side_effect = blocked
+    monkeypatch.setattr(worker, "BenchmarkRepository", lambda db: repository)
+    observer = worker._DurableStageObserver(
+        cell=MagicMock(id=uuid4(), attempt_count=2), lease_owner=uuid4(),
+        session_factory=session_factory,
+    )
+
+    async def run():
+        with observe_stages(observer):
+            async with measure_stage(StageIdentity("extractor", "extraction")) as stage:
+                assert current_stage() is stage
+                assert operations == ["commit"]
+                operations.append("body")
+            assert current_stage() is None
+            operations.append("returned")
+
+    watchdog = threading.Timer(2, release.set)
+    watchdog.start()
+    task = asyncio.create_task(run())
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        assert not release.is_set() and not task.done()
+        if checkpoint == "append_stage":
+            assert operations == []
+        else:
+            assert operations == ["commit", "body"]
+        if cancel:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 0.2)
+            assert not release.is_set()
+            assert "returned" not in operations
+        release.set()
+        assert await asyncio.to_thread(closed.wait, 1)
+        if not cancel:
+            await task
+            assert operations == ["commit", "body", "commit", "returned"]
+            start = repository.append_stage.call_args.kwargs
+            finish = repository.finish_stage.call_args.kwargs
+            assert start["attempt"] == finish["attempt"] == 2
+            assert start["lease_owner"] == finish["lease_owner"] == observer.lease_owner
+            assert finish["stage"].start is start["stage"]
+    finally:
+        release.set()
+        watchdog.cancel()
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert await asyncio.to_thread(closed.wait, 5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint", ["start_pipeline", "finish_pipeline"])
+@pytest.mark.parametrize("error_type", [RuntimeError, BenchmarkLeaseLostError])
+async def test_pipeline_checkpoint_failure_prevents_success(monkeypatch, checkpoint, error_type):
+    from src.lib.benchmarks import worker
+
+    repository = MagicMock()
+    error = error_type("checkpoint failed")
+    getattr(repository, checkpoint).side_effect = error
+    monkeypatch.setattr(worker, "BenchmarkRepository", lambda db: repository)
+    instance = BenchmarkWorker(session_factory=MagicMock())
+    cell = SimpleNamespace(id=uuid4(), job_id=uuid4(), target_kind="agent", attempt_count=2)
+    instance._load_cell = MagicMock(return_value=(cell, object()))
+    instance._execute_authorized_target = AsyncMock(return_value=SimpleNamespace(invocations=(), output={}))
+    instance._finish_successful_cell = MagicMock()
+    instance._finish_failed_cell = MagicMock()
+    if error_type is BenchmarkLeaseLostError:
+        with pytest.raises(BenchmarkLeaseLostError):
+            await instance._execute_cell(cell.id)
+        instance._finish_failed_cell.assert_not_called()
+    else:
+        await instance._execute_cell(cell.id)
+        assert instance._finish_failed_cell.call_args.args[-1] is error
+    instance._finish_successful_cell.assert_not_called()
+    if checkpoint == "start_pipeline":
+        instance._execute_authorized_target.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint", ["finish_pipeline", "finish_stage"])
+@pytest.mark.parametrize("stop", ["timeout", "cancel"])
+async def test_body_cancellation_does_not_wait_for_completion_sql(monkeypatch, checkpoint, stop):
+    import threading
+    from src.lib.benchmarks.stage_measurements import (
+        StageIdentity, current_stage, measure_stage, observe_stages,
+    )
+    from src.lib.benchmarks.worker import _DurableStageObserver
+
+    release = threading.Event()
+    body_started = asyncio.Event()
+    repository = MagicMock()
+    getattr(repository, checkpoint).side_effect = lambda **kwargs: release.wait(2)
+    monkeypatch.setattr("src.lib.benchmarks.worker.BenchmarkRepository", lambda session: repository)
+    instance = BenchmarkWorker(session_factory=MagicMock())
+    instance.cell_timeout_seconds = 0.1
+    monkeypatch.setattr(instance, "heartbeat_seconds", 0.01)
+    instance._renew_leases = MagicMock()
+    cell = MagicMock(id=uuid4(), job_id=uuid4(), attempt_count=1)
+    observer = _DurableStageObserver(
+        cell=cell, lease_owner=instance.worker_id, session_factory=instance.session_factory,
+    )
+    contexts_after_cancel = []
+
+    async def execute(*args):
+        with observe_stages(observer):
+            try:
+                async with measure_stage(StageIdentity("extractor", "extraction")):
+                    body_started.set()
+                    await asyncio.Event().wait()
+            finally:
+                contexts_after_cancel.append(current_stage())
+
+    instance._execute_authorized_target = execute
+    task = asyncio.create_task(instance._run_with_heartbeat(AsyncMock(), MagicMock(), cell))
+    try:
+        await asyncio.wait_for(body_started.wait(), 1)
+        if stop == "cancel":
+            task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=0.5)
+        assert task in done, "cancellation unwind waited for a fresh completion checkpoint"
+        with pytest.raises(TimeoutError if stop == "timeout" else asyncio.CancelledError):
+            await task
+        repository.finish_pipeline.assert_not_called()
+        repository.finish_stage.assert_not_called()
+        assert contexts_after_cancel == [None]
+        if stop == "timeout":
+            instance._renew_leases.assert_called()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)

@@ -1819,7 +1819,7 @@ async def _collect_flow_validator_materialization_inputs(
                 measure_bound_validator, record_handled_stage_failure,
             )
 
-            with measure_bound_validator(
+            async with measure_bound_validator(
                 binding_id, node_id=str(validator_node["id"]) if validator_node is not None else None,
             ):
                 try:
@@ -3528,7 +3528,7 @@ def get_all_agent_tools(
                 from src.lib.benchmarks.stage_measurements import measure_flow_node
                 from src.lib.openai_agents.provider_usage import provider_parent_for_tool_call
 
-                with measure_flow_node(node_id, parent_invocation_sequence=provider_parent_for_tool_call(
+                async with measure_flow_node(node_id, parent_invocation_sequence=provider_parent_for_tool_call(
                     getattr(ctx, "tool_call_id", None),
                 )):
                     return await _run_claimed_ordered_tool(ctx, query, next_idx)

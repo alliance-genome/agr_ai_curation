@@ -449,3 +449,156 @@ async def test_blocked_snapshot_read_allows_worker_heartbeats_and_timeout(monkey
             session.execute(delete(BenchmarkJob).where(BenchmarkJob.id == job_id))
             session.execute(delete(BenchmarkInputSnapshot).where(BenchmarkInputSnapshot.id == snapshot_id))
             session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint,during_body", [
+    ("start_pipeline", False), ("finish_pipeline", False),
+    ("append_stage", False), ("finish_stage", False),
+    ("finish_pipeline", True), ("finish_stage", True),
+])
+async def test_blocked_checkpoint_sql_allows_heartbeat_timeout_and_fences_late_write(
+    monkeypatch, checkpoint, during_body,
+):
+    import asyncio
+    import threading
+    from sqlalchemy import text
+    from src.lib.benchmarks.persistence import BenchmarkLeaseLostError
+    from src.lib.benchmarks.stage_measurements import StageIdentity, measure_stage
+    from src.models.sql.benchmark import BenchmarkStage
+    from tests.integration.persistence.test_benchmark_repository import _create_job
+
+    lease_owner = uuid4()
+    with SessionLocal() as session:
+        job = _create_job(session, owner=f"blocked-checkpoint-{uuid4()}", cells=1)
+        job_id = job.id
+        repository = BenchmarkRepository(session)
+        claimed = repository.claim_next_job(
+            lease_owner=lease_owner,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        assert claimed is not None and claimed.id == job_id
+        cell = repository.claim_next_cell(
+            job_id=job_id, lease_owner=lease_owner,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        assert cell is not None
+        cell_id, snapshot_id = cell.id, cell.input_snapshot_id
+        session.commit()
+
+    entered, released, closed = threading.Event(), threading.Event(), threading.Event()
+    lock_id = uuid4().int % (2**63)
+    original = getattr(BenchmarkRepository, checkpoint)
+    heartbeat_leases = BenchmarkRepository.heartbeat_leases
+    heartbeat_count = 0
+    late_errors = []
+    checkpoint_thread = None
+    loop_thread = threading.get_ident()
+
+    @contextmanager
+    def session_factory():
+        owner_thread = threading.get_ident()
+        assert owner_thread != loop_thread
+        try:
+            with SessionLocal() as session:
+                yield session
+        finally:
+            assert threading.get_ident() == owner_thread
+            if checkpoint_thread == owner_thread:
+                closed.set()
+
+    def blocked(self, **kwargs):
+        nonlocal checkpoint_thread
+        checkpoint_thread = threading.get_ident()
+        entered.set()
+        # Deliberately block real PostgreSQL before taking the row locks. Lease
+        # heartbeats/terminalization remain independently eligible to commit.
+        self.session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+        try:
+            return original(self, **kwargs)
+        except BenchmarkLeaseLostError as exc:
+            late_errors.append(exc)
+            raise
+
+    def heartbeat(self, **kwargs):
+        nonlocal heartbeat_count
+        owned = heartbeat_leases(self, **kwargs)
+        if (during_body or entered.is_set()) and not released.is_set():
+            heartbeat_count += int(owned)
+        return owned
+
+    monkeypatch.setattr(BenchmarkRepository, checkpoint, blocked)
+    monkeypatch.setattr(BenchmarkRepository, "heartbeat_leases", heartbeat)
+    curator = BenchmarkCuratorContext(subject="synthetic", auth_provider="oidc", db_user_id=1, active_groups=())
+    monkeypatch.setattr("src.lib.benchmarks.worker.prepare_job_document", AsyncMock(
+        return_value=(SimpleNamespace(document_id=uuid4()), curator),
+    ))
+    monkeypatch.setattr("src.lib.benchmarks.worker.authorize_benchmark_curator", AsyncMock(return_value=curator))
+
+    async def execute(*args):
+        async with measure_stage(StageIdentity("extractor", "extraction")):
+            if during_body:
+                await asyncio.Event().wait()
+            return SimpleNamespace(output={}, invocations=())
+
+    worker = BenchmarkWorker(
+        worker_id=lease_owner, session_factory=session_factory,
+        agent_executor=execute, flow_executor=execute,
+    )
+    monkeypatch.setattr(worker, "heartbeat_seconds", 0.02)
+    worker.cell_timeout_seconds = 0.4
+
+    # Own and release the blocking transaction in one dedicated thread, with a
+    # bounded watchdog so a regression cannot hang the test process.
+    locked = threading.Event()
+
+    def hold_lock():
+        with SessionLocal() as session:
+            session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+            locked.set()
+            released.wait(3)
+            released.set()
+            session.rollback()
+
+    blocker = asyncio.create_task(asyncio.to_thread(hold_lock))
+    try:
+        assert await asyncio.to_thread(locked.wait, 2)
+        await worker._execute_cell(cell_id)
+        assert not released.is_set(), "timeout waited for blocked SQL"
+        assert entered.is_set() is not during_body
+        assert heartbeat_count > 0
+        with SessionLocal() as session:
+            cell = session.get(BenchmarkCell, cell_id)
+            assert cell.status == BenchmarkCellStatus.FAILED
+            assert cell.failure["category"] == "timeout"
+        released.set()
+        await blocker
+        if not during_body:
+            assert await asyncio.to_thread(closed.wait, 5)
+        assert len(late_errors) == (0 if during_body else 1)
+        with SessionLocal() as session:
+            stages = list(session.scalars(select(BenchmarkStage).where(BenchmarkStage.cell_id == cell_id)))
+            assert all(stage.status != "running" for stage in stages)
+            if checkpoint in ("start_pipeline", "append_stage"):
+                assert stages == []
+            if checkpoint == "finish_stage" or during_body:
+                assert stages[0].status == "interrupted"
+            if during_body:
+                assert stages[0].failure_type == "CellTerminated"
+                assert stages[0].completed_at is None
+                assert stages[0].elapsed_ms is None
+                cell = session.get(BenchmarkCell, cell_id)
+                assert cell.pipeline_completed_at is None
+                assert cell.pipeline_elapsed_ms is None
+    finally:
+        released.set()
+        await blocker
+        if entered.is_set():
+            assert await asyncio.to_thread(closed.wait, 5)
+        with SessionLocal() as session:
+            BenchmarkRepository(session).complete_job(
+                job_id=job_id, lease_owner=lease_owner, completed_at=datetime.now(timezone.utc),
+            )
+            session.execute(delete(BenchmarkJob).where(BenchmarkJob.id == job_id))
+            session.execute(delete(BenchmarkInputSnapshot).where(BenchmarkInputSnapshot.id == snapshot_id))
+            session.commit()
