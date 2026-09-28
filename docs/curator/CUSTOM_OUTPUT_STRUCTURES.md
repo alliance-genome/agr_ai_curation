@@ -67,6 +67,8 @@ Under **More field options**, **Allow an empty answer if the paper doesn’t say
 
 The editor manages internal field identifiers for you. Renaming a detail keeps its identity; it does not create a second output field.
 
+Under **More field options**, use **Synonyms / source labels (not output fields)** to inspect or edit names used for a detail in source material. Enter one label per line; delete a line to remove it, or clear the box to remove all labels. These labels help recognize the detail without changing its output key. Review shows the draft labels for each detail and part. Resolve any reported label collisions before finishing. Changes stay in the draft until Workshop Save; existing saved revisions remain unchanged.
+
 AI Chat proposals appear in the shared review dialog. **Cancel** leaves the draft unchanged; **Apply** changes only the unsaved draft. A stale proposal must be regenerated. You can undo the last accepted change while the draft still matches it. Only your separate **Save** creates a saved revision.
 
 ## Understand validation and revisions

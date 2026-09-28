@@ -310,6 +310,16 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
         <Divider />
         <Button aria-expanded={more} onClick={() => setMore(!more)} sx={{ alignSelf: 'flex-start' }}>More field options</Button>
         {more && <Stack spacing={2}>
+          <TextField
+            id={`profile-${row.schemaPath}.source_labels`}
+            label="Synonyms / source labels (not output fields)"
+            multiline minRows={2} disabled={disabled}
+            value={(field.source_labels ?? []).join('\n')}
+            onChange={(event) => patch({ source_labels: event.target.value ? event.target.value.split('\n') : [] })}
+            onBlur={onValidate}
+            error={Boolean(issueText(`${row.schemaPath}.source_labels`))}
+            helperText={issueText(`${row.schemaPath}.source_labels`) || 'One label per line. These help recognize this detail in the source; output keys stay unchanged. Delete a line to remove a label.'}
+          />
           <FormControlLabel control={<Checkbox disabled={disabled} checked={field.nullable ?? false} onChange={(_, nullable) => patch({ nullable })} />} label="Allow an empty answer if the paper doesn’t say" />
           <Typography color="text.secondary">The detail stays in the record, but its answer can be empty when the paper does not provide the information.</Typography>
           <Stack direction="row" sx={{  gap: 1, flexWrap: "wrap" }}>

@@ -21,6 +21,42 @@ const draft = (): GenericProfileContract => JSON.parse(screen.getByLabelText('Cu
 function edit(name = 'Title') { fireEvent.click(screen.getByRole('button', { name: `Edit ${name}` })) }
 
 describe('Curator collection overview', () => {
+  it('inspects, edits, adds and removes source labels without mutating saved fields or output keys', () => {
+    const saved = structuredClone(initial)
+    const validate = vi.fn()
+    render(<Harness value={saved} onValidate={validate} />); edit()
+    fireEvent.click(screen.getByRole('button', { name: 'More field options' }))
+    const labels = screen.getByLabelText('Synonyms / source labels (not output fields)')
+    expect(labels).toHaveValue('Paper heading')
+    fireEvent.change(labels, { target: { value: 'Article heading\nReported title' } })
+    expect(draft().fields[0]).toEqual({ ...initial.fields[0], source_labels: ['Article heading', 'Reported title'] })
+    expect(validate).not.toHaveBeenCalled()
+    fireEvent.blur(labels)
+    expect(validate).toHaveBeenCalledOnce()
+    fireEvent.change(labels, { target: { value: 'Reported title' } })
+    expect(draft().fields[0].source_labels).toEqual(['Reported title'])
+    fireEvent.change(labels, { target: { value: '' } })
+    expect(draft()).toEqual({ ...initial, fields: [{ ...initial.fields[0], source_labels: [] }, initial.fields[1]] })
+    expect(saved).toEqual(initial)
+  })
+  it('opens and focuses nested source-label collision diagnostics without discarding the draft', async () => {
+    const message = 'Source label identifies another canonical field'
+    render(<Harness issues={[{ path: 'fields[1].value_schema.fields[0].source_labels[0]', code: 'invalid', message }]} />)
+    fireEvent.click(screen.getByRole('button', { name: message }))
+    const labels = screen.getByLabelText('Synonyms / source labels (not output fields)')
+    await waitFor(() => expect(labels).toHaveFocus())
+    expect(labels).toHaveAttribute('aria-invalid', 'true')
+    expect(labels).toHaveAccessibleDescription(message)
+    fireEvent.change(labels, { target: { value: 'Supplier name' } })
+    expect(draft().fields[1].value_schema).toMatchObject({ fields: [{ key: 'name', source_labels: ['Supplier name'] }] })
+    expect(draft().fields[0]).toEqual(initial.fields[0])
+  })
+  it('disables source-label editing when the draft is read-only', () => {
+    render(<Harness disabled issues={[{ path: 'fields[0].source_labels', code: 'invalid', message: 'Clarify source labels' }]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Clarify source labels' }))
+    expect(screen.getByLabelText('Synonyms / source labels (not output fields)')).toBeDisabled()
+    expect(draft()).toEqual(initial)
+  })
   it('starts a custom item type without reagent-specific fields or a technical class question', () => {
     render(<Harness value={{ name: '', semantic_class: '', fields: [] }} />)
     fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Antibodies' } })
