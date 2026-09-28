@@ -526,6 +526,15 @@ Use `add_observed_background_task()` or `report_background_task_exception()` for
 FastAPI background tasks. Background-task identifier tags are hashed before
 capture.
 
+Invalid persisted resolution records report at the shared resolvable-value read
+boundary with component `resolvable_values`, operation
+`read_invalid_persisted_record`, and category `invalid_persisted_resolution_record`.
+Reports contain only structural booleans and a fixed, chain-free exception;
+stored values, validation error text, and extracted wording are omitted. Reads
+still demote damaged records without changing storage when reporting fails.
+Valid historical values and ordinary unresolved outcomes stay quiet. Companion
+read and materialization warnings skip log-event promotion to avoid duplicates.
+
 Use the tool-failure notifier only for tool/specialist failure alerts. Do not
 use it as a generic application-error facade. Its Sentry events correlate through
 `ai_curation.trace.id_hash` and `ai_curation.chat.session_id_hash`, using the
