@@ -574,8 +574,14 @@ def _find_staged_allele_observations_impl(
     include_discarded: bool = False,
     limit: int = 50,
     offset: int = 0,
+    detail_path: Optional[str] = None,
+    detail_cursor: Optional[int] = None,
+    result_sha256: Optional[str] = None,
 ) -> AgrQueryResult:
-    """Find specific staged allele drafts by content or id, one page at a time."""
+    """Find specific staged allele drafts by content or id, one page at a time.
+
+    Use a withheld summary's detail_read arguments with this tool to read its
+    exact JSON in chunks; retain result_sha256 and advance detail_cursor."""
 
     attempted_query = _attempt_query(
         "find_staged_allele_observations",
@@ -620,6 +626,9 @@ def _find_staged_allele_observations_impl(
         include_discarded=find_input.include_discarded,
         limit=find_input.limit,
         offset=find_input.offset,
+        detail_path=detail_path,
+        detail_cursor=detail_cursor,
+        result_sha256=result_sha256,
     )
     _emit_allele_builder_event(
         "allele_builder.find_completed",

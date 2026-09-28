@@ -433,25 +433,84 @@ async def test_an_oversized_resolver_result_is_replaced_like_any_run_state_resul
     assert len(reported) == 1 and reported[0][1]["correlation"]["enforced"] is True
 
 
-def test_write_requests_are_never_paged_by_repetition(reported):
-    large = {"status": "ok", "data": [{"row": "w" * 500} for _ in range(100)]}
-    small = {"status": "ok", "data": [{"row": "w"}]}
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+@pytest.mark.parametrize("budget", [2048, 8192])
+async def test_write_response_is_captured_and_read_without_repetition(resolved_query_tool, reported, monkeypatch, method, budget):
+    tool, state = resolved_query_tool
+    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", str(budget))
+    state["result"] = {"status": "ok", "data": NOTE * 500}
+    original = {"method": method}
+    first = await tool.on_invoke_tool(None, json.dumps(original))
+    assert serialized_size(first) <= budget
+    ref = first["result_ref"]
+    # Read the complete captured response exactly, even after upstream changes.
+    expected = canonical_json(state["result"])
+    state["result"] = {"status": "changed"}
+    cursor = 0
+    chunks = []
+    while True:
+        result = await tool.on_invoke_tool(None, json.dumps({**original, "result_ref": ref, "detail_path": "data", "detail_cursor": cursor}))
+        assert serialized_size(result) <= budget
+        detail = result["detail"]
+        chunks.append(detail["content"])
+        if detail["complete"]:
+            break
+        cursor = detail["next_cursor"]
+    assert "".join(chunks) == expected
+    for bad in ({"result_offset": 1}, {"result_ref": "unknown"}, {"result_ref": ref, "gene_symbol": "changed"}):
+        result = await tool.on_invoke_tool(None, json.dumps({**original, **bad}))
+        assert result["error_code"] == "invalid_result_cursor"
+    for scope_key in ("session_id", "user_id", "trace_id"):
+        monkeypatch.setattr(catalog_service, "_current_package_tool_request_context", lambda: {scope_key: "another-scope"})
+        denied = await tool.on_invoke_tool(None, json.dumps({**original, "result_ref": ref}))
+        assert denied["error_code"] == "invalid_result_cursor"
+    other_tool = catalog_service._resolve_package_tool(
+        "lookup_records", catalog_service.ToolExecutionContext(user_id="other-user", document_id="other-document")
+    )
+    denied = await other_tool.on_invoke_tool(None, json.dumps({**original, "result_ref": ref}))
+    assert denied["error_code"] == "invalid_result_cursor"
+    assert len(state["calls"]) == 1
+    assert not reported
 
-    oversized = catalog_service._bounded_package_result(
-        "rest_lookup", large, {}, repeatable=False
-    )
-    fits = catalog_service._bounded_package_result(
-        "rest_lookup", small, {}, repeatable=False
-    )
-    continued = catalog_service._bounded_package_result(
-        "rest_lookup", large, {"result_offset": 3}, repeatable=False
-    )
 
-    assert oversized["error_code"] == "tool_result_budget_unmet"
-    assert "result_page" not in oversized
-    assert fits == small
-    assert continued["error_code"] == "invalid_result_cursor"
+@pytest.mark.asyncio
+async def test_captured_write_rows_page_completely(resolved_query_tool, reported):
+    tool, state = resolved_query_tool
+    state["result"] = _query_result(40)
+    expected = state["result"]["data"]
+    arguments = {"method": "POST"}
+    rows = []
+    while True:
+        result = await tool.on_invoke_tool(None, json.dumps(arguments))
+        assert serialized_size(result) <= BUDGET
+        rows.extend(result["data"]["data"])
+        next_call = result["result_page"]["next_call"]
+        if next_call is None:
+            break
+        arguments = {"method": "POST", **next_call}
+    assert rows == expected
+    assert len(state["calls"]) == 1
+    assert not reported
+
+
+@pytest.mark.asyncio
+async def test_write_capture_survives_unexpected_presentation_failure(resolved_query_tool, reported, monkeypatch):
+    tool, state = resolved_query_tool
+    state["result"] = _query_result(40)
+
+    def fail_presentation(*args, **kwargs):
+        raise catalog_service.ToolResultBudgetError(measured=99999, limit=BUDGET)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(catalog_service, "bounded_json_result", fail_presentation)
+        failure = await _call(tool, method="POST")
+    assert failure["error_code"] == "tool_result_budget_unmet"
+    assert failure["operation_status"] == "response_captured"
+    assert serialized_size(failure) <= BUDGET
+    # Output naming is not an authorization scope change.
+    monkeypatch.setattr(catalog_service, "_current_package_tool_request_context", lambda: {"output_filename_stem": "new-output"})
+    result = await _call(tool, method="POST", result_ref=failure["result_ref"], detail_path="data", detail_cursor=0)
+    assert result["detail"]["content"]
+    assert len(state["calls"]) == 1
     assert len(reported) == 1
-    assert catalog_service._is_non_idempotent_http_call({"method": "post"})
-    assert not catalog_service._is_non_idempotent_http_call({"method": "GET"})
-    assert not catalog_service._is_non_idempotent_http_call({"method": "search_genes"})

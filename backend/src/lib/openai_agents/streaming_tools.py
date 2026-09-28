@@ -1086,7 +1086,19 @@ def _adapt_tools_with_provider_adapter(tools: List[Any], adapter_key: str) -> Li
         if hasattr(tool, "profile_bound_schema"):
             raise ValueError("This provider adapter cannot preserve the profile-specific tool contract")
 
-        adapted.append(adapter_factory())
+        adapter = adapter_factory()
+        invoke = adapter.on_invoke_tool
+
+        async def invoke_and_report(ctx, input_str, *, _invoke=invoke, _name=tool_name):
+            from src.lib.agent_studio.catalog_service import _report_inline_package_result
+            from src.lib.openai_agents.tool_result_bounds import full_tool_results_are_requested
+
+            result = await _invoke(ctx, input_str)
+            if not full_tool_results_are_requested():
+                _report_inline_package_result(_name, result)
+            return result
+
+        adapted.append(replace(adapter, on_invoke_tool=invoke_and_report))
     return adapted
 
 

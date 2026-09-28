@@ -27,6 +27,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterator, List, Optional
 from datetime import datetime
 from dataclasses import dataclass, replace
+from uuid import uuid4
 
 from agents import Agent
 from src.lib.config.agent_loader import (
@@ -48,6 +49,7 @@ from src.lib.openai_agents.tool_result_bounds import (
     ToolResultBudgetError,
     bounded_json_result,
     budget_failure,
+    canonical_json,
     full_tool_results_are_requested,
     invalid_cursor,
     is_budget_failure,
@@ -821,6 +823,9 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
     requery_pages = not execute_inline and not (
         isinstance(metadata, dict) and metadata.get("builder_run_state")
     )
+    # Lifetime is this tool instance, never a process-global response cache.
+    # Scope is checked again on every read, even if a tool instance is reused.
+    captured_writes: Dict[str, tuple[Any, str, Any]] = {}
 
     async def _runner_invoke(ctx, input_str):
         if tracker:
@@ -836,6 +841,7 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
 
         runner = _get_package_tool_runner()
         decoded_kwargs = _decode_tool_input(tool_id, input_str)
+        result_ref = decoded_kwargs.pop("result_ref", None) if requery_pages else None
         view_arguments = (
             {
                 key: decoded_kwargs.pop(key)
@@ -845,13 +851,31 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             if requery_pages
             else {}
         )
+        request_context = _current_package_tool_request_context()
         execute_kwargs = {
             "kwargs": decoded_kwargs,
             "context": {
                 **_binding_context_payload(binding, execution_context),
-                **_current_package_tool_request_context(),
+                **request_context,
             },
         }
+        scope = (
+            execution_context.user_id, execution_context.document_id,
+            request_context.get("user_id"), request_context.get("session_id"),
+            request_context.get("trace_id"),
+        )
+        request_identity = canonical_json(decoded_kwargs)
+        if result_ref is not None:
+            stored = captured_writes.get(result_ref) if isinstance(result_ref, str) else None
+            if stored is None or stored[:2] != (scope, request_identity):
+                return invalid_cursor("Unknown write result for this request scope.", tool_name=tool_id)
+            return _bounded_package_result(
+                tool_id, stored[2], view_arguments, result_ref=result_ref,
+            )
+        is_write = _is_non_idempotent_http_call(decoded_kwargs)
+        if is_write and any(value is not None for value in view_arguments.values()):
+            return invalid_cursor("Write continuation requires result_ref; the request was not executed.",
+                                  tool_name=tool_id)
 
         try:
             result = await asyncio.to_thread(
@@ -879,11 +903,14 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
         if not requery_pages:
             _report_inline_package_result(tool_id, result.result)
             return result.result
+        if is_write and not full_tool_results_are_requested() and serialized_size(result.result) > tool_result_budget():
+            result_ref = str(uuid4())
+            captured_writes[result_ref] = (scope, request_identity, result.result)
         return _bounded_package_result(
             tool_id,
             result.result,
             view_arguments,
-            repeatable=not _is_non_idempotent_http_call(decoded_kwargs),
+            result_ref=result_ref,
         )
 
     if not requery_pages:
@@ -905,16 +932,20 @@ def _with_result_view_arguments(tool: Any) -> Dict[str, Any]:
     schema = json.loads(json.dumps(getattr(tool, "params_json_schema", None) or {}))
     schema.setdefault("type", "object")
     properties = schema.setdefault("properties", {})
-    collisions = sorted(set(properties) & set(RESULT_VIEW_ARGUMENTS))
+    collisions = sorted(set(properties) & {*RESULT_VIEW_ARGUMENTS, "result_ref"})
     if collisions:
         raise ValueError(
             f"Package tool '{getattr(tool, 'name', '')}' declares reserved result view "
             f"arguments: {', '.join(collisions)}"
         )
     properties.update(result_view_schema_properties())
+    properties["result_ref"] = {
+        "type": ["string", "null"],
+        "description": "Captured write response reference. Repeat the original inputs with this ref to read pages or details without executing the write again.",
+    }
     if getattr(tool, "strict_json_schema", False):
         # Strict schemas require every property; the view arguments are nullable.
-        schema["required"] = [*schema.get("required", []), *RESULT_VIEW_ARGUMENTS]
+        schema["required"] = [*schema.get("required", []), *RESULT_VIEW_ARGUMENTS, "result_ref"]
     return schema
 
 
@@ -932,7 +963,7 @@ def _bounded_package_result(
     payload: Any,
     view_arguments: Dict[str, Any],
     *,
-    repeatable: bool = True,
+    result_ref: str | None = None,
 ) -> Any:
     """Serve one subprocess package result within the model-facing budget.
 
@@ -942,9 +973,8 @@ def _bounded_package_result(
     (recomputed and hash-checked) result. Application-side captures that need
     the complete result (validator lookup capture) request it explicitly.
 
-    Continuation re-runs the call, so a non-repeatable call (a REST write) is
-    never paged: an oversized result is a reported contract failure instead of
-    an invitation to repeat the side effect.
+    Writes are captured by the caller before presentation. A result_ref reads
+    that capture without executing the request again.
     """
     view_arguments = {
         key: value for key, value in view_arguments.items() if value is not None
@@ -955,24 +985,10 @@ def _bounded_package_result(
                 f"Tool '{tool_id}' was asked for a complete result and a page at once"
             )
         return payload
-    if not repeatable:
-        if view_arguments:
-            return invalid_cursor(
-                "Results of write requests cannot be paged because paging repeats the request.",
-                tool_name=tool_id,
-            )
-        measured = serialized_size(payload)
-        budget = tool_result_budget()
-        if measured <= budget:
-            return payload
-        failure = budget_failure(tool_name=tool_id, measured=measured, limit=budget)
-        report_budget_failure_result(
-            failure,
-            tool_name=tool_id,
-            component="package_tool_adapter",
-        )
-        return failure
     body = payload if isinstance(payload, dict) else {"data": payload}
+    if result_ref is not None:
+        # An outer envelope avoids reserving/overwriting provider response keys.
+        body = {"data": payload, "result_ref": result_ref}
     try:
         bounded = bounded_json_result(
             body,
@@ -981,6 +997,8 @@ def _bounded_package_result(
             expected_sha256=view_arguments.get("result_sha256"),
             detail_path=view_arguments.get("detail_path"),
             detail_cursor=view_arguments.get("detail_cursor"),
+            continuation_args={"result_ref": result_ref} if result_ref else None,
+            **({"identity_keys": ("result_ref",)} if result_ref else {}),
         )
     except ValueError as exc:
         return invalid_cursor(str(exc), tool_name=tool_id)
@@ -991,6 +1009,12 @@ def _bounded_package_result(
             limit=exc.limit,
             field=view_arguments.get("detail_path"),
         )
+        if result_ref is not None:
+            failure.update({
+                "result_ref": result_ref,
+                "operation_status": "response_captured",
+                "message": "The write returned and its response was captured. Do not repeat the write; read detail_path='data' with result_ref.",
+            })
         report_budget_failure_result(
             failure,
             tool_name=tool_id,

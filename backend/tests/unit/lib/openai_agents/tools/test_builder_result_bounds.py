@@ -164,3 +164,56 @@ def test_invalid_builder_offset_is_explicit(offset):
     assert page["error_code"] == "invalid_result_cursor"
     assert page["candidates"] == []
     assert page["candidate_count"] == 5
+
+
+@pytest.mark.parametrize("module_name,tool_name", [
+    ("agr_curation", "find_staged_gene_expression_observations"),
+    ("gene_builder_tools", "find_staged_gene_mention_evidence"),
+    ("allele_builder_tools", "find_staged_allele_observations"),
+    ("phenotype_builder_tools", "find_staged_phenotype_observations"),
+    ("disease_builder_tools", "find_staged_disease_observations"),
+    ("go_builder_tools", "find_staged_go_recommendations"),
+    ("generic_builder_tools", "find_staged_generic_objects"),
+])
+@pytest.mark.parametrize("budget", [2048, 8192])
+def test_all_find_tools_read_exact_summary_and_reject_stale_or_other_workspace(monkeypatch, module_name, tool_name, budget):
+    import importlib
+    import json
+
+    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", str(budget))
+    module = importlib.import_module(f"agr_ai_curation_alliance.tools.{module_name}")
+    for name in vars(module):
+        if name.startswith("_emit_") and name.endswith("_builder_event"):
+            monkeypatch.setattr(module, name, lambda *args, **kwargs: None)
+    invoke = getattr(module, f"_{tool_name}_impl")
+    workspace = _workspace(1)
+    errors = [{"field_path": f"field_{i}", "message": UNICODE_NOTE * 25} for i in range(50)]
+    workspace.get_candidate("cand-0000").validation_errors = errors
+    token = builder.set_active_extraction_builder_workspace(workspace)
+    try:
+        result = invoke(candidate_id="cand-0000")
+        assert serialized_size(result) <= budget
+        descriptor = result.data["candidates"][0]["detail_read"]
+        parts = []
+        while True:
+            result = invoke(**descriptor)
+            assert serialized_size(result) <= budget
+            detail = result.data["detail"]
+            parts.append(detail["content"])
+            if detail["complete"]:
+                break
+            descriptor["detail_cursor"] = detail["next_cursor"]
+        restored = json.loads("".join(parts))
+        assert restored["validation_errors"] == errors
+        assert restored["staged_fields"] == {"keys": ["where_expressed_statement"], "field_count": 1}
+        workspace.get_candidate("cand-0000").validation_errors = []
+        assert invoke(**descriptor).data["error_code"] == "stale_result_cursor"
+        assert invoke(candidate_id="missing", detail_path="candidate").data["error_code"] == "invalid_result_cursor"
+        assert invoke(candidate_id="cand-0000", detail_path="candidate", detail_cursor=-1).data["error_code"] == "invalid_result_cursor"
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)
+    token = builder.set_active_extraction_builder_workspace(_workspace(0))
+    try:
+        assert invoke(**descriptor).data["error_code"] == "invalid_result_cursor"
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)

@@ -1,6 +1,8 @@
 """Tests for Groq JSON+tools compatibility helpers in streaming_tools."""
 
 from types import SimpleNamespace
+from dataclasses import dataclass
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import BaseModel
@@ -18,6 +20,12 @@ from src.lib.openai_agents.streaming_tools import (
     _should_use_groq_tool_json_compat,
     _try_validate_json_output,
 )
+
+
+@dataclass
+class _Adapter:
+    name: str
+    on_invoke_tool: object
 
 
 class _Envelope(BaseModel):
@@ -199,7 +207,7 @@ def test_required_tool_failure_message_is_none_when_required_tool_called(monkeyp
 
 
 def test_adapt_tools_for_groq_uses_package_declared_adapter(monkeypatch):
-    replacement = SimpleNamespace(name="demo_lookup")
+    replacement = _Adapter("demo_lookup", AsyncMock(return_value={"status": "ok"}))
     monkeypatch.setattr(
         "src.lib.openai_agents.streaming_tools._tool_provider_adapter_factories",
         lambda adapter_key: {"demo_lookup": lambda: replacement},
@@ -211,12 +219,12 @@ def test_adapt_tools_for_groq_uses_package_declared_adapter(monkeypatch):
 
     adapted = _adapt_tools_for_groq_schema_constraints(tools)
 
-    assert adapted[0] is replacement
+    assert adapted[0].name == replacement.name
     assert getattr(adapted[1], "name", None) == "search_document"
 
 
 def test_adapt_tools_with_provider_adapter_is_tool_name_agnostic(monkeypatch):
-    replacement = SimpleNamespace(name="museum_catalog_lookup")
+    replacement = _Adapter("museum_catalog_lookup", AsyncMock(return_value={"status": "ok"}))
     monkeypatch.setattr(
         "src.lib.openai_agents.streaming_tools._tool_provider_adapter_factories",
         lambda adapter_key: {"museum_catalog_lookup": lambda: replacement},
@@ -227,7 +235,8 @@ def test_adapt_tools_with_provider_adapter_is_tool_name_agnostic(monkeypatch):
         "demo_provider_schema",
     )
 
-    assert adapted == [replacement]
+    assert len(adapted) == 1
+    assert adapted[0].name == replacement.name
 
 
 def test_provider_adapter_factories_load_shipped_package_registry_by_default(
@@ -366,3 +375,24 @@ def test_tool_efficiency_instruction_requires_package_declared_text(monkeypatch)
 
     with pytest.raises(ValueError, match="no instruction is declared"):
         _build_tool_efficiency_instruction(agent, query)
+
+
+@pytest.mark.asyncio
+async def test_provider_adapter_reports_budget_failure_once_and_skips_full_capture(monkeypatch):
+    from src.lib.agent_studio import catalog_service
+    from src.lib.openai_agents.tool_result_bounds import budget_failure, full_tool_results_requested
+
+    payload = budget_failure(tool_name="demo", measured=99999, limit=2048)
+    replacement = _Adapter("demo", AsyncMock(return_value=payload))
+    monkeypatch.setattr(
+        "src.lib.openai_agents.streaming_tools._tool_provider_adapter_factories",
+        lambda _: {"demo": lambda: replacement},
+    )
+    reports = []
+    monkeypatch.setattr(catalog_service, "_report_inline_package_result", lambda *args: reports.append(args))
+    tool = _adapt_tools_with_provider_adapter([SimpleNamespace(name="demo")], "test")[0]
+    assert await tool.on_invoke_tool(None, "{}") is payload
+    assert reports == [("demo", payload)]
+    with full_tool_results_requested():
+        assert await tool.on_invoke_tool(None, "{}") is payload
+    assert len(reports) == 1

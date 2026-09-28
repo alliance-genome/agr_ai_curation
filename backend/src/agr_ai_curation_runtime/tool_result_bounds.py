@@ -23,7 +23,9 @@ import hashlib
 import json
 import logging
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,32 @@ TOOL_RESULT_MAX_BYTES_DEFAULT = 32768
 # The compact failure and descriptors must always fit; below this the contract
 # cannot be expressed at all, so configuration is clamped up to it.
 TOOL_RESULT_MIN_BYTES = 2048
+
+
+_FULL_TOOL_RESULTS_REQUESTED: ContextVar[bool] = ContextVar(
+    "full_tool_results_requested",
+    default=False,
+)
+
+
+@contextmanager
+def full_tool_results_requested() -> Iterator[None]:
+    """Let an application-side capture receive a lookup's complete result.
+
+    Validator lookup capture stores the complete provider response and then
+    serves the model its own bounded view; the package adapter must not page
+    the result underneath it.
+    """
+
+    token = _FULL_TOOL_RESULTS_REQUESTED.set(True)
+    try:
+        yield
+    finally:
+        _FULL_TOOL_RESULTS_REQUESTED.reset(token)
+
+
+def full_tool_results_are_requested() -> bool:
+    return _FULL_TOOL_RESULTS_REQUESTED.get()
 
 
 class ToolResultBudgetError(RuntimeError):
