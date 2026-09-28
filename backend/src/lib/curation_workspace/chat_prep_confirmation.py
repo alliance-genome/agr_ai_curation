@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from typing import Literal
 
@@ -19,6 +20,8 @@ from src.lib.observability.runtime import report_runtime_exception, sanitized_ru
 from src.lib.redis_client import get_redis
 from src.schemas.curation_prep import CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import CurationExtractionSourceKind
+
+logger = logging.getLogger(__name__)
 
 
 def _reply(status: str, message: str, **extra) -> str:
@@ -121,7 +124,10 @@ async def prepare_from_chat(
             )
         except Exception:
             # Reporting must not change the fail-closed confirmation response.
-            pass
+            logger.warning(
+                "Chat preparation confirmation store failure reporting unavailable",
+                extra={"sentry_skip_event": True},
+            )
         return _reply("unavailable", "The preparation scope could not be verified. Nothing was prepared; retry with a fresh preview.")
     except (ValueError, KeyError):
         return _reply("unavailable", "The preparation scope could not be verified. Nothing was prepared; retry with a fresh preview.")

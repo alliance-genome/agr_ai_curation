@@ -182,14 +182,14 @@ async def test_expired_or_unavailable_confirmation_store_fails_closed(context, m
 @pytest.mark.parametrize("operation", ["connect", "set", "get", "delete", "eval"])
 @pytest.mark.parametrize("reporting_fails", [False, True])
 async def test_redis_failure_reports_sanitized_error_and_fails_closed(
-    context, monkeypatch, operation, reporting_fails,
+    context, monkeypatch, caplog, operation, reporting_fails,
 ):
     await call()
     session_key = next(iter(context.redis.values))
     raw_error = ConnectionError(
         f"redis://:private-password@host/0 {session_key} private-result-content"
     )
-    report = Mock(side_effect=RuntimeError("reporting failed") if reporting_fails else None)
+    report = Mock(side_effect=RuntimeError(f"reporting failed: {raw_error}") if reporting_fails else None)
     monkeypatch.setattr(prep, "report_runtime_exception", report)
     failing = AsyncMock(side_effect=raw_error)
     if operation == "connect":
@@ -219,11 +219,23 @@ async def test_redis_failure_reports_sanitized_error_and_fails_closed(
     }
     for sensitive in (session_key, "private-password", "private-result-content"):
         assert sensitive not in repr(report.call_args)
+        assert sensitive not in caplog.text
+    if reporting_fails:
+        record, = caplog.records
+        assert record.levelname == "WARNING"
+        assert record.getMessage() == "Chat preparation confirmation store failure reporting unavailable"
+        assert record.sentry_skip_event is True
+        assert record.args == ()
+        assert record.exc_info is None
+        assert record.exc_text is None
+        assert record.stack_info is None
+    else:
+        assert not caplog.records
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", ["expired", "rejected", "scope_changed", "invalid_json", "missing_key"])
-async def test_expected_confirmation_rejections_remain_quiet(context, monkeypatch, scenario):
+async def test_expected_confirmation_rejections_remain_quiet(context, monkeypatch, caplog, scenario):
     report = Mock()
     monkeypatch.setattr(prep, "report_runtime_exception", report)
     await call()
@@ -243,3 +255,4 @@ async def test_expected_confirmation_rejections_remain_quiet(context, monkeypatc
     )
     context.run.assert_not_called()
     report.assert_not_called()
+    assert not caplog.records
