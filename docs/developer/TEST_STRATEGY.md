@@ -41,7 +41,9 @@ This does not change the live release validation sequence.
 
 Backend test images, the frontend `nginx-runtime-base` contract image, and the
 TraceReview test image use separate GitHub Actions BuildKit cache scopes.
-Registry metadata requests can still occur on cached builds; caching does not
+The frontend base uses the Docker Official Images ECR mirror
+(`public.ecr.aws/docker/library/nginx:alpine`), matching the Node builder
+namespace. Registry metadata requests can still occur on cached builds; caching does not
 guarantee availability during a registry outage.
 
 `scripts/testing/ci_image_scope.py` selects the nginx runtime contract from the
