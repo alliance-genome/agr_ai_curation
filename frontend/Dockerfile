@@ -44,7 +44,8 @@ RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") && \
 
 # Stage 2: Configure the Nginx runtime independently so the rendered proxy
 # contract can be tested without rebuilding the frontend assets.
-FROM public.ecr.aws/nginx/nginx:alpine AS nginx-runtime-base
+# Use the upstream official image; ECR metadata requests can exhaust its data limit.
+FROM docker.io/library/nginx:alpine AS nginx-runtime-base
 
 ENV PDF_MAX_FILE_SIZE_BYTES=524288000
 ENV VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=3
