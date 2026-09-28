@@ -32,6 +32,7 @@ from src.lib.observability.payload_contracts import (
     PayloadContractViolation,
     report_payload_contract_violation,
 )
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.observability.sentry import (
     gen_ai_invoke_agent_span,
     set_redacted_ai_span_data,
@@ -616,7 +617,22 @@ Common abstract locations when not explicitly labeled:
         return sections, abstract_section_title, raw_response
 
     except Exception as e:
-        logger.error('[HIERARCHY] LLM hierarchy resolution failed: %s', e, exc_info=True)
+        if not getattr(e, "_ai_curation_sentry_captured", False):
+            try:
+                report_runtime_exception(
+                    sanitized_runtime_error("LLM hierarchy resolution failed"),
+                    component="hierarchy_resolution",
+                    operation="resolve_hierarchy",
+                    context={"exception_type": type(e).__name__},
+                )
+            except Exception:
+                # Observability must not prevent the document's flat fallback.
+                pass
+        logger.error(
+            '[HIERARCHY] LLM hierarchy resolution failed (%s)',
+            type(e).__name__,
+            extra={"sentry_skip_event": True},
+        )
         return [], None, None
 
 
