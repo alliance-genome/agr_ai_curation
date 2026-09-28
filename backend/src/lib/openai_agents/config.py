@@ -3826,6 +3826,15 @@ def get_flow_output_chat_max_chars() -> int:
     return max(1_000, _get_env_int_with_fallback("FLOW_OUTPUT_CHAT_MAX_CHARS", 4_000_000))
 
 
+def get_flow_output_chat_max_sections() -> int:
+    """Maximum independently projected sections per chat report (default 12).
+
+    Increase FLOW_OUTPUT_CHAT_MAX_SECTIONS for larger reports. Aggregate rows
+    and characters remain bounded by the existing projection/chat ceilings.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_OUTPUT_CHAT_MAX_SECTIONS", 12))
+
+
 def get_flow_output_chat_notes_max_chars() -> int:
     """Max chars of formatter-written notes appended to a chat table (FLOW_OUTPUT_CHAT_NOTES_MAX_CHARS).
 

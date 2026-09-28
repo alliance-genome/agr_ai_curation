@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import json
 import re
 from collections import Counter
@@ -55,6 +56,7 @@ from src.lib.observability.payload_contracts import (
 from src.lib.openai_agents.config import (
     get_flow_chat_max_rows,
     get_flow_output_chat_max_chars,
+    get_flow_output_chat_max_sections,
     get_flow_output_chat_notes_max_chars,
     get_flow_output_projection_preview_limit,
     get_flow_projection_max_field_examples,
@@ -1279,7 +1281,12 @@ def _capabilities_payload(
                 "table (default), bullets (one line per row) or sections (one heading per "
                 "row). group_by splits rows into headed groups that share the same columns; "
                 "use it for 'separate sections' split by a value. Sections needing "
-                "different columns are not supported: call formatter_cannot_complete."
+                "different columns use report_json: {sections: [{heading: string, plan: projection_object}]}. "
+                "Each section independently selects source keys, columns and filters from the saved bundle. "
+                "Preview each section's plan with preview_output_projection; validate the whole report "
+                "with validate_output_projection(report_json=...). Finalize once with report_json "
+                "instead of plan_json. Fixed selected-field layouts must keep their single plan. "
+                "A valid empty section states no rows matched; a missing source is not an empty result."
             ),
         }[output_format],
         "source_refs": source_refs,
@@ -1288,6 +1295,9 @@ def _capabilities_payload(
             "max_projection_rows": _MAX_PROJECTION_ROWS,
             "default_preview_rows": _DEFAULT_PREVIEW_LIMIT,
             "default_inspection_rows": _MAX_CHAT_ROWS,
+            **({"max_report_sections": get_flow_output_chat_max_sections(),
+                "max_report_total_rows": get_flow_projection_max_rows(),
+                "max_report_chars": get_flow_output_chat_max_chars()} if output_format == "chat" else {}),
             "max_tool_response_chars": get_output_tool_max_response_chars(),
             "max_value_read_chars": get_output_tool_value_read_chars(),
         },
@@ -1537,6 +1547,79 @@ def build_output_formatter_tools(
                 "Formatter tools cannot produce literal-only output without saved source rows."
             )
         return errors, warnings
+
+    def render_chat_report(report_json: str) -> tuple[str, dict[str, Any]]:
+        """Validate/render all sections without delivering any partial report."""
+        if not is_chat:
+            raise ValueError("Reports are supported only for chat output.")
+        if locked_plan is not None:
+            raise ValueError("The curator selected fixed output fields. Use the exact configured single plan.")
+        raw = json.loads(report_json)
+        if not isinstance(raw, dict) or set(raw) != {"sections"}:
+            raise ValueError('Chat report must be an object containing only "sections".')
+        sections = raw["sections"]
+        if not isinstance(sections, list) or not sections:
+            raise ValueError("Chat report sections must be a nonempty list.")
+        section_limit = get_flow_output_chat_max_sections()
+        if len(sections) > section_limit:
+            raise ValueError(f"Chat report exceeds FLOW_OUTPUT_CHAT_MAX_SECTIONS ({section_limit}).")
+        # Resolve and validate every plan before rendering. Use the same strict
+        # payload parser and formatter constraints as single projections.
+        plans: list[tuple[str, FlowOutputProjectionPlan]] = []
+        for index, section in enumerate(sections, 1):
+            try:
+                if not isinstance(section, dict) or set(section) != {"heading", "plan"}:
+                    raise ValueError('Each section requires exactly "heading" and "plan".')
+                heading = section["heading"]
+                if not isinstance(heading, str) or not heading.strip():
+                    raise ValueError("Section heading must be nonempty text.")
+                if len(heading) > get_flow_output_chat_notes_max_chars() or "\n" in heading or "\r" in heading:
+                    raise ValueError("Section heading must be one line within FLOW_OUTPUT_CHAT_NOTES_MAX_CHARS.")
+                if not isinstance(section["plan"], dict):
+                    raise ValueError("Section plan must be a projection object.")
+                plan = resolve_final_plan(json.dumps(section["plan"]))
+                errors, _ = final_plan_errors(plan)
+                if errors:
+                    raise ValueError("; ".join(errors))
+                plans.append((heading.strip(), plan))
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"Section {index}: {exc}") from exc
+
+        contents: list[str] = []
+        summaries: list[dict[str, Any]] = []
+        total_rows = 0
+        total_chars = 0
+        for index, (heading, plan) in enumerate(plans, 1):
+            try:
+                projection = finalize_output_projection(bundle, plan)
+            except FlowOutputOperationalCeilingError:
+                raise
+            except Exception as exc:
+                raise ValueError(f"Section {index}: {exc}") from exc
+            total_rows += projection.total_count
+            row_limit = get_flow_projection_max_rows()
+            if total_rows > row_limit:
+                raise FlowOutputOperationalCeilingError(
+                    f"Chat report exceeds the aggregate {row_limit}-row ceiling. No partial output was delivered.",
+                    measured=total_rows, limit=row_limit, setting="FLOW_PROJECTION_MAX_ROWS", unit="rows",
+                )
+            # Headings are labels, never model-authored Markdown/HTML content.
+            safe_heading = re.sub(r"([\\`*_{}\[\]()#+.!|>~-])", r"\\\1", html.escape(heading))
+            content = f"## {safe_heading}\n\n{projection.chat_output or ''}"
+            total_chars += len(content) + (2 if contents else 0)
+            char_limit = get_flow_output_chat_max_chars()
+            if total_chars > char_limit:
+                raise FlowOutputOperationalCeilingError(
+                    f"Chat report exceeds the {char_limit}-character ceiling. No partial output was delivered.",
+                    measured=total_chars, limit=char_limit, setting="FLOW_OUTPUT_CHAT_MAX_CHARS", unit="chars",
+                )
+            contents.append(content)
+            summaries.append({"section": index, "heading": heading, **_projection_summary(projection)})
+        if not total_rows:
+            raise ValueError("Report matched no saved rows; inspect the bundle or call formatter_cannot_complete.")
+        return "\n\n".join(contents), {
+            "section_count": len(plans), "total_count": total_rows, "sections": summaries,
+        }
 
     saver = save_projected_output
     finalization_lock = asyncio.Lock()
@@ -1972,14 +2055,20 @@ def build_output_formatter_tools(
     @function_tool(
         name_override="validate_output_projection",
         description_override=(
-            "Validate a projection plan over saved bundle fields. Empty plan_json "
+            "Validate a projection plan over saved bundle fields, or a complete chat report "
+            "with report_json={sections: [{heading, plan}]}, exclusive of plan_json/cursor. Empty plan_json "
             "validates the default (or curator-fixed) plan. The format is forced to "
             "this formatter's output type. Extra raw-content keys are rejected."
         ),
         strict_mode=False,
     )
-    async def _validate_output_projection(plan_json: str = "", cursor: str = "") -> str:
+    async def _validate_output_projection(plan_json: str = "", cursor: str = "", report_json: str = "") -> str:
         try:
+            if report_json.strip():
+                if plan_json.strip() or cursor:
+                    raise ValueError("Use report_json alone for complete report validation; preview individual section plans separately.")
+                _, summary = render_chat_report(report_json)
+                return respond("validate_output_projection", {"status": "ok", "report_summary": summary})
             plan = resolve_final_plan(plan_json)
             return plan_response("validate_output_projection", plan, cursor)
         except Exception as exc:
@@ -2226,13 +2315,14 @@ def build_output_formatter_tools(
         name_override="finalize_chat_output",
         description_override=(
             "Finalize a projection over all saved bundle rows and deliver the rendered "
-            "chat table to the curator exactly once. Empty plan_json uses the validated "
+            "chat report to the curator exactly once. For independent tables pass report_json "
+            "with sections [{heading, plan}] instead of plan_json. Empty plan_json uses the validated "
             "default projection; notes adds a brief caveat below the table. Returns a "
             "compact receipt, never the table."
         ),
         strict_mode=False,
     )
-    async def _finalize_chat_output(plan_json: str = "", notes: str = "") -> str:
+    async def _finalize_chat_output(plan_json: str = "", notes: str = "", report_json: str = "") -> str:
         nonlocal finalized_chat_receipt
 
         def chat_failure(payload: dict[str, Any]) -> str:
@@ -2271,33 +2361,43 @@ def build_output_formatter_tools(
             if note_errors:
                 return respond("finalize_chat_output", {"status": "invalid", "errors": note_errors})
             try:
-                plan = resolve_final_plan(plan_json)
-                errors, warnings = final_plan_errors(plan)
-                if errors:
-                    return respond(
-                        "finalize_chat_output",
-                        {
-                            "status": "invalid",
-                            "errors": [_bounded_text(error) for error in errors[:_MAX_LIST_ITEMS]],
-                            "error_count": len(errors),
-                            "warnings": [
-                                _bounded_text(warning) for warning in warnings[:_MAX_LIST_ITEMS]
-                            ],
-                        },
-                    )
-                projection = finalize_output_projection(bundle, plan)
-                if projection.total_count < 1 and locked_plan is None:
-                    return respond(
-                        "finalize_chat_output",
-                        {
-                            "status": "invalid",
-                            "errors": [
-                                "Projection matched no saved rows; call formatter_cannot_complete "
-                                "or inspect the saved bundle before trying again."
-                            ],
-                            "projection_summary": _projection_summary(projection),
-                        },
-                    )
+                if report_json.strip():
+                    if plan_json.strip():
+                        raise ValueError("Supply either plan_json or report_json, not both.")
+                    content, report_summary = render_chat_report(report_json)
+                    receipt_summary = {"report_summary": report_summary}
+                    row_count = report_summary["total_count"]
+                else:
+                    plan = resolve_final_plan(plan_json)
+                    errors, warnings = final_plan_errors(plan)
+                    if errors:
+                        return respond(
+                            "finalize_chat_output",
+                            {
+                                "status": "invalid",
+                                "errors": [_bounded_text(error) for error in errors[:_MAX_LIST_ITEMS]],
+                                "error_count": len(errors),
+                                "warnings": [
+                                    _bounded_text(warning) for warning in warnings[:_MAX_LIST_ITEMS]
+                                ],
+                            },
+                        )
+                    projection = finalize_output_projection(bundle, plan)
+                    if projection.total_count < 1 and locked_plan is None:
+                        return respond(
+                            "finalize_chat_output",
+                            {
+                                "status": "invalid",
+                                "errors": [
+                                    "Projection matched no saved rows; call formatter_cannot_complete "
+                                    "or inspect the saved bundle before trying again."
+                                ],
+                                "projection_summary": _projection_summary(projection),
+                            },
+                        )
+                    content = str(projection.chat_output or "")
+                    receipt_summary = {"projection_summary": _projection_summary(projection)}
+                    row_count = projection.total_count
             except FlowOutputOperationalCeilingError as exc:
                 diagnostic = _report_delivery_failure(
                     message=str(exc),
@@ -2322,7 +2422,6 @@ def build_output_formatter_tools(
             except Exception as exc:
                 return respond("finalize_chat_output", {"status": "invalid", "errors": [str(exc)]})
 
-            content = str(projection.chat_output or "")
             if note_text:
                 content = f"{content}\n\n{note_text}"
             content_limit = get_flow_output_chat_max_chars()
@@ -2341,7 +2440,7 @@ def build_output_formatter_tools(
                     measured=len(content),
                     limit=content_limit,
                     setting="FLOW_OUTPUT_CHAT_MAX_CHARS",
-                    correlation={"row_count": projection.total_count},
+                    correlation={"row_count": row_count},
                 )
                 return chat_failure(
                     {
@@ -2359,7 +2458,7 @@ def build_output_formatter_tools(
                 "formatter_agent_id": formatter_agent_id,
                 "output_chars": len(content),
                 "notes_included": bool(note_text),
-                "projection_summary": _projection_summary(projection),
+                **receipt_summary,
             }
             try:
                 delivered = dict(

@@ -502,6 +502,27 @@ describe('Chat persistence', () => {
     expect(renderedOutput.match(/Allele branch answer\./g)).toHaveLength(1)
   })
 
+  it('renders independently shaped report tables once from one typed output', async () => {
+    const report = '## Genes\n\n| Gene |\n| --- |\n| agrn |\n\n## Phenotypes\n\n| Observation | Evidence |\n| --- | --- |\n| Reported finding | Paper quote |'
+    const outputEvent = {
+      type: 'CHAT_OUTPUT_READY', session_id: 'session-1', turn_id: 'report-turn',
+      details: { formatter_node_id: 'report', output: report },
+    }
+    const view = renderChat({
+      sessionId: 'session-1', eventStreamVersion: 5, processedEventCount: 0,
+      events: [
+        { type: 'RUN_STARTED', session_id: 'session-1', turn_id: 'report-turn' },
+        outputEvent, outputEvent,
+      ],
+    })
+    await waitFor(() => expect(view.container.querySelector('.message-content')?.textContent).toBe(report))
+    expect(view.container.querySelectorAll('.assistant-message')).toHaveLength(1)
+    view.unmount()
+    const restored = renderChat({ sessionId: 'session-1' })
+    await waitFor(() => expect(restored.container.querySelector('.message-content')?.textContent).toBe(report))
+    expect(restored.container.querySelectorAll('.assistant-message')).toHaveLength(1)
+  })
+
   it('does not delete stored messages when session id mismatches', () => {
     localStorage.setItem(chatStorageKeys.sessionId, 'session-2')
     localStorage.setItem(
