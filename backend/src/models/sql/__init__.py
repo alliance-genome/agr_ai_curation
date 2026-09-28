@@ -4,6 +4,7 @@ from .batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from .benchmark import (
     BenchmarkCell,
     BenchmarkCellStatus,
+    BenchmarkDocumentConversion,
     BenchmarkEvent,
     BenchmarkInputSnapshot,
     BenchmarkInvocation,
@@ -52,6 +53,7 @@ __all__ = [
     "BatchDocumentStatus",
     "BenchmarkCell",
     "BenchmarkCellStatus",
+    "BenchmarkDocumentConversion",
     "BenchmarkEvent",
     "BenchmarkInputSnapshot",
     "BenchmarkInvocation",

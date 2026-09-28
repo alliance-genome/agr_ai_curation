@@ -363,6 +363,128 @@ async def test_parse_threads_merged_page_provenance_into_elements_and_receipt(
     assert observations[0]["duration_ms"] >= 0
 
 
+def _stub_successful_extraction(monkeypatch, parser, markdown):
+    class _SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def _submit_extraction(*_args, **_kwargs):
+        return {"process_id": "proc-artifacts"}
+
+    async def _poll_until_complete(**_kwargs):
+        return {"status": "complete"}
+
+    async def _download_markdown(*_args, **_kwargs):
+        return markdown
+
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.aiohttp.ClientSession",
+        lambda timeout: _SessionContext(),
+    )
+    monkeypatch.setattr(parser, "_submit_extraction", _submit_extraction)
+    monkeypatch.setattr(parser, "_poll_until_complete", _poll_until_complete)
+    monkeypatch.setattr(parser, "_download_markdown", _download_markdown)
+
+
+@pytest.mark.asyncio
+async def test_parse_without_saving_artifacts_returns_elements_and_writes_nothing(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "false")
+    storage_root = tmp_path / "pdf_storage"
+    storage_root.mkdir()
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: storage_root)
+    parser = PDFXParser()
+    _stub_successful_extraction(monkeypatch, parser, "# Results\n\nBody\n")
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    result = await parser.parse_pdf_document(
+        pdf_path,
+        "doc-no-artifacts",
+        "user-no-artifacts",
+        save_artifacts=False,
+    )
+
+    assert [element["text"] for element in result["elements"]] == ["Results", "Body"]
+    assert result["pdfx_json_path"] is None
+    assert result["processed_json_path"] is None
+    assert result["page_provenance"] is None
+    assert list(storage_root.rglob("*")) == []
+
+
+@pytest.mark.asyncio
+async def test_parse_without_saving_artifacts_returns_page_provenance_receipt(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "true")
+    storage_root = tmp_path / "pdf_storage"
+    storage_root.mkdir()
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: storage_root)
+    receipt = {
+        "schema": "pdfx-merged-page-provenance",
+        "contract_version": "merged-page-provenance-v1",
+        "record_sha256": "b" * 64,
+        "expected_page_count": 1,
+        "range_count": 1,
+        "summary": {},
+    }
+
+    class _Provenance:
+        def page_for_byte_offset(self, byte_offset):
+            del byte_offset
+            return 1
+
+        def receipt(self):
+            return receipt
+
+    async def _download_page_provenance(*_args, **_kwargs):
+        return _Provenance()
+
+    parser = PDFXParser()
+    _stub_successful_extraction(monkeypatch, parser, "# Results\n\nBody\n")
+    monkeypatch.setattr(parser, "_download_page_provenance", _download_page_provenance)
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    result = await parser.parse_pdf_document(
+        pdf_path,
+        "doc-receipt",
+        "user-receipt",
+        save_artifacts=False,
+    )
+
+    assert result["page_provenance"] == receipt
+    assert list(storage_root.rglob("*")) == []
+
+
+@pytest.mark.asyncio
+async def test_parse_saves_artifacts_by_default(parser_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "false")
+    storage_root = tmp_path / "pdf_storage"
+    storage_root.mkdir()
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: storage_root)
+    parser = PDFXParser()
+    _stub_successful_extraction(monkeypatch, parser, "# Results\n\nBody\n")
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    result = await parser.parse_pdf_document(pdf_path, "doc-default", "user-default")
+
+    assert result["pdfx_json_path"] == "user-default/pdfx_json/doc-default.json"
+    assert result["processed_json_path"] == "user-default/processed_json/doc-default.json"
+    assert (storage_root / result["pdfx_json_path"]).is_file()
+    processed = json.loads((storage_root / result["processed_json_path"]).read_text())
+    assert processed == result["elements"]
+
+
 @pytest.mark.parametrize(
     ("failure", "expected_status"),
     [

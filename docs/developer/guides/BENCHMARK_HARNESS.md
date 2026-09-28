@@ -78,6 +78,93 @@ route verifies the caller-supplied digest and document format and stores the
 original bytes without normalization. Repeating the same owner/content-type/
 content combination reuses the immutable receipt.
 
+### Converting papers into frozen documents
+
+`POST /api/v1/benchmarks/sources/document-conversions` turns a paper into
+AI Curation pipeline elements and freezes them as an `application/json`
+snapshot that the calling service's jobs can use with the `frozen_snapshot`
+resolver. It requires `benchmark:source:read` and a verified curator in
+`X-Benchmark-Curator-Authorization`, the same human check used for job
+submission. Delegated source credentials are rejected.
+
+- PDF: send the raw bytes as `application/pdf` with
+  `X-Benchmark-Content-Digest: sha256:<hex>`. The bytes must match the digest,
+  start with `%PDF-`, fit within `BENCHMARK_MAX_INPUT_BYTES`, and arrive within
+  `BENCHMARK_SOURCE_TIMEOUT_SECONDS`.
+- Source reference: send `application/json`
+  `{"source_reference": "<identifier>"}`, where the identifier names a paper
+  in the deployment's configured document-source provider. It must be
+  non-empty, at most 256 characters, have no leading or trailing whitespace,
+  and contain no control characters. AI Curation does not check the
+  identifier's format itself: the configured provider resolves it, and an
+  identifier the provider does not know fails the conversion with `not_found`.
+- Both require an `Idempotency-Key` of at most 255 characters. Keys are scoped
+  to the calling service. Repeating a key with the same input and curator
+  returns the same conversion without starting it again; reusing it for
+  different input or another curator returns 409.
+
+The response is `202 {"conversion_id", "status"}` with a `Location` header.
+Poll `GET /api/v1/benchmarks/sources/document-conversions/{conversion_id}` for
+`status` (`queued`, `running`, `succeeded`, `failed`), `error`
+(`{"code", "message"}` when failed), `snapshot` (the same receipt the snapshot
+routes return, when succeeded), `conversion_identity`, `created_at`, and
+`completed_at`. Only the service that started a conversion can read it; other
+callers get 404. Request errors use the source error envelope, for example
+`invalid_reference`, `invalid_document`, `oversize_payload`, `conflict`, and
+`not_found`.
+
+Conversion runs in the background and is never retried; a failed conversion
+stays failed, and the caller starts a new one with a new key. Failure codes
+include `not_found` (the provider does not know the reference, or the paper
+has no usable text or PDF), `access_denied`,
+`ambiguous_source`, `source_unavailable`, `extraction_failed`,
+`invalid_document`, `oversize_payload` (converted elements exceed
+`BENCHMARK_MAX_INPUT_BYTES`), `storage_unavailable`, `conversion_failed`, and
+`interrupted`. Queued or running conversions older than
+`BENCHMARK_DOCUMENT_CONVERSION_STALE_SECONDS` are marked `interrupted` at API
+startup, before each new conversion, and whenever a conversion's status is
+read, so a conversion lost to a restart shows as failed on the next poll.
+
+`conversion_identity` records what produced the elements: the parser and its
+settings, the AI Curation application version (`APP_VERSION`), the page
+provenance receipt for PDF extraction, and for source references the
+configured provider's ID (`source_provider`), the provider artifact whose bytes
+were converted (`source_artifact`: ID and checksum), any figure metadata
+artifacts used with main text (`source_figure_metadata`), and the access policy
+of the provider source PDF the curator's groups were authorized against
+(`source_access`: artifact ID, scope and group IDs). `parser` is `pdfx` when a
+PDF was extracted and `source_main_text` when the provider's main text was
+used.
+The snapshot `source_version` is the SHA-256 of that identity, so it changes
+when the application version changes.
+
+How this differs from a curator's document import:
+
+- The snapshot is owned by the calling service, not the curator. The curator
+  is recorded on the conversion and in the snapshot reference, so the same
+  paper converted for two curators gives two snapshots that share one stored
+  blob.
+- Nothing is added to the curator's document library, and no per-user parser
+  artifacts are written.
+- For source references, AI Curation calls the configured document source
+  with its own configured credentials and uses the curator's groups to decide which
+  restricted PDFs may be read. It uses the provider's main text when present;
+  otherwise it parses the selected main PDF with PDFX. It never asks the
+  provider to convert a paper, and when the provider's own conversion is still
+  running or has failed it parses the PDF instead of waiting or stopping.
+- Conversion uses the deployment's configured document-source provider, as
+  curator imports do.
+
+Trust boundary for group-restricted source papers: access is checked once, when
+the conversion runs, against the requesting curator's groups. After that the
+snapshot, and its content through
+`GET /api/v1/benchmarks/sources/snapshots/{snapshot_id}/content` and the
+`frozen_snapshot` resolver, is readable by the owning service without any
+further group check. The owning service must therefore restrict reuse of an
+source-reference conversion to the curator who requested it (recorded as
+`curator_subject` in the snapshot reference). `source_access` in the conversion
+identity records which access policy authorized the conversion.
+
 The snapshot store may use the durable filesystem backend or a private,
 versioned S3 bucket configured with `BENCHMARK_SNAPSHOT_STORE_BACKEND` and the
 `BENCHMARK_SNAPSHOT_S3_*` settings. This S3 backend stores frozen input bytes;

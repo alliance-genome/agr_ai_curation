@@ -107,6 +107,37 @@ class ProviderMarkdownIngestionResult:
     validation_warnings: list[str] = field(default_factory=list)
 
 
+def provider_markdown_to_pipeline_elements(
+    markdown: str,
+    provider_figure_metadata: tuple[Mapping[str, Any], ...] = (),
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate provider main-text Markdown and convert it to pipeline elements.
+
+    Returns the elements and non-blocking validation warnings. This step has no
+    storage or indexing side effects.
+    """
+
+    warnings = _validate_provider_markdown(markdown)
+    enriched_markdown = append_provider_figure_metadata_markdown(
+        markdown,
+        provider_figure_metadata,
+    )
+    element_markdown = _strip_markdown_image_assets(enriched_markdown)
+
+    from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
+
+    elements = markdown_to_pipeline_elements(element_markdown)
+    apply_provider_figure_page_provenance(
+        elements,
+        provider_figure_metadata,
+    )
+    if not elements:
+        raise DocumentSourceMarkdownValidationError(
+            "Provider Markdown produced no usable pipeline elements"
+        )
+    return elements, warnings
+
+
 @costed_document_processing
 async def ingest_provider_markdown_document(
     request: ProviderMarkdownIngestionRequest,
@@ -144,24 +175,10 @@ async def ingest_provider_markdown_document(
             owner_user_id=owner_user_id,
             status="processing",
         )
-        warnings = _validate_provider_markdown(markdown)
-        enriched_markdown = append_provider_figure_metadata_markdown(
+        elements, warnings = provider_markdown_to_pipeline_elements(
             markdown,
             request.provider_figure_metadata,
         )
-        element_markdown = _strip_markdown_image_assets(enriched_markdown)
-
-        from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
-
-        elements = markdown_to_pipeline_elements(element_markdown)
-        apply_provider_figure_page_provenance(
-            elements,
-            request.provider_figure_metadata,
-        )
-        if not elements:
-            raise DocumentSourceMarkdownValidationError(
-                "Provider Markdown produced no usable pipeline elements"
-            )
         stages_completed.append(ProcessingStage.PARSING)
 
         source_markdown_path = await _save_source_markdown(

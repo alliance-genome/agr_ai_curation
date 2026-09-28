@@ -1438,6 +1438,14 @@ def get_benchmark_max_input_bytes() -> int:
     )
 
 
+def get_benchmark_document_conversion_stale_seconds() -> int:
+    """Age after which an unfinished benchmark document conversion is failed as interrupted."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_DOCUMENT_CONVERSION_STALE_SECONDS", 7200),
+    )
+
+
 def get_benchmark_admission_max_bytes() -> int:
     """Maximum JSON request bytes for benchmark admission and plan preview."""
     return max(1, _get_env_int_with_fallback("BENCHMARK_ADMISSION_MAX_BYTES", 1_048_576))
