@@ -1987,7 +1987,7 @@ def test_pdf_conversion_timeouts_have_one_capture_owner_with_logging_enabled():
         import asyncio
         import logging
         from types import SimpleNamespace
-        from unittest.mock import AsyncMock
+        from unittest.mock import AsyncMock, patch
         import sentry_sdk
         from sentry_sdk.integrations.logging import LoggingIntegration
         from src.lib.observability import sentry
@@ -2007,7 +2007,11 @@ def test_pdf_conversion_timeouts_have_one_capture_owner_with_logging_enabled():
         async def run():
             await service.execute_provider_conversion(request)
             await service.execute_provider_conversion(request)
-        asyncio.run(run())
+        # Isolate the attribution DB dependency so only conversion timeouts fail.
+        with patch("src.models.sql.database.SessionLocal") as session_factory:
+            db = session_factory.return_value.__enter__.return_value
+            db.query.return_value.join.return_value.filter.return_value.one_or_none.return_value = None
+            asyncio.run(run())
         sentry_sdk.flush(timeout=1)
         assert len(events) == 2, [(e.get("tags"), e.get("logentry")) for e in events]
         assert all(e["tags"]["failure_stage"] == "timeout" for e in events)
