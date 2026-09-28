@@ -4200,8 +4200,13 @@ async def chat_with_opus(
         )
 
     if not str(get_api_key("openai") or "").strip():
-        logger.error("OpenAI API key is not configured")
-        raise HTTPException(status_code=500, detail="Chat service not properly configured")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Chat service not properly configured",
+            log_message="OpenAI API key is not configured",
+            exc=RuntimeError("OpenAI API key is not configured"),
+        )
 
     active_group_ids = _authenticated_group_ids(user)
     if db_user_id is not None:

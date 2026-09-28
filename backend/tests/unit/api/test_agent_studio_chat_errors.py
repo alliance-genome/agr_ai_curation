@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import httpx
@@ -133,6 +134,65 @@ def _chat_request():
         messages=[api_module.ChatMessage(role="user", content="Please help")],
         context=api_module.ChatContext(trace_id="trace-123"),
     )
+
+
+@pytest.mark.parametrize("api_key", [None, "", " \t\n"])
+@pytest.mark.parametrize("capture_fails", [False, True])
+def test_chat_with_opus_reports_missing_api_key_safely(
+    monkeypatch, caplog, api_key, capture_fails,
+):
+    alerts, _, runtime_reports = _configure_chat_endpoint(
+        monkeypatch, RuntimeError("unused"),
+    )
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: api_key)
+    provider = Mock(side_effect=AssertionError("Provider must not be invoked"))
+    monkeypatch.setattr(api_module, "stream_agent_studio_run", provider)
+    report = Mock(
+        side_effect=RuntimeError("capture unavailable") if capture_fails else None,
+        return_value=True,
+    )
+    monkeypatch.setattr(http_errors, "report_runtime_exception", report)
+    caplog.set_level(logging.ERROR, logger=api_module.logger.name)
+    request = _chat_request()
+    request.messages[0].content = "private prompt sk-test-secret-credential"
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(api_module.chat_with_opus(
+            request=request,
+            user={"email": "curator@example.org", "sub": "private-auth-sub"},
+        ))
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Chat service not properly configured"
+    provider.assert_not_called()
+    report.assert_called_once()
+    reported_exc = report.call_args.args[0]
+    assert type(reported_exc) is RuntimeError
+    assert str(reported_exc) == "OpenAI API key is not configured"
+    assert reported_exc.__cause__ is None
+    assert reported_exc.__context__ is None
+    assert report.call_args.kwargs == {
+        "component": "api",
+        "operation": "sanitized_http_exception",
+        "context": {
+            "logger_name": api_module.logger.name,
+            "status_code": 500,
+            "log_level": logging.ERROR,
+            "level_name": "ERROR",
+        },
+    }
+    assert alerts == []
+    assert runtime_reports == []
+    error_logs = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert len(error_logs) == 1
+    assert error_logs[0].sentry_skip_event is True
+    for sensitive_value in (
+        request.messages[0].content, "sk-test-secret-credential",
+        "curator@example.org", "private-auth-sub", "trace-123",
+    ):
+        assert sensitive_value not in repr(report.call_args)
+        assert sensitive_value not in caplog.text
+        assert sensitive_value not in str(exc_info.value.detail)
 
 
 def _assert_provider_context_preflight(event: dict) -> None:
