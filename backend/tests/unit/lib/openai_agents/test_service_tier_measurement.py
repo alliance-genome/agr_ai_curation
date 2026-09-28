@@ -2,7 +2,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -13,6 +13,71 @@ from openai import AsyncOpenAI
 
 from src.lib.cost_ledger import runtime_writes
 from src.lib.openai_agents import model_request_measurement as measurement
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ["responses", "responses.compact", "chat_completions"])
+@pytest.mark.parametrize(
+    "tier_kwargs, requested",
+    [
+        ({"service_tier": "flex"}, "flex"),
+        ({"service_tier": "flex", "extra_body": {"service_tier": "priority"}}, "priority"),
+        ({"extra_body": {"service_tier": "flex"}}, "flex"),
+        ({"service_tier": "flex", "extra_body": {}}, "flex"),
+        ({"service_tier": "flex", "extra_body": {"service_tier": None}}, None),
+        ({"service_tier": " "}, None),
+        ({"service_tier": 123}, None),
+        ({}, None),
+    ],
+)
+@pytest.mark.parametrize("reported", ["priority", None])
+async def test_direct_request_preserves_tiers(monkeypatch, api, tier_kwargs, requested, reported):
+    sink = Mock()
+    reserved_tiers = []
+
+    def reserve(record):
+        reserved_tiers.append(record.get("requested_service_tier"))
+        return sink
+
+    monkeypatch.setattr(runtime_writes, "reserve_runtime_request", reserve)
+    response = SimpleNamespace(
+        id="direct_test",
+        usage={"input_tokens": 7, "output_tokens": 8, "total_tokens": 15},
+    )
+    if reported is not None:
+        response.service_tier = reported
+    call = AsyncMock(return_value=response)
+    input_key = "messages" if api == "chat_completions" else "input"
+    kwargs = {"model": "test", input_key: [], **tier_kwargs}
+
+    result = await measurement.call_measured_direct_request(
+        surface="tier test", provider="openai", api=api, kwargs=kwargs, call=call,
+    )
+
+    assert result is response
+    call.assert_awaited_once_with(**kwargs)
+    assert reserved_tiers == [requested]
+    sink.finish.assert_called_once()
+    assert sink.finish.call_args.kwargs["service_tiers"] == {"requested": requested, "effective": reported}
+    usage = sink.finish.call_args.kwargs["usage"]
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (7, 8, 15)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [RuntimeError("provider failed"), asyncio.CancelledError()])
+async def test_direct_request_failure_preserves_requested_tier(monkeypatch, error):
+    sink = Mock()
+    monkeypatch.setattr(runtime_writes, "reserve_runtime_request", Mock(return_value=sink))
+    call = AsyncMock(side_effect=error)
+    with pytest.raises(type(error)) as caught:
+        await measurement.call_measured_direct_request(
+            surface="tier test", provider="openai", api="responses",
+            kwargs={"model": "test", "input": [], "service_tier": "flex"}, call=call,
+        )
+    assert caught.value is error
+    call.assert_awaited_once()
+    sink.finish.assert_called_once()
+    assert sink.finish.call_args.kwargs["service_tiers"] == {"requested": "flex", "effective": None}
 
 
 @pytest.mark.asyncio

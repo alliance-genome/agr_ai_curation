@@ -1468,6 +1468,10 @@ def measure_direct_request(
     identity = _request_identity(None)
     identity["agent_name"] = surface
     identity["attempt"] = 1
+    # The OpenAI client merges extra_body after ordinary request parameters.
+    extra_body = kwargs.get("extra_body")
+    tier_source = extra_body if isinstance(extra_body, Mapping) and "service_tier" in extra_body else kwargs
+    identity["requested_service_tier"] = _tier(tier_source.get("service_tier"))
     if api == "chat_completions":
         instructions = None
         input_value = kwargs.get("messages")
@@ -1553,6 +1557,7 @@ async def call_measured_direct_request(
     except BaseException as exc:
         record_outcome(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
         raise
+    _observe_service_tier(measurement, response)
     record_outcome(
         measurement,
         outcome="completed",
