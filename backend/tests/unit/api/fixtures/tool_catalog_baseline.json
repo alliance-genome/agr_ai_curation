@@ -1702,6 +1702,12 @@
     "documentation": {
       "parameters": [
         {
+          "description": "Chat-only report JSON: {sections: [{heading, plan}]}. Exclusive of plan_json; preview section plans separately.",
+          "name": "report_json",
+          "required": false,
+          "type": "string"
+        },
+        {
           "description": "Projection plan JSON. Empty input uses the validated default projection.",
           "name": "plan_json",
           "required": false,
@@ -6111,6 +6117,12 @@
     "description": "Validate a projection plan over saved bundle fields. The output format is forced to the bound formatter type.",
     "documentation": {
       "parameters": [
+        {
+          "description": "Chat-only report JSON: {sections: [{heading, plan}]}. Exclusive of plan_json; preview section plans separately.",
+          "name": "report_json",
+          "required": false,
+          "type": "string"
+        },
         {
           "description": "Projection plan JSON using field refs and plan metadata. Empty input validates the default or curator-fixed plan.",
           "name": "plan_json",

@@ -1352,7 +1352,8 @@ async def test_chat_capabilities_route_explanations_to_stored_rationale_and_sect
     chat_rules = capabilities["format_rules"]
     assert "never table rows or explanations" in chat_rules
     assert "group_by splits rows into headed groups" in chat_rules
-    assert "different columns are not supported" in chat_rules
+    assert "different columns use report_json" in chat_rules
+    assert "validate_output_projection(report_json=...)" in chat_rules
 
 
 @pytest.mark.asyncio

@@ -492,3 +492,30 @@ async def test_specialist_error_before_delivery_still_propagates(monkeypatch):
         with pytest.raises(Exception, match="provider stream dropped"):
             await _invoke(tool, "Render the table.")
     assert delivery.output is None
+
+
+@pytest.mark.asyncio
+async def test_multi_table_report_uses_program_rendering_and_compact_model_receipt(monkeypatch):
+    executor = _executor_module()
+    second = json.loads(json.dumps(SEMANTIC_CHAT_PLAN))
+    second["columns"] = second["columns"][:2]
+    report = {"sections": [
+        {"heading": "Expression evidence", "plan": SEMANTIC_CHAT_PLAN},
+        {"heading": "Summary fields", "plan": second},
+    ]}
+    model = _ScriptedFormatterModel([
+        ("validate_output_projection", {"report_json": json.dumps(report)}),
+        ("finalize_chat_output", {"report_json": json.dumps(report)}),
+    ])
+    _install_scripted_formatter(monkeypatch, executor, model)
+    tool = _chat_tool(executor, completed_steps=[build_semantic_output_step()])
+    with chat_output_delivery_scope() as delivery:
+        receipt = json.loads(await _invoke(tool, "Render two independently configured tables."))
+        assert receipt["delivered"] is True, receipt
+        assert delivery.output is not None
+        assert "## Expression evidence" in delivery.output
+        assert "## Summary fields" in delivery.output
+        assert sum(line.startswith("| ---") for line in delivery.output.splitlines()) == 2
+        assert len(delivery.output) > len(json.dumps(receipt))
+    final_results = _tool_outputs(model.requests[-1]["input"])
+    assert all("body wall musculature" not in value for value in final_results.values())

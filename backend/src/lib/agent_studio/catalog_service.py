@@ -340,6 +340,12 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
         ),
         "parameters": [
             {
+                "name": "report_json",
+                "type": "string",
+                "required": False,
+                "description": "Chat-only report JSON: {sections: [{heading, plan}]}. Exclusive of plan_json; preview section plans separately.",
+            },
+            {
                 "name": "plan_json",
                 "type": "string",
                 "required": False,
@@ -417,6 +423,12 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
             "rendered chat table to the curator exactly once."
         ),
         "parameters": [
+            {
+                "name": "report_json",
+                "type": "string",
+                "required": False,
+                "description": "Chat-only report JSON: {sections: [{heading, plan}]}. Exclusive of plan_json; preview section plans separately.",
+            },
             {
                 "name": "plan_json",
                 "type": "string",
