@@ -3,17 +3,27 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
-image_tag="agr-ai-curation-frontend-nginx-contract:${GITHUB_RUN_ID:-local-$$}"
+image_tag=""
+build_image=true
+if (( $# == 2 )) && [[ "$1" == "--image" && -n "$2" && "$2" != -* ]]; then
+  image_tag="$2"
+  build_image=false
+elif (( $# != 0 )); then
+  echo "Usage: $0 [--image PREBUILT_IMAGE]" >&2
+  exit 2
+fi
 
-cleanup() {
-  docker image rm -f "${image_tag}" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
-docker build \
-  --target nginx-runtime-base \
-  --tag "${image_tag}" \
-  "${repo_root}/frontend"
+if [[ "${build_image}" == true ]]; then
+  image_tag="agr-ai-curation-frontend-nginx-contract:${GITHUB_RUN_ID:-local-$$}"
+  cleanup() {
+    docker image rm -f "${image_tag}" >/dev/null 2>&1 || true
+  }
+  trap cleanup EXIT
+  docker build --target nginx-runtime-base --tag "${image_tag}" "${repo_root}/frontend"
+else
+  # CI owns the cached image; refuse a missing image instead of rebuilding it.
+  docker image inspect "${image_tag}" >/dev/null
+fi
 
 assert_rendered_limit() {
   local expected_bytes="$1"

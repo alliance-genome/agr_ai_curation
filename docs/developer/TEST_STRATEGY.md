@@ -37,6 +37,31 @@ externally isolated Compose project and cleans only that project. See
 [the canary boundary and evidence guide](guides/BENCHMARK_REPLACEMENT_CANARY.md).
 This does not change the live release validation sequence.
 
+## CI image caching and selection
+
+Backend test images, the frontend `nginx-runtime-base` contract image, and the
+TraceReview test image use separate GitHub Actions BuildKit cache scopes.
+Registry metadata requests can still occur on cached builds; caching does not
+guarantee availability during a registry outage.
+
+`scripts/testing/ci_image_scope.py` selects the nginx runtime contract from the
+complete PR diff or push range. It runs for changes to the frontend Dockerfile,
+Docker ignore files, nginx configuration, entrypoint scripts, or its CI/test
+machinery. Update its input list when adding runtime-stage build inputs.
+Unavailable history runs all image checks. Ordinary UI edits avoid this image
+build; backend unit tests still run. Agent PR Gate builds its smoke-test image
+only when backend files changed, matching its existing smoke-test selection.
+
+Local nginx contract validation still builds and cleans up its own image:
+
+```bash
+bash scripts/testing/frontend_nginx_pdf_limit_contract.sh
+```
+
+CI passes `--image PREBUILT_IMAGE` to test the cached, loaded image without
+rebuilding it. That mode requires an existing image and leaves cleanup to its
+caller.
+
 ## TraceReview Backend Tests
 
 TraceReview has an isolated, offline backend suite with its own test-only image
@@ -46,8 +71,9 @@ target. From the repository root, run:
 docker compose -f trace_review/docker-compose.yml run --rm --build backend-tests
 ```
 
-This is the same command used by GitHub Actions. The profiled test service does
-not join the VPN-facing development backend, load its optional `.env`, or
+GitHub Actions builds the same `test` target with a dedicated BuildKit Actions
+cache, then runs Compose with `--no-build` so it uses that loaded image. The
+profiled test service does not join the VPN-facing development backend, load its optional `.env`, or
 require real Langfuse credentials. Test dependencies remain outside the
 published TraceReview image, which continues to use `backend/Dockerfile.prod`.
 
