@@ -493,6 +493,15 @@ exception chains, omit provider payloads, and mark companion logs to avoid dupli
 promotion. Optional extraction results and cancellation behavior are unchanged when
 reporting is unavailable. Langfuse remains the source for model-call detail.
 
+Benchmark document conversion reports extraction configuration errors and PDFX
+errors carrying provider-boundary failure metadata with component
+`benchmark_document_conversion` and operations `document_conversion_configuration`
+and `document_conversion_extraction`. Reports retain only the operation and
+exception class through the sanitized benchmark wrapper; provider details and
+exception chains are omitted. Unmarked invalid-input/empty-document parsing
+errors and cancellation remain quiet. Terminal `extraction_failed` results are
+preserved even when capture fails, and companion warnings skip event promotion.
+
 Identifier-like runtime context is hashed by the global Sentry hook when it uses
 recognized keys such as `batch_id`, `document_id`, `flow_id`, `flow_run_id`,
 `job_id`, `run_id`, `session_id`, `trace_id`, or `turn_id`.

@@ -38,7 +38,8 @@ from src.lib.document_sources.models import (
     SourceArtifactStatus,
     SourceReference,
 )
-from src.lib.exceptions import PDFParsingError
+from src.lib.exceptions import ConfigurationError, PDFCancellationError, PDFParsingError
+from src.lib.pipeline.pdfx_parser import PDFX_FAILURE_DETAILS_KEY
 from src.models.sql.benchmark import BenchmarkDocumentConversion
 
 
@@ -515,20 +516,67 @@ async def test_converted_elements_over_the_input_limit_fail_as_oversize_without_
 
 
 @pytest.mark.asyncio
-async def test_parser_failure_is_recorded_as_a_sanitized_terminal_failure():
+@pytest.mark.parametrize("error_type", [PDFParsingError, PDFCancellationError])
+async def test_parser_failure_is_recorded_as_a_sanitized_terminal_failure(error_type):
     row = _conversion_row()
     service, repository, recorder = _service(row)
     secret = "provider said http://internal.example/token=abc123 failed"
-    parser_patch, parsers = _parser_patch(error=PDFParsingError(secret))
+    parser_patch, parsers = _parser_patch(error=error_type(secret))
 
-    with parser_patch:
+    with parser_patch, patch(f"{_SERVICE_MODULE}.report_runtime_exception") as report:
         await service.run(row.id, authorized_group_ids=())
 
+    report.assert_not_called()
     assert recorder.frozen == []
     [(code, message)] = repository.failed
     assert code == "extraction_failed"
     assert "internal.example" not in message and "abc123" not in message
     assert len(parsers) == 1 and len(parsers[0].calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture_fails", [False, True])
+@pytest.mark.parametrize(
+    "category",
+    ["configuration", "unknown_provider_failure", "polling_timeout", "provider_terminal_failure"],
+)
+async def test_operational_pdf_failure_reports_safely_and_remains_terminal(category, capture_fails, caplog):
+    row = _conversion_row()
+    service, repository, recorder = _service(row)
+    secret = "private document content provider response token=abc123"
+    if category == "configuration":
+        error = ConfigurationError(secret)
+        parser_patch = patch(f"{_SERVICE_MODULE}.PDFXParser", side_effect=error)
+        operation = "document_conversion_configuration"
+    else:
+        error = PDFParsingError(secret, details={PDFX_FAILURE_DETAILS_KEY: {
+            "failure_category": category, "process_id": secret, "provider_error_code": secret,
+        }})
+        parser_patch, _parsers = _parser_patch(error=error)
+        operation = "document_conversion_extraction"
+    error.__cause__ = RuntimeError(secret)
+    error.__context__ = RuntimeError(secret)
+
+    with parser_patch, patch(
+        f"{_SERVICE_MODULE}.report_runtime_exception",
+        side_effect=RuntimeError(secret) if capture_fails else None,
+    ) as report:
+        await service.run(row.id, authorized_group_ids=())
+
+    report.assert_called_once()
+    reported = report.call_args.args[0]
+    assert type(error).__name__ in str(reported)
+    assert reported.__traceback__ is not None
+    assert reported.__cause__ is None and reported.__context__ is None
+    assert report.call_args.kwargs == {
+        "component": "benchmark_document_conversion", "operation": operation,
+    }
+    assert secret not in str(reported) and secret not in caplog.text
+    assert "abc123" not in repr(report.call_args)
+    assert all(record.sentry_skip_event for record in caplog.records)
+    assert row.status == "failed"
+    assert repository.failed == [("extraction_failed", "Text could not be extracted from the PDF.")]
+    assert repository.succeeded == [] and recorder.frozen == []
 
 
 @pytest.mark.asyncio
