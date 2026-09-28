@@ -56,21 +56,28 @@ SECRET_PATTERNS = (
 )
 
 _AUTH_SCHEME_PATTERN = re.compile(
-    r"\b(bearer|basic)[ \t]+([A-Za-z0-9._~+/-]+=*)(?![\w=])", re.IGNORECASE
+    r"\b(?:basic[ \t]+(?P<basic>[A-Za-z0-9+/]+=*)"
+    r"|bearer[ \t]+(?P<bearer>[A-Za-z0-9._~+/-]+=*))(?![\w=])",
+    re.IGNORECASE,
 )
 
 
 def _redact_auth_credential(match: re.Match[str]) -> str:
     """Distinguish standalone auth values from words such as 'Basic cellular'."""
-    scheme, credential = match.groups()
-    if scheme.lower() == "basic":
+    basic = match.group("basic")
+    if basic is not None:
         try:
-            decoded = base64.b64decode(credential, validate=True)
+            decoded = base64.b64decode(basic, validate=True)
         except (binascii.Error, ValueError):
             return match.group()
         # Basic encodes user:password; alphabet/length alone also matches prose.
         return REDACTED if b":" in decoded else match.group()
 
+    # Sentence-ending periods are not evidence of a credential. Keep internal
+    # periods for JWTs, and preserve sentence punctuation after redaction.
+    bearer = match.group("bearer")
+    credential = bearer.rstrip(".")
+    punctuation = bearer[len(credential):]
     # A standalone opaque bearer value must be token-length and contain more
     # than an ordinary single-case word. This is a credential-shape heuristic,
     # not an execution limit. Header values are scrubbed regardless of shape.
@@ -78,7 +85,7 @@ def _redact_auth_credential(match: re.Match[str]) -> str:
         not credential.isalpha()
         or (not credential.islower() and not credential.isupper() and not credential.istitle())
     ):
-        return REDACTED
+        return REDACTED + punctuation
     return match.group()
 
 

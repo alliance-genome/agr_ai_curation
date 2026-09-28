@@ -468,7 +468,9 @@ The shared logging/Sentry credential redactor requires a word boundary before
 Authorization-header Basic/Bearer values are scrubbed regardless of shape.
 Outside headers, Basic must decode as base64 containing the `user:password`
 separator; Bearer must contain at least 16 token characters with a non-letter
-or mixed case (excluding title case). These shape checks preserve ordinary
+or mixed case (excluding title case). Basic uses its own base64 alphabet;
+trailing sentence periods do not count toward Bearer length or shape, while
+internal JWT separators remain supported. These shape checks preserve ordinary
 phrases such as "Basic phenotype" and "Bearer of the mutation". Arbitrary
 opaque values indistinguishable from prose still require sensitive structured
 keys or request-local `active_secret_redaction` coverage.

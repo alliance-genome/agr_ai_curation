@@ -26,7 +26,9 @@ from src.lib.security.redaction import (
     "Bearer characterization",
     "Bearer Characterization",
 ])
-def test_ordinary_identifiers_and_auth_scheme_words_survive(text):
+@pytest.mark.parametrize("suffix", ["", ".", "...", ",", ";", "!", "?"])
+def test_ordinary_identifiers_and_auth_scheme_words_survive(text, suffix):
+    text += suffix
     assert redact_secrets(text) == text
     record = logging.LogRecord("test", logging.INFO, __file__, 1, text, (), None)
     assert json.loads(JsonFormatter().format(record))["message"] == text
@@ -62,12 +64,15 @@ def test_authorization_headers_redact_even_short_values(scheme, header):
     "Basic " + base64.b64encode(b"example:password").decode(),
     "Basic " + base64.b64encode(b"a:b").decode(),
 ])
-def test_standalone_credential_shapes_are_redacted(credential):
-    assert redact_secrets(f"rejected {credential}, retry") == f"rejected {REDACTED}, retry"
-    assert sentry._scrub_string(f"rejected {credential}, retry") == f"rejected {REDACTED}, retry"
+@pytest.mark.parametrize("suffix", [", retry", ".", "...", ";", "!", "?"])
+def test_standalone_credential_shapes_are_redacted(credential, suffix):
+    text = f"rejected {credential}{suffix}"
+    expected = f"rejected {REDACTED}{suffix}"
+    assert redact_secrets(text) == expected
+    assert sentry._scrub_string(text) == expected
     assert credential not in redact_secrets(f"Authorization: {credential}")
-    record = logging.LogRecord("test", logging.INFO, __file__, 1, credential, (), None)
-    assert json.loads(JsonFormatter().format(record))["message"] == REDACTED
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, text, (), None)
+    assert json.loads(JsonFormatter().format(record))["message"] == expected
 
 
 def test_delegated_header_and_bearer_are_redacted_in_nested_values():
