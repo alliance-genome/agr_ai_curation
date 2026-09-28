@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from typing import Literal
 
@@ -15,9 +16,12 @@ from src.lib.curation_workspace.curation_prep_service import (
 )
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.openai_agents.config import get_chat_curation_confirmation_ttl_seconds
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.redis_client import get_redis
 from src.schemas.curation_prep import CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import CurationExtractionSourceKind
+
+logger = logging.getLogger(__name__)
 
 
 def _reply(status: str, message: str, **extra) -> str:
@@ -111,7 +115,21 @@ async def prepare_from_chat(
         )
         if not consumed:
             return _reply("confirmation_required", "The preview was replaced or already consumed. Preview again.")
-    except (RedisError, ValueError, KeyError):
+    except RedisError:
+        try:
+            report_runtime_exception(
+                sanitized_runtime_error("Chat preparation confirmation store failed"),
+                component="chat_prep_confirmation",
+                operation="confirmation_store_failed",
+            )
+        except Exception:
+            # Reporting must not change the fail-closed confirmation response.
+            logger.warning(
+                "Chat preparation confirmation store failure reporting unavailable",
+                extra={"sentry_skip_event": True},
+            )
+        return _reply("unavailable", "The preparation scope could not be verified. Nothing was prepared; retry with a fresh preview.")
+    except (ValueError, KeyError):
         return _reply("unavailable", "The preparation scope could not be verified. Nothing was prepared; retry with a fresh preview.")
 
     try:

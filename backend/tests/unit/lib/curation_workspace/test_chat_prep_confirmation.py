@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import json
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from redis.exceptions import ConnectionError
@@ -176,3 +176,83 @@ async def test_expired_or_unavailable_confirmation_store_fails_closed(context, m
     monkeypatch.setattr(prep, "get_redis", AsyncMock(side_effect=ConnectionError("unavailable")))
     assert (await call())["status"] == "unavailable"
     context.run.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["connect", "set", "get", "delete", "eval"])
+@pytest.mark.parametrize("reporting_fails", [False, True])
+async def test_redis_failure_reports_sanitized_error_and_fails_closed(
+    context, monkeypatch, caplog, operation, reporting_fails,
+):
+    await call()
+    session_key = next(iter(context.redis.values))
+    raw_error = ConnectionError(
+        f"redis://:private-password@host/0 {session_key} private-result-content"
+    )
+    report = Mock(side_effect=RuntimeError(f"reporting failed: {raw_error}") if reporting_fails else None)
+    monkeypatch.setattr(prep, "report_runtime_exception", report)
+    failing = AsyncMock(side_effect=raw_error)
+    if operation == "connect":
+        monkeypatch.setattr(prep, "get_redis", failing)
+    else:
+        monkeypatch.setattr(context.redis, operation, failing)
+    action = "preview" if operation in {"connect", "set"} else "confirm"
+    answer = "No" if operation == "delete" else "Yes"
+
+    result = await call(action, authoritative_user_request=answer)
+
+    assert result == {
+        "status": "unavailable",
+        "message": "The preparation scope could not be verified. Nothing was prepared; retry with a fresh preview.",
+    }
+    context.run.assert_not_called()
+    report.assert_called_once()
+    error = report.call_args.args[0]
+    assert isinstance(error, RuntimeError)
+    assert str(error) == "Chat preparation confirmation store failed"
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert error.__traceback__ is not None
+    assert report.call_args.kwargs == {
+        "component": "chat_prep_confirmation",
+        "operation": "confirmation_store_failed",
+    }
+    for sensitive in (session_key, "private-password", "private-result-content"):
+        assert sensitive not in repr(report.call_args)
+        assert sensitive not in caplog.text
+    if reporting_fails:
+        record, = caplog.records
+        assert record.levelname == "WARNING"
+        assert record.getMessage() == "Chat preparation confirmation store failure reporting unavailable"
+        assert record.sentry_skip_event is True
+        assert record.args == ()
+        assert record.exc_info is None
+        assert record.exc_text is None
+        assert record.stack_info is None
+    else:
+        assert not caplog.records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["expired", "rejected", "scope_changed", "invalid_json", "missing_key"])
+async def test_expected_confirmation_rejections_remain_quiet(context, monkeypatch, caplog, scenario):
+    report = Mock()
+    monkeypatch.setattr(prep, "report_runtime_exception", report)
+    await call()
+    key = next(iter(context.redis.values))
+    if scenario == "expired":
+        context.redis.values.clear()
+    elif scenario == "scope_changed":
+        context.records[0].payload_json = {"objects": ["changed"]}
+    elif scenario == "invalid_json":
+        context.redis.values[key] = "invalid-json"
+    elif scenario == "missing_key":
+        context.redis.values[key] = "{}"
+    answer = "No" if scenario == "rejected" else "Yes"
+    result = await call("confirm", authoritative_user_request=answer)
+    assert result["status"] == (
+        "unavailable" if scenario in {"invalid_json", "missing_key"} else "confirmation_required"
+    )
+    context.run.assert_not_called()
+    report.assert_not_called()
+    assert not caplog.records
