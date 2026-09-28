@@ -91,7 +91,13 @@ submission. Delegated source credentials are rejected.
   `X-Benchmark-Content-Digest: sha256:<hex>`. The bytes must match the digest,
   start with `%PDF-`, fit within `BENCHMARK_MAX_INPUT_BYTES`, and arrive within
   `BENCHMARK_SOURCE_TIMEOUT_SECONDS`.
-- ABC paper: send `application/json` `{"abc_reference": "AGRKB:<digits>"}`.
+- Source reference: send `application/json`
+  `{"source_reference": "<identifier>"}`, where the identifier names a paper
+  in the deployment's configured document-source provider. It must be
+  non-empty, at most 256 characters, have no leading or trailing whitespace,
+  and contain no control characters. AI Curation does not check the
+  identifier's format itself: the configured provider resolves it, and an
+  identifier the provider does not know fails the conversion with `not_found`.
 - Both require an `Idempotency-Key` of at most 255 characters. Keys are scoped
   to the calling service. Repeating a key with the same input and curator
   returns the same conversion without starting it again; reusing it for
@@ -109,7 +115,8 @@ callers get 404. Request errors use the source error envelope, for example
 
 Conversion runs in the background and is never retried; a failed conversion
 stays failed, and the caller starts a new one with a new key. Failure codes
-include `not_found` (the ABC paper has no usable text or PDF), `access_denied`,
+include `not_found` (the provider does not know the reference, or the paper
+has no usable text or PDF), `access_denied`,
 `ambiguous_source`, `source_unavailable`, `extraction_failed`,
 `invalid_document`, `oversize_payload` (converted elements exceed
 `BENCHMARK_MAX_INPUT_BYTES`), `storage_unavailable`, `conversion_failed`, and
@@ -120,9 +127,14 @@ read, so a conversion lost to a restart shows as failed on the next poll.
 
 `conversion_identity` records what produced the elements: the parser and its
 settings, the AI Curation application version (`APP_VERSION`), the page
-provenance receipt for PDF extraction, and for ABC papers the artifact used
-(`abc_artifact`) and the access policy of the ABC source artifact the curator's
-groups were authorized against (`abc_access`: artifact ID, scope and group IDs).
+provenance receipt for PDF extraction, and for source references the
+configured provider's ID (`source_provider`), the provider artifact whose bytes
+were converted (`source_artifact`: ID and checksum), any figure metadata
+artifacts used with main text (`source_figure_metadata`), and the access policy
+of the provider source PDF the curator's groups were authorized against
+(`source_access`: artifact ID, scope and group IDs). `parser` is `pdfx` when a
+PDF was extracted and `source_main_text` when the provider's main text was
+used.
 The snapshot `source_version` is the SHA-256 of that identity, so it changes
 when the application version changes.
 
@@ -134,8 +146,8 @@ How this differs from a curator's document import:
   blob.
 - Nothing is added to the curator's document library, and no per-user parser
   artifacts are written.
-- For ABC papers, AI Curation calls the literature service with its own
-  configured credentials and uses the curator's groups to decide which
+- For source references, AI Curation calls the configured document source
+  with its own configured credentials and uses the curator's groups to decide which
   restricted PDFs may be read. It uses the provider's main text when present;
   otherwise it parses the selected main PDF with PDFX. It never asks the
   provider to convert a paper, and when the provider's own conversion is still
@@ -143,14 +155,14 @@ How this differs from a curator's document import:
 - Conversion uses the deployment's configured document-source provider, as
   curator imports do.
 
-Trust boundary for group-restricted ABC papers: access is checked once, when
+Trust boundary for group-restricted source papers: access is checked once, when
 the conversion runs, against the requesting curator's groups. After that the
 snapshot, and its content through
 `GET /api/v1/benchmarks/sources/snapshots/{snapshot_id}/content` and the
 `frozen_snapshot` resolver, is readable by the owning service without any
 further group check. The owning service must therefore restrict reuse of an
-ABC-derived conversion to the curator who requested it (recorded as
-`curator_subject` in the snapshot reference). `abc_access` in the conversion
+source-reference conversion to the curator who requested it (recorded as
+`curator_subject` in the snapshot reference). `source_access` in the conversion
 identity records which access policy authorized the conversion.
 
 The snapshot store may use the durable filesystem backend or a private,

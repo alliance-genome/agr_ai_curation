@@ -1,8 +1,11 @@
 """Public contract for read-only registered benchmark source materialization."""
 
+import json
+
 from fastapi import FastAPI
 
 from src.api.benchmark_document_conversions import router as conversions_router
+from src.lib.benchmarks.document_conversions import SOURCE_REFERENCE_PATTERN
 from src.api.benchmark_sources import router
 
 
@@ -54,9 +57,14 @@ def test_benchmark_document_conversion_openapi_contract():
 
     start = schema["paths"][base]["post"]
     assert set(start["requestBody"]["content"]) == {"application/pdf", "application/json"}
-    abc = start["requestBody"]["content"]["application/json"]["schema"]
-    assert abc["required"] == ["abc_reference"] and abc["additionalProperties"] is False
-    assert abc["properties"]["abc_reference"]["pattern"] == "^AGRKB:[0-9]+$"
+    reference = start["requestBody"]["content"]["application/json"]["schema"]
+    assert reference["required"] == ["source_reference"]
+    assert reference["additionalProperties"] is False
+    field = reference["properties"]["source_reference"]
+    assert field["type"] == "string"
+    assert (field["minLength"], field["maxLength"]) == (1, 256)
+    assert field["pattern"] == SOURCE_REFERENCE_PATTERN
+    assert "AGRKB" not in json.dumps(schema)
     headers = {parameter["name"] for parameter in start["parameters"]}
     assert {"Idempotency-Key", "X-Benchmark-Content-Digest",
             "X-Benchmark-Curator-Authorization"} <= headers

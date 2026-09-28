@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 
 from src.lib.benchmarks.document_conversions import (
-    ABC_NOT_FOUND_MESSAGE,
+    SOURCE_NOT_FOUND_MESSAGE,
     STALE_CONVERSION_MESSAGE,
     ConversionStateError,
     DocumentConversionRepository,
@@ -73,7 +73,7 @@ def test_conversion_table_declares_owner_key_uniqueness_and_input_shape():
     foreign_targets = {fk.target_fullname for fk in table.foreign_keys}
     assert foreign_targets == {"users.user_id", "benchmark_input_snapshots.id"}
     assert table.c.source_digest.nullable
-    assert table.c.abc_reference.nullable
+    assert table.c.source_reference.nullable
     assert table.c.snapshot_id.nullable
     assert not table.c.owner_subject.nullable
     assert not table.c.idempotency_key.nullable
@@ -85,7 +85,7 @@ def test_conversion_table_declares_owner_key_uniqueness_and_input_shape():
         ({"input_kind": "url"}, "input kind"),
         ({"source_digest": None}, "PDF conversions"),
         ({"source_blob_reference": None}, "PDF conversions"),
-        ({"abc_reference": "AGRKB:101000000000001"}, "PDF conversions"),
+        ({"source_reference": "EXAMPLE:paper-0001"}, "PDF conversions"),
         ({"source_digest": "sha256:short"}, "digest"),
         ({"idempotency_key": ""}, "idempotency key"),
         ({"owner_subject": ""}, "owner"),
@@ -100,7 +100,7 @@ def test_create_or_get_rejects_invalid_pdf_input_before_touching_the_database(ov
         "input_kind": "pdf",
         "source_digest": DIGEST,
         "source_blob_reference": "blob/" + "a" * 64,
-        "abc_reference": None,
+        "source_reference": None,
         "idempotency_key": "key-1",
         **overrides,
     }
@@ -115,22 +115,28 @@ def test_create_or_get_rejects_invalid_pdf_input_before_touching_the_database(ov
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"abc_reference": None},
-        {"abc_reference": "PMID:12345"},
+        {"source_reference": None},
+        {"source_reference": ""},
+        {"source_reference": " EXAMPLE:paper-0001"},
+        {"source_reference": "EXAMPLE:paper-0001\n"},
+        {"source_reference": "EXAMPLE:\x01paper"},
+        {"source_reference": "x" * 257},
         {"source_digest": DIGEST},
         {"source_blob_reference": "blob/x"},
     ],
 )
-def test_create_or_get_rejects_invalid_abc_input_before_touching_the_database(overrides):
+def test_create_or_get_rejects_invalid_source_reference_input_before_touching_the_database(
+    overrides,
+):
     db = MagicMock()
     arguments = {
         "owner_subject": "service:portal",
         "service_principal": "portal-client",
         "curator": _curator(),
-        "input_kind": "abc_reference",
+        "input_kind": "source_reference",
         "source_digest": None,
         "source_blob_reference": None,
-        "abc_reference": "AGRKB:101000000000001",
+        "source_reference": "EXAMPLE:paper-0001",
         "idempotency_key": "key-1",
         **overrides,
     }
@@ -161,7 +167,7 @@ def test_mark_failed_rejects_unsanitized_error_fields_before_touching_the_databa
 PDF_BYTES = b"%PDF-1.4\n%synthetic conversion fixture\n"
 PDF_DIGEST = "sha256:" + hashlib.sha256(PDF_BYTES).hexdigest()
 PDF_BLOB = "sha256/aa/" + PDF_DIGEST.removeprefix("sha256:")
-ABC_REFERENCE = "AGRKB:101000000000001"
+SOURCE_REFERENCE = "EXAMPLE:paper-0001"
 MAIN_TEXT = "# Synthetic paper\n\n## Results\n\nThe synthetic gene is expressed in the wing.\n"
 ELEMENTS = [
     {"index": 0, "type": "Title", "text": "Results", "metadata": {"page_number": 1}},
@@ -188,17 +194,17 @@ def _conversion_row(**overrides):
         "input_kind": "pdf",
         "source_digest": PDF_DIGEST,
         "source_blob_reference": PDF_BLOB,
-        "abc_reference": None,
+        "source_reference": None,
         "status": "queued",
     }
     values.update(overrides)
     return SimpleNamespace(**values)
 
 
-def _abc_row(**overrides):
+def _source_row(**overrides):
     return _conversion_row(
-        input_kind="abc_reference", source_digest=None, source_blob_reference=None,
-        abc_reference=ABC_REFERENCE, **overrides,
+        input_kind="source_reference", source_digest=None, source_blob_reference=None,
+        source_reference=SOURCE_REFERENCE, **overrides,
     )
 
 
@@ -326,12 +332,12 @@ def _parser_patch(**parser_kwargs):
 def _artifact(artifact_id, *, role, fmt, status=SourceArtifactStatus.AVAILABLE, parent=None,
               scope=SourceAccessScope.GLOBAL, groups=(), metadata=None):
     return SourceArtifact(
-        provider="abc_literature",
+        provider="example_source",
         artifact_id=artifact_id,
         role=role,
         artifact_format=fmt,
         status=status,
-        reference_curie=ABC_REFERENCE,
+        reference_curie=SOURCE_REFERENCE,
         display_name=f"{artifact_id}.dat",
         parent_artifact_id=parent,
         access_policy=SourceAccessPolicy(scope=scope, group_ids=tuple(groups)),
@@ -354,10 +360,10 @@ def _main_text(parent="pdf-1"):
     )
 
 
-class _FakeABCProvider:
-    """Provider contract double with ABC-like main-text and main-PDF rules."""
+class _FakeSourceProvider:
+    """Provider contract double with main-text and main-PDF selection rules."""
 
-    provider_id = "abc_literature"
+    provider_id = "example_source"
 
     def __init__(self, artifacts=(), downloads=None, resolve_error=None, download_error=None):
         self.artifacts = list(artifacts)
@@ -571,9 +577,9 @@ async def test_conversion_that_is_not_queued_is_left_untouched():
 
 
 @pytest.mark.asyncio
-async def test_abc_main_text_is_used_before_the_pdf_with_ai_curation_access():
-    row = _abc_row()
-    provider = _FakeABCProvider(
+async def test_source_main_text_is_used_before_the_pdf_with_ai_curation_access():
+    row = _source_row()
+    provider = _FakeSourceProvider(
         artifacts=[_source_pdf(), _main_text()],
         downloads={"md-1": MAIN_TEXT.encode("utf-8"), "pdf-1": PDF_BYTES},
     )
@@ -595,28 +601,29 @@ async def test_abc_main_text_is_used_before_the_pdf_with_ai_curation_access():
     assert any("synthetic gene" in element["text"] for element in elements)
     assert json.loads(frozen["source"].reference) == {
         "schema": "document_conversion/v1",
-        "input_kind": "abc_reference",
-        "abc_reference": ABC_REFERENCE,
+        "input_kind": "source_reference",
+        "source_reference": SOURCE_REFERENCE,
         "curator_subject": "synthetic-curator",
     }
     [succeeded] = repository.succeeded
     identity = succeeded["identity"]
-    assert identity["parser"] == "abc_main_text"
-    assert identity["input_kind"] == "abc_reference"
-    assert identity["abc_artifact"] == {
+    assert identity["parser"] == "source_main_text"
+    assert identity["input_kind"] == "source_reference"
+    assert identity["source_provider"] == "example_source"
+    assert identity["source_artifact"] == {
         "id": "md-1",
         "checksum": "sha256:" + hashlib.sha256(MAIN_TEXT.encode("utf-8")).hexdigest(),
     }
-    assert identity["abc_access"] == {
+    assert identity["source_access"] == {
         "source_artifact_id": "pdf-1", "scope": "global", "group_ids": [],
     }
     assert frozen["source"].version == identity_version(identity)
 
 
 @pytest.mark.asyncio
-async def test_abc_without_main_text_parses_the_selected_main_pdf():
-    row = _abc_row()
-    provider = _FakeABCProvider(artifacts=[_source_pdf()], downloads={"pdf-1": PDF_BYTES})
+async def test_source_without_main_text_parses_the_selected_main_pdf():
+    row = _source_row()
+    provider = _FakeSourceProvider(artifacts=[_source_pdf()], downloads={"pdf-1": PDF_BYTES})
     service, repository, recorder = _service(row)
     parser_patch, parsers = _parser_patch()
 
@@ -635,21 +642,22 @@ async def test_abc_without_main_text_parses_the_selected_main_pdf():
     identity = succeeded["identity"]
     assert identity["parser"] == "pdfx"
     assert identity["page_provenance_receipt"] == RECEIPT
-    assert identity["abc_artifact"] == {"id": "pdf-1", "checksum": PDF_DIGEST}
+    assert identity["source_artifact"] == {"id": "pdf-1", "checksum": PDF_DIGEST}
+    assert identity["source_provider"] == "example_source"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "provider",
     [
-        _FakeABCProvider(resolve_error=DocumentSourceReferenceNotFound("no such paper")),
-        _FakeABCProvider(artifacts=[]),
-        _FakeABCProvider(artifacts=[_main_text(parent=None)]),
+        _FakeSourceProvider(resolve_error=DocumentSourceReferenceNotFound("no such paper")),
+        _FakeSourceProvider(artifacts=[]),
+        _FakeSourceProvider(artifacts=[_main_text(parent=None)]),
     ],
     ids=["unknown-reference", "no-artifacts", "text-without-source-pdf"],
 )
-async def test_abc_paper_without_usable_text_or_pdf_fails_not_found(provider):
-    row = _abc_row()
+async def test_source_paper_without_usable_text_or_pdf_fails_not_found(provider):
+    row = _source_row()
     service, repository, recorder = _service(row)
     parser_patch, parsers = _parser_patch()
 
@@ -657,16 +665,16 @@ async def test_abc_paper_without_usable_text_or_pdf_fails_not_found(provider):
         await service.run(row.id, authorized_group_ids=("group-alpha",))
 
     assert parsers == [] and recorder.frozen == []
-    assert repository.failed == [("not_found", ABC_NOT_FOUND_MESSAGE)]
-    assert ABC_NOT_FOUND_MESSAGE == (
-        "The Alliance literature database has no usable text or PDF for this paper."
+    assert repository.failed == [("not_found", SOURCE_NOT_FOUND_MESSAGE)]
+    assert SOURCE_NOT_FOUND_MESSAGE == (
+        "The configured document source has no usable text or PDF for this paper."
     )
 
 
 @pytest.mark.asyncio
-async def test_abc_pdf_restricted_to_other_groups_fails_access_denied():
-    row = _abc_row()
-    provider = _FakeABCProvider(
+async def test_source_pdf_restricted_to_other_groups_fails_access_denied():
+    row = _source_row()
+    provider = _FakeSourceProvider(
         artifacts=[_source_pdf(scope=SourceAccessScope.RESTRICTED, groups=("group-beta",))],
         downloads={"pdf-1": PDF_BYTES},
     )
@@ -682,9 +690,9 @@ async def test_abc_pdf_restricted_to_other_groups_fails_access_denied():
 
 
 @pytest.mark.asyncio
-async def test_abc_download_denied_fails_access_denied():
-    row = _abc_row()
-    provider = _FakeABCProvider(
+async def test_source_download_denied_fails_access_denied():
+    row = _source_row()
+    provider = _FakeSourceProvider(
         artifacts=[_source_pdf()], download_error=DocumentSourceAccessDenied("denied"),
     )
     service, repository, _recorder = _service(row)
@@ -791,9 +799,9 @@ def test_identity_changes_with_the_application_version(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_abc_restricted_pdf_records_the_authorizing_access_policy():
-    row = _abc_row()
-    provider = _FakeABCProvider(
+async def test_source_restricted_pdf_records_the_authorizing_access_policy():
+    row = _source_row()
+    provider = _FakeSourceProvider(
         artifacts=[_source_pdf(scope=SourceAccessScope.RESTRICTED,
                                groups=("group-beta", "group-alpha"))],
         downloads={"pdf-1": PDF_BYTES},
@@ -807,7 +815,7 @@ async def test_abc_restricted_pdf_records_the_authorizing_access_policy():
     assert repository.failed == []
     [succeeded] = repository.succeeded
     identity = succeeded["identity"]
-    assert identity["abc_access"] == {
+    assert identity["source_access"] == {
         "source_artifact_id": "pdf-1", "scope": "restricted",
         "group_ids": ["group-alpha", "group-beta"],
     }
@@ -818,14 +826,14 @@ async def test_abc_restricted_pdf_records_the_authorizing_access_policy():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("content", [b"", b"<html>not a pdf</html>", b"%PDF-" + b"x" * 64],
                          ids=["empty", "not-pdf", "oversize"])
-async def test_unusable_abc_pdf_fails_as_invalid_document_without_reporting(
+async def test_unusable_source_pdf_fails_as_invalid_document_without_reporting(
     content, monkeypatch,
 ):
     import src.lib.document_sources.identifier_import as identifier_import
 
     monkeypatch.setattr(identifier_import, "MAX_PDF_FILE_SIZE_BYTES", 32)
-    row = _abc_row()
-    provider = _FakeABCProvider(artifacts=[_source_pdf()], downloads={"pdf-1": content})
+    row = _source_row()
+    provider = _FakeSourceProvider(artifacts=[_source_pdf()], downloads={"pdf-1": content})
     service, repository, recorder = _service(row)
     parser_patch, parsers = _parser_patch()
 

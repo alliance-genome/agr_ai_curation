@@ -20,7 +20,7 @@ from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 
 BASE = "/api/v1/benchmarks/sources/document-conversions"
 PDF = b"%PDF-1.7\nsynthetic paper body"
-ABC = "AGRKB:101000000000001"
+REFERENCE = "EXAMPLE:paper-0001"
 PRINCIPAL = {"sub": "service:synthetic", "client_id": "synthetic"}
 CURATOR = BenchmarkCuratorContext(
     subject="curator-synthetic", auth_provider="oidc", db_user_id=7,
@@ -68,12 +68,14 @@ class Repository:
         self.events = events
 
     def create_or_get(self, _db, *, owner_subject, service_principal, curator, input_kind,
-                      source_digest, source_blob_reference, abc_reference, idempotency_key):
+                      source_digest, source_blob_reference, source_reference, idempotency_key):
         self.events.append("create")
         for row in self.rows.values():
             if row.owner_subject == owner_subject and row.idempotency_key == idempotency_key:
-                if (row.input_kind, row.source_digest, row.abc_reference, row.curator_subject) != (
-                    input_kind, source_digest, abc_reference, curator.subject,
+                if (
+                    row.input_kind, row.source_digest, row.source_reference, row.curator_subject,
+                ) != (
+                    input_kind, source_digest, source_reference, curator.subject,
                 ):
                     raise ConversionIdempotencyConflict("different input")
                 return row, False
@@ -81,7 +83,7 @@ class Repository:
             id=uuid4(), owner_subject=owner_subject, service_principal=service_principal,
             curator_subject=curator.subject, curator_db_user_id=curator.db_user_id,
             input_kind=input_kind, source_digest=source_digest,
-            source_blob_reference=source_blob_reference, abc_reference=abc_reference,
+            source_blob_reference=source_blob_reference, source_reference=source_reference,
             idempotency_key=idempotency_key, status="queued", error_code=None,
             error_message=None, snapshot_id=None, conversion_identity=None,
             created_at=datetime(2026, 9, 27, tzinfo=timezone.utc), completed_at=None,
@@ -146,7 +148,7 @@ def post_pdf(client, content=PDF, *, key="paper-1", content_digest=None, extra=N
     return client.post(BASE, content=content, headers=headers)
 
 
-def post_abc(client, body, *, key="paper-2", extra=None):
+def post_reference(client, body, *, key="paper-2", extra=None):
     headers = {"Content-Type": "application/json", "Idempotency-Key": key}
     headers.update(extra or {})
     raw = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -164,7 +166,7 @@ def test_pdf_conversion_is_accepted_stored_and_dispatched_with_curator_groups(ha
     row = harness.repository.rows[conversion_id]
     assert (row.owner_subject, row.service_principal) == ("service:synthetic", "synthetic")
     assert row.curator_subject == CURATOR.subject and row.input_kind == "pdf"
-    assert row.source_digest == digest(PDF) and row.abc_reference is None
+    assert row.source_digest == digest(PDF) and row.source_reference is None
     assert harness.store.blobs == {digest(PDF): PDF}
     assert row.source_blob_reference == f"sha256/{hashlib.sha256(PDF).hexdigest()}"
     assert harness.dispatched == [(conversion_id, ("group-alpha", "group-beta"), "queued")]
@@ -236,29 +238,42 @@ def test_same_key_with_different_bytes_is_a_conflict(harness):
     assert len(harness.dispatched) == 1
 
 
-def test_abc_reference_is_accepted_and_dispatched_with_curator_groups(harness):
-    response = post_abc(harness.client, {"abc_reference": ABC})
+def test_source_reference_is_accepted_and_dispatched_with_curator_groups(harness):
+    response = post_reference(harness.client, {"source_reference": REFERENCE})
     assert response.status_code == 202, response.text
     conversion_id = UUID(response.json()["conversion_id"])
     row = harness.repository.rows[conversion_id]
-    assert row.input_kind == "abc_reference" and row.abc_reference == ABC
+    assert row.input_kind == "source_reference" and row.source_reference == REFERENCE
     assert row.source_digest is None and row.source_blob_reference is None
     assert harness.store.blobs == {}
     assert harness.dispatched == [(conversion_id, ("group-alpha", "group-beta"), "queued")]
 
 
+@pytest.mark.parametrize("reference", ["PMID:12345", "paper 12", "x" * 256, "Ä:1"])
+def test_any_bounded_provider_identifier_is_accepted_for_the_provider_to_resolve(
+    harness, reference,
+):
+    response = post_reference(harness.client, {"source_reference": reference})
+    assert response.status_code == 202, response.text
+    [row] = harness.repository.rows.values()
+    assert row.input_kind == "source_reference" and row.source_reference == reference
+
+
 @pytest.mark.parametrize("body", [
-    {"abc_reference": "AGRKB:abc"},
-    {"abc_reference": "PMID:12345"},
-    {"abc_reference": " AGRKB:1"},
-    {"abc_reference": 101},
-    {"abc_reference": ABC, "extra": True},
+    {"source_reference": ""},
+    {"source_reference": " EXAMPLE:1"},
+    {"source_reference": "EXAMPLE:1 "},
+    {"source_reference": "EXAMPLE:\n1"},
+    {"source_reference": "EXAMPLE:\u00011"},
+    {"source_reference": "x" * 257},
+    {"source_reference": 101},
+    {"source_reference": REFERENCE, "extra": True},
     {},
-    [ABC],
+    [REFERENCE],
     b"{not json",
 ])
-def test_invalid_abc_requests_are_rejected_before_any_record(harness, body):
-    response = post_abc(harness.client, body)
+def test_invalid_source_reference_requests_are_rejected_before_any_record(harness, body):
+    response = post_reference(harness.client, body)
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "invalid_reference"
     assert harness.repository.rows == {} and harness.dispatched == []
@@ -325,7 +340,8 @@ def test_delegated_source_credentials_are_rejected(harness):
     response = post_pdf(harness.client, extra=delegated)
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "unexpected_delegated_authorization"
-    assert post_abc(harness.client, {"abc_reference": ABC}, extra=delegated).status_code == 400
+    response = post_reference(harness.client, {"source_reference": REFERENCE}, extra=delegated)
+    assert response.status_code == 400
     assert harness.client.get(f"{BASE}/{uuid4()}", headers=delegated).status_code == 400
     assert harness.repository.rows == {} and harness.store.blobs == {}
 

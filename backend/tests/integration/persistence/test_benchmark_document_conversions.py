@@ -33,7 +33,7 @@ from src.models.sql.user import User
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
-ABC_REFERENCE = "AGRKB:101000000000001"
+SOURCE_REFERENCE = "EXAMPLE:paper-0001"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -79,21 +79,21 @@ def _pdf(repository, db, scope, *, key="key-1", digest=DIGEST_A, curator=0, owne
         input_kind="pdf",
         source_digest=digest,
         source_blob_reference="blobs/" + digest.removeprefix("sha256:"),
-        abc_reference=None,
+        source_reference=None,
         idempotency_key=key,
     )
 
 
-def _abc(repository, db, scope, *, key="abc-key", reference=ABC_REFERENCE):
+def _reference(repository, db, scope, *, key="reference-key", reference=SOURCE_REFERENCE):
     return repository.create_or_get(
         db,
         owner_subject=scope["owner"],
         service_principal="portal-client",
         curator=scope["curators"][0],
-        input_kind="abc_reference",
+        input_kind="source_reference",
         source_digest=None,
         source_blob_reference=None,
-        abc_reference=reference,
+        source_reference=reference,
         idempotency_key=key,
     )
 
@@ -121,7 +121,7 @@ def test_migration_creates_conversion_table_with_constraints():
     columns = {column["name"] for column in inspector.get_columns("benchmark_document_conversions")}
     assert columns == {
         "id", "owner_subject", "service_principal", "curator_subject", "curator_db_user_id",
-        "input_kind", "source_digest", "source_blob_reference", "abc_reference", "status",
+        "input_kind", "source_digest", "source_blob_reference", "source_reference", "status",
         "error_code", "error_message", "snapshot_id", "conversion_identity",
         "idempotency_key", "created_at", "started_at", "completed_at",
     }
@@ -161,7 +161,7 @@ def test_create_or_get_replays_same_input_and_rejects_changed_input(scope):
         with pytest.raises(ConversionIdempotencyConflict):
             _pdf(repository, db, scope, curator=1)
         with pytest.raises(ConversionIdempotencyConflict):
-            _abc(repository, db, scope, key="key-1")
+            _reference(repository, db, scope, key="key-1")
         other, created = _pdf(repository, db, scope, key="key-2", digest=DIGEST_B)
         assert created is True and other.id != row.id
         db.commit()
@@ -181,19 +181,26 @@ def test_same_key_is_independent_per_owner_and_reads_are_owner_scoped(scope):
         assert repository.get_for_owner(db, uuid4(), scope["owner"]) is None
 
 
-def test_abc_conversion_records_reference_only(scope):
+def test_source_reference_conversion_records_reference_only(scope):
     repository = DocumentConversionRepository()
     with SessionLocal() as db:
-        row, created = _abc(repository, db, scope)
+        row, created = _reference(repository, db, scope)
         db.commit()
         assert created is True
-        assert (row.input_kind, row.abc_reference, row.source_digest, row.source_blob_reference) == (
-            "abc_reference", ABC_REFERENCE, None, None,
+        assert (
+            row.input_kind, row.source_reference, row.source_digest, row.source_blob_reference,
+        ) == (
+            "source_reference", SOURCE_REFERENCE, None, None,
         )
-        replay, created = _abc(repository, db, scope)
+        replay, created = _reference(repository, db, scope)
         assert created is False and replay.id == row.id
         with pytest.raises(ConversionIdempotencyConflict):
-            _abc(repository, db, scope, reference="AGRKB:101000000000002")
+            _reference(repository, db, scope, reference="EXAMPLE:paper-0002")
+        other_format, created = _reference(
+            repository, db, scope, key="other-format", reference="PMID:12345 v2",
+        )
+        db.commit()
+        assert created is True and other_format.source_reference == "PMID:12345 v2"
 
 
 def test_lifecycle_running_then_succeeded_with_owned_snapshot(scope):
@@ -287,13 +294,21 @@ def test_database_rejects_inconsistent_rows(scope):
         {"input_kind": "pdf", "source_digest": DIGEST_A, "source_blob_reference": None,
          "status": "queued"},
         {"input_kind": "pdf", "source_digest": DIGEST_A, "source_blob_reference": "b",
-         "abc_reference": ABC_REFERENCE, "status": "queued"},
-        {"input_kind": "abc_reference", "abc_reference": "PMID:1", "status": "queued"},
-        {"input_kind": "abc_reference", "abc_reference": ABC_REFERENCE, "status": "succeeded",
+         "source_reference": SOURCE_REFERENCE, "status": "queued"},
+        {"input_kind": "source_reference", "source_reference": None, "status": "queued"},
+        {"input_kind": "source_reference", "source_reference": "", "status": "queued"},
+        {"input_kind": "source_reference", "source_reference": " PMID:1", "status": "queued"},
+        {"input_kind": "source_reference", "source_reference": "PMID:1\n", "status": "queued"},
+        {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE,
+         "source_digest": DIGEST_A, "status": "queued"},
+        {"input_kind": "reference", "source_reference": SOURCE_REFERENCE, "status": "queued"},
+        {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE,
+         "status": "succeeded",
          "completed_at": datetime.now(timezone.utc)},
-        {"input_kind": "abc_reference", "abc_reference": ABC_REFERENCE, "status": "failed",
+        {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE, "status": "failed",
          "completed_at": datetime.now(timezone.utc)},
-        {"input_kind": "abc_reference", "abc_reference": ABC_REFERENCE, "status": "paused"},
+        {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE,
+         "status": "paused"},
     ]
     with SessionLocal() as db:
         for values in invalid_rows:
@@ -340,7 +355,7 @@ def _queued_pdf_conversion(scope, store):
             input_kind="pdf",
             source_digest=digest,
             source_blob_reference=blob_reference,
-            abc_reference=None,
+            source_reference=None,
             idempotency_key=f"service-{uuid4()}",
         )
         db.commit()

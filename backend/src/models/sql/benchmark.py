@@ -135,7 +135,7 @@ class BenchmarkDocumentConversion(Base):
     input_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     source_digest: Mapped[str | None] = mapped_column(String(71))
     source_blob_reference: Mapped[str | None] = mapped_column(String(2048))
-    abc_reference: Mapped[str | None] = mapped_column(String(64))
+    source_reference: Mapped[str | None] = mapped_column(String(256))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(String(512))
@@ -163,15 +163,16 @@ class BenchmarkDocumentConversion(Base):
             name="ck_benchmark_document_conversions_identity",
         ),
         CheckConstraint(
-            "input_kind IN ('pdf', 'abc_reference')",
+            "input_kind IN ('pdf', 'source_reference')",
             name="ck_benchmark_document_conversions_input_kind",
         ),
         CheckConstraint(
             "(input_kind = 'pdf' AND source_digest IS NOT NULL "
             "AND source_digest ~ '^sha256:[0-9a-f]{64}$' AND source_blob_reference IS NOT NULL "
-            "AND char_length(source_blob_reference) > 0 AND abc_reference IS NULL) OR "
-            "(input_kind = 'abc_reference' AND abc_reference IS NOT NULL "
-            "AND abc_reference ~ '^AGRKB:[0-9]+$' "
+            "AND char_length(source_blob_reference) > 0 AND source_reference IS NULL) OR "
+            "(input_kind = 'source_reference' AND source_reference IS NOT NULL "
+            "AND char_length(source_reference) BETWEEN 1 AND 256 "
+            "AND source_reference ~ '^[^[:space:]](.*[^[:space:]])?$' "
             "AND source_digest IS NULL AND source_blob_reference IS NULL)",
             name="ck_benchmark_document_conversions_input_fields",
         ),

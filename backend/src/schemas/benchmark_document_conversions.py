@@ -6,16 +6,24 @@ from uuid import UUID
 
 from pydantic import Field
 
+from src.lib.benchmarks.document_conversions import (
+    MAX_SOURCE_REFERENCE_LENGTH,
+    SOURCE_REFERENCE_PATTERN,
+)
 from src.lib.benchmarks.models import FrozenStrictModel
 from src.lib.benchmarks.snapshots import FrozenBenchmarkInputSnapshot
 
 BenchmarkDocumentConversionState = Literal["queued", "running", "succeeded", "failed"]
 
 
-class BenchmarkDocumentConversionAbcRequest(FrozenStrictModel):
-    """JSON body naming one Alliance literature (ABC) paper by its curie."""
+class BenchmarkDocumentConversionSourceReferenceRequest(FrozenStrictModel):
+    """JSON body naming one paper by an identifier the configured document source resolves."""
 
-    abc_reference: str = Field(pattern=r"^AGRKB:[0-9]+$", max_length=64)
+    source_reference: str = Field(
+        min_length=1,
+        max_length=MAX_SOURCE_REFERENCE_LENGTH,
+        pattern=SOURCE_REFERENCE_PATTERN,
+    )
 
 
 class BenchmarkDocumentConversionAccepted(FrozenStrictModel):
@@ -39,7 +47,7 @@ class BenchmarkDocumentConversionStatus(FrozenStrictModel):
 
 
 __all__ = [
-    "BenchmarkDocumentConversionAbcRequest",
+    "BenchmarkDocumentConversionSourceReferenceRequest",
     "BenchmarkDocumentConversionAccepted",
     "BenchmarkDocumentConversionFailure",
     "BenchmarkDocumentConversionState",

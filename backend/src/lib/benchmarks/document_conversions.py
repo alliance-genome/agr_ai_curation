@@ -4,9 +4,10 @@ A conversion record is owned by the calling benchmark service subject. Reads
 and idempotency keys are scoped to that owner; the requesting curator is
 recorded separately. Failed conversions are terminal and never retried.
 
-The conversion service turns an uploaded PDF, or an Alliance literature (ABC)
-paper, into the application's standard pipeline elements and freezes them as
-an ``application/json`` benchmark input snapshot owned by the calling service.
+The conversion service turns an uploaded PDF, or a paper named by a reference
+that the deployment's configured document-source provider resolves, into the
+application's standard pipeline elements and freezes them as an
+``application/json`` benchmark input snapshot owned by the calling service.
 """
 
 from __future__ import annotations
@@ -74,7 +75,7 @@ logger = logging.getLogger(__name__)
 
 
 INPUT_KIND_PDF = "pdf"
-INPUT_KIND_ABC_REFERENCE = "abc_reference"
+INPUT_KIND_SOURCE_REFERENCE = "source_reference"
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
 STATUS_SUCCEEDED = "succeeded"
@@ -82,7 +83,15 @@ STATUS_FAILED = "failed"
 INTERRUPTED_ERROR_CODE = "interrupted"
 
 _DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
-_ABC_REFERENCE_PATTERN = re.compile(r"^AGRKB:[0-9]+$")
+# A provider-neutral identifier: bounded, non-empty, no surrounding whitespace
+# and no control characters. The configured document-source provider decides
+# whether it names a paper. The bound keeps the snapshot reference that embeds
+# it within the snapshot reference column.
+MAX_SOURCE_REFERENCE_LENGTH = 256
+SOURCE_REFERENCE_PATTERN = (
+    r"^[^\s\x00-\x1f\x7f-\x9f](?:[^\x00-\x1f\x7f-\x9f]*[^\s\x00-\x1f\x7f-\x9f])?$"
+)
+_SOURCE_REFERENCE_RE = re.compile(SOURCE_REFERENCE_PATTERN)
 _ERROR_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _MAX_SUBJECT_LENGTH = 255
 _MAX_IDEMPOTENCY_KEY_LENGTH = 255
@@ -111,12 +120,12 @@ def _validate_input(
     input_kind: str,
     source_digest: str | None,
     source_blob_reference: str | None,
-    abc_reference: str | None,
+    source_reference: str | None,
 ) -> None:
     if input_kind == INPUT_KIND_PDF:
-        if source_digest is None or source_blob_reference is None or abc_reference is not None:
+        if source_digest is None or source_blob_reference is None or source_reference is not None:
             raise ValueError(
-                "PDF conversions require a source digest and blob reference and no ABC reference"
+                "PDF conversions require a source digest and blob reference and no source reference"
             )
         if not _DIGEST_PATTERN.fullmatch(source_digest):
             raise ValueError("PDF conversion source digest must be sha256:<64 lowercase hex>")
@@ -126,11 +135,18 @@ def _validate_input(
             max_length=_MAX_BLOB_REFERENCE_LENGTH,
         )
         return
-    if input_kind == INPUT_KIND_ABC_REFERENCE:
+    if input_kind == INPUT_KIND_SOURCE_REFERENCE:
         if source_digest is not None or source_blob_reference is not None:
-            raise ValueError("ABC conversions must not carry PDF source fields")
-        if abc_reference is None or not _ABC_REFERENCE_PATTERN.fullmatch(abc_reference):
-            raise ValueError("ABC conversions require an AGRKB reference")
+            raise ValueError("Source reference conversions must not carry PDF source fields")
+        if (
+            not isinstance(source_reference, str)
+            or len(source_reference) > MAX_SOURCE_REFERENCE_LENGTH
+            or not _SOURCE_REFERENCE_RE.fullmatch(source_reference)
+        ):
+            raise ValueError(
+                "Source reference conversions require a nonempty normalized reference "
+                f"of at most {MAX_SOURCE_REFERENCE_LENGTH} characters"
+            )
         return
     raise ValueError("Unsupported conversion input kind")
 
@@ -148,7 +164,7 @@ class DocumentConversionRepository:
         input_kind: str,
         source_digest: str | None,
         source_blob_reference: str | None,
-        abc_reference: str | None,
+        source_reference: str | None,
         idempotency_key: str,
     ) -> tuple[BenchmarkDocumentConversion, bool]:
         """Create a queued conversion, or return the one already bound to this key.
@@ -169,7 +185,7 @@ class DocumentConversionRepository:
             input_kind=input_kind,
             source_digest=source_digest,
             source_blob_reference=source_blob_reference,
-            abc_reference=abc_reference,
+            source_reference=source_reference,
         )
 
         inserted_id = db.scalar(
@@ -183,7 +199,7 @@ class DocumentConversionRepository:
                 input_kind=input_kind,
                 source_digest=source_digest,
                 source_blob_reference=source_blob_reference,
-                abc_reference=abc_reference,
+                source_reference=source_reference,
                 status=STATUS_QUEUED,
                 idempotency_key=idempotency_key,
             )
@@ -209,7 +225,7 @@ class DocumentConversionRepository:
         if (
             row.input_kind != input_kind
             or row.source_digest != source_digest
-            or row.abc_reference != abc_reference
+            or row.source_reference != source_reference
             or row.curator_subject != curator.subject
             or row.curator_db_user_id != curator.db_user_id
         ):
@@ -365,10 +381,10 @@ CONVERSION_RESOLVER_ID = "document_conversion"
 CONVERSION_REFERENCE_SCHEMA = "document_conversion/v1"
 CONVERTED_CONTENT_TYPE = "application/json"
 PARSER_PDFX = "pdfx"
-PARSER_ABC_MAIN_TEXT = "abc_main_text"
-ABC_MAIN_TEXT_CONTENT_FORMAT = "provider_markdown"
-ABC_NOT_FOUND_MESSAGE = (
-    "The Alliance literature database has no usable text or PDF for this paper."
+PARSER_SOURCE_MAIN_TEXT = "source_main_text"
+SOURCE_MAIN_TEXT_CONTENT_FORMAT = "provider_markdown"
+SOURCE_NOT_FOUND_MESSAGE = (
+    "The configured document source has no usable text or PDF for this paper."
 )
 
 
@@ -382,29 +398,29 @@ class _ConversionFailure(Exception):
 
 
 def _not_found() -> _ConversionFailure:
-    return _ConversionFailure("not_found", ABC_NOT_FOUND_MESSAGE)
+    return _ConversionFailure("not_found", SOURCE_NOT_FOUND_MESSAGE)
 
 
-def _abc_access_denied() -> _ConversionFailure:
+def _source_access_denied() -> _ConversionFailure:
     return _ConversionFailure(
         "access_denied",
-        "The Alliance literature database does not allow this curator's groups "
+        "The configured document source does not allow this curator's groups "
         "to read this paper.",
     )
 
 
-def _abc_ambiguous() -> _ConversionFailure:
+def _source_ambiguous() -> _ConversionFailure:
     return _ConversionFailure(
         "ambiguous_source",
-        "The Alliance literature database has more than one equally preferred "
+        "The configured document source has more than one equally preferred "
         "text or PDF for this paper.",
     )
 
 
-def _abc_unavailable() -> _ConversionFailure:
+def _source_unavailable() -> _ConversionFailure:
     return _ConversionFailure(
         "source_unavailable",
-        "The Alliance literature database could not provide this paper.",
+        "The configured document source could not provide this paper.",
     )
 
 
@@ -416,15 +432,15 @@ def _extraction_failed() -> _ConversionFailure:
     return _ConversionFailure("extraction_failed", "Text could not be extracted from the PDF.")
 
 
-def _invalid_abc_pdf() -> _ConversionFailure:
+def _invalid_source_pdf() -> _ConversionFailure:
     return _ConversionFailure(
         "invalid_document",
-        "The Alliance literature database PDF for this paper is empty, too large, "
+        "The configured document source's PDF for this paper is empty, too large, "
         "or not a PDF.",
     )
 
 
-def _abc_access(source_artifact: Any) -> dict[str, Any]:
+def _source_access(source_artifact: Any) -> dict[str, Any]:
     policy = source_artifact.access_policy
     return {
         "source_artifact_id": source_artifact.artifact_id,
@@ -461,17 +477,21 @@ def conversion_identity(
     merge: bool | None,
     content_format: str,
     page_provenance_receipt: dict[str, Any] | None,
-    abc_artifact: dict[str, str] | None = None,
-    abc_figure_metadata: list[dict[str, str]] | None = None,
-    abc_access: dict[str, Any] | None = None,
+    source_provider: str | None = None,
+    source_artifact: dict[str, str] | None = None,
+    source_figure_metadata: list[dict[str, str]] | None = None,
+    source_access: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe everything that determined a conversion's output elements.
 
     ``methods`` and ``merge`` are the PDF extraction settings and are ``None``
-    when ABC main text was used instead of PDF extraction. The application
-    version is included so the identity changes when the pipeline changes.
-    ``abc_access`` records the access policy of the ABC source artifact that
-    the requesting curator's groups were authorized against, for audit.
+    when the provider's main text was used instead of PDF extraction. The
+    application version is included so the identity changes when the pipeline
+    changes. For source references, ``source_provider`` is the configured
+    provider's ID, ``source_artifact`` is the provider artifact whose bytes were
+    converted, and ``source_access`` records the access policy of the provider
+    source PDF that the requesting curator's groups were authorized against,
+    for audit.
     """
 
     identity: dict[str, Any] = {
@@ -483,12 +503,14 @@ def conversion_identity(
         "page_provenance_receipt": page_provenance_receipt,
         "application_version": get_app_version(),
     }
-    if abc_access is not None:
-        identity["abc_access"] = abc_access
-    if abc_artifact is not None:
-        identity["abc_artifact"] = abc_artifact
-    if abc_figure_metadata:
-        identity["abc_figure_metadata"] = abc_figure_metadata
+    if source_provider is not None:
+        identity["source_provider"] = source_provider
+    if source_access is not None:
+        identity["source_access"] = source_access
+    if source_artifact is not None:
+        identity["source_artifact"] = source_artifact
+    if source_figure_metadata:
+        identity["source_figure_metadata"] = source_figure_metadata
     return identity
 
 
@@ -517,7 +539,7 @@ class _ConversionJob:
     input_kind: str
     source_digest: str | None
     source_blob_reference: str | None
-    abc_reference: str | None
+    source_reference: str | None
 
     @classmethod
     def from_row(cls, row: Any) -> "_ConversionJob":
@@ -530,7 +552,7 @@ class _ConversionJob:
             input_kind=row.input_kind,
             source_digest=row.source_digest,
             source_blob_reference=row.source_blob_reference,
-            abc_reference=row.abc_reference,
+            source_reference=row.source_reference,
         )
 
 
@@ -564,8 +586,8 @@ class DocumentConversionService:
         """Convert and freeze one queued conversion created by the API layer.
 
         ``authorized_group_ids`` are the requesting curator's active groups;
-        they gate which ABC source PDFs may be used, exactly as for curator
-        ABC imports.
+        they gate which provider source PDFs may be used, exactly as for
+        curator reference imports.
         """
 
         try:
@@ -631,8 +653,8 @@ class DocumentConversionService:
                 elements=elements,
                 identity=conversion_identity(input_kind=INPUT_KIND_PDF, **pdfx_identity),
             )
-        if job.input_kind == INPUT_KIND_ABC_REFERENCE:
-            return await _convert_abc_reference(job, authorized_group_ids)
+        if job.input_kind == INPUT_KIND_SOURCE_REFERENCE:
+            return await _convert_source_reference(job, authorized_group_ids)
         raise ValueError("Unsupported conversion input kind")
 
     def _read_uploaded_pdf(self, job: _ConversionJob) -> bytes:
@@ -666,8 +688,10 @@ class DocumentConversionService:
         if job.input_kind == INPUT_KIND_PDF:
             reference_fields["source_digest"] = str(job.source_digest)
         else:
-            reference_fields["abc_reference"] = str(job.abc_reference)
-        reference = json.dumps(reference_fields, sort_keys=True, separators=(",", ":"))
+            reference_fields["source_reference"] = str(job.source_reference)
+        reference = json.dumps(
+            reference_fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
         version = identity_version(converted.identity)
         digest = _sha256(content)
         provenance = BenchmarkSourceProvenance(
@@ -740,60 +764,61 @@ async def _parse_pdf(
     }
 
 
-async def _convert_abc_reference(
+async def _convert_source_reference(
     job: _ConversionJob, authorized_group_ids: tuple[str, ...]
 ) -> _ConvertedDocument:
-    """Use the curator ABC import selection with the application's own ABC access."""
+    """Use the curator reference-import selection with the application's own source access."""
 
     try:
         provider = get_configured_document_source_provider()
     except DocumentSourceError as exc:
         _report("document_conversion_source", exc)
-        raise _abc_unavailable() from None
+        raise _source_unavailable() from None
     try:
         decision = await select_reference_import_candidate(
             provider=provider,
-            identifier=str(job.abc_reference),
+            identifier=str(job.source_reference),
             authorized_group_ids=authorized_group_ids,
             request_bearer_token=None,
             allow_conversion_request=False,
         )
         if decision.status == ReferenceImportDecisionStatus.ACCESS_DENIED:
-            raise _abc_access_denied()
+            raise _source_access_denied()
         if decision.status == ReferenceImportDecisionStatus.AMBIGUOUS_MATCH:
-            raise _abc_ambiguous()
+            raise _source_ambiguous()
         selected = decision.selected
         if selected is None:
             raise _not_found()
         if selected.converted_artifact is not None:
-            return await _convert_abc_main_text(provider, selected)
+            return await _convert_source_main_text(provider, selected)
         pdf_bytes = await provider.download_artifact(
             selected.source_artifact.artifact_id, request_bearer_token=None,
         )
         try:
             _validate_source_pdf_bytes(pdf_bytes)
         except DocumentSourceError:
-            raise _invalid_abc_pdf() from None
+            raise _invalid_source_pdf() from None
         elements, pdfx_identity = await _parse_pdf(pdf_bytes, job)
         return _ConvertedDocument(
             elements=elements,
             identity=conversion_identity(
-                input_kind=INPUT_KIND_ABC_REFERENCE,
-                abc_artifact={
+                input_kind=INPUT_KIND_SOURCE_REFERENCE,
+                source_provider=provider.provider_id,
+                source_artifact={
                     "id": selected.source_artifact.artifact_id,
                     "checksum": _sha256(pdf_bytes),
                 },
-                abc_access=_abc_access(selected.source_artifact),
+                source_access=_source_access(selected.source_artifact),
                 **pdfx_identity,
             ),
         )
     except DocumentSourceAccessDenied:
-        raise _abc_access_denied() from None
+        raise _source_access_denied() from None
     except DocumentSourceIngestionError:
         raise _invalid_document() from None
     except DocumentSourceError as exc:
         _report("document_conversion_source", exc)
-        raise _abc_unavailable() from None
+        raise _source_unavailable() from None
     finally:
         try:
             await provider.aclose()
@@ -803,10 +828,10 @@ async def _convert_abc_reference(
             )
 
 
-async def _convert_abc_main_text(
+async def _convert_source_main_text(
     provider: DocumentSourceProvider, selected: Any
 ) -> _ConvertedDocument:
-    """Convert provider main-text Markdown exactly as curator ABC imports do."""
+    """Convert provider main-text Markdown exactly as curator reference imports do."""
 
     converted = selected.converted_artifact
     markdown_bytes = await provider.download_artifact(
@@ -834,15 +859,16 @@ async def _convert_abc_main_text(
     return _ConvertedDocument(
         elements=elements,
         identity=conversion_identity(
-            input_kind=INPUT_KIND_ABC_REFERENCE,
-            parser=PARSER_ABC_MAIN_TEXT,
+            input_kind=INPUT_KIND_SOURCE_REFERENCE,
+            parser=PARSER_SOURCE_MAIN_TEXT,
             methods=None,
             merge=None,
-            content_format=ABC_MAIN_TEXT_CONTENT_FORMAT,
+            content_format=SOURCE_MAIN_TEXT_CONTENT_FORMAT,
             page_provenance_receipt=None,
-            abc_artifact={"id": converted.artifact_id, "checksum": _sha256(markdown_bytes)},
-            abc_figure_metadata=figure_identity,
-            abc_access=_abc_access(selected.source_artifact),
+            source_provider=provider.provider_id,
+            source_artifact={"id": converted.artifact_id, "checksum": _sha256(markdown_bytes)},
+            source_figure_metadata=figure_identity,
+            source_access=_source_access(selected.source_artifact),
         ),
     )
 
