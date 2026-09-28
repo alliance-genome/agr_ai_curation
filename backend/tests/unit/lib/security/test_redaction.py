@@ -1,14 +1,73 @@
 """Shared credential redaction coverage."""
 
+import base64
 import json
 import logging
 
+import pytest
+
 from src.lib.logging_config import JsonFormatter
+from src.lib.observability import sentry
 from src.lib.security.redaction import (
     REDACTED,
     active_secret_redaction,
     redact_secrets,
 )
+
+
+@pytest.mark.parametrize("text", [
+    "Basic phenotype information was recorded for the allele",
+    "Bearer of the mutation showed no phenotype",
+    "task-3f2a9c1e-8b7d-4c2a-9f1e-123456789abc failed",
+    "risk-assessment-template-v2 loaded",
+    "desk-reference-manual-2024-edition",
+    "Basic cellular processes",
+    "Basic information",
+    "Bearer characterization",
+    "Bearer Characterization",
+])
+def test_ordinary_identifiers_and_auth_scheme_words_survive(text):
+    assert redact_secrets(text) == text
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, text, (), None)
+    assert json.loads(JsonFormatter().format(record))["message"] == text
+    assert sentry._scrub_string(text) == text
+
+
+@pytest.mark.parametrize("prefix", ["sk-", "pk-"])
+@pytest.mark.parametrize("context", ["{}", "value='{}'", "({})"])
+def test_api_keys_at_word_boundaries_are_redacted(prefix, context):
+    key = prefix + "aB3_" * 8
+    assert redact_secrets(context.format(key)) == context.format(REDACTED)
+
+
+@pytest.mark.parametrize("prefix", ["sk-", "pk-"])
+def test_api_key_prefixes_inside_identifiers_are_preserved(prefix):
+    identifier = "identifier_" + prefix + "aB3_" * 8
+    assert redact_secrets(identifier) == identifier
+
+
+@pytest.mark.parametrize("scheme", ["Bearer", "Basic", "bEaReR", "bAsIc"])
+@pytest.mark.parametrize("header", ["Authorization: {}", "authorization:\t{}", '"Authorization": "{}"'])
+def test_authorization_headers_redact_even_short_values(scheme, header):
+    value = header.format(f"{scheme} abc")
+    assert "abc" not in redact_secrets(value)
+    assert "abc" not in sentry._scrub_string(value)
+
+
+@pytest.mark.parametrize("credential", [
+    "Bearer " + "aB3_" * 8,
+    "Bearer " + "aBcD" * 8,
+    "Bearer distinctive-opaque-delegated-token",
+    "Bearer " + "eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcDEF123_-",
+    "Basic " + base64.b64encode(b"example:password").decode(),
+    "Basic " + base64.b64encode(b"a:b").decode(),
+])
+def test_standalone_credential_shapes_are_redacted(credential):
+    assert redact_secrets(f"rejected {credential}, retry") == f"rejected {REDACTED}, retry"
+    assert sentry._scrub_string(f"rejected {credential}, retry") == f"rejected {REDACTED}, retry"
+    assert credential not in redact_secrets(f"Authorization: {credential}")
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, credential, (), None)
+    assert json.loads(JsonFormatter().format(record))["message"] == REDACTED
 
 
 def test_delegated_header_and_bearer_are_redacted_in_nested_values():
