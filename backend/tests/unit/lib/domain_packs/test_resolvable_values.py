@@ -714,7 +714,11 @@ def test_header_text_recognises_explicitly_indexed_declared_values():
     {"validator_explanation": ["not", "text"]},
     {"curie": None, "name": None},  # resolved without an identity
 ])
-def test_invalid_stored_values_read_as_unresolved_with_a_marker_and_never_raise(broken, caplog):
+def test_invalid_stored_values_read_as_unresolved_with_a_marker_and_never_raise(broken, caplog, monkeypatch):
+    from unittest.mock import Mock
+
+    capture = Mock()
+    monkeypatch.setattr("src.lib.domain_packs.resolvable_values.report_runtime_exception", capture)
     from src.lib.domain_packs.resolvable_values import (
         INVALID_RECORD_EXPLANATION,
         INVALID_RECORD_SUFFIX,
@@ -727,6 +731,7 @@ def test_invalid_stored_values_read_as_unresolved_with_a_marker_and_never_raise(
 
     with caplog.at_level("WARNING"):
         effective = effective_value(stored, spec, covered_by_validator=True)
+    capture.assert_called_once()
     assert effective["resolution_state"] == UNRESOLVED
     assert effective["lookup_outcome"] == "invalid_schema"
     assert effective["validator_explanation"] == INVALID_RECORD_EXPLANATION
@@ -1759,3 +1764,100 @@ def test_a_fixed_mapping_field_takes_the_tables_own_outcomes(outcome, mapped_ok,
                            "lookup_outcome": "curator_override",
                            "curator_override": {"actor_id": "a", "actor_display_name": "A", "at": "t", "previous": {}}}}
     assert extraction_value_problems(overridden, mapped, "Observation", stored=False)
+
+
+@pytest.mark.parametrize("reader", ["declared", "stated"])
+@pytest.mark.parametrize("capture_fails", [False, True])
+def test_invalid_record_capture_is_private_and_best_effort(monkeypatch, caplog, reader, capture_fails):
+    from copy import deepcopy
+    from unittest.mock import Mock
+
+    from src.lib.domain_packs import resolvable_values as values
+
+    capture = Mock(side_effect=RuntimeError("PRIVATE reporting failure") if capture_fails else None)
+    monkeypatch.setattr(values, "report_runtime_exception", capture)
+    stored = resolved_value("PRIVATE paper wording", {"curie": "PRIVATE:1", "name": "PRIVATE label"})
+    stored["lookup_outcome"] = "PRIVATE damaged outcome"
+    original = deepcopy(stored)
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    with caplog.at_level("WARNING"):
+        result = (effective_value(stored, spec, covered_by_validator=True)
+                  if reader == "declared" else values.stated_value(stored))
+    assert result["resolution_state"] == UNRESOLVED
+    assert result["lookup_outcome"] == "invalid_schema"
+    assert stored == original
+    capture.assert_called_once()
+    exc = capture.call_args.args[0]
+    assert exc.__traceback__ is not None
+    assert exc.__cause__ is None and exc.__context__ is None
+    assert capture.call_args.kwargs == {
+        "component": "resolvable_values",
+        "operation": "read_invalid_persisted_record",
+        "tags": {"failure_category": "invalid_persisted_resolution_record"},
+        "context": {"identity_checked": reader == "declared", "mention_present": True,
+                    "curator_override_present": False},
+        "fingerprint": ["resolvable_values", "invalid_persisted_resolution_record"],
+    }
+    assert "PRIVATE" not in str(capture.call_args)
+    assert "PRIVATE" not in caplog.text
+    reporting_warnings = [
+        record for record in caplog.records
+        if record.getMessage() == "Invalid persisted resolution record reporting unavailable"
+    ]
+    assert len(reporting_warnings) == int(capture_fails)
+    assert all(record.levelname == "WARNING" and record.exc_info is None for record in reporting_warnings)
+    assert all(record.sentry_skip_event for record in caplog.records)
+    # A display copy is not a second damaged stored record.
+    capture.reset_mock()
+    if reader == "declared":
+        effective_value(result, spec, covered_by_validator=True)
+    else:
+        values.stated_value(result)
+    capture.assert_not_called()
+
+
+def test_valid_and_historical_resolution_reads_do_not_report(monkeypatch):
+    from unittest.mock import Mock
+
+    from src.lib.domain_packs import resolvable_values as values
+
+    capture = Mock()
+    monkeypatch.setattr(values, "report_runtime_exception", capture)
+    spec = ResolvableSpec(id_key="curie", label_key="name")
+    for stored in [
+        resolved_value("skin", {"curie": "ONT:1", "name": "skin"}),
+        unresolved_value("skin", identity_keys=TERM_KEYS),
+        {"curie": "ONT:1", "name": "skin"},
+        {"curie": "ONT:1", "name": "skin", "resolution_state": "pending_ontology_resolution"},
+        {"curie": "ONT:1", "name": "skin", "resolution_state": UNRESOLVED,
+         "lookup_outcome": OUTCOME_NOT_FOUND},
+    ]:
+        effective_value(stored, spec, covered_by_validator=False)
+        values.stated_value(stored)
+    capture.assert_not_called()
+
+
+def test_materialization_reports_invalid_record_once(monkeypatch, caplog):
+    from copy import deepcopy
+    from unittest.mock import Mock
+
+    from src.lib.domain_packs import resolvable_values as values
+    from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+
+    capture = Mock()
+    monkeypatch.setattr(values, "report_runtime_exception", capture)
+    stored = resolved_value("skin", {"curie": "ONT:1", "symbol": "skin"})
+    stored["validator_explanation"] = ["PRIVATE invalid explanation"]
+    envelope = DomainEnvelope(
+        envelope_id="root-env", domain_pack_id="fixture.root",
+        extracted_objects=[CuratableObjectEnvelope(object_type="Mention", pending_ref_id="m-1", payload=stored)],
+    )
+    original = deepcopy(envelope)
+    with caplog.at_level("WARNING"):
+        rows = DomainPackMetadataReviewRowMaterializer(_root_pack()).materialize(envelope, envelope_revision=1)
+    assert len(rows) == 1
+    assert envelope == original
+    capture.assert_called_once()
+    warnings = [record for record in caplog.records if "unresolved" in record.message]
+    assert warnings
+    assert all(record.sentry_skip_event for record in warnings)

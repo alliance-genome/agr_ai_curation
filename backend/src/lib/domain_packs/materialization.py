@@ -3819,6 +3819,7 @@ def _read_review_value(
             "envelope_id=%s envelope_revision=%s object_id=%s object_type=%s value_path=%r: %s",
             envelope_id, envelope_revision, stable_object_id(domain_object),
             domain_object.object_type, path_text, problem,
+            extra={"sentry_skip_event": True},  # Shared value reader owns capture.
         )
     state, outcome = str(value[RESOLUTION_STATE_KEY]), str(value[LOOKUP_OUTCOME_KEY])
     mention = value.get(spec.mention_key)

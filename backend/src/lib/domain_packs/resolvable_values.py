@@ -48,6 +48,7 @@ from enum import StrEnum
 from typing import Any
 
 from src.lib.domain_packs.validator_result_classification import ValidatorFailureClassification
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.schemas.domain_envelope import parse_field_path
 
 
@@ -1072,7 +1073,7 @@ def effective_value(
     Values with a valid contract state, and values this function already
     read (a pack's display copy), come back unchanged; an invalid stored
     one reads as unresolved/``invalid_schema`` (``_invalid_record_value``),
-    is logged, and never raises. A legacy value reads
+    is reported, and never raises. A legacy value reads
     with the explanation "Recorded before validation tracking; not verified."
     When not verified it reads as unresolved/``legacy_unverified``: its
     identity keys are emptied and its stored text becomes paper wording
@@ -1088,7 +1089,7 @@ def effective_value(
             return value
         if _is_revalidated_legacy_leftover(value, spec):
             return _legacy_leftover_value(value, spec)
-        return _invalid_record_value(value, spec, problem)
+        return _invalid_record_value(value, spec)
     state, outcome = effective_resolution(
         value, identity_keys=spec.identity_keys, covered_by_validator=covered_by_validator,
     )
@@ -1151,10 +1152,38 @@ def _legacy_leftover_value(value: Mapping[str, Any], spec: ResolvableSpec) -> di
     return annotated
 
 
-def _invalid_record_value(value: Mapping[str, Any], spec: ResolvableSpec, problem: str) -> dict[str, Any]:
+def _report_invalid_record(value: Mapping[str, Any], *, identity_checked: bool) -> None:
+    """Report at the read boundary without forwarding stored content or validation errors."""
+
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error("Stored resolvable value violates the persisted contract"),
+            component="resolvable_values",
+            operation="read_invalid_persisted_record",
+            tags={"failure_category": "invalid_persisted_resolution_record"},
+            context={
+                "identity_checked": identity_checked,
+                "mention_present": MENTION_KEY in value,
+                "curator_override_present": CURATOR_OVERRIDE_KEY in value,
+            },
+            fingerprint=["resolvable_values", "invalid_persisted_resolution_record"],
+        )
+    except Exception:
+        # Observability must not prevent reading the remaining envelope values.
+        _log.warning(
+            "Invalid persisted resolution record reporting unavailable",
+            extra={"sentry_skip_event": True},
+        )
+    _log.warning(
+        "Stored resolvable value breaks the contract and reads as unresolved",
+        extra={"sentry_skip_event": True},
+    )
+
+
+def _invalid_record_value(value: Mapping[str, Any], spec: ResolvableSpec) -> dict[str, Any]:
     """A stored value that breaks the contract, read as unresolved with a clear marker."""
 
-    _log.warning("Stored resolvable value breaks the contract and reads as unresolved: %s", problem)
+    _report_invalid_record(value, identity_checked=True)
     annotated = dict(value)
     stored = _stored_text(value, spec)
     for key in spec.identity_keys:
@@ -1182,7 +1211,7 @@ def stated_value(value: Any) -> Any:
     problem = stored_state_problem(value)
     if problem is None:
         return value
-    _log.warning("Stored resolvable value breaks the contract and reads as unresolved: %s", problem)
+    _report_invalid_record(value, identity_checked=False)
     return {
         **value,
         RESOLUTION_STATE_KEY: UNRESOLVED,
