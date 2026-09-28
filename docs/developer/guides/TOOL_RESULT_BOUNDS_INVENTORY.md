@@ -178,3 +178,14 @@ measurement/blocking.
   `pkg::test_write_response_is_captured_and_read_without_repetition` covers POST,
   PUT, PATCH and DELETE, Unicode, minimum budgets, upstream changes, invalid refs
   and cross-session reads while asserting exactly one write.
+
+### TraceReview extraction for bounded continuations
+
+TraceReview parses the Agents SDK's Python dictionary literals and complete
+`AgrQueryResult` field representations, including nested detail content, hashes,
+returned ranges, cursors and captured response refs. Raw evidence remains intact.
+SDK serialization regressions in
+`backend/tests/unit/lib/openai_agents/test_bounded_result_trace_review.py` prove
+exact Unicode reconstruction across detail chunks at the minimum and larger
+budgets. Parser and analyzer regressions also cover nested pages, empty results,
+escaped field-like scientific text and rejection of nonliteral expressions.

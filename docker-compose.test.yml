@@ -150,6 +150,7 @@ services:
       - ./config:/runtime/config:ro
       - ./packages:/app/packages:ro
       - ./docs:/app/docs:ro
+      - ./trace_review:/app/trace_review:ro
       - ./frontend:/app/frontend:ro
       - ./config:/workspace/config:ro
       - ./packages:/workspace/packages:ro
@@ -218,6 +219,7 @@ services:
       - ./config:/runtime/config:ro
       - ./packages:/app/packages:ro
       - ./docs:/app/docs:ro
+      - ./trace_review:/app/trace_review:ro
       - ./frontend:/app/frontend:ro
       - ./config:/workspace/config:ro
       - ./packages:/workspace/packages:ro
