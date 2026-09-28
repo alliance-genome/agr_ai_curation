@@ -37,6 +37,19 @@ externally isolated Compose project and cleans only that project. See
 [the canary boundary and evidence guide](guides/BENCHMARK_REPLACEMENT_CANARY.md).
 This does not change the live release validation sequence.
 
+## Superseded PR checks
+
+Unit Tests and Agent PR Gate group runs by workflow, event, and PR number.
+When a new run starts for that PR, GitHub cancels the previous pending or
+running checks for the same workflow. Different PRs and workflows remain
+independent. Always assess checks on the current PR head; a canceled older
+run is not a failure of the current revision.
+
+Non-PR runs use their unique run ID as the group key, so every push to `main`
+or `develop` retains its validation, including runs still waiting for a
+runner. Publishing, release, scheduled hygiene, and Claude review workflows
+keep their existing concurrency policies.
+
 ## CI image caching and selection
 
 Backend test images, the frontend `nginx-runtime-base` contract image, and the

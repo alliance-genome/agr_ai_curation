@@ -8,6 +8,12 @@ permissions:
   contents: read
   checks: read
 
+# Supersede checks only within the same PR and workflow. Give every non-PR
+# run its own group so pushes cannot evict running or pending validation.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   agent-pr-gate:
     name: Agent PR Gate
