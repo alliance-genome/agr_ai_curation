@@ -553,6 +553,60 @@ def test_builder_policy_rejection_precedes_all_save_mutations(
     assert [db.scalar(sa.select(sa.func.count()).select_from(model)) for model in models] == counts
 
 
+@pytest.mark.parametrize("transition", ["create", "update"])
+def test_authenticated_profile_builder_attachment_exemption(
+    execution_db, builder_policies, monkeypatch, transition,
+):
+    from src.lib.agent_studio import capability_catalog, custom_agent_service as service
+    from src.lib.agent_studio.execution_revision_service import get_execution_revision
+    from src.lib.agent_studio.profile_builder_contract import profile_builder_tool_ids
+    from src.schemas.generic_extraction_profile import GenericProfileContract
+
+    db, *_ = execution_db
+    builders = set(profile_builder_tool_ids([]))
+    assert builders == {policy.tool_key for policy in builder_policies}
+    assert all(policy.allow_execute and not policy.allow_attach for policy in builder_policies)
+
+    # Isolate catalog discovery, not canonical validation or authenticated
+    # authorization. Non-attachable builders are absent from selectable tools.
+    monkeypatch.setattr(
+        capability_catalog, "build_authorized_capability_catalog",
+        lambda **_kwargs: [capability_catalog.CapabilityRecord(
+            kind="model", resource_id="gpt-6-sol", name="Test model", description="Test",
+        )],
+    )
+    contract = GenericProfileContract(name="Details", semantic_class="detail", fields=[])
+    head = service.create_custom_agent(
+        db, 1, "Authenticated builder", model_id="gpt-6-sol",
+        custom_prompt="Keep curator instructions.", model_temperature=0.0,
+        include_group_rules=False, active_group_ids=[],
+        new_generic_profile=contract if transition == "create" else None,
+    )
+    first_id = head.execution_revision_id
+    first, original = get_execution_revision(db, head.id, first_id, 1, active_group_ids=[])
+    if transition == "update":
+        assert original.tool_ids == []
+        assert original.output_contract.output_state == "none"
+        service.update_custom_agent(
+            db, head, expected_revision_id=first_id, active_group_ids=[],
+            new_generic_profile=contract,
+        )
+        assert head.execution_revision_id != first_id
+    db.flush()
+    db.refresh(head)
+    revision, saved = get_execution_revision(
+        db, head.id, head.execution_revision_id, 1, active_group_ids=[],
+    )
+    assert revision.revision == (1 if transition == "create" else 2)
+    assert set(head.tool_ids) == set(saved.tool_ids) == builders
+    assert saved.output_contract.output_mode == "profile_bound_generic"
+    assert saved.output_contract.generic_profile_ref is not None
+    assert saved.instructions == "Keep curator instructions."
+    assert saved.model_temperature == 0.0
+    db.refresh(first)
+    assert first.snapshot == original.model_dump(mode="json")
+
+
 def test_workshop_create_update_profile_binding_and_atomic_rollback(execution_db, builder_policies):
     from src.lib.agent_studio import custom_agent_service as service
     from src.lib.agent_studio.execution_revision_service import (
