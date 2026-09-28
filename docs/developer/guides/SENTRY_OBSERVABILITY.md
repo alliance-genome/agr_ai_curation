@@ -499,6 +499,13 @@ companion log skips event promotion, and the generic tool failure result is
 unchanged when capture is unavailable. Routine validation results and tool-scope
 rejections do not report.
 
+Agent Studio chat reports missing or blank OpenAI credentials through
+`raise_sanitized_http_exception()` before invoking the provider. The exception
+contains only a fixed configuration-failure message; request content and
+credential values are omitted. The HTTP 500 detail remains `Chat service not
+properly configured` even when capture fails, and the companion log skips event
+promotion.
+
 Agent Studio flow proposals do not persist flows. The final create operation in
 `src/api/flows.py` reports unexpected add, commit, and refresh failures through
 `raise_sanitized_http_exception()`, which delegates to `report_runtime_exception()`.
