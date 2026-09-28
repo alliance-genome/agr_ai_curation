@@ -38,6 +38,12 @@ on:
       - 'docs/testing/executable-flow-graph-parity.json'
       - '.github/workflows/test.yml'
 
+# Supersede checks only within the same PR and workflow. Give every non-PR
+# run its own group so pushes cannot evict running or pending validation.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   backend-unit-tests:
     name: Backend Unit Tests
