@@ -29,6 +29,9 @@ export default function OutputStructureWorkflow(props: OutputStructureEditorProp
               <Typography sx={{  fontWeight: 600 }}>{row.field.display_name || row.field.key}</Typography>
               {row.depth > 0 && <Typography variant="body2" color="text.secondary">Part of {rows.find((parent) => parent.address.join('.') === row.address.slice(0, -1).join('.'))?.field.display_name || 'parent answer'}</Typography>}
               {row.field.description && <Typography variant="body2" sx={{ mt: 0.5 }}>{row.field.description}</Typography>}
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                Synonyms / source labels (not output fields): {row.field.source_labels?.length ? row.field.source_labels.join(' · ') : 'None'}
+              </Typography>
             </TableCell>
             <TableCell>{row.field.required ? (row.depth ? 'With its parent answer' : 'Yes') : 'No'}</TableCell>
             <TableCell>{row.field.nullable ? 'Yes' : 'No'}</TableCell><TableCell><ValidatorAttachmentStatus value={value} address={row.address} issues={issues} /></TableCell>
