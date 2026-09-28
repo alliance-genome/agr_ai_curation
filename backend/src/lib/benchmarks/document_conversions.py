@@ -66,7 +66,7 @@ from src.lib.openai_agents.config import (
     get_benchmark_document_conversion_stale_seconds,
     get_benchmark_max_input_bytes,
 )
-from src.lib.pipeline.pdfx_parser import PDFXParser
+from src.lib.pipeline.pdfx_parser import PDFX_FAILURE_DETAILS_KEY, PDFXParser
 from src.models.sql.benchmark import BenchmarkDocumentConversion, BenchmarkInputSnapshot
 from src.models.sql.database import SessionLocal
 
@@ -753,7 +753,16 @@ async def _parse_pdf(
                 user_id=str(job.curator_db_user_id),
                 save_artifacts=False,
             )
-    except (PDFParsingError, PDFCancellationError, ConfigurationError):
+    except ConfigurationError as exc:
+        _report("document_conversion_configuration", exc)
+        raise _extraction_failed() from None
+    except PDFParsingError as exc:
+        # PDFX marks failures at its provider boundary; local invalid-input
+        # and empty-document errors carry no provider failure metadata.
+        if isinstance(exc.details.get(PDFX_FAILURE_DETAILS_KEY), dict):
+            _report("document_conversion_extraction", exc)
+        raise _extraction_failed() from None
+    except PDFCancellationError:
         raise _extraction_failed() from None
     return result["elements"], {
         "parser": PARSER_PDFX,
@@ -883,7 +892,10 @@ def _report(operation: str, exc: BaseException) -> None:
             operation=operation,
         )
     except Exception:
-        logger.warning("Benchmark conversion failure reporting is unavailable")
+        logger.warning(
+            "Benchmark conversion failure reporting is unavailable",
+            extra={"sentry_skip_event": True},
+        )
 
 
 async def run_conversion(
