@@ -58,6 +58,14 @@ used at several flow nodes therefore remains distinguishable. Invocation
 
 Stage durations cover their runtime intervals, including nested work. Do not
 sum parent and child intervals or overlapping validators to estimate wall time.
+Async runtime adapters use `async with` for stage measurements: start and finish
+callbacks run off the event loop and are awaited before work or return proceeds.
+Synchronous validator threads use `with` on the same measurement helpers.
+Pipeline checkpoints likewise run off the event loop, with each database session
+created, committed, and closed within its worker thread. Cancellation stops the
+async wait, not SQL already running in a thread; existing cell/attempt/lease
+fences reject late writes after terminalization. Checkpoint failures invalidate
+the trial even if a validator converts the exception into unresolved output.
 Single, batch and graph-attached validator intervals include result finalization
 and handled-error conversion. A handled validator exception records a failed
 stage with only its exception type; the normal unresolved result can still allow

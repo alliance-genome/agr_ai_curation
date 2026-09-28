@@ -329,23 +329,32 @@ class BenchmarkWorker:
     ) -> Any:
         started_at = _utcnow()
         clock_start = monotonic()
-        with self.session_factory() as session:
-            BenchmarkRepository(session).start_pipeline(
-                cell_id=cell.id, lease_owner=self.worker_id, attempt=cell.attempt_count,
-                started_at=started_at,
-            )
-            session.commit()
+        await asyncio.to_thread(self._start_pipeline, cell.id, cell.attempt_count, started_at)
         try:
             return await self._execute_authorized_target(executor, resolved, run_id, cell)
         finally:
             completed_at = _utcnow()
             elapsed_ms = max(0, round((monotonic() - clock_start) * 1000))
-            with self.session_factory() as session:
-                BenchmarkRepository(session).finish_pipeline(
-                    cell_id=cell.id, lease_owner=self.worker_id, attempt=cell.attempt_count,
-                    completed_at=completed_at, elapsed_ms=elapsed_ms,
-                )
-                session.commit()
+            await asyncio.to_thread(
+                self._finish_pipeline, cell.id, cell.attempt_count, completed_at, elapsed_ms,
+            )
+
+    def _start_pipeline(self, cell_id: UUID, attempt: int, started_at: datetime) -> None:
+        with self.session_factory() as session:
+            BenchmarkRepository(session).start_pipeline(
+                cell_id=cell_id, lease_owner=self.worker_id, attempt=attempt,
+                started_at=started_at,
+            )
+            session.commit()
+
+    def _finish_pipeline(self, cell_id: UUID, attempt: int, completed_at: datetime,
+                         elapsed_ms: int) -> None:
+        with self.session_factory() as session:
+            BenchmarkRepository(session).finish_pipeline(
+                cell_id=cell_id, lease_owner=self.worker_id, attempt=attempt,
+                completed_at=completed_at, elapsed_ms=elapsed_ms,
+            )
+            session.commit()
 
     async def _execute_authorized_target(
         self, executor: Callable[..., Any], resolved: ResolvedBenchmarkCell,
