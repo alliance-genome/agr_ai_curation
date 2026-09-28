@@ -2342,6 +2342,24 @@
           "name": "offset",
           "required": false,
           "type": "integer"
+        },
+        {
+          "default": null,
+          "name": "detail_path",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "detail_cursor",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "result_sha256",
+          "required": false,
+          "type": "any"
         }
       ],
       "summary": "Searches the current builder workspace without relisting the full recommendation manifest."
