@@ -1077,6 +1077,7 @@ def test_routine_absence_does_not_report(monkeypatch, missing_session):
 def test_real_dependency_failures_have_one_event_owner(monkeypatch, caplog, failure):
     import logging
     import smtplib
+    import time
 
     from botocore.exceptions import ClientError
     from src.lib.observability.sentry import before_send
@@ -1115,7 +1116,10 @@ def test_real_dependency_failures_have_one_event_owner(monkeypatch, caplog, fail
         if failure == "email":
             monkeypatch.setattr(notifier, "_send_email", MagicMock(side_effect=smtplib.SMTPException(secret)))
             email_module = importlib.import_module("src.lib.feedback.email_notifier")
-            monkeypatch.setattr(email_module.time, "sleep", sleep)
+            monkeypatch.setattr(email_module, "time", SimpleNamespace(sleep=sleep))
+            # Unrelated SDK/background callers must not use the retry mock.
+            time.sleep(0)
+            sleep.assert_not_called()
         else:
             notifier = module.SNSNotifier(topic_arn="arn:aws:sns:us-east-1:123456789012:fixture")
             notifier._sns_client = MagicMock()

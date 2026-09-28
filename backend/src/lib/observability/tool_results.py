@@ -31,6 +31,14 @@ def classify_tool_result(output: Any, *, studio: bool = False) -> ToolOutcome:
     if value is None:
         return ToolOutcome()
     if (
+        value.get("failure_category") == "provider_content_policy"
+        and value.get("provider") == "openai"
+        and value.get("error_code") == "bio_policy"
+        and value.get("retryable") is False
+    ):
+        # The specialist SDK error formatter owns the terminal policy report.
+        return ToolOutcome(False)
+    if (
         value.get("failure_kind") == "operational"
         and value.get("code") == "flow_authoring_compile_failed"
     ):

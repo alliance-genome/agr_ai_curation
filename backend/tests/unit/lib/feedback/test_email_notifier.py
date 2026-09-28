@@ -8,6 +8,8 @@ CRITICAL: These tests MUST FAIL before implementation!
 import pytest
 from unittest.mock import MagicMock, patch
 import smtplib
+import time
+from types import SimpleNamespace
 
 
 @pytest.fixture
@@ -53,8 +55,14 @@ def mock_config():
 def mock_retry_sleep():
     # Retry behavior should be asserted without paying the real 1s/2s backoff
     # delay in unit tests. Keep this fixture on retry-path tests.
-    with patch("src.lib.feedback.email_notifier.time.sleep") as mock_sleep:
+    mock_sleep = MagicMock()
+    with patch("src.lib.feedback.email_notifier.time", SimpleNamespace(sleep=mock_sleep)):
         yield mock_sleep
+
+
+def test_retry_sleep_mock_does_not_intercept_other_callers(mock_retry_sleep):
+    time.sleep(0)
+    mock_retry_sleep.assert_not_called()
 
 
 class TestEmailNotifierSendNotification:
