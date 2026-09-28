@@ -548,6 +548,15 @@ Use `add_observed_background_task()` or `report_background_task_exception()` for
 FastAPI background tasks. Background-task identifier tags are hashed before
 capture.
 
+Cost attribution lookup and span enrichment failures report with components
+`cost_context` and `cost_tracing`, and operations `attribution_lookup_failed`
+and `span_enrichment_failed`, respectively. Reports use fixed, chain-free
+exceptions and exception-type context bounded by the runtime reporting facade.
+Best-effort attribution and span completion survive capture failures. Missing
+ownership, omitted provider usage, and cancelled attempts do not report cost
+instrumentation failures. Companion warnings skip log-event promotion;
+Langfuse remains the source of model usage and cost evidence.
+
 Invalid persisted resolution records report at the shared resolvable-value read
 boundary with component `resolvable_values`, operation
 `read_invalid_persisted_record`, and category `invalid_persisted_resolution_record`.

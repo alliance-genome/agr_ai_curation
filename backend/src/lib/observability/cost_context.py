@@ -11,6 +11,8 @@ from contextvars import ContextVar
 from typing import Any, Mapping
 from uuid import uuid4
 
+from .runtime import report_runtime_exception, sanitized_runtime_error
+
 logger = logging.getLogger(__name__)
 _context: ContextVar[str] = ContextVar("model_cost_context", default="{}")
 _model_request: ContextVar[str] = ContextVar("model_request_identity", default="{}")
@@ -89,7 +91,20 @@ def execution_context(*, activity: str, document_id: str | None = None,
                     context["paper_category"] = "paper"
                 context["artifact_revision"] = document.file_hash or document.source_md5
     except Exception as exc:
-        logger.warning("Paper cost attribution unavailable (%s)", type(exc).__name__)
+        try:
+            report_runtime_exception(
+                sanitized_runtime_error("Paper cost attribution lookup failed"),
+                component="cost_context",
+                operation="attribution_lookup_failed",
+                context={"exception_type": type(exc).__name__},
+            )
+        except Exception:
+            # Reporting must not interrupt best-effort attribution.
+            pass
+        logger.warning(
+            "Paper cost attribution unavailable (%s)", type(exc).__name__,
+            extra={"sentry_skip_event": True},
+        )
     return context
 
 
