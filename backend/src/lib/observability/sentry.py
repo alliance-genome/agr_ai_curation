@@ -1735,7 +1735,9 @@ def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] |
     Chris's decision (2026-09-18): this Sentry is self-hosted in the same
     compose stack, the payloads are published literature and extraction output
     rather than personal data, and over-scrubbing them cost more than it
-    protected. So curator and document content goes in.
+    protected. So curator and document content goes in by default. When
+    SENTRY_CONTENT_REDACTION_ENABLED is enabled, untrusted diagnostic strings
+    are filtered while exception classifications remain available.
 
     Two limits remain, and neither is about privacy:
 
@@ -1796,6 +1798,13 @@ def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] |
     if len(chain) > 1 or chain[0] is not error:
         detail["cause_types"] = [type(link).__name__ for link in chain]
     detail = _scrub_credential_values(detail)
+    if _content_redaction_enabled():
+        # These fields can contain extraction text, SQL parameters, and
+        # user-defined field names. Keep only the trusted classifications
+        # (code, exception_type, cause_types) and numeric omission counts intact.
+        for attribute in ("issues", "details", "unknown_fields"):
+            if attribute in detail:
+                detail[attribute] = _redact_untrusted_strings(detail[attribute])
 
     # Trim entries rather than drop the context, so a very noisy failure still
     # arrives with usable diagnosis instead of being discarded by Sentry.
@@ -1844,8 +1853,8 @@ def before_send(
     scrubbed = _redact_event(enriched)
     if isinstance((hint or {}).get("log_record"), logging.LogRecord):
         _add_safe_log_event_title(scrubbed)
-    # Attached after scrubbing on purpose: this is our own structured detail,
-    # and routing it through the content scrubber is what removed it before.
+    # Structured detail applies its own content policy so safe exception
+    # classifications survive even when content redaction is enabled.
     structured_detail = _structured_error_detail(hint)
     if structured_detail:
         contexts = scrubbed.setdefault("contexts", {})

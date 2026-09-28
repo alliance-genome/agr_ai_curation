@@ -424,8 +424,14 @@ protected. A curator's flow failed on 2026-09-18 and the exact offending field
 had to be traced by hand because the alert said only "Record does not conform
 to its saved output structure".
 
-That context is attached after `_redact_event`, so it is deliberately outside
-the global scrubber. Two limits remain, and neither is about content:
+That context is attached after `_redact_event` and applies its own redaction
+policy. Content capture remains enabled by default. Setting
+`SENTRY_CONTENT_REDACTION_ENABLED=true` filters string values in `issues`,
+`details`, and `unknown_fields`, including nested persistence exception text
+and diagnostics from chained exceptions. Exception types, cause types, error
+codes, and numeric omission counts remain available for classification.
+
+Two limits apply regardless of the content-redaction setting:
 
 - credential-shaped **values** are still redacted with `_SECRET_PATTERNS`,
   because a DSN or bearer token can sit inside an ordinary-looking string such
@@ -440,8 +446,9 @@ privacy boundary: without it, any third-party exception exposing `.code` or
 
 Global redaction filters sensitive keys, content-like keys, common secret
 patterns, request query strings, cookies, request bodies, exception values,
-breadcrumbs, arbitrary extra data, and stack-frame locals. The two reviewed
-exceptions above are not subject to it.
+breadcrumbs, arbitrary extra data, and stack-frame locals. The reviewed
+exceptions above use their respective content policies; structured exception
+details honor the global content-redaction switch.
 
 ## Reporting Facades
 
