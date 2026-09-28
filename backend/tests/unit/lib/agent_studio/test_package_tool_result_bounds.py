@@ -434,6 +434,67 @@ async def test_an_oversized_resolver_result_is_replaced_like_any_run_state_resul
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "post", "patch"])
+@pytest.mark.parametrize("view_arguments", [
+    {"result_offset": 3},
+    {"result_offset": 0},
+    {"result_sha256": "unexpected-hash"},
+    {"result_sha256": ""},
+    {"detail_path": "data"},
+    {"detail_path": ""},
+    {"detail_cursor": 0},
+    {"result_ref": "unknown"},
+    {"result_ref": ""},
+])
+async def test_write_paging_is_rejected_before_execution(
+    resolved_query_tool, reported, method, view_arguments,
+):
+    tool, state = resolved_query_tool
+
+    result = await _call(tool, method=method, **view_arguments)
+
+    assert state["calls"] == []
+    assert result["error_code"] == "invalid_result_cursor"
+    assert reported == []  # Invalid caller input is not a payload-contract failure.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+@pytest.mark.parametrize("view_arguments", [{}, {
+    "result_offset": None,
+    "result_sha256": None,
+    "detail_path": None,
+    "detail_cursor": None,
+    "result_ref": None,
+}])
+async def test_ordinary_write_executes_once_with_omitted_or_null_view_arguments(
+    resolved_query_tool, reported, method, view_arguments,
+):
+    tool, state = resolved_query_tool
+
+    result = await _call(tool, method=method, **view_arguments)
+
+    assert result == state["result"]
+    assert state["calls"] == [{"method": method}]
+    assert reported == []
+
+
+@pytest.mark.asyncio
+async def test_get_pagination_requeries_without_forwarding_view_arguments(resolved_query_tool, reported):
+    tool, state = resolved_query_tool
+    state["result"] = _query_result(40)
+    pages = [await _call(tool, method="GET")]
+    while pages[-1]["result_page"]["next_call"] is not None:
+        pages.append(await _call(tool, method="GET", **pages[-1]["result_page"]["next_call"]))
+
+    assert len(pages) > 1
+    assert [row for page in pages for row in page["data"]] == state["result"]["data"]
+    assert all(serialized_size(page) <= BUDGET for page in pages)
+    assert state["calls"] == [{"method": "GET"}] * len(pages)
+    assert reported == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
 @pytest.mark.parametrize("budget", [2048, 8192])
 async def test_write_response_is_captured_and_read_without_repetition(resolved_query_tool, reported, monkeypatch, method, budget):
