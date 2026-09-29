@@ -444,15 +444,16 @@ describe('FlowBuilder', () => {
     serviceMocks.updateFlow.mockResolvedValue(buildFlowResponse({ name: 'Renamed Flow' }))
     const { unmount } = render(<FlowBuilder flowId="flow-1" />)
     await screen.findByText('Fresh Flow')
+    await waitFor(() => expect(reactFlowMocks.onNodeClick).toBeTypeOf('function'))
     fireEvent.drop(screen.getByTestId('react-flow'), {
       clientX: 320, clientY: 220,
       dataTransfer: { getData: (format: string) => format === 'application/reactflow'
         ? JSON.stringify({ type: 'agent', agentId: 'draft_agent', agentName: 'Draft Agent' }) : '' },
     })
-    act(() => reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' }))
-    act(() => reactFlowMocks.onNodeClick?.({} as never, { id: 'node_0', data: saved.flow_definition.nodes[0].data } as never))
+    await act(async () => reactFlowMocks.onConnect!({ source: 'node_0', target: 'node_1' }))
+    await act(async () => reactFlowMocks.onNodeClick!({} as never, saved.flow_definition.nodes[0] as never))
     await screen.findByTestId('node-panel')
-    act(() => nodePanelMocks.onApply?.('node_0', { task_instructions: 'Unsaved instructions' }))
+    await act(async () => nodePanelMocks.onApply!('node_0', { task_instructions: 'Unsaved instructions' }))
     const draftNodes = structuredClone(reactFlowMocks.nodes)
     const draftEdges = reactFlowMocks.edges.map(({ source, target }) => ({ source, target }))
     if (entry === 'File') {

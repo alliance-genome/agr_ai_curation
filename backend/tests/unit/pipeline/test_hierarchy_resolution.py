@@ -933,6 +933,24 @@ def test_preview_max_chars_setting_default_and_override(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_hierarchy_prompt_uses_organization_neutral_context(
+    monkeypatch, hierarchy_env
+):
+    _captured, calls = _install_sequenced_runner(monkeypatch, [_paper_output()])
+    _sentry_recorder(monkeypatch)
+
+    await hierarchy._call_llm_for_hierarchy(_PAPER_SECTIONS)
+
+    instructions = calls[0]["instructions"]
+    assert "alliance" not in instructions.lower()
+    assert "Understanding document structure is critical" in instructions
+    assert "TOP-LEVEL SECTIONS (is_top_level=true)" in instructions
+    assert "SUBSECTIONS (is_top_level=false)" in instructions
+    assert "Following parent_idx from any subsection must reach a top-level section" in instructions
+    assert "ADDITIONAL TASK - IDENTIFY ABSTRACT" in instructions
+
+
+@pytest.mark.asyncio
 async def test_prompt_marks_only_cut_previews_and_omits_empty_ones(
     monkeypatch, hierarchy_env
 ):
