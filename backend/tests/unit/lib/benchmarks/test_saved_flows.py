@@ -100,7 +100,7 @@ def pair(setup, monkeypatch):
     definition = two_step_flow()
     setup.resolved.definition = definition
     setup.resolved.entries_by_node = {"node_0": {"execution_receipt": {}}}
-    system = Mock(return_value={"curation": {"domain_pack_id": "agr.alliance.disease"}})
+    system = Mock(return_value={"curation": {"domain_pack_id": "example.pack"}})
     monkeypatch.setattr(service, "get_active_visible_agent_metadata", system)
     setup.discover.return_value = VERIFIED
     setup.discover.side_effect = None
