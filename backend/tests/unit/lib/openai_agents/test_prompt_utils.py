@@ -48,7 +48,7 @@ async def test_abstract_fallback_reserves_owned_cost_across_sync_worker(monkeypa
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)), close=close)
     monkeypatch.setattr("openai.AsyncOpenAI", lambda: client)
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-sol")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
     monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunks_by_parent_section", empty)
     monkeypatch.setattr("src.lib.weaviate_client.chunks.search_chunks_by_keyword", keyword)
@@ -254,7 +254,7 @@ def test_format_abstract_for_prompt_trims_and_formats_text():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6-sol"])
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol"])
 async def test_extract_abstract_with_llm_uses_catalog_reasoning_without_temperature(monkeypatch, model):
     captured = {}
 

@@ -30,7 +30,7 @@ def studio(execution_db, builder_policies):  # noqa: F811
 
 def existing_flexible(db):
     """A Flexible agent saved before the rule existed (written below the service rule)."""
-    agent = service.create_custom_agent(db, 1, "Older finder", model_id="gpt-6-sol",
+    agent = service.create_custom_agent(db, 1, "Older finder", model_id="gpt-6.1-sol",
                                         custom_prompt="Find things", include_group_rules=False)
     snapshot = capture_execution_snapshot(db, agent, FLEXIBLE)
     revision = append_execution_revision(db, agent, snapshot, user_id=1,
@@ -46,7 +46,7 @@ def head_mode(db, agent):
 
 def test_creating_a_flexible_agent_is_refused(studio):
     with pytest.raises(ValueError, match=RETIRED):
-        service.create_custom_agent(studio, 1, "New finder", model_id="gpt-6-sol",
+        service.create_custom_agent(studio, 1, "New finder", model_id="gpt-6.1-sol",
                                     custom_prompt="Find things", include_group_rules=False,
                                     output_contract=FLEXIBLE)
 
@@ -56,7 +56,7 @@ def test_a_template_default_that_resolves_to_flexible_is_refused(studio, monkeyp
     monkeypatch.setattr(domain_output_contract, "initial_agent_output_contract",
                         lambda agent: FLEXIBLE)
     with pytest.raises(ValueError, match=RETIRED):
-        service.create_custom_agent(studio, 1, "Template finder", model_id="gpt-6-sol",
+        service.create_custom_agent(studio, 1, "Template finder", model_id="gpt-6.1-sol",
                                     custom_prompt="Find things", include_group_rules=False)
 
 
@@ -97,7 +97,7 @@ def test_restoring_a_non_flexible_revision_never_reads_the_head(studio, monkeypa
     # that cannot create Flexible output must not depend on reading it.
     from src.lib.agent_studio import execution_revision_service as revisions
 
-    agent = service.create_custom_agent(studio, 1, "Plain finder", model_id="gpt-6-sol",
+    agent = service.create_custom_agent(studio, 1, "Plain finder", model_id="gpt-6.1-sol",
                                         custom_prompt="Find things", include_group_rules=False)
     first = agent.execution_revision_id
     service.update_custom_agent(studio, agent, expected_revision_id=first, model_temperature=0.4)

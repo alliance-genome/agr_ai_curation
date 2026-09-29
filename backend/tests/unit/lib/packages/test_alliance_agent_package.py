@@ -148,8 +148,8 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
 
 def test_alliance_specialist_models_follow_extraction_validation_roles():
     expected_model_by_category = {
-        "Extraction": "gpt-6-sol",
-        "Validation": "gpt-6-sol",
+        "Extraction": "gpt-6.1-sol",
+        "Validation": "gpt-6.1-sol",
     }
     seen_categories: set[str] = set()
 

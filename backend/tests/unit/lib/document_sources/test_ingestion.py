@@ -573,7 +573,7 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
     )
     monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", fake_chunk)
     monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", AsyncMock())
-    monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-6-sol")
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "low")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 

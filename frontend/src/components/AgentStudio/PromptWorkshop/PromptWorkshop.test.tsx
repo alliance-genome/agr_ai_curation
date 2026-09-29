@@ -211,7 +211,7 @@ function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
     inherited_allowed_group_ids: [],
     icon: '🔧',
     include_group_rules: true,
-    model_id: 'gpt-6-sol',
+    model_id: 'gpt-6.1-sol',
     model_temperature: 0.1,
     model_reasoning: undefined,
     tool_ids: [],
@@ -297,17 +297,17 @@ async function assertGroupOptions(expected: string[], absent: string[] = []): Pr
 describe('PromptWorkshop', () => {
   const modelOptions: ModelOption[] = [
     {
-      model_id: 'gpt-6-sol',
-      name: 'GPT-6 Sol',
+      model_id: 'gpt-6.1-sol',
+      name: 'GPT-6.1 Sol',
       provider: 'openai',
       description: 'fast reasoning model',
       guidance: 'Use for validation, lookups, utilities, and iterative drafting.',
       default: true,
       supports_reasoning: true,
       supports_temperature: false,
-      reasoning_options: ['low', 'medium', 'high', 'xhigh'],
+      reasoning_options: ['low', 'medium', 'high'],
       default_reasoning: 'medium',
-      reasoning_descriptions: { low: 'Fastest', medium: 'Balanced', high: 'Deep', xhigh: 'Deepest' },
+      reasoning_descriptions: { low: 'Fastest', medium: 'Balanced', high: 'Deep' },
       recommended_for: ['Validation and lightweight work'],
       avoid_for: ['Deep multi-step adjudication'],
     },
@@ -368,7 +368,7 @@ describe('PromptWorkshop', () => {
       description: 'Gene validation',
       icon: '🧬',
       category: 'Validation',
-      model_id: 'gpt-6-sol',
+      model_id: 'gpt-6.1-sol',
       tool_ids: ['search_document'],
       allowed_group_ids: [],
       output_schema_key: undefined,
@@ -383,7 +383,7 @@ describe('PromptWorkshop', () => {
       description: 'Disease validation',
       icon: '🦠',
       category: 'Validation',
-      model_id: 'gpt-6-sol',
+      model_id: 'gpt-6.1-sol',
       tool_ids: ['search_document'],
       allowed_group_ids: [],
       output_schema_key: undefined,
@@ -755,7 +755,7 @@ describe('PromptWorkshop', () => {
     await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1))
     const payload = serviceMocks.createCustomAgent.mock.calls[0][0]
     expect(payload.template_source).toBe('gene')
-    expect(payload.model_id).toBe('gpt-6-sol')
+    expect(payload.model_id).toBe('gpt-6.1-sol')
     expect(payload.allowed_group_ids).toEqual([])
     expect(payload.tool_ids).toEqual(['search_document'])
     expect(payload.icon).toBe('🔧')
@@ -1485,7 +1485,7 @@ describe('PromptWorkshop', () => {
     const request = onVerifyRequest.mock.calls[0][0]
     expect(request).toContain('Help me choose the best model settings')
     expect(request).toContain('gpt-6-astra')
-    expect(request).toContain('gpt-6-sol')
+    expect(request).toContain('gpt-6.1-sol')
     expect(request).not.toContain('gpt-5.5')
   }, 15000)
 

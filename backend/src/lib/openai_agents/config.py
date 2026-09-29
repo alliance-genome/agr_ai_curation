@@ -9,7 +9,7 @@ Environment variable naming convention:
 
 Example:
   AGENT_SUPERVISOR_MODEL=gpt-6-astra
-  AGENT_PDF_MODEL=gpt-6-sol
+  AGENT_PDF_MODEL=gpt-6.1-sol
   AGENT_PDF_TEMPERATURE=0.3
   AGENT_GENE_REASONING=medium
 
@@ -381,7 +381,7 @@ def get_model_for_agent(
     backed by their own direct ``OpenAIProvider`` client.
 
     Args:
-        model_name: The model name (e.g., "gpt-6-sol", "gemini-3-pro-preview")
+        model_name: The model name (e.g., "gpt-6.1-sol", "gemini-3-pro-preview")
 
     Returns:
         Model name string for native OpenAI, or a direct SDK model otherwise.
@@ -480,7 +480,7 @@ def supports_reasoning(model: str) -> bool:
     """Check if a model supports reasoning/thinking mode.
 
     All supported models use reasoning:
-    - GPT-6 Sol/Astra - OpenAI reasoning
+    - GPT-6.1 Sol/Astra - OpenAI reasoning
     - Gemini 3 Pro Preview (gemini-3-pro-preview) - "low"/"high" thinking levels
 
     For Gemini 3 models, the OpenAI SDK's reasoning_effort parameter maps to:
@@ -497,7 +497,7 @@ def supports_temperature(model: str) -> bool:
     """Check if a model supports temperature parameter.
 
     The model catalog (models.yaml) declares it; reasoning models such as
-    gpt-6-sol do not accept a temperature.
+    gpt-6.1-sol do not accept a temperature.
     """
     model_def = _get_model_definition(model)
     return bool(model_def.supports_temperature)
@@ -819,7 +819,7 @@ def build_model_settings(
     behavior across OpenAI and Gemini models.
 
     Reasoning is supported on:
-    - GPT-6 Sol/Astra models
+    - GPT-6.1 Sol/Astra models
     - Gemini 3 Pro Preview (gemini-3-pro-preview) - uses "low"/"high" thinking levels
 
     For Gemini 3, the OpenAI SDK's reasoning_effort parameter maps to:
@@ -827,7 +827,7 @@ def build_model_settings(
     - medium/high/xhigh -> "high" thinking level
 
     Args:
-        model: The model name (e.g., "gpt-6-sol", "gemini-3-pro-preview")
+        model: The model name (e.g., "gpt-6.1-sol", "gemini-3-pro-preview")
         temperature: Optional temperature override (0.0-1.0)
         reasoning_effort: Optional reasoning effort for models that support it
         tool_choice: Optional tool choice mode ("auto", "required", etc.)
@@ -952,7 +952,7 @@ def get_default_model() -> str:
 
     model_id = require_env(
         "DEFAULT_AGENT_MODEL",
-        hint="gpt-4o is retired; use a registered model such as gpt-6-sol or gpt-6-astra.",
+        hint="gpt-4o is retired; use a registered model such as gpt-6.1-sol or gpt-6-astra.",
     )
     _get_model_definition(model_id)  # validate the model is registered in models.yaml
     return model_id
@@ -962,7 +962,7 @@ def get_default_temperature() -> Optional[float]:
     """Get the optional default temperature from DEFAULT_AGENT_TEMPERATURE (.env).
 
     Temperature is optional and has no code default: reasoning models such as
-    gpt-6-sol do not accept it, and agents that need it (e.g. Gemini) declare it
+    gpt-6.1-sol do not accept it, and agents that need it (e.g. Gemini) declare it
     in their package agent.yaml. Returns None when unset.
     """
     from src.lib.config.env import optional_env_float

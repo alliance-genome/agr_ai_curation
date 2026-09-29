@@ -5,7 +5,7 @@ category: Demo
 subcategory: Validation
 model_config:
   # Fixture default follows the current core catalog default model.
-  model: "${AGENT_DEMO_MODEL:-gpt-6-sol}"
+  model: "${AGENT_DEMO_MODEL:-gpt-6.1-sol}"
   reasoning: medium
 supervisor_routing:
   enabled: true

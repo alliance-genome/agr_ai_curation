@@ -96,7 +96,7 @@ structured_finalization:
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_CHEMICAL_MODEL:-gpt-6-sol}"
+  model: "${AGENT_CHEMICAL_MODEL:-gpt-6.1-sol}"
   temperature: 0.1
   reasoning: "medium"
 

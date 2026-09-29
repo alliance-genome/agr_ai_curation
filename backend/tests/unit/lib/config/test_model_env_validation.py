@@ -16,16 +16,16 @@ def test_current_catalog_models_and_levels_pass():
         "DEFAULT_AGENT_MODEL": "gpt-6-astra",
         "DEFAULT_AGENT_REASONING": "low",
         "SUPERVISOR_MODEL": "gpt-6-astra",
-        "HIERARCHY_LLM_MODEL": "gpt-6-sol",
+        "HIERARCHY_LLM_MODEL": "gpt-6.1-sol",
         "HIERARCHY_LLM_REASONING": "low",
-        "FIGURE_LOCATOR_LLM_MODEL": "gpt-6-sol",
+        "FIGURE_LOCATOR_LLM_MODEL": "gpt-6.1-sol",
         "FIGURE_LOCATOR_LLM_REASONING": "LOW",
         "ABSTRACT_EXTRACTION_MODEL": "gpt-6-astra",
         "ABSTRACT_EXTRACTION_REASONING": "low",
         "AGENT_STUDIO_OPENAI_MODEL": "gpt-6-astra",
         "AGENT_STUDIO_REASONING_EFFORT": "medium",
-        "BENCHMARK_ADJUDICATION_MODEL": "gpt-6-sol",
-        "AGENT_GENE_MODEL": "gpt-6-sol",
+        "BENCHMARK_ADJUDICATION_MODEL": "gpt-6.1-sol",
+        "AGENT_GENE_MODEL": "gpt-6.1-sol",
         "AGENT_GENE_REASONING": "medium",
         # A reasoning override without its model override is checked on the agent row.
         "AGENT_SUPERVISOR_REASONING": "low",
@@ -52,14 +52,23 @@ def test_current_catalog_models_and_levels_pass():
             "AGENT_GENE_MODEL='gpt-5.6-sol' is not a model in the model catalog",
         ),
         (
-            {"HIERARCHY_LLM_MODEL": "gpt-6-sol", "HIERARCHY_LLM_REASONING": "minimal"},
-            "HIERARCHY_LLM_REASONING='minimal' is not a reasoning level of "
-            "HIERARCHY_LLM_MODEL model 'gpt-6-sol' (allowed: low, medium, high, xhigh)",
+            {"DEFAULT_AGENT_MODEL": "gpt-6-sol"},
+            "DEFAULT_AGENT_MODEL='gpt-6-sol' is not a model in the model catalog",
         ),
         (
-            {"AGENT_PDF_MODEL": "gpt-6-sol", "AGENT_PDF_REASONING": "disabled"},
+            {"AGENT_GENE_MODEL": "gpt-6.1-sol", "AGENT_GENE_REASONING": "xhigh"},
+            "AGENT_GENE_REASONING='xhigh' is not a reasoning level of "
+            "AGENT_GENE_MODEL model 'gpt-6.1-sol' (allowed: low, medium, high)",
+        ),
+        (
+            {"HIERARCHY_LLM_MODEL": "gpt-6.1-sol", "HIERARCHY_LLM_REASONING": "minimal"},
+            "HIERARCHY_LLM_REASONING='minimal' is not a reasoning level of "
+            "HIERARCHY_LLM_MODEL model 'gpt-6.1-sol' (allowed: low, medium, high)",
+        ),
+        (
+            {"AGENT_PDF_MODEL": "gpt-6.1-sol", "AGENT_PDF_REASONING": "disabled"},
             "AGENT_PDF_REASONING='disabled' is not a reasoning level of "
-            "AGENT_PDF_MODEL model 'gpt-6-sol' (allowed: low, medium, high, xhigh)",
+            "AGENT_PDF_MODEL model 'gpt-6.1-sol' (allowed: low, medium, high)",
         ),
         (
             {"AGENT_STUDIO_OPENAI_MODEL": "gpt-6-astra", "AGENT_STUDIO_REASONING_EFFORT": "max"},

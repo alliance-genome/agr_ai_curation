@@ -15,7 +15,7 @@ describe('smoke configuration', () => {
     assert.equal(config.appUrl, 'http://localhost:3002')
     assert.equal(config.provider, 'codex')
     assert.equal(config.model.baseUrl, 'codex://app-server')
-    assert.equal(config.model.name, 'gpt-6-sol')
+    assert.equal(config.model.name, 'gpt-6.1-sol')
     assert.equal(config.model.reasoningEffort, 'low')
     assert.equal(config.model.temperature, 1)
     assert.equal(config.model.retryCount, 1)

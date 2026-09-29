@@ -88,7 +88,7 @@ structured_finalization:
       - agm_candidates[].data_provider
 
 model_config:
-  model: "${AGENT_AGM_MODEL:-gpt-6-sol}"
+  model: "${AGENT_AGM_MODEL:-gpt-6.1-sol}"
   temperature: 0.1
   reasoning: "medium"
 

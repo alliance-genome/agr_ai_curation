@@ -73,7 +73,7 @@ Token accounting preserves these meanings:
 
 Langfuse 4.21's managed model catalog contains the GPT-5.4, GPT-5.5 and GPT-5.6
 pricing variants used by earlier releases, including applicable cache and
-service-tier rates. The current models (`gpt-6-sol`, `gpt-6-astra`) are priced
+service-tier rates. The current models (`gpt-6.1-sol`, `gpt-6-astra`) are priced
 only after a reviewed definition is applied; see
 [MODEL_COST_REPORTING.md](../guides/MODEL_COST_REPORTING.md).
 Historical zero-cost observations remain explicitly unavailable until an

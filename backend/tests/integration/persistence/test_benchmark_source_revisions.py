@@ -36,7 +36,7 @@ async def test_custom_benchmark_executes_frozen_source_with_separate_model_route
 
     db, agent_id, _, _ = execution_db
     head = db.get(Agent, agent_id)
-    head.model_id = "gpt-6-sol"
+    head.model_id = "gpt-6.1-sol"
     if with_tool:
         ToolPolicy.__table__.create(db.connection())
         head.tool_ids = ["synthetic_lookup"]
@@ -142,7 +142,7 @@ def test_saved_flow_capture_preserves_real_revision_and_rechecks_access(request,
     db.execute(text("CREATE TABLE project_members (project_id uuid, user_id integer)"))
     CurationFlow.__table__.create(db.connection())
     head = db.get(Agent, agent_id)
-    head.model_id = "gpt-6-sol"
+    head.model_id = "gpt-6.1-sol"
     saved = capture_execution_snapshot(db, head, AgentOutputContract(output_state="none"))
     first = append_execution_revision(db, head, saved, user_id=1, expected_revision_id=None)
     receipt = current_execution_receipt(db, head.agent_key, 1, active_group_ids=[])

@@ -23,8 +23,8 @@ def _load_smoke_module():
 
 
 _CATALOG = {"models": [
-    {"model_id": "gpt-6-sol", "supports_reasoning": True,
-     "reasoning_options": ["low", "medium", "high", "xhigh"], "default_reasoning": "medium"},
+    {"model_id": "gpt-6.1-sol", "supports_reasoning": True,
+     "reasoning_options": ["low", "medium", "high"], "default_reasoning": "medium"},
     {"model_id": "gpt-6-astra", "supports_reasoning": True,
      "reasoning_options": ["low", "medium", "high", "xhigh"], "default_reasoning": "low"},
 ]}
@@ -95,8 +95,8 @@ def test_parse_args_keeps_rerank_provider_smoke_opt_in_by_default():
     assert args.stream_chat_message == smoke.DEFAULT_CHAT_MESSAGE
     assert "focus of the publication" in args.stream_chat_message
     assert args.chat_model == "gpt-6-astra"
-    assert args.specialist_model == "gpt-6-sol"
-    assert args.flow_model == "gpt-6-sol"
+    assert args.specialist_model == "gpt-6.1-sol"
+    assert args.flow_model == "gpt-6.1-sol"
 
 
 def test_parse_args_accepts_auth_mode_env_default(monkeypatch):
@@ -772,7 +772,7 @@ def test_ask_streaming_chat_question_returns_trace_and_model_summary(monkeypatch
     smoke = _load_smoke_module()
     checks: list[dict] = []
     sse_body = (
-        'data: {"type":"RUN_STARTED","trace_id":"trace-123","model":"gpt-6-sol"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-123","model":"gpt-6.1-sol"}\n'
         "\n"
         'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
         "\n"
@@ -796,15 +796,15 @@ def test_ask_streaming_chat_question_returns_trace_and_model_summary(monkeypatch
         headers={"X-API-Key": "test-key"},
         session_id="session-stream-1",
         message="Summarize the loaded paper.",
-        chat_model="gpt-6-sol",
-        specialist_model="gpt-6-sol",
+        chat_model="gpt-6.1-sol",
+        specialist_model="gpt-6.1-sol",
         expected_model=None,
         chat_timeout_seconds=5.0,
         checks=checks,
     )
 
     assert summary["trace_id"] == "trace-123"
-    assert summary["model"] == "gpt-6-sol"
+    assert summary["model"] == "gpt-6.1-sol"
     assert "RUN_STARTED" in summary["event_types"]
     assert "RUN_FINISHED" in summary["event_types"]
     assert "zebrafish" in summary["response_preview"].lower()
@@ -815,7 +815,7 @@ def test_ask_streaming_chat_question_accepts_durable_turn_completed(monkeypatch)
     smoke = _load_smoke_module()
     checks: list[dict] = []
     sse_body = (
-        'data: {"type":"RUN_STARTED","trace_id":"trace-456","model":"gpt-6-sol"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-456","model":"gpt-6.1-sol"}\n'
         "\n"
         'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
         "\n"
@@ -845,7 +845,7 @@ def test_ask_streaming_chat_question_accepts_durable_turn_completed(monkeypatch)
         message="What genes are the focus of the publication?",
         chat_model=None,
         specialist_model=None,
-        expected_model="gpt-6-sol",
+        expected_model="gpt-6.1-sol",
         chat_timeout_seconds=5.0,
         checks=checks,
     )
@@ -861,7 +861,7 @@ def test_ask_streaming_chat_question_accepts_structured_evidence_summary(monkeyp
     smoke = _load_smoke_module()
     checks: list[dict] = []
     sse_body = (
-        'data: {"type":"RUN_STARTED","trace_id":"trace-789","model":"gpt-6-sol"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-789","model":"gpt-6.1-sol"}\n'
         "\n"
         'data: {"type":"evidence_summary","evidence_records":[{"record_id":"evidence-1","quote":"Crb organizes the rhabdomere.","chunk_id":"chunk-1"}]}\n'
         "\n"
@@ -889,7 +889,7 @@ def test_ask_streaming_chat_question_accepts_structured_evidence_summary(monkeyp
         message="Summarize the loaded paper.",
         chat_model=None,
         specialist_model=None,
-        expected_model="gpt-6-sol",
+        expected_model="gpt-6.1-sol",
         chat_timeout_seconds=5.0,
         checks=checks,
     )
@@ -915,7 +915,7 @@ def test_ask_streaming_chat_question_accepts_nonfatal_validator_warning(monkeypa
         },
     }
     sse_body = (
-        'data: {"type":"RUN_STARTED","trace_id":"trace-warning","model":"gpt-6-sol"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-warning","model":"gpt-6.1-sol"}\n'
         "\n"
         'data: {"type":"evidence_summary","evidence_records":[{"record_id":"evidence-1","quote":"Crb organizes the rhabdomere.","chunk_id":"chunk-1"}]}\n'
         "\n"
@@ -945,7 +945,7 @@ def test_ask_streaming_chat_question_accepts_nonfatal_validator_warning(monkeypa
         message="What genes are the focus of the publication?",
         chat_model=None,
         specialist_model=None,
-        expected_model="gpt-6-sol",
+        expected_model="gpt-6.1-sol",
         chat_timeout_seconds=5.0,
         checks=checks,
     )
@@ -973,7 +973,7 @@ def test_ask_streaming_chat_question_rejects_fatal_specialist_error(monkeypatch)
         },
     }
     sse_body = (
-        'data: {"type":"RUN_STARTED","trace_id":"trace-fatal","model":"gpt-6-sol"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-fatal","model":"gpt-6.1-sol"}\n'
         "\n"
         'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
         "\n"
@@ -1004,7 +1004,7 @@ def test_ask_streaming_chat_question_rejects_fatal_specialist_error(monkeypatch)
             message="What genes are the focus of the publication?",
             chat_model=None,
             specialist_model=None,
-            expected_model="gpt-6-sol",
+            expected_model="gpt-6.1-sol",
             chat_timeout_seconds=5.0,
             checks=checks,
         )
@@ -1026,7 +1026,7 @@ def test_execute_flow_accepts_nonfatal_validator_warning(monkeypatch):
     sse_body = (
         'data: {"type":"FLOW_STARTED","flow_id":"flow-1"}\n'
         "\n"
-        'data: {"type":"RUN_STARTED","trace_id":"trace-flow","model":"gpt-6-sol"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-flow","model":"gpt-6.1-sol"}\n'
         "\n"
         f"data: {json.dumps(warning_event)}\n"
         "\n"
@@ -1107,7 +1107,7 @@ def test_execute_flow_rejects_fatal_specialist_error(monkeypatch):
     sse_body = (
         'data: {"type":"FLOW_STARTED","flow_id":"flow-1"}\n'
         "\n"
-        'data: {"type":"RUN_STARTED","trace_id":"trace-flow","model":"gpt-6-sol"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-flow","model":"gpt-6.1-sol"}\n'
         "\n"
         f"data: {json.dumps(fatal_event)}\n"
         "\n"
@@ -1146,7 +1146,7 @@ def test_ask_streaming_chat_question_rejects_weak_evidence_summary(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []
     sse_body = (
-        'data: {"type":"RUN_STARTED","trace_id":"trace-weak","model":"gpt-6-sol"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-weak","model":"gpt-6.1-sol"}\n'
         "\n"
         'data: {"type":"evidence_summary","evidence_records":[{"record_id":"evidence-1"}]}\n'
         "\n"
@@ -1175,7 +1175,7 @@ def test_ask_streaming_chat_question_rejects_weak_evidence_summary(monkeypatch):
             message="Summarize the loaded paper.",
             chat_model=None,
             specialist_model=None,
-            expected_model="gpt-6-sol",
+            expected_model="gpt-6.1-sol",
             chat_timeout_seconds=5.0,
             checks=checks,
         )
@@ -1185,7 +1185,7 @@ def test_ask_streaming_chat_question_rejects_missing_trace_id(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []
     sse_body = (
-        'data: {"type":"RUN_STARTED","model":"gpt-6-sol"}\n'
+        'data: {"type":"RUN_STARTED","model":"gpt-6.1-sol"}\n'
         "\n"
         'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
         "\n"
@@ -1210,8 +1210,8 @@ def test_ask_streaming_chat_question_rejects_missing_trace_id(monkeypatch):
             headers={"X-API-Key": "test-key"},
             session_id="session-stream-2",
             message="Summarize the loaded paper.",
-            chat_model="gpt-6-sol",
-            specialist_model="gpt-6-sol",
+            chat_model="gpt-6.1-sol",
+            specialist_model="gpt-6.1-sol",
             expected_model=None,
             chat_timeout_seconds=5.0,
             checks=checks,
@@ -1258,7 +1258,7 @@ def test_ask_streaming_chat_question_can_validate_runtime_default_model_without_
     checks: list[dict] = []
     captured = {}
     sse_body = (
-        'data: {"type":"RUN_STARTED","trace_id":"trace-runtime","model":"gpt-6-sol"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-runtime","model":"gpt-6.1-sol"}\n'
         "\n"
         'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
         "\n"
@@ -1285,7 +1285,7 @@ def test_ask_streaming_chat_question_can_validate_runtime_default_model_without_
         message="What genes are the focus of the publication?",
         chat_model=None,
         specialist_model=None,
-        expected_model="gpt-6-sol",
+        expected_model="gpt-6.1-sol",
         chat_timeout_seconds=5.0,
         checks=checks,
     )
@@ -1295,7 +1295,7 @@ def test_ask_streaming_chat_question_can_validate_runtime_default_model_without_
         "session_id": "session-stream-runtime-defaults",
     }
     assert summary["trace_id"] == "trace-runtime"
-    assert summary["model"] == "gpt-6-sol"
+    assert summary["model"] == "gpt-6.1-sol"
     assert "crb" in summary["response_preview"].lower()
 
 
@@ -1328,7 +1328,7 @@ def test_create_smoke_agent_reads_exact_created_revision(monkeypatch, wrong_agen
             json_body=created if method == "POST" else revision, text="fixture")
     posted = []
     monkeypatch.setattr(smoke, "http_request", request)
-    created_agent = smoke.create_custom_agent(base_url="http://fixture", headers={}, model_id="gpt-6-sol", checks=[])
+    created_agent = smoke.create_custom_agent(base_url="http://fixture", headers={}, model_id="gpt-6.1-sol", checks=[])
     assert posted[0]["model_reasoning"] == "medium"
     if wrong_agent:
         with pytest.raises(smoke.SmokeFailure, match="does not match"):
@@ -1439,7 +1439,7 @@ def test_require_model_looks_expected_rejects_generic_object_repr():
     with pytest.raises(smoke.SmokeFailure, match="did not match"):
         smoke.require_model_looks_expected(
             "<object object at 0x1234>",
-            expected_model="gpt-6-sol",
+            expected_model="gpt-6.1-sol",
             context="Streaming chat RUN_STARTED",
         )
 
@@ -1640,7 +1640,7 @@ def test_explicit_chat_model_overrides_use_catalog_reasoning_not_minimal(monkeyp
     monkeypatch.setattr(smoke, "http_request", _fake_http_request)
     smoke.ask_chat_question(
         base_url="http://example.test", headers={}, session_id="s1", message="Focus?",
-        chat_model="gpt-6-astra", specialist_model="gpt-6-sol",
+        chat_model="gpt-6-astra", specialist_model="gpt-6.1-sol",
         chat_timeout_seconds=5.0, checks=[],
     )
 

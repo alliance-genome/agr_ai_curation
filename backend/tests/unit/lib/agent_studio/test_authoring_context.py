@@ -113,7 +113,7 @@ def _adversarial_workshop_context() -> AgentWorkshopContext:
         prompt_draft="Exact main prompt",
         group_prompt_overrides={"é": "accent", "a": "lower", "A": "upper"},
         include_group_rules=True,
-        draft_model_id="gpt-6-sol",
+        draft_model_id="gpt-6.1-sol",
         draft_model_reasoning="high",
         draft_tool_ids=["é-tool", "a-tool", "A-tool"],
         draft_output_schema_key="gene",
@@ -136,7 +136,7 @@ def test_adversarial_fingerprints_match_frontend_canonical_fixtures():
         "sha256:f9f8664ca18901527a106d90c077ae0b52f2733a592531c7cd1110795a558b92"
     )
     assert workshop_draft_fingerprint(_adversarial_workshop_context()) == (
-        "sha256:3c625211d63cd4bfbb85912a37421617bb5a1585f8ef4cfea12b8fcd1f9e6bd4"
+        "sha256:e8c208713f0140d58f31b7abc39f0a324b78aa87b209174b9584023504bae23e"
     )
 
 

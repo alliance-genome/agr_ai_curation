@@ -659,13 +659,13 @@ def _report_for_reasoning(monkeypatch, reasoning):
     import src.lib.agent_studio.runtime_validation as module
 
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
-        _agent(agent_key="ca_reasoning", model_id="gpt-6-sol", model_reasoning=reasoning)
+        _agent(agent_key="ca_reasoning", model_id="gpt-6.1-sol", model_reasoning=reasoning)
     ])
     monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
     monkeypatch.setattr(module, "load_models", lambda: None)
     monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(
-        model_id="gpt-6-sol", supports_reasoning=True,
-        reasoning_options=["low", "medium", "high", "xhigh"],
+        model_id="gpt-6.1-sol", supports_reasoning=True,
+        reasoning_options=["low", "medium", "high"],
     )])
     monkeypatch.setattr(module, "_load_runtime_policy", lambda: {
         "tool_bindings": {},
@@ -676,16 +676,17 @@ def _report_for_reasoning(monkeypatch, reasoning):
     return module.build_agent_runtime_report(strict_mode=False)
 
 
-def test_startup_rejects_a_reasoning_level_the_catalog_model_does_not_offer(monkeypatch):
-    report = _report_for_reasoning(monkeypatch, "minimal")
+@pytest.mark.parametrize("reasoning", ["minimal", "xhigh"])
+def test_startup_rejects_a_reasoning_level_the_catalog_model_does_not_offer(monkeypatch, reasoning):
+    report = _report_for_reasoning(monkeypatch, reasoning)
 
     assert report["status"] == "unhealthy"
     assert report["errors"] == [
-        "ca_reasoning: model_reasoning 'minimal' is not supported by model 'gpt-6-sol'"
+        f"ca_reasoning: model_reasoning '{reasoning}' is not supported by model 'gpt-6.1-sol'"
     ]
 
 
-@pytest.mark.parametrize("reasoning", ["medium", "XHIGH", None])
+@pytest.mark.parametrize("reasoning", ["medium", "HIGH", None])
 def test_startup_accepts_a_reasoning_level_the_catalog_model_offers(monkeypatch, reasoning):
     report = _report_for_reasoning(monkeypatch, reasoning)
 
