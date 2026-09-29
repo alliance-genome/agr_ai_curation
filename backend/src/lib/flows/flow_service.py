@@ -15,6 +15,8 @@ def save_flow_definition(
     Validation runs as the flow's owner with agent references and step policy
     enforced, including pinned-revision and profile projection checks. An invalid
     flow raises the validator's HTTPException (422) with its findings.
+    A caller outside a request must load the flow as its owner and pass the owner's
+    active groups as ``active_group_ids``, never an operator's.
     """
     # The validator and its agent-policy helpers live with the flows route.
     from src.api import flows as flows_api

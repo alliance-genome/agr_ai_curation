@@ -773,6 +773,63 @@ payload against the current `DomainEnvelope` model, fails closed on mixed or
 malformed payloads, and commits all repairs together. A repeated dry-run should
 report zero targets after a successful apply.
 
+### one_off/convert_flexible_agents_0100.py
+
+Converts custom agents that still use Flexible extraction (`unprofiled_generic`)
+to a Custom Output Structure, one reviewed plan file per agent. Flexible
+extraction is retired: new agents and revisions can't use it, and existing ones
+keep running until converted.
+
+1. Read-only inventory (record kinds, semantic classes, attribute keys with
+   counts and list-ness, the flow steps that pin the agent, and a draft plan
+   with suggested key merges). It runs in a read-only transaction:
+
+   ```bash
+   docker compose run --rm --no-deps backend python \
+     /app/scripts/one_off/convert_flexible_agents_0100.py inventory > inventory.json
+   ```
+
+   `steps` lists steps in active flows owned by the agent's owner; only these
+   can be re-pinned. `other_owner_steps` lists steps in other users' flows,
+   which keep their pinned revision until their own owner re-pins them.
+
+2. Review each `draft_plan` with the agent's owner and save it as its own file:
+   the profile `name`, the one `semantic_class`, the attributes and
+   `key_merges`, the new `custom_prompt`, what happens to other record kinds
+   (`other_object_kinds`: `dropped` or `attribute`), the owner's active groups
+   (`active_group_ids`; never the operator's) and `owner_review`. A draft does
+   not validate until those are filled in. Record the reviewed file's digest
+   (`sha256sum agent.plan.json`); apply and rollback refuse any other bytes.
+
+3. Dry run, then apply during maintenance. The agent is saved as its owner
+   through the normal agent service, and each step through the normal flow save,
+   so the flow's own validation runs; a refused flow prints its findings. With
+   `--commit` the result file (the old and new revision ids of every re-pinned
+   step) is written before the commit and is never overwritten:
+
+   ```bash
+   docker compose run --rm --no-deps backend python \
+     /app/scripts/one_off/convert_flexible_agents_0100.py apply \
+     --plan agent.plan.json --plan-sha256 <digest> --result agent.result.json
+   docker compose run --rm --no-deps backend python \
+     /app/scripts/one_off/convert_flexible_agents_0100.py apply \
+     --plan agent.plan.json --plan-sha256 <digest> --result agent.result.json --commit
+   ```
+
+   Apply refuses a plan written for an older agent head, an agent that is no
+   longer Flexible, and a step whose flow no longer pins the planned revision.
+
+4. Roll back by re-pinning the recorded steps to the old, immutable revision.
+   The agent itself stays converted (restoring Flexible is refused), even if its
+   owner has edited it since; old revisions and runs are untouched. A step whose
+   flow no longer pins the revision apply wrote is refused:
+
+   ```bash
+   docker compose run --rm --no-deps backend python \
+     /app/scripts/one_off/convert_flexible_agents_0100.py rollback \
+     --plan agent.plan.json --plan-sha256 <digest> --result agent.result.json --commit
+   ```
+
 ## Utilities
 
 ### utilities/check_services.sh
