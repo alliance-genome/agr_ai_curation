@@ -879,6 +879,47 @@ deployment note; never commit them to a repository or attach them to a ticket.
      --plan /work/agent.plan.json --plan-sha256 <digest> --result /work/agent.result.json --commit
    ```
 
+### one_off/convert_gpt6_sol_agents_0100.py
+
+Moves saved custom agents and the flow steps that pin them from the retired
+GPT-6 Sol (`gpt-6-sol`) to GPT-6.1 Sol (`gpt-6.1-sol`), so no curator has to
+re-save anything. Alembic `s6b7c8d9e0f1` moves the editable agent rows, but a
+custom agent runs its saved head version and a flow step runs the exact version
+it pins, and those still name GPT-6 Sol. Run it after `alembic upgrade head`.
+
+For every custom agent, archived ones included, it appends a copy of the head,
+and of each older version that an active flow step pins. Each copy is the saved
+version with only the model changed; `xhigh` reasoning becomes `high`, as in the
+migration. The head copy stays the head, and nothing else about any version
+changes. It then re-pins each of those steps to the copy of the version it
+pinned and saves the flow through the normal flow save as the flow's owner. A
+selected-fields file output that reads a re-pinned step moves with it only if
+its field layout was current before. Old versions are never edited. Steps in
+deleted flows are left alone and counted in the report.
+
+The run is refused before any write if a flow to be re-pinned belongs to an
+owner missing from `--owner-groups` (JSON `{"<user_id>": ["<group id>", ...]}`,
+the owner's reviewed active groups; `[]` is allowed). An agent or flow that
+can't be converted, for example a saved reasoning level GPT-6.1 Sol doesn't
+offer or a flow whose own validation already fails, is left unchanged. It is
+listed under `refused_agents` or `refused_flows` with the reason, and the
+script exits 3. Everything else is converted, and a re-run converts only what
+is left, so it is safe to run again.
+
+Without `--apply` the whole conversion runs and is rolled back (a dry run).
+The JSON report on stdout lists every owner, agent (old head, new head and
+each copy) and flow step touched, plus `before`/`after` counts of agent heads
+and flow pins still on GPT-6 Sol. It contains agent and flow names; keep it in
+the private deployment note.
+
+```bash
+docker compose run --rm --no-deps -T --entrypoint python \
+  -v "$PWD/scripts/one_off:/app/scripts/one_off:ro" -v "$PWD/conversion:/work:ro" \
+  backend /app/scripts/one_off/convert_gpt6_sol_agents_0100.py \
+  --owner-groups /work/owner-groups.json > gpt61-dry-run.json
+# then the same command with --apply
+```
+
 ## Utilities
 
 ### utilities/check_services.sh
