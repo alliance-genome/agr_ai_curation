@@ -10,6 +10,7 @@ from src.lib.agent_studio.execution_revision_service import (
     restore_execution_revision,
 )
 from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+from src.lib.agent_studio.flexible_extraction import FLEXIBLE_COPY_REFUSED
 from src.models.sql.custom_agent import CustomAgentVersion
 from src.schemas.agent_execution_revision import AgentOutputContract
 from .test_agent_execution_revision_persistence import builder_policies, execution_db  # noqa: F401
@@ -65,10 +66,16 @@ def test_an_existing_flexible_agent_stays_editable(studio):
     assert head_mode(studio, agent) == "unprofiled_generic"
 
 
-def test_cloning_a_flexible_agent_is_refused(studio):
+def test_cloning_a_flexible_agent_is_refused_with_the_copy_message(studio):
     agent, _ = existing_flexible(studio)
-    with pytest.raises(ValueError, match=RETIRED):
+    with pytest.raises(ValueError) as refused:
         service.clone_saved_custom_agent(studio, 1, agent, name="Copy", active_group_ids=[])
+    assert str(refused.value) == FLEXIBLE_COPY_REFUSED
+    assert str(refused.value) == (
+        "This agent uses retired Flexible extraction, so it can't be copied. "
+        "Convert the original agent to Custom Output Structure first, then copy it."
+    )
+    assert not service.custom_agent_name_exists(studio, 1, "Copy")
 
 
 def test_a_converted_agent_cannot_be_restored_to_flexible(studio):

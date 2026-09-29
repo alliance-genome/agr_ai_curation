@@ -1217,11 +1217,13 @@ def _record_kind_family_errors(metadata: "DomainPackMetadata") -> list[str]:
     errors: list[str] = []
     seen_ids: set[str] = set()
     owner: dict[str, str] = {}
-    for item in raw:
+    for index, item in enumerate(raw):
         try:
             family = DomainPackRecordKindFamily.model_validate(item)
         except ValidationError as exc:
-            errors.append(f"metadata.record_kind_families: {exc.errors()[0]['msg']}")
+            first = exc.errors()[0]
+            loc = "".join(f".{part}" for part in first["loc"])
+            errors.append(f"metadata.record_kind_families[{index}]{loc}: {first['msg']}")
             continue
         where = f"metadata.record_kind_families.{family.id}"
         if family.id in seen_ids:

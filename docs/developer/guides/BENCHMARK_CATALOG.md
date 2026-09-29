@@ -109,8 +109,8 @@ when the flow is runnable). A step whose agent the caller can't see is
 `unavailable_agent` with one generic reason and no receipt. A step whose model
 or tools need a re-save keeps its structure (`needs_resave`).
 
-`runnable` is true only when every step resolved and the flow's stages, model
-defaults and validators are available; otherwise `run_problem` is a fixed
+`runnable` is true only when every step resolved, the flow has no error
+findings, and its stages, model defaults and validators are available; otherwise `run_problem` is a fixed
 sentence chosen by the first problem's code and `stages` is empty. Admission
 refuses a flow that isn't runnable.
 

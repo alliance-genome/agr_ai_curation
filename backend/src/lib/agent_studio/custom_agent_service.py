@@ -1443,9 +1443,10 @@ def clone_saved_custom_agent(
         db, source.id, source.execution_revision_id, user_id,
         active_group_ids=list(active_group_ids or []),
     )
-    from src.lib.agent_studio.flexible_extraction import require_flexible_not_new
+    from src.lib.agent_studio.flexible_extraction import FLEXIBLE_COPY_REFUSED
 
-    require_flexible_not_new(saved.output_contract, None)
+    if saved.output_contract.output_mode == "unprofiled_generic":
+        raise ValueError(FLEXIBLE_COPY_REFUSED)
     allowed = require_allowed_group_ids_narrowing(
         saved.allowed_group_ids,
         saved.allowed_group_ids if allowed_group_ids is None else allowed_group_ids,

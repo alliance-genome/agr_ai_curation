@@ -58,6 +58,17 @@ def test_family_ids_are_unique():
         DomainPackMetadata.model_validate(_pack([_family(), twin], roles=roles))
 
 
+def test_families_must_be_a_list():
+    with pytest.raises(ValidationError, match="metadata.record_kind_families must be a list"):
+        DomainPackMetadata.model_validate(_pack(_family()))
+
+
+def test_malformed_family_names_its_index_and_field():
+    broken = {key: value for key, value in _family(id="others").items() if key != "label"}
+    with pytest.raises(ValidationError, match=r"metadata\.record_kind_families\[1\]\.label: Field required"):
+        DomainPackMetadata.model_validate(_pack([_family(), broken]))
+
+
 def test_free_text_must_be_a_boolean_on_a_string_field():
     DomainPackFieldDefinition(field_path="rationale", field_type="string",
                               metadata={"free_text": True})
@@ -88,14 +99,22 @@ def _fields(pack_id, object_type):
     return {field.field_path: field for field in obj.fields}, pack.metadata
 
 
-def test_disease_pack_declares_its_family_and_free_text():
-    fields, metadata = _fields("agr.alliance.disease", "AGMDiseaseAnnotation")
+def test_disease_pack_declares_its_family():
+    _, metadata = _fields("agr.alliance.disease", "AGMDiseaseAnnotation")
     assert metadata.metadata["record_kind_families"] == [{
         "id": "disease_annotations", "label": "Disease annotations",
         "fallback_object_type": "DiseaseAnnotation",
         "object_types": ["DiseaseAnnotation", "GeneDiseaseAnnotation",
                          "AlleleDiseaseAnnotation", "AGMDiseaseAnnotation"],
     }]
+
+
+@pytest.mark.parametrize("object_type", [
+    "DiseaseAnnotation", "GeneDiseaseAnnotation",
+    "AlleleDiseaseAnnotation", "AGMDiseaseAnnotation",
+])
+def test_every_disease_annotation_kind_marks_its_prose_free_text(object_type):
+    fields, _ = _fields("agr.alliance.disease", object_type)
     assert fields["rationale"].metadata["free_text"] is True
     assert fields["condition_relations.conditions.condition_summary"].metadata["free_text"] is True
     assert "free_text" not in fields["mention"].metadata
