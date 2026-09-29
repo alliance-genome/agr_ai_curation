@@ -1,8 +1,8 @@
-"""Move saved custom agents and the flow steps that pin them off a retired model.
+"""Move saved custom agents and the flow steps that pin them off retired models.
 
 A model retirement's Alembic migration moves the editable ``agents`` rows, but a
 custom agent runs from its immutable head revision and a flow step runs the exact
-revision it pins, so both still name the retired model. For every custom agent
+revision it pins, so both still name a retired model. For every custom agent
 (archived ones included) this appends, through the append-only revision service
 that restore and the release agent-upgrade engine use:
 
@@ -81,16 +81,16 @@ def _pins(flow: CurationFlow) -> list[tuple[str, str, str]]:
     return pins
 
 
-def _retired_revisions(db: Session, revision_ids: set[str], retired_model_id: str) -> set[str]:
+def _retired_revisions(db: Session, revision_ids: set[str], retired_model_ids: frozenset[str]) -> set[str]:
     if not revision_ids:
         return set()
     rows = db.execute(select(AgentExecutionRevision.id, AgentExecutionRevision.snapshot).where(
         AgentExecutionRevision.id.in_([UUID(value) for value in revision_ids])))
-    return {str(row_id) for row_id, snapshot in rows if snapshot.get("model_id") == retired_model_id}
+    return {str(row_id) for row_id, snapshot in rows if snapshot.get("model_id") in retired_model_ids}
 
 
 def _convert_agent(
-    db: Session, agent: Agent, pinned_ids: set[str], *, retired_model_id: str,
+    db: Session, agent: Agent, pinned_ids: set[str], *, retired_model_ids: frozenset[str],
     target_model_id: str, reasoning_map: dict[str, str], notes: str,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Returns the agent's report entry and {old revision id: its copy's id}."""
@@ -117,7 +117,7 @@ def _convert_agent(
         raise ValueError("a flow step pins a revision of another agent")
     # Snapshots are checked before anything is appended.
     planned = [(row, converted(row)) for row in sorted(older, key=lambda row: row.revision)]
-    head_retired = _saved_model(head) == retired_model_id
+    head_retired = _saved_model(head) in retired_model_ids
     head_snapshot = converted(head) if head_retired else _saved(head)
     copies, moves = [], {}
     for row, snapshot in planned:
@@ -133,7 +133,7 @@ def _convert_agent(
                        "model_reasoning": [_saved_reasoning(row), snapshot.model_reasoning]})
     if head_retired or agent.execution_revision_id != head.id:
         # A pinned copy became the head; the head's own configuration is appended
-        # again (with the model change when the head is on the retired model).
+        # again (with the model change when the head is on a retired model).
         copy = append(head_snapshot)
         if head_retired:
             moves[str(head.id)] = str(copy.id)
@@ -264,22 +264,22 @@ def _refusal(error: Exception) -> Any:
     return str(error)
 
 
-def _retired_heads(db: Session, retired_model_id: str) -> list[Agent]:
+def _retired_heads(db: Session, retired_model_ids: frozenset[str]) -> list[Agent]:
     return list(db.execute(
         select(Agent)
         .join(AgentExecutionRevision, AgentExecutionRevision.id == Agent.execution_revision_id)
         .where(Agent.agent_key.startswith("ca_", autoescape=True),
-               AgentExecutionRevision.snapshot["model_id"].astext == retired_model_id)
+               AgentExecutionRevision.snapshot["model_id"].astext.in_(sorted(retired_model_ids)))
     ).scalars())
 
 
-def remaining(db: Session, retired_model_id: str) -> dict[str, int]:
-    """What still names the retired model: agent heads, and pins in active and deleted flows."""
+def remaining(db: Session, retired_model_ids: frozenset[str]) -> dict[str, int]:
+    """What still names a retired model: agent heads, and pins in active and deleted flows."""
     pins = {True: [], False: []}
     for flow in db.execute(select(CurationFlow)).scalars():
         pins[bool(flow.is_active)].extend(revision for _, _, revision in _pins(flow))
-    retired = _retired_revisions(db, set(pins[True]) | set(pins[False]), retired_model_id)
-    heads = _retired_heads(db, retired_model_id)
+    retired = _retired_revisions(db, set(pins[True]) | set(pins[False]), retired_model_ids)
+    heads = _retired_heads(db, retired_model_ids)
     return {
         "active_agent_heads": sum(1 for agent in heads if agent.is_active),
         "archived_agent_heads": sum(1 for agent in heads if not agent.is_active),
@@ -289,20 +289,21 @@ def remaining(db: Session, retired_model_id: str) -> dict[str, int]:
 
 
 def convert(
-    db: Session, *, retired_model_id: str, target_model_id: str, reasoning_map: dict[str, str],
+    db: Session, *, retired_model_ids: frozenset[str], target_model_id: str, reasoning_map: dict[str, str],
     owner_groups: dict[int, list[str]], notes: str,
 ) -> dict[str, Any]:
-    """Convert every custom agent head and active-flow pin on the retired model; report each."""
-    if get_model(retired_model_id) is not None:
-        raise ConversionRefused(f"{retired_model_id} is still in the model catalog")
+    """Convert every custom agent head and active-flow pin on a retired model; report each."""
+    offered = sorted(model_id for model_id in retired_model_ids if get_model(model_id) is not None)
+    if not retired_model_ids or offered:
+        raise ConversionRefused(f"Retired models still in the model catalog: {offered}")
     if get_model(target_model_id) is None:
         raise ConversionRefused(f"{target_model_id} is not in the model catalog")
-    before = remaining(db, retired_model_id)
+    before = remaining(db, retired_model_ids)
     flows = list(db.execute(select(CurationFlow).where(CurationFlow.is_active.is_(True))
                             .order_by(CurationFlow.id).with_for_update()).scalars())
     pinned = {flow.id: _pins(flow) for flow in flows}
     retired_pins = _retired_revisions(
-        db, {revision for pins in pinned.values() for _, _, revision in pins}, retired_model_id)
+        db, {revision for pins in pinned.values() for _, _, revision in pins}, retired_model_ids)
     affected = [flow for flow in flows
                 if any(revision in retired_pins for _, _, revision in pinned[flow.id])]
     missing = sorted({flow.user_id for flow in affected} - set(owner_groups))
@@ -315,7 +316,7 @@ def convert(
         for _, key, revision in pinned[flow.id]:
             if revision in retired_pins:
                 pins_by_agent.setdefault(key, set()).add(revision)
-    agents = {agent.agent_key: agent for agent in _retired_heads(db, retired_model_id)}
+    agents = {agent.agent_key: agent for agent in _retired_heads(db, retired_model_ids)}
     for key in set(pins_by_agent) - set(agents):
         agents[key] = db.execute(select(Agent).where(Agent.agent_key == key)).scalar_one()
 
@@ -331,7 +332,7 @@ def convert(
         savepoint = db.begin_nested()
         try:
             entry, agent_moves = _convert_agent(
-                db, agent, pins_by_agent.get(key, set()), retired_model_id=retired_model_id,
+                db, agent, pins_by_agent.get(key, set()), retired_model_ids=retired_model_ids,
                 target_model_id=target_model_id, reasoning_map=reasoning_map, notes=notes)
         except ValueError as error:
             savepoint.rollback()
@@ -365,8 +366,8 @@ def convert(
     report = [owners[user_id] for user_id in sorted(owners)]
     return {
         "schema_version": REPORT_SCHEMA,
-        "from_model": retired_model_id, "to_model": target_model_id, "reasoning_map": reasoning_map,
-        "before": before, "after": remaining(db, retired_model_id),
+        "from_models": sorted(retired_model_ids), "to_model": target_model_id, "reasoning_map": reasoning_map,
+        "before": before, "after": remaining(db, retired_model_ids),
         "counts": {
             "owners": len(report),
             "agents_converted": sum(len(item["agents"]) for item in report),

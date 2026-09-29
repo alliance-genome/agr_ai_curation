@@ -55,12 +55,12 @@ def make_agent(db, name, user_id=1):
                                        custom_prompt=f"{name} instructions", include_group_rules=False)
 
 
-def save_on_retired(db, agent, instructions=None, reasoning="medium"):
-    """A saved version from before the retirement (the catalog no longer offers GPT-6 Sol)."""
+def save_on_retired(db, agent, instructions=None, reasoning="medium", model=RETIRED):
+    """A saved version from before the retirement (the catalog no longer offers the model)."""
     if instructions is not None:
         agent.instructions = instructions
     snapshot = capture_execution_snapshot(db, agent, NO_OUTPUT).model_copy(
-        update={"model_id": RETIRED, "model_reasoning": reasoning})
+        update={"model_id": model, "model_reasoning": reasoning})
     row = append_execution_revision(db, agent, snapshot, user_id=agent.user_id,
                                     expected_revision_id=agent.execution_revision_id)
     # Alembic s6b7c8d9e0f1 has already moved the editable row.
@@ -110,9 +110,13 @@ def revision_count(db, agent):
                      .where(AgentExecutionRevision.agent_id == agent.id))
 
 
-def run(db, owner_groups=None):
-    return conversion.convert(db, retired_model_id=RETIRED, target_model_id=TARGET,
-                              reasoning_map={"xhigh": "high"},
+FULL_MAP = {"minimal": "low", "disabled": "medium", "xhigh": "high"}
+
+
+def run(db, owner_groups=None, reasoning_map=None):
+    return conversion.convert(db, retired_model_ids=frozenset({RETIRED, "gpt-5.6-terra"}),
+                              target_model_id=TARGET,
+                              reasoning_map=FULL_MAP if reasoning_map is None else reasoning_map,
                               owner_groups={1: [], 2: []} if owner_groups is None else owner_groups,
                               notes="test conversion")
 
@@ -232,7 +236,7 @@ def test_a_version_with_an_unmapped_reasoning_level_is_refused_and_its_flow_left
     flow = make_flow(db, [(good, good_head), (bad, bad_head)])
     before = deepcopy(flow.flow_definition)
 
-    report = run(db)
+    report = run(db, reasoning_map={"xhigh": "high"})
 
     [owner] = report["owners"]
     assert [item["agent_key"] for item in owner["refused_agents"]] == [bad.agent_key]
@@ -244,6 +248,33 @@ def test_a_version_with_an_unmapped_reasoning_level_is_refused_and_its_flow_left
     assert owner["refused_flows"][0]["flow_id"] == str(flow.id)
     assert report["counts"]["flows_refused"] == 1
     assert report["after"]["active_agent_heads"] == 1 and report["after"]["active_flow_pins"] == 2
+
+
+@pytest.mark.parametrize("model,saved,expected", [
+    ("gpt-5.6-terra", "disabled", "medium"), ("gpt-5.6-terra", "minimal", "low"),
+    (RETIRED, "minimal", "low"), (RETIRED, "high", "high"), (RETIRED, None, None),
+])
+def test_every_retired_model_moves_with_the_reviewed_reasoning(world, model, saved, expected):
+    db = world
+    agent = make_agent(db, "Finder")
+    old_head = save_on_retired(db, agent, reasoning=saved, model=model)
+    flow = make_flow(db, [(agent, old_head)])
+
+    report = run(db)
+
+    head = revision(db, agent.execution_revision_id)
+    assert (head.snapshot["model_id"], head.snapshot["model_reasoning"]) == (TARGET, expected)
+    assert same_except_model(old_head.snapshot, head.snapshot)
+    db.refresh(flow)
+    assert pin(flow)["agent_revision_id"] == str(head.id)
+    assert report["from_models"] == ["gpt-5.6-terra", RETIRED]
+    assert report["after"]["active_agent_heads"] == report["after"]["active_flow_pins"] == 0
+
+
+def test_a_run_is_refused_while_a_retired_model_is_still_offered(world):
+    with pytest.raises(conversion.ConversionRefused, match=r"still in the model catalog: \['gpt-6.1-sol'\]"):
+        conversion.convert(world, retired_model_ids=frozenset({TARGET}), target_model_id=TARGET,
+                           reasoning_map={}, owner_groups={}, notes="n")
 
 
 def test_a_flow_owner_without_reviewed_groups_stops_the_run_before_any_write(world):
@@ -311,7 +342,9 @@ def test_cli_exits_3_when_something_is_refused(world, tmp_path, capsys):
     db = world
     agent = make_agent(db, "Finder")
     save_on_retired(db, agent, reasoning="minimal")
-    assert _script().main(["--owner-groups", _groups_file(tmp_path, {}), "--apply"]) == 3
+    script = _script()
+    script.REASONING_MAP = {}
+    assert script.main(["--owner-groups", _groups_file(tmp_path, {}), "--apply"]) == 3
     assert json.loads(capsys.readouterr().out)["counts"]["agents_refused"] == 1
 
 
