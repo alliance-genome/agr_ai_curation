@@ -3,7 +3,8 @@
 The Studio export catalog (``export_fields.source_catalog``) is not changed; this
 describes the same declarations for choosing benchmark fields. Every fact comes
 from an explicit declaration (field type, display roles, ``free_text``,
-``validator_binding_id`` / ``validation_result_binding_id``,
+``validator_binding_id`` / ``validation_result_binding_id`` on a field, or a
+pack-level ``validator_bindings.active[].applies_to`` naming the field,
 ``record_kind_families``, ``exported``); nothing is inferred from a
 name or description. Only curatable record kinds carry fields and defaults.
 """
@@ -34,23 +35,28 @@ def _ancestors_and_self(path: str) -> list[str]:
     return [".".join(parts[:size]) for size in range(1, len(parts) + 1)]
 
 
-def _declared_binding(field: Any) -> str | None:
-    """The validator binding a field declares, under either declaration name."""
-    declared = {
-        str(value)
-        for name in ("validator_binding_id", "validation_result_binding_id")
-        if (value := field.metadata.get(name))
-    }
-    if len(declared) > 1:
-        raise ValueError(f"{field.field_path} declares two different validator bindings")
-    return next(iter(declared), None)
+def _pack_bindings(pack_metadata: Any, object_type: str) -> dict[str, set[str]]:
+    """Active pack-level binding ids per field path they declare for ``object_type``."""
+    bindings: dict[str, set[str]] = {}
+    raw = pack_metadata.metadata.get("validator_bindings") or {}
+    for binding in raw.get("active") or []:
+        applies_to = binding.get("applies_to") or {}
+        object_types = applies_to.get("object_types") or []
+        if object_types and object_type not in object_types:
+            continue
+        for path in applies_to.get("field_paths") or []:
+            bindings.setdefault(path, set()).add(str(binding["binding_id"]))
+    return bindings
 
 
 class _ObjectFacts:
     """One object type's declared fields and their benchmark facts, keyed by declared path."""
 
-    def __init__(self, obj: Any, models: dict[str, Any], object_models: dict[str, Any]) -> None:
+    def __init__(
+        self, obj: Any, models: dict[str, Any], object_models: dict[str, Any], pack_metadata: Any,
+    ) -> None:
         self.obj = obj
+        self.pack_bindings = _pack_bindings(pack_metadata, obj.object_type)
         self.models = models
         self.object_models = object_models
         self.declared = {field.field_path: field for field in obj.fields}
@@ -67,6 +73,20 @@ class _ObjectFacts:
     def _has_children(self, path: str) -> bool:
         prefix = path + "."
         return any(other.startswith(prefix) for other in self.exported)
+
+    def _declared_binding(self, field: Any) -> str | None:
+        """The binding declared for a field on the field itself or at pack level; they must agree."""
+        declared = {
+            str(value)
+            for name in ("validator_binding_id", "validation_result_binding_id")
+            if (value := field.metadata.get(name))
+        } | self.pack_bindings.get(field.field_path, set())
+        if len(declared) > 1:
+            raise ValueError(
+                f"{self.obj.object_type}.{field.field_path} declares two different validator "
+                f"bindings: {sorted(declared)}"
+            )
+        return next(iter(declared), None)
 
     def _mention_key(self, path: str) -> str | None:
         """The declared mention key of the resolvable value at ``path`` ("" is the root)."""
@@ -121,12 +141,12 @@ class _ObjectFacts:
     def _binding(self, field: Any, parent_path: str, key: str, mention_key: str | None) -> str | None:
         if key == mention_key:
             return None  # The paper wording is the extractor's, never a validator's.
-        own = _declared_binding(field)
+        own = self._declared_binding(field)
         if own is not None or mention_key is None or not parent_path:
             # A root-level value has no parent field; its leaves declare their own binding.
             return own
         parent = self.by_path.get(parent_path)
-        return _declared_binding(parent) if parent is not None else None
+        return self._declared_binding(parent) if parent is not None else None
 
     def _fact(self, field: Any) -> dict[str, Any]:
         path = field.field_path
@@ -209,7 +229,7 @@ def benchmark_pack_catalog(domain_pack: Any) -> dict[str, Any]:
                              "role": role})
         if role != "curatable":
             continue
-        facts = _ObjectFacts(obj, models, object_models)
+        facts = _ObjectFacts(obj, models, object_models, metadata)
         fields.extend(facts.facts.values())
         prefix = f"object.pack.{obj.object_type}."
         layout = [ref.removeprefix(prefix) for ref in source.default_layout([obj.object_type])]

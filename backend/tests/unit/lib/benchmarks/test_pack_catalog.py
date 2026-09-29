@@ -198,3 +198,63 @@ def test_unexported_containers_hide_their_children():
     assert set(paths) == {"visible", "title"}
     # Its only child is unexported, so the container has nothing to compare.
     assert paths["visible"]["shape"] == "other"
+
+
+def test_pack_level_binding_declarations_are_read():
+    # GO and one gene-expression value declare their bindings only under the
+    # pack's validator_bindings.active[].applies_to.
+    go = catalog("agr.alliance.go")
+    kind = "GOCuratableObject"
+    for path, binding in [("gene_product.curie", "go_gene_product_validation"),
+                          ("gene_product.label", "go_gene_product_validation"),
+                          ("go_term.curie", "go_term_validation"),
+                          ("reference_curie.curie", "go_reference_validation"),
+                          ("with_from[].curie", "go_with_from_gene_validation")]:
+        assert field(go, kind, path)["validator_binding_id"] == binding, path
+    assert field(go, kind, "gene_product.mention")["validator_binding_id"] is None
+    assert field(go, kind, "with_from[].mention")["validator_binding_id"] is None
+    assert {"path": "gene_product.curie", "if_not_validated": "gene_product.mention"} in (
+        go["default_fields"][kind])
+    expression = catalog("agr.alliance.gene_expression")
+    relation = field(expression, "GeneExpressionAnnotation", "relation.name")
+    assert relation["validator_binding_id"] == "relation_vocabulary_validation"
+    assert field(expression, "GeneExpressionAnnotation", "relation.mention")[
+        "validator_binding_id"] is None
+
+
+def test_relation_name_default_falls_back_to_its_mention():
+    from src.lib.benchmarks.pack_catalog import _ObjectFacts
+
+    pack = domain_pack_validation_registries()["agr.alliance.gene_expression"].domain_pack
+    metadata = pack.metadata
+    obj = next(o for o in metadata.object_definitions
+               if o.object_type == "GeneExpressionAnnotation")
+    facts = _ObjectFacts(obj, {m.model_id: m for m in metadata.model_definitions},
+                         {o.object_type: o.model_ref for o in metadata.object_definitions},
+                         metadata)
+    assert facts.default_fields(["relation"]) == [
+        {"path": "relation.name", "if_not_validated": "relation.mention"}]
+
+
+def test_pack_and_field_binding_declarations_must_agree():
+    from types import SimpleNamespace
+
+    from src.schemas.domain_pack_metadata import DomainPackMetadata
+
+    metadata = DomainPackMetadata.model_validate({
+        "pack_id": "fixture.pack", "display_name": "Fixture", "version": "0.1.0",
+        "metadata_api_version": "1.0.0",
+        "object_definitions": [{
+            "object_type": "Thing", "display_name": "Thing",
+            "metadata": {"object_role": "curatable_unit"},
+            "fields": [{"field_path": "term", "field_type": "string",
+                        "metadata": {"validator_binding_id": "field_check"}}],
+        }],
+        "metadata": {"object_role_key": "object_role", "validator_bindings": {"active": [{
+            "binding_id": "pack_check",
+            "validator_agent": {"package_id": "fixture.pack", "agent_id": "checker"},
+            "applies_to": {"object_types": ["Thing"], "field_paths": ["term"]},
+        }]}},
+    })
+    with pytest.raises(ValueError, match="two different validator bindings"):
+        benchmark_pack_catalog(SimpleNamespace(metadata=metadata))
