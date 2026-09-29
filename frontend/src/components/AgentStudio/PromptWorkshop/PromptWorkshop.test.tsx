@@ -1952,6 +1952,24 @@ describe('PromptWorkshop', () => {
     expect(screen.getByRole('combobox', { name: 'Domain format' })).toHaveTextContent('fixture.domain')
   })
 
+  it('shows a saved Flexible agent as retired and keeps the retired choice disabled after converting', async () => {
+    const existing = buildCustomAgent()
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.getAgentExecutionRevision.mockImplementation(async () => ({
+      ...buildVersion(2), id: existing.execution_revision_id, agent_id: existing.id,
+      snapshot: { ...buildVersion(2).snapshot, output_contract: { output_state: 'structured_extraction', output_mode: 'unprofiled_generic' } },
+    }))
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} authoringContextRef={handle} />)
+    await waitForHeaderName('My Agent')
+    expect(await screen.findByText('Flexible extraction is retired. Convert to Custom Output Structure to keep the same fields on every run.')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Output format' })).toHaveTextContent('Flexible extraction (retired)')
+    fireEvent.click(screen.getByRole('button', { name: 'Convert to Custom Output Structure' }))
+    await waitFor(() => expect(handle.current?.captureAuthoringContext().draft_output?.mode).toBe('profile_bound_generic'))
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Output format' }))
+    expect(await screen.findByRole('option', { name: 'Flexible extraction (retired)' })).toHaveAttribute('aria-disabled', 'true')
+  })
+
   it.each([true, false])('saves a loaded profile as an exact revision edit only when editable (%s)', async (canEdit) => {
     const existing = buildCustomAgent()
     const pin = { profile_id: 'profile-id', profile_revision_id: 'profile-revision-2', revision: 2, fingerprint: 'sha256:profile' }

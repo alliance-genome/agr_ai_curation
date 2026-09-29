@@ -7,7 +7,7 @@ export default function SavedExecutionSummary({ revision }: { revision: AgentExe
   const pin = output.output_state === 'structured_extraction' && output.output_mode === 'profile_bound_generic' ? output.generic_profile_ref : null
   const label = output.output_state === 'none' ? 'No structured output'
     : output.output_mode === 'domain' ? `Packaged domain: ${output.domain_extraction_ref?.domain_pack_id ?? output.output_schema_key}`
-      : pin ? `Custom Output Structure revision ${pin.revision}` : 'Flexible generic extraction (no profile)'
+      : pin ? `Custom Output Structure revision ${pin.revision}` : 'Flexible extraction (retired)'
   return <details>
     <summary>Saved configuration · revision {revision.revision}</summary>
     <Stack spacing={1} sx={{ mt: 1 }}>

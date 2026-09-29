@@ -323,6 +323,26 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
         elif draft_output.get("mode") == "unprofiled_generic":
             if candidate["output_schema_key"] or any(draft_output.get(key) for key in ("schemaKey", "profilePin", "profileContract", "domainExtractionRef")):
                 raise ValueError("Flexible generic output cannot retain a profile, schema or builder selection")
+            from src.lib.agent_studio.flexible_extraction import FLEXIBLE_RETIRED, require_flexible_not_new
+            # Save keeps Flexible only for an agent whose saved head already is
+            # Flexible; a template start or a copy has no head of its own.
+            previous = None
+            if workshop.custom_agent_id and source is not None:
+                from src.lib.agent_studio.execution_revision_service import get_execution_revision
+                _, head = get_execution_revision(
+                    db, source.id, source.execution_revision_id, user_id,
+                    active_group_ids=active_group_ids,
+                )
+                previous = head.output_contract
+            try:
+                require_flexible_not_new(AgentOutputContract(
+                    output_state="structured_extraction", output_mode="unprofiled_generic",
+                ), previous)
+            except ValueError:
+                findings.append(AuthoringValidationFinding(
+                    code="flexible_extraction_retired", severity="error",
+                    path="custom_agent.output_contract", message=FLEXIBLE_RETIRED,
+                ))
         else:
             raise ValueError("Choose an explicit supported output mode")
     except ProfileMappingError as exc:

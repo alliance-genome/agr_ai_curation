@@ -28,7 +28,7 @@ AI Chat can help throughout. Ask it to add details or parts, write instructions,
 
 ## Use the right kind of output
 
-**Custom Output Structure** gives your extractor a consistent set of fields. **Flexible extraction** lets the AI choose fields that may differ between runs. **Packaged domain format** uses an existing biological structure, with validation where supported and enabled. See [choosing an output mode](CUSTOM_OUTPUT_STRUCTURES.md#choose-an-output-mode) for the tradeoffs.
+**Custom Output Structure** gives your extractor a consistent set of fields. **Packaged domain format** uses an existing biological structure, with validation where supported and enabled. Flexible extraction is retired; convert existing agents to a Custom Output Structure. See [choosing an output mode](CUSTOM_OUTPUT_STRUCTURES.md#choose-an-output-mode) for the tradeoffs.
 
 A flow also needs a way to present its results: **Chat Output**, CSV, TSV, or JSON. You can specify columns and formatting in the output step. Choosing CSV does not, by itself, define what the extractor collects or make the file ready for database submission.
 

@@ -28,6 +28,6 @@ describe('saved executable summary', () => {
     expect(screen.getByText('No structured output')).toBeInTheDocument()
     view.rerender(<SavedExecutionSummary revision={{ ...revision, snapshot: { ...revision.snapshot,
       output_contract: { output_state: 'structured_extraction', output_mode: 'unprofiled_generic' } } }} />)
-    expect(screen.getByText('Flexible generic extraction (no profile)')).toBeInTheDocument()
+    expect(screen.getByText('Flexible extraction (retired)')).toBeInTheDocument()
   })
 })

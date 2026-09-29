@@ -5,10 +5,10 @@ import WorkshopOutputSetup from './WorkshopOutputSetup'
 import { emptyOutputDraft, type WorkshopOutputDraft } from './workshopOutputDraft'
 import { buildDomainEnvelopeMetadata } from '@/test/fixtures/agentStudioDomainEnvelope'
 
-function Harness({ initial = emptyOutputDraft() }: { initial?: WorkshopOutputDraft }) {
+function Harness({ initial = emptyOutputDraft(), savedFlexible = false }: { initial?: WorkshopOutputDraft; savedFlexible?: boolean }) {
   const [value, onChange] = useState(initial)
   return <>
-    <WorkshopOutputSetup value={value} onChange={onChange} onEditStructure={vi.fn()} agents={{
+    <WorkshopOutputSetup value={value} onChange={onChange} onEditStructure={vi.fn()} savedFlexible={savedFlexible} agents={{
       facts: { name: 'Facts', icon: '', category: 'Extraction', output_schema_key: 'facts',
         domain_envelope: { ...buildDomainEnvelopeMetadata(), display_name: 'Facts', status: 'under_development' } },
       builder: { name: 'Builder', icon: '', category: 'Extraction', output_schema_key: null,
@@ -19,6 +19,8 @@ function Harness({ initial = emptyOutputDraft() }: { initial?: WorkshopOutputDra
     <output aria-label="Selected schema">{value.schemaKey || 'none'}</output>
   </>
 }
+
+const RETIRED = 'Flexible extraction is retired. Convert to Custom Output Structure to keep the same fields on every run.'
 
 describe('Workshop output choices', () => {
   it('selects a schema-null packaged builder and explicitly clears it when changing format', async () => {
@@ -54,12 +56,27 @@ describe('Workshop output choices', () => {
     expect(screen.getByRole('combobox', { name: 'Domain format' })).toHaveTextContent('Facts')
   })
 
-  it('distinguishes flexible generic extraction from no output', () => {
-    render(<Harness initial={emptyOutputDraft('unprofiled_generic')} />)
+  it('does not offer Flexible extraction to a new agent', async () => {
+    render(<Harness initial={emptyOutputDraft('profile_bound_generic')} />)
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Output format' }))
+    const options = await screen.findAllByRole('option')
+    expect(options.map(option => option.textContent)).toEqual(['Custom Output Structure', 'Packaged domain format'])
+  })
+
+  it('shows a saved Flexible agent as retired and converts it', () => {
+    render(<Harness initial={emptyOutputDraft('unprofiled_generic')} savedFlexible />)
     expect(screen.getByRole('radio', { name: 'Structured extraction' })).toBeChecked()
-    expect(screen.getByRole('alert')).toHaveTextContent('fields it considers useful')
-    fireEvent.click(screen.getByRole('radio', { name: 'No structured output' }))
-    expect(screen.getByLabelText('Selected output mode')).toHaveTextContent('none')
+    expect(screen.getByRole('alert')).toHaveTextContent(RETIRED)
+    fireEvent.click(screen.getByRole('button', { name: 'Convert to Custom Output Structure' }))
+    expect(screen.getByLabelText('Selected output mode')).toHaveTextContent('profile_bound_generic')
+    expect(screen.queryByText(RETIRED)).not.toBeInTheDocument()
+  })
+
+  it('lists the retired format only as a disabled choice', async () => {
+    render(<Harness initial={emptyOutputDraft('profile_bound_generic')} savedFlexible />)
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Output format' }))
+    expect(await screen.findByRole('option', { name: 'Flexible extraction (retired)' }))
+      .toHaveAttribute('aria-disabled', 'true')
   })
 
   it('preserves the current structure when a format change is canceled', () => {

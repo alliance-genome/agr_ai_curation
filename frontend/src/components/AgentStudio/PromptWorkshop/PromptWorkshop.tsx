@@ -595,6 +595,11 @@ function PromptWorkshop({
             {((['csv_formatter', 'tsv_formatter', 'json_formatter'].includes(draft.domainEnvelopeAgentId) && draft.outputDraft.mode === 'none' && draft.selectedToolIds.includes('finalize_and_save')) || draft.defaultExportExecutionMode === 'direct') && <DirectExportSetting isDefault value={draft.defaultExportExecutionMode} onChange={draft.setDefaultExportExecutionMode} />}
             <WorkshopOutputSetup value={draft.outputDraft} onChange={draft.setOutputDraft}
               disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
+              savedFlexible={Boolean(selectedCustomAgent && draft.savedExecutionRevision
+                && draft.savedExecutionRevision.id === selectedCustomAgent.execution_revision_id
+                && draft.savedExecutionRevision.agent_id === selectedCustomAgent.id
+                && draft.savedExecutionRevision.snapshot.output_contract.output_state === 'structured_extraction'
+                && draft.savedExecutionRevision.snapshot.output_contract.output_mode === 'unprofiled_generic')}
               agents={agentMetadata} onEditStructure={() => setSection('output_structure')}
               onChooseExisting={() => setProfilePickerBase(workshopDraftKey(draft.captureAuthoringContext()))} />
             {selectedCustomAgent && draft.savedExecutionRevision && draft.savedExecutionRevision.id === selectedCustomAgent.execution_revision_id
