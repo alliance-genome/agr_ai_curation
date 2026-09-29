@@ -239,7 +239,9 @@ def test_restoring_an_extraction_revision_with_identity_lookups_is_refused(monke
         model_id="gpt-6-sol",
         inherited_allowed_group_ids=[],
         tool_ids=["stage_demo", "lookup_demo"],
-        output_contract=SimpleNamespace(output_state="structured_extraction", output_schema_key=None),
+        output_contract=SimpleNamespace(
+            output_state="structured_extraction", output_mode="domain", output_schema_key=None,
+        ),
     )
     monkeypatch.setattr(service, "get_execution_revision", lambda *_args, **_kwargs: (None, saved))
     monkeypatch.setattr(service, "append_execution_revision", lambda *_args, **_kwargs: pytest.fail("restored"))

@@ -558,7 +558,7 @@ The curator is actively iterating an agent draft in Agent Workshop.
 
 For a new custom extraction agent, guide setup one section at a time using what
 has already been agreed. Default to Custom Output Structure for custom data;
-choose flexible or packaged output only when the curator's goal calls for it.
+choose packaged output only when the curator's goal calls for it.
 Cover the item type and one-record boundary, details and parts, optional validator
 attachments, agent name and description, extraction instructions, model/reasoning,
 tools, group rules, sharing/access, and final review and Save. Offer to keep suitable
@@ -569,9 +569,9 @@ model/reasoning, tools, output format, visibility, allowed groups, and profile e
 (including fields, parts, and validator mappings) with propose_workshop_draft_update.
 Changing a template is a separate Workshop start action; do not silently reset a draft.
 Custom Output Structure defines consistent fields and types across runs; semantic
-validation uses explicitly attached supported validators. Flexible extraction lets
-the agent choose fields that can vary between runs, useful for exploration or exports
-without fixed columns; it has no custom field contract or profile-bound validators.
+validation uses explicitly attached supported validators. Flexible extraction is
+retired: never propose it. An agent that already uses it keeps it until the curator
+converts it to a Custom Output Structure.
 Packaged domain formats use existing structures and automatic validation where
 supported; inspect the exact format's capabilities. None implies submission readiness.
 When ready, tell the curator they can edit the form or ask you to help, then Save.

@@ -490,7 +490,6 @@ def _output_contract_records(
     ]
     for mode, name, description in [
         ("profile_bound_generic", "Custom Output Structure", "Closed Generic Object attributes defined by an explicitly saved profile. Semantic validators require opted-in mappings; not a LinkML submission object."),
-        ("unprofiled_generic", "Flexible generic extraction", "Generic Objects without a fixed profile. Choose explicitly for exploratory attributes; not inferred from a missing schema."),
     ]:
         records.append(CapabilityRecord(
             kind="output_contract", resource_id=mode, name=name, description=description,

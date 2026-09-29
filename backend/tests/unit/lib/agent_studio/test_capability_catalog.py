@@ -97,7 +97,7 @@ def test_catalog_keeps_none_distinct_and_future_extensions_discoverable(sources)
     indexed = {(item["kind"], item["resource_id"]): item for item in result["results"]}
     assert indexed[("output_contract", "none")]["selectable"] is True
     assert indexed[("validator_capability", "future_validator")]["selectable"] is False
-    assert indexed[("output_contract", "unprofiled_generic")]["selectable"] is True
+    assert ("output_contract", "unprofiled_generic") not in indexed
     assert indexed[("output_contract", "profile_bound_generic")]["selectable"] is True
 
 

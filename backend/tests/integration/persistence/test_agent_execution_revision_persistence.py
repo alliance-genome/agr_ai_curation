@@ -1063,7 +1063,7 @@ def test_normal_save_round_trips_all_output_modes_atomically(execution_db, monke
     generic = AgentOutputContract(output_state="structured_extraction", output_mode="unprofiled_generic")
     first = append_execution_revision(db, head, capture_execution_snapshot(db, head, none),
                                       user_id=1, expected_revision_id=None)
-    for number, output in enumerate([domain, bound, generic, none, domain], start=2):
+    for number, output in enumerate([domain, bound, none, domain], start=2):
         service.update_custom_agent(db, head, expected_revision_id=head.execution_revision_id,
                                     output_contract=output)
         row, saved = get_execution_revision(db, head.id, head.execution_revision_id, 1, active_group_ids=[])
@@ -1081,6 +1081,20 @@ def test_normal_save_round_trips_all_output_modes_atomically(execution_db, monke
     db.refresh(head)
     assert head.execution_revision_id == before
     assert head.output_schema_key == domain.output_schema_key
+    # Flexible extraction is retired: a head that is not Flexible cannot become Flexible,
+    # but an existing Flexible head (saved below the service rule) round-trips unchanged.
+    with pytest.raises(ValueError, match="Flexible extraction is retired"):
+        with db.begin_nested():
+            service.update_custom_agent(db, head, expected_revision_id=before, output_contract=generic)
+    db.refresh(head)
+    assert head.execution_revision_id == before
+    append_execution_revision(db, head, capture_execution_snapshot(db, head, generic),
+                              user_id=1, expected_revision_id=before)
+    service.update_custom_agent(db, head, expected_revision_id=head.execution_revision_id,
+                                output_contract=generic)
+    row, saved = get_execution_revision(db, head.id, head.execution_revision_id, 1, active_group_ids=[])
+    assert row.revision == 7 and saved.output_contract == generic
+    assert row.output_schema_key is None and row.profile_revision_id is None
 
 
 def test_profile_identity_mismatch_cannot_be_inserted(execution_db):

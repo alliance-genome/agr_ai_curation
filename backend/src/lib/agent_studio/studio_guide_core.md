@@ -179,8 +179,9 @@ claim a proposal has changed the live draft until Apply reports success.
 
 <studio_guide_topic id="workshop_output_and_validators" title="Workshop output choice and validator attachment" read_when="Required before choosing a draft output format, or attaching, changing or removing a validator on a detail or part.">
 Choose output through the existing select_output operation: profile_bound_generic for a closed custom structure,
-unprofiled_generic only for explicitly exploratory attributes, or an available packaged
-format (development maturity is advisory). A null schema never implies open extraction.
+or an available packaged format (development maturity is advisory). Flexible extraction
+(unprofiled_generic) is retired: never propose it. An agent that already uses it keeps it until
+the curator converts it to a Custom Output Structure. A null schema never implies open extraction.
 Generic Objects retain system-owned identity, label, evidence and provenance. Profile
 attributes are closed: every permitted key is declared; optional fields may be absent.
 "Synonyms / source labels (not output fields)" recognize one canonical key, not extra keys.

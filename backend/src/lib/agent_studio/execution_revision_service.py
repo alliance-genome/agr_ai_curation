@@ -281,6 +281,22 @@ def restore_execution_revision(
     _, saved = get_execution_revision(
         db, agent_id, revision_id, user_id, active_group_ids=active_group_ids
     )
+    if saved.output_contract.output_mode == "unprofiled_generic":
+        from src.lib.agent_studio.flexible_extraction import require_flexible_not_new
+        from src.schemas.agent_execution_revision import AgentOutputContract
+
+        # Ownership and the head lock are verified above; only the head's saved output
+        # mode matters here, so its access checks do not gate the restore.
+        current = db.execute(
+            select(AgentExecutionRevision.snapshot).where(
+                AgentExecutionRevision.id == head.execution_revision_id,
+                AgentExecutionRevision.agent_id == agent_id,
+            )
+        ).scalar_one_or_none()
+        require_flexible_not_new(
+            saved.output_contract,
+            None if current is None else AgentOutputContract.model_validate(current["output_contract"]),
+        )
     from src.lib.config.models_loader import get_model
 
     # A restored head must still run, and startup rejects active agents whose

@@ -207,6 +207,7 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
             path="custom_agent.default_export_execution_mode", message="Direct export requires a file exporter agent."))
     source = None
     required_tools = []
+    copy_of_flexible = False
     try:
         if workshop.custom_agent_id:
             source_id = service.parse_custom_agent_id(workshop.custom_agent_id)
@@ -229,6 +230,14 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
             )
             if not workshop_source_is_current(source, workshop.clone_source_updated_at):
                 raise ValueError("Stale clone source")
+            # A copy is saved from the source's saved configuration, so a Flexible
+            # source can't be copied whatever output the draft now selects.
+            from src.lib.agent_studio.execution_revision_service import get_execution_revision
+            _, source_head = get_execution_revision(
+                db, source.id, source.execution_revision_id, user_id,
+                active_group_ids=active_group_ids,
+            )
+            copy_of_flexible = source_head.output_contract.output_mode == "unprofiled_generic"
         elif workshop.template_source:
             source = service._resolve_system_template_agent(
                 db, workshop.template_source, active_group_ids=active_group_ids,
@@ -271,6 +280,12 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
         findings.append(AuthoringValidationFinding(
             code="unavailable_workshop_source", severity="error", path="custom_agent.identity",
             message="The agent source or inherited access changed. Reopen the draft and try again.",
+        ))
+    if copy_of_flexible:
+        from src.lib.agent_studio.flexible_extraction import FLEXIBLE_COPY_REFUSED
+        findings.append(AuthoringValidationFinding(
+            code="flexible_extraction_retired", severity="error",
+            path="custom_agent.output_contract", message=FLEXIBLE_COPY_REFUSED,
         ))
     output_validation_path = "custom_agent.output_contract"
     try:
@@ -323,6 +338,28 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
         elif draft_output.get("mode") == "unprofiled_generic":
             if candidate["output_schema_key"] or any(draft_output.get(key) for key in ("schemaKey", "profilePin", "profileContract", "domainExtractionRef")):
                 raise ValueError("Flexible generic output cannot retain a profile, schema or builder selection")
+            from src.lib.agent_studio.flexible_extraction import FLEXIBLE_RETIRED, require_flexible_not_new
+            # Save keeps Flexible only for an agent whose saved head already is
+            # Flexible; a template start has no head of its own, and a copy of a
+            # Flexible source is already reported with the copy-specific message.
+            previous = None
+            if workshop.custom_agent_id and source is not None:
+                from src.lib.agent_studio.execution_revision_service import get_execution_revision
+                _, head = get_execution_revision(
+                    db, source.id, source.execution_revision_id, user_id,
+                    active_group_ids=active_group_ids,
+                )
+                previous = head.output_contract
+            if not copy_of_flexible:
+                try:
+                    require_flexible_not_new(AgentOutputContract(
+                        output_state="structured_extraction", output_mode="unprofiled_generic",
+                    ), previous)
+                except ValueError:
+                    findings.append(AuthoringValidationFinding(
+                        code="flexible_extraction_retired", severity="error",
+                        path="custom_agent.output_contract", message=FLEXIBLE_RETIRED,
+                    ))
         else:
             raise ValueError("Choose an explicit supported output mode")
     except ProfileMappingError as exc:

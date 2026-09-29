@@ -52,7 +52,8 @@ def prepare_selected_catalog(session, curator, catalog: BenchmarkRouteCatalog, s
             raise ValueError("Saved flow identity conflicts with an existing catalog target")
         frozen = capture_saved_flow(session, curator, UUID(target.id), expected_revision=target.source_revision)
         contracts = saved_flow_contracts(session, curator, UUID(target.id), expected_revision=target.source_revision)
-        if not contracts.stages or set(contracts.route_default_conflicts) - explicit_slots:
+        if (not contracts.runnable or not contracts.stages
+                or set(contracts.route_default_conflicts) - explicit_slots):
             raise ValueError("Selected flow has unavailable stages or conflicting shared model defaults")
         sources, systems, target_slots = {}, {}, set()
         nodes = {node["id"]: node for node in frozen.definition["nodes"]}

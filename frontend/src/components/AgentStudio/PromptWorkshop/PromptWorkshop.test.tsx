@@ -1952,6 +1952,45 @@ describe('PromptWorkshop', () => {
     expect(screen.getByRole('combobox', { name: 'Domain format' })).toHaveTextContent('fixture.domain')
   })
 
+  it('shows a saved Flexible agent as retired and keeps the retired choice disabled after converting', async () => {
+    const existing = buildCustomAgent()
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.getAgentExecutionRevision.mockImplementation(async () => ({
+      ...buildVersion(2), id: existing.execution_revision_id, agent_id: existing.id,
+      snapshot: { ...buildVersion(2).snapshot, output_contract: { output_state: 'structured_extraction', output_mode: 'unprofiled_generic' } },
+    }))
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} authoringContextRef={handle} />)
+    await waitForHeaderName('My Agent')
+    expect(await screen.findByText('Flexible extraction is retired. Convert to Custom Output Structure to keep the same fields on every run.')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Output format' })).toHaveTextContent('Flexible extraction (retired)')
+    fireEvent.click(screen.getByRole('button', { name: 'Convert to Custom Output Structure' }))
+    await waitFor(() => expect(handle.current?.captureAuthoringContext().draft_output?.mode).toBe('profile_bound_generic'))
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Output format' }))
+    expect(await screen.findByRole('option', { name: 'Flexible extraction (retired)' })).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('explains that a copy of a Flexible agent cannot be saved and does not offer Convert', async () => {
+    const agent = buildCustomAgent()
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [agent], total: 1 })
+    serviceMocks.getAgentExecutionRevision.mockImplementation(async () => ({
+      ...buildVersion(2), id: agent.execution_revision_id, agent_id: agent.id,
+      snapshot: { ...buildVersion(2).snapshot, output_contract: { output_state: 'structured_extraction', output_mode: 'unprofiled_generic' } },
+    }))
+    const action: import('@/types/promptExplorer').WorkshopAction = {
+      success: true, contract_version: 'workshop_action.v1',
+      request: { action: 'new_agent', mode: 'clone', agent_id: agent.agent_id },
+      source: { agent_id: agent.agent_id, name: agent.name, updated_at: agent.updated_at, agent_revision_id: agent.execution_revision_id || null },
+      label: 'Open agent', origin: null, active_tab: 'agents', flow_draft_fingerprint: null, workshop_draft_fingerprint: null,
+      saved: false, message: 'Nothing saved.',
+    }
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialChatAction={action} authoringContextRef={ref} />)
+    await waitFor(() => expect(ref.current?.captureAuthoringContext().clone_source_agent_id).toBe(agent.agent_id))
+    expect(await screen.findByText("This agent uses retired Flexible extraction, so it can't be copied. Convert the original agent to Custom Output Structure first, then copy it.")).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Convert to Custom Output Structure' })).not.toBeInTheDocument()
+  })
+
   it.each([true, false])('saves a loaded profile as an exact revision edit only when editable (%s)', async (canEdit) => {
     const existing = buildCustomAgent()
     const pin = { profile_id: 'profile-id', profile_revision_id: 'profile-revision-2', revision: 2, fingerprint: 'sha256:profile' }

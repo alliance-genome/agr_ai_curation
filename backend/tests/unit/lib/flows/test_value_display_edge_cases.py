@@ -255,14 +255,14 @@ def _gene_expression_item(object_id):
 
 
 def test_pack_display_specs_resolve_once_per_bundle(monkeypatch):
-    original = export_fields._packaged_domain_pack
+    original = export_fields.packaged_domain_pack
     calls = []
 
     def counted(*args, **kwargs):
         calls.append(args)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(export_fields, "_packaged_domain_pack", counted)
+    monkeypatch.setattr(export_fields, "packaged_domain_pack", counted)
     steps = [_envelope_step("gene_expression", "agr.alliance.gene_expression", [_gene_expression_item(f"g{n}")],
                             step=n, node_id=f"node_{n}") for n in (1, 2, 3)]
     bundle = build_flow_output_artifact_bundle(completed_steps=steps, flow_name="GE", output_format="csv")

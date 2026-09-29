@@ -83,10 +83,42 @@ The response contains declared output structures per node, not result data:
   types, rather than guessing fields from examples.
 - `profile_attributes` is the exact saved generic profile's attributes schema.
   Its saved agent receipt includes the profile revision and fingerprint.
-- `pack_fields` is the installed domain pack's declared export-field catalog,
-  not a JSON Schema. Its fields retain package versions and payload paths.
+- `pack_fields` is a benchmark catalog of the installed domain pack (not the
+  Studio export catalog and not a JSON Schema): `pack_id`, `pack_version`,
+  `pack_label`; `record_kinds` (`object_type`, `label`, `role` `curatable` or
+  `supporting`); `families` from the pack's explicit `record_kind_families`
+  (`id`, `label`, `fallback_object_type`, `object_types`); `fields` for curatable
+  kinds (`object_type`, `path`, `label`, `shape`, `inside_list`, `is_identifier`,
+  `validator_written`, `is_pointer`, `free_text`, `validator_binding_id`); and
+  `default_fields` per curatable kind (`path`, `if_not_validated`), read live
+  from the kind's workspace layout. A leaf read from every element of a list of
+  inline objects is written `list[].leaf` with shape `text_from_each_item`.
+  Descriptions and enum values are omitted.
 - `not_verified` means a contract is unavailable or undeclared. It does not
   mean a model failed, and it must not be presented as an empty gene list.
+- Every verified pack or profile contract has `structure_source`:
+  `{"kind": "pack", "pack_id", "pack_version", "pack_label"}` or
+  `{"kind": "profile", "profile_id", "profile_revision_id", "revision", "name"}`.
+
+Each step is described on its own. A step has `output_kind` (`pack_fields`,
+`profile_attributes`, `flexible`, `pdf_extraction`, `envelope_legacy`,
+`validator_result`, `formatter`, `text`, `other` or `unavailable`), `problem`
+(`needs_resave`, `unavailable_agent`, `unreadable_structure` or null) and
+`validated_bindings` (the validator binding ids that run on its output; only
+when the flow is runnable). A step whose agent the caller can't see is
+`unavailable_agent` with one generic reason and no receipt. A step whose model
+or tools need a re-save keeps its structure (`needs_resave`).
+
+`runnable` is true only when every step resolved, the flow has no error
+findings, and its stages, model defaults and validators are available; otherwise `run_problem` is a fixed
+sentence chosen by the first problem's code and `stages` is empty. Admission
+refuses a flow that isn't runnable.
+
+The whole contracts response is bounded by
+`BENCHMARK_CATALOG_MAX_RESPONSE_BYTES` (default 1 MiB), like the catalog
+responses. Each `pack_fields` step carries its pack's full benchmark catalog,
+so a flow with several pack steps grows with each one; a flow over the limit
+returns 413 `response_too_large` rather than a truncated contract list.
 
 The `stages` list identifies extraction, validation, output and other roles.
 Graph-attached validators and repeated nodes using one agent share its

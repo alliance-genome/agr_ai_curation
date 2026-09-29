@@ -17,7 +17,6 @@ from fastapi.responses import Response
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel, Field
 
 from ..lib.flows.access import get_visible_flow, visible_flow_filter, generate_clone_name
@@ -43,6 +42,7 @@ from ..lib.flows.persisted_flow_migrations import (
     validate_persisted_flow_definition,
 )
 from ..lib.flows.execution_revisions import resolve_flow_execution_revisions
+from ..lib.flows.flow_service import save_flow_definition
 from ..lib.agent_studio.catalog_service import (
     AGENT_REGISTRY,
     get_active_visible_agent_metadata,
@@ -982,17 +982,7 @@ async def update_flow(
         node_count = len(request.flow_definition.nodes) if request.flow_definition.nodes else 0
         edge_count = len(request.flow_definition.edges) if request.flow_definition.edges else 0
         logger.debug('[Flow Update] Updating flow_definition: %s nodes, %s edges', node_count, edge_count)
-        flow.flow_definition = _validated_flow_definition_payload(
-            request.flow_definition,
-            db_user_id=flow.user_id,
-            enforce_agent_references=True,
-            enforce_agent_step_policy=True,
-            active_group_ids=active_group_ids,
-            db=db,
-        )
-        # CRITICAL: SQLAlchemy doesn't detect changes to mutable JSONB fields
-        # We must explicitly flag it as modified for the UPDATE to be emitted
-        flag_modified(flow, "flow_definition")
+        save_flow_definition(db, flow, request.flow_definition, active_group_ids=active_group_ids)
         updates.append("flow_definition")
 
     # Only commit if something changed

@@ -101,7 +101,7 @@ New extraction drafts default to **GPT-6 Sol with medium reasoning**; GPT-6 Astr
 
 **Visibility** and **Available to groups** serve different purposes: sharing controls discovery, while groups restrict execution. A restricted template or clone source may let you narrow group access without widening it.
 
-Under **Output**, read the explanation below the selected mode. Custom Output Structure defines consistent fields; Flexible extraction allows fields to vary; Packaged domain format uses an existing biological structure. [Compare the modes](CUSTOM_OUTPUT_STRUCTURES.md#choose-an-output-mode) before changing one.
+Under **Output**, read the explanation below the selected mode. Custom Output Structure defines consistent fields; Packaged domain format uses an existing biological structure. Flexible extraction is retired; convert existing agents to a Custom Output Structure. [Compare the modes](CUSTOM_OUTPUT_STRUCTURES.md#choose-an-output-mode) before changing one.
 
 For custom output, Setup includes a read-only details table. Choose **Add details to collect** or **Edit details to collect** above the table. This opens the same structure in the editor, where you define what the AI should collect—not actual answers from a paper. **Back to Setup** returns to the agent settings.
 

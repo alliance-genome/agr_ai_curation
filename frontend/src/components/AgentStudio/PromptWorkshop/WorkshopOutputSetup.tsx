@@ -11,11 +11,6 @@ const outputHelp = {
     summary: 'Choose consistent details to collect from every paper.',
     text: 'Define one type of item, then choose its details and any parts that belong together. The agent follows these saved fields, answer types, and inclusion rules across runs. You can attach supported validators to selected details or parts to resolve identities or validate values. A consistent structure makes results easier to compare and export to CSV, TSV, or JSON. You can revise the structure later. These custom records are not automatically ready for Alliance submission.',
   },
-  unprofiled_generic: {
-    title: 'Flexible extraction',
-    summary: 'Let the agent choose details as it reads; fields may vary between runs.',
-    text: 'The agent can create the fields it considers useful for your request. This is useful for quick exploration, chat answers, or CSV, TSV, and JSON exports when the columns do not need to stay consistent. It does not enforce a custom set of fields or apply validators attached to custom fields. General record and evidence rules still apply. Choose Custom Output Structure when you need repeatable fields or field-specific validation.',
-  },
   domain: {
     title: 'Packaged domain format',
     summary: 'Use an existing biological data structure, with automatic validation where supported.',
@@ -30,11 +25,20 @@ interface Props {
   onEditStructure: () => void
   onChooseExisting?: () => void
   disabled?: boolean
+  /** True when the loaded saved revision of the selected agent uses Flexible extraction. */
+  savedFlexible?: boolean
+  /** True when this draft copies an agent whose saved revision uses Flexible extraction; such a copy is refused. */
+  flexibleCopySource?: boolean
 }
 
+const RETIRED = 'Flexible extraction is retired. Convert to Custom Output Structure to keep the same fields on every run.'
+const COPY_REFUSED = "This agent uses retired Flexible extraction, so it can't be copied. Convert the original agent to Custom Output Structure first, then copy it."
+
 /** Explicit output intent. Domain maturity describes support, never eligibility. */
-export default function WorkshopOutputSetup({ value, onChange, agents, onEditStructure, onChooseExisting, disabled = false }: Props) {
-  const help = value.mode === 'none' ? null : outputHelp[value.mode]
+export default function WorkshopOutputSetup({ value, onChange, agents, onEditStructure, onChooseExisting, disabled = false, savedFlexible = false, flexibleCopySource = false }: Props) {
+  const help = value.mode === 'none' || value.mode === 'unprofiled_generic' ? null : outputHelp[value.mode]
+  // A saved Flexible agent (or a recovered Flexible draft) is shown, never offered.
+  const showRetired = savedFlexible || flexibleCopySource || value.mode === 'unprofiled_generic'
   const [pendingMode, setPendingMode] = useState<WorkshopOutputDraft['mode'] | null>(null)
   const changeMode = (mode: WorkshopOutputDraft['mode']) => {
     if (disabled || mode === value.mode) return
@@ -58,17 +62,25 @@ export default function WorkshopOutputSetup({ value, onChange, agents, onEditStr
       <FormControlLabel disabled={disabled} value="none" control={<Radio />} label="No structured output" />
       <FormControlLabel disabled={disabled} value="structured" control={<Radio />} label="Structured extraction" />
     </RadioGroup>
+    {flexibleCopySource && <Alert severity="warning">
+      <Typography variant="body2">{COPY_REFUSED}</Typography>
+    </Alert>}
     {value.mode !== 'none' && <>
       <TextField disabled={disabled} select label="Output format" value={value.mode}
         onChange={(event) => changeMode(event.target.value as WorkshopOutputDraft['mode'])}>
         <MenuItem value="profile_bound_generic">Custom Output Structure</MenuItem>
         <MenuItem value="domain">Packaged domain format</MenuItem>
-        <MenuItem value="unprofiled_generic">Flexible extraction</MenuItem>
+        {showRetired && <MenuItem value="unprofiled_generic" disabled>Flexible extraction (retired)</MenuItem>}
       </TextField>
-      {help && <Alert severity="info">
-        <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>{help.summary}</Typography>
-        <Typography variant="body2">{help.text}</Typography>
-      </Alert>}
+      {value.mode === 'unprofiled_generic'
+        ? !flexibleCopySource && <Alert severity="info" action={<Button disabled={disabled} color="inherit"
+            onClick={() => onChange(emptyOutputDraft('profile_bound_generic'))}>Convert to Custom Output Structure</Button>}>
+          <Typography variant="body2">{RETIRED}</Typography>
+        </Alert>
+        : help && <Alert severity="info">
+          <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>{help.summary}</Typography>
+          <Typography variant="body2">{help.text}</Typography>
+        </Alert>}
       {value.mode === 'domain' && <>
         <TextField disabled={disabled} select label="Domain format" value={selectedKey}
           onChange={(event) => {

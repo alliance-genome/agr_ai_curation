@@ -367,8 +367,11 @@ def test_clone_source_revision_is_reauthorized(db, base, monkeypatch):
         id=uuid4(), execution_revision_id=uuid4(),
         updated_at=datetime(2026, 9, 4, tzinfo=timezone.utc), allowed_group_ids=[], tool_ids=[],
     )
-    monkeypatch.setattr(execution_revision_service, "get_execution_revision",
-                        lambda *a, **kw: (None, SimpleNamespace(tool_ids=[], system_managed_tool_ids=[])))
+    from src.schemas.agent_execution_revision import AgentOutputContract
+    head = SimpleNamespace(
+        tool_ids=[], system_managed_tool_ids=[], output_contract=AgentOutputContract(output_state="none"),
+    )
+    monkeypatch.setattr(execution_revision_service, "get_execution_revision", lambda *a, **kw: (None, head))
     monkeypatch.setattr(service, "get_custom_agent_visible_to_user", lambda *a: source)
     base.clone_source_agent_id = "ca_11111111-1111-1111-1111-111111111111"
     base.clone_source_updated_at = source.updated_at.isoformat()
@@ -705,3 +708,98 @@ def test_case_variant_name_conflicts_in_proposal_and_save(db, base, monkeypatch)
     assert error.value.status_code == 409
     db.add.assert_not_called()
     db.commit.assert_not_called()
+
+
+FLEXIBLE_DRAFT = {"mode": "unprofiled_generic", "schemaKey": "", "profilePin": None, "profileContract": None}
+
+
+def _saved_agent_with_head(monkeypatch, output_contract):
+    from uuid import uuid4
+    from src.lib.agent_studio import custom_agent_service as service
+    from src.lib.agent_studio import execution_revision_service
+    from src.schemas.agent_execution_revision import AgentOutputContract
+    source = SimpleNamespace(
+        id=uuid4(), execution_revision_id=uuid4(), updated_at=datetime(2026, 9, 4, tzinfo=timezone.utc),
+        allowed_group_ids=[], inherited_allowed_group_ids=[], tool_ids=[], template_source=None,
+    )
+    head = SimpleNamespace(
+        tool_ids=[], system_managed_tool_ids=[],
+        output_contract=AgentOutputContract.model_validate(output_contract),
+    )
+    reads = []
+
+    def read(_db, agent_id, revision_id, *_args, **_kwargs):
+        reads.append((agent_id, revision_id))
+        return None, head
+
+    monkeypatch.setattr(execution_revision_service, "get_execution_revision", read)
+    monkeypatch.setattr(service, "get_custom_agent_for_user", lambda *a: source)
+    monkeypatch.setattr(service, "get_custom_agent_visible_to_user", lambda *a: source)
+    return source, reads
+
+
+def _flexible_findings(result):
+    return [item for item in result.findings if item.code == "flexible_extraction_retired"]
+
+
+def test_a_new_flexible_draft_is_warned_before_save(db, base):
+    base.draft_output = dict(FLEXIBLE_DRAFT)
+    result = validate_workshop_context(db, workshop=base, user_id=1, active_group_ids=["TEAM"])
+    assert not result.valid
+    [finding] = _flexible_findings(result)
+    assert finding.severity == "error"
+    assert finding.path == "custom_agent.output_contract"
+    assert finding.message == "Flexible extraction is retired. Choose Custom Output Structure for this agent."
+
+
+@pytest.mark.parametrize("head, warned", [
+    ({"output_state": "structured_extraction", "output_mode": "unprofiled_generic"}, False),
+    ({"output_state": "none"}, True),
+])
+def test_a_saved_agent_keeps_flexible_only_when_its_head_is_flexible(db, base, monkeypatch, head, warned):
+    source, reads = _saved_agent_with_head(monkeypatch, head)
+    base.custom_agent_id = f"ca_{source.id}"
+    base.custom_agent_updated_at = source.updated_at.isoformat()
+    base.draft_output = dict(FLEXIBLE_DRAFT)
+    result = validate_workshop_context(db, workshop=base, user_id=1, active_group_ids=[])
+    assert bool(_flexible_findings(result)) is warned
+    assert result.valid is not warned
+    assert (source.id, source.execution_revision_id) in reads
+
+
+COPY_REFUSED = (
+    "This agent uses retired Flexible extraction, so it can't be copied. "
+    "Convert the original agent to Custom Output Structure first, then copy it."
+)
+CONVERTED_DRAFT = {
+    "mode": "profile_bound_generic", "schemaKey": "", "profilePin": None,
+    "profileContract": {"name": "Converted", "semantic_class": "", "fields": []},
+}
+NO_OUTPUT_DRAFT = {"mode": "none", "schemaKey": "", "profilePin": None, "profileContract": None}
+
+
+@pytest.mark.parametrize("draft_output", [FLEXIBLE_DRAFT, CONVERTED_DRAFT, NO_OUTPUT_DRAFT])
+def test_a_copy_of_a_flexible_agent_is_refused_whatever_the_draft_output(db, base, monkeypatch, draft_output):
+    source, reads = _saved_agent_with_head(
+        monkeypatch, {"output_state": "structured_extraction", "output_mode": "unprofiled_generic"},
+    )
+    base.clone_source_agent_id = f"ca_{source.id}"
+    base.clone_source_updated_at = source.updated_at.isoformat()
+    base.draft_output = dict(draft_output)
+    result = validate_workshop_context(db, workshop=base, user_id=1, active_group_ids=[])
+    assert not result.valid
+    [finding] = _flexible_findings(result)
+    assert finding.severity == "error"
+    assert finding.path == "custom_agent.output_contract"
+    assert finding.message == COPY_REFUSED
+    assert (source.id, source.execution_revision_id) in reads
+
+
+def test_a_copy_of_a_non_flexible_agent_is_unaffected(db, base, monkeypatch):
+    source, _ = _saved_agent_with_head(monkeypatch, {"output_state": "none"})
+    base.clone_source_agent_id = f"ca_{source.id}"
+    base.clone_source_updated_at = source.updated_at.isoformat()
+    base.draft_output = dict(NO_OUTPUT_DRAFT)
+    result = validate_workshop_context(db, workshop=base, user_id=1, active_group_ids=[])
+    assert result.valid
+    assert not _flexible_findings(result)

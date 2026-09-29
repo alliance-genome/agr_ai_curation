@@ -32,7 +32,7 @@ def setup(monkeypatch):
     stage = NS(route_slot=f"agent:{receipt.agent_key}", default_route=_route(), execution_receipt=receipt,
                node_id="node_0", agent_id=receipt.agent_key, stage_id="stage_0", role="extraction",
                source_node_id=None, binding_id=None)
-    contracts = NS(stages=(stage,), nodes=(), route_default_conflicts=())
+    contracts = NS(stages=(stage,), nodes=(), route_default_conflicts=(), runnable=True)
     capture = Mock(return_value=frozen)
     monkeypatch.setattr(service, "capture_saved_flow", capture)
     monkeypatch.setattr(service, "saved_flow_contracts", Mock(return_value=contracts))
@@ -63,6 +63,13 @@ def test_unusable_selected_flow_fails_closed(setup, failure):
     else:
         setup.stage.execution_receipt = setup.receipt.model_copy(update={"revision": 2})
     with pytest.raises(ValueError):
+        service.prepare_selected_catalog(Mock(), setup.curator, _catalog(), setup.suite)
+
+
+def test_flow_that_cannot_run_is_refused_even_with_stages(setup):
+    # Stages are empty whenever a flow can't run; admission also checks the flag itself.
+    setup.contracts.runnable = False
+    with pytest.raises(ValueError, match="unavailable stages"):
         service.prepare_selected_catalog(Mock(), setup.curator, _catalog(), setup.suite)
 
 

@@ -276,6 +276,14 @@ function PromptWorkshop({
     }
     : undefined
 
+  // The loaded saved revision is the agent's current head and uses Flexible extraction.
+  const savedHeadIsFlexible = (agent: CustomAgent | undefined) => {
+    const revision = draft.savedExecutionRevision
+    if (!agent || !revision || revision.id !== agent.execution_revision_id || revision.agent_id !== agent.id) return false
+    const output = revision.snapshot.output_contract
+    return output.output_state === 'structured_extraction' && output.output_mode === 'unprofiled_generic'
+  }
+
   const handleNew = () => guard(() => {
     draft.handleNew()
     navigateSection('start')
@@ -595,6 +603,9 @@ function PromptWorkshop({
             {((['csv_formatter', 'tsv_formatter', 'json_formatter'].includes(draft.domainEnvelopeAgentId) && draft.outputDraft.mode === 'none' && draft.selectedToolIds.includes('finalize_and_save')) || draft.defaultExportExecutionMode === 'direct') && <DirectExportSetting isDefault value={draft.defaultExportExecutionMode} onChange={draft.setDefaultExportExecutionMode} />}
             <WorkshopOutputSetup value={draft.outputDraft} onChange={draft.setOutputDraft}
               disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
+              savedFlexible={savedHeadIsFlexible(selectedCustomAgent)}
+              flexibleCopySource={!selectedCustomAgent && draft.gettingStartedMode === 'clone'
+                && savedHeadIsFlexible(draft.selectedCloneSource)}
               agents={agentMetadata} onEditStructure={() => setSection('output_structure')}
               onChooseExisting={() => setProfilePickerBase(workshopDraftKey(draft.captureAuthoringContext()))} />
             {selectedCustomAgent && draft.savedExecutionRevision && draft.savedExecutionRevision.id === selectedCustomAgent.execution_revision_id

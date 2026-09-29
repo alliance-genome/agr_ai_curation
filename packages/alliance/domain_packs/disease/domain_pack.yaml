@@ -1274,6 +1274,7 @@ object_definitions:
         description: Curator-facing reason the extractor selected this item, written at extraction time.
         metadata:
           protected: true
+          free_text: true
           curator_action_note: Written by the extraction agent; not editable.
       - field_path: evidence_records[0].evidence_record_id
         field_type: string
@@ -1746,6 +1747,7 @@ object_definitions:
         field_type: string
         display_name: Condition summary
         metadata:
+          free_text: true
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -2647,6 +2649,7 @@ object_definitions:
         description: Curator-facing reason the extractor selected this item, written at extraction time.
         metadata:
           protected: true
+          free_text: true
           curator_action_note: Written by the extraction agent; not editable.
       - field_path: evidence_records[0].evidence_record_id
         field_type: string
@@ -3119,6 +3122,7 @@ object_definitions:
         field_type: string
         display_name: Condition summary
         metadata:
+          free_text: true
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -4011,6 +4015,7 @@ object_definitions:
         description: Curator-facing reason the extractor selected this item, written at extraction time.
         metadata:
           protected: true
+          free_text: true
           curator_action_note: Written by the extraction agent; not editable.
       - field_path: evidence_records[0].evidence_record_id
         field_type: string
@@ -4483,6 +4488,7 @@ object_definitions:
         field_type: string
         display_name: Condition summary
         metadata:
+          free_text: true
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -5377,6 +5383,7 @@ object_definitions:
         description: Curator-facing reason the extractor selected this item, written at extraction time.
         metadata:
           protected: true
+          free_text: true
           curator_action_note: Written by the extraction agent; not editable.
       - field_path: evidence_records[0].evidence_record_id
         field_type: string
@@ -5849,6 +5856,7 @@ object_definitions:
         field_type: string
         display_name: Condition summary
         metadata:
+          free_text: true
           definition_state_category: complete
           provider_refs:
             alliance_linkml:
@@ -5904,6 +5912,17 @@ fixture_packs:
       - GeneDiseaseAnnotation
 metadata:
   object_role_key: object_role
+  # Curatable kinds a benchmark curator may choose together ("Disease annotations (all kinds)").
+  # DiseaseAnnotation is the unknown-subject fallback the builder writes when the subject kind is unknown.
+  record_kind_families:
+    - id: disease_annotations
+      label: Disease annotations
+      fallback_object_type: DiseaseAnnotation
+      object_types:
+        - DiseaseAnnotation
+        - GeneDiseaseAnnotation
+        - AlleleDiseaseAnnotation
+        - AGMDiseaseAnnotation
   semantic_source: domain_envelope.extracted_objects
   legacy_semantic_lists: []
   supported_object_roles:
