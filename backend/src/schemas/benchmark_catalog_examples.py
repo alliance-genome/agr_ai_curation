@@ -35,6 +35,8 @@ SAVED_FLOWS = {"items": [SAVED_FLOW], "total_items": 1, "next_offset": None}
 SAVED_FLOW_CONTRACTS = {
     "flow": SAVED_FLOW, "nodes": [], "status": "not_verified",
     "reason": "Define and verify an output structure in AI Curation before mapping fields.",
+    "runnable": False,
+    "run_problem": "This flow can't run right now. Open it in AI Curation and check its steps and validators.",
 }
 
 
