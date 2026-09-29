@@ -320,6 +320,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/schemas/test_domain_validator.py"),
     # Benchmark declarations are checked against the installed Alliance packs.
     Path("backend/tests/unit/schemas/test_domain_pack_benchmark_declarations.py"),
+    # The benchmark pack catalog is checked against the installed Alliance packs.
+    Path("backend/tests/unit/lib/benchmarks/test_pack_catalog.py"),
     # Contract, integration, and live suites intentionally exercise shipped deployment data.
     Path("backend/tests/contract/alliance/domain_packs/test_allele_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_alliance_gene_domain_pack.py"),
