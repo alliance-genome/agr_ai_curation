@@ -10,8 +10,10 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.catalog_service import get_active_visible_agent_metadata
+from src.lib.agent_studio.execution_revision_service import get_execution_revision
 from src.lib.flows.access import get_visible_flow, visible_flow_filter
 from src.lib.flows.execution_revisions import resolve_flow_execution_revisions
+from src.lib.flows.formatter_capability import snapshot_formatter_format
 from src.models.sql.curation_flow import CurationFlow
 from src.schemas.flows import FlowDefinition
 
@@ -173,12 +175,20 @@ def _step(session: Session, curator: BenchmarkCuratorContext, node: Any,
             return _unavailable_step(base, "unavailable_agent", UNAVAILABLE_AGENT_REASON)
     try:
         contract = discover_output_contract(session, curator, agent_id=agent_id, metadata=metadata)
+        if problem == "needs_resave" and receipt.output_contract.output_state == "none":
+            # A saved formatter copy declares its format on the revision, not the receipt;
+            # read it from the same authorized revision the resolver pinned.
+            _, saved = get_execution_revision(
+                session, receipt.agent_id, receipt.agent_revision_id, curator.db_user_id,
+                active_group_ids=list(curator.active_groups),
+            )
+            metadata = {**metadata, "output_formatter_format": snapshot_formatter_format(saved)}
+        output_kind = step_output_kind(agent_id, metadata, contract)
     except ValueError:
         return _unavailable_step(base, "unreadable_structure", UNREADABLE_STRUCTURE_REASON)
     if problem is None:
         entries[node.id] = metadata
-    return {**base, "contract": contract, "problem": problem,
-            "output_kind": step_output_kind(agent_id, metadata, contract)}
+    return {**base, "contract": contract, "problem": problem, "output_kind": output_kind}
 
 
 def _run_problem(errors: list[Any], steps: list[dict[str, Any]]) -> str:

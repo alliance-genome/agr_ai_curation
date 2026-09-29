@@ -148,9 +148,11 @@ def test_unrelated_failing_step_keeps_the_other_steps_structure(pair):
     pair.stages.assert_not_called()
 
 
-def test_needs_resave_step_keeps_its_structure_from_the_resolved_receipt(pair):
+def test_needs_resave_step_keeps_its_structure_from_the_resolved_receipt(pair, monkeypatch):
     receipt = source_receipt("ca_fixture")
     pair.definition.nodes[1].data.execution_receipt = receipt
+    snapshot = NS(template_source=None, tool_ids=[], output_contract=receipt.output_contract)
+    monkeypatch.setattr(service, "get_execution_revision", Mock(return_value=(None, snapshot)))
     pair.resolved.entries_by_node = {"node_0": None}
     pair.resolved.findings = (finding("unavailable_model"),)
     result = service.saved_flow_contracts(Mock(), pair.curator, pair.row.id)
@@ -160,6 +162,7 @@ def test_needs_resave_step_keeps_its_structure_from_the_resolved_receipt(pair):
     assert first_call.kwargs["metadata"] == {"execution_receipt": receipt.model_dump(mode="json")}
     assert result.runnable is False and result.stages == ()
     assert result.run_problem == service.RESAVE_MODEL
+    assert node.output_kind == "profile_attributes"
 
 
 def test_supplied_receipt_on_an_unauthorized_step_is_never_read(pair):
@@ -245,3 +248,42 @@ def test_unreadable_flow_definition_keeps_the_whole_flow_reason(setup):
     result = service.saved_flow_contracts(Mock(), setup.curator, setup.row.id)
     assert result.nodes == () and result.runnable is False
     assert result.reason.startswith("A flow node or its saved output structure is unavailable")
+
+
+def test_output_kind_failure_is_a_per_step_unreadable_structure(pair, monkeypatch):
+    def kind(agent_id, metadata, contract):
+        if agent_id.startswith("ca_"):
+            raise ValueError("secret receipt detail")
+        return "pack_fields"
+    monkeypatch.setattr(service, "step_output_kind", kind)
+    result = service.saved_flow_contracts(Mock(), pair.curator, pair.row.id)
+    first, second = result.nodes
+    assert (first.problem, first.output_kind) == ("unreadable_structure", "unavailable")
+    assert first.contract.reason == service.UNREADABLE_STRUCTURE_REASON
+    assert second.problem is None and second.output_kind == "pack_fields"
+    assert result.runnable is False and result.stages == ()
+    assert "secret" not in result.model_dump_json()
+
+
+def test_needs_resave_formatter_copy_keeps_its_formatter_kind(pair, monkeypatch):
+    from src.lib.benchmarks.flow_contracts import step_output_kind
+    receipt = source_receipt("ca_fixture")
+    pair.definition.nodes[1].data.execution_receipt = receipt
+    pair.resolved.entries_by_node = {"node_0": None}
+    pair.resolved.findings = (finding("unavailable_model"),)
+    pair.discover.side_effect = [
+        BenchmarkFlowOutputContract(status="not_verified", execution_receipt=receipt,
+                                    reason="Undeclared"),
+        VERIFIED,
+    ]
+    snapshot = NS(template_source="tsv_formatter", tool_ids=["finalize_and_save"],
+                  output_contract=receipt.output_contract)
+    revision = Mock(return_value=(NS(id=receipt.agent_revision_id), snapshot))
+    monkeypatch.setattr(service, "get_execution_revision", revision)
+    monkeypatch.setattr(service, "step_output_kind", step_output_kind)
+    session = Mock()
+    result = service.saved_flow_contracts(session, pair.curator, pair.row.id)
+    node = result.nodes[0]
+    assert (node.problem, node.output_kind) == ("needs_resave", "formatter")
+    assert revision.call_args.args == (session, receipt.agent_id, receipt.agent_revision_id, 42)
+    assert revision.call_args.kwargs == {"active_group_ids": ["group-a"]}
