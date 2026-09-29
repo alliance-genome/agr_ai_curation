@@ -90,9 +90,12 @@ def main(argv: list[str] | None = None) -> int:
                 handle.write(outcome.model_dump_json(indent=2))
             try:
                 db.commit()
-            except BaseException:
-                args.result.unlink()
-                raise
+            except Exception as error:
+                # The commit may or may not have landed; keep the result file.
+                print(json.dumps({"error": "commit outcome unknown; check the agent head before retrying",
+                                  "result": str(args.result), "detail": str(error)}, indent=2),
+                      file=sys.stderr)
+                return 2
         else:
             db.commit()
         print(json.dumps({"committed": args.commit, args.command: report}, indent=2))

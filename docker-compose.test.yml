@@ -407,6 +407,9 @@ services:
       - ./config:/app/config:ro
       - ./config:/runtime/config:ro
       - ./packages:/app/packages:ro
+      # tests/integration/persistence/test_flexible_agent_migration.py runs this
+      # one-off script's main() against its isolated schema.
+      - ./scripts/one_off:/app/scripts/one_off:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false

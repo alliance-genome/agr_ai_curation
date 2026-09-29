@@ -1,6 +1,12 @@
 """Converting a Flexible agent from a reviewed plan, and rolling the flow pin back."""
 
+import hashlib
+import importlib.util
+from copy import deepcopy
+from pathlib import Path
+
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -40,8 +46,8 @@ def converted_world(execution_db, builder_policies, monkeypatch):  # noqa: F811
     monkeypatch.setattr(flows_api, "_flow_agent_policy_entry",
                         lambda *_, **__: {"category": "Extraction", "supervisor": {}})
     monkeypatch.setattr(migration, "_result_payloads", lambda db, key: [])
-    agent = service.create_custom_agent(db, 1, "Model finder", model_id="gpt-6-sol",
-                                        custom_prompt="Find models", include_group_rules=False)
+    agent = service.create_custom_agent(db, 1, "Widget finder", model_id="gpt-6-sol",
+                                        custom_prompt="Find widgets", include_group_rules=False)
     snapshot = capture_execution_snapshot(db, agent, FLEXIBLE)
     append_execution_revision(db, agent, snapshot, user_id=1,
                               expected_revision_id=agent.execution_revision_id)
@@ -53,7 +59,7 @@ def converted_world(execution_db, builder_policies, monkeypatch):  # noqa: F811
             "data": {"agent_id": agent.agent_key, "agent_display_name": "Finder",
                      "output_key": "result_0", "agent_revision_id": str(receipt.agent_revision_id),
                      "execution_receipt": receipt.model_dump(mode="json")}}
-    flow = CurationFlow(user_id=1, name="Model flow", flow_definition={
+    flow = CurationFlow(user_id=1, name="Widget flow", flow_definition={
         "nodes": [task, step], "entry_node_id": "task",
         "edges": [{"id": "e0", "source": "task", "target": "node_0"}]})
     db.add(flow)
@@ -61,11 +67,11 @@ def converted_world(execution_db, builder_policies, monkeypatch):  # noqa: F811
     plan = migration.ConversionPlan.model_validate({
         "schema_version": migration.PLAN_SCHEMA, "agent_id": str(agent.id),
         "expected_head_revision_id": str(receipt.agent_revision_id), "active_group_ids": [],
-        "profile": {"name": "Models", "semantic_class": "model", "fields": [
-            {"key": "model_type", "source_labels": ["model_types"],
+        "profile": {"name": "Widgets", "semantic_class": "widget", "fields": [
+            {"key": "widget_type", "source_labels": ["widget_types"],
              "value_schema": {"kind": "string"}}]},
-        "custom_prompt": "Find models and record each model type.",
-        "key_merges": {"model_types": "model_type"}, "other_object_kinds": {"generic_claim": "dropped"},
+        "custom_prompt": "Find widgets and record each widget type.",
+        "key_merges": {"widget_types": "widget_type"}, "other_object_kinds": {"generic_claim": "dropped"},
         "steps": [{"flow_id": str(flow.id), "node_id": "node_0"}],
         "owner_review": "Reviewed with the agent's owner.",
     })
@@ -142,4 +148,107 @@ def test_apply_refuses_a_step_in_a_flow_the_agent_owner_does_not_own(converted_w
     with pytest.raises(ValueError, match="not owned by the agent's owner"):
         migration.apply(db, plan)
     assert agent.execution_revision_id == receipt.agent_revision_id
+    assert pinned(flow)["agent_revision_id"] == str(receipt.agent_revision_id)
+
+
+# The CLI, run through main() against this isolated schema.
+
+def _cli():
+    path = Path(__file__).resolve().parents[4] / "scripts/one_off/convert_flexible_agents_0100.py"
+    spec = importlib.util.spec_from_file_location("convert_flexible_agents_0100", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.main
+
+
+def _sessions(db, monkeypatch, on_commit=None):
+    class ScriptSession(Session):
+        def commit(self):
+            if on_commit is not None:
+                on_commit()
+            super().commit()
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: ScriptSession(
+        bind=db.connection(), join_transaction_mode="create_savepoint"))
+
+
+def _args(tmp_path, plan, command="apply"):
+    plan_file = tmp_path / "agent.plan.json"
+    plan_file.write_text(plan.model_dump_json(indent=2))
+    digest = hashlib.sha256(plan_file.read_bytes()).hexdigest()
+    return [command, "--plan", str(plan_file), "--plan-sha256", digest,
+            "--result", str(tmp_path / "agent.result.json"), "--commit"]
+
+
+def _head(db, agent):
+    db.expire_all()
+    return db.get(type(agent), agent.id).execution_revision_id
+
+
+def test_cli_refuses_to_overwrite_an_existing_result_file(converted_world, tmp_path, monkeypatch, capsys):
+    db, agent, _, receipt, plan = converted_world
+    _sessions(db, monkeypatch)
+    args = _args(tmp_path, plan)
+    (tmp_path / "agent.result.json").write_text("earlier apply")
+    assert _cli()(args) == 1
+    assert "already exists" in capsys.readouterr().err
+    assert (tmp_path / "agent.result.json").read_text() == "earlier apply"
+    assert _head(db, agent) == receipt.agent_revision_id
+
+
+def test_cli_writes_the_result_file_before_it_commits(converted_world, tmp_path, monkeypatch):
+    db, agent, flow, receipt, plan = converted_world
+    result_file = tmp_path / "agent.result.json"
+    seen = []
+    _sessions(db, monkeypatch, on_commit=lambda: seen.append(
+        migration.ConversionResult.model_validate_json(result_file.read_text())))
+    assert _cli()(_args(tmp_path, plan)) == 0
+    [written] = seen
+    assert written.old_revision_id == receipt.agent_revision_id
+    assert _head(db, agent) == written.new_revision_id
+    db.refresh(flow)
+    assert pinned(flow)["agent_revision_id"] == str(written.new_revision_id)
+
+
+def test_cli_keeps_the_result_file_when_the_commit_outcome_is_unknown(
+        converted_world, tmp_path, monkeypatch, capsys):
+    db, _, _, _, plan = converted_world
+
+    def lost():
+        raise ConnectionError("server closed the connection")
+
+    _sessions(db, monkeypatch, on_commit=lost)
+    assert _cli()(_args(tmp_path, plan)) == 2
+    assert "commit outcome unknown; check the agent head before retrying" in capsys.readouterr().err
+    migration.ConversionResult.model_validate_json((tmp_path / "agent.result.json").read_text())
+
+
+def test_cli_a_refused_second_repin_leaves_the_agent_unconverted(
+        converted_world, tmp_path, monkeypatch, capsys):
+    db, agent, flow, receipt, plan = converted_world
+    second = CurationFlow(user_id=1, name="Second widget flow",
+                          flow_definition=deepcopy(flow.flow_definition))
+    db.add(second)
+    db.flush()
+    plan = plan.model_copy(update={"steps": [
+        *plan.steps, migration.StepPin(flow_id=second.id, node_id="node_0")]})
+    real_save = migration.save_flow_definition
+    calls = []
+
+    def save(db_, flow_, definition, *, active_group_ids):
+        calls.append(flow_.id)
+        if len(calls) == 2:
+            raise HTTPException(status_code=422, detail={"valid": False, "findings": [
+                {"code": "example_finding", "message": "Example finding"}]})
+        real_save(db_, flow_, definition, active_group_ids=active_group_ids)
+
+    monkeypatch.setattr(migration, "save_flow_definition", save)
+    _sessions(db, monkeypatch)
+    assert _cli()(_args(tmp_path, plan)) == 1
+    err = capsys.readouterr().err
+    assert "example_finding" in err and "Traceback" not in err
+    assert calls == [flow.id, second.id]
+    assert not (tmp_path / "agent.result.json").exists()
+    assert _head(db, agent) == receipt.agent_revision_id
+    db.refresh(flow)
     assert pinned(flow)["agent_revision_id"] == str(receipt.agent_revision_id)

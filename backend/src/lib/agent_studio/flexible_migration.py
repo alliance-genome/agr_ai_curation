@@ -19,7 +19,7 @@ from copy import deepcopy
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -60,10 +60,24 @@ class ConversionPlan(_Closed):
     active_group_ids: list[str]
     profile: GenericProfileContract
     custom_prompt: str = Field(min_length=1)
+    # Each merged attribute key -> the profile field that absorbs it.
     key_merges: dict[str, str] = Field(default_factory=dict)
+    # Review notes only: records what the owner decided for other record kinds.
+    # Nothing is applied from it; the profile and prompt carry the decision.
     other_object_kinds: dict[str, Literal["dropped", "attribute"]] = Field(default_factory=dict)
     steps: list[StepPin] = Field(min_length=1)
     owner_review: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def merges_are_declared(self) -> "ConversionPlan":
+        """A merge only records what the profile declares: a source label of its target field."""
+        labels = {field.key: set(field.source_labels) for field in self.profile.fields}
+        undeclared = sorted(key for key, target in self.key_merges.items()
+                            if key not in labels.get(target, set()))
+        if undeclared:
+            raise ValueError("key_merges must name a source label of their target field: "
+                             + ", ".join(undeclared))
+        return self
 
 
 class RepinnedStep(_Closed):

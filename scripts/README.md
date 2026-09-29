@@ -780,6 +780,10 @@ to a Custom Output Structure, one reviewed plan file per agent. Flexible
 extraction is retired: new agents and revisions can't use it, and existing ones
 keep running until converted.
 
+Inventory, plan and result files contain the owner's prompt text and field
+keys. Keep them on the production host or in the private deployment note;
+never commit them to a repository or attach them to a ticket.
+
 1. Read-only inventory (record kinds, semantic classes, attribute keys with
    counts and list-ness, the flow steps that pin the agent, and a draft plan
    with suggested key merges). It runs in a read-only transaction:
@@ -795,8 +799,10 @@ keep running until converted.
 
 2. Review each `draft_plan` with the agent's owner and save it as its own file:
    the profile `name`, the one `semantic_class`, the attributes and
-   `key_merges`, the new `custom_prompt`, what happens to other record kinds
-   (`other_object_kinds`: `dropped` or `attribute`), the owner's active groups
+   `key_merges` (every merged key must be a `source_labels` entry of its target
+   field, or the plan is refused), the new `custom_prompt`, the owner's decision
+   for other record kinds (`other_object_kinds`: `dropped` or `attribute`; a
+   review note only, applied through the profile and prompt), the owner's active groups
    (`active_group_ids`; never the operator's) and `owner_review`. A draft does
    not validate until those are filled in. Record the reviewed file's digest
    (`sha256sum agent.plan.json`); apply and rollback refuse any other bytes.
@@ -805,7 +811,12 @@ keep running until converted.
    through the normal agent service, and each step through the normal flow save,
    so the flow's own validation runs; a refused flow prints its findings. With
    `--commit` the result file (the old and new revision ids of every re-pinned
-   step) is written before the commit and is never overwritten:
+   step) is written before the commit and is never overwritten. If the commit
+   itself fails, the script prints "commit outcome unknown; check the agent head
+   before retrying" and keeps the result file. If an apply was interrupted
+   before its commit, confirm the agent head is still the plan's
+   `expected_head_revision_id`, then delete the leftover result file before
+   applying again:
 
    ```bash
    docker compose run --rm --no-deps backend python \
