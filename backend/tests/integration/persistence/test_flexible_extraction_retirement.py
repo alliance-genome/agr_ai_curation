@@ -81,3 +81,38 @@ def test_a_converted_agent_cannot_be_restored_to_flexible(studio):
         restore_execution_revision(studio, agent.id, flexible_revision.id, user_id=1,
                                    expected_revision_id=converted, active_group_ids=[])
     assert agent.execution_revision_id == converted
+
+
+def test_restoring_a_non_flexible_revision_never_reads_the_head(studio, monkeypatch):
+    # The head may be broken or restricted to groups the curator is not in now; a restore
+    # that cannot create Flexible output must not depend on reading it.
+    from src.lib.agent_studio import execution_revision_service as revisions
+
+    agent = service.create_custom_agent(studio, 1, "Plain finder", model_id="gpt-6-sol",
+                                        custom_prompt="Find things", include_group_rules=False)
+    first = agent.execution_revision_id
+    service.update_custom_agent(studio, agent, expected_revision_id=first, model_temperature=0.4)
+    head = agent.execution_revision_id
+    read = []
+    original = revisions.get_execution_revision
+
+    def recording(db, agent_id, revision_id, *args, **kwargs):
+        read.append(revision_id)
+        return original(db, agent_id, revision_id, *args, **kwargs)
+
+    monkeypatch.setattr(revisions, "get_execution_revision", recording)
+    restore_execution_revision(studio, agent.id, first, user_id=1,
+                               expected_revision_id=head, active_group_ids=[])
+    assert read == [first]
+    assert agent.execution_revision_id not in (first, head)
+
+
+def test_a_flexible_agent_may_restore_an_older_flexible_revision(studio):
+    agent, older = existing_flexible(studio)
+    service.update_custom_agent(studio, agent, expected_revision_id=agent.execution_revision_id,
+                                model_temperature=0.4)
+    head = agent.execution_revision_id
+    restored = restore_execution_revision(studio, agent.id, older.id, user_id=1,
+                                          expected_revision_id=head, active_group_ids=[])
+    assert agent.execution_revision_id == restored.id != head
+    assert head_mode(studio, agent) == "unprofiled_generic"

@@ -147,23 +147,30 @@ def test_a_real_template_that_defaults_to_flexible_extraction_is_refused(policy_
         )
 
 
-def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch):
-    from src.lib.agent_studio import catalog_service
+@pytest.mark.parametrize("template_key", ["gene_extractor", "pdf_extraction"])
+def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, template_key):
+    from src.lib.agent_studio import catalog_service, flexible_extraction
     from src.lib.openai_agents import langfuse_client
     from src.models.sql import database
 
     db = policy_db
-    template_key = "gene_extractor"
     template, groups = _seed_real_template(db, monkeypatch, template_key)
     original_tools = list(template.tool_ids)
-    head = service.create_custom_agent(
-        db, 1, f"Inherited {template_key}", template_source=template_key,
-        include_group_rules=False, active_group_ids=groups,
-    )
+    with monkeypatch.context() as before_retirement:
+        if template_key == "pdf_extraction":
+            # An existing Flexible agent, saved before Flexible extraction was retired: seed
+            # its head below the rule. Later edits, builds and revocation run with the rule on.
+            before_retirement.setattr(flexible_extraction, "require_flexible_not_new",
+                                      lambda *_args: None)
+        head = service.create_custom_agent(
+            db, 1, f"Inherited {template_key}", template_source=template_key,
+            include_group_rules=False, active_group_ids=groups,
+        )
     first_id = head.execution_revision_id
     _, first = get_execution_revision(db, head.id, first_id, 1, active_group_ids=groups)
     assert head.instructions == first.instructions == template.instructions
     assert head.tool_ids == original_tools
+    assert (first.output_contract.output_mode == "unprofiled_generic") == (template_key == "pdf_extraction")
     assert "agr_species_context_lookup" in first.system_managed_tool_ids
     assert set(first.tool_ids) <= {p.tool_key for p in db.query(ToolPolicy).filter(ToolPolicy.allow_execute.is_(True))}
 
