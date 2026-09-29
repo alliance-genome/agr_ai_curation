@@ -1001,6 +1001,9 @@ def _record_execution_save(
         selected = initial_agent_output_contract(agent)
     else:
         selected = previous_output
+    from src.lib.agent_studio.flexible_extraction import require_flexible_not_new
+
+    require_flexible_not_new(selected, previous_output)
     saved = capture_execution_snapshot(db, agent, selected, active_group_ids=active_group_ids)
     mode = default_export_execution_mode if default_export_execution_mode is not None else (
         previous_snapshot.default_export_execution_mode if previous_snapshot is not None else None
@@ -1440,6 +1443,9 @@ def clone_saved_custom_agent(
         db, source.id, source.execution_revision_id, user_id,
         active_group_ids=list(active_group_ids or []),
     )
+    from src.lib.agent_studio.flexible_extraction import require_flexible_not_new
+
+    require_flexible_not_new(saved.output_contract, None)
     allowed = require_allowed_group_ids_narrowing(
         saved.allowed_group_ids,
         saved.allowed_group_ids if allowed_group_ids is None else allowed_group_ids,

@@ -281,6 +281,12 @@ def restore_execution_revision(
     _, saved = get_execution_revision(
         db, agent_id, revision_id, user_id, active_group_ids=active_group_ids
     )
+    from src.lib.agent_studio.flexible_extraction import require_flexible_not_new
+
+    _, current = get_execution_revision(
+        db, agent_id, head.execution_revision_id, user_id, active_group_ids=active_group_ids
+    )
+    require_flexible_not_new(saved.output_contract, current.output_contract)
     from src.lib.config.models_loader import get_model
 
     # A restored head must still run, and startup rejects active agents whose
