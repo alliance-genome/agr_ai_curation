@@ -44,7 +44,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:${PATH}" \
-    PYTHONPATH=/app/backend \
+    PYTHONPATH=/app/backend:/app/backend/src \
     AGR_RUNTIME_ROOT=/runtime
 
 WORKDIR /app/backend
