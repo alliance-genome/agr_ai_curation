@@ -2,6 +2,7 @@
 
 import hashlib
 import importlib.util
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -93,8 +94,51 @@ def test_inventory_is_read_only_and_finds_the_step(converted_world):
     [found] = report["agents"]
     assert found["agent_key"] == agent.agent_key
     assert found["head_revision_id"] == str(receipt.agent_revision_id)
-    assert found["steps"] == [{"flow_id": str(flow.id), "node_id": "node_0"}]
+    assert found["steps"] == [{"flow_id": str(flow.id), "node_id": "node_0",
+                               "agent_revision_id": str(receipt.agent_revision_id)}]
+    assert found["not_current_steps"] == []
+    assert found["draft_plan"]["steps"] == [{"flow_id": str(flow.id), "node_id": "node_0"}]
     assert not (db.new or db.dirty or db.deleted)
+
+
+def test_inventory_lists_steps_pinning_an_older_revision_apart_from_the_draft(converted_world):
+    db, agent, flow, receipt, _ = converted_world
+    older = CurationFlow(user_id=1, name="Older widget flow",
+                         flow_definition=deepcopy(flow.flow_definition))
+    db.add(older)
+    db.flush()
+    # A new head: both flows still pin the earlier Flexible revision.
+    service.update_custom_agent(db, agent, expected_revision_id=agent.execution_revision_id,
+                                model_temperature=0.3)
+    # Re-pin one flow to the new head, as its owner would in the Workshop.
+    head = current_execution_receipt(db, agent.agent_key, 1, active_group_ids=[])
+    definition = deepcopy(flow.flow_definition)
+    definition["nodes"][1]["data"]["agent_revision_id"] = str(head.agent_revision_id)
+    definition["nodes"][1]["data"]["execution_receipt"] = head.model_dump(mode="json")
+    flow.flow_definition = definition
+    db.flush()
+    [found] = migration.inventory(db)["agents"]
+    assert found["head_revision_id"] == str(head.agent_revision_id)
+    assert found["steps"] == [{"flow_id": str(flow.id), "node_id": "node_0",
+                               "agent_revision_id": str(head.agent_revision_id)}]
+    assert found["not_current_steps"] == [{"flow_id": str(older.id), "node_id": "node_0",
+                                           "agent_revision_id": str(receipt.agent_revision_id)}]
+    assert found["draft_plan"]["steps"] == [{"flow_id": str(flow.id), "node_id": "node_0"}]
+
+
+def test_apply_and_rollback_a_plan_with_no_flow_steps(converted_world):
+    db, agent, flow, receipt, plan = converted_world
+    plan = plan.model_copy(update={"steps": []})
+    result = migration.apply(db, plan)
+    assert result.steps == []
+    assert agent.execution_revision_id == result.new_revision_id != receipt.agent_revision_id
+    assert mode(db, agent, result.new_revision_id) == "profile_bound_generic"
+    db.refresh(flow)
+    assert pinned(flow)["agent_revision_id"] == str(receipt.agent_revision_id)
+    assert migration.rollback(db, plan, result) == []
+    db.refresh(flow)
+    assert pinned(flow)["agent_revision_id"] == str(receipt.agent_revision_id)
+    assert agent.execution_revision_id == result.new_revision_id
 
 
 def test_apply_converts_and_repins_then_rollback_repins_the_old_revision(converted_world):
@@ -143,8 +187,9 @@ def test_apply_refuses_a_step_in_a_flow_the_agent_owner_does_not_own(converted_w
     db.flush()
     report = migration.inventory(db)
     [found] = report["agents"]
-    assert found["steps"] == []
-    assert found["other_owner_steps"] == [{"flow_id": str(flow.id), "node_id": "node_0"}]
+    assert found["steps"] == [] and found["not_current_steps"] == []
+    assert found["other_owner_steps"] == [{"flow_id": str(flow.id), "node_id": "node_0",
+                                           "agent_revision_id": str(receipt.agent_revision_id)}]
     with pytest.raises(ValueError, match="not owned by the agent's owner"):
         migration.apply(db, plan)
     assert agent.execution_revision_id == receipt.agent_revision_id
@@ -153,13 +198,28 @@ def test_apply_refuses_a_step_in_a_flow_the_agent_owner_does_not_own(converted_w
 
 # The CLI, run through main() against this isolated schema.
 
-def _cli():
+def _script():
     path = Path(__file__).resolve().parents[4] / "scripts/one_off/convert_flexible_agents_0100.py"
     spec = importlib.util.spec_from_file_location("convert_flexible_agents_0100", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.main
+    return module
+
+
+def _cli():
+    return _script().main
+
+
+def test_the_script_makes_the_backend_and_its_runtime_helpers_importable(monkeypatch):
+    # The production image puts only the backend root on PYTHONPATH; backend modules
+    # also import the runtime helpers that live under the backend's src directory.
+    backend = Path(__file__).resolve().parents[3]
+    wanted = {str(backend), str(backend / "src")}
+    monkeypatch.setattr(sys, "path", [entry for entry in sys.path
+                                      if str(Path(entry or ".").resolve()) not in wanted])
+    _script()
+    assert wanted <= set(sys.path)
 
 
 def _sessions(db, monkeypatch, on_commit=None):

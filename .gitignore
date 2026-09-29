@@ -258,3 +258,6 @@ skills-lock.json
 
 # Prompt-customization migration working set (local only, do not commit)
 docs/design/2026-06-08-prompt-customization-migration/
+
+# Owner data from scripts/one_off/convert_flexible_agents_0100.py (see scripts/README.md)
+/conversion/

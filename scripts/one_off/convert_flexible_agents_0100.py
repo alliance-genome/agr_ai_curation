@@ -13,10 +13,14 @@ import json
 import sys
 from pathlib import Path
 
+# Mounted at /app/scripts/one_off in the backend image (backend at /app/backend), or
+# run from a checkout. Backend modules also import the runtime helpers under its
+# src directory, which the production image does not put on PYTHONPATH.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = REPO_ROOT / "backend"
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
+for _import_root in (BACKEND_ROOT / "src", BACKEND_ROOT):
+    if str(_import_root) not in sys.path:
+        sys.path.insert(0, str(_import_root))
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -52,12 +52,13 @@ def test_draft_plan_suggests_merges_and_needs_review_before_it_validates():
                                                       "attributes": {"widget_types": ["y"]}}},
     ]}])
     agent = NS(id=uuid4(), execution_revision_id=uuid4(), instructions="Find widgets.")
-    steps = [{"flow_id": str(uuid4()), "node_id": "node_0"}]
+    step = {"flow_id": str(uuid4()), "node_id": "node_0"}
+    steps = [{**step, "agent_revision_id": str(agent.execution_revision_id)}]
     draft = migration.draft_plan(agent, tally, steps)
     assert draft["key_merges"] == {"widget_types": "widget_type"}
     assert draft["profile"]["semantic_class"] == "widget"
     assert draft["profile"]["fields"][0]["source_labels"] == ["widget_types"]
-    assert draft["steps"] == steps and draft["custom_prompt"] == "Find widgets."
+    assert draft["steps"] == [step] and draft["custom_prompt"] == "Find widgets."
     # The profile name and the owner review are left for people to fill in.
     with pytest.raises(ValidationError):
         migration.ConversionPlan.model_validate(draft)
@@ -99,3 +100,22 @@ def test_a_reviewed_plan_loads_only_with_its_sha256_digest():
     assert migration.load_reviewed_plan(raw, digest).custom_prompt == "Find widgets."
     with pytest.raises(ValueError, match="does not match the reviewed digest"):
         migration.load_reviewed_plan(raw + b"\n", digest)
+
+
+def test_draft_plan_lists_only_steps_that_pin_the_current_head():
+    agent = NS(id=uuid4(), execution_revision_id=uuid4(), instructions="Find widgets.")
+    current = {"flow_id": str(uuid4()), "node_id": "node_0"}
+    older = {"flow_id": str(uuid4()), "node_id": "node_1"}
+    steps = [{**current, "agent_revision_id": str(agent.execution_revision_id)},
+             {**older, "agent_revision_id": str(uuid4())}]
+    draft = migration.draft_plan(agent, migration.attribute_inventory([]), steps)
+    assert draft["steps"] == [current]
+
+
+def test_a_plan_may_convert_an_agent_with_no_flow_steps():
+    assert migration.ConversionPlan.model_validate(_plan(steps=[])).steps == []
+    # The owner's decision is explicit: a plan without a steps list does not validate.
+    plan = _plan()
+    del plan["steps"]
+    with pytest.raises(ValidationError, match="steps"):
+        migration.ConversionPlan.model_validate(plan)

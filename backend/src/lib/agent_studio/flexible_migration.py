@@ -65,7 +65,8 @@ class ConversionPlan(_Closed):
     # Review notes only: records what the owner decided for other record kinds.
     # Nothing is applied from it; the profile and prompt carry the decision.
     other_object_kinds: dict[str, Literal["dropped", "attribute"]] = Field(default_factory=dict)
-    steps: list[StepPin] = Field(min_length=1)
+    # Required but may be empty: an agent with no flow steps is converted on its own.
+    steps: list[StepPin]
     owner_review: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -145,8 +146,13 @@ def attribute_inventory(payloads: Iterable[Any]) -> dict[str, Any]:
     }
 
 
-def draft_plan(agent: Any, tally: dict[str, Any], steps: list[dict[str, str]]) -> dict[str, Any]:
-    """A plan to review with the owner; its empty name and review keep it from validating."""
+def draft_plan(agent: Any, tally: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any]:
+    """A plan to review with the owner; its empty name and review keep it from validating.
+
+    Only steps that pin the agent's current head are drafted: apply re-pins a step
+    only from the revision it converts.
+    """
+    head = str(agent.execution_revision_id)
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for entry in tally["attribute_keys"]:
         groups[merge_key(entry["key"])].append(entry)
@@ -170,7 +176,8 @@ def draft_plan(agent: Any, tally: dict[str, Any], steps: list[dict[str, str]]) -
         "expected_head_revision_id": str(agent.execution_revision_id), "active_group_ids": [],
         "profile": {"name": "", "semantic_class": classes[0] if classes else "", "fields": fields},
         "custom_prompt": agent.instructions, "key_merges": merges, "other_object_kinds": {},
-        "steps": [{"flow_id": step["flow_id"], "node_id": step["node_id"]} for step in steps],
+        "steps": [{"flow_id": step["flow_id"], "node_id": step["node_id"]} for step in steps
+                  if step["agent_revision_id"] == head],
         "owner_review": "",
     }
 
@@ -190,14 +197,16 @@ def _result_payloads(db: Session, agent_key: str) -> Iterable[Any]:
                       .where(CurationExtractionResultRecord.agent_key == agent_key)).scalars()
 
 
-def _steps_using(db: Session, agent: Agent) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Steps in the owner's active flows, and steps in other users' active flows."""
+def _steps_using(db: Session, agent: Agent) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Steps (with their pinned revision) in the owner's active flows, and in other users'."""
     owned, others = [], []
     for flow in db.execute(select(CurationFlow).where(CurationFlow.is_active.is_(True))
                            .order_by(CurationFlow.id)).scalars():
         for node in (flow.flow_definition or {}).get("nodes", []):
-            if (node.get("data") or {}).get("agent_id") == agent.agent_key:
-                step = {"flow_id": str(flow.id), "node_id": str(node["id"])}
+            data = node.get("data") or {}
+            if data.get("agent_id") == agent.agent_key:
+                step = {"flow_id": str(flow.id), "node_id": str(node["id"]),
+                        "agent_revision_id": data.get("agent_revision_id")}
                 (owned if flow.user_id == agent.user_id else others).append(step)
     return owned, others
 
@@ -207,16 +216,21 @@ def inventory(db: Session) -> dict[str, Any]:
     agents = []
     for agent in _flexible_agents(db):
         tally = attribute_inventory(_result_payloads(db, agent.agent_key))
-        steps, other_owner_steps = _steps_using(db, agent)
+        owned, other_owner_steps = _steps_using(db, agent)
+        head = str(agent.execution_revision_id)
         agents.append({
             "agent_id": str(agent.id), "agent_key": agent.agent_key,
             "owner_user_id": agent.user_id,
-            "head_revision_id": str(agent.execution_revision_id),
-            **tally, "steps": steps,
+            "head_revision_id": head,
+            **tally,
+            "steps": [step for step in owned if step["agent_revision_id"] == head],
+            # Owned steps pinning another revision: apply refuses them, so they are
+            # not drafted; their owner re-pins them to the head first, or leaves them.
+            "not_current_steps": [step for step in owned if step["agent_revision_id"] != head],
             # Flows owned by someone else are never re-pinned by this script; they
             # keep their pinned revision until their owner re-pins them.
             "other_owner_steps": other_owner_steps,
-            "draft_plan": draft_plan(agent, tally, steps),
+            "draft_plan": draft_plan(agent, tally, owned),
         })
     return {"schema_version": INVENTORY_SCHEMA, "agents": agents}
 

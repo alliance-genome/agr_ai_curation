@@ -780,51 +780,87 @@ to a Custom Output Structure, one reviewed plan file per agent. Flexible
 extraction is retired: new agents and revisions can't use it, and existing ones
 keep running until converted.
 
+The production backend image does not contain `scripts/`, and the production
+Compose file does not mount it. Run each command from the deployment checkout
+(at the tag of the running release, so the script matches the image) with the
+script directory mounted read-only and a host directory, `./conversion`, mounted
+at `/work` for the plan and result files. `--entrypoint python` runs the script
+directly, without the backend's startup steps (migrations, package environment
+bootstrap), so inventory stays read-only. `-T` keeps a terminal from mixing log
+lines into the JSON on stdout.
+
 Inventory, plan and result files contain the owner's prompt text and field
-keys. Keep them on the production host or in the private deployment note;
-never commit them to a repository or attach them to a ticket.
+keys. Keep them in `./conversion` on the production host or in the private
+deployment note; never commit them to a repository or attach them to a ticket.
+
+0. Create `./conversion` for the backend container's user (`APP_UID`/`APP_GID`,
+   10001 in the published image; confirm with
+   `docker compose run --rm --no-deps -T --entrypoint id backend`). Only that
+   user can read or write it, so operators read and edit its files with `sudo`:
+
+   ```bash
+   sudo install -d -m 0700 -o 10001 -g 10001 conversion
+   ```
 
 1. Read-only inventory (record kinds, semantic classes, attribute keys with
    counts and list-ness, the flow steps that pin the agent, and a draft plan
    with suggested key merges). It runs in a read-only transaction:
 
    ```bash
-   docker compose run --rm --no-deps backend python \
-     /app/scripts/one_off/convert_flexible_agents_0100.py inventory > inventory.json
+   docker compose run --rm --no-deps -T --entrypoint python \
+     -v "$PWD/scripts/one_off:/app/scripts/one_off:ro" -v "$PWD/conversion:/work" \
+     backend /app/scripts/one_off/convert_flexible_agents_0100.py inventory \
+     | sudo tee conversion/inventory.json > /dev/null
    ```
 
-   `steps` lists steps in active flows owned by the agent's owner; only these
-   can be re-pinned. `other_owner_steps` lists steps in other users' flows,
-   which keep their pinned revision until their own owner re-pins them.
+   Each listed step carries the `agent_revision_id` it pins. `steps` lists
+   steps in the owner's active flows that pin the agent's current head
+   (`head_revision_id`); only these are drafted and re-pinned.
+   `not_current_steps` lists steps in the owner's flows that pin an older
+   revision; apply refuses them, so they keep their pin unless the owner
+   re-pins them to the head and inventory runs again. `other_owner_steps` lists
+   steps in other users' flows, which keep their pinned revision until their
+   own owner re-pins them. An agent with no steps is converted on its own: its
+   plan has `"steps": []`.
 
-2. Review each `draft_plan` with the agent's owner and save it as its own file:
-   the profile `name`, the one `semantic_class`, the attributes and
-   `key_merges` (every merged key must be a `source_labels` entry of its target
-   field, or the plan is refused), the new `custom_prompt`, the owner's decision
-   for other record kinds (`other_object_kinds`: `dropped` or `attribute`; a
-   review note only, applied through the profile and prompt), the owner's active groups
+2. Review each `draft_plan` with the agent's owner and save it as its own file
+   in `./conversion`: the profile `name`, the one `semantic_class`, the
+   attributes and `key_merges` (every merged key must be a `source_labels`
+   entry of its target field, or the plan is refused), the new
+   `custom_prompt`, the owner's decision for other record kinds
+   (`other_object_kinds`: `dropped` or `attribute`; a review note only, applied
+   through the profile and prompt), the owner's active groups
    (`active_group_ids`; never the operator's) and `owner_review`. A draft does
-   not validate until those are filled in. Record the reviewed file's digest
-   (`sha256sum agent.plan.json`); apply and rollback refuse any other bytes.
+   not validate until those are filled in. Create the file for the container's
+   user, then record the reviewed file's digest; apply and rollback refuse any
+   other bytes:
+
+   ```bash
+   sudo install -m 0600 -o 10001 -g 10001 /dev/null conversion/agent.plan.json
+   sudoedit conversion/agent.plan.json
+   sudo sha256sum conversion/agent.plan.json
+   ```
 
 3. Dry run, then apply during maintenance. The agent is saved as its owner
    through the normal agent service, and each step through the normal flow save,
    so the flow's own validation runs; a refused flow prints its findings. With
    `--commit` the result file (the old and new revision ids of every re-pinned
-   step) is written before the commit and is never overwritten. If the commit
-   itself fails, the script prints "commit outcome unknown; check the agent head
-   before retrying" and keeps the result file. If an apply was interrupted
-   before its commit, confirm the agent head is still the plan's
+   step) is written to `/work` before the commit and is never overwritten. If
+   the commit itself fails, the script prints "commit outcome unknown; check
+   the agent head before retrying" and keeps the result file. If an apply was
+   interrupted before its commit, confirm the agent head is still the plan's
    `expected_head_revision_id`, then delete the leftover result file before
    applying again:
 
    ```bash
-   docker compose run --rm --no-deps backend python \
-     /app/scripts/one_off/convert_flexible_agents_0100.py apply \
-     --plan agent.plan.json --plan-sha256 <digest> --result agent.result.json
-   docker compose run --rm --no-deps backend python \
-     /app/scripts/one_off/convert_flexible_agents_0100.py apply \
-     --plan agent.plan.json --plan-sha256 <digest> --result agent.result.json --commit
+   docker compose run --rm --no-deps -T --entrypoint python \
+     -v "$PWD/scripts/one_off:/app/scripts/one_off:ro" -v "$PWD/conversion:/work" \
+     backend /app/scripts/one_off/convert_flexible_agents_0100.py apply \
+     --plan /work/agent.plan.json --plan-sha256 <digest> --result /work/agent.result.json
+   docker compose run --rm --no-deps -T --entrypoint python \
+     -v "$PWD/scripts/one_off:/app/scripts/one_off:ro" -v "$PWD/conversion:/work" \
+     backend /app/scripts/one_off/convert_flexible_agents_0100.py apply \
+     --plan /work/agent.plan.json --plan-sha256 <digest> --result /work/agent.result.json --commit
    ```
 
    Apply refuses a plan written for an older agent head, an agent that is no
@@ -833,12 +869,14 @@ never commit them to a repository or attach them to a ticket.
 4. Roll back by re-pinning the recorded steps to the old, immutable revision.
    The agent itself stays converted (restoring Flexible is refused), even if its
    owner has edited it since; old revisions and runs are untouched. A step whose
-   flow no longer pins the revision apply wrote is refused:
+   flow no longer pins the revision apply wrote is refused. A plan with no steps
+   has nothing to roll back:
 
    ```bash
-   docker compose run --rm --no-deps backend python \
-     /app/scripts/one_off/convert_flexible_agents_0100.py rollback \
-     --plan agent.plan.json --plan-sha256 <digest> --result agent.result.json --commit
+   docker compose run --rm --no-deps -T --entrypoint python \
+     -v "$PWD/scripts/one_off:/app/scripts/one_off:ro" -v "$PWD/conversion:/work" \
+     backend /app/scripts/one_off/convert_flexible_agents_0100.py rollback \
+     --plan /work/agent.plan.json --plan-sha256 <digest> --result /work/agent.result.json --commit
    ```
 
 ## Utilities
