@@ -194,7 +194,7 @@ def test_scope_bounds_are_not_relaxed(provider, allowed, cross, groups, valid):
 def test_permitted_constant_uses_recursive_conformance():
     raw, cap = fixture()
     reuse = cap.binding.custom_profile_reuse.model_copy(deep=True)
-    reuse.inputs["mention"].allow_constant = True
+    reuse.inputs["mention"] = reuse.inputs["mention"].model_copy(update={"allow_constant": True})
     cap = replace(cap, binding=replace(cap.binding, custom_profile_reuse=reuse))
     raw["validator_mappings"][0]["inputs"]["mention"] = {"source": "constant", "value": "supplied"}
     assert validate_profile_mappings(raw, capabilities=[cap]) == [cap]
@@ -211,8 +211,9 @@ def test_fixed_package_selectors_cannot_be_replaced_by_profile_input():
     cap = replace(cap, binding=replace(cap.binding, input_fields={"mention": fixed}))
     assert any("exact package selector" in issue for issue in capability_issues(cap, ()))
     reuse = cap.binding.custom_profile_reuse.model_copy(deep=True)
-    reuse.inputs["mention"].allow_field = False
-    reuse.inputs["mention"].context_selector = fixed
+    reuse.inputs["mention"] = reuse.inputs["mention"].model_copy(
+        update={"allow_field": False, "context_selector": fixed}
+    )
     cap = replace(cap, binding=replace(cap.binding, custom_profile_reuse=reuse))
     raw["validator_mappings"][0]["inputs"]["mention"] = {"source": "context"}
     assert validate_profile_mappings(raw, capabilities=[cap]) == [cap]
