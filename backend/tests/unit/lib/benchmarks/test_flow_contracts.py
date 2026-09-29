@@ -138,6 +138,7 @@ def test_system_pack_step_returns_the_benchmark_catalog(curator):
         metadata={"curation": {"domain_pack_id": "agr.alliance.disease"}},
     )
     assert result.status == "verified" and result.representation == "pack_fields"
+    assert result.schema_definition is not None
     assert set(result.schema_definition) == {
         "pack_id", "pack_version", "pack_label", "record_kinds", "families", "fields",
         "default_fields"}
@@ -158,6 +159,7 @@ def test_custom_builder_step_returns_the_benchmark_catalog(monkeypatch, curator)
     result = contracts.discover_output_contract(Mock(), curator, agent_id=receipt.agent_key,
                                                 metadata={})
     assert result.representation == "pack_fields"
+    assert result.schema_definition is not None and result.structure_source is not None
     assert result.schema_definition["pack_id"] == "agr.alliance.phenotype"
     assert result.structure_source.kind == "pack"
 

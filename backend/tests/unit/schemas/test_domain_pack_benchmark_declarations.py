@@ -69,28 +69,29 @@ def test_malformed_family_names_its_index_and_field():
         DomainPackMetadata.model_validate(_pack([_family(), broken]))
 
 
+def _field(**data):
+    return DomainPackFieldDefinition.model_validate(data)
+
+
 def test_free_text_must_be_a_boolean_on_a_string_field():
-    DomainPackFieldDefinition(field_path="rationale", field_type="string",
-                              metadata={"free_text": True})
+    _field(field_path="rationale", field_type="string", metadata={"free_text": True})
     with pytest.raises(ValidationError, match="'free_text' must be a boolean"):
-        DomainPackFieldDefinition(field_path="rationale", field_type="string",
-                                  metadata={"free_text": "yes"})
+        _field(field_path="rationale", field_type="string", metadata={"free_text": "yes"})
     with pytest.raises(ValidationError, match="only valid on string fields"):
-        DomainPackFieldDefinition(field_path="count", field_type="integer",
-                                  metadata={"free_text": True})
+        _field(field_path="count", field_type="integer", metadata={"free_text": True})
 
 
 def test_free_text_list_holds_plain_text_items_only():
-    DomainPackFieldDefinition(field_path="notes", field_type="array",
-                              metadata={"free_text": True})
+    _field(field_path="notes", field_type="array", metadata={"free_text": True})
     with pytest.raises(ValidationError, match="only valid on string fields or lists of text"):
-        DomainPackFieldDefinition(field_path="records", field_type="array",
-                                  model_ref="RecordPayload", metadata={"free_text": True})
+        _field(field_path="records", field_type="array", model_ref="RecordPayload",
+               metadata={"free_text": True})
     with pytest.raises(ValidationError, match="declares parts, so it is not free text"):
-        DomainPackObjectDefinition(object_type="Thing", display_name="Thing", fields=[
-            {"field_path": "notes", "field_type": "array", "metadata": {"free_text": True}},
-            {"field_path": "notes.text", "field_type": "string"},
-        ])
+        DomainPackObjectDefinition.model_validate({
+            "object_type": "Thing", "display_name": "Thing", "fields": [
+                {"field_path": "notes", "field_type": "array", "metadata": {"free_text": True}},
+                {"field_path": "notes.text", "field_type": "string"},
+            ]})
 
 
 def _fields(pack_id, object_type):

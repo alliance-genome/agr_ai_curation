@@ -20,7 +20,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=str(__doc__).splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("inventory", help="Read-only report and draft plans (JSON on stdout).")
     for name in ("apply", "rollback"):
@@ -49,28 +49,28 @@ def main(argv: list[str] | None = None) -> int:
     from src.lib.agent_studio.custom_agent_service import CustomAgentError
     from src.models.sql.database import SessionLocal
 
-    if args.command != "inventory":
-        try:
-            plan = migration.load_reviewed_plan(args.plan.read_bytes(), args.plan_sha256)
-            recorded = (migration.ConversionResult.model_validate_json(args.result.read_bytes())
-                        if args.command == "rollback" else None)
-        except ValidationError as error:
-            return _refuse(error.errors(include_url=False, include_input=False))
-        except (OSError, ValueError) as error:
-            return _refuse(str(error))
-        if args.command == "apply" and args.commit and args.result.exists():
-            return _refuse(f"{args.result} already exists; it records an earlier apply")
-
-    with SessionLocal() as db:
-        if args.command == "inventory":
+    if args.command == "inventory":
+        with SessionLocal() as db:
             db.execute(text("SET TRANSACTION READ ONLY"))
             print(json.dumps(migration.inventory(db), indent=2, sort_keys=True))
             db.rollback()
             return 0
+
+    try:
+        plan = migration.load_reviewed_plan(args.plan.read_bytes(), args.plan_sha256)
+        recorded = (migration.ConversionResult.model_validate_json(args.result.read_bytes())
+                    if args.command == "rollback" else None)
+    except ValidationError as error:
+        return _refuse(error.errors(include_url=False, include_input=False))
+    except (OSError, ValueError) as error:
+        return _refuse(str(error))
+    if args.command == "apply" and args.commit and args.result.exists():
+        return _refuse(f"{args.result} already exists; it records an earlier apply")
+
+    with SessionLocal() as db:
         try:
-            if args.command == "apply":
-                outcome = migration.apply(db, plan)
-                report = outcome.model_dump(mode="json")
+            if recorded is None:
+                report = migration.apply(db, plan).model_dump(mode="json")
             else:
                 report = [step.model_dump(mode="json")
                           for step in migration.rollback(db, plan, recorded)]
@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
             # Record the old and new revisions before committing, so a committed
             # conversion always has the result file its rollback needs.
             with args.result.open("x") as handle:
-                handle.write(outcome.model_dump_json(indent=2))
+                handle.write(json.dumps(report, indent=2))
             try:
                 db.commit()
             except Exception as error:

@@ -247,6 +247,7 @@ def test_unreadable_flow_definition_keeps_the_whole_flow_reason(setup):
     setup.row.flow_definition = {"nodes": "not a list"}
     result = service.saved_flow_contracts(Mock(), setup.curator, setup.row.id)
     assert result.nodes == () and result.runnable is False
+    assert result.reason is not None
     assert result.reason.startswith("A flow node or its saved output structure is unavailable")
 
 

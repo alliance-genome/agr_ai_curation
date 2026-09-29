@@ -156,6 +156,7 @@ def test_apply_refuses_a_step_in_a_flow_the_agent_owner_does_not_own(converted_w
 def _cli():
     path = Path(__file__).resolve().parents[4] / "scripts/one_off/convert_flexible_agents_0100.py"
     spec = importlib.util.spec_from_file_location("convert_flexible_agents_0100", path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.main

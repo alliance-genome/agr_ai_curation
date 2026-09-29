@@ -150,6 +150,7 @@ def _step(session: Session, curator: BenchmarkCuratorContext, node: Any,
             "output_key": node.data.output_key}
     agent_id = node.data.agent_id
     problem: StepProblem | None = None
+    receipt = None
     metadata: dict[str, Any] | None
     if node.id in resolved_entries:
         metadata = resolved_entries[node.id]
@@ -175,7 +176,7 @@ def _step(session: Session, curator: BenchmarkCuratorContext, node: Any,
             return _unavailable_step(base, "unavailable_agent", UNAVAILABLE_AGENT_REASON)
     try:
         contract = discover_output_contract(session, curator, agent_id=agent_id, metadata=metadata)
-        if problem == "needs_resave" and receipt.output_contract.output_state == "none":
+        if receipt is not None and receipt.output_contract.output_state == "none":
             # A saved formatter copy declares its format on the revision, not the receipt;
             # read it from the same authorized revision the resolver pinned.
             _, saved = get_execution_revision(

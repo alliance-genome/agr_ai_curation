@@ -747,7 +747,7 @@ async def test_update_flow_saves_definitions_through_the_flow_service(monkeypatc
     monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
     monkeypatch.setattr(flows, "save_flow_definition", save)
     db = Mock()
-    request = UpdateFlowRequest(flow_definition=_flow_definition())
+    request = UpdateFlowRequest(name=None, description=None, flow_definition=_flow_definition())
     await flows.update_flow(flow_id=flow_obj.id, request=request, user={"sub": "u1"}, db=db)
     save.assert_called_once_with(db, flow_obj, request.flow_definition, active_group_ids=[])
     db.commit.assert_called_once()

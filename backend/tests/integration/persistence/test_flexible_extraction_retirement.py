@@ -13,6 +13,7 @@ from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
 from src.lib.agent_studio.flexible_extraction import FLEXIBLE_COPY_REFUSED
 from src.models.sql.custom_agent import CustomAgentVersion
 from src.schemas.agent_execution_revision import AgentOutputContract
+from src.schemas.generic_extraction_profile import GenericProfileContract
 from .test_agent_execution_revision_persistence import builder_policies, execution_db  # noqa: F401
 from .test_generic_profile_persistence import profile_db  # noqa: F401
 
@@ -82,7 +83,8 @@ def test_a_converted_agent_cannot_be_restored_to_flexible(studio):
     agent, flexible_revision = existing_flexible(studio)
     service.update_custom_agent(
         studio, agent, expected_revision_id=agent.execution_revision_id,
-        new_generic_profile={"name": "Things", "semantic_class": "thing", "fields": []})
+        new_generic_profile=GenericProfileContract.model_validate(
+            {"name": "Things", "semantic_class": "thing", "fields": []}))
     converted = agent.execution_revision_id
     with pytest.raises(ValueError, match=RETIRED):
         restore_execution_revision(studio, agent.id, flexible_revision.id, user_id=1,

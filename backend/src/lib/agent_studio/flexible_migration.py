@@ -124,10 +124,13 @@ def attribute_inventory(payloads: Iterable[Any]) -> dict[str, Any]:
                 continue
             kind = str(item.get("object_type"))
             kinds[kind] += 1
-            body = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-            if kind == GENERIC_OBJECT and isinstance(body.get("semantic_class"), str):
-                classes[body["semantic_class"]] += 1
-            attributes = body.get("attributes") if isinstance(body.get("attributes"), dict) else {}
+            raw_body = item.get("payload")
+            body = raw_body if isinstance(raw_body, dict) else {}
+            semantic_class = body.get("semantic_class")
+            if kind == GENERIC_OBJECT and isinstance(semantic_class, str):
+                classes[semantic_class] += 1
+            raw_attributes = body.get("attributes")
+            attributes = raw_attributes if isinstance(raw_attributes, dict) else {}
             for key, value in attributes.items():
                 keys[key] += 1
                 if isinstance(value, list):
