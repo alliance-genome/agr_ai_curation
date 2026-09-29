@@ -719,8 +719,9 @@ async def test_update_flow_commits_and_flags_json(monkeypatch):
 
     db = _DB()
     monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
+    from src.lib.flows import flow_service
     monkeypatch.setattr(
-        flows,
+        flow_service,
         "flag_modified",
         lambda _obj, field: captured.__setitem__("flagged", field == "flow_definition"),
     )
@@ -737,6 +738,19 @@ async def test_update_flow_commits_and_flags_json(monkeypatch):
     assert captured["flagged"] is True
     assert response.name == "After"
     assert response.description is None
+
+
+@pytest.mark.asyncio
+async def test_update_flow_saves_definitions_through_the_flow_service(monkeypatch):
+    flow_obj = _flow(name="Before")
+    save = Mock()
+    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
+    monkeypatch.setattr(flows, "save_flow_definition", save)
+    db = Mock()
+    request = UpdateFlowRequest(flow_definition=_flow_definition())
+    await flows.update_flow(flow_id=flow_obj.id, request=request, user={"sub": "u1"}, db=db)
+    save.assert_called_once_with(db, flow_obj, request.flow_definition, active_group_ids=[])
+    db.commit.assert_called_once()
 
 
 @pytest.mark.asyncio
