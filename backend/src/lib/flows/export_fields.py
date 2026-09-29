@@ -47,7 +47,7 @@ def packaged_export_fields(agent_id: str, entry: dict | None = None) -> list[dic
     return _pack_export_fields(domain_pack) if domain_pack is not None else []
 
 
-def _declared_display(field: Any, models: dict[str, Any], object_models: dict[str, Any]) -> dict[str, Any] | None:
+def declared_display(field: Any, models: dict[str, Any], object_models: dict[str, Any]) -> dict[str, Any] | None:
     """Field-level display wins, then its model's (or referenced object's model's)."""
 
     display = field.metadata.get("display")
@@ -79,7 +79,7 @@ def _resolvable_leaf_key(
         parent = by_path.get(parent_path)
         if parent is None:
             return None
-        parent_display, parent_label = _declared_display(parent, models, object_models), _field_label(parent)
+        parent_display, parent_label = declared_display(parent, models, object_models), _field_label(parent)
     else:
         model = models.get(obj.model_ref) if obj.model_ref else None
         parent_display = model.metadata.get("display") if model is not None else None
@@ -190,7 +190,7 @@ class PackagedExportSource:
         self.legacy_display_mapper = _legacy_display_mapper(metadata.pack_id)
 
     def _field_display(self, field: Any) -> dict[str, Any] | None:
-        return _declared_display(field, self._models, self._object_models)
+        return declared_display(field, self._models, self._object_models)
 
     def _resolvable_fields(self) -> dict[str, dict[str, Any]]:  # {object_type: {path: ResolvableSpec}}
         """Declared resolvable values per object type ("" is the object root)."""

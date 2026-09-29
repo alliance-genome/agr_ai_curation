@@ -511,6 +511,7 @@ object_definitions:
         required: true
         metadata:
           protected: true
+          free_text: true
           curator_action_note: Written by the extraction agent; not editable.
       - field_path: provider_context
         field_type: object
@@ -524,6 +525,7 @@ object_definitions:
         required: true
         metadata:
           read_only: true
+          free_text: true
 fixture_packs:
   - fixture_pack_id: rgd_curator_review
     display_name: RGD GO curator-review fixtures

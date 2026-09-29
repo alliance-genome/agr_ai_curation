@@ -4,7 +4,11 @@ import pytest
 from pydantic import ValidationError
 
 from src.lib.flows.validation_attachments import domain_pack_validation_registries
-from src.schemas.domain_pack_metadata import DomainPackFieldDefinition, DomainPackMetadata
+from src.schemas.domain_pack_metadata import (
+    DomainPackFieldDefinition,
+    DomainPackMetadata,
+    DomainPackObjectDefinition,
+)
 
 
 def _pack(families, *, roles=None):
@@ -65,6 +69,19 @@ def test_free_text_must_be_a_boolean_on_a_string_field():
                                   metadata={"free_text": True})
 
 
+def test_free_text_list_holds_plain_text_items_only():
+    DomainPackFieldDefinition(field_path="notes", field_type="array",
+                              metadata={"free_text": True})
+    with pytest.raises(ValidationError, match="only valid on string fields or lists of text"):
+        DomainPackFieldDefinition(field_path="records", field_type="array",
+                                  model_ref="RecordPayload", metadata={"free_text": True})
+    with pytest.raises(ValidationError, match="declares parts, so it is not free text"):
+        DomainPackObjectDefinition(object_type="Thing", display_name="Thing", fields=[
+            {"field_path": "notes", "field_type": "array", "metadata": {"free_text": True}},
+            {"field_path": "notes.text", "field_type": "string"},
+        ])
+
+
 def _fields(pack_id, object_type):
     pack = domain_pack_validation_registries()[pack_id].domain_pack
     obj = next(o for o in pack.metadata.object_definitions if o.object_type == object_type)
@@ -90,6 +107,8 @@ def test_disease_pack_declares_its_family_and_free_text():
     ("agr.alliance.gene_expression", "GeneExpressionAnnotation",
      ["rationale", "where_expressed_statement",
       "condition_relations.conditions.condition_summary"]),
+    ("agr.alliance.allele", "AllelePaperEvidenceAssociation", ["rationale"]),
+    ("agr.alliance.go", "GOCuratableObject", ["rationale", "blocking_reasons"]),
 ])
 def test_prose_fields_are_marked_free_text(pack_id, object_type, paths):
     fields, _ = _fields(pack_id, object_type)

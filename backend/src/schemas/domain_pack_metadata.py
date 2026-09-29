@@ -1115,8 +1115,13 @@ class DomainPackFieldDefinition(DomainPackMetadataBaseModel):
         if raw_free_text is not None:
             if not isinstance(raw_free_text, bool):
                 raise ValueError("field metadata 'free_text' must be a boolean")
-            if raw_free_text and self.field_type is not DomainPackFieldType.STRING:
-                raise ValueError("field metadata 'free_text' is only valid on string fields")
+            text_list = self.field_type is DomainPackFieldType.ARRAY and not (
+                self.model_ref or self.object_type_ref
+            )
+            if raw_free_text and self.field_type is not DomainPackFieldType.STRING and not text_list:
+                raise ValueError(
+                    "field metadata 'free_text' is only valid on string fields or lists of text"
+                )
         return self
 
 
@@ -1160,6 +1165,15 @@ class DomainPackObjectDefinition(DomainPackMetadataBaseModel):
             [field.field_path for field in self.fields],
             f"object {self.object_type} fields",
         )
+        paths = [field.field_path for field in self.fields]
+        for field in self.fields:
+            if field.field_type is DomainPackFieldType.ARRAY and field.metadata.get("free_text"):
+                prefixes = (field.field_path + ".", field.field_path + "[")
+                if any(path.startswith(prefixes) for path in paths):
+                    raise ValueError(
+                        f"object {self.object_type} field {field.field_path} declares parts, "
+                        "so it is not free text"
+                    )
         return self
 
 

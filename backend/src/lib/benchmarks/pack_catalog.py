@@ -3,14 +3,15 @@
 The Studio export catalog (``export_fields.source_catalog``) is not changed; this
 describes the same declarations for choosing benchmark fields. Every fact comes
 from an explicit declaration (field type, display roles, ``free_text``,
-``validator_binding_id``, ``record_kind_families``); nothing is inferred from a
+``validator_binding_id`` / ``validation_result_binding_id``,
+``record_kind_families``, ``exported``); nothing is inferred from a
 name or description. Only curatable record kinds carry fields and defaults.
 """
 
 from typing import Any
 
 from src.lib.domain_packs.resolvable_values import CONTRACT_KEYS, MENTION_KEY
-from src.lib.flows.export_fields import PackagedExportSource, _declared_display
+from src.lib.flows.export_fields import PackagedExportSource, declared_display
 from src.schemas.domain_envelope import parse_field_path
 from src.schemas.domain_pack_metadata import DomainPackFieldType, DomainPackRecordKindFamily
 
@@ -28,6 +29,23 @@ def _indexed(path: str) -> bool:
     return any(isinstance(part, int) for part in parse_field_path(path))
 
 
+def _ancestors_and_self(path: str) -> list[str]:
+    parts = path.split(".")
+    return [".".join(parts[:size]) for size in range(1, len(parts) + 1)]
+
+
+def _declared_binding(field: Any) -> str | None:
+    """The validator binding a field declares, under either declaration name."""
+    declared = {
+        str(value)
+        for name in ("validator_binding_id", "validation_result_binding_id")
+        if (value := field.metadata.get(name))
+    }
+    if len(declared) > 1:
+        raise ValueError(f"{field.field_path} declares two different validator bindings")
+    return next(iter(declared), None)
+
+
 class _ObjectFacts:
     """One object type's declared fields and their benchmark facts, keyed by declared path."""
 
@@ -37,15 +55,23 @@ class _ObjectFacts:
         self.object_models = object_models
         self.declared = {field.field_path: field for field in obj.fields}
         self.by_path = {path: field for path, field in self.declared.items() if not _indexed(path)}
-        self.facts: dict[str, dict[str, Any]] = {}
-        for path, field in self.by_path.items():
-            if field.metadata.get("exported") is False:
-                continue
-            self.facts[path] = self._fact(field)
+        # An unexported container hides everything declared under it.
+        hidden = {path for path, field in self.by_path.items()
+                  if field.metadata.get("exported") is False}
+        self.exported = [path for path in self.by_path
+                         if not any(part in hidden for part in _ancestors_and_self(path))]
+        self.facts: dict[str, dict[str, Any]] = {
+            path: self._fact(self.by_path[path]) for path in self.exported
+        }
 
     def _has_children(self, path: str) -> bool:
         prefix = path + "."
-        return any(other.startswith(prefix) for other in self.by_path)
+        return any(other.startswith(prefix) for other in self.exported)
+
+    def _mention_key(self, path: str) -> str | None:
+        """The declared mention key of the resolvable value at ``path`` ("" is the root)."""
+        mention = (self._display(path) or {}).get("mention")
+        return mention if isinstance(mention, str) and mention else None
 
     def _display(self, path: str) -> dict[str, Any] | None:
         if not path:
@@ -55,7 +81,7 @@ class _ObjectFacts:
         field = self.by_path.get(path)
         if field is None:
             return None
-        return _declared_display(field, self.models, self.object_models)
+        return declared_display(field, self.models, self.object_models)
 
     def _written_path(self, path: str) -> tuple[str, int]:
         """``path`` with ``[]`` after each declared list ancestor, and how many lists are above."""
@@ -77,6 +103,8 @@ class _ObjectFacts:
         if _is_list(field):
             if self._has_children(path):
                 return "object_list"
+            if field.model_ref or getattr(field, "object_type_ref", None):
+                return "other"  # Items of a declared model whose parts are not declared here.
             element = self.declared.get(f"{path}[0]")
             return "text_list" if element is None or element.field_type in TEXT_TYPES else "other"
         kind = field.field_type
@@ -90,17 +118,15 @@ class _ObjectFacts:
             return "number"
         return "other"
 
-    def _binding(self, field: Any, parent_path: str, key: str, resolvable: bool) -> str | None:
-        if resolvable and key == MENTION_KEY:
+    def _binding(self, field: Any, parent_path: str, key: str, mention_key: str | None) -> str | None:
+        if key == mention_key:
             return None  # The paper wording is the extractor's, never a validator's.
-        own = field.metadata.get("validator_binding_id")
-        if own:
-            return str(own)
-        if not resolvable or not parent_path:
-            return None
+        own = _declared_binding(field)
+        if own is not None or mention_key is None or not parent_path:
+            # A root-level value has no parent field; its leaves declare their own binding.
+            return own
         parent = self.by_path.get(parent_path)
-        inherited = parent.metadata.get("validator_binding_id") if parent is not None else None
-        return str(inherited) if inherited else None
+        return _declared_binding(parent) if parent is not None else None
 
     def _fact(self, field: Any) -> dict[str, Any]:
         path = field.field_path
@@ -111,7 +137,7 @@ class _ObjectFacts:
             shape = "text_from_each_item"
         parent_path, _, key = path.rpartition(".")
         parent_display = self._display(parent_path)
-        resolvable = bool(parent_display and parent_display.get("mention"))
+        mention_key = self._mention_key(parent_path)
         return {
             "object_type": self.obj.object_type,
             "path": written,
@@ -119,12 +145,14 @@ class _ObjectFacts:
             "shape": shape,
             "inside_list": inside_list,
             "is_identifier": bool(parent_display) and parent_display.get("id") == key,
-            "validator_written": resolvable and key in VALIDATOR_WRITTEN_KEYS,
+            "validator_written": (
+                mention_key is not None and key != mention_key and key in VALIDATOR_WRITTEN_KEYS
+            ),
             "is_pointer": (
                 field.field_type is DomainPackFieldType.OBJECT_REF and not self._has_children(path)
             ) or key in EVIDENCE_LINK_KEYS,
             "free_text": field.metadata.get("free_text") is True,
-            "validator_binding_id": self._binding(field, parent_path, key, resolvable),
+            "validator_binding_id": self._binding(field, parent_path, key, mention_key),
         }
 
     def _default_entry(self, layout_path: str) -> dict[str, Any] | None:
@@ -145,11 +173,10 @@ class _ObjectFacts:
                 or leaf["validator_written"] or leaf["free_text"]):
             return None
         mention = None
-        value_path = leaf_path.rpartition(".")[0]
-        if leaf["validator_binding_id"] and value_path:
-            mention_key = (self._display(value_path) or {}).get("mention")
-            mention_fact = (self.facts.get(f"{value_path}.{mention_key}")
-                            if isinstance(mention_key, str) else None)
+        value_path = leaf_path.rpartition(".")[0]  # "" when the value is the object root.
+        mention_key = self._mention_key(value_path) if leaf["validator_binding_id"] else None
+        if mention_key is not None:
+            mention_fact = self.facts.get(f"{value_path}.{mention_key}" if value_path else mention_key)
             mention = mention_fact["path"] if mention_fact is not None else None
         return {"path": leaf["path"], "if_not_validated": mention}
 

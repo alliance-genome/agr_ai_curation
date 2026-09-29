@@ -427,8 +427,10 @@ def test_package_review_policies_reach_review_rows(pack_name, object_type, expec
 
 # Packs whose benchmark comparison treats the rationale as prose (field metadata free_text).
 FREE_TEXT_RATIONALE_PACKS = {
+    "agr.alliance.allele",
     "agr.alliance.disease",
     "agr.alliance.gene_expression",
+    "agr.alliance.go",
     "agr.alliance.phenotype",
 }
 
