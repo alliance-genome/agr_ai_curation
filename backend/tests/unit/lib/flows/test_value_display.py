@@ -279,7 +279,7 @@ def _gene_expression_step():
 def _declared_gene_expression_pack(monkeypatch):
     """The real gene_expression pack plus in-test display declarations."""
 
-    original = export_fields._packaged_domain_pack
+    original = export_fields.packaged_domain_pack
     pack = original("gene_expression", {"curation": {"domain_pack_id": "agr.alliance.gene_expression"}})
     assert pack is not None
     declared = SimpleNamespace(metadata=pack.metadata.model_copy(deep=True))
@@ -293,7 +293,7 @@ def _declared_gene_expression_pack(monkeypatch):
     for model in declared.metadata.model_definitions:
         if model.model_id in displays:
             model.metadata["display"] = dict(displays[model.model_id])
-    monkeypatch.setattr(export_fields, "_packaged_domain_pack", lambda *_args, **_kwargs: declared)
+    monkeypatch.setattr(export_fields, "packaged_domain_pack", lambda *_args, **_kwargs: declared)
     return declared
 
 
@@ -349,7 +349,7 @@ def test_selected_saved_plan_for_packaged_source_still_validates(monkeypatch):
 def test_packaged_gene_expression_declarations_render_daniela_values():
     """Integration with the packaged declarations (ALL-1282 packs)."""
 
-    pack = export_fields._packaged_domain_pack("gene_expression", {"curation": {"domain_pack_id": "agr.alliance.gene_expression"}})
+    pack = export_fields.packaged_domain_pack("gene_expression", {"curation": {"domain_pack_id": "agr.alliance.gene_expression"}})
     models = {model.model_id: model for model in pack.metadata.model_definitions}
     if not models["OntologyTermSnapshotPayload"].metadata.get("display"):
         pytest.skip("gene_expression pack display declarations are not present in this checkout")
@@ -654,13 +654,13 @@ def _gene_mention_step(payloads):
 
 
 def test_packaged_object_label_never_falls_back_to_mention(monkeypatch):
-    original = export_fields._packaged_domain_pack
+    original = export_fields.packaged_domain_pack
     pack = original("gene", {"curation": {"domain_pack_id": "gene"}})
     declared = SimpleNamespace(metadata=pack.metadata.model_copy(deep=True))
     for model in declared.metadata.model_definitions:
         if model.model_id == "GeneMentionEvidencePayload":
             model.metadata["display"] = {"label": "gene_symbol", "id": "primary_external_id", "mention": "mention"}
-    monkeypatch.setattr(export_fields, "_packaged_domain_pack", lambda *_args, **_kwargs: declared)
+    monkeypatch.setattr(export_fields, "packaged_domain_pack", lambda *_args, **_kwargs: declared)
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_gene_mention_step([
             {"gene_symbol": "unc-54", "primary_external_id": "WB:WBGene00006789", "mention": "UNC-54 myosin",

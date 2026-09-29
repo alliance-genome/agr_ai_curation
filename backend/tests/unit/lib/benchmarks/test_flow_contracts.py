@@ -42,7 +42,7 @@ def test_declared_schema_preserves_nested_fields_and_nullability(monkeypatch, cu
 
 
 def test_no_schema_does_not_guess_from_names_or_example(monkeypatch, curator):
-    monkeypatch.setattr(contracts, "_packaged_domain_pack", lambda *args: None)
+    monkeypatch.setattr(contracts, "packaged_domain_pack", lambda *args: None)
     result = contracts.discover_output_contract(
         Mock(), curator, agent_id="gene_extractor", metadata={
             "name": "gene_a", "example": {"gene_a": "rutabaga"},
@@ -234,6 +234,9 @@ def test_custom_profile_step_output_kind():
     ("disease_extractor", {"curation": {"domain_pack_id": "agr.alliance.disease"}},
      "pack_fields", False, "pack_fields"),
     ("chat_output", {}, None, False, "text"),
+    ("chat_output", {"curation": None}, None, False, "text"),
+    ("retired_extractor", {"curation": {"domain_pack_id": "agr.alliance.not_loaded"}},
+     None, False, "other"),
 ])
 def test_system_step_output_kind_comes_from_metadata(
         monkeypatch, agent_id, metadata, representation, validator, expected):
@@ -251,3 +254,31 @@ def test_custom_output_kind_requires_the_authorized_receipt():
     with pytest.raises(ValueError, match="authorized receipt"):
         step_output_kind("ca_saved", {}, contracts.BenchmarkFlowOutputContract(
             status="not_verified"))
+
+
+def test_custom_formatter_clone_is_a_formatter_before_its_receipt_is_read():
+    # A saved copy of a file formatter keeps its declared format on the entry.
+    assert step_output_kind("ca_saved", {"output_formatter_format": "tsv"},
+                            contracts.BenchmarkFlowOutputContract(status="not_verified")) == "formatter"
+
+
+def test_system_metadata_with_null_curation_is_read_as_no_pack(curator):
+    result = contracts.discover_output_contract(
+        Mock(), curator, agent_id="chat_output", metadata={"curation": None})
+    assert result.status == "not_verified"
+    assert result.structure_source is None
+
+
+def test_custom_builder_with_missing_pack_is_still_pack_fields(monkeypatch, curator):
+    receipt = source_receipt().model_copy(update={"output_contract": AgentOutputContract(
+        output_state="structured_extraction", output_mode="domain",
+        domain_extraction_ref=DomainExtractionRef(
+            package_id="p", agent_id="a", domain_pack_id="agr.alliance.not_loaded"),
+    )})
+    monkeypatch.setattr(contracts, "authorize_execution_receipt", lambda *a, **k: receipt)
+    contract = contracts.discover_output_contract(Mock(), curator, agent_id=receipt.agent_key,
+                                                  metadata={})
+    assert contract.status == "not_verified" and contract.structure_source is None
+    # The authorized receipt still declares a pack builder; the missing pack is
+    # reported by the unverified contract, not by relabelling the step's kind.
+    assert step_output_kind(receipt.agent_key, {}, contract) == "pack_fields"

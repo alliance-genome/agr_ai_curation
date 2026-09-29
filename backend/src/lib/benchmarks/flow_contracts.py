@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from src.lib.agent_studio.execution_revision_service import authorize_execution_receipt
 from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.curation_workspace.execution_contracts import resolve_receipt_profile
-from src.lib.flows.export_fields import _packaged_domain_pack
+from src.lib.flows.export_fields import packaged_domain_pack
 from src.lib.flows.formatter_capability import resolved_formatter_format
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.schemas.domain_validator import is_domain_validator_result_schema
@@ -68,7 +68,7 @@ class BenchmarkFlowOutputContract(FrozenStrictModel):
 def _pack_catalog(
     agent_id: str, entry: dict[str, Any],
 ) -> tuple[dict[str, Any], PackStructureSource] | None:
-    domain_pack = _packaged_domain_pack(agent_id, entry)
+    domain_pack = packaged_domain_pack(agent_id, entry)
     if domain_pack is None:
         return None
     catalog = benchmark_pack_catalog(domain_pack)
@@ -170,6 +170,9 @@ def step_output_kind(
     agent_id: str, metadata: Mapping[str, Any], contract: BenchmarkFlowOutputContract,
 ) -> OutputKind:
     """What a step's output is, from its authorized receipt or system metadata, never reasons."""
+    # Saved copies of a file formatter carry their format on the entry.
+    if resolved_formatter_format(agent_id, metadata) is not None:
+        return "formatter"
     if agent_id.startswith("ca_"):
         receipt = contract.execution_receipt
         if receipt is None:
@@ -182,15 +185,17 @@ def step_output_kind(
         if output.output_mode == "profile_bound_generic":
             return "profile_attributes"
         if output.domain_extraction_ref is not None:
+            # The receipt declares a pack builder even when its pack is not
+            # loaded; the unverified contract reports that, not the kind.
             return "pack_fields"
         return "validator_result" if _validator_schema(output.output_schema_key) else "envelope_legacy"
-    if resolved_formatter_format(agent_id, metadata) is not None:
-        return "formatter"
-    if (metadata.get("curation") or {}).get("domain_pack_id") == "generic":
+    pack_id = (metadata.get("curation") or {}).get("domain_pack_id")
+    if pack_id == "generic":
         return "pdf_extraction"
     schema_key = metadata.get("output_schema_key")
     if schema_key:
         return "validator_result" if _validator_schema(schema_key) else "other"
     if contract.representation == "pack_fields":
         return "pack_fields"
-    return "text"
+    # A declared pack that is not loaded is structured output we cannot read.
+    return "other" if pack_id else "text"

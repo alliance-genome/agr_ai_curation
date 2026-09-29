@@ -17,7 +17,7 @@ COMMON_FIELDS = [
 ]
 
 
-def _packaged_domain_pack(agent_id: str, entry: dict | None = None) -> Any:
+def packaged_domain_pack(agent_id: str, entry: dict | None = None) -> Any:
     """The domain pack behind a packaged export source, or None (generic/unknown)."""
 
     from src.lib.config.agent_loader import canonical_system_agent_key, list_agents
@@ -43,7 +43,7 @@ def _packaged_domain_pack(agent_id: str, entry: dict | None = None) -> Any:
 
 
 def packaged_export_fields(agent_id: str, entry: dict | None = None) -> list[dict[str, Any]]:
-    domain_pack = _packaged_domain_pack(agent_id, entry)
+    domain_pack = packaged_domain_pack(agent_id, entry)
     return _pack_export_fields(domain_pack) if domain_pack is not None else []
 
 
@@ -363,7 +363,7 @@ def packaged_export_source(
     pack_id = (entry.get("curation") or {}).get("domain_pack_id") if entry is not None else None
     key = ("pack", str(pack_id)) if entry is not None else ("agent", agent_id)
     if key not in cache:
-        domain_pack = _packaged_domain_pack(agent_id, entry)
+        domain_pack = packaged_domain_pack(agent_id, entry)
         cache[key] = PackagedExportSource(domain_pack) if domain_pack is not None else None
     return cache[key]
 
