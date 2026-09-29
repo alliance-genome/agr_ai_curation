@@ -463,6 +463,18 @@ breadcrumbs, arbitrary extra data, and stack-frame locals. The reviewed
 exceptions above use their respective content policies; structured exception
 details honor the global content-redaction switch.
 
+The shared logging/Sentry credential redactor requires a word boundary before
+`sk-` and `pk-` API keys so task IDs and words such as `risk-assessment` survive.
+Authorization-header Basic/Bearer values are scrubbed regardless of shape.
+Outside headers, Basic must decode as base64 containing the `user:password`
+separator; Bearer must contain at least 16 token characters with a non-letter
+or mixed case (excluding title case). Basic uses its own base64 alphabet;
+trailing sentence periods do not count toward Bearer length or shape, while
+internal JWT separators remain supported. These shape checks preserve ordinary
+phrases such as "Basic phenotype" and "Bearer of the mutation". Arbitrary
+opaque values indistinguishable from prose still require sensitive structured
+keys or request-local `active_secret_redaction` coverage.
+
 ## Reporting Facades
 
 Use `raise_sanitized_http_exception()` for caught endpoint failures that become
