@@ -142,9 +142,15 @@ def _legacy_display_mapper(domain_pack_id: str) -> Any | None:
 
 def source_catalog(fields: list[dict], receipt: Any = None) -> dict:
     declared = [*fields, *deepcopy(COMMON_FIELDS)] if fields else []
+    return {"fields": declared, "execution_receipt": receipt,
+            "schema_fingerprint": catalog_fingerprint(declared, receipt)}
+
+
+def catalog_fingerprint(declared: list[dict], receipt: Any) -> str:
+    """Identity of a source's declared fields under one execution receipt."""
     identity = {"fields": declared, "execution_receipt": receipt}
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), default=str)
-    return {**identity, "schema_fingerprint": "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()}
+    return "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()
 
 
 _LIST_INDEX = re.compile(r"\[\d+\]")
