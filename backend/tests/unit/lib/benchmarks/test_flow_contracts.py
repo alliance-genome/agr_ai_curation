@@ -1,13 +1,19 @@
 """Declared output discovery must not guess fields or bypass saved-revision auth."""
 
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel, Field
 
 from src.lib.benchmarks import flow_contracts as contracts
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
-from src.schemas.agent_execution_revision import AgentOutputContract
+from src.lib.benchmarks.flow_contracts import (
+    PackStructureSource,
+    ProfileStructureSource,
+    step_output_kind,
+)
+from src.schemas.agent_execution_revision import AgentOutputContract, DomainExtractionRef
 from tests.unit.lib.benchmarks.test_source_revisions import source_receipt
 
 
@@ -36,7 +42,7 @@ def test_declared_schema_preserves_nested_fields_and_nullability(monkeypatch, cu
 
 
 def test_no_schema_does_not_guess_from_names_or_example(monkeypatch, curator):
-    monkeypatch.setattr(contracts, "packaged_export_fields", lambda *args: [])
+    monkeypatch.setattr(contracts, "_packaged_domain_pack", lambda *args: None)
     result = contracts.discover_output_contract(
         Mock(), curator, agent_id="gene_extractor", metadata={
             "name": "gene_a", "example": {"gene_a": "rutabaga"},
@@ -124,3 +130,124 @@ def test_exact_profile_schema_keeps_descriptions_nested_types_and_semantics(monk
     assert result.declared_semantic_class == contract.semantic_class
     assert result.execution_receipt.output_contract.generic_profile_ref == pin
     assert result.semantic_mapping_required is True
+
+
+def test_system_pack_step_returns_the_benchmark_catalog(curator):
+    result = contracts.discover_output_contract(
+        Mock(), curator, agent_id="disease_extractor",
+        metadata={"curation": {"domain_pack_id": "agr.alliance.disease"}},
+    )
+    assert result.status == "verified" and result.representation == "pack_fields"
+    assert set(result.schema_definition) == {
+        "pack_id", "pack_version", "pack_label", "record_kinds", "families", "fields",
+        "default_fields"}
+    assert result.structure_source == PackStructureSource(
+        pack_id="agr.alliance.disease", pack_version="0.1.0",
+        pack_label="Alliance Disease Domain Pack")
+    assert result.domain_pack_id == "agr.alliance.disease"
+
+
+def test_custom_builder_step_returns_the_benchmark_catalog(monkeypatch, curator):
+    receipt = source_receipt().model_copy(update={"output_contract": AgentOutputContract(
+        output_state="structured_extraction", output_mode="domain",
+        domain_extraction_ref=DomainExtractionRef(
+            package_id="agr.alliance", agent_id="phenotype_extractor",
+            domain_pack_id="agr.alliance.phenotype"),
+    )})
+    monkeypatch.setattr(contracts, "authorize_execution_receipt", lambda *a, **k: receipt)
+    result = contracts.discover_output_contract(Mock(), curator, agent_id=receipt.agent_key,
+                                                metadata={})
+    assert result.representation == "pack_fields"
+    assert result.schema_definition["pack_id"] == "agr.alliance.phenotype"
+    assert result.structure_source.kind == "pack"
+
+
+def test_profile_contract_names_its_structure_source(monkeypatch, curator):
+    from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile
+    from src.schemas.agent_execution_revision import GenericProfilePin
+    from src.schemas.generic_extraction_profile import GenericProfileContract
+
+    contract = GenericProfileContract.model_validate({
+        "name": "Stock inventory", "semantic_class": "stock",
+        "fields": [{"key": "stock_name", "value_schema": {"kind": "string"}}]})
+    pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=3,
+                            fingerprint=contract.fingerprint())
+    receipt = source_receipt().model_copy(update={"output_contract": AgentOutputContract(
+        output_state="structured_extraction", output_mode="profile_bound_generic",
+        generic_profile_ref=pin)})
+    monkeypatch.setattr(contracts, "authorize_execution_receipt", lambda *a, **k: receipt)
+    monkeypatch.setattr(contracts, "resolve_receipt_profile",
+                        lambda db, supplied: ResolvedGenericProfile(pin, contract))
+    result = contracts.discover_output_contract(Mock(), curator, agent_id=receipt.agent_key,
+                                                metadata={})
+    assert result.structure_source == ProfileStructureSource(
+        profile_id=pin.profile_id, profile_revision_id=pin.profile_revision_id,
+        revision=3, name="Stock inventory")
+
+
+def _custom(mode=None, *, schema_key=None, builder=False):
+    if mode is None:
+        output = AgentOutputContract(output_state="none")
+    elif builder:
+        output = AgentOutputContract(
+            output_state="structured_extraction", output_mode="domain",
+            domain_extraction_ref=DomainExtractionRef(
+                package_id="p", agent_id="a", domain_pack_id="agr.alliance.disease"))
+    else:
+        output = AgentOutputContract(output_state="structured_extraction", output_mode=mode,
+                                     output_schema_key=schema_key)
+    receipt = source_receipt().model_copy(update={"output_contract": output})
+    return contracts.BenchmarkFlowOutputContract(status="not_verified", execution_receipt=receipt)
+
+
+@pytest.mark.parametrize("contract,validator,expected", [
+    (_custom(None), False, "text"),
+    (_custom("unprofiled_generic"), False, "flexible"),
+    (_custom("domain", builder=True), False, "pack_fields"),
+    (_custom("domain", schema_key="LegacyEnvelope"), False, "envelope_legacy"),
+    (_custom("domain", schema_key="DiseaseValidatorResult"), True, "validator_result"),
+])
+def test_custom_step_output_kind_comes_from_the_authorized_receipt(
+        monkeypatch, contract, validator, expected):
+    monkeypatch.setattr(contracts, "resolve_output_schema", lambda key: object())
+    monkeypatch.setattr(contracts, "is_domain_validator_result_schema", lambda model: validator)
+    assert step_output_kind("ca_saved", {"output_schema_key": "ignored"}, contract) == expected
+
+
+def test_custom_profile_step_output_kind():
+    from src.schemas.agent_execution_revision import GenericProfilePin
+    pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1,
+                            fingerprint="sha256:" + "c" * 64)
+    receipt = source_receipt().model_copy(update={"output_contract": AgentOutputContract(
+        output_state="structured_extraction", output_mode="profile_bound_generic",
+        generic_profile_ref=pin)})
+    contract = contracts.BenchmarkFlowOutputContract(status="not_verified",
+                                                     execution_receipt=receipt)
+    assert step_output_kind("ca_saved", {}, contract) == "profile_attributes"
+
+
+@pytest.mark.parametrize("agent_id,metadata,representation,validator,expected", [
+    ("csv_formatter", {}, None, False, "formatter"),
+    ("pdf_extraction", {"curation": {"domain_pack_id": "generic"}}, None, False, "pdf_extraction"),
+    ("disease_term_check", {"output_schema_key": "DiseaseTermResult"}, None, True, "validator_result"),
+    ("go_annotations", {"output_schema_key": "GoAnnotations"}, "json_schema", False, "other"),
+    ("disease_extractor", {"curation": {"domain_pack_id": "agr.alliance.disease"}},
+     "pack_fields", False, "pack_fields"),
+    ("chat_output", {}, None, False, "text"),
+])
+def test_system_step_output_kind_comes_from_metadata(
+        monkeypatch, agent_id, metadata, representation, validator, expected):
+    monkeypatch.setattr(contracts, "resolve_output_schema", lambda key: object())
+    monkeypatch.setattr(contracts, "is_domain_validator_result_schema", lambda model: validator)
+    contract = contracts.BenchmarkFlowOutputContract(
+        status="not_verified" if representation is None else "verified",
+        representation=representation,
+        schema_definition=None if representation is None else {"x": 1},
+        schema_digest=None if representation is None else "sha256:" + "d" * 64)
+    assert step_output_kind(agent_id, metadata, contract) == expected
+
+
+def test_custom_output_kind_requires_the_authorized_receipt():
+    with pytest.raises(ValueError, match="authorized receipt"):
+        step_output_kind("ca_saved", {}, contracts.BenchmarkFlowOutputContract(
+            status="not_verified"))
