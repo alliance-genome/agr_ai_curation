@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, lru_cache
 from pathlib import Path
 
 from src.lib.packages.registry import PackageRegistry
@@ -103,6 +103,44 @@ def iter_domain_pack_dirs(packs_dir: Path | None = None) -> tuple[Path, ...]:
     )
 
 
+@dataclass(frozen=True)
+class _ParsedDomainPackDir:
+    pack_path: Path
+    metadata_path: Path
+    metadata: DomainPackMetadata | None
+    failure_reason: str | None
+
+
+@lru_cache(maxsize=None)
+def _parse_domain_pack_dirs(resolved_packs_dir: Path) -> tuple[_ParsedDomainPackDir, ...]:
+    """Parse every pack beneath one resolved directory once per process.
+
+    Pack files ship with the runtime and do not change while it runs; callers
+    that swap pack files in place (tests, tooling) must call
+    :func:`clear_domain_pack_registry_cache`. Parsed metadata is shared by every
+    registry built from this directory, so callers must treat it as read-only.
+    """
+
+    parsed: list[_ParsedDomainPackDir] = []
+    for pack_path in iter_domain_pack_dirs(resolved_packs_dir):
+        metadata_path = get_domain_pack_metadata_path(pack_path)
+        try:
+            metadata = load_domain_pack_metadata(metadata_path)
+        except ValueError as exc:
+            parsed.append(
+                _ParsedDomainPackDir(pack_path, metadata_path, None, str(exc))
+            )
+            continue
+        parsed.append(_ParsedDomainPackDir(pack_path, metadata_path, metadata, None))
+    return tuple(parsed)
+
+
+def clear_domain_pack_registry_cache() -> None:
+    """Forget parsed domain packs so the next registry load re-reads pack files."""
+
+    _parse_domain_pack_dirs.cache_clear()
+
+
 def discover_domain_pack_metadata(
     packs_dir: Path | None = None,
     *,
@@ -112,31 +150,32 @@ def discover_domain_pack_metadata(
 ) -> tuple[tuple[LoadedDomainPack, ...], tuple[DomainPackDiscoveryFailure, ...]]:
     """Load every domain-pack metadata file beneath the domain-pack directory."""
 
+    resolved_packs_dir = (packs_dir or get_domain_packs_dir()).expanduser().resolve(
+        strict=False
+    )
     discovered: list[LoadedDomainPack] = []
     failures: list[DomainPackDiscoveryFailure] = []
 
-    for pack_path in iter_domain_pack_dirs(packs_dir):
-        metadata_path = get_domain_pack_metadata_path(pack_path)
-        try:
-            metadata = load_domain_pack_metadata(metadata_path)
-        except ValueError as exc:
+    for parsed in _parse_domain_pack_dirs(resolved_packs_dir):
+        if parsed.metadata is None:
             failures.append(
                 DomainPackDiscoveryFailure(
-                    pack_id=pack_path.name,
-                    pack_path=pack_path,
-                    metadata_path=metadata_path,
-                    reason=str(exc),
+                    pack_id=parsed.pack_path.name,
+                    pack_path=parsed.pack_path,
+                    metadata_path=parsed.metadata_path,
+                    reason=str(parsed.failure_reason),
                 )
             )
             continue
 
+        metadata = parsed.metadata
         discovered.append(
             LoadedDomainPack(
                 pack_id=metadata.pack_id,
                 display_name=metadata.display_name,
                 version=metadata.version,
-                pack_path=pack_path,
-                metadata_path=metadata_path,
+                pack_path=parsed.pack_path,
+                metadata_path=parsed.metadata_path,
                 metadata=metadata,
                 package_id=package_id,
                 package_display_name=package_display_name,
@@ -259,6 +298,7 @@ __all__ = [
     "DomainPackRegistry",
     "DomainPackRegistryValidationError",
     "LoadedDomainPack",
+    "clear_domain_pack_registry_cache",
     "discover_domain_pack_metadata",
     "iter_domain_pack_dirs",
     "load_package_domain_pack_registry",

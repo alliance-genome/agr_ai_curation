@@ -115,9 +115,13 @@ def _require_unique(values: list[str], field_name: str) -> None:
 
 
 class DomainPackMetadataBaseModel(BaseModel):
-    """Strict base model for domain-pack metadata contracts."""
+    """Strict base model for domain-pack metadata contracts.
 
-    model_config = ConfigDict(extra="forbid")
+    Loaded pack metadata is parsed once per process and shared by every
+    registry, so instances are frozen against attribute assignment.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class DomainPackStatus(str, Enum):

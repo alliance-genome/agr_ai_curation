@@ -28,7 +28,9 @@ class DomainFixturePackError(DomainPackContractError):
 def _load_yaml_mapping(path: Path) -> dict:
     try:
         with path.open("r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle)
+            # Domain packs are large; LibYAML's CSafeLoader keeps the same safe
+            # constructors as ``yaml.safe_load`` at a fraction of the parse time.
+            data = yaml.load(handle, Loader=yaml.CSafeLoader)
     except FileNotFoundError as exc:
         raise DomainPackContractError(f"Contract file not found: {path}") from exc
     except yaml.YAMLError as exc:

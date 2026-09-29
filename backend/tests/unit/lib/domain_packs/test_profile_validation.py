@@ -211,7 +211,7 @@ def test_compilation_retains_complete_provider_scope_and_selector(example, const
     from src.schemas.domain_pack_metadata import ReusableValidatorInput
     reuse.inputs["provider"] = ReusableValidatorInput.model_validate({
         "value_schema": {"kind": "string"}, "required": True, "allow_constant": True})
-    reuse.provider_input_slots = {"source.provider": "provider"}
+    reuse = reuse.model_copy(update={"provider_input_slots": {"source.provider": "provider"}})
     binding = replace(cap.binding, custom_profile_reuse=reuse, required_any_active_group=("FB",),
                       provider_value_field_paths=("source.provider",), allowed_provider_values=("FB",),
                       allow_cross_provider=False,

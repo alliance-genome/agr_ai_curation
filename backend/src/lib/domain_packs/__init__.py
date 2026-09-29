@@ -24,6 +24,7 @@ from .registry import (
     DomainPackRegistry,
     DomainPackRegistryValidationError,
     LoadedDomainPack,
+    clear_domain_pack_registry_cache,
     load_package_domain_pack_registry,
     load_domain_pack_registry,
 )
@@ -81,6 +82,7 @@ __all__ = [
     "ValidatorResultMaterializationInput",
     "ValidatorResultMaterializationResult",
     "append_validation_findings_to_envelope",
+    "clear_domain_pack_registry_cache",
     "runtime_validator_resolved_object_ids",
     "dispatch_active_validator_bindings",
     "load_domain_fixture_pack",
