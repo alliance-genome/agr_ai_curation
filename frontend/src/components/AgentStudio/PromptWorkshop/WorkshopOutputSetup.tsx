@@ -27,15 +27,18 @@ interface Props {
   disabled?: boolean
   /** True when the loaded saved revision of the selected agent uses Flexible extraction. */
   savedFlexible?: boolean
+  /** True when this draft copies an agent whose saved revision uses Flexible extraction; such a copy is refused. */
+  flexibleCopySource?: boolean
 }
 
 const RETIRED = 'Flexible extraction is retired. Convert to Custom Output Structure to keep the same fields on every run.'
+const COPY_REFUSED = "This agent uses retired Flexible extraction, so it can't be copied. Convert the original agent to Custom Output Structure first, then copy it."
 
 /** Explicit output intent. Domain maturity describes support, never eligibility. */
-export default function WorkshopOutputSetup({ value, onChange, agents, onEditStructure, onChooseExisting, disabled = false, savedFlexible = false }: Props) {
+export default function WorkshopOutputSetup({ value, onChange, agents, onEditStructure, onChooseExisting, disabled = false, savedFlexible = false, flexibleCopySource = false }: Props) {
   const help = value.mode === 'none' || value.mode === 'unprofiled_generic' ? null : outputHelp[value.mode]
   // A saved Flexible agent (or a recovered Flexible draft) is shown, never offered.
-  const showRetired = savedFlexible || value.mode === 'unprofiled_generic'
+  const showRetired = savedFlexible || flexibleCopySource || value.mode === 'unprofiled_generic'
   const [pendingMode, setPendingMode] = useState<WorkshopOutputDraft['mode'] | null>(null)
   const changeMode = (mode: WorkshopOutputDraft['mode']) => {
     if (disabled || mode === value.mode) return
@@ -59,6 +62,9 @@ export default function WorkshopOutputSetup({ value, onChange, agents, onEditStr
       <FormControlLabel disabled={disabled} value="none" control={<Radio />} label="No structured output" />
       <FormControlLabel disabled={disabled} value="structured" control={<Radio />} label="Structured extraction" />
     </RadioGroup>
+    {flexibleCopySource && <Alert severity="warning">
+      <Typography variant="body2">{COPY_REFUSED}</Typography>
+    </Alert>}
     {value.mode !== 'none' && <>
       <TextField disabled={disabled} select label="Output format" value={value.mode}
         onChange={(event) => changeMode(event.target.value as WorkshopOutputDraft['mode'])}>
@@ -67,7 +73,7 @@ export default function WorkshopOutputSetup({ value, onChange, agents, onEditStr
         {showRetired && <MenuItem value="unprofiled_generic" disabled>Flexible extraction (retired)</MenuItem>}
       </TextField>
       {value.mode === 'unprofiled_generic'
-        ? <Alert severity="info" action={<Button disabled={disabled} color="inherit"
+        ? !flexibleCopySource && <Alert severity="info" action={<Button disabled={disabled} color="inherit"
             onClick={() => onChange(emptyOutputDraft('profile_bound_generic'))}>Convert to Custom Output Structure</Button>}>
           <Typography variant="body2">{RETIRED}</Typography>
         </Alert>

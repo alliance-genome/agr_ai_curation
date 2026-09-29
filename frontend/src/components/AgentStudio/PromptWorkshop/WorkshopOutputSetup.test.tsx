@@ -5,10 +5,10 @@ import WorkshopOutputSetup from './WorkshopOutputSetup'
 import { emptyOutputDraft, type WorkshopOutputDraft } from './workshopOutputDraft'
 import { buildDomainEnvelopeMetadata } from '@/test/fixtures/agentStudioDomainEnvelope'
 
-function Harness({ initial = emptyOutputDraft(), savedFlexible = false }: { initial?: WorkshopOutputDraft; savedFlexible?: boolean }) {
+function Harness({ initial = emptyOutputDraft(), savedFlexible = false, flexibleCopySource = false }: { initial?: WorkshopOutputDraft; savedFlexible?: boolean; flexibleCopySource?: boolean }) {
   const [value, onChange] = useState(initial)
   return <>
-    <WorkshopOutputSetup value={value} onChange={onChange} onEditStructure={vi.fn()} savedFlexible={savedFlexible} agents={{
+    <WorkshopOutputSetup value={value} onChange={onChange} onEditStructure={vi.fn()} savedFlexible={savedFlexible} flexibleCopySource={flexibleCopySource} agents={{
       facts: { name: 'Facts', icon: '', category: 'Extraction', output_schema_key: 'facts',
         domain_envelope: { ...buildDomainEnvelopeMetadata(), display_name: 'Facts', status: 'under_development' } },
       builder: { name: 'Builder', icon: '', category: 'Extraction', output_schema_key: null,
@@ -21,6 +21,7 @@ function Harness({ initial = emptyOutputDraft(), savedFlexible = false }: { init
 }
 
 const RETIRED = 'Flexible extraction is retired. Convert to Custom Output Structure to keep the same fields on every run.'
+const COPY_REFUSED = "This agent uses retired Flexible extraction, so it can't be copied. Convert the original agent to Custom Output Structure first, then copy it."
 
 describe('Workshop output choices', () => {
   it('selects a schema-null packaged builder and explicitly clears it when changing format', async () => {
@@ -70,6 +71,13 @@ describe('Workshop output choices', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Convert to Custom Output Structure' }))
     expect(screen.getByLabelText('Selected output mode')).toHaveTextContent('profile_bound_generic')
     expect(screen.queryByText(RETIRED)).not.toBeInTheDocument()
+  })
+
+  it.each(['unprofiled_generic', 'profile_bound_generic', 'none'] as const)('explains that a copy of a Flexible agent cannot be saved, without Convert (%s)', (mode) => {
+    render(<Harness initial={emptyOutputDraft(mode)} flexibleCopySource />)
+    expect(screen.getByText(COPY_REFUSED)).toBeInTheDocument()
+    expect(screen.queryByText(RETIRED)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Convert to Custom Output Structure' })).not.toBeInTheDocument()
   })
 
   it('lists the retired format only as a disabled choice', async () => {

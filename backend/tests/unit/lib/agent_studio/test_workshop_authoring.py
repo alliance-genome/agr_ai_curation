@@ -367,8 +367,11 @@ def test_clone_source_revision_is_reauthorized(db, base, monkeypatch):
         id=uuid4(), execution_revision_id=uuid4(),
         updated_at=datetime(2026, 9, 4, tzinfo=timezone.utc), allowed_group_ids=[], tool_ids=[],
     )
-    monkeypatch.setattr(execution_revision_service, "get_execution_revision",
-                        lambda *a, **kw: (None, SimpleNamespace(tool_ids=[], system_managed_tool_ids=[])))
+    from src.schemas.agent_execution_revision import AgentOutputContract
+    head = SimpleNamespace(
+        tool_ids=[], system_managed_tool_ids=[], output_contract=AgentOutputContract(output_state="none"),
+    )
+    monkeypatch.setattr(execution_revision_service, "get_execution_revision", lambda *a, **kw: (None, head))
     monkeypatch.setattr(service, "get_custom_agent_visible_to_user", lambda *a: source)
     base.clone_source_agent_id = "ca_11111111-1111-1111-1111-111111111111"
     base.clone_source_updated_at = source.updated_at.isoformat()
@@ -764,13 +767,39 @@ def test_a_saved_agent_keeps_flexible_only_when_its_head_is_flexible(db, base, m
     assert (source.id, source.execution_revision_id) in reads
 
 
-def test_a_copy_of_a_flexible_agent_is_warned_before_save(db, base, monkeypatch):
-    source, _ = _saved_agent_with_head(
+COPY_REFUSED = (
+    "This agent uses retired Flexible extraction, so it can't be copied. "
+    "Convert the original agent to Custom Output Structure first, then copy it."
+)
+CONVERTED_DRAFT = {
+    "mode": "profile_bound_generic", "schemaKey": "", "profilePin": None,
+    "profileContract": {"name": "Converted", "semantic_class": "", "fields": []},
+}
+NO_OUTPUT_DRAFT = {"mode": "none", "schemaKey": "", "profilePin": None, "profileContract": None}
+
+
+@pytest.mark.parametrize("draft_output", [FLEXIBLE_DRAFT, CONVERTED_DRAFT, NO_OUTPUT_DRAFT])
+def test_a_copy_of_a_flexible_agent_is_refused_whatever_the_draft_output(db, base, monkeypatch, draft_output):
+    source, reads = _saved_agent_with_head(
         monkeypatch, {"output_state": "structured_extraction", "output_mode": "unprofiled_generic"},
     )
     base.clone_source_agent_id = f"ca_{source.id}"
     base.clone_source_updated_at = source.updated_at.isoformat()
-    base.draft_output = dict(FLEXIBLE_DRAFT)
+    base.draft_output = dict(draft_output)
     result = validate_workshop_context(db, workshop=base, user_id=1, active_group_ids=[])
     assert not result.valid
-    assert len(_flexible_findings(result)) == 1
+    [finding] = _flexible_findings(result)
+    assert finding.severity == "error"
+    assert finding.path == "custom_agent.output_contract"
+    assert finding.message == COPY_REFUSED
+    assert (source.id, source.execution_revision_id) in reads
+
+
+def test_a_copy_of_a_non_flexible_agent_is_unaffected(db, base, monkeypatch):
+    source, _ = _saved_agent_with_head(monkeypatch, {"output_state": "none"})
+    base.clone_source_agent_id = f"ca_{source.id}"
+    base.clone_source_updated_at = source.updated_at.isoformat()
+    base.draft_output = dict(NO_OUTPUT_DRAFT)
+    result = validate_workshop_context(db, workshop=base, user_id=1, active_group_ids=[])
+    assert result.valid
+    assert not _flexible_findings(result)

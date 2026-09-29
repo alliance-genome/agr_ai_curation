@@ -8,6 +8,10 @@ already Flexible (create, clone, or restore to an older Flexible revision).
 from src.schemas.agent_execution_revision import AgentOutputContract
 
 FLEXIBLE_RETIRED = "Flexible extraction is retired. Choose Custom Output Structure for this agent."
+FLEXIBLE_COPY_REFUSED = (
+    "This agent uses retired Flexible extraction, so it can't be copied. "
+    "Convert the original agent to Custom Output Structure first, then copy it."
+)
 
 
 def require_flexible_not_new(
