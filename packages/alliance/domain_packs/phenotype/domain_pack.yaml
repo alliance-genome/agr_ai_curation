@@ -789,6 +789,7 @@ object_definitions:
         description: Curator-facing reason the extractor selected this item, written at extraction time.
         metadata:
           protected: true
+          free_text: true
           curator_action_note: Written by the extraction agent; not editable.
       # EXPERIMENTAL CONDITIONS: condition_relations[] is the OUTER multivalued list (one
       # ConditionRelation per entry: relation_type + its conditions[]). Declared multivalued so
@@ -1248,6 +1249,7 @@ object_definitions:
         field_type: string
         display_name: Condition summary
         metadata:
+          free_text: true
           definition_state_category: complete
           provider_refs:
             alliance_linkml:

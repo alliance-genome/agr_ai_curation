@@ -425,6 +425,14 @@ def test_package_review_policies_reach_review_rows(pack_name, object_type, expec
     assert envelope.extracted_objects[0].payload["confidence"] == "high"
 
 
+# Packs whose benchmark comparison treats the rationale as prose (field metadata free_text).
+FREE_TEXT_RATIONALE_PACKS = {
+    "agr.alliance.disease",
+    "agr.alliance.gene_expression",
+    "agr.alliance.phenotype",
+}
+
+
 def _rationale_object_types() -> list[tuple[str, str]]:
     return [
         (pack_id, object_definition.object_type)
@@ -449,10 +457,13 @@ def test_rationale_is_protected_read_only_for_curators(pack_id: str, object_type
     field_definition = next(
         field for field in object_definition.fields if field.field_path == "rationale"
     )
-    assert field_definition.metadata == {
+    expected_metadata = {
         "protected": True,
         "curator_action_note": "Written by the extraction agent; not editable.",
     }
+    if pack_id in FREE_TEXT_RATIONALE_PACKS:
+        expected_metadata["free_text"] = True
+    assert field_definition.metadata == expected_metadata
     editable, policy = _field_editability(field_definition)
     assert editable is False
     assert policy["protected"] is True

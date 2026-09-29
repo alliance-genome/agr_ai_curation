@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, ClassVar, Dict, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .generic_extraction_profile import ValueSchema
 
@@ -1111,6 +1111,12 @@ class DomainPackFieldDefinition(DomainPackMetadataBaseModel):
             raise ValueError(
                 "object_type_ref is only valid for object_ref or field_ref fields"
             )
+        raw_free_text = self.metadata.get("free_text")
+        if raw_free_text is not None:
+            if not isinstance(raw_free_text, bool):
+                raise ValueError("field metadata 'free_text' must be a boolean")
+            if raw_free_text and self.field_type is not DomainPackFieldType.STRING:
+                raise ValueError("field metadata 'free_text' is only valid on string fields")
         return self
 
 
@@ -1155,6 +1161,69 @@ class DomainPackObjectDefinition(DomainPackMetadataBaseModel):
             f"object {self.object_type} fields",
         )
         return self
+
+
+class DomainPackRecordKindFamily(DomainPackMetadataBaseModel):
+    """Curatable record kinds a curator may choose together ("all kinds") for benchmarks."""
+
+    id: str
+    label: str = Field(min_length=1)
+    fallback_object_type: str
+    object_types: list[str] = Field(min_length=2)
+
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, value: str) -> str:
+        return _validate_symbolic_name(value, "record_kind_families.id")
+
+    @model_validator(mode="after")
+    def _validate_members(self) -> "DomainPackRecordKindFamily":
+        _require_unique(self.object_types, f"record_kind_families.{self.id}.object_types")
+        if self.fallback_object_type not in self.object_types:
+            raise ValueError(
+                f"record_kind_families.{self.id}.fallback_object_type must be one of its object_types"
+            )
+        return self
+
+
+def _record_kind_family_errors(metadata: "DomainPackMetadata") -> list[str]:
+    """Families name curatable units of this pack; each unit belongs to at most one family."""
+
+    raw = metadata.metadata.get("record_kind_families")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return ["metadata.record_kind_families must be a list"]
+    configured = metadata.metadata.get("object_role_key")
+    role_key = configured.strip() if isinstance(configured, str) and configured.strip() else "object_role"
+    roles = {}
+    for obj in metadata.object_definitions:
+        role = obj.metadata.get(role_key)
+        roles[obj.object_type] = role.strip() if isinstance(role, str) else None
+    errors: list[str] = []
+    seen_ids: set[str] = set()
+    owner: dict[str, str] = {}
+    for item in raw:
+        try:
+            family = DomainPackRecordKindFamily.model_validate(item)
+        except ValidationError as exc:
+            errors.append(f"metadata.record_kind_families: {exc.errors()[0]['msg']}")
+            continue
+        where = f"metadata.record_kind_families.{family.id}"
+        if family.id in seen_ids:
+            errors.append(f"{where} is declared twice")
+        seen_ids.add(family.id)
+        for object_type in family.object_types:
+            if object_type not in roles:
+                errors.append(f"{where} references unknown object_type '{object_type}'")
+            elif roles[object_type] != "curatable_unit":
+                errors.append(f"{where}: '{object_type}' is not a curatable unit")
+            if object_type in owner and owner[object_type] != family.id:
+                errors.append(
+                    f"{where}: '{object_type}' belongs to both '{owner[object_type]}' and '{family.id}'"
+                )
+            owner.setdefault(object_type, family.id)
+    return errors
 
 
 class DomainPackFixturePackRef(DomainPackMetadataBaseModel):
@@ -1353,6 +1422,7 @@ class DomainPackMetadata(DomainPackMetadataBaseModel):
 
         errors.extend(_resolvable_vocabulary_errors(self))
         errors.extend(_resolvable_validated_key_errors(self))
+        errors.extend(_record_kind_family_errors(self))
 
         for fixture_pack in self.fixture_packs:
             for object_type in fixture_pack.object_types:
