@@ -881,16 +881,20 @@ deployment note; never commit them to a repository or attach them to a ticket.
 
 ### one_off/convert_gpt6_sol_agents_0100.py
 
-Moves saved custom agents and the flow steps that pin them from the retired
-GPT-6 Sol (`gpt-6-sol`) to GPT-6.1 Sol (`gpt-6.1-sol`), so no curator has to
-re-save anything. Alembic `s6b7c8d9e0f1` moves the editable agent rows, but a
-custom agent runs its saved head version and a flow step runs the exact version
-it pins, and those still name GPT-6 Sol. Run it after `alembic upgrade head`.
+Moves saved custom agents and the flow steps that pin them from retired models
+to GPT-6.1 Sol (`gpt-6.1-sol`), so no curator has to re-save anything. The
+retired models are GPT-6 Sol (`gpt-6-sol`) and, for a database that still has
+versions from before the GPT-6 Sol switch, GPT-5.6 Sol and GPT-5.6 Terra
+(`gpt-5.6-sol`, `gpt-5.6-terra`), which GPT-6 Sol replaced. Alembic
+`r5a6b7c8d9e0` and `s6b7c8d9e0f1` move the editable agent rows, but a custom
+agent runs its saved head version and a flow step runs the exact version it
+pins, and those still name the retired model. Run it after
+`alembic upgrade head`.
 
 For every custom agent, archived ones included, it appends a copy of the head,
 and of each older version that an active flow step pins. Each copy is the saved
-version with only the model changed; `xhigh` reasoning becomes `high`, as in the
-migration. The head copy stays the head, and nothing else about any version
+version with only the model changed. Reasoning follows the migrations: `minimal`
+becomes `low`, off (`disabled`) becomes `medium`, `xhigh` becomes `high`. The head copy stays the head, and nothing else about any version
 changes. It then re-pins each of those steps to the copy of the version it
 pinned and saves the flow through the normal flow save as the flow's owner. A
 selected-fields file output that reads a re-pinned step moves with it only if
@@ -909,7 +913,7 @@ is left, so it is safe to run again.
 Without `--apply` the whole conversion runs and is rolled back (a dry run).
 The JSON report on stdout lists every owner, agent (old head, new head and
 each copy) and flow step touched, plus `before`/`after` counts of agent heads
-and flow pins still on GPT-6 Sol. It contains agent and flow names; keep it in
+and flow pins still on a retired model. It contains agent and flow names; keep it in
 the private deployment note.
 
 ```bash

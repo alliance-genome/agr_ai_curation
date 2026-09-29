@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""One-off: move saved custom agents and pinned flow steps from GPT-6 Sol to GPT-6.1 Sol.
+"""One-off: move saved custom agents and pinned flow steps from retired GPT-6/5.6 models to GPT-6.1 Sol.
 
 See scripts/README.md ("One-off data migrations"). A dry run unless --apply is
 given: the whole conversion runs and is rolled back. Run it after `alembic
-upgrade head` (s6b7c8d9e0f1 moves the editable agent rows).
+upgrade head` (r5a6b7c8d9e0 and s6b7c8d9e0f1 move the editable agent rows).
 """
 
 from __future__ import annotations
@@ -22,12 +22,15 @@ for _import_root in (BACKEND_ROOT / "src", BACKEND_ROOT):
     if str(_import_root) not in sys.path:
         sys.path.insert(0, str(_import_root))
 
-RETIRED_MODEL_ID = "gpt-6-sol"
+# Every retired model a saved agent may still name. GPT-5.6 Sol and Terra were replaced by
+# GPT-6 Sol (r5a6b7c8d9e0), which GPT-6.1 Sol replaces (s6b7c8d9e0f1), so all three move to it.
+RETIRED_MODEL_IDS = frozenset({"gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol"})
 TARGET_MODEL_ID = "gpt-6.1-sol"
-# The same mapping as Alembic s6b7c8d9e0f1: GPT-6.1 Sol offers low, medium and high.
-REASONING_MAP = {"xhigh": "high"}
-NOTES = ("v0.10.0 release: GPT-6 Sol was retired; this copy of the saved version runs on "
-         "GPT-6.1 Sol (xhigh reasoning becomes high). Nothing else changed.")
+# Both migrations' mappings; GPT-6.1 Sol offers low, medium and high. "disabled" was never
+# sent, so the provider default (medium) applied; medium keeps that behavior.
+REASONING_MAP = {"minimal": "low", "disabled": "medium", "xhigh": "high"}
+NOTES = ("v0.10.0 release: this saved version's model was retired; this copy runs on GPT-6.1 Sol "
+         "(minimal reasoning becomes low, off becomes medium, xhigh becomes high). Nothing else changed.")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -66,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     with SessionLocal() as db:
         try:
             report = conversion.convert(
-                db, retired_model_id=RETIRED_MODEL_ID, target_model_id=TARGET_MODEL_ID,
+                db, retired_model_ids=RETIRED_MODEL_IDS, target_model_id=TARGET_MODEL_ID,
                 reasoning_map=REASONING_MAP, owner_groups=owner_groups, notes=NOTES)
         except conversion.ConversionRefused as error:
             db.rollback()
