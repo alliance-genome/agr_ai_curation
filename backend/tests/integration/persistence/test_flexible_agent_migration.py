@@ -47,7 +47,7 @@ def converted_world(execution_db, builder_policies, monkeypatch):  # noqa: F811
     monkeypatch.setattr(flows_api, "_flow_agent_policy_entry",
                         lambda *_, **__: {"category": "Extraction", "supervisor": {}})
     monkeypatch.setattr(migration, "_result_payloads", lambda db, key: [])
-    agent = service.create_custom_agent(db, 1, "Widget finder", model_id="gpt-6-sol",
+    agent = service.create_custom_agent(db, 1, "Widget finder", model_id="gpt-6.1-sol",
                                         custom_prompt="Find widgets", include_group_rules=False)
     snapshot = capture_execution_snapshot(db, agent, FLEXIBLE)
     append_execution_revision(db, agent, snapshot, user_id=1,

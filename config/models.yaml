@@ -3,7 +3,7 @@ models:
     name: GPT-6 Astra
     provider: openai
     description: Reasoning model for routing, output, and explicitly selected document extraction.
-    guidance: Default for routing and output agents, with low reasoning. Available for extraction agents by explicit selection; new extraction agents use GPT-6 Sol with medium reasoning. Agent Studio AI Chat uses medium reasoning separately.
+    guidance: Default for routing and output agents, with low reasoning. Available for extraction agents by explicit selection; new extraction agents use GPT-6.1 Sol with medium reasoning. Agent Studio AI Chat uses medium reasoning separately.
     default: false
     curator_visible: true
     supports_reasoning: true
@@ -20,10 +20,10 @@ models:
       - Routing and formatting extracted information
       - Paper extraction when explicitly selected
     avoid_for:
-      - Routine validation and database lookups where GPT-6 Sol is the default
+      - Routine validation and database lookups where GPT-6.1 Sol is the default
 
-  - model_id: gpt-6-sol
-    name: GPT-6 Sol
+  - model_id: gpt-6.1-sol
+    name: GPT-6.1 Sol
     provider: openai
     description: Default reasoning model for document extraction, validation, and curation.
     guidance: Default for new extraction agents and for validation and utility agents. Start with medium reasoning; increase it when difficult evidence needs more analysis. GPT-6 Astra is available by explicit selection.
@@ -35,13 +35,11 @@ models:
       - low
       - medium
       - high
-      - xhigh
     default_reasoning: medium
     reasoning_descriptions:
-      low: Fastest GPT-6 Sol mode. Good for quick checks, simple lookups, and straightforward extraction.
+      low: Fastest GPT-6.1 Sol mode. Good for quick checks, simple lookups, and straightforward extraction.
       medium: Default for extraction, validation, and curation. Start here when designing a new agent.
-      high: Deeper reasoning for hard ambiguity in extraction or validation.
-      xhigh: Deepest reasoning but slowest. Use sparingly for hard ambiguity, not routine DB lookups.
+      high: Deepest reasoning offered here. Use for hard ambiguity in extraction or validation, not routine DB lookups.
     recommended_for:
       - Document extraction and high-stakes interpretation where instruction fidelity matters
       - Validation and database lookups after using search/read tools

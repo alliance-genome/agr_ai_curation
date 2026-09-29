@@ -75,7 +75,7 @@ def test_pre_backfill_snapshot_keeps_newly_designated_helpers(execution_db, subm
     groups = list(get_valid_group_ids())
     head = db.get(Agent, agent_id)
     head.template_source = "gene_extractor"
-    head.model_id = "gpt-6-sol"
+    head.model_id = "gpt-6.1-sol"
     head.model_reasoning = "medium"
     head.tool_ids = list(definition.tools)
     head.allowed_group_ids = list(definition.access.allowed_group_ids)
@@ -116,7 +116,7 @@ def _seed_real_template(db, monkeypatch, template_key):
     groups = list(get_valid_group_ids())
     template = Agent(
         id=uuid4(), agent_key=template_key, name=definition.name,
-        instructions="Extract paper-supported records.", model_id="gpt-6-sol",
+        instructions="Extract paper-supported records.", model_id="gpt-6.1-sol",
         model_temperature=0.1, model_reasoning="medium", visibility="system",
         tool_ids=list(definition.tools), allowed_group_ids=list(definition.access.allowed_group_ids),
         group_rules_enabled=False,
@@ -291,7 +291,7 @@ def _legacy_expression_extractor(db, groups, *, migrated):
     agent_id = uuid4()
     head = Agent(
         id=agent_id, agent_key=f"ca_{agent_id.hex}", user_id=1, name="Saved expression extractor",
-        instructions="Record zebrafish expression patterns.", model_id="gpt-6-sol",
+        instructions="Record zebrafish expression patterns.", model_id="gpt-6.1-sol",
         model_temperature=0.1, model_reasoning="medium", visibility="private",
         template_source="gene_expression_extraction",
         tool_ids=list(dict.fromkeys([*definition.tools, *RESOLVER_HELPERS])),

@@ -10,7 +10,7 @@ from src.lib.openai_agents.config import PromptCacheIdentity, build_model_settin
 
 ROOT = Path(__file__).resolve().parents[5]
 # ALL-1248: the seven packaged extractors run on Sol/medium; routing and output stay on Astra/low.
-# 2026-09-24: GPT-6 Sol replaced GPT-6 Sol (extraction) and GPT-6 Sol (validation).
+# 2026-09-24: GPT-6.1 Sol replaced GPT-6.1 Sol (extraction) and GPT-6.1 Sol (validation).
 EXTRACTORS = {
     'allele_extractor': 'allele_extractor',
     'disease_extractor': 'disease_extractor',
@@ -56,7 +56,7 @@ def test_packaged_extractors_use_sol_medium_without_env_override(package_agents)
     for folder, agent_id in EXTRACTORS.items():
         agent = package_agents[folder]
         assert agent.agent_id == agent_id
-        _assert_effective(agent.model_config, 'gpt-6-sol', 'medium', agent_id)
+        _assert_effective(agent.model_config, 'gpt-6.1-sol', 'medium', agent_id)
 
 
 def test_output_agents_stay_astra_low_and_validators_use_sol_medium(package_agents):
@@ -66,7 +66,7 @@ def test_output_agents_stay_astra_low_and_validators_use_sol_medium(package_agen
         assert package_agents[folder].model_config.model == 'gpt-6-astra', folder
     for folder, agent in package_agents.items():
         if folder not in EXTRACTORS.keys() | FORMATTERS | GO_ANNOTATIONS_ENV_AGENTS:
-            _assert_effective(agent.model_config, 'gpt-6-sol', 'medium', folder)
+            _assert_effective(agent.model_config, 'gpt-6.1-sol', 'medium', folder)
 
 
 def test_supervisor_stays_astra_low(monkeypatch):
@@ -95,8 +95,8 @@ def test_extractor_model_env_override_still_applies(monkeypatch):
 def test_catalog_defaults_new_agents_to_sol_medium_and_keeps_astra_selectable():
     load_models(force_reload=True)
     astra = get_model('gpt-6-astra')
-    sol = get_model('gpt-6-sol')
-    assert get_default_model().model_id == 'gpt-6-sol'
+    sol = get_model('gpt-6.1-sol')
+    assert get_default_model().model_id == 'gpt-6.1-sol'
     assert sol.default and sol.curator_visible and sol.default_reasoning == 'medium'
     assert not astra.default and astra.curator_visible and astra.default_reasoning == 'low'
     settings = build_model_settings(sol.model_id, reasoning_effort='medium',
@@ -104,11 +104,12 @@ def test_catalog_defaults_new_agents_to_sol_medium_and_keeps_astra_selectable():
     assert settings.reasoning.effort == 'medium'
 
 
-def test_retired_gpt56_models_are_not_in_the_catalog():
+def test_retired_sol_and_terra_models_are_not_in_the_catalog():
     load_models(force_reload=True)
     assert get_model('gpt-5.6-sol') is None
     assert get_model('gpt-5.6-terra') is None
-    sol = get_model('gpt-6-sol')
-    # Live-verified 2026-09-24: gpt-6-sol rejects "minimal" and any temperature.
-    assert sol.reasoning_options == ['low', 'medium', 'high', 'xhigh']
+    assert get_model('gpt-6-sol') is None
+    sol = get_model('gpt-6.1-sol')
+    # Curators get low, medium and high only; the API's xhigh and max are not offered.
+    assert sol.reasoning_options == ['low', 'medium', 'high']
     assert not sol.supports_temperature and sol.supports_tool_search

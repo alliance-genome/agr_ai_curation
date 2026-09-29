@@ -28,7 +28,7 @@ from src.lib.openai_agents.config import (
 )
 from src.lib.prompts import assembly
 
-OPENAI_MODEL = "gpt-6-sol"
+OPENAI_MODEL = "gpt-6.1-sol"
 COMPATIBLE_MODEL = "deepseek/deepseek-v4-pro-0813"  # openrouter, openai_compatible
 
 

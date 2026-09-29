@@ -34,7 +34,7 @@ def _resolution(*annotations, status="resolved"):
     return {
         "schema_version": 1,
         "prompt_version": "figure-locator-v1",
-        "model": "gpt-6-sol",
+        "model": "gpt-6.1-sol",
         "reasoning": "low",
         "status": status,
         "annotations": list(annotations),

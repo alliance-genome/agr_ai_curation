@@ -28,7 +28,7 @@ structured_finalization:
   checks: []
 
 model_config:
-  model: "${AGENT_GO_ANNOTATIONS_MODEL:-gpt-6-sol}"
+  model: "${AGENT_GO_ANNOTATIONS_MODEL:-gpt-6.1-sol}"
   temperature: 0.1
   reasoning: "medium"
 

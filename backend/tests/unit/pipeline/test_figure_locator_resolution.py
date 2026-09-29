@@ -83,7 +83,7 @@ def _provider_reference_for(chunk: DocumentChunk) -> ProviderFigureReference:
 
 @pytest.fixture(autouse=True)
 def figure_locator_env(monkeypatch):
-    monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-6-sol")
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "low")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -994,7 +994,7 @@ def test_provider_reference_does_not_cross_final_subsection_boundary(
             "figure_locator_resolution": {
                 "schema_version": 1,
                 "prompt_version": "figure-locator-v1",
-                "model": "gpt-6-sol",
+                "model": "gpt-6.1-sol",
                 "reasoning": "low",
                 "status": "resolved",
                 "annotations": [],
@@ -1022,8 +1022,8 @@ def test_provider_reference_does_not_cross_final_subsection_boundary(
 
 
 @pytest.mark.asyncio
-async def test_gpt6_sol_xhigh_reasoning_is_accepted_from_catalog(monkeypatch) -> None:
-    monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "xhigh")
+async def test_gpt61_sol_high_reasoning_is_accepted_from_catalog(monkeypatch) -> None:
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "high")
     classifier = AsyncMock(
         return_value=locator.FigureLocatorBatchOutput(
             candidates=[
@@ -1041,18 +1041,19 @@ async def test_gpt6_sol_xhigh_reasoning_is_accepted_from_catalog(monkeypatch) ->
 
     classifier.assert_awaited_once()
     assert classifier.await_args is not None
-    assert classifier.await_args.kwargs["reasoning_effort"] == "xhigh"
-    assert _resolution_for(chunk).reasoning == "xhigh"
+    assert classifier.await_args.kwargs["reasoning_effort"] == "high"
+    assert _resolution_for(chunk).reasoning == "high"
 
 
 @pytest.mark.asyncio
-async def test_gpt6_sol_minimal_reasoning_is_rejected_from_catalog(monkeypatch) -> None:
-    monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "minimal")
+@pytest.mark.parametrize("reasoning", ["minimal", "xhigh"])
+async def test_gpt61_sol_unoffered_reasoning_is_rejected_from_catalog(monkeypatch, reasoning) -> None:
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", reasoning)
     classifier = AsyncMock()
     monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
     chunk = _chunk("chunk-0", "Figure 1 shows signal.")
 
-    with pytest.raises(ValueError, match="not supported by model 'gpt-6-sol'"):
+    with pytest.raises(ValueError, match="not supported by model 'gpt-6.1-sol'"):
         await locator.resolve_figure_locators([chunk])
 
     classifier.assert_not_awaited()

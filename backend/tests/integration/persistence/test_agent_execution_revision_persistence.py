@@ -53,7 +53,7 @@ def execution_db(profile_db, request):  # noqa: F811 - pytest injects the import
                 user_id=1,
                 name="Test agent",
                 instructions="Original instructions",
-                model_id="gpt-6-sol",
+                model_id="gpt-6.1-sol",
                 model_temperature=0.0,
                 visibility="private",
             )
@@ -240,7 +240,7 @@ def test_catalog_pin_checks_saved_access_and_current_tool_policy(execution_db, m
     if explicit_pin:
         args["execution_revision_id"] = str(revision.id)
     built = catalog_service.get_agent_by_id(head.agent_key, **args)
-    assert built.saved.model_id == "gpt-6-sol"
+    assert built.saved.model_id == "gpt-6.1-sol"
     assert built.execution_revision_id == str(revision.id)
     from src.lib.agent_studio.execution_revision_service import current_execution_receipt
 
@@ -339,7 +339,7 @@ def test_saved_profile_builds_real_closed_agent_from_postgres(execution_db, monk
     db, agent_id, _, profile_revision = execution_db
     ToolPolicy.__table__.create(db.connection())
     head = db.get(Agent, agent_id)
-    head.model_id = "gpt-6-sol"
+    head.model_id = "gpt-6.1-sol"
     head.tool_ids = ["stage_generic_object", "patch_generic_object",
                      "finalize_generic_extraction", "list_generic_object_classes"]
     for tool_key in head.tool_ids:
@@ -442,7 +442,7 @@ def test_restore_appends_complete_snapshot_and_checks_expected_head(execution_db
     assert restored.snapshot == first.snapshot == saved.model_dump(mode="json")
     assert restored.fingerprint == first.fingerprint
     assert head.execution_revision_id == restored.id
-    assert head.model_id == "gpt-6-sol" and head.model_temperature == 0.0
+    assert head.model_id == "gpt-6.1-sol" and head.model_temperature == 0.0
     assert head.model_reasoning is None
     assert head.instructions == "Original instructions"
     assert head.group_prompt_overrides == {"FB": "Saved group rules"}
@@ -499,7 +499,7 @@ def test_builder_policy_rejection_precedes_all_save_mutations(
     db, _, _, existing_profile = execution_db
     contract = GenericProfileContract(name="Details", semantic_class="detail", fields=[])
     head = service.create_custom_agent(
-        db, 1, "Policy test", model_id="gpt-6-sol", custom_prompt="Keep curator settings.",
+        db, 1, "Policy test", model_id="gpt-6.1-sol", custom_prompt="Keep curator settings.",
         include_group_rules=False,
         new_generic_profile=contract if transition in {"revise_profile", "unchanged"} else None,
     )
@@ -534,7 +534,7 @@ def test_builder_policy_rejection_precedes_all_save_mutations(
     with pytest.raises(ValueError, match="Builder tool.*unavailable for execution"):
         if transition == "create":
             service.create_custom_agent(
-                db, 1, "Rejected create", model_id="gpt-6-sol", custom_prompt="Extract details.",
+                db, 1, "Rejected create", model_id="gpt-6.1-sol", custom_prompt="Extract details.",
                 include_group_rules=False, new_generic_profile=contract,
             )
         else:
@@ -572,12 +572,12 @@ def test_authenticated_profile_builder_attachment_exemption(
     monkeypatch.setattr(
         capability_catalog, "build_authorized_capability_catalog",
         lambda **_kwargs: [capability_catalog.CapabilityRecord(
-            kind="model", resource_id="gpt-6-sol", name="Test model", description="Test",
+            kind="model", resource_id="gpt-6.1-sol", name="Test model", description="Test",
         )],
     )
     contract = GenericProfileContract(name="Details", semantic_class="detail", fields=[])
     head = service.create_custom_agent(
-        db, 1, "Authenticated builder", model_id="gpt-6-sol",
+        db, 1, "Authenticated builder", model_id="gpt-6.1-sol",
         custom_prompt="Keep curator instructions.", model_temperature=0.0,
         include_group_rules=False, active_group_ids=[],
         new_generic_profile=contract if transition == "create" else None,
@@ -619,7 +619,7 @@ def test_workshop_create_update_profile_binding_and_atomic_rollback(execution_db
     db, _, _, _ = execution_db
     CustomAgentVersion.__table__.create(db.connection())
     head = service.create_custom_agent(
-        db, 1, "Workshop snapshot", model_id="gpt-6-sol", model_temperature=0.0,
+        db, 1, "Workshop snapshot", model_id="gpt-6.1-sol", model_temperature=0.0,
         model_reasoning="high",
         custom_prompt="Extract the details requested by the curator.",
         include_group_rules=False,
@@ -660,7 +660,7 @@ def test_workshop_create_update_profile_binding_and_atomic_rollback(execution_db
     with pytest.raises(RuntimeError, match="transaction failure"):
         with db.begin_nested():
             service.create_custom_agent(
-                db, 1, "Rolled back", model_id="gpt-6-sol",
+                db, 1, "Rolled back", model_id="gpt-6.1-sol",
                 custom_prompt="Draft that never commits", include_group_rules=False,
                 new_generic_profile={"name": "Rolled back profile", "semantic_class": "example", "fields": []},
             )
@@ -679,14 +679,14 @@ def test_workshop_profile_revision_is_atomic_and_keeps_other_agent_pins(executio
     contract = {"name": "Details", "semantic_class": "detail", "fields": []}
     profile_count = db.scalar(sa.select(sa.func.count()).select_from(GenericExtractionProfile))
     head = service.create_custom_agent(
-        db, 1, "Profile editor", model_id="gpt-6-sol", custom_prompt="Extract details.",
+        db, 1, "Profile editor", model_id="gpt-6.1-sol", custom_prompt="Extract details.",
         include_group_rules=False, new_generic_profile=contract,
     )
     original_id = head.execution_revision_id
     _, original = get_execution_revision(db, head.id, original_id, 1, active_group_ids=[])
     base = original.output_contract.generic_profile_ref
     other = service.create_custom_agent(
-        db, 1, "Pinned consumer", model_id="gpt-6-sol", custom_prompt="Extract details.",
+        db, 1, "Pinned consumer", model_id="gpt-6.1-sol", custom_prompt="Extract details.",
         include_group_rules=False, output_contract=original.output_contract,
     )
     service.update_custom_agent(db, head, expected_revision_id=original_id, revise_generic_profile={
@@ -739,7 +739,7 @@ def test_clone_api_preserves_profile_pin_and_records_explicit_edits(execution_db
     # canonical draft validation, source authorization and pin authorization real.
     monkeypatch.setattr(service, "authorized_agent_validation_sources", lambda *_args, **kwargs: kwargs["sources"])
     source = service.create_custom_agent(
-        db, 1, "Clone API source", model_id="gpt-6-sol", custom_prompt="Saved source prompt",
+        db, 1, "Clone API source", model_id="gpt-6.1-sol", custom_prompt="Saved source prompt",
         include_group_rules=False,
         new_generic_profile={"name": "Output record", "semantic_class": "example", "fields": []},
     )
@@ -770,7 +770,7 @@ def test_revision_api_reads_and_restores_real_saved_head(execution_db, monkeypat
     monkeypatch.setattr(api, "set_global_user_from_cognito", lambda _db, user: SimpleNamespace(id=user["db_user_id"]))
     owner, stranger = {"db_user_id": 1}, {"db_user_id": 2}
     head = service.create_custom_agent(
-        db, 1, "Revision API", model_id="gpt-6-sol",
+        db, 1, "Revision API", model_id="gpt-6.1-sol",
         custom_prompt="First complete configuration", include_group_rules=False,
     )
     first_id = head.execution_revision_id
@@ -810,7 +810,7 @@ def test_restore_rejects_a_revision_whose_model_left_the_catalog(execution_db, m
     CustomAgentVersion.__table__.create(db.connection())
     monkeypatch.setattr(api, "set_global_user_from_cognito", lambda _db, user: SimpleNamespace(id=user["db_user_id"]))
     head = service.create_custom_agent(
-        db, 1, "Retired model", model_id="gpt-6-sol",
+        db, 1, "Retired model", model_id="gpt-6.1-sol",
         custom_prompt="First complete configuration", include_group_rules=False,
     )
     first_id = head.execution_revision_id
@@ -821,7 +821,7 @@ def test_restore_rejects_a_revision_whose_model_left_the_catalog(execution_db, m
     real_get_model = models_loader.get_model
     monkeypatch.setattr(
         models_loader, "get_model",
-        lambda model_id: None if model_id == "gpt-6-sol" else real_get_model(model_id),
+        lambda model_id: None if model_id == "gpt-6.1-sol" else real_get_model(model_id),
     )
 
     with pytest.raises(HTTPException) as rejected:
@@ -845,7 +845,7 @@ def test_custom_clone_preserves_snapshot_profile_and_inherited_access(execution_
     db, _, _, _ = execution_db
     CustomAgentVersion.__table__.create(db.connection())
     source = service.create_custom_agent(
-        db, 1, "Clone source", model_id="gpt-6-sol", model_temperature=0.0,
+        db, 1, "Clone source", model_id="gpt-6.1-sol", model_temperature=0.0,
         custom_prompt="Exact saved instructions", include_group_rules=False,
         allowed_group_ids=["FB"],
         new_generic_profile={"name": "Shared profile", "semantic_class": "example", "fields": []},
@@ -1014,7 +1014,7 @@ def test_edit_preserves_saved_inherited_tools_and_group_policy(execution_db, mon
 
     db, agent_id, _, _ = execution_db
     head = db.get(Agent, agent_id)
-    head.model_id = "gpt-6-sol"
+    head.model_id = "gpt-6.1-sol"
     head.tool_ids = ["record_evidence"]
     head.group_tool_policy = {"rules": []}
     monkeypatch.setattr(service, "_system_managed_tool_ids", lambda *_args: ["record_evidence"])
@@ -1045,7 +1045,7 @@ def test_normal_save_round_trips_all_output_modes_atomically(execution_db, monke
 
     db, agent_id, _, profile = execution_db
     head = db.get(Agent, agent_id)
-    head.model_id = "gpt-6-sol"
+    head.model_id = "gpt-6.1-sol"
     head.tool_ids = []
     # Catalog eligibility is tested separately; this test exercises the real
     # transaction, complete snapshot, output discrimination and relational FKs.
@@ -1149,7 +1149,7 @@ def test_service_snapshot_does_not_float_with_mutable_head_and_archival(
     _, restored = get_execution_revision(
         db, agent_id, revision.id, 1, active_group_ids=["FB"]
     )
-    assert restored.model_id == "gpt-6-sol" and restored.model_temperature == 0.0
+    assert restored.model_id == "gpt-6.1-sol" and restored.model_temperature == 0.0
     assert restored.instructions == "Original instructions"
     assert restored.tool_ids == [] and restored.allowed_group_ids == ["FB"]
     with pytest.raises(ExecutionRevisionNotFoundError):

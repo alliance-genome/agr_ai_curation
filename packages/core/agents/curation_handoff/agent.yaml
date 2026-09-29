@@ -28,7 +28,7 @@ tools: []
 output_schema: null
 
 model_config:
-  model: "${AGENT_CURATION_HANDOFF_MODEL:-gpt-6-sol}"
+  model: "${AGENT_CURATION_HANDOFF_MODEL:-gpt-6.1-sol}"
   temperature: 0.1
   reasoning: "medium"
 

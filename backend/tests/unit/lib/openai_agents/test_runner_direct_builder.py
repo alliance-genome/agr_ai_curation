@@ -409,7 +409,7 @@ async def test_direct_expression_stage_preserves_unresolved_mentions_without_res
     stage = catalog_service._resolve_package_tool(
         "stage_gene_expression_observation", catalog_service.ToolExecutionContext(database_url="unused"),
     )
-    agent = Agent(name="Synthetic expression", model="gpt-6-sol", tools=[stage])
+    agent = Agent(name="Synthetic expression", model="gpt-6.1-sol", tools=[stage])
     observed = []
 
     class Result:

@@ -172,7 +172,7 @@ def test_shipped_catalog_defaults_to_sol_and_retains_alternative_routes():
     assert runtime_catalog == package_catalog
     assert [model["model_id"] for model in runtime_catalog] == [
         "gpt-6-astra",
-        "gpt-6-sol",
+        "gpt-6.1-sol",
         "deepseek/deepseek-v4-pro-0813",
         "google/gemini-3.7-flash",
         "qwen/qwen3.8-27b",
@@ -180,5 +180,9 @@ def test_shipped_catalog_defaults_to_sol_and_retains_alternative_routes():
     assert [model["default"] for model in runtime_catalog] == [False, True, False, False, False]
     assert all(model["provider"] == "openrouter" for model in runtime_catalog[2:])
     for model in runtime_catalog[:2]:
-        assert model["reasoning_options"] == ["low", "medium", "high", "xhigh"]
+        assert model["reasoning_options"] == (
+            ["low", "medium", "high", "xhigh"]
+            if model["model_id"] == "gpt-6-astra"
+            else ["low", "medium", "high"]
+        )
         assert model["default_reasoning"] == ("low" if model["model_id"] == "gpt-6-astra" else "medium")

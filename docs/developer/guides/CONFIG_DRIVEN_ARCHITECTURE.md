@@ -313,7 +313,7 @@ output_schema: GeneValidationEnvelope
 
 # Model configuration
 model_config:
-  model: "${AGENT_GENE_MODEL:-gpt-6-sol}"
+  model: "${AGENT_GENE_MODEL:-gpt-6.1-sol}"
   temperature: 0.1
   reasoning: "medium"
 
@@ -449,20 +449,20 @@ models:
     recommended_for:
       - Routing and formatting extracted information
     avoid_for:
-      - Routine validation and database lookups where GPT-6 Sol is the default
+      - Routine validation and database lookups where GPT-6.1 Sol is the default
 
-  - model_id: gpt-6-sol
-    name: GPT-6 Sol
+  - model_id: gpt-6.1-sol
+    name: GPT-6.1 Sol
     provider: openai
     description: Default reasoning model for document extraction, validation, and curation.
     default: true
     supports_reasoning: true
-    reasoning_options: [low, medium, high, xhigh]
+    reasoning_options: [low, medium, high]
     default_reasoning: medium
     reasoning_descriptions:
       low: Fastest mode. Good for quick checks.
       medium: Recommended default for curation.
-      high: Deepest reasoning. Use sparingly.
+      high: Deepest reasoning offered here. Use sparingly.
 ```
 
 #### Model Definition Fields
@@ -740,7 +740,7 @@ output_projection:
   inherited_parent_fields: []
 
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-6-sol}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-6.1-sol}"
   temperature: 0.2
   reasoning: "low"
 
@@ -1156,7 +1156,7 @@ GROQ_BASE_URL=https://api.groq.com/openai/v1
 LLM_PROVIDER_STRICT_MODE=true      # Fail startup if required keys missing (default: true)
 
 # Per-agent model overrides (in agent.yaml via ${VAR:-default})
-AGENT_GENE_MODEL=gpt-6-sol
+AGENT_GENE_MODEL=gpt-6.1-sol
 AGENT_SUPERVISOR_MODEL=gpt-6-astra
 
 # Runtime paths (optional; these are the container defaults)

@@ -1203,7 +1203,7 @@ def test_flatten_loaded_tool_definitions_counts_namespace_members():
 # ALL-1284: stable prompt cache key bound to the tool surface; cached-token share
 # ---------------------------------------------------------------------------
 
-_MODEL = "gpt-6-sol"
+_MODEL = "gpt-6.1-sol"
 _PROMPT_KEY = build_prompt_cache_key(
     PromptCacheIdentity(agent_key="allele_validation", static_prompt="Validate alleles."),
     model=_MODEL,
