@@ -5,7 +5,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from src.auth import current_principal as resolvers
-from src.auth.base import AuthPrincipal, CurrentPrincipalDenied, PrincipalLookupIdentity
+from auth_runtime.base import AuthPrincipal, CurrentPrincipalDenied, PrincipalLookupIdentity
 from src.auth.providers import cognito_current_principal as cognito
 from src.lib.benchmarks import curator_authorization as authorization
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext

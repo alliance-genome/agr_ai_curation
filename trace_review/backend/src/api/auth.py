@@ -1,178 +1,104 @@
-"""
-Authentication API endpoints for Trace Review.
+"""TraceReview authentication endpoints backed by the shared auth runtime."""
 
-This service currently keeps an in-repo auth module because Trace Review and the
-main backend both use a top-level `src` package layout, which makes direct
-runtime imports from `backend/src/auth` ambiguous in isolated service runs.
-
-Trace Review auth is currently Cognito-only. Multi-provider abstraction sharing
-with the main backend is planned future work after auth is extracted into a
-separate importable package.
-"""
 import os
 import logging
 import secrets
-import hashlib
-import base64
-from typing import Dict, Any, Optional
-from urllib.parse import urlencode
+from functools import lru_cache
+from typing import Any, Dict, Optional
 
-import requests
-import jwt
-from jwt import PyJWKClient
+from auth_runtime.base import AuthProvider
+
+from auth_runtime.service import TRUSTED_CALLER_EMAIL_HEADER, TRUSTED_CALLER_SUB_HEADER
+from auth_runtime.browser import (
+    authenticate_callback,
+    create_pkce,
+    set_oauth_cookies,
+    set_session_cookie,
+)
+from auth_runtime.factory import create_auth_provider
+from jwt.exceptions import (
+    InvalidTokenError,
+    PyJWKClientConnectionError,
+    PyJWKClientError,
+)
 from fastapi import APIRouter, HTTPException, Request, Response, Depends
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from fastapi.security import SecurityScopes
 
-from ..config import (
-    get_cognito_region,
-    get_cognito_user_pool_id,
-    get_cognito_client_id,
-    get_cognito_client_secret,
-    get_cognito_domain,
-    get_cognito_redirect_uri,
-    is_cognito_configured,
-    is_dev_mode,
-    get_secure_cookies,
-    get_frontend_url,
-)
+from ..config import is_dev_mode, get_secure_cookies, get_frontend_url
 from ..models.requests import DevBypassRequest
+from ..observability import report_failure
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 TRACE_REVIEW_INTERNAL_API_TOKEN_ENV = "TRACE_REVIEW_INTERNAL_API_TOKEN"
-TRUSTED_CALLER_SUB_HEADER = "x-agr-trusted-caller-sub"
-TRUSTED_CALLER_EMAIL_HEADER = "x-agr-trusted-caller-email"
+# AGR-branded trusted-caller headers were dropped after ALL-908 because core
+# service authentication is project-neutral. Only this canonical protocol is read.
 
 
-# ===========================
-# Cognito Configuration
-# ===========================
-
-cognito_region: Optional[str] = None
-cognito_user_pool_id: Optional[str] = None
-cognito_client_id: Optional[str] = None
-cognito_client_secret: Optional[str] = None
-cognito_domain: Optional[str] = None
-cognito_redirect_uri: Optional[str] = None
-jwks_client: Optional[PyJWKClient] = None
-secure_cookies: bool = False
-
-# Initialize Cognito configuration
-try:
-    cognito_region = get_cognito_region()
-    cognito_user_pool_id = get_cognito_user_pool_id()
-    cognito_client_id = get_cognito_client_id()
-    cognito_client_secret = get_cognito_client_secret()
-    cognito_domain = get_cognito_domain()
-    cognito_redirect_uri = get_cognito_redirect_uri()
-    secure_cookies = get_secure_cookies()
-
-    if cognito_user_pool_id and cognito_client_id:
-        # Initialize JWKS client for token validation
-        jwks_url = f"https://cognito-idp.{cognito_region}.amazonaws.com/{cognito_user_pool_id}/.well-known/jwks.json"
-        jwks_client = PyJWKClient(jwks_url)
-        logger.info("Cognito authentication initialized with pool: %s", cognito_user_pool_id)
-        logger.info("Redirect URI: %s", cognito_redirect_uri)
-        logger.info("Secure cookies: %s", secure_cookies)
-    elif not is_dev_mode():
-        # Only warn if not in dev mode (expected in dev mode)
-        logger.warning("Cognito not fully configured - falling back to dev mode")
-        logger.warning("Set COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, COGNITO_CLIENT_SECRET, COGNITO_DOMAIN")
-
-except Exception as e:
-    logger.error("Failed to initialize Cognito configuration: %s", e)
-    cognito_user_pool_id = None
-    cognito_client_id = None
+@lru_cache(maxsize=1)
+def _configured_provider() -> AuthProvider:
+    return create_auth_provider(dev_mode=is_dev_mode())
 
 
-# ===========================
-# Authentication Dependency
-# ===========================
+def _get_provider_or_503() -> AuthProvider:
+    try:
+        return _configured_provider()
+    except ValueError:
+        report_failure("auth_configuration")
+        raise HTTPException(
+            status_code=503, detail="Authentication not configured"
+        ) from None
+
 
 async def _get_user_from_cookie_impl(
     request: Request,
-    security_scopes: SecurityScopes = SecurityScopes()
+    security_scopes: SecurityScopes = SecurityScopes(),
 ) -> Dict[str, Any]:
-    """
-    Internal implementation to extract and validate user from cookie.
-
-    Falls back to dev mode if Cognito is not configured or DEV_MODE=true.
-
-    Args:
-        request: FastAPI request object
-        security_scopes: Optional security scopes (not used currently)
-
-    Returns:
-        Decoded token claims as dictionary
-
-    Raises:
-        HTTPException: If token is missing or invalid
-    """
     internal_user = _get_internal_service_user(request)
     if internal_user is not None:
         return internal_user
-
-    # Dev mode bypass
-    if is_dev_mode():
-        logger.debug("DEV_MODE enabled - returning mock user")
-        mock_user_dict = {
-            "sub": "dev-user-123",
-            "uid": "dev-user-123",
-            "email": "dev@localhost",
-            "name": "Dev User",
-            "cognito:groups": ["developers"]
-        }
-
-        # Return dict that supports attribute access
-        class MockUser(dict):
-            def __getattr__(self, item):
-                try:
-                    return self[item]
-                except KeyError:
-                    raise AttributeError(f"'{type(self).__name__}' object has no attribute '{item}'")
-
-        return MockUser(mock_user_dict)
-
-    # Cognito authentication
-    if not is_cognito_configured():
-        raise HTTPException(
-            status_code=500,
-            detail="Cognito authentication not configured. Set COGNITO_* environment variables or enable DEV_MODE."
-        )
-
-    # Get token from cookie
-    token = request.cookies.get("auth_token") or request.cookies.get("cognito_token")
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail="Not authenticated. No token found in cookie."
-        )
-
-    # Validate token with JWKS
-    issuer = f"https://cognito-idp.{cognito_region}.amazonaws.com/{cognito_user_pool_id}"
-    configured_jwks_client = jwks_client
-    if configured_jwks_client is None:
-        raise HTTPException(status_code=500, detail="Cognito authentication is not initialized.")
-
+    provider = _get_provider_or_503()
+    token = request.cookies.get("auth_token")
+    if not token and not is_dev_mode():
+        raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        signing_key = configured_jwks_client.get_signing_key_from_jwt(token)
-        decoded_token = jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["RS256"],
-            audience=cognito_client_id,
-            issuer=issuer
-        )
-
-        return decoded_token
-
-    except jwt.ExpiredSignatureError:
-        logger.warning("Token expired")
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError as e:
-        logger.error("Invalid token: %s", e)
-        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+        claims = await provider.validate_token(token or "dev-token")
+        principal = provider.extract_principal(claims)
+        if not principal.subject:
+            raise InvalidTokenError("Authenticated principal missing subject")
+    except PyJWKClientConnectionError:
+        report_failure("auth_validation")
+        raise HTTPException(
+            status_code=503, detail="Authentication provider unavailable"
+        ) from None
+    except PyJWKClientError as exc:
+        if str(exc).startswith("Unable to find a signing key that matches:"):
+            raise HTTPException(
+                status_code=401, detail="Invalid authentication token"
+            ) from None
+        report_failure("auth_validation")
+        raise HTTPException(
+            status_code=503, detail="Authentication provider unavailable"
+        ) from None
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=401, detail="Invalid authentication token"
+        ) from None
+    except Exception:
+        report_failure("auth_validation")
+        raise HTTPException(
+            status_code=503, detail="Authentication provider unavailable"
+        ) from None
+    return {
+        "sub": principal.subject,
+        "uid": principal.subject,
+        "email": principal.email,
+        "name": principal.display_name,
+        "groups": principal.groups,
+        "provider": principal.provider,
+    }
 
 
 def _get_internal_service_user(request: Request) -> Optional[Dict[str, Any]]:
@@ -198,8 +124,8 @@ def _get_internal_service_user(request: Request) -> Optional[Dict[str, Any]]:
         "name": "TraceReview internal service",
         "token_use": "internal_service",
     }
-    caller_sub = request.headers.get(TRUSTED_CALLER_SUB_HEADER, "").strip()
-    caller_email = request.headers.get(TRUSTED_CALLER_EMAIL_HEADER, "").strip()
+    caller_sub = request.headers.get(TRUSTED_CALLER_SUB_HEADER.lower(), "").strip()
+    caller_email = request.headers.get(TRUSTED_CALLER_EMAIL_HEADER.lower(), "").strip()
     if caller_sub:
         user["trusted_caller_sub"] = caller_sub
     if caller_email:
@@ -208,293 +134,97 @@ def _get_internal_service_user(request: Request) -> Optional[Dict[str, Any]]:
 
 
 def get_auth_dependency():
-    """
-    Get authentication dependency for route protection.
-
-    Usage:
-        @router.get("/protected")
-        async def protected_route(user: Dict = Depends(get_auth_dependency())):
-            return {"user": user.get("email")}
-
-    Returns:
-        FastAPI dependency that validates authentication
-    """
     return Depends(_get_user_from_cookie_impl)
 
 
-# ===========================
-# OAuth2 Endpoints
-# ===========================
-
 @router.get("/login")
 async def login(request: Request) -> RedirectResponse:
-    """
-    Initiate Cognito OAuth2 authorization code flow with PKCE.
-
-    Steps:
-    1. Generate PKCE code_verifier and code_challenge
-    2. Generate state for CSRF protection
-    3. Redirect to Cognito Hosted UI
-    4. Store state and code_verifier in httpOnly cookies
-
-    Returns:
-        RedirectResponse to Cognito Hosted UI
-    """
-    # Check if Cognito is configured
-    if not is_cognito_configured():
-        if is_dev_mode():
-            logger.info("DEV_MODE: Redirecting to dev bypass")
-            return RedirectResponse(url=f"{get_frontend_url()}?dev_mode=true", status_code=302)
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail="Cognito authentication not configured. Set COGNITO_* environment variables or enable DEV_MODE."
-            )
-
+    provider = _get_provider_or_503()
+    if is_dev_mode():
+        return RedirectResponse(
+            url=f"{get_frontend_url()}?dev_mode=true", status_code=302
+        )
+    state, verifier, challenge = create_pkce()
     try:
-        # Generate PKCE code_verifier (random 32-byte string, URL-safe base64)
-        code_verifier = secrets.token_urlsafe(32)
-
-        # Generate code_challenge from code_verifier using SHA256
-        code_challenge_bytes = hashlib.sha256(code_verifier.encode('utf-8')).digest()
-        code_challenge = base64.urlsafe_b64encode(code_challenge_bytes).decode('utf-8').rstrip('=')
-
-        # Generate state for CSRF protection
-        state = secrets.token_urlsafe(32)
-
-        # Build authorization URL
-        authorize_url = f"{cognito_domain}/oauth2/authorize"
-        authorize_params = {
-            "client_id": cognito_client_id,
-            "response_type": "code",
-            "scope": "openid profile email",
-            "redirect_uri": cognito_redirect_uri,
-            "state": state,
-            "code_challenge_method": "S256",
-            "code_challenge": code_challenge,
-        }
-
-        full_authorize_url = f"{authorize_url}?{urlencode(authorize_params)}"
-
-        logger.info("Initiating OAuth2 login for redirect_uri: %s", cognito_redirect_uri)
-
-        # Create redirect response
-        redirect_response = RedirectResponse(url=full_authorize_url, status_code=302)
-
-        # Store state and code_verifier in httpOnly cookies (expires in 10 minutes)
-        redirect_response.set_cookie(
-            key="oauth_state",
-            value=state,
-            httponly=True,
-            secure=secure_cookies,
-            samesite="lax",
-            max_age=600  # 10 minutes
-        )
-        redirect_response.set_cookie(
-            key="oauth_code_verifier",
-            value=code_verifier,
-            httponly=True,
-            secure=secure_cookies,
-            samesite="lax",
-            max_age=600  # 10 minutes
-        )
-
-        return redirect_response
-
-    except Exception as e:
-        logger.error("Login failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
+        url = await run_in_threadpool(provider.get_login_url, state, challenge, "S256")
+    except Exception:
+        report_failure("auth_login")
+        raise HTTPException(
+            status_code=503, detail="Authentication provider unavailable"
+        ) from None
+    redirect = RedirectResponse(url=url, status_code=302)
+    set_oauth_cookies(redirect, state, verifier, secure=get_secure_cookies())
+    return redirect
 
 
 @router.get("/callback")
 async def callback(
-    request: Request,
-    response: Response,
-    code: str,
-    state: str
+    request: Request, response: Response, code: str, state: str
 ) -> RedirectResponse:
-    """
-    Handle Cognito OAuth2 callback.
-
-    Steps:
-    1. Verify state parameter (CSRF protection)
-    2. Exchange authorization code for tokens using Basic Auth + PKCE
-    3. Validate ID token with JWKS
-    4. Store ID token in httpOnly cookie
-    5. Redirect to frontend
-
-    Args:
-        code: Authorization code from Cognito
-        state: State parameter for CSRF protection
-
-    Returns:
-        RedirectResponse to frontend with authentication cookie
-    """
+    stored_state = request.cookies.get("oauth_state")
+    if not stored_state or not secrets.compare_digest(stored_state, state):
+        raise HTTPException(status_code=403, detail="Invalid state parameter")
+    verifier = request.cookies.get("oauth_code_verifier")
+    if not verifier:
+        raise HTTPException(status_code=400, detail="Missing code_verifier")
+    provider = _get_provider_or_503()
     try:
-        # Verify state (CSRF protection)
-        stored_state = request.cookies.get("oauth_state")
-        if not stored_state or stored_state != state:
-            logger.error("Invalid state parameter (CSRF protection)")
-            raise HTTPException(status_code=403, detail="Invalid state parameter")
-
-        # Get code_verifier from cookie
-        code_verifier = request.cookies.get("oauth_code_verifier")
-        if not code_verifier:
-            logger.error("Missing code_verifier cookie")
-            raise HTTPException(status_code=400, detail="Missing code_verifier")
-
-        # Exchange authorization code for tokens
-        token_endpoint = f"{cognito_domain}/oauth2/token"
-
-        # Build Basic Auth header (client_id:client_secret)
-        credentials = f"{cognito_client_id}:{cognito_client_secret}"
-        credentials_b64 = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
-
-        token_data = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": cognito_redirect_uri,
-            "code_verifier": code_verifier,
-        }
-
-        headers = {
-            "Authorization": f"Basic {credentials_b64}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        }
-
-        logger.info("Exchanging authorization code for tokens")
-
-        token_response = requests.post(token_endpoint, data=token_data, headers=headers)
-
-        if token_response.status_code != 200:
-            logger.error("Token exchange failed: %s - %s", token_response.status_code, token_response.text)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Token exchange failed: {token_response.text}"
-            )
-
-        tokens = token_response.json()
-        id_token = tokens.get("id_token")
-        access_token = tokens.get("access_token")
-
-        if not id_token or not access_token:
-            logger.error("Missing tokens in response")
-            raise HTTPException(status_code=500, detail="Missing tokens in response")
-
-        # Validate ID token with JWKS
-        issuer = f"https://cognito-idp.{cognito_region}.amazonaws.com/{cognito_user_pool_id}"
-        configured_jwks_client = jwks_client
-        if configured_jwks_client is None:
-            raise HTTPException(status_code=500, detail="Cognito authentication is not initialized.")
-
-        try:
-            signing_key = configured_jwks_client.get_signing_key_from_jwt(id_token)
-            decoded_token = jwt.decode(
-                id_token,
-                signing_key.key,
-                algorithms=["RS256"],
-                audience=cognito_client_id,
-                issuer=issuer,
-                access_token=access_token,
-                options={"verify_at_hash": True}
-            )
-
-            logger.info("Authentication successful for user: %s", decoded_token.get('email', 'unknown'))
-
-        except jwt.InvalidTokenError as e:
-            logger.error("Token validation failed: %s", e)
-            raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
-
-        # Create redirect response to frontend
-        frontend_url = get_frontend_url()
-        redirect_response = RedirectResponse(url=frontend_url, status_code=302)
-
-        # Set httpOnly cookie with ID token (expires in 24 hours)
-        redirect_response.set_cookie(
-            key="auth_token",
-            value=id_token,
-            httponly=True,
-            secure=secure_cookies,
-            samesite="lax",
-            max_age=86400  # 24 hours
+        tokens, principal = await authenticate_callback(provider, code, verifier)
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=401, detail="Invalid authentication token"
+        ) from None
+    except Exception:
+        report_failure("auth_callback")
+        raise HTTPException(
+            status_code=503, detail="Authentication callback failed"
+        ) from None
+    if not principal.subject:
+        raise HTTPException(
+            status_code=401, detail="Authenticated principal missing subject"
         )
-
-        # Clear OAuth state cookies
-        redirect_response.delete_cookie(key="oauth_state")
-        redirect_response.delete_cookie(key="oauth_code_verifier")
-
-        return redirect_response
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Callback failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Callback failed: {str(e)}")
+    redirect = RedirectResponse(url=get_frontend_url(), status_code=302)
+    set_session_cookie(redirect, tokens.id_token, secure=get_secure_cookies())
+    return redirect
 
 
 @router.get("/logout")
 async def logout(request: Request) -> RedirectResponse:
-    """
-    Logout user and clear authentication cookie.
-
-    Returns:
-        RedirectResponse to Cognito logout endpoint
-    """
-    frontend_url = get_frontend_url()
-
-    # Create redirect response
-    if is_cognito_configured():
-        # Redirect to Cognito logout endpoint
-        logout_url = f"{cognito_domain}/logout"
-        logout_params = {
-            "client_id": cognito_client_id,
-            "logout_uri": frontend_url,
-        }
-        full_logout_url = f"{logout_url}?{urlencode(logout_params)}"
-        redirect_response = RedirectResponse(url=full_logout_url, status_code=302)
-    else:
-        # Dev mode - just redirect to frontend
-        redirect_response = RedirectResponse(url=frontend_url, status_code=302)
-
-    # Clear authentication cookie
-    redirect_response.delete_cookie(key="auth_token")
-    redirect_response.delete_cookie(key="cognito_token")
-
-    logger.info("User logged out")
-
-    return redirect_response
+    provider = _get_provider_or_503()
+    try:
+        url = await run_in_threadpool(provider.get_logout_url, get_frontend_url())
+    except Exception:
+        report_failure("auth_logout")
+        raise HTTPException(
+            status_code=503, detail="Authentication provider unavailable"
+        ) from None
+    redirect = RedirectResponse(url=url or get_frontend_url(), status_code=302)
+    redirect.delete_cookie(
+        key="auth_token", secure=get_secure_cookies(), samesite="lax"
+    )
+    return redirect
 
 
 @router.get("/me")
 async def get_current_user(
-    user: Dict[str, Any] = Depends(_get_user_from_cookie_impl)
+    user: Dict[str, Any] = Depends(_get_user_from_cookie_impl),
 ) -> Dict[str, Any]:
-    """
-    Get current authenticated user information.
-
-    Returns:
-        User information from ID token
-    """
     return {
         "authenticated": True,
         "user": {
             "sub": user.get("sub"),
             "email": user.get("email"),
             "name": user.get("name"),
-            "groups": user.get("cognito:groups", [])
+            "groups": user.get("groups", []),
         },
-        "dev_mode": is_dev_mode()
+        "dev_mode": is_dev_mode(),
     }
 
-
-# ===========================
-# Dev Mode Endpoints
-# ===========================
 
 @router.post("/dev-bypass")
 async def dev_bypass(request: DevBypassRequest) -> Dict[str, Any]:
     """
-    Development mode authentication bypass (legacy endpoint).
+    Development mode authentication bypass.
 
     Only works when DEV_MODE=true environment variable is set.
 
@@ -507,42 +237,34 @@ async def dev_bypass(request: DevBypassRequest) -> Dict[str, Any]:
     if not is_dev_mode():
         raise HTTPException(
             status_code=403,
-            detail="Dev mode is disabled. Set DEV_MODE=true to enable bypass authentication."
+            detail="Dev mode is disabled. Set DEV_MODE=true to enable bypass authentication.",
         )
 
     # Simple dev key validation
     if request.dev_key != "dev":
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid dev key"
-        )
+        raise HTTPException(status_code=401, detail="Invalid dev key")
 
     # Return mock authentication
     return {
         "status": "authenticated",
-        "user": {
-            "email": "dev@localhost",
-            "name": "Dev User"
-        },
-        "dev_mode": True
+        "user": {"email": "dev@localhost", "name": "Dev User"},
+        "dev_mode": True,
     }
 
 
-# ===========================
-# Health Check
-# ===========================
-
 @router.get("/health")
 async def health() -> Dict[str, Any]:
-    """
-    Authentication service health check.
-
-    Returns:
-        Health status and configuration info
-    """
+    try:
+        provider = _configured_provider()
+    except ValueError:
+        return {
+            "status": "unavailable",
+            "auth_configured": False,
+            "dev_mode": is_dev_mode(),
+        }
     return {
         "status": "healthy",
-        "cognito_configured": is_cognito_configured(),
+        "auth_configured": True,
+        "provider": provider.provider_name,
         "dev_mode": is_dev_mode(),
-        "jwks_initialized": jwks_client is not None
     }

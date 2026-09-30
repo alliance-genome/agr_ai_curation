@@ -382,7 +382,7 @@ async def test_inspect_chat_traces_summary_sends_trusted_caller_header(monkeypat
     assert json.loads(response)["status"] == "ok"
     assert captured["headers"] == {
         "Authorization": "Bearer service-token",
-        "X-AGR-Trusted-Caller-Sub": "curator-sub-1",
+        "X-Trusted-Caller-Sub": "curator-sub-1",
     }
 
 

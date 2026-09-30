@@ -3966,3 +3966,28 @@ def get_tool_surface_namespace_max_functions() -> int:
     moved to another namespace. Default 10.
     """
     return max(1, _get_env_int_with_fallback("TOOL_SURFACE_NAMESPACE_MAX_FUNCTIONS", 10))
+
+
+def get_auth_provider_timeout_seconds() -> float:
+    """Shared authentication limit (AUTH_PROVIDER_TIMEOUT_SECONDS); default 10 seconds."""
+    return max(1, _get_env_float_with_fallback("AUTH_PROVIDER_TIMEOUT_SECONDS", 10))
+
+
+def get_auth_jwks_timeout_seconds() -> float:
+    """Shared authentication limit (AUTH_JWKS_TIMEOUT_SECONDS); default 30 seconds."""
+    return max(1, _get_env_float_with_fallback("AUTH_JWKS_TIMEOUT_SECONDS", 30))
+
+
+def get_auth_jwks_cache_ttl_seconds() -> int:
+    """Shared authentication limit (AUTH_JWKS_CACHE_TTL_SECONDS); default 300 seconds."""
+    return max(1, _get_env_int_with_fallback("AUTH_JWKS_CACHE_TTL_SECONDS", 300))
+
+
+def get_auth_oauth_cookie_max_age_seconds() -> int:
+    """Shared authentication limit (AUTH_OAUTH_COOKIE_MAX_AGE_SECONDS); default 600 seconds."""
+    return max(1, _get_env_int_with_fallback("AUTH_OAUTH_COOKIE_MAX_AGE_SECONDS", 600))
+
+
+def get_auth_session_cookie_max_age_seconds() -> int:
+    """Shared authentication limit (AUTH_SESSION_COOKIE_MAX_AGE_SECONDS); default 86400 seconds."""
+    return max(1, _get_env_int_with_fallback("AUTH_SESSION_COOKIE_MAX_AGE_SECONDS", 86400))

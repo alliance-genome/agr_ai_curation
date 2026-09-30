@@ -6,6 +6,8 @@ COPY trace_review/backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/cost_pricing/ /tmp/cost_pricing/
 RUN pip install --no-cache-dir --no-deps /tmp/cost_pricing
+COPY backend/auth_runtime/ /tmp/auth_runtime/
+RUN pip install --no-cache-dir --no-deps /tmp/auth_runtime
 
 
 FROM runtime-dependencies AS test

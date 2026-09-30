@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import logging
 import os
 import secrets
@@ -25,12 +23,22 @@ from jwt.exceptions import (
 )
 from sqlalchemy.orm import Session
 
-from src.auth.base import AuthProvider
+from auth_runtime.base import AuthProvider
+from auth_runtime.browser import (
+    authenticate_callback,
+    create_pkce,
+    set_oauth_cookies,
+    set_session_cookie,
+)
 from src.auth.factory import create_auth_provider
 from src.config import get_secure_cookies, is_auth_configured, is_dev_mode
 from src.lib.config import get_group
 from src.lib.config.groups_loader import get_group_claim_key
 from src.lib.http_errors import raise_sanitized_http_exception
+from src.lib.openai_agents.config import (
+    get_auth_oauth_cookie_max_age_seconds,
+    get_auth_session_cookie_max_age_seconds,
+)
 from src.models.sql.database import get_db
 from src.services.user_service import provision_user
 
@@ -98,10 +106,7 @@ async def login(request: Request) -> RedirectResponse:
 
     provider = _get_provider_or_503()
 
-    code_verifier = secrets.token_urlsafe(32)
-    code_challenge_bytes = hashlib.sha256(code_verifier.encode("utf-8")).digest()
-    code_challenge = base64.urlsafe_b64encode(code_challenge_bytes).decode("utf-8").rstrip("=")
-    state = secrets.token_urlsafe(32)
+    state, code_verifier, code_challenge = create_pkce()
 
     try:
         authorize_url = await run_in_threadpool(
@@ -113,26 +118,14 @@ async def login(request: Request) -> RedirectResponse:
 
     redirect_response = RedirectResponse(url=authorize_url, status_code=302)
     # Fixed destination allowlist, never an arbitrary return URL/open redirect.
+    oauth_cookie_max_age = get_auth_oauth_cookie_max_age_seconds()
     redirect_response.set_cookie(
         key="oauth_destination", value="cost" if request.query_params.get("destination") == "cost" else "home",
-        httponly=True, secure=get_secure_cookies(), samesite="lax", max_age=600,
+        httponly=True, secure=get_secure_cookies(), samesite="lax", max_age=oauth_cookie_max_age,
     )
-    secure_cookies = get_secure_cookies()
-    redirect_response.set_cookie(
-        key="oauth_state",
-        value=state,
-        httponly=True,
-        secure=secure_cookies,
-        samesite="lax",
-        max_age=600,
-    )
-    redirect_response.set_cookie(
-        key="oauth_code_verifier",
-        value=code_verifier,
-        httponly=True,
-        secure=secure_cookies,
-        samesite="lax",
-        max_age=600,
+    set_oauth_cookies(
+        redirect_response, state, code_verifier,
+        secure=get_secure_cookies(), max_age=oauth_cookie_max_age,
     )
     return redirect_response
 
@@ -163,9 +156,7 @@ async def callback(
 
     provider = _get_provider_or_503()
     try:
-        tokens = await provider.handle_callback(code, code_verifier)
-        claims = await provider.validate_token(tokens.id_token)
-        principal = provider.extract_principal(claims)
+        tokens, principal = await authenticate_callback(provider, code, code_verifier)
     except Exception as exc:
         raise_sanitized_http_exception(
             logger,
@@ -183,17 +174,10 @@ async def callback(
 
     redirect_response = RedirectResponse(url="/cost/" if request.cookies.get("oauth_destination") == "cost" else "/", status_code=302)
     redirect_response.delete_cookie(key="oauth_destination")
-    secure_cookies = get_secure_cookies()
-    redirect_response.set_cookie(
-        key="auth_token",
-        value=tokens.id_token,
-        httponly=True,
-        secure=secure_cookies,
-        samesite="lax",
-        max_age=86400,
+    set_session_cookie(
+        redirect_response, tokens.id_token, secure=get_secure_cookies(),
+        max_age=get_auth_session_cookie_max_age_seconds(),
     )
-    redirect_response.delete_cookie(key="oauth_state")
-    redirect_response.delete_cookie(key="oauth_code_verifier")
     return redirect_response
 
 
@@ -266,7 +250,7 @@ async def _get_user_from_cookie_impl(
     if not is_auth_configured():
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    token = request.cookies.get("auth_token") or request.cookies.get("cognito_token")
+    token = request.cookies.get("auth_token")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -386,11 +370,9 @@ def _build_app_root_url(request: Request) -> str:
 
 
 def _clear_logout_cookies(response: Response) -> None:
-    """Delete current and legacy auth cookies on the outgoing response."""
+    """Delete the auth session cookie on the outgoing response."""
     secure_cookies = get_secure_cookies()
     response.delete_cookie(key="auth_token", secure=secure_cookies, samesite="lax")
-    # Transitional cleanup for old cookie name
-    response.delete_cookie(key="cognito_token", secure=secure_cookies, samesite="lax")
 
 
 @router.post("/logout")

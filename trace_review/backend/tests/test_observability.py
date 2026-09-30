@@ -3,15 +3,18 @@ import asyncio
 import hashlib
 import json
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import requests
 import sentry_sdk
+from fastapi import HTTPException, Response
+from jwt.exceptions import InvalidTokenError, PyJWKClientConnectionError, PyJWKClientError
 from sentry_sdk.transport import Transport
 
 from src import observability, main
 from src.services import feedback_artifacts
+from src.api import auth
 
 
 @pytest.fixture
@@ -35,7 +38,11 @@ def test_unconfigured_and_failed_initialization_are_nonmasking(monkeypatch):
     factory.assert_called_once()
 
 
-def test_real_sdk_event_excludes_ambient_content(monkeypatch):
+@pytest.mark.parametrize("operation", [
+    "scores", "auth_configuration", "auth_validation", "auth_login",
+    "auth_callback", "auth_logout",
+])
+def test_real_sdk_event_excludes_ambient_content(monkeypatch, operation):
     envelopes = []
 
     class RecordingTransport(Transport):
@@ -58,7 +65,7 @@ def test_real_sdk_event_excludes_ambient_content(monkeypatch):
         scope.set_extra("prompt", "private-prompt")
         scope.set_context("payload", {"response": "private-response"})
         scope.set_tag("token", "private-token")
-        observability.report_failure("scores", trace_id="private-trace")
+        observability.report_failure(operation, trace_id="private-trace")
     observability.close_sentry()
     events = [item.get_event() for envelope in envelopes for item in envelope.items
               if item.type == "event"]
@@ -68,7 +75,7 @@ def test_real_sdk_event_excludes_ambient_content(monkeypatch):
     assert event["release"] == "test-release"
     assert event["contexts"]["trace_review"]["trace_id_hash"] == hashlib.sha256(
         b"private-trace").hexdigest()
-    assert event["tags"] == {"component": "trace_review", "operation": "scores", "source": "remote"}
+    assert event["tags"] == {"component": "trace_review", "operation": operation, "source": "remote"}
     assert "exception" not in event
     assert "request" not in event
     assert "breadcrumbs" not in event
@@ -166,3 +173,92 @@ def test_startup_and_shutdown_use_owned_client(monkeypatch):
             initialize.assert_called_once()
         close.assert_called_once()
     asyncio.run(run())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage,failure,operation", [
+    ("configuration", ValueError("private-configuration"), "auth_configuration"),
+    ("validation", PyJWKClientConnectionError("private-jwks"), "auth_validation"),
+    ("validation", PyJWKClientError("private-jwks-response"), "auth_validation"),
+    ("validation", RuntimeError("private-runtime"), "auth_validation"),
+    ("login", RuntimeError("private-login-url"), "auth_login"),
+    ("callback", RuntimeError("private-callback-response"), "auth_callback"),
+    ("logout", RuntimeError("private-logout-url"), "auth_logout"),
+])
+@pytest.mark.parametrize("reporter_broken", [False, True])
+async def test_auth_outages_report_once_without_sensitive_context(
+    monkeypatch, reporter, stage, failure, operation, reporter_broken,
+):
+    provider = Mock()
+    provider.validate_token = AsyncMock(side_effect=failure)
+    provider.get_login_url.side_effect = failure
+    provider.get_logout_url.side_effect = failure
+    monkeypatch.setattr(auth, "_configured_provider", Mock(
+        side_effect=failure if stage == "configuration" else None,
+        return_value=provider,
+    ))
+    monkeypatch.setattr(auth, "authenticate_callback", AsyncMock(side_effect=failure))
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.delenv("TRACE_REVIEW_INTERNAL_API_TOKEN", raising=False)
+    request = SimpleNamespace(headers={"authorization": "private-header"}, cookies={
+        "auth_token": "private-token", "oauth_state": "private-state",
+        "oauth_code_verifier": "private-verifier",
+    })
+    if reporter_broken:
+        reporter.capture_event.side_effect = RuntimeError("private-reporting-outage")
+    with pytest.raises(HTTPException) as exc:
+        if stage == "login":
+            await auth.login(request)
+        elif stage == "callback":
+            await auth.callback(request, Response(), "private-code", "private-state")
+        elif stage == "logout":
+            await auth.logout(request)
+        else:
+            await auth._get_user_from_cookie_impl(request)
+    assert exc.value.status_code == 503
+    assert "private-" not in exc.value.detail
+    reporter.capture_event.assert_called_once()
+    event = reporter.capture_event.call_args.args[0]
+    assert event["tags"]["operation"] == operation
+    assert event["contexts"]["trace_review"] == {}
+    assert "private-" not in json.dumps(event)
+    assert "exception" not in event
+    assert "request" not in event
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", [
+    "invalid_token", "unknown_key", "missing_token", "invalid_state",
+    "missing_verifier", "callback_invalid_token", "internal_token", "health",
+])
+async def test_expected_auth_rejections_and_health_are_quiet(monkeypatch, reporter, stage):
+    provider = Mock()
+    failure = (PyJWKClientError("Unable to find a signing key that matches: private-kid")
+               if stage == "unknown_key" else InvalidTokenError("private-token"))
+    provider.validate_token = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(auth, "_configured_provider", Mock(return_value=provider))
+    monkeypatch.setattr(auth, "authenticate_callback", AsyncMock(side_effect=failure))
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "expected-token")
+    request = SimpleNamespace(headers={}, cookies={
+        "auth_token": "private-token", "oauth_state": "state",
+        "oauth_code_verifier": "verifier",
+    })
+    if stage == "health":
+        monkeypatch.setattr(auth, "_configured_provider", Mock(side_effect=ValueError("private-config")))
+        assert (await auth.health())["auth_configured"] is False
+    else:
+        with pytest.raises(HTTPException) as exc:
+            if stage in {"invalid_state", "missing_verifier", "callback_invalid_token"}:
+                if stage == "missing_verifier":
+                    request.cookies.pop("oauth_code_verifier")
+                await auth.callback(request, Response(), "code",
+                                    "wrong" if stage == "invalid_state" else "state")
+            else:
+                if stage == "missing_token":
+                    request.cookies.clear()
+                if stage == "internal_token":
+                    request.headers["authorization"] = "Bearer wrong-token"
+                await auth._get_user_from_cookie_impl(request)
+        assert 400 <= exc.value.status_code < 500
+    reporter.capture_event.assert_not_called()

@@ -17,7 +17,7 @@ from jwt.exceptions import (
 )
 
 from src.api import auth as browser_auth
-from src.auth.providers.oidc import OIDCAuthProvider
+from auth_runtime.oidc import OIDCAuthProvider
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.openai_agents.config import (
     get_benchmark_oidc_allowed_client_ids,

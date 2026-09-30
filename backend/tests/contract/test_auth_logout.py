@@ -79,7 +79,6 @@ def _assert_logout_cookie_expired(set_cookie_headers, cookie_name):
 
 def _assert_logout_cookies_expired(set_cookie_headers):
     _assert_logout_cookie_expired(set_cookie_headers, "auth_token")
-    _assert_logout_cookie_expired(set_cookie_headers, "cognito_token")
 
 
 class TestLogoutEndpoint:
@@ -167,14 +166,14 @@ class TestDevProviderBehavior:
     """Basic provider checks for dev auth provider."""
 
     def test_dev_provider_login_url_preserves_state(self):
-        from src.auth.providers.dev import DevAuthProvider
+        from auth_runtime.dev import DevAuthProvider
 
         provider = DevAuthProvider()
         login_url = provider.get_login_url(state="random-state-123", code_challenge="unused")
         assert "state=random-state-123" in login_url
 
     def test_dev_provider_returns_expected_principal(self):
-        from src.auth.providers.dev import DevAuthProvider
+        from auth_runtime.dev import DevAuthProvider
 
         provider = DevAuthProvider()
         claims = asyncio.run(provider.validate_token("dev-token"))
@@ -189,7 +188,7 @@ class TestOidcLogoutBehavior:
     """Logout URL parameter behavior for generic OIDC vs Cognito compatibility."""
 
     def test_generic_oidc_custom_logout_uses_post_logout_redirect_uri(self):
-        from src.auth.providers.oidc import OIDCAuthProvider
+        from auth_runtime.oidc import OIDCAuthProvider
 
         provider = OIDCAuthProvider(
             {
@@ -208,7 +207,7 @@ class TestOidcLogoutBehavior:
         assert "logout_uri" not in params
 
     def test_cognito_provider_uses_logout_uri_param(self, monkeypatch):
-        from src.auth.providers.cognito_config import create_cognito_provider
+        from auth_runtime.factory import create_cognito_provider
 
         monkeypatch.setenv("COGNITO_REGION", "us-east-1")
         monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-east-1_example")

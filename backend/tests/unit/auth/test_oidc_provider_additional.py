@@ -6,8 +6,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from src.auth.providers import oidc as oidc_module
-from src.auth.providers.oidc import OIDCAuthProvider
+from auth_runtime import oidc as oidc_module
+from auth_runtime.oidc import OIDCAuthProvider
 
 
 class _FakeResponse:

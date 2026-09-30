@@ -246,7 +246,7 @@ class TestAuthProviderClaimParity:
         pytest.importorskip("jose")
         pytest.importorskip("jwt")
         pytest.importorskip("requests")
-        from src.auth.providers.oidc import OIDCAuthProvider
+        from auth_runtime.oidc import OIDCAuthProvider
 
         return OIDCAuthProvider(
             {

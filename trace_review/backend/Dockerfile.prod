@@ -21,6 +21,8 @@ RUN python -m venv "${VIRTUAL_ENV}" \
 
 COPY backend/cost_pricing/ /tmp/cost_pricing/
 RUN pip install --no-cache-dir --no-deps /tmp/cost_pricing
+COPY backend/auth_runtime/ /tmp/auth_runtime/
+RUN pip install --no-cache-dir --no-deps /tmp/auth_runtime
 
 FROM public.ecr.aws/docker/library/python:3.11-slim AS runtime
 

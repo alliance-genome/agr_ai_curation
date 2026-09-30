@@ -35,7 +35,15 @@ A Docker-based, web-accessible developer tool for comprehensive analysis of Lang
 
 ### 1. Setup Environment
 
-Create `.env` file in the `trace_review/` directory:
+Create the standalone deployment file outside the repository:
+
+```bash
+mkdir -p ~/.agr_ai_curation/trace_review
+cp trace_review/backend/.env.example ~/.agr_ai_curation/trace_review/.env
+chmod 600 ~/.agr_ai_curation/trace_review/.env
+```
+
+For local development, set the following values in that file:
 
 ```bash
 # Langfuse Configuration
@@ -51,6 +59,7 @@ LANGFUSE_HOST=http://host.docker.internal:3000
 
 # Development Mode (bypass authentication)
 DEV_MODE=true
+AUTH_PROVIDER=dev
 
 # Cache Configuration
 CACHE_TTL_HOURS=1
@@ -65,8 +74,16 @@ CACHE_TTL_HOURS=1
 
 ```bash
 cd trace_review
-docker compose up -d
+docker compose --env-file "$HOME/.agr_ai_curation/trace_review/.env" up -d
 ```
+
+The standalone stack uses this explicit Compose interpolation file, with exported
+shell variables taking precedence. `backend/.env` is not a service configuration
+input. From the repository root, `make trace-review-standalone` uses the same file.
+For OIDC or Cognito, set `AUTH_PROVIDER` and its provider settings in the file,
+set `DEV_MODE=false`, and register this service's `OIDC_REDIRECT_URI` or
+`COGNITO_REDIRECT_URI` separately from the main application's callback. Set
+`SECURE_COOKIES=true` when serving over HTTPS.
 
 This will start:
 - **Frontend**: http://localhost:3001
@@ -209,17 +226,17 @@ The frontend dev server will automatically proxy API requests to `http://localho
 For development with auto-reload in Docker:
 ```bash
 # Backend and frontend will hot-reload on file changes
-docker compose up
+docker compose --env-file "$HOME/.agr_ai_curation/trace_review/.env" up
 ```
 
 ### Build for Production
 
 ```bash
-# Build the published backend image
-docker build -f backend/Dockerfile.prod -t trace-review-backend:prod backend
+# Build the published backend image from the repository root
+docker build -f trace_review/backend/Dockerfile.prod -t trace-review-backend:prod .
 
 # Run the local standalone stack
-docker compose up -d
+docker compose --env-file "$HOME/.agr_ai_curation/trace_review/.env" -f trace_review/docker-compose.yml up -d
 ```
 
 The main repository's standalone Compose stack pulls the published backend image

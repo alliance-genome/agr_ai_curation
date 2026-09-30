@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from jwt.exceptions import InvalidAudienceError
 from sqlalchemy.exc import IntegrityError
 from src.api import benchmark_curator, benchmark_gate, benchmark_onboarding
-from src.auth.base import AuthPrincipal, CurrentPrincipalDenied
+from auth_runtime.base import AuthPrincipal, CurrentPrincipalDenied
 from src.lib.benchmarks import curator_onboarding as service
 from src.models.sql.user import User
 

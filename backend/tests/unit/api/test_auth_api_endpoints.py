@@ -14,7 +14,7 @@ from fastapi.security import SecurityScopes
 from fastapi.testclient import TestClient
 
 auth_api = importlib.import_module("src.api.auth")
-TokenSet = importlib.import_module("src.auth.base").TokenSet
+TokenSet = importlib.import_module("auth_runtime.base").TokenSet
 
 
 def _request(headers=None, cookies=None, base_url="https://app.example.org/", query_params=None):
@@ -41,7 +41,6 @@ def _assert_logout_cookie_expired(set_cookie_headers, cookie_name):
 
 def _assert_logout_cookies_expired(set_cookie_headers):
     _assert_logout_cookie_expired(set_cookie_headers, "auth_token")
-    _assert_logout_cookie_expired(set_cookie_headers, "cognito_token")
 
 
 @pytest.fixture(autouse=True)
@@ -130,12 +129,20 @@ async def test_login_sets_pkce_and_state_cookies(monkeypatch):
     monkeypatch.setattr(auth_api.secrets, "token_urlsafe", lambda _n: next(generated))
     monkeypatch.setattr(auth_api, "get_secure_cookies", lambda: False)
 
+    monkeypatch.setattr(auth_api, "get_auth_oauth_cookie_max_age_seconds", lambda: 321)
+    monkeypatch.setenv("AUTH_OAUTH_COOKIE_MAX_AGE_SECONDS", "invalid")
+
     response = await auth_api.login(_request())
     assert response.status_code == 302
     assert str(response.headers["location"]) == "https://issuer.example.org/authorize"
     set_cookie_headers = response.headers.getlist("set-cookie")
     assert any(header.startswith("oauth_state=") for header in set_cookie_headers)
     assert any(header.startswith("oauth_code_verifier=") for header in set_cookie_headers)
+    assert all(
+        "Max-Age=321" in header
+        for header in set_cookie_headers
+        if header.startswith(("oauth_state=", "oauth_code_verifier=", "oauth_destination="))
+    )
 
 
 @pytest.mark.asyncio
@@ -193,6 +200,8 @@ async def test_callback_success_sets_auth_cookie_and_clears_pkce(monkeypatch, de
     monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
     monkeypatch.setattr(auth_api, "provision_user", lambda _db, principal: SimpleNamespace(auth_sub=principal.subject))
     monkeypatch.setattr(auth_api, "get_secure_cookies", lambda: False)
+    monkeypatch.setattr(auth_api, "get_auth_session_cookie_max_age_seconds", lambda: 654)
+    monkeypatch.setenv("AUTH_SESSION_COOKIE_MAX_AGE_SECONDS", "invalid")
 
     response = await auth_api.callback(
         request=_request(cookies={"oauth_state": "state", "oauth_code_verifier": "verifier", "oauth_destination": destination}),
@@ -205,6 +214,10 @@ async def test_callback_success_sets_auth_cookie_and_clears_pkce(monkeypatch, de
     assert str(response.headers["location"]) == expected
     set_cookie_headers = response.headers.getlist("set-cookie")
     assert any(header.startswith("auth_token=jwt-token") for header in set_cookie_headers)
+    assert any(
+        header.startswith("auth_token=jwt-token") and "Max-Age=654" in header
+        for header in set_cookie_headers
+    )
     assert any(header.startswith("oauth_state=") for header in set_cookie_headers)
     assert any(header.startswith("oauth_code_verifier=") for header in set_cookie_headers)
 
@@ -424,3 +437,12 @@ async def test_logout_redirect_uses_app_root_when_provider_has_no_logout_url(mon
 
 def test_auth_compat_get_user_property_returns_impl():
     assert auth_api.auth.get_user is auth_api._get_user_from_cookie_impl
+
+
+@pytest.mark.asyncio
+async def test_browser_auth_rejects_retired_cognito_cookie(monkeypatch):
+    monkeypatch.setattr(auth_api, "is_dev_mode", lambda: False)
+    monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
+    with pytest.raises(HTTPException) as exc:
+        await auth_api._get_user_from_cookie_impl(_request(cookies={"cognito_token": "legacy-token"}))
+    assert exc.value.status_code == 401

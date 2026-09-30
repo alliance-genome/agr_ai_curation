@@ -5,8 +5,8 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from src.auth import factory as auth_factory
-from src.auth.providers.cognito_config import create_cognito_provider
-from src.auth.providers.oidc import OIDCAuthProvider
+from auth_runtime.factory import create_cognito_provider
+from auth_runtime.oidc import OIDCAuthProvider
 
 
 def test_oidc_provider_default_custom_logout_param():

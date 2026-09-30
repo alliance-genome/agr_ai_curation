@@ -3,7 +3,7 @@
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
-from src.auth.base import AuthPrincipal, AuthProvider, TokenSet
+from .base import AuthPrincipal, AuthProvider, TokenSet
 
 
 class DevAuthProvider(AuthProvider):

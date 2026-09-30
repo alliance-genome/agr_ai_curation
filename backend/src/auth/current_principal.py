@@ -3,7 +3,7 @@
 from importlib.metadata import entry_points
 from typing import cast
 
-from src.auth.base import CurrentPrincipalResolver
+from auth_runtime.base import CurrentPrincipalResolver
 from src.config import get_auth_provider, is_dev_mode
 
 
