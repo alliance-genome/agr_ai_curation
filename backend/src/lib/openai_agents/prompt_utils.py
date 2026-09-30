@@ -336,7 +336,13 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
             from src.lib.config.env import require_env
             model = require_env("ABSTRACT_EXTRACTION_MODEL")
 
-            from src.lib.openai_agents.config import supports_temperature, supports_reasoning, require_model_reasoning_effort
+            from src.lib.openai_agents.config import (
+                get_abstract_extraction_input_max_chars,
+                require_model_reasoning_effort,
+                supports_reasoning,
+                supports_temperature,
+            )
+            input_max_chars = get_abstract_extraction_input_max_chars()
             completion_kwargs = {
                 "model": model,
                 "messages": [
@@ -354,7 +360,7 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
                     },
                     {
                         "role": "user",
-                        "content": f"Extract the abstract from this text:\n\n{raw_text[:4000]}"  # Limit input
+                        "content": f"Extract the abstract from this text:\n\n{raw_text[:input_max_chars]}"
                     }
                 ],
             }

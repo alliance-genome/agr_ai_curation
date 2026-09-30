@@ -5,7 +5,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
 import sys
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -251,6 +251,44 @@ def test_format_abstract_for_prompt_trims_and_formats_text():
     rendered = prompt_utils.format_abstract_for_prompt("  concise abstract  ")
     assert "## Paper Abstract" in rendered
     assert "concise abstract" in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_limit", "input_length", "expected_length"),
+    [(None, 8000, 4000), (128, 8000, 128), (6000, 8000, 6000), (128, 32, 32)],
+    ids=["default", "smaller-limit", "larger-limit", "short-input"],
+)
+async def test_extract_abstract_with_llm_input_character_limit(
+    monkeypatch, configured_limit, input_length, expected_length
+):
+    raw_text = ("αβγ\n" * 2000)[:input_length]
+    create = AsyncMock(return_value=SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="A" * 80))]
+    ))
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr("openai.AsyncOpenAI", lambda: client)
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
+    if configured_limit is None:
+        monkeypatch.delenv("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", raising=False)
+    else:
+        monkeypatch.setenv("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", str(configured_limit))
+
+    assert await prompt_utils._extract_abstract_with_llm(raw_text) == "A" * 80
+
+    create.assert_awaited_once()
+    message = create.call_args.kwargs["messages"][1]
+    prefix = "Extract the abstract from this text:\n\n"
+    assert message["role"] == "user"
+    assert message["content"].startswith(prefix)
+    source_text = message["content"][len(prefix):]
+    assert len(source_text) == expected_length
+    assert source_text == raw_text[:expected_length]
+    client.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio

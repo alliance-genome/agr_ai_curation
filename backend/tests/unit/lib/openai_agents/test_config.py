@@ -15,6 +15,7 @@ from src.lib.openai_agents.config import (
     PromptCacheIdentity,
     build_default_model_retry,
     build_model_settings,
+    get_abstract_extraction_input_max_chars,
     get_agent_config,
     get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
@@ -86,6 +87,22 @@ from src.lib.openai_agents.config import (
 )
 
 _PROMPT_CACHE = PromptCacheIdentity(agent_key="test_agent", static_prompt="Static test prompt.")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, 4000), ("128", 128), ("6000", 6000), ("0", 1), ("-7", 1),
+     ("invalid", 4000), ("", 4000)],
+)
+def test_abstract_extraction_input_character_limit_is_env_backed_and_positive(
+    monkeypatch, raw, expected
+):
+    if raw is None:
+        monkeypatch.delenv("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", raising=False)
+    else:
+        monkeypatch.setenv("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", raw)
+
+    assert get_abstract_extraction_input_max_chars() == expected
 
 
 def test_sentry_log_event_level_is_bounded_and_environment_configurable(

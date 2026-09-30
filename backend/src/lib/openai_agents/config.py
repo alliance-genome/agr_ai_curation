@@ -2059,6 +2059,15 @@ def get_list_recorded_evidence_limit() -> int:
 
 # --- Display / truncation ---
 
+def get_abstract_extraction_input_max_chars() -> int:
+    """Maximum source-text characters sent to the abstract-extraction LLM.
+
+    Environment variable: ABSTRACT_EXTRACTION_INPUT_MAX_CHARS. Default 4000,
+    minimum 1. Raise for more context or lower to reduce input cost and latency.
+    """
+    return max(1, _get_env_int_with_fallback("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", 4000))
+
+
 def get_supervisor_text_preview_limit() -> int:
     """Char limit for short text previews in supervisor context tools (SUPERVISOR_TEXT_PREVIEW_LIMIT).
 
