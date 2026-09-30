@@ -38,6 +38,7 @@ write_test_env() {
       'OIDC_ISSUER_URL=https://issuer.example.org' \
       'OIDC_CLIENT_ID=curation-production' \
       'OIDC_REDIRECT_URI=https://curation.example.org/auth/callback' \
+      'ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=6000' \
       'VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7' \
       'VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500' \
       'VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS=8000' \
@@ -84,7 +85,7 @@ assert_rejected_with() {
 }
 
 write_test_env
-grep -Ev '^VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_)' "${env_file}" >"${default_env_file}"
+grep -Ev '^(VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -102,6 +103,7 @@ import json
 import sys
 
 config = json.load(open(sys.argv[1], encoding="utf-8"))
+assert str(config["services"]["backend"]["environment"]["ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"]) == "4000"
 frontend_env = config["services"]["frontend"]["environment"]
 assert frontend_env["FRONTEND_RUNTIME_CONFIG_KEYS"] == (
     "VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS VITE_PDF_PROGRESS_TIMEOUT_MS VITE_PDF_PROGRESS_POLL_INTERVAL_MS"
@@ -209,6 +211,7 @@ import sys
 
 config = json.load(open(sys.argv[1], encoding="utf-8"))
 backend_env = config["services"]["backend"]["environment"]
+assert str(backend_env["ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"]) == "6000"
 frontend_env = config["services"]["frontend"]["environment"]
 weaviate_env = config["services"]["weaviate"]["environment"]
 weaviate = config["services"]["weaviate"]
