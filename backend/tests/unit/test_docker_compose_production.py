@@ -353,6 +353,18 @@ def test_compose_model_defaults_match_supported_runtime_roles():
     )
 
 
+def test_production_compose_forwards_abstract_extraction_input_limit():
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    documented_default = _load_env_assignments(ENV_EXAMPLE_PATH)[
+        "ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"
+    ]
+
+    assert documented_default == "4000"
+    assert production_env["ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"] == (
+        f"${{ABSTRACT_EXTRACTION_INPUT_MAX_CHARS:-{documented_default}}}"
+    )
+
+
 def test_compose_propagates_optional_openrouter_key_name_only():
     dev_env = _list_environment(
         _load_dev_compose()["services"]["backend"]["environment"]
