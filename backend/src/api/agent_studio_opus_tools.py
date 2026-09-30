@@ -30,6 +30,7 @@ from src.lib.openai_agents.config import (
     get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
     get_agent_studio_provider_tool_result_inline_max_chars,
+    get_agent_studio_recent_flow_run_window_days,
     get_agent_studio_service_log_default_lines,
     get_agent_studio_service_log_max_lines,
     get_agent_studio_service_log_max_lookback_minutes,
@@ -183,7 +184,8 @@ INSPECT_SAVED_STUDIO_RESOURCE_TOOL = {
         "Use get_current_flow or refresh_workshop_prompt for unsaved edits. Follow next_call. "
         "When a curator reports that a flow failed or could not start, first call recent_flow_runs "
         "(defaults to the saved flow open in the editor; otherwise pass flow_id) to list your own runs "
-        "of that flow from the last 7 days, newest first, with status, document_loaded, trace_id, "
+        f"of that flow from the last {get_agent_studio_recent_flow_run_window_days()} days, "
+        "newest first, with status, document_loaded, trace_id, "
         "failure_reason and per-step reason_codes (document_required, attachment_only_validator, "
         "agent_unresolvable, missing_agent_id, provider_disabled, agent_unavailable). Answer from those "
         "recorded codes. reason_codes null means an older record without codes: rely on its "

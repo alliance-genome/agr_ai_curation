@@ -387,14 +387,25 @@ describe('FlowBuilder', () => {
     serviceMocks.updateFlow.mockReturnValueOnce(new Promise<FlowResponse>((resolve) => { finishSave = resolve })).mockResolvedValue(flow)
     render(<FlowBuilder flowId="flow-1" />)
     await screen.findByText('Fresh Flow')
-    act(() => reactFlowMocks.onNodeClick?.({} as never, flow.flow_definition.nodes[0] as never))
-    act(() => nodePanelMocks.onApply?.('node_0', { task_instructions: 'First edit' }))
-    await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    await waitFor(() => expect(reactFlowMocks.onNodeClick).toBeTypeOf('function'))
+    await act(async () => reactFlowMocks.onNodeClick!({} as never, flow.flow_definition.nodes[0] as never))
+    await screen.findByTestId('node-panel')
+    await act(async () => nodePanelMocks.onApply!('node_0', { task_instructions: 'First edit' }))
     expect(screen.getByText(unsavedReminder)).toBeInTheDocument()
-    act(() => nodePanelMocks.onApply?.('node_0', { task_instructions: 'Later edit' }))
+    await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    await waitFor(() => expect(serviceMocks.updateFlow).toHaveBeenCalledTimes(1))
+    expect(serviceMocks.updateFlow).toHaveBeenLastCalledWith('flow-1', expect.objectContaining({
+      flow_definition: expect.objectContaining({ nodes: [expect.objectContaining({ data: expect.objectContaining({ task_instructions: 'First edit' }) })] }),
+    }))
+    expect(screen.getByText(unsavedReminder)).toBeInTheDocument()
+    await act(async () => nodePanelMocks.onApply!('node_0', { task_instructions: 'Later edit' }))
     await act(async () => finishSave(flow))
     expect(screen.getByText(unsavedReminder)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    await waitFor(() => expect(serviceMocks.updateFlow).toHaveBeenCalledTimes(2))
+    expect(serviceMocks.updateFlow).toHaveBeenLastCalledWith('flow-1', expect.objectContaining({
+      flow_definition: expect.objectContaining({ nodes: [expect.objectContaining({ data: expect.objectContaining({ task_instructions: 'Later edit' }) })] }),
+    }))
     await waitFor(() => expect(screen.queryByText(unsavedReminder)).not.toBeInTheDocument())
   })
 

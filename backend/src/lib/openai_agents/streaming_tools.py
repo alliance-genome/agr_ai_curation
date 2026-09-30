@@ -61,6 +61,7 @@ from .config import (
     PromptCacheIdentity,
     build_prompt_cache_key,
     get_batching_nudge_threshold,
+    get_generic_profile_max_issues,
     get_layer2_force_tool_finalization_enabled,
     get_max_turns,
     get_structured_finalization_hard_max_attempts,
@@ -4326,7 +4327,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
         # so a later trace review does not need a live reproduction.
         structured_issues = getattr(exc, "issues", None)
         if isinstance(structured_issues, list) and structured_issues:
-            specialist_error_details["conformanceIssues"] = structured_issues[:50]
+            specialist_error_details["conformanceIssues"] = structured_issues[:get_generic_profile_max_issues()]
         add_specialist_event({
             "type": "SPECIALIST_ERROR",
             "timestamp": datetime.now(timezone.utc).isoformat(),

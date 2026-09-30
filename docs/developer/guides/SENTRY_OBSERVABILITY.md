@@ -449,9 +449,13 @@ Two limits apply regardless of the content-redaction setting:
 - credential-shaped **values** are still redacted with `_SECRET_PATTERNS`,
   because a DSN or bearer token can sit inside an ordinary-looking string such
   as a SQLAlchemy connection error;
-- the context is capped at 60,000 characters and trims its entries rather than
-  dropping the context, because Sentry discards an over-large event outright
-  and that would lose the alert entirely.
+- `SENTRY_STRUCTURED_ERROR_MAX_ENTRIES` caps each diagnostic list at 200 entries
+  by default, and `SENTRY_STRUCTURED_ERROR_MAX_CHARS` caps the context at 60,000
+  characters by default. The context trims its entries rather than dropping the
+  context, because Sentry discards an over-large event outright and that would
+  lose the alert entirely. Tune these settings for diagnostic depth and ingest
+  size; both are documented with `SENTRY_CONTENT_REDACTION_ENABLED` under
+  operational limits in `.env.example`.
 
 Only our own error types qualify. That allowlist is noise control, not a
 privacy boundary: without it, any third-party exception exposing `.code` or

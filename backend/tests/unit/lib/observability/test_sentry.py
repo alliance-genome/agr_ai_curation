@@ -37,6 +37,9 @@ def reset_sentry(monkeypatch):
         "SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS",
         "SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS",
         "SENTRY_TRANSACTION_RETAINED_SPANS_MAX",
+        "SENTRY_CONTENT_REDACTION_ENABLED",
+        "SENTRY_STRUCTURED_ERROR_MAX_ENTRIES",
+        "SENTRY_STRUCTURED_ERROR_MAX_CHARS",
         "APP_ENV",
         "ENVIRONMENT",
         "GIT_SHA",
@@ -66,6 +69,56 @@ def test_get_sentry_settings_defaults_to_disabled():
     assert settings.ai_content_tier1_preview_max_chars == 2000
     assert settings.ai_content_preview_max_chars == 2000
     assert settings.transaction_retained_spans_max == 50
+
+
+@pytest.mark.parametrize("entry_limit", [200, 3, 250])
+def test_structured_diagnostic_entry_limit(monkeypatch, entry_limit):
+    from src.lib.agent_studio.profile_conformance import ProfileConformanceError
+
+    if entry_limit != 200:
+        monkeypatch.setenv("SENTRY_STRUCTURED_ERROR_MAX_ENTRIES", str(entry_limit))
+    issues = [{"path": f"field[{i}]", "message": "wrong kind"} for i in range(260)]
+    error = ProfileConformanceError(issues)
+    event = sentry.before_send({}, {"exc_info": (type(error), error, None)})
+    assert event is not None
+    detail = event["contexts"]["error_detail"]
+    assert detail["issues"] == issues[:entry_limit]
+    assert detail["issues_omitted"] == 260 - entry_limit
+
+
+@pytest.mark.parametrize("configured_chars,max_chars", [(60000, 60000), (1000, 1000), (80000, 80000), (0, 256)])
+def test_structured_diagnostic_character_limit(monkeypatch, configured_chars, max_chars):
+    from src.lib.agent_studio.profile_conformance import ProfileConformanceError
+
+    if configured_chars != 60000:
+        monkeypatch.setenv("SENTRY_STRUCTURED_ERROR_MAX_CHARS", str(configured_chars))
+    issues = [{"message": "x" * 1000} for _ in range(70)]
+    error = ProfileConformanceError(issues)
+    event = sentry.before_send({}, {"exc_info": (type(error), error, None)})
+    assert event is not None
+    detail = event["contexts"]["error_detail"]
+    assert len(json.dumps(detail)) <= max_chars
+    assert detail["exception_type"] == "ProfileConformanceError"
+    if max_chars == 80000:
+        assert detail["issues"] == issues
+    else:
+        assert len(detail["issues"]) < len(issues)
+
+
+@pytest.mark.parametrize("redaction", [False, True])
+def test_structured_diagnostics_honor_content_switch_and_always_scrub_credentials(monkeypatch, redaction):
+    from src.lib.agent_studio.profile_conformance import ProfileConformanceError
+
+    if redaction:
+        monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "true")
+    token = "sk-" + "a" * 32
+    error = ProfileConformanceError([{"message": "published literature " + token}])
+    event = sentry.before_send({}, {"exc_info": (type(error), error, None)})
+    assert event is not None
+    detail = event["contexts"]["error_detail"]
+    encoded = json.dumps(detail)
+    assert token not in encoded
+    assert ("published literature" in encoded) is not redaction
 
 
 def test_get_sentry_settings_parses_env(monkeypatch):
