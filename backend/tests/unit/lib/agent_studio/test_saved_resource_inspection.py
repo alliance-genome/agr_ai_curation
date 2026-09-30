@@ -306,6 +306,46 @@ def _owned_flow_db(rows, *, owned=True):
     return db
 
 
+@pytest.mark.parametrize("window_days", [7, 14])
+def test_recent_flow_run_window_matches_query_and_guidance(monkeypatch, window_days):
+    import importlib
+    from src.api import agent_studio_opus_tools
+
+    monkeypatch.setenv("AGENT_STUDIO_RECENT_FLOW_RUN_WINDOW_DAYS", str(window_days))
+    before = datetime.now(timezone.utc)
+    db = _owned_flow_db([])
+    result = inspection.inspect_saved_resource(
+        db, user_id=28, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="recent_flow_runs", flow_id=REFUSAL_FLOW_ID),
+    )
+    after = datetime.now(timezone.utc)
+    params = db.execute.call_args.args[0].compile().params
+    cutoff = next(value for value in params.values() if isinstance(value, datetime))
+    assert window_days * 86400 <= (after - cutoff).total_seconds()
+    assert (before - cutoff).total_seconds() <= window_days * 86400
+    assert result["window_days"] == window_days
+    try:
+        importlib.reload(agent_studio_opus_tools)
+        assert f"last {window_days} days" in agent_studio_opus_tools.INSPECT_SAVED_STUDIO_RESOURCE_TOOL["description"]
+    finally:
+        monkeypatch.delenv("AGENT_STUDIO_RECENT_FLOW_RUN_WINDOW_DAYS")
+        importlib.reload(agent_studio_opus_tools)
+
+
+def test_flow_run_lookup_uses_configured_record_and_failure_preview_limits(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_RUN_LOOKUP_MAX_RECORDS", "2")
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_RUN_FAILURE_REASON_MAX_CHARS", "12")
+    db = _owned_flow_db([_summary_row(failure_reason="x" * 30)])
+    db.scalars.return_value.all.return_value = []
+    result = inspection.inspect_saved_resource(
+        db, user_id=28, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="flow_run_traces", flow_run_id=REFUSAL_RUN_ID),
+    )
+    query = db.execute.call_args.args[0].compile(compile_kwargs={"literal_binds": True})
+    assert "LIMIT 2" in str(query)
+    assert result["runs"][0]["failure_reason"] == "x" * 12 + "... [truncated]"
+
+
 def test_recent_flow_runs_returns_refused_run_without_trace_for_owner():
     rows = [_summary_row(codes=[{"step": 1, "reason_code": "document_required"},
                                 {"step": 2, "reason_code": "document_required"}])]

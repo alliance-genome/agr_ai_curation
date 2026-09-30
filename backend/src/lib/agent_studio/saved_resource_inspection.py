@@ -21,6 +21,9 @@ from src.lib.agent_studio.generic_profile_service import get_profile_revision
 from src.lib.chat_transcript import FLOW_SUMMARY_MESSAGE_TYPE
 from src.lib.flows.unavailable_steps import stored_flow_step_reason_codes
 from src.lib.openai_agents.config import (
+    get_agent_studio_flow_run_failure_reason_max_chars,
+    get_agent_studio_flow_run_lookup_max_records,
+    get_agent_studio_recent_flow_run_window_days,
     get_tool_page_default_limit, get_agent_studio_provider_tool_result_inline_max_chars,
 )
 from src.models.sql.curation_flow import CurationFlow
@@ -59,9 +62,6 @@ def _flow_summary(row):
             "updated_at": row.updated_at.isoformat(), "execution_count": row.execution_count}
 
 
-RECENT_FLOW_RUN_WINDOW_DAYS = 7
-_FLOW_RUN_LOOKUP_MAX_RECORDS = 5
-_FLOW_RUN_FAILURE_REASON_MAX_CHARS = 2000
 _LIST_ACTIONS = {"list_flows", "agent_revisions", "flow_run_traces", "recent_flow_runs"}
 
 
@@ -85,8 +85,9 @@ def _flow_run_record(row) -> dict:
     document_id = str(payload.get("document_id") or "").strip() or None
     trace_id = str(payload.get("trace_id") or row.trace_id or "").strip() or None
     failure_reason = payload.get("failure_reason")
-    if isinstance(failure_reason, str) and len(failure_reason) > _FLOW_RUN_FAILURE_REASON_MAX_CHARS:
-        failure_reason = failure_reason[:_FLOW_RUN_FAILURE_REASON_MAX_CHARS] + "... [truncated]"
+    max_chars = get_agent_studio_flow_run_failure_reason_max_chars()
+    if isinstance(failure_reason, str) and len(failure_reason) > max_chars:
+        failure_reason = failure_reason[:max_chars] + "... [truncated]"
     elif not isinstance(failure_reason, str):
         failure_reason = None
     return {
@@ -134,7 +135,8 @@ def _read_saved_resource(db, *, user_id: int, active_group_ids: list[str], reque
         if flow is None:
             raise ValueError("This saved flow is unavailable to you")
         limit = get_tool_page_default_limit()
-        since = datetime.now(timezone.utc) - timedelta(days=RECENT_FLOW_RUN_WINDOW_DAYS)
+        window_days = get_agent_studio_recent_flow_run_window_days()
+        since = datetime.now(timezone.utc) - timedelta(days=window_days)
         rows = db.execute(
             _owned_flow_run_summaries(
                 user_id,
@@ -147,7 +149,7 @@ def _read_saved_resource(db, *, user_id: int, active_group_ids: list[str], reque
             lambda page, **paging: {
                 "saved": True, "loaded_in_editor": False, "flow_id": str(flow_id),
                 "flow_name": flow.name, "source": "owned_saved_chat_run_records",
-                "window_days": RECENT_FLOW_RUN_WINDOW_DAYS, "runs": page, **paging,
+                "window_days": window_days, "runs": page, **paging,
             },
             records, has_more=len(rows) > limit, offset=request.offset,
             next_arguments={"action": "recent_flow_runs", "flow_id": str(flow_id)},
@@ -170,7 +172,7 @@ def _read_saved_resource(db, *, user_id: int, active_group_ids: list[str], reque
         run_records = [_flow_run_record(row) for row in db.execute(
             _owned_flow_run_summaries(
                 user_id, ChatMessage.payload_json["flow_run_id"].astext == run_id,
-            ).limit(_FLOW_RUN_LOOKUP_MAX_RECORDS)
+            ).limit(get_agent_studio_flow_run_lookup_max_records())
         ).all()]
         rows = db.scalars(statement).all()
         return {"saved": True, "loaded_in_editor": False, "flow_run_id": run_id,

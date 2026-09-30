@@ -3914,6 +3914,39 @@ async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("issue_limit", [50, 75])
+async def test_chat_domain_envelope_dispatch_honors_conformance_issue_limit(
+    monkeypatch, _repo_package_curation_registry, issue_limit,
+):
+    from src.lib.agent_studio.profile_conformance import ProfileConformanceError
+    from src.lib.curation_workspace import extraction_results
+    from src.lib.domain_packs import validator_dispatch
+
+    monkeypatch.setenv("GENERIC_PROFILE_MAX_ISSUES", str(issue_limit))
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+    monkeypatch.setattr(
+        extraction_results, "_get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "gene", "launchable": True},
+    )
+    issues = [{"path": f"field[{i}]", "reason": "wrong_kind"} for i in range(90)]
+
+    def fail_dispatch(*args, **kwargs):
+        raise ProfileConformanceError(issues)
+
+    monkeypatch.setattr(validator_dispatch, "dispatch_active_validator_bindings", fail_dispatch)
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+            _gene_extractor_domain_output(),
+            expected_output_type=GeneExtractionResultEnvelope,
+            specialist_name="Gene Extraction",
+            tool_name="ask_gene_extractor_specialist",
+        )
+    error = next(event for event in emitted if event["type"] == "SPECIALIST_ERROR")
+    assert error["details"]["conformanceIssues"] == issues[:issue_limit]
+
+
+@pytest.mark.asyncio
 async def test_chat_domain_envelope_dispatch_fails_closed_without_tool_agent_key():
     with pytest.raises(streaming_tools.SpecialistOutputError, match="source agent"):
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(

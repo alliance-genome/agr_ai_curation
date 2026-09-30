@@ -689,6 +689,41 @@ async def test_hybrid_search_reports_second_transient_failure_without_sentry_eve
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retry_count", [0, 2])
+async def test_hybrid_search_honors_configured_transient_retry_count(monkeypatch, caplog, retry_count):
+    monkeypatch.setenv("WEAVIATE_SEARCH_TRANSIENT_RETRY_COUNT", str(retry_count))
+    caplog.set_level(logging.INFO, logger=chunks.logger.name)
+    failures = [_weaviate_query_error(grpc.StatusCode.DEADLINE_EXCEEDED) for _ in range(2)]
+    if retry_count == 0:
+        with pytest.raises(WeaviateQueryError) as raised:
+            await _run_hybrid_search(monkeypatch, failures + [_hybrid_response()])
+        assert raised.value.chunk_collection.query.hybrid.call_count == 1
+    else:
+        results, collection = await _run_hybrid_search(monkeypatch, failures + [_hybrid_response()])
+        assert [chunk["id"] for chunk in results] == ["chunk-1"]
+        assert collection.query.hybrid.call_count == 3
+    warnings = [record for record in caplog.records
+                if getattr(record, "operation", None) == "weaviate_hybrid_search_transient_retry"]
+    assert [record.attempt for record in warnings] == list(range(1, retry_count + 1))
+
+
+@pytest.mark.asyncio
+async def test_configured_transient_retries_are_shared_across_lexical_attempts(monkeypatch):
+    monkeypatch.setenv("WEAVIATE_SEARCH_TRANSIENT_RETRY_COUNT", "2")
+
+    def failure():
+        return _weaviate_query_error(grpc.StatusCode.DEADLINE_EXCEEDED)
+
+    with pytest.raises(WeaviateQueryError) as raised:
+        await _run_hybrid_search(
+            monkeypatch,
+            [failure(), SimpleNamespace(objects=[]), failure(), failure(), _hybrid_response()],
+            strategy="hybrid_lexical_first",
+        )
+    assert raised.value.chunk_collection.query.hybrid.call_count == 4
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error",
     [

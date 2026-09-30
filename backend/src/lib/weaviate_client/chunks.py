@@ -20,6 +20,7 @@ from ..openai_agents.config import (
     get_weaviate_search_initial_limit,
     get_weaviate_search_mmr_enabled,
     get_weaviate_search_mmr_lambda,
+    get_weaviate_search_transient_retry_count,
 )
 from .connection import get_connection
 
@@ -565,15 +566,16 @@ async def hybrid_search_chunks(
         logger.info("Detected short/symbol-like query; enabling BM25 boost while preserving rerank/MMR")
         use_bm25_boost = True
 
-    # One transient retry per logical search, shared by every attempt the
+    # Transient retries per logical search, shared by every attempt the
     # lexical-first retry adapter makes. UNAVAILABLE is already retried inside
     # weaviate-client, and other errors are not retried.
-    transient_retry_available = True
+    transient_retry_count = get_weaviate_search_transient_retry_count()
+    transient_retries_remaining = transient_retry_count
 
     def _search(alpha_override: Optional[float] = None,
                 rerank_override: Optional[bool] = None,
                 mmr_override: Optional[bool] = None) -> List[Dict[str, Any]]:
-        nonlocal transient_retry_available
+        nonlocal transient_retries_remaining
         try:
             search_start = time.monotonic()
             search_id = uuid4().hex
@@ -714,30 +716,31 @@ async def hybrid_search_chunks(
 
                 # Execute query
                 weaviate_start = time.monotonic()
-                try:
-                    response = collection.query.hybrid(**query_params)
-                except WeaviateQueryError as query_error:
-                    if not (
-                        transient_retry_available
-                        and _is_retryable_weaviate_query_error(query_error)
-                    ):
-                        raise
-                    transient_retry_available = False
-                    logger.warning(
-                        "Weaviate hybrid query failed transiently; retrying once search_id=%s",
-                        search_id,
-                        extra={
-                            "operation": "weaviate_hybrid_search_transient_retry",
-                            "sentry_skip_event": True,
-                            "attempt": 1,
-                            "duration_ms": round(
-                                (time.monotonic() - weaviate_start) * 1000, 1
-                            ),
-                            "retrieval_search_id": search_id,
-                            "retrieval_query_fingerprint": query_fingerprint,
-                        },
-                    )
-                    response = collection.query.hybrid(**query_params)
+                while True:
+                    try:
+                        response = collection.query.hybrid(**query_params)
+                        break
+                    except WeaviateQueryError as query_error:
+                        if not (
+                            transient_retries_remaining > 0
+                            and _is_retryable_weaviate_query_error(query_error)
+                        ):
+                            raise
+                        transient_retries_remaining -= 1
+                        logger.warning(
+                            "Weaviate hybrid query failed transiently; retrying search_id=%s",
+                            search_id,
+                            extra={
+                                "operation": "weaviate_hybrid_search_transient_retry",
+                                "sentry_skip_event": True,
+                                "attempt": transient_retry_count - transient_retries_remaining,
+                                "duration_ms": round(
+                                    (time.monotonic() - weaviate_start) * 1000, 1
+                                ),
+                                "retrieval_search_id": search_id,
+                                "retrieval_query_fingerprint": query_fingerprint,
+                            },
+                        )
                 weaviate_duration_ms = (time.monotonic() - weaviate_start) * 1000
 
                 # V5: Log retrieval results

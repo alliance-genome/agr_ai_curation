@@ -16,7 +16,12 @@ import re
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from src.lib.openai_agents.config import get_sentry_log_event_level
+from src.lib.openai_agents.config import (
+    get_sentry_content_redaction_enabled,
+    get_sentry_log_event_level,
+    get_sentry_structured_error_max_chars,
+    get_sentry_structured_error_max_entries,
+)
 from src.lib.security.redaction import (
     REDACTED as _REDACTED,
     SECRET_PATTERNS as _SECRET_PATTERNS,
@@ -339,8 +344,7 @@ def _content_redaction_enabled() -> bool:
     Set SENTRY_CONTENT_REDACTION_ENABLED=true to restore the old behavior
     without a code change.
     """
-    raw = os.getenv("SENTRY_CONTENT_REDACTION_ENABLED", "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    return get_sentry_content_redaction_enabled()
 
 
 def _scrub_value(
@@ -1667,10 +1671,6 @@ def _add_safe_log_event_title(event: dict[str, Any]) -> None:
     }
 
 
-_MAX_STRUCTURED_ENTRIES = 200
-_MAX_STRUCTURED_DETAIL_CHARS = 60000
-
-
 @lru_cache(maxsize=1)
 def _owned_diagnostic_error_types() -> tuple[type, ...]:
     """Our own error types, whose structured detail is worth publishing.
@@ -1773,6 +1773,8 @@ def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] |
     if not chain:
         return None
 
+    max_entries = get_sentry_structured_error_max_entries()
+    max_chars = get_sentry_structured_error_max_chars()
     detail: dict[str, Any] = {}
     for link in chain:
         for attribute in ("issues", "details"):
@@ -1780,16 +1782,16 @@ def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] |
                 continue
             value = getattr(link, attribute, None)
             if isinstance(value, list) and value:
-                detail[attribute] = value[:_MAX_STRUCTURED_ENTRIES]
-                if len(value) > _MAX_STRUCTURED_ENTRIES:
-                    detail[f"{attribute}_omitted"] = len(value) - _MAX_STRUCTURED_ENTRIES
+                detail[attribute] = value[:max_entries]
+                if len(value) > max_entries:
+                    detail[f"{attribute}_omitted"] = len(value) - max_entries
         code = getattr(link, "code", None)
         if "code" not in detail and isinstance(code, str) and code:
             detail["code"] = code
         unknown_fields = getattr(link, "unknown_fields", None)
         if "unknown_fields" not in detail and isinstance(unknown_fields, tuple) and unknown_fields:
             detail["unknown_fields"] = [
-                str(name) for name in unknown_fields[:_MAX_STRUCTURED_ENTRIES]
+                str(name) for name in unknown_fields[:max_entries]
             ]
 
     if not detail:
@@ -1809,13 +1811,13 @@ def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] |
     # Trim entries rather than drop the context, so a very noisy failure still
     # arrives with usable diagnosis instead of being discarded by Sentry.
     for attribute in ("details", "issues"):
-        while len(json.dumps(detail, default=str)) > _MAX_STRUCTURED_DETAIL_CHARS:
+        while len(json.dumps(detail, default=str)) > max_chars:
             current = detail.get(attribute)
             if not isinstance(current, list) or not current:
                 break
             if len(current) == 1:
                 detail[attribute] = [
-                    json.dumps(current[0], default=str)[:_MAX_STRUCTURED_DETAIL_CHARS // 2]
+                    json.dumps(current[0], default=str)[:max_chars // 2]
                 ]
                 break
             kept = len(current) // 2
@@ -1827,7 +1829,7 @@ def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] |
     # The loop only trims list-shaped keys, so a detail whose bulk is elsewhere
     # (a long unknown_fields, a single huge entry) could still exceed the cap
     # and be dropped by Sentry as too_large. Guarantee the bound.
-    if len(json.dumps(detail, default=str)) > _MAX_STRUCTURED_DETAIL_CHARS:
+    if len(json.dumps(detail, default=str)) > max_chars:
         detail = {
             "exception_type": detail.get("exception_type"),
             "code": detail.get("code"),

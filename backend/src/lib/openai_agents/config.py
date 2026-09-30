@@ -1135,6 +1135,21 @@ def get_flow_supervisor_parallel_tool_calls_enabled() -> bool:
 # --- Observability ---
 
 
+def get_sentry_content_redaction_enabled() -> bool:
+    """Filter curator/document content in Sentry events; credentials are always scrubbed."""
+    return _get_env_bool("SENTRY_CONTENT_REDACTION_ENABLED", False)
+
+
+def get_sentry_structured_error_max_entries() -> int:
+    """Maximum entries per structured diagnostic list in Sentry error detail."""
+    return max(1, _get_env_int_with_fallback("SENTRY_STRUCTURED_ERROR_MAX_ENTRIES", 200))
+
+
+def get_sentry_structured_error_max_chars() -> int:
+    """Structured error context budget, with room for the compact classification summary."""
+    return max(256, _get_env_int_with_fallback("SENTRY_STRUCTURED_ERROR_MAX_CHARS", 60000))
+
+
 def get_sentry_log_event_level() -> int | None:
     """Minimum Python log level promoted to a Sentry event.
 
@@ -1752,6 +1767,11 @@ def get_weaviate_query_timeout_seconds() -> float:
         )
         return default
     return value
+
+
+def get_weaviate_search_transient_retry_count() -> int:
+    """Transient query retries shared across one logical search; zero disables retries."""
+    return max(0, _get_env_int_with_fallback("WEAVIATE_SEARCH_TRANSIENT_RETRY_COUNT", 1))
 
 
 def get_weaviate_search_initial_limit() -> int:
@@ -2885,6 +2905,21 @@ def get_agent_studio_flow_output_filename_template_max_chars() -> int:
         FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS,
         FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS,
     )
+
+
+def get_agent_studio_recent_flow_run_window_days() -> int:
+    """Lookback window for authorized saved-flow run inspection."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_RECENT_FLOW_RUN_WINDOW_DAYS", 7))
+
+
+def get_agent_studio_flow_run_lookup_max_records() -> int:
+    """Maximum saved summary records returned for one flow-run trace lookup."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_FLOW_RUN_LOOKUP_MAX_RECORDS", 5))
+
+
+def get_agent_studio_flow_run_failure_reason_max_chars() -> int:
+    """Failure-reason preview characters retained in a saved-flow run record."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_FLOW_RUN_FAILURE_REASON_MAX_CHARS", 2000))
 
 
 def get_agent_studio_flow_inspection_page_limit() -> int:
