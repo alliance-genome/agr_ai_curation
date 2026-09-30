@@ -35,6 +35,25 @@ def test_deterministic_and_model_validators_have_explicit_roles(monkeypatch):
     assert authorize.call_count == 2
 
 
+def test_binding_repeated_across_field_attachments_is_one_stage(monkeypatch):
+    # Defaults attach one binding per field; the runtime dispatches the binding
+    # once (identical request ids), so the stage list names it once.
+    monkeypatch.setattr(stages, "validation_schedule_from_node_data", lambda data: {
+        "scheduled_validators": [
+            {"validator_binding_id": "reference", "attachment_id": "a"},
+            {"validator_binding_id": "gene", "attachment_id": "b"},
+            {"validator_binding_id": "reference", "attachment_id": "c"},
+            {"validator_binding_id": "gene", "attachment_id": "d"},
+            {"validator_binding_id": "reference", "attachment_id": "e"},
+        ],
+    })
+    authorize = Mock(side_effect=lambda node_id, binding: binding["validator_binding_id"] + "_agent")
+    result = stages.flow_stages(flow(None), {"node_0": {"category": "Extraction"}}, authorize_validator=authorize)
+    assert [item.binding_id for item in result[2:]] == ["reference", "gene"]
+    assert len({item.stage_id for item in result}) == len(result)
+    assert authorize.call_count == 2
+
+
 def test_unavailable_validator_fails_instead_of_silently_omitting_it(monkeypatch):
     monkeypatch.setattr(stages, "validation_schedule_from_node_data", lambda data: {
         "scheduled_validators": [{"validator_binding_id": "private"}],

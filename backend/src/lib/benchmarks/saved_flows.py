@@ -4,9 +4,10 @@ Discovery receipts describe a mutable saved flow at read time. They are not
 executable snapshots; the execution-freeze boundary must reauthorize selection.
 """
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 from uuid import UUID
 
+from pydantic import model_validator
 from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.catalog_service import get_active_visible_agent_metadata
@@ -112,6 +113,13 @@ class BenchmarkSavedFlowContracts(FrozenStrictModel):
     run_problem: str | None = None
     stages: tuple[BenchmarkFlowStage, ...] = ()
     route_default_conflicts: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def unique_stage_identities(self) -> Self:
+        identities = [stage.stage_id for stage in self.stages]
+        if len(identities) != len(set(identities)):
+            raise ValueError("Duplicate flow stage identity")
+        return self
 
 
 class BenchmarkSavedFlowPage(FrozenStrictModel):

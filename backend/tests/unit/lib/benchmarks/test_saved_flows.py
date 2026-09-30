@@ -288,3 +288,13 @@ def test_needs_resave_formatter_copy_keeps_its_formatter_kind(pair, monkeypatch)
     assert (node.problem, node.output_kind) == ("needs_resave", "formatter")
     assert revision.call_args.args == (session, receipt.agent_id, receipt.agent_revision_id, 42)
     assert revision.call_args.kwargs == {"active_group_ids": ["group-a"]}
+
+
+def test_contracts_reject_duplicate_stage_identities_like_the_portal():
+    stage = BenchmarkFlowStage(stage_id="sha256:" + "b" * 64, node_id="node_0", title="Check",
+                               role="validation", route_slot="validator:check", binding_id="check")
+    summary = service.BenchmarkSavedFlowSummary(flow_id=uuid4(), title="Dup", description=None,
+                                                revision="sha256:" + "a" * 64)
+    with pytest.raises(ValueError, match="Duplicate flow stage identity"):
+        service.BenchmarkSavedFlowContracts(flow=summary, nodes=(), status="verified",
+                                            runnable=True, stages=(stage, stage))
