@@ -332,20 +332,10 @@ def is_cognito_configured() -> bool:
 
 
 def get_auth_provider() -> str:
-    """Get configured authentication provider type.
+    """Load auth settings only for auth callers, keeping package workers isolated."""
+    from auth_runtime.factory import get_auth_provider as configured_provider
 
-    AUTH_PROVIDER is required and must be explicit to avoid deployment bias.
-    """
-    provider = os.getenv("AUTH_PROVIDER", "").strip().lower()
-    if not provider:
-        raise ValueError(
-            "AUTH_PROVIDER must be set explicitly (one of: cognito, oidc, dev)"
-        )
-    if provider not in {"cognito", "oidc", "dev"}:
-        raise ValueError(
-            f"Invalid AUTH_PROVIDER '{provider}'. Expected one of: cognito, oidc, dev"
-        )
-    return provider
+    return configured_provider()
 
 
 def is_auth_configured() -> bool:

@@ -191,7 +191,7 @@ are configured by `BENCHMARK_CURATOR_AUTH_TIMEOUT_SECONDS` and
 `BENCHMARK_CURATOR_AUTH_MAX_ATTEMPTS`. The auth adapter is tested with synthetic
 responses, not live Cognito.
 
-`src.auth.base.CurrentPrincipalResolver` is the provider-neutral extension
+`auth_runtime.base.CurrentPrincipalResolver` is the provider-neutral extension
 contract. The callable accepts only `PrincipalLookupIdentity` (subject,
 normalized provider, issuer, optional provider username), with no historical
 groups or human credentials, and returns exactly `AuthPrincipal`. It must use

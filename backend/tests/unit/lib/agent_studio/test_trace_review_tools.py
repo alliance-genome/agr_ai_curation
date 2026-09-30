@@ -101,8 +101,8 @@ async def test_trace_review_requests_forward_internal_bearer(
 
     assert capture["headers"] == {
         "Authorization": "Bearer shared-service-token",
-        "X-AGR-Trusted-Caller-Sub": "curator-sub-1",
-        "X-AGR-Trusted-Caller-Email": "curator@example.org",
+        "X-Trusted-Caller-Sub": "curator-sub-1",
+        "X-Trusted-Caller-Email": "curator@example.org",
     }
 
 

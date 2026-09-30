@@ -14,7 +14,7 @@ from fastapi.security import SecurityScopes
 from fastapi.testclient import TestClient
 
 auth_api = importlib.import_module("src.api.auth")
-TokenSet = importlib.import_module("src.auth.base").TokenSet
+TokenSet = importlib.import_module("auth_runtime.base").TokenSet
 
 
 def _request(headers=None, cookies=None, base_url="https://app.example.org/", query_params=None):
@@ -41,7 +41,6 @@ def _assert_logout_cookie_expired(set_cookie_headers, cookie_name):
 
 def _assert_logout_cookies_expired(set_cookie_headers):
     _assert_logout_cookie_expired(set_cookie_headers, "auth_token")
-    _assert_logout_cookie_expired(set_cookie_headers, "cognito_token")
 
 
 @pytest.fixture(autouse=True)
@@ -424,3 +423,12 @@ async def test_logout_redirect_uses_app_root_when_provider_has_no_logout_url(mon
 
 def test_auth_compat_get_user_property_returns_impl():
     assert auth_api.auth.get_user is auth_api._get_user_from_cookie_impl
+
+
+@pytest.mark.asyncio
+async def test_browser_auth_rejects_retired_cognito_cookie(monkeypatch):
+    monkeypatch.setattr(auth_api, "is_dev_mode", lambda: False)
+    monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
+    with pytest.raises(HTTPException) as exc:
+        await auth_api._get_user_from_cookie_impl(_request(cookies={"cognito_token": "legacy-token"}))
+    assert exc.value.status_code == 401

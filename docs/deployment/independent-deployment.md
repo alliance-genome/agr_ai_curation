@@ -335,3 +335,27 @@ groups:
 ```
 
 `cognito_groups` is legacy terminology and should not be used in new configuration examples.
+
+## Shared authentication for TraceReview
+
+The backend and TraceReview install `backend/auth_runtime`, which owns the
+provider-neutral principal contract, provider factory, OIDC/Cognito token
+validation, PKCE, and session cookies. Both use `AUTH_PROVIDER` and the same
+`OIDC_*` settings. Set `OIDC_GROUP_CLAIM` explicitly for your provider (including
+dot paths such as `realm_access.roles`). Cognito uses the same OIDC implementation;
+Alliance Cognito defaults live in deployment configuration rather than the runtime.
+
+Register a separate TraceReview callback with your identity provider. In the main
+Compose stack, set `TRACE_REVIEW_OIDC_REDIRECT_URI` (or
+`TRACE_REVIEW_COGNITO_REDIRECT_URI`) to the TraceReview frontend origin followed
+by `/api/auth/callback`. Standalone TraceReview uses `OIDC_REDIRECT_URI` or
+`COGNITO_REDIRECT_URI` directly. Production disables development auth in both
+services. Configuration errors do not enable a development bypass.
+
+Deploy both service images together: internal requests now use only
+`X-Trusted-Caller-Sub` and `X-Trusted-Caller-Email`, authenticated by
+`TRACE_REVIEW_INTERNAL_API_TOKEN`. The AGR-branded headers from ALL-908 were
+removed because core service auth is project-neutral. Old headers and the legacy
+`cognito_token` browser cookie are no longer accepted; existing users with only
+that cookie must log in again. Feedback artifact owner/admin authorization still
+runs in the main backend after the trusted identity is forwarded.

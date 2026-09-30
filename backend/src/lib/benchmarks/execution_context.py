@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator
 
-from src.auth.base import AuthPrincipal
+from auth_runtime.base import AuthPrincipal
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.models.sql.user import User
 

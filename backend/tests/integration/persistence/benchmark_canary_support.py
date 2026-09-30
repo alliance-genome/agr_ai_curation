@@ -120,7 +120,7 @@ class CanaryIdentity:
         monkeypatch.setattr(auth, "_provider_failed", False)
         # Only discovery/key delivery are fake; key selection and signature,
         # issuer, audience, expiry and all API capability checks stay real.
-        monkeypatch.setattr("src.auth.providers.oidc.OIDCAuthProvider._discover", lambda provider: {
+        monkeypatch.setattr("auth_runtime.oidc.OIDCAuthProvider._discover", lambda provider: {
             "issuer": ISSUER, "jwks_uri": "https://canary.invalid/jwks",
         })
         monkeypatch.setattr(PyJWKClient, "fetch_data", lambda client: self.jwks)

@@ -31,6 +31,8 @@ from src.lib.observability.runtime import report_runtime_exception
 
 import httpx
 import os
+
+from auth_runtime.service import TRUSTED_CALLER_EMAIL_HEADER, TRUSTED_CALLER_SUB_HEADER
 import re
 from contextvars import ContextVar
 from typing import Dict, Any, Optional
@@ -101,9 +103,9 @@ def _trace_review_request_headers(
     trusted_email = caller_email or _trusted_trace_caller_email.get()
     headers = {"Authorization": f"Bearer {token}"}
     if trusted_sub:
-        headers["X-AGR-Trusted-Caller-Sub"] = trusted_sub
+        headers[TRUSTED_CALLER_SUB_HEADER] = trusted_sub
     if trusted_email:
-        headers["X-AGR-Trusted-Caller-Email"] = trusted_email
+        headers[TRUSTED_CALLER_EMAIL_HEADER] = trusted_email
     return headers
 
 

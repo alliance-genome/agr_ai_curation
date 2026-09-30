@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+
+from auth_runtime.service import TRUSTED_CALLER_EMAIL_HEADER, TRUSTED_CALLER_SUB_HEADER
 from typing import Any, Dict, Mapping
 
 import requests
@@ -77,9 +79,9 @@ def fetch_feedback_trace_artifacts(
     try:
         headers = {"Authorization": f"Bearer {token}"}
         if caller_sub:
-            headers["X-AGR-Trusted-Caller-Sub"] = caller_sub
+            headers[TRUSTED_CALLER_SUB_HEADER] = caller_sub
         if caller_email:
-            headers["X-AGR-Trusted-Caller-Email"] = caller_email
+            headers[TRUSTED_CALLER_EMAIL_HEADER] = caller_email
         response = requests.get(
             endpoint,
             headers=headers,

@@ -33,6 +33,8 @@ RUN apt-get update && apt-get install -y \
 
 COPY cost_pricing/ /tmp/cost_pricing/
 RUN pip install --no-cache-dir --no-deps /tmp/cost_pricing
+COPY auth_runtime/ /tmp/auth_runtime/
+RUN pip install --no-cache-dir --no-deps /tmp/auth_runtime
 
 # Copy source code and tests last (changes most frequently)
 COPY src/ ./src/

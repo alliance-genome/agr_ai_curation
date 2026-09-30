@@ -2,6 +2,8 @@
 
 import logging
 import os
+
+from auth_runtime.service import TRUSTED_CALLER_EMAIL_HEADER, TRUSTED_CALLER_SUB_HEADER
 import secrets
 import threading
 from typing import Annotated, Any, Dict
@@ -116,8 +118,10 @@ def _require_trace_review_internal_request(request: Request) -> tuple[str, str |
             status_code=401,
             detail="Invalid TraceReview service token.",
         )
-    caller_sub = request.headers.get("x-agr-trusted-caller-sub", "").strip()
-    caller_email = request.headers.get("x-agr-trusted-caller-email", "").strip() or None
+    # AGR-branded trusted-caller headers were dropped after ALL-908 because core
+    # service authentication is project-neutral; only canonical headers are read.
+    caller_sub = request.headers.get(TRUSTED_CALLER_SUB_HEADER.lower(), "").strip()
+    caller_email = request.headers.get(TRUSTED_CALLER_EMAIL_HEADER.lower(), "").strip() or None
     if not caller_sub:
         raise HTTPException(status_code=401, detail="Trusted caller identity is required.")
     return caller_sub, caller_email

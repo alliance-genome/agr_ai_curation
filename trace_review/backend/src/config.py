@@ -47,74 +47,11 @@ if not _env_loaded_from:
 
 
 # ===========================
-# AWS Cognito Configuration
-# ===========================
-
-def get_cognito_region() -> str:
-    """Get AWS Cognito region from environment."""
-    region = os.getenv("COGNITO_REGION", "us-east-1")
-    return region
-
-
-def get_cognito_user_pool_id() -> Optional[str]:
-    """Get Cognito User Pool ID from environment."""
-    pool_id = os.getenv("COGNITO_USER_POOL_ID")
-    # Only warn if not in dev mode (expected in dev mode)
-    if not pool_id and os.getenv("DEV_MODE", "false").lower() != "true":
-        logger.warning("COGNITO_USER_POOL_ID not set - Cognito authentication disabled")
-    return pool_id
-
-
-def get_cognito_client_id() -> Optional[str]:
-    """Get Cognito Client ID from environment."""
-    client_id = os.getenv("COGNITO_CLIENT_ID")
-    # Only warn if not in dev mode (expected in dev mode)
-    if not client_id and os.getenv("DEV_MODE", "false").lower() != "true":
-        logger.warning("COGNITO_CLIENT_ID not set - Cognito authentication disabled")
-    return client_id
-
-
-def get_cognito_client_secret() -> Optional[str]:
-    """Get Cognito Client Secret from environment."""
-    client_secret = os.getenv("COGNITO_CLIENT_SECRET")
-    # Only warn if not in dev mode (expected in dev mode)
-    if not client_secret and os.getenv("DEV_MODE", "false").lower() != "true":
-        logger.warning("COGNITO_CLIENT_SECRET not set - Cognito authentication disabled")
-    return client_secret
-
-
-def get_cognito_domain() -> Optional[str]:
-    """Get Cognito Domain from environment."""
-    domain = os.getenv("COGNITO_DOMAIN")
-    # Only warn if not in dev mode (expected in dev mode)
-    if not domain and os.getenv("DEV_MODE", "false").lower() != "true":
-        logger.warning("COGNITO_DOMAIN not set - Cognito authentication disabled")
-    return domain
-
-
-def get_cognito_redirect_uri() -> str:
-    """Get Cognito Redirect URI from environment."""
-    # Default to localhost for development
-    redirect_uri = os.getenv("COGNITO_REDIRECT_URI", "http://localhost:3001/api/auth/callback")
-    return redirect_uri
-
-
-def is_cognito_configured() -> bool:
-    """Check if all required Cognito config is present."""
-    return all([
-        get_cognito_user_pool_id(),
-        get_cognito_client_id(),
-        get_cognito_client_secret(),
-        get_cognito_domain()
-    ])
-
-
-# ===========================
 # Development Mode
 # ===========================
 
 def is_dev_mode() -> bool:
-    """Check if development mode is enabled (bypasses Cognito)."""
+    """Check if development mode is enabled (bypasses authentication)."""
     return os.getenv("DEV_MODE", "false").lower() == "true"
 
 

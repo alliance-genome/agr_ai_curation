@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 from jwt.exceptions import PyJWTError
 
-from src.auth.providers import oidc as oidc_module
-from src.auth.providers.oidc import OIDCAuthProvider
+from auth_runtime import oidc as oidc_module
+from auth_runtime.oidc import OIDCAuthProvider
 
 
 def test_validate_token_uses_pyjwt_decode(monkeypatch):

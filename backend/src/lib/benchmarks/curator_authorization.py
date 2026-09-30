@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable
 
-from src.auth.base import AuthPrincipal, CurrentPrincipalDenied, PrincipalLookupIdentity
+from auth_runtime.base import AuthPrincipal, CurrentPrincipalDenied, PrincipalLookupIdentity
 from src.auth.current_principal import get_current_principal_resolver
 from src.lib.benchmarks.execution_context import (
     BenchmarkCuratorContext,

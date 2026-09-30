@@ -6,7 +6,7 @@ from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from src.auth.base import AuthPrincipal, PrincipalLookupIdentity
+from auth_runtime.base import AuthPrincipal, PrincipalLookupIdentity
 from src.auth.current_principal import get_current_principal_resolver
 from src.lib.benchmarks.models import FrozenStrictModel
 from src.lib.group_rules import get_groups_from_provider_groups

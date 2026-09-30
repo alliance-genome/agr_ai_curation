@@ -2,6 +2,8 @@
 !backend/
 !backend/cost_pricing/
 !backend/cost_pricing/**
+!backend/auth_runtime/
+!backend/auth_runtime/**
 !trace_review/
 !trace_review/backend/
 !trace_review/backend/**

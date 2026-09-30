@@ -942,3 +942,36 @@ def test_worker_sentry_configuration_matches_backend_in_each_environment():
     assert worker_env["SENTRY_DEV_DSN"] == backend_env["SENTRY_DEV_DSN"] == ""
     # Release, environment and the remaining Sentry settings come from this shared env file.
     assert dev["benchmark_worker"]["env_file"] == dev["backend"]["env_file"]
+
+
+@pytest.mark.parametrize("compose_path", [DEV_COMPOSE_PATH, COMPOSE_PATH])
+def test_tracereview_shares_provider_configuration_and_has_its_own_callback(compose_path):
+    services = yaml.safe_load(compose_path.read_text())["services"]
+    environments = []
+    for service in ("backend", "trace_review_backend"):
+        environment = services[service]["environment"]
+        environments.append(_list_environment(environment) if isinstance(environment, list) else environment)
+    backend, review = environments
+    for name in (
+        "AUTH_PROVIDER", "OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET",
+        "OIDC_SCOPES", "OIDC_GROUP_CLAIM", "OIDC_LOGOUT_URL", "OIDC_LOGOUT_REDIRECT_PARAM",
+        "AUTH_PROVIDER_TIMEOUT_SECONDS", "AUTH_JWKS_TIMEOUT_SECONDS", "AUTH_JWKS_CACHE_TTL_SECONDS",
+        "AUTH_OAUTH_COOKIE_MAX_AGE_SECONDS", "AUTH_SESSION_COOKIE_MAX_AGE_SECONDS",
+    ):
+        assert review[name] == backend[name], name
+    assert review["OIDC_REDIRECT_URI"] == "${TRACE_REVIEW_OIDC_REDIRECT_URI:-http://localhost:3001/api/auth/callback}"
+    assert review["COGNITO_REDIRECT_URI"] == "${TRACE_REVIEW_COGNITO_REDIRECT_URI:-http://localhost:3001/api/auth/callback}"
+    if compose_path == COMPOSE_PATH:
+        assert review["DEV_MODE"] == "false"
+
+
+def test_standalone_tracereview_forwards_auth_settings_from_environment():
+    compose_path = WORKSPACE_ROOT / "trace_review/docker-compose.yml"
+    if not compose_path.exists():
+        compose_path = Path("/app/trace_review/docker-compose.yml")
+    environment = _list_environment(yaml.safe_load(compose_path.read_text())["services"]["backend"]["environment"])
+    assert environment["AUTH_PROVIDER"] == "${AUTH_PROVIDER}"
+    assert environment["OIDC_ISSUER_URL"] == "${OIDC_ISSUER_URL:-}"
+    assert environment["OIDC_CLIENT_ID"] == "${OIDC_CLIENT_ID:-}"
+    assert environment["OIDC_REDIRECT_URI"] == "${OIDC_REDIRECT_URI:-http://localhost:${TRACE_REVIEW_FRONTEND_HOST_PORT:-3001}/api/auth/callback}"
+    assert environment["COGNITO_REDIRECT_URI"] == "${COGNITO_REDIRECT_URI:-http://localhost:${TRACE_REVIEW_FRONTEND_HOST_PORT:-3001}/api/auth/callback}"

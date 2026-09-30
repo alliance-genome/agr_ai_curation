@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
 from weaviate.classes.tenants import Tenant
 
-from src.auth.base import AuthPrincipal
+from auth_runtime.base import AuthPrincipal
 from src.models.sql.user import User
 from src.lib.weaviate_helpers import get_connection, get_tenant_name
 

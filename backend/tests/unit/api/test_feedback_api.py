@@ -580,8 +580,8 @@ def test_get_feedback_trace_artifacts_returns_internal_trace_data(monkeypatch):
         feedback_id="feedback-123",
         request=SimpleNamespace(headers={
             "authorization": "Bearer service-token",
-            "x-agr-trusted-caller-sub": "curator-sub-1",
-            "x-agr-trusted-caller-email": "curator@example.org",
+            "x-trusted-caller-sub": "curator-sub-1",
+            "x-trusted-caller-email": "curator@example.org",
         }),
         db=_Db(),
     )
@@ -602,8 +602,8 @@ def test_get_feedback_trace_artifacts_hides_another_curators_report(monkeypatch)
             feedback_id="feedback-123",
             request=SimpleNamespace(headers={
                 "authorization": "Bearer service-token",
-                "x-agr-trusted-caller-sub": "other-sub",
-                "x-agr-trusted-caller-email": "other@example.org",
+                "x-trusted-caller-sub": "other-sub",
+                "x-trusted-caller-email": "other@example.org",
             }),
             db=db,
         )
@@ -623,3 +623,20 @@ def test_get_feedback_trace_artifacts_rejects_invalid_internal_token(monkeypatch
         )
 
     assert exc.value.status_code == 401
+
+
+def test_feedback_artifacts_reject_agr_branded_caller_headers(monkeypatch):
+    """A valid service token never makes retired caller headers authoritative."""
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "service-token")
+    with pytest.raises(feedback_api.HTTPException) as exc:
+        feedback_api.get_feedback_trace_artifacts(
+            feedback_id="feedback-123",
+            request=SimpleNamespace(headers={
+                "authorization": "Bearer service-token",
+                "x-agr-trusted-caller-sub": "curator-sub-1",
+                "x-agr-trusted-caller-email": "curator@example.org",
+            }),
+            db=object(),
+        )
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Trusted caller identity is required."

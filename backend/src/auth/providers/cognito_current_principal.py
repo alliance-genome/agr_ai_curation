@@ -8,7 +8,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from src.auth.base import AuthPrincipal, CurrentPrincipalDenied, PrincipalLookupIdentity
+from auth_runtime.base import AuthPrincipal, CurrentPrincipalDenied, PrincipalLookupIdentity
 from src.config import get_cognito_region, get_cognito_user_pool_id
 from src.lib.openai_agents.config import (
     get_benchmark_curator_auth_max_attempts,

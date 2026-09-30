@@ -329,6 +329,11 @@ services:
       - FEEDBACK_USE_SNS=${FEEDBACK_USE_SNS:-false}
       # Authentication Provider Configuration
       - AUTH_PROVIDER=${AUTH_PROVIDER}
+      - AUTH_PROVIDER_TIMEOUT_SECONDS=${AUTH_PROVIDER_TIMEOUT_SECONDS:-10}
+      - AUTH_JWKS_TIMEOUT_SECONDS=${AUTH_JWKS_TIMEOUT_SECONDS:-30}
+      - AUTH_JWKS_CACHE_TTL_SECONDS=${AUTH_JWKS_CACHE_TTL_SECONDS:-300}
+      - AUTH_OAUTH_COOKIE_MAX_AGE_SECONDS=${AUTH_OAUTH_COOKIE_MAX_AGE_SECONDS:-600}
+      - AUTH_SESSION_COOKIE_MAX_AGE_SECONDS=${AUTH_SESSION_COOKIE_MAX_AGE_SECONDS:-86400}
       # AWS Cognito Authentication Configuration
       - COGNITO_REGION=${COGNITO_REGION:-us-east-1}
       - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID:-}
@@ -342,7 +347,7 @@ services:
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
       - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-}
       - OIDC_SCOPES=${OIDC_SCOPES:-openid profile email}
-      - OIDC_GROUP_CLAIM=${OIDC_GROUP_CLAIM:-}
+      - OIDC_GROUP_CLAIM=${OIDC_GROUP_CLAIM:-groups}
       - OIDC_LOGOUT_URL=${OIDC_LOGOUT_URL:-}
       - OIDC_LOGOUT_REDIRECT_PARAM=${OIDC_LOGOUT_REDIRECT_PARAM:-post_logout_redirect_uri}
       # Scoped benchmark OIDC authorization
@@ -499,17 +504,31 @@ services:
       - path: ./trace_review/backend/.env
         required: false
     environment:
+      - AUTH_PROVIDER=${AUTH_PROVIDER}
+      - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URI=${TRACE_REVIEW_OIDC_REDIRECT_URI:-http://localhost:3001/api/auth/callback}
+      - OIDC_SCOPES=${OIDC_SCOPES:-openid profile email}
+      - OIDC_GROUP_CLAIM=${OIDC_GROUP_CLAIM:-groups}
+      - OIDC_LOGOUT_URL=${OIDC_LOGOUT_URL:-}
+      - OIDC_LOGOUT_REDIRECT_PARAM=${OIDC_LOGOUT_REDIRECT_PARAM:-post_logout_redirect_uri}
+      - AUTH_PROVIDER_TIMEOUT_SECONDS=${AUTH_PROVIDER_TIMEOUT_SECONDS:-10}
+      - AUTH_JWKS_TIMEOUT_SECONDS=${AUTH_JWKS_TIMEOUT_SECONDS:-30}
+      - AUTH_JWKS_CACHE_TTL_SECONDS=${AUTH_JWKS_CACHE_TTL_SECONDS:-300}
+      - AUTH_OAUTH_COOKIE_MAX_AGE_SECONDS=${AUTH_OAUTH_COOKIE_MAX_AGE_SECONDS:-600}
+      - AUTH_SESSION_COOKIE_MAX_AGE_SECONDS=${AUTH_SESSION_COOKIE_MAX_AGE_SECONDS:-86400}
       # trace_review environment variables
       # Priority: TRACE_REVIEW_* prefix (from main .env) > non-prefixed (from trace_review .env) > defaults
       # This allows using either the main .env with prefixes or a separate trace_review/.env
       #
-      # Cognito Authentication (falls back to main app's Cognito config)
+      # Cognito Authentication (deployment defaults shared with the main app)
       - COGNITO_REGION=${TRACE_REVIEW_COGNITO_REGION:-${COGNITO_REGION:-us-east-1}}
       - COGNITO_USER_POOL_ID=${TRACE_REVIEW_COGNITO_USER_POOL_ID:-${COGNITO_USER_POOL_ID}}
       - COGNITO_CLIENT_ID=${TRACE_REVIEW_COGNITO_CLIENT_ID:-${COGNITO_CLIENT_ID}}
       - COGNITO_CLIENT_SECRET=${TRACE_REVIEW_COGNITO_CLIENT_SECRET:-${COGNITO_CLIENT_SECRET}}
-      - COGNITO_DOMAIN=${TRACE_REVIEW_COGNITO_DOMAIN:-${COGNITO_DOMAIN}}
-      - COGNITO_REDIRECT_URI=${TRACE_REVIEW_COGNITO_REDIRECT_URI:-${COGNITO_REDIRECT_URI:-http://localhost:3001/api/auth/callback}}
+      - COGNITO_DOMAIN=${TRACE_REVIEW_COGNITO_DOMAIN:-${COGNITO_DOMAIN:-https://auth.alliancegenome.org}}
+      - COGNITO_REDIRECT_URI=${TRACE_REVIEW_COGNITO_REDIRECT_URI:-http://localhost:3001/api/auth/callback}
       # Development Mode
       - DEV_MODE=${TRACE_REVIEW_DEV_MODE:-${DEV_MODE:-false}}
       - TRACE_REVIEW_SENTRY_DSN=${TRACE_REVIEW_SENTRY_DSN:-}

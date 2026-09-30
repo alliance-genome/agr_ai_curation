@@ -15,7 +15,7 @@ from src.api.benchmark_auth import (
     require_benchmark_run,
     require_benchmark_source_read,
 )
-from src.auth.base import AuthPrincipal
+from auth_runtime.base import AuthPrincipal
 from src.lib.benchmarks.curator_authorization import authorize_benchmark_curator
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext, capture_curator_context
 from src.lib.benchmarks.observability import sanitized_benchmark_error

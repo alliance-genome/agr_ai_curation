@@ -8,7 +8,7 @@ from jwt.exceptions import InvalidAudienceError
 from starlette.requests import Request
 
 from src.api import benchmark_curator as admission
-from src.auth.base import AuthPrincipal
+from auth_runtime.base import AuthPrincipal
 from src.models.sql.user import User
 from src.lib.security.redaction import REDACTED, redact_secrets
 

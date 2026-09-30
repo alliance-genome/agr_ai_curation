@@ -19,7 +19,7 @@ from src.api import (
     benchmark_gate,
     benchmark_onboarding,
 )
-from src.auth.base import AuthPrincipal, CurrentPrincipalDenied
+from auth_runtime.base import AuthPrincipal, CurrentPrincipalDenied
 from src.lib.benchmarks import curator_authorization, curator_onboarding
 from src.models.sql.benchmark import BenchmarkJob
 from src.models.sql.database import SessionLocal, engine

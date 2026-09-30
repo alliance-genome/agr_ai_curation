@@ -43,6 +43,8 @@ RUN KNOWN_PTH="a1_coverage.pth distutils-precedence.pth sphinxcontrib_jsmath-1.0
 # Shared pure accounting valuation (also installed by TraceReview).
 COPY cost_pricing/ /tmp/cost_pricing/
 RUN pip install --no-cache-dir --no-deps /tmp/cost_pricing
+COPY auth_runtime/ /tmp/auth_runtime/
+RUN pip install --no-cache-dir --no-deps /tmp/auth_runtime
 
 # Copy source code
 COPY src/ ./src/

@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.auth.base import AuthPrincipal
+from auth_runtime.base import AuthPrincipal
 from src.lib.benchmarks.execution_context import (
     BenchmarkCuratorContext,
     capture_curator_context,
