@@ -200,7 +200,8 @@ def _canonical(definition: dict) -> dict:
 def _require_only_pins_changed(before: dict, after: dict, moves: dict[str, str],
                                layouts: list[dict[str, Any]]) -> None:
     """The save may change only the moved pins, their receipts, derived validation
-    groups and the layout identities moved above."""
+    groups, check descriptors (not which checks or their on/off choice) and the
+    layout identities moved above."""
     old, new = _canonical(before), _canonical(after)
     if {k: v for k, v in old.items() if k != "nodes"} != {k: v for k, v in new.items() if k != "nodes"}:
         raise ValueError("the save would change flow settings other than the re-pinned steps")
@@ -221,11 +222,20 @@ def _require_only_pins_changed(before: dict, after: dict, moves: dict[str, str],
         for source in (expected.get("projection_plan") or {}).get("selected_sources") or []:
             if (node_id, source.get("node_id")) in moved_layouts:
                 source["schema_fingerprint"] = moved_layouts[(node_id, source["node_id"])]
-        # Validation groups are derived by the save from the (unchanged) checks.
-        derived = {"validation_groups"}
+        # The save derives validation groups, and refreshes each check's descriptor
+        # from the installed packages as any curator save does; which checks a step
+        # has and whether each is on must stay the same.
+        derived = {"validation_groups", "validation_attachments"}
         if ({k: v for k, v in expected.items() if k not in derived}
                 != {k: v for k, v in new_node["data"].items() if k not in derived}):
             raise ValueError(f"the save would change step {node_id} beyond its pinned revision")
+        if _check_choices(expected) != _check_choices(new_node["data"]):
+            raise ValueError(f"the save would change step {node_id}'s checks")
+
+
+def _check_choices(data: dict) -> dict[str, Any]:
+    return {item.get("attachment_id"): item.get("enabled")
+            for item in data.get("validation_attachments") or []}
 
 
 def _repin_flow(db: Session, flow: CurationFlow, moves: dict[str, str],
@@ -370,7 +380,9 @@ def convert(
         "before": before, "after": remaining(db, retired_model_ids),
         "counts": {
             "owners": len(report),
-            "agents_converted": sum(len(item["agents"]) for item in report),
+            # An agent whose pins only reuse copies from an earlier run is listed, not counted.
+            "agents_converted": sum(1 for item in report for agent in item["agents"]
+                                    if any(not copy["reused"] for copy in agent["copies"])),
             "revisions_appended": sum(1 for item in report for agent in item["agents"]
                                       for copy in agent["copies"] if not copy["reused"]),
             "flows_repinned": sum(len(item["flows"]) for item in report),

@@ -249,6 +249,12 @@ def test_a_version_with_an_unmapped_reasoning_level_is_refused_and_its_flow_left
     assert report["counts"]["flows_refused"] == 1
     assert report["after"]["active_agent_heads"] == 1 and report["after"]["active_flow_pins"] == 2
 
+    # The good agent's pin is still retired in the refused flow: a re-run finds its
+    # existing copy and lists the agent without appending or counting it again.
+    again = run(db, reasoning_map={"xhigh": "high"})
+    assert again["counts"]["agents_converted"] == again["counts"]["revisions_appended"] == 0
+    assert good.agent_key in [item["agent_key"] for item in again["owners"][0]["agents"]]
+
 
 @pytest.mark.parametrize("model,saved,expected", [
     ("gpt-5.6-terra", "disabled", "medium"), ("gpt-5.6-terra", "minimal", "low"),
