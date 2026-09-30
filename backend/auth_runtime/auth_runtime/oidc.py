@@ -36,8 +36,16 @@ class OIDCAuthProvider(AuthProvider):
             "logout_redirect_param", "post_logout_redirect_uri"
         )
         self.timeout_seconds = float(config.get("timeout_seconds", os.getenv("AUTH_PROVIDER_TIMEOUT_SECONDS", "10")))
-        self.jwks_timeout_seconds = config.get("jwks_timeout_seconds", float(os.getenv("AUTH_JWKS_TIMEOUT_SECONDS", "30")))
-        self.jwks_cache_ttl_seconds = config.get("jwks_cache_ttl_seconds", int(os.getenv("AUTH_JWKS_CACHE_TTL_SECONDS", "300")))
+        self.jwks_timeout_seconds = (
+            config["jwks_timeout_seconds"]
+            if "jwks_timeout_seconds" in config
+            else float(os.getenv("AUTH_JWKS_TIMEOUT_SECONDS", "30"))
+        )
+        self.jwks_cache_ttl_seconds = (
+            config["jwks_cache_ttl_seconds"]
+            if "jwks_cache_ttl_seconds" in config
+            else int(os.getenv("AUTH_JWKS_CACHE_TTL_SECONDS", "300"))
+        )
         self.clock_skew_seconds = config.get("clock_skew_seconds", 0)
         self.required_claims = list(config.get("required_claims", ()))
         self.verify_audience = bool(config.get("verify_audience", True))

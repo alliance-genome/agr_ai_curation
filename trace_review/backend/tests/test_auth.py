@@ -90,6 +90,18 @@ def provider(request, monkeypatch):
     return p, token, kind
 
 
+def test_standalone_provider_reads_network_limits_from_environment(provider, monkeypatch):
+    monkeypatch.setenv("AUTH_PROVIDER_TIMEOUT_SECONDS", "7.5")
+    monkeypatch.setenv("AUTH_JWKS_TIMEOUT_SECONDS", "8.5")
+    monkeypatch.setenv("AUTH_JWKS_CACHE_TTL_SECONDS", "99")
+    auth._configured_provider.cache_clear()
+    configured = auth._configured_provider()
+    assert isinstance(configured, OIDCAuthProvider)
+    assert configured.timeout_seconds == 7.5
+    assert configured.jwks_timeout_seconds == 8.5
+    assert configured.jwks_cache_ttl_seconds == 99
+
+
 @pytest.mark.asyncio
 async def test_browser_provider_login_callback_cookie_and_logout(provider, monkeypatch):
     p, token, kind = provider

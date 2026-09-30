@@ -35,7 +35,10 @@ from src.config import get_secure_cookies, is_auth_configured, is_dev_mode
 from src.lib.config import get_group
 from src.lib.config.groups_loader import get_group_claim_key
 from src.lib.http_errors import raise_sanitized_http_exception
-from src.lib.openai_agents.config import get_auth_oauth_cookie_max_age_seconds
+from src.lib.openai_agents.config import (
+    get_auth_oauth_cookie_max_age_seconds,
+    get_auth_session_cookie_max_age_seconds,
+)
 from src.models.sql.database import get_db
 from src.services.user_service import provision_user
 
@@ -115,11 +118,15 @@ async def login(request: Request) -> RedirectResponse:
 
     redirect_response = RedirectResponse(url=authorize_url, status_code=302)
     # Fixed destination allowlist, never an arbitrary return URL/open redirect.
+    oauth_cookie_max_age = get_auth_oauth_cookie_max_age_seconds()
     redirect_response.set_cookie(
         key="oauth_destination", value="cost" if request.query_params.get("destination") == "cost" else "home",
-        httponly=True, secure=get_secure_cookies(), samesite="lax", max_age=get_auth_oauth_cookie_max_age_seconds(),
+        httponly=True, secure=get_secure_cookies(), samesite="lax", max_age=oauth_cookie_max_age,
     )
-    set_oauth_cookies(redirect_response, state, code_verifier, secure=get_secure_cookies())
+    set_oauth_cookies(
+        redirect_response, state, code_verifier,
+        secure=get_secure_cookies(), max_age=oauth_cookie_max_age,
+    )
     return redirect_response
 
 
@@ -167,7 +174,10 @@ async def callback(
 
     redirect_response = RedirectResponse(url="/cost/" if request.cookies.get("oauth_destination") == "cost" else "/", status_code=302)
     redirect_response.delete_cookie(key="oauth_destination")
-    set_session_cookie(redirect_response, tokens.id_token, secure=get_secure_cookies())
+    set_session_cookie(
+        redirect_response, tokens.id_token, secure=get_secure_cookies(),
+        max_age=get_auth_session_cookie_max_age_seconds(),
+    )
     return redirect_response
 
 

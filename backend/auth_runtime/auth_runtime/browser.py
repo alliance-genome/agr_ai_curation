@@ -20,8 +20,10 @@ def create_pkce() -> tuple[str, str, str]:
 
 
 def set_oauth_cookies(
-    response: Any, state: str, verifier: str, *, secure: bool
+    response: Any, state: str, verifier: str, *, secure: bool, max_age: int | None = None
 ) -> None:
+    if max_age is None:
+        max_age = max(1, int(os.getenv("AUTH_OAUTH_COOKIE_MAX_AGE_SECONDS", "600")))
     for key, value in (("oauth_state", state), ("oauth_code_verifier", verifier)):
         response.set_cookie(
             key=key,
@@ -29,7 +31,7 @@ def set_oauth_cookies(
             httponly=True,
             secure=secure,
             samesite="lax",
-            max_age=max(1, int(os.getenv("AUTH_OAUTH_COOKIE_MAX_AGE_SECONDS", "600"))),
+            max_age=max_age,
         )
 
 
@@ -42,14 +44,18 @@ async def authenticate_callback(
     return tokens, principal
 
 
-def set_session_cookie(response: Any, token: str, *, secure: bool) -> None:
+def set_session_cookie(
+    response: Any, token: str, *, secure: bool, max_age: int | None = None
+) -> None:
+    if max_age is None:
+        max_age = max(1, int(os.getenv("AUTH_SESSION_COOKIE_MAX_AGE_SECONDS", "86400")))
     response.set_cookie(
         key="auth_token",
         value=token,
         httponly=True,
         secure=secure,
         samesite="lax",
-        max_age=max(1, int(os.getenv("AUTH_SESSION_COOKIE_MAX_AGE_SECONDS", "86400"))),
+        max_age=max_age,
     )
     for key in ("oauth_state", "oauth_code_verifier"):
         response.delete_cookie(key=key, secure=secure, samesite="lax")

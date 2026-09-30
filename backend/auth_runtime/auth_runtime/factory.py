@@ -20,7 +20,12 @@ def get_auth_provider() -> str:
     return provider
 
 
-def create_cognito_provider() -> OIDCAuthProvider:
+def create_cognito_provider(
+    *,
+    timeout_seconds: float | None = None,
+    jwks_timeout_seconds: float | None = None,
+    jwks_cache_ttl_seconds: int | None = None,
+) -> OIDCAuthProvider:
     """Cognito uses the same OIDC implementation; deployment owns its defaults."""
     required = (
         "COGNITO_REGION",
@@ -41,19 +46,37 @@ def create_cognito_provider() -> OIDCAuthProvider:
             "logout_url": f"{os.environ['COGNITO_DOMAIN'].rstrip('/')}/logout",
             "logout_redirect_param": "logout_uri",
             "scopes": "openid profile email",
+            **{
+                key: value
+                for key, value in (
+                    ("timeout_seconds", timeout_seconds),
+                    ("jwks_timeout_seconds", jwks_timeout_seconds),
+                    ("jwks_cache_ttl_seconds", jwks_cache_ttl_seconds),
+                )
+                if value is not None
+            },
         }
     )
 
 
 def create_auth_provider(
-    *, dev_mode: bool, group_claim: str = "groups"
+    *,
+    dev_mode: bool,
+    group_claim: str = "groups",
+    timeout_seconds: float | None = None,
+    jwks_timeout_seconds: float | None = None,
+    jwks_cache_ttl_seconds: int | None = None,
 ) -> AuthProvider:
     """Use the caller's authorized dev-mode decision, never infer a bypass."""
     if dev_mode:
         return DevAuthProvider()
     provider_type = get_auth_provider()
     if provider_type == "cognito":
-        return create_cognito_provider()
+        return create_cognito_provider(
+            timeout_seconds=timeout_seconds,
+            jwks_timeout_seconds=jwks_timeout_seconds,
+            jwks_cache_ttl_seconds=jwks_cache_ttl_seconds,
+        )
     if provider_type == "dev":
         raise ValueError("AUTH_PROVIDER=dev requires DEV_MODE=true")
     required = ("OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_REDIRECT_URI")
@@ -73,5 +96,14 @@ def create_auth_provider(
             "logout_redirect_param": os.getenv(
                 "OIDC_LOGOUT_REDIRECT_PARAM", "post_logout_redirect_uri"
             ),
+            **{
+                key: value
+                for key, value in (
+                    ("timeout_seconds", timeout_seconds),
+                    ("jwks_timeout_seconds", jwks_timeout_seconds),
+                    ("jwks_cache_ttl_seconds", jwks_cache_ttl_seconds),
+                )
+                if value is not None
+            },
         }
     )
