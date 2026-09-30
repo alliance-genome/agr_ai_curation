@@ -16,10 +16,9 @@ services:
       context: ..
       dockerfile: trace_review/backend/Dockerfile
     network_mode: host  # Use host network to access VPN (EC2 Langfuse)
-    # Environment loaded from shell (via Makefile) or optional local .env
-    env_file:
-      - path: ./backend/.env
-        required: false
+    # Canonical input: Compose --env-file (or exported shell variables).
+    # Service env_file is deliberately absent: it cannot supply interpolation
+    # values and would be shadowed by the environment entries below.
     environment:
       # Langfuse config comes from .env (supports both local and remote sources)
       # - source="remote" uses LANGFUSE_HOST (EC2 VPN)

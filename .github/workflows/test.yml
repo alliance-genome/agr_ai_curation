@@ -265,7 +265,12 @@ jobs:
       - name: Run complete TraceReview backend suite
         run: |
           docker image inspect trace_review-backend-tests:latest > /dev/null
-          docker compose -p trace_review -f trace_review/docker-compose.yml run --rm --pull never backend-tests
+          compose_plugin=$(docker info --format '{{range .ClientInfo.Plugins}}{{if eq .Name "compose"}}{{.Path}}{{end}}{{end}}')
+          test -x "$compose_plugin"
+          docker compose -p trace_review -f trace_review/docker-compose.yml run --rm --pull never \
+            -v "$compose_plugin:/usr/local/bin/docker-compose:ro" \
+            -v "$PWD/trace_review/docker-compose.yml:/app/trace_review/docker-compose.yml:ro" \
+            -e COMPOSE_BIN=/usr/local/bin/docker-compose backend-tests
 
       - name: Cleanup TraceReview test resources
         if: always()

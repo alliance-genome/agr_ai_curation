@@ -169,8 +169,7 @@ trace-review: check-env check-trace-review-env ## Start published trace_review b
 .PHONY: trace-review-standalone
 trace-review-standalone: check-trace-review-env ## Start source-built trace_review stack independently
 	@echo "$(GREEN)Starting source-built trace_review standalone stack...$(NC)"
-	@set -a && . "$(TRACE_REVIEW_ENV_FILE)" && set +a && \
-		docker compose -f trace_review/docker-compose.yml up
+	@docker compose --env-file "$(TRACE_REVIEW_ENV_FILE)" -f trace_review/docker-compose.yml up
 
 .PHONY: restart-trace-review
 restart-trace-review: check-trace-review-env ## Restart trace_review backend

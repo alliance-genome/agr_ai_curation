@@ -723,8 +723,12 @@ deployment environment. The application and standalone Compose files pass these
 settings to TraceReview. A blank DSN disables reporting; there is no implicit
 use of the main backend DSN or its content-capture settings.
 
-Only explicit score, search, extraction, analysis, session, and configured
-feedback-service failures create events. Session exports aggregate failures into
+Only explicit score, search, extraction, analysis, session, configured
+feedback-service, and operational authentication failures create events. Auth
+failures use fixed `auth_configuration`, `auth_validation`, `auth_login`,
+`auth_callback`, and `auth_logout` categories, without identifiers or exception
+content. Expected credential, session, and OAuth state/verifier rejections (4xx)
+remain quiet. Session exports aggregate failures into
 one event with category counts and a hashed session ID. Ordinary missing traces,
 feedback 4xx responses, absent optional feedback configuration, and health probes
 remain quiet. A listed trace that disappears during a session export is counted

@@ -28,6 +28,7 @@ from fastapi.security import SecurityScopes
 
 from ..config import is_dev_mode, get_secure_cookies, get_frontend_url
 from ..models.requests import DevBypassRequest
+from ..observability import report_failure
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -45,6 +46,7 @@ def _get_provider_or_503() -> AuthProvider:
     try:
         return _configured_provider()
     except ValueError:
+        report_failure("auth_configuration")
         raise HTTPException(
             status_code=503, detail="Authentication not configured"
         ) from None
@@ -67,6 +69,7 @@ async def _get_user_from_cookie_impl(
         if not principal.subject:
             raise InvalidTokenError("Authenticated principal missing subject")
     except PyJWKClientConnectionError:
+        report_failure("auth_validation")
         raise HTTPException(
             status_code=503, detail="Authentication provider unavailable"
         ) from None
@@ -75,6 +78,7 @@ async def _get_user_from_cookie_impl(
             raise HTTPException(
                 status_code=401, detail="Invalid authentication token"
             ) from None
+        report_failure("auth_validation")
         raise HTTPException(
             status_code=503, detail="Authentication provider unavailable"
         ) from None
@@ -83,6 +87,7 @@ async def _get_user_from_cookie_impl(
             status_code=401, detail="Invalid authentication token"
         ) from None
     except Exception:
+        report_failure("auth_validation")
         raise HTTPException(
             status_code=503, detail="Authentication provider unavailable"
         ) from None
@@ -143,6 +148,7 @@ async def login(request: Request) -> RedirectResponse:
     try:
         url = await run_in_threadpool(provider.get_login_url, state, challenge, "S256")
     except Exception:
+        report_failure("auth_login")
         raise HTTPException(
             status_code=503, detail="Authentication provider unavailable"
         ) from None
@@ -169,6 +175,7 @@ async def callback(
             status_code=401, detail="Invalid authentication token"
         ) from None
     except Exception:
+        report_failure("auth_callback")
         raise HTTPException(
             status_code=503, detail="Authentication callback failed"
         ) from None
@@ -187,6 +194,7 @@ async def logout(request: Request) -> RedirectResponse:
     try:
         url = await run_in_threadpool(provider.get_logout_url, get_frontend_url())
     except Exception:
+        report_failure("auth_logout")
         raise HTTPException(
             status_code=503, detail="Authentication provider unavailable"
         ) from None

@@ -19,6 +19,8 @@ _OPERATIONS = frozenset({
     "scores", "search", "session_listing", "session_export", "extraction",
     "analysis", "feedback_transport", "feedback_http", "feedback_json",
     "feedback_payload", "session_missing_trace_id",
+    "auth_configuration", "auth_validation", "auth_login", "auth_callback",
+    "auth_logout",
 })
 
 
