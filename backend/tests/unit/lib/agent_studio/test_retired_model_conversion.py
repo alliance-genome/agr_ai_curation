@@ -78,3 +78,22 @@ def test_only_the_moved_pin_may_change(monkeypatch):
     with pytest.raises(ValueError, match="step task beyond its pinned revision"):
         conversion._require_only_pins_changed(_flow(), _flow("new", {"agent_revision_id": "new"}, "Other"),
                                               {"node_0": "new"}, [])
+
+
+def _with_check(flow, enabled=True, validator="old_validator"):
+    flow["nodes"][1]["data"]["validation_attachments"] = [
+        {"attachment_id": "gene:binding:lookup", "enabled": enabled, "validator_id": validator}]
+    return flow
+
+
+def test_a_refreshed_check_descriptor_is_allowed_but_not_a_changed_choice(monkeypatch):
+    monkeypatch.setattr(conversion, "_canonical", deepcopy)
+    before = _with_check(_flow())
+    refreshed = _with_check(_flow("new", {"agent_revision_id": "new"}), validator="renamed_validator")
+    conversion._require_only_pins_changed(before, refreshed, {"node_0": "new"}, [])
+    turned_off = _with_check(_flow("new", {"agent_revision_id": "new"}), enabled=False)
+    with pytest.raises(ValueError, match="step node_0's checks"):
+        conversion._require_only_pins_changed(before, turned_off, {"node_0": "new"}, [])
+    dropped = _flow("new", {"agent_revision_id": "new"})
+    with pytest.raises(ValueError, match="step node_0's checks"):
+        conversion._require_only_pins_changed(before, dropped, {"node_0": "new"}, [])
