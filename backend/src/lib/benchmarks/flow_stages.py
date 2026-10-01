@@ -152,8 +152,12 @@ def flow_stages(
             # Their palette defaults therefore are not another scheduled layer.
             continue
         schedule = validation_schedule_from_node_data(node.data.model_dump())
+        # Defaults attach one binding per field, but the executor dispatches a
+        # binding's envelope matches once (identical request ids), so it is one stage.
+        scheduled: dict[str, Mapping[str, Any]] = {}
         for binding in schedule["scheduled_validators"]:
-            binding_id = binding["validator_binding_id"]
+            scheduled.setdefault(binding["validator_binding_id"], binding)
+        for binding_id, binding in scheduled.items():
             source = authorize_validator(node_id, binding)
             validator_receipt = source if isinstance(source, AgentExecutionReceipt) else None
             validator_id = source.agent_key if isinstance(source, AgentExecutionReceipt) else source
