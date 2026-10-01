@@ -258,3 +258,113 @@ def test_pack_and_field_binding_declarations_must_agree():
     })
     with pytest.raises(ValueError, match="two different validator bindings"):
         benchmark_pack_catalog(SimpleNamespace(metadata=metadata))
+
+
+def test_value_roles_come_from_the_declared_display():
+    result = catalog("agr.alliance.gene_expression")
+    kind = "GeneExpressionAnnotation"
+    subject = "expression_annotation_subject"
+    assert field(result, kind, subject)["has_value_roles"] is True
+    assert field(result, kind, f"{subject}.primary_external_id")["value_role"] == "id"
+    assert field(result, kind, f"{subject}.gene_symbol")["value_role"] == "label"
+    assert field(result, kind, f"{subject}.mention")["value_role"] == "mention"
+    for note in ("resolution_state", "lookup_outcome", "validator_explanation",
+                 "validator_curator_message"):
+        assert field(result, kind, f"{subject}.{note}")["value_role"] == "working_note"
+    # The relation declares its roles on its model even though the object has no binding.
+    assert field(result, kind, "relation")["has_value_roles"] is True
+    assert field(result, kind, "relation.name")["value_role"] == "label"
+    assert field(result, kind, "relation.vocabulary")["value_role"] is None
+    # A grouping container composes its parts; it has no roles of its own.
+    assert field(result, kind, "expression_experiment")["has_value_roles"] is False
+    assert field(result, kind, "condition_relations")["has_value_roles"] is False
+    assert field(result, kind, "rationale")["value_role"] is None
+
+
+def test_lists_of_values_carry_roles_on_each_item():
+    result = catalog("agr.alliance.phenotype")
+    terms = field(result, "PhenotypeAnnotation", "phenotype_terms")
+    assert terms["shape"] == "object_list" and terms["has_value_roles"] is True
+    assert field(result, "PhenotypeAnnotation", "phenotype_terms[].curie")["value_role"] == "id"
+    assert field(result, "PhenotypeAnnotation", "phenotype_terms[].label")["value_role"] == "label"
+
+
+def test_a_reference_is_benchmarked_by_its_curie():
+    # The display id (the database reference_id) stays the identifier everywhere
+    # else; the declared benchmark_id makes the CURIE the value's id for benchmarks.
+    result = catalog("agr.alliance.gene_expression")
+    kind = "GeneExpressionAnnotation"
+    for reference in ("single_reference", "expression_experiment.single_reference"):
+        curie = field(result, kind, f"{reference}.curie")
+        assert curie["value_role"] == "id" and curie["is_identifier"] is False, reference
+        reference_id = field(result, kind, f"{reference}.reference_id")
+        assert reference_id["value_role"] is None, reference
+        assert reference_id["is_identifier"] is True, reference
+        assert field(result, kind, f"{reference}.title")["value_role"] == "label", reference
+
+
+# Leaves whose value declares a benchmark_id other than its display id.
+BENCHMARK_ID_LEAVES = {
+    ("agr.alliance.gene_expression", "single_reference.curie"),
+    ("agr.alliance.gene_expression", "single_reference.reference_id"),
+    ("agr.alliance.gene_expression", "expression_experiment.single_reference.curie"),
+    ("agr.alliance.gene_expression", "expression_experiment.single_reference.reference_id"),
+}
+
+
+def test_value_role_id_matches_is_identifier_everywhere():
+    for pack_id in ("agr.alliance.gene_expression", "agr.alliance.phenotype",
+                    "agr.alliance.disease", "agr.alliance.go"):
+        for item in catalog(pack_id)["fields"]:
+            same = (item["value_role"] == "id") == item["is_identifier"]
+            assert same != ((pack_id, item["path"]) in BENCHMARK_ID_LEAVES), (
+                pack_id, item["path"])
+            assert (item["value_role"] == "working_note") == item["validator_written"], (
+                pack_id, item["path"])
+
+
+def test_system_filled_fields_are_declared():
+    result = catalog("agr.alliance.gene_expression")
+    filled = {item["path"] for item in result["fields"] if item["system_filled"]}
+    assert filled == {"unique_id", "date_created", "expression_experiment.unique_id"}
+    for pack_id in ("agr.alliance.phenotype", "agr.alliance.disease", "agr.alliance.go"):
+        assert not any(item["system_filled"] for item in catalog(pack_id)["fields"]), pack_id
+
+
+@pytest.mark.parametrize("pack_id", ["agr.alliance.gene_expression", "agr.alliance.phenotype",
+                                     "agr.alliance.disease", "agr.alliance.go",
+                                     "agr.alliance.allele"])
+def test_every_field_binding_names_a_declared_validation(pack_id):
+    result = catalog(pack_id)
+    declared = {item["binding_id"]: item["label"] for item in result["validations"]}
+    assert len(declared) == len(result["validations"])
+    assert all(label.strip() for label in declared.values())
+    used = {item["validator_binding_id"] for item in result["fields"]} - {None}
+    assert used <= set(declared), sorted(used - set(declared))
+
+
+def test_validations_keep_the_pack_labels():
+    declared = {item["binding_id"]: item["label"]
+                for item in catalog("agr.alliance.gene_expression")["validations"]}
+    assert declared["subject_gene_validation"] == "Subject gene validation"
+    assert declared["relation_vocabulary_validation"] == "Relation vocabulary lookup"
+    # Bindings still being built are declared too, so the portal can name them.
+    phenotype = {item["binding_id"] for item in catalog("agr.alliance.phenotype")["validations"]}
+    assert "phenotype_subject_entity_validator" in phenotype
+
+
+def test_validations_carry_their_declared_state():
+    under_development = {
+        "agr.alliance.gene_expression": {"reagent_context_materialization"},
+        "agr.alliance.phenotype": {"phenotype_subject_entity_validator",
+                                   "phenotype_reference_validator"},
+        "agr.alliance.disease": {"disease_reference_materialization"},
+        "agr.alliance.allele": {"source_reference_validation"},
+        "agr.alliance.go": set(),
+    }
+    for pack_id, expected in under_development.items():
+        validations = catalog(pack_id)["validations"]
+        assert {item["state"] for item in validations} <= {"active", "under_development"}
+        found = {item["binding_id"] for item in validations
+                 if item["state"] == "under_development"}
+        assert found == expected, pack_id

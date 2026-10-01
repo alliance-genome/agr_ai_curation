@@ -837,7 +837,9 @@ class DomainPackValidatorBindings(DomainPackMetadataBaseModel):
 
 
 _DISPLAY_ROLES = ("label", "id", "state", "mention")
-_DISPLAY_KEYS = frozenset({*_DISPLAY_ROLES, "resolved_states", "compose", "separator", "validated"})
+_DISPLAY_KEYS = frozenset(
+    {*_DISPLAY_ROLES, "resolved_states", "compose", "separator", "validated", "benchmark_id"}
+)
 
 
 def _validate_display_spec(display: Any, where: str) -> None:
@@ -847,8 +849,10 @@ def _validate_display_spec(display: Any, where: str) -> None:
     declared parts and cannot be mixed with roles. A ``mention`` role declares
     a resolvable value (``src.lib.domain_packs.resolvable_values``): its
     mention, label and id are keys of the value itself, and its state is the
-    contract's ``resolution_state``, so it takes no ``state`` role. Checked
-    when a pack loads.
+    contract's ``resolution_state``, so it takes no ``state`` role. An
+    optional ``benchmark_id`` names the key the benchmark catalog treats as the
+    value's identifier when it differs from the display ``id`` (e.g. a
+    reference's CURIE); nothing else reads it. Checked when a pack loads.
     """
 
     if not isinstance(display, dict) or not display:
@@ -864,7 +868,10 @@ def _validate_display_spec(display: Any, where: str) -> None:
     if "separator" in display and not isinstance(display["separator"], str):
         raise ValueError(f"{where}.separator must be a string")
     if "compose" in display:
-        if any(key in display for key in (*_DISPLAY_ROLES, "resolved_states", "validated")):
+        if any(
+            key in display
+            for key in (*_DISPLAY_ROLES, "resolved_states", "validated", "benchmark_id")
+        ):
             raise ValueError(f"{where}.compose cannot be combined with label, id or state roles")
         compose = display["compose"]
         if not isinstance(compose, list) or not compose:
@@ -893,6 +900,12 @@ def _validate_display_spec(display: Any, where: str) -> None:
         return
     if not (display.get("label") or display.get("id")):
         raise ValueError(f"{where} needs a label, id or compose declaration")
+    if "benchmark_id" in display:
+        benchmark_id = display["benchmark_id"]
+        if not (isinstance(benchmark_id, str) and benchmark_id.strip() and "." not in benchmark_id):
+            raise ValueError(f"{where}.benchmark_id must be a key of the value itself")
+        if benchmark_id == display.get("id"):
+            raise ValueError(f"{where}.benchmark_id repeats the display id")
     if "mention" in display:
         if "state" in display or "resolved_states" in display:
             raise ValueError(
@@ -1126,6 +1139,14 @@ class DomainPackFieldDefinition(DomainPackMetadataBaseModel):
                 raise ValueError(
                     "field metadata 'free_text' is only valid on string fields or lists of text"
                 )
+        raw_system_filled = self.metadata.get("system_filled")
+        if raw_system_filled is not None:
+            if not isinstance(raw_system_filled, bool):
+                raise ValueError("field metadata 'system_filled' must be a boolean")
+            if raw_system_filled and self.field_type in {
+                DomainPackFieldType.OBJECT, DomainPackFieldType.OBJECT_REF,
+            }:
+                raise ValueError("field metadata 'system_filled' is not valid on an object")
         return self
 
 

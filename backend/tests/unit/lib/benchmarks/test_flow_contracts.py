@@ -140,8 +140,8 @@ def test_system_pack_step_returns_the_benchmark_catalog(curator):
     assert result.status == "verified" and result.representation == "pack_fields"
     assert result.schema_definition is not None
     assert set(result.schema_definition) == {
-        "pack_id", "pack_version", "pack_label", "record_kinds", "families", "fields",
-        "default_fields"}
+        "pack_id", "pack_version", "pack_label", "record_kinds", "families", "validations",
+        "fields", "default_fields"}
     assert result.structure_source == PackStructureSource(
         pack_id="agr.alliance.disease", pack_version="0.1.0",
         pack_label="Alliance Disease Domain Pack")

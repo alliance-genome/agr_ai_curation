@@ -134,3 +134,38 @@ def test_prose_fields_are_marked_free_text(pack_id, object_type, paths):
     fields, _ = _fields(pack_id, object_type)
     for path in paths:
         assert fields[path].metadata["free_text"] is True, path
+
+
+def test_system_filled_must_be_a_boolean_on_a_value_field():
+    _field(field_path="unique_id", field_type="string", metadata={"system_filled": True})
+    with pytest.raises(ValidationError, match="'system_filled' must be a boolean"):
+        _field(field_path="unique_id", field_type="string", metadata={"system_filled": "yes"})
+    with pytest.raises(ValidationError, match="'system_filled' is not valid on an object"):
+        _field(field_path="block", field_type="object", metadata={"system_filled": True})
+
+
+def _reference_display(**display):
+    return _field(field_path="reference", field_type="object",
+                  metadata={"display": {"label": "title", "id": "reference_id",
+                                        "mention": "mention", **display}})
+
+
+def test_benchmark_id_names_one_other_key_of_the_value():
+    _reference_display(benchmark_id="curie")
+    with pytest.raises(ValidationError, match="benchmark_id must be a key of the value itself"):
+        _reference_display(benchmark_id="source.curie")
+    with pytest.raises(ValidationError, match="benchmark_id must be a key of the value itself"):
+        _reference_display(benchmark_id=["curie"])
+    with pytest.raises(ValidationError, match="benchmark_id repeats the display id"):
+        _reference_display(benchmark_id="reference_id")
+    with pytest.raises(ValidationError, match="compose cannot be combined"):
+        _field(field_path="block", field_type="object", metadata={"display": {
+            "compose": ["part"], "benchmark_id": "curie"}})
+
+
+def test_gene_expression_references_declare_their_curie_benchmark_id():
+    pack = domain_pack_validation_registries()["agr.alliance.gene_expression"].domain_pack
+    model = next(m for m in pack.metadata.model_definitions
+                 if m.model_id == "ReferenceSnapshotPayload")
+    assert model.metadata["display"]["benchmark_id"] == "curie"
+    assert model.metadata["display"]["id"] == "reference_id"

@@ -134,6 +134,7 @@ model_definitions:
       display:
         label: title
         id: reference_id
+        benchmark_id: curie
         mention: mention
         validated:
           - curie
@@ -459,6 +460,7 @@ object_definitions:
         display_name: Unique ID
         metadata:
           protected: true
+          system_filled: true
           curator_action_note: Unique IDs are stable persistence identifiers.
           provider_refs:
             alliance_linkml:
@@ -476,6 +478,7 @@ object_definitions:
         required: true
         metadata:
           protected: true
+          system_filled: true
           curator_action_note: Creation timestamps are persistence metadata, not extraction edit targets.
           provider_refs:
             alliance_linkml:
@@ -973,6 +976,7 @@ object_definitions:
         required: true
         metadata:
           protected: true
+          system_filled: true
           curator_action_note: Experiment unique IDs are stable persistence identifiers.
           provider_refs:
             alliance_linkml:

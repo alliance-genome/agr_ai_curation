@@ -87,13 +87,26 @@ The response contains declared output structures per node, not result data:
   Studio export catalog and not a JSON Schema): `pack_id`, `pack_version`,
   `pack_label`; `record_kinds` (`object_type`, `label`, `role` `curatable` or
   `supporting`); `families` from the pack's explicit `record_kind_families`
-  (`id`, `label`, `fallback_object_type`, `object_types`); `fields` for curatable
-  kinds (`object_type`, `path`, `label`, `shape`, `inside_list`, `is_identifier`,
-  `validator_written`, `is_pointer`, `free_text`, `validator_binding_id`); and
+  (`id`, `label`, `fallback_object_type`, `object_types`); `validations`, every
+  validator binding the pack declares in declaration order (`binding_id`,
+  `label` from its `display_name`, `state` `active` or `under_development`);
+  `fields` for curatable kinds (`object_type`, `path`, `label`, `shape`,
+  `inside_list`, `is_identifier`, `validator_written`, `is_pointer`, `free_text`,
+  `validator_binding_id`, `value_role`, `has_value_roles`, `system_filled`); and
   `default_fields` per curatable kind (`path`, `if_not_validated`), read live
   from the kind's workspace layout. A leaf read from every element of a list of
   inline objects is written `list[].leaf` with shape `text_from_each_item`.
   Descriptions and enum values are omitted.
+  - `value_role` is the leaf's part of its parent value's declared `display`:
+    `mention` (the paper's wording), `working_note` (a validator-written
+    contract key such as `resolution_state`), `id`, `label`, or null. The id is
+    the display's `benchmark_id` when declared (a gene expression reference is
+    benchmarked by its CURIE, while its display `id` and `is_identifier` stay
+    on `reference_id`), otherwise its `id`.
+  - `has_value_roles` is true on an object or list of objects whose display
+    names an `id`, `label` or `mention`; a `compose` container has none.
+  - `system_filled` repeats the field's `metadata.system_filled` declaration
+    (persistence values such as unique IDs and creation dates).
 - `not_verified` means a contract is unavailable or undeclared. It does not
   mean a model failed, and it must not be presented as an empty gene list.
 - Every verified pack or profile contract has `structure_source`:

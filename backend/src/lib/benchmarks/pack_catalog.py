@@ -5,8 +5,11 @@ describes the same declarations for choosing benchmark fields. Every fact comes
 from an explicit declaration (field type, display roles, ``free_text``,
 ``validator_binding_id`` / ``validation_result_binding_id`` on a field, or a
 pack-level ``validator_bindings.active[].applies_to`` naming the field,
-``record_kind_families``, ``exported``); nothing is inferred from a
-name or description. Only curatable record kinds carry fields and defaults.
+``record_kind_families``, ``exported``, a resolvable value's declared
+``display`` roles and ``benchmark_id`` (``value_role``, ``has_value_roles``),
+``metadata.system_filled``, and the pack's ``validator_bindings`` labels and
+states); nothing is inferred from a name or description. Only curatable record
+kinds carry fields and defaults.
 """
 
 from typing import Any
@@ -20,6 +23,8 @@ VALIDATOR_WRITTEN_KEYS = frozenset(CONTRACT_KEYS) - {MENTION_KEY}
 EVIDENCE_LINK_KEYS = frozenset({"evidence_record_id", "evidence_record_ids"})
 TEXT_TYPES = frozenset({DomainPackFieldType.STRING, DomainPackFieldType.ENUM})
 OFFERABLE_SHAPES = frozenset({"text", "text_list", "text_from_each_item"})
+ROLE_KEYS = ("id", "label", "mention")
+VALIDATION_STATES = ("active", "under_development")
 
 
 def _is_list(field: Any) -> bool:
@@ -47,6 +52,20 @@ def _pack_bindings(pack_metadata: Any, object_type: str) -> dict[str, set[str]]:
         for path in applies_to.get("field_paths") or []:
             bindings.setdefault(path, set()).add(str(binding["binding_id"]))
     return bindings
+
+
+def _declared_validations(pack_metadata: Any) -> list[dict[str, str]]:
+    """Every validation the pack declares, with its display name and state, in order."""
+    found: list[dict[str, str]] = []
+    raw = pack_metadata.metadata.get("validator_bindings") or {}
+    for state in VALIDATION_STATES:
+        for binding in raw.get(state) or []:
+            binding_id = str(binding["binding_id"])
+            label = binding.get("display_name")
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError(f"validator binding {binding_id} declares no display_name")
+            found.append({"binding_id": binding_id, "label": label, "state": state})
+    return found
 
 
 class _ObjectFacts:
@@ -103,6 +122,31 @@ class _ObjectFacts:
             return None
         return declared_display(field, self.models, self.object_models)
 
+    def _has_value_roles(self, path: str, shape: str) -> bool:
+        if shape not in ("object", "object_list"):
+            return False
+        display = self._display(path) or {}
+        return any(isinstance(display.get(role), str) and display[role] for role in ROLE_KEYS)
+
+    @staticmethod
+    def _value_role(key: str, parent_display: dict[str, Any] | None, mention_key: str | None,
+                    validator_written: bool) -> str | None:
+        """This leaf's role in its parent's declared display: id, label, mention or a note.
+
+        The id is the display's ``benchmark_id`` when it declares one, else its ``id``.
+        """
+        if mention_key is not None and key == mention_key:
+            return "mention"
+        if validator_written:
+            return "working_note"
+        if not parent_display:
+            return None
+        if key == parent_display.get("benchmark_id", parent_display.get("id")):
+            return "id"
+        if key == parent_display.get("label"):
+            return "label"
+        return None
+
     def _written_path(self, path: str) -> tuple[str, int]:
         """``path`` with ``[]`` after each declared list ancestor, and how many lists are above."""
         parts = path.split(".")
@@ -158,6 +202,9 @@ class _ObjectFacts:
         parent_path, _, key = path.rpartition(".")
         parent_display = self._display(parent_path)
         mention_key = self._mention_key(parent_path)
+        validator_written = (
+            mention_key is not None and key != mention_key and key in VALIDATOR_WRITTEN_KEYS
+        )
         return {
             "object_type": self.obj.object_type,
             "path": written,
@@ -165,14 +212,15 @@ class _ObjectFacts:
             "shape": shape,
             "inside_list": inside_list,
             "is_identifier": bool(parent_display) and parent_display.get("id") == key,
-            "validator_written": (
-                mention_key is not None and key != mention_key and key in VALIDATOR_WRITTEN_KEYS
-            ),
+            "validator_written": validator_written,
             "is_pointer": (
                 field.field_type is DomainPackFieldType.OBJECT_REF and not self._has_children(path)
             ) or key in EVIDENCE_LINK_KEYS,
             "free_text": field.metadata.get("free_text") is True,
             "validator_binding_id": self._binding(field, parent_path, key, mention_key),
+            "value_role": self._value_role(key, parent_display, mention_key, validator_written),
+            "has_value_roles": self._has_value_roles(path, shape),
+            "system_filled": field.metadata.get("system_filled") is True,
         }
 
     def _default_entry(self, layout_path: str) -> dict[str, Any] | None:
@@ -210,7 +258,7 @@ class _ObjectFacts:
 
 
 def benchmark_pack_catalog(domain_pack: Any) -> dict[str, Any]:
-    """The pack's record kinds, families, curatable field facts and default fields.
+    """The pack's record kinds, families, validations, curatable field facts and defaults.
 
     Defaults are the curatable kind's ``workspace_display`` layout, read live on
     every call, mapped to comparable leaves; no copy is kept anywhere.
@@ -242,5 +290,6 @@ def benchmark_pack_catalog(domain_pack: Any) -> dict[str, Any]:
     return {
         "pack_id": metadata.pack_id, "pack_version": metadata.version,
         "pack_label": metadata.display_name, "record_kinds": record_kinds,
-        "families": families, "fields": fields, "default_fields": defaults,
+        "families": families, "validations": _declared_validations(metadata),
+        "fields": fields, "default_fields": defaults,
     }
