@@ -5,7 +5,7 @@ langfuse==4.7.1
 python-dotenv==1.0.0
 
 # Authentication
-PyJWT[crypto]==2.10.1
+PyJWT[crypto]==2.15.1
 cryptography==48.0.0
 httpx==0.28.1
 requests==2.32.4
