@@ -92,5 +92,15 @@
     "reason": "PE-24. Extraction never searches a database for an identity (Chris, 2026-09-24): the lookup tools were removed from the extractor and the validators do all identity search. A proposed phenotype term name is not paper data, so the term_label staging input was removed; the phenotype ontology validator searches with the paper wording.",
     "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<output_and_handoff_contract>",
     "new_home": ""
+  },
+  {
+    "phrase": "If no phenotype finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation (finalizing with an empty candidate list is not valid; simply do not stage candidates).",
+    "category": "relocated",
+    "reason": "Builder empty-finalize fix (PR #910), same as ALL-1229 for disease. The 'empty candidate list is not valid' clause only restated the old min_length=1 finalize schema, which this fix removes. The rule now requires an actual finalize_phenotype_extraction(candidate_ids=[]) call, because prose alone never produced a finalized empty result. The stage-nothing / never-force-an-annotation intent is unchanged and remains in the same prompt.yaml bullet.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<stop_rules>",
+    "new_home": "render",
+    "synonyms": [
+      "If no phenotype finding has direct experimental support in this paper, stage nothing and explicitly call `finalize_phenotype_extraction(candidate_ids=[])`"
+    ]
   }
 ]

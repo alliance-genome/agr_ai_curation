@@ -332,7 +332,7 @@ class GOFindInput(_StrictToolModel):
 
 
 class GOFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(min_length=1)
+    candidate_ids: List[StrictStr]
 
 
 def _emit_go_builder_event(
@@ -1031,6 +1031,12 @@ def _materialize_go_with_events(
 
 
 def _finalize_go_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
+    """Finalize staged GO drafts through the builder handoff contract.
+
+    Pass candidate_ids=[] to explicitly finalize with no retained GO recommendations.
+    Omitting the call or returning only prose does not finalize an empty result.
+    """
+
     attempted_query = _attempt_query(
         "finalize_go_extraction", candidate_ids=candidate_ids
     )

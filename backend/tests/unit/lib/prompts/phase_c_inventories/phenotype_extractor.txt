@@ -190,7 +190,7 @@ Call `finalize_phenotype_extraction(candidate_ids=[...])` once after every retai
 The backend then materializes one pending phenotype annotation per finalized candidate, copies verified evidence into metadata, and wires the object graph with BLOCKED export/write posture; you never hand-author that graph.
 
 # PE-59 stop/abstain: empty result allowed; empty finalize not valid
-If no phenotype finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation (finalizing with an empty candidate list is not valid; simply do not stage candidates).
+If no phenotype finding has direct experimental support in this paper, stage nothing and explicitly call `finalize_phenotype_extraction(candidate_ids=[])`
 
 # PE-60 unresolved identity: keep free-text statement with hints; leave to validators
 If phenotype identity or genotype attribution is unresolved after using the available paper context, do not guess: stage the supported, evidence-backed phenotype with its free-text statement and paper wording, leave identifiers the paper does not print unset for the validators

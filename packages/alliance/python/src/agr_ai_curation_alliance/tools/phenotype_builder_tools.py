@@ -399,7 +399,7 @@ class PhenotypeFindInput(_StrictToolModel):
 
 
 class PhenotypeFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(min_length=1, max_length=50)
+    candidate_ids: List[StrictStr] = Field(max_length=50)
 
 
 def _emit_phenotype_builder_event(
@@ -1024,6 +1024,9 @@ def _materialize_phenotype_with_events(
 
 def _finalize_phenotype_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
     """Finalize staged phenotype candidates through the builder handoff contract.
+
+    Pass candidate_ids=[] to explicitly finalize with no retained phenotype annotations.
+    Omitting the call or returning only prose does not finalize an empty result.
 
     Thin domain adapter: input validation + result shape live here; all structural
     staging/finalize control flow is delegated to ``finalize_builder_extraction``. The active

@@ -107,7 +107,10 @@ content: |
 
   Call `list_staged_go_recommendations`, patch only supported corrections, and
   discard non-retained drafts. Call `finalize_go_extraction` once with the exact
-  completed candidate manifest. Do not author full envelope JSON and do not use
+  completed candidate manifest. If no GO recommendation in scope has direct
+  experimental support in this paper, stage nothing and explicitly call
+  `finalize_go_extraction(candidate_ids=[])`; prose alone is not a finalized
+  empty result. Do not author full envelope JSON and do not use
   any generic builder or general-PDF fallback.
   </builder_workflow>
 

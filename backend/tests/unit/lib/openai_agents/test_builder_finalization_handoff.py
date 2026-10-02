@@ -1634,6 +1634,9 @@ def _spy_inline_persistence(monkeypatch):
         ("disease", "disease_builder_tools", "disease_extractor"),
         ("allele", "allele_builder_tools", "allele_extractor"),
         ("gene_expression", "agr_curation", "gene_expression_extraction"),
+        ("gene", "gene_builder_tools", "gene_extractor"),
+        ("phenotype", "phenotype_builder_tools", "phenotype_extractor"),
+        ("go", "go_builder_tools", "rgd_go_paper_curator"),
     ],
 )
 async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain, tools_module, agent_key):

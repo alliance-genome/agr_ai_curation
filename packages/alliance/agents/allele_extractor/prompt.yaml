@@ -135,7 +135,7 @@ content: |
 
   <stop_rules>
   - Stop searching when you have checked the high-yield sections (Methods strain/genotype lists, results, figure legends, tables) and additional searches return duplicate or background-only candidates. Once each retained allele has its verified evidence, proceed to finalization instead of searching for more support.
-  - If no allele finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation.
+  - If no allele finding has direct experimental support in this paper, stage nothing and explicitly call `finalize_allele_extraction(candidate_ids=[])`, then return the same small finalization acknowledgment. Prose alone is not a finalized empty result; never force an annotation.
   - When allele identity stays uncertain after using the available paper context, do not guess: stage the supported, evidence-backed allele with its exact notation and paper-backed selector hints, leave `normalized_hint`/identity for the validator. Leave a mention unstaged only when you cannot tell whether it is even a single curatable allele.
   - If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
   - Never invent allele symbols, identifiers, gene associations, taxa, `chunk_id` values, or evidence text. Leave unresolved validator-bound values to the validator's result fields and envelope validation findings.
