@@ -66,6 +66,7 @@ import {
   loadMessagesFromStorage,
   mergeTraceIds,
   mergeFlowChatOutputs,
+  sanitizeStoredMessage,
   shouldShowCurationDbWarning,
   upsertAssistantTurnMessage,
   withEvidenceRecords,
@@ -80,6 +81,7 @@ import type {
   ConversationStatus,
   Message,
   PrepStatus,
+  RestoredChatTranscript,
   SerializedMessage,
   StoredChatData,
 } from './types'
@@ -89,9 +91,14 @@ type ChatStreamEvent = SSEEvent & {
   session_id?: unknown
 }
 
+function toRestoredMessages(transcript: RestoredChatTranscript): Message[] {
+  return transcript.messages.map(sanitizeStoredMessage)
+}
+
 export function useChatController({
   sessionId: propSessionId,
   onSessionChange,
+  restoredTranscript = null,
   events,
   eventStreamVersion,
   processedEventCount,
@@ -109,8 +116,16 @@ export function useChatController({
     () => (storageUserId ? getChatLocalStorageKeys(storageUserId) : null),
     [storageUserId],
   )
-  // Initialize messages from localStorage if available
-  const [messages, setMessages] = useState<Message[]>(() => loadMessagesFromStorage(chatStorageKeys, propSessionId))
+  // A resumed session renders the durable transcript handed down by HomePage;
+  // otherwise the browser cache restores the current session.
+  const initialRestoredTranscript = restoredTranscript?.sessionId === propSessionId
+    ? restoredTranscript
+    : null
+  const [messages, setMessages] = useState<Message[]>(() => (
+    initialRestoredTranscript
+      ? toRestoredMessages(initialRestoredTranscript)
+      : loadMessagesFromStorage(chatStorageKeys, propSessionId)
+  ))
   const [inputMessage, setInputMessage] = useState('')
   const [progressMessage, setProgressMessage] = useState<string>('')
   const [activeDocument, setActiveDocument] = useState<ActiveDocument | null>(null)
@@ -147,7 +162,8 @@ export function useChatController({
   const latestSessionIdRef = useRef<string | null>(propSessionId)
   const sessionStateVersionRef = useRef(0)
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const restoredSessionRef = useRef<string | null>(null)
+  const restoredSessionRef = useRef<string | null>(initialRestoredTranscript ? propSessionId : null)
+  const consumedRestoredTranscriptRef = useRef<RestoredChatTranscript | null>(initialRestoredTranscript)
   const messageStorageUserIdRef = useRef<string | null>(storageUserId)
   const storageUserIdRef = useRef<string | null>(storageUserId)
   const previousSessionIdRef = useRef<string | null>(propSessionId)
@@ -405,6 +421,24 @@ export function useChatController({
       persistTimeoutRef.current = null
     }
   }, [invalidateTurnRuntimeState, storageUserId])
+
+  // Hydrate each durable transcript exactly once for its session. It replaces
+  // whatever the previous session left behind, and later live messages are
+  // never overwritten by a transcript that was already consumed.
+  useEffect(() => {
+    if (
+      !restoredTranscript
+      || restoredTranscript === consumedRestoredTranscriptRef.current
+      || restoredTranscript.sessionId !== propSessionId
+    ) {
+      return
+    }
+
+    consumedRestoredTranscriptRef.current = restoredTranscript
+    restoredSessionRef.current = propSessionId
+    messageStorageUserIdRef.current = storageUserId
+    setMessages(toRestoredMessages(restoredTranscript))
+  }, [propSessionId, restoredTranscript, storageUserId])
 
   // If session arrives after mount (or changes), restore persisted messages once per session.
   useEffect(() => {

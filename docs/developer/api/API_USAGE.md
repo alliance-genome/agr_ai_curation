@@ -276,7 +276,7 @@ curl -X POST http://localhost:8000/api/chat/session/bulk-delete \
   -H 'Content-Type: application/json' \
   -d '{"session_ids": ["session-a", "session-b"]}' | jq
 ```
-`/api/chat/history` returns paginated durable session summaries with optional `query`, `document_id`, and `cursor` filters. Session detail payloads include persisted transcript rows plus `active_document` metadata when the referenced document is available for resume flows.
+`/api/chat/history` returns paginated durable session summaries with optional `query`, `document_id`, and `cursor` filters. Session detail payloads include persisted transcript rows plus `active_document` metadata when the referenced document is available for resume flows. Detail pages are chronological and hold at most 200 messages (`message_limit`); follow `next_message_cursor` until it is `null` to read the whole transcript. The main chat's **Resume chat** does this and renders the server transcript directly, so browser storage is only a cache; a chat longer than `VITE_AI_CURATION_CHAT_TRANSCRIPT_MAX_PAGES` pages shows an error instead of a partial transcript.
 
 ### 7. Durable chat contract note
 The durable-chat cutover removed the legacy `/api/chat/config` surface. The supported contract is the durable session and history API above; there is no separate runtime knob endpoint to query.

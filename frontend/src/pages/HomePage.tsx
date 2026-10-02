@@ -7,12 +7,12 @@ import WorkspaceResizeHandle from '@/components/WorkspaceResizeHandle'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import Chat from '@/components/Chat'
+import type { RestoredChatTranscript } from '@/components/Chat/types'
 import RightPanel from '@/components/RightPanel'
 import { INITIAL_TABS } from '@/types/ComponentProps'
 import { useAuth } from '@/contexts/AuthContext'
 import { useChatStream } from '@/hooks/useChatStream'
 import {
-  DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
   getChatLocalStorageKeys,
   pruneChatMessageCacheMessages,
 } from '@/lib/chatCacheKeys'
@@ -48,12 +48,12 @@ import {
   loadDocumentForChat,
 } from '@/features/documents/pdfUploadFlow'
 import { readCurationApiError } from '@/features/curation/services/api'
+import { fetchChatHistoryTranscript } from '@/features/history/chatHistoryTranscript'
 import {
   ASSISTANT_CHAT_HISTORY_KIND,
   buildRestorableChatMessages,
-  fetchChatHistoryDetail,
   type ChatHistoryActiveDocument,
-  type ChatHistoryDetailResponse,
+  type RestorableChatMessage,
 } from '@/services/chatHistoryApi'
 
 const Root = styled(Box)(({ theme }) => ({
@@ -165,6 +165,7 @@ function HomePage() {
   const [missingSessionId, setMissingSessionId] = useState<string | null>(null)
   const [sessionBootstrapError, setSessionBootstrapError] = useState<string | null>(null)
   const [isStartingNewChat, setIsStartingNewChat] = useState(false)
+  const [restoredTranscript, setRestoredTranscript] = useState<RestoredChatTranscript | null>(null)
 
   // Document loading overlay state
   const [loadingDocument, setLoadingDocument] = useState(false)
@@ -262,16 +263,17 @@ function HomePage() {
     })
   }, [chatStorageKeys])
 
+  // Best-effort browser cache of the resumed transcript. Chat renders the
+  // transcript from React state, so a failed write never hides it.
   const persistSessionMessages = useCallback((
     activeSessionId: string,
-    detail: ChatHistoryDetailResponse,
+    messages: RestorableChatMessage[],
   ) => {
     if (!chatStorageKeys) {
       return
     }
 
-    const storedMessages = buildRestorableChatMessages(detail.messages)
-    const prunedMessages = pruneChatMessageCacheMessages(storedMessages)
+    const prunedMessages = pruneChatMessageCacheMessages(messages)
     if (prunedMessages.length === 0) {
       safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
         owner: 'chat',
@@ -510,13 +512,13 @@ function HomePage() {
       setIsBootstrappingSession(true)
       setMissingSessionId(null)
       setSessionBootstrapError(null)
+      setRestoredTranscript(null)
 
       try {
         if (requestedSessionId) {
-          const detail = await fetchChatHistoryDetail({
+          const detail = await fetchChatHistoryTranscript({
             sessionId: requestedSessionId,
             chatKind: ASSISTANT_CHAT_HISTORY_KIND,
-            messageLimit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
             signal: operation.signal,
           })
 
@@ -526,8 +528,10 @@ function HomePage() {
 
           const activeSessionId =
             normalizeChatHistoryValue(detail.session.session_id) ?? requestedSessionId
+          const restoredMessages = buildRestorableChatMessages(detail.messages)
           persistSessionId(activeSessionId)
-          persistSessionMessages(activeSessionId, detail)
+          setRestoredTranscript({ sessionId: activeSessionId, messages: restoredMessages })
+          persistSessionMessages(activeSessionId, restoredMessages)
           await rehydrateDocumentContext(detail.active_document, documentOperation)
 
           if (operation.ownsLatest()) {
@@ -790,6 +794,7 @@ function HomePage() {
     setMissingSessionId(null)
     setSessionBootstrapError(null)
     setLoadingError(null)
+    setRestoredTranscript(null)
 
     try {
       const createdSession = await createSession()
@@ -910,6 +915,7 @@ function HomePage() {
             <Chat
               sessionId={sessionId}
               onSessionChange={handleSessionChange}
+              restoredTranscript={restoredTranscript}
               events={events}
               eventStreamVersion={eventStreamVersion}
               processedEventCount={processedEventCount}

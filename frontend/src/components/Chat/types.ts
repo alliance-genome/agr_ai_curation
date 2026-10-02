@@ -96,6 +96,15 @@ export interface ConversationStatus {
   }
 }
 
+/**
+ * Server transcript handed from HomePage to Chat on resume. The server is the
+ * source of truth; browser storage only caches the current session.
+ */
+export interface RestoredChatTranscript {
+  sessionId: string
+  messages: RestorableChatMessage[]
+}
+
 export interface ChatProps {
   /**
    * Session ID passed from parent (HomePage).
@@ -108,6 +117,12 @@ export interface ChatProps {
    * Parent (HomePage) must update its session state when this is called.
    */
   onSessionChange?: (newSessionId: string) => void
+
+  /**
+   * Durable transcript fetched by the parent when resuming a chat session.
+   * Chat renders it for the matching session instead of the browser cache.
+   */
+  restoredTranscript?: RestoredChatTranscript | null
 
   /**
    * Shared SSE events from useChatStream hook (lifted to HomePage).
