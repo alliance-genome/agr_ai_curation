@@ -1616,6 +1616,31 @@ describe('HomePage resumed transcript hydration', () => {
     expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-offline')
   })
 
+  it('clears a deleted stored session and shows the unavailable warning', async () => {
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-deleted')
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (parseHistoryDetailRequest(url)?.sessionId === 'session-deleted') {
+        return jsonResponse({ detail: 'Chat session not found' }, 404)
+      }
+      const response = realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/')
+
+    expect(
+      await screen.findByText('This chat session is unavailable. It may have been deleted.'),
+    ).toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBeNull()
+    expect(chatRenderSpy).not.toHaveBeenCalled()
+    expect(vi.mocked(global.fetch)).not.toHaveBeenCalledWith('/api/chat/session', expect.anything())
+  })
+
   it('renders the fetched transcript even when browser storage rejects writes', async () => {
     const requests: Array<{ cursor: string | null; limit: number | null }> = []
     const serveTranscript = serveLongTranscript('session-quota', 3, requests)
