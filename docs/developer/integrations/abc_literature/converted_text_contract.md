@@ -96,7 +96,7 @@ normalized ready Markdown artifacts without requiring ABC's
   uploaded supplement.
 - Inaccessible source PDF: do not download or ingest converted text.
 - Authorized source PDF with no canonical converted Markdown: request ABC
-  conversion when available, using `wait=false` and `overwrite_tei_md=false`.
+  conversion when available, using `wait=false` and `overwrite_tei_md=true`.
 - Conversion running: keep the local AI Curation job in a running/waiting state
   and poll provider conversion status. Raw progress sidecar IDs are hints only;
   downloadable figure metadata must be selected from the provider artifact list

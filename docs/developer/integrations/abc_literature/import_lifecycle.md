@@ -67,11 +67,13 @@ is available yet.
 AI Curation may call:
 
 ```text
-GET /reference/referencefile/conversion_request/{curie_or_reference_id}?wait=false&overwrite_tei_md=false
+GET /reference/referencefile/conversion_request/{curie_or_reference_id}?wait=false&overwrite_tei_md=true
 ```
 
-only for an existing authorized ABC match. It must not call Literature upload,
-reference creation, or TEI-overwrite paths.
+only for an existing authorized ABC match. `overwrite_tei_md=true` (agreed with
+the Blue Team on 2026-10-02, SCRUM-6624) makes ABC convert references whose only
+main text is legacy TEI-derived Markdown. It must not call Literature upload or
+reference creation paths.
 
 ABC conversion response fields are stored under PDF job
 `metadata.document_source` after JSON-safe sanitization:

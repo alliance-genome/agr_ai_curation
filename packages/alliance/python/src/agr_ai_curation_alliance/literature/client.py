@@ -255,7 +255,7 @@ class ABCLiteratureClient:
             f"/reference/referencefile/conversion_request/{reference_path}",
             params={
                 "wait": _bool_param(wait),
-                "overwrite_tei_md": "false",
+                "overwrite_tei_md": "true",
             },
             request_bearer_token=request_bearer_token,
         )
