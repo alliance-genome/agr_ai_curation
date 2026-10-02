@@ -489,8 +489,21 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
     assert fetched["execution_count"] == 1
 
 
-@pytest.mark.parametrize("domain_finalizer", [None, "disease", "allele"])
-def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_db, monkeypatch, request, domain_finalizer):
+@pytest.mark.parametrize(
+    ("domain_finalizer", "tools_module", "agent_key"),
+    [
+        (None, None, None),
+        ("disease", "disease_builder_tools", "disease_extractor"),
+        ("allele", "allele_builder_tools", "allele_extractor"),
+        ("gene_expression", "agr_curation", "gene_expression_extraction"),
+        ("gene", "gene_builder_tools", "gene_extractor"),
+        ("phenotype", "phenotype_builder_tools", "phenotype_extractor"),
+        ("go", "go_builder_tools", "rgd_go_paper_curator"),
+    ],
+)
+def test_execute_flow_saves_and_replays_finalized_empty_extraction(
+    client, test_db, monkeypatch, request, domain_finalizer, tools_module, agent_key,
+):
     """Exercise real result persistence, envelope checkpoint, and durable chat replay."""
     from src.lib.curation_workspace.extraction_results import build_extraction_envelope_candidate
     from src.lib.curation_workspace.models import (
@@ -566,9 +579,9 @@ def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_
             )
             from src.schemas.curation_workspace import CurationExtractionResultRecord as ResultSchema
 
-            tools = import_module(f"agr_ai_curation_alliance.tools.{domain_finalizer}_builder_tools")
+            tools = import_module(f"agr_ai_curation_alliance.tools.{tools_module}")
             workspace = ExtractionBuilderWorkspace(run_id=f"empty-{domain_finalizer}-replay",
-                                                   agent_id=f"{domain_finalizer}_extractor")
+                                                   agent_id=agent_key)
             monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
             monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: [])
             assert getattr(tools, f"_finalize_{domain_finalizer}_extraction_impl")([]).status == "ok"
@@ -576,7 +589,7 @@ def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_
             assert finalization is not None
             record = ResultSchema.model_validate(
                 {"extraction_result_id": "empty-replay", "document_id": str(document_id),
-                 "adapter_key": domain_finalizer, "agent_key": f"{domain_finalizer}_extractor",
+                 "adapter_key": domain_finalizer, "agent_key": agent_key,
                  "source_kind": "flow", "candidate_count": 0, "payload_json": finalization.payload,
                  "created_at": datetime.now(timezone.utc), "metadata": {}}
             )

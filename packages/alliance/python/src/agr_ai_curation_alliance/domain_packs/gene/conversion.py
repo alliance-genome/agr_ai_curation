@@ -631,7 +631,11 @@ def materialize_gene_builder_state(
         "source_candidate_ids": list(normalized_candidate_ids),
     }
     output_payload = {
-        "summary": "Finalized gene extraction from builder-staged mentions.",
+        "summary": (
+            "Finalized gene extraction from builder-staged mentions."
+            if curatable_objects
+            else "Finalized gene extraction with no retained gene mentions."
+        ),
         "curatable_objects": [
             obj.model_dump(mode="json", exclude_none=True) for obj in curatable_objects
         ],
@@ -656,7 +660,9 @@ def materialize_gene_builder_state(
         "schema_ref": _gene_schema_ref().model_dump(mode="json", exclude_none=True),
     }
 
-    if not curatable_objects and not issues:
+    # Only an explicitly empty selection represents a successful no-findings run.
+    # Nonempty invalid selections must not become empty successes after normalization.
+    if not curatable_objects and candidate_ids and not issues:
         issues.append(
             _gene_materialization_issue(
                 field_path="curatable_objects",

@@ -36,5 +36,15 @@
     "reason": "AE-17. Internal retry-mode mechanic, not a curation rule and not a curator-facing search behavior. The curator-facing search guidance (blended default, exact-word matching for specific tokens, short queries leaning lexical) already lives in the search_document bindings summary. The hybrid_lexical_first retry knob is an implementation detail dropped with no home.",
     "old_source": "packages/alliance/agents/allele_extractor/prompt.yaml:<search_context>",
     "new_home": ""
+  },
+  {
+    "phrase": "If no allele finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation.",
+    "category": "relocated",
+    "reason": "Builder empty-finalize fix (PR #910), same as ALL-1229 for disease. The rule was strengthened in place in <stop_rules>: an empty result must be an actual finalize_allele_extraction(candidate_ids=[]) call, because prose alone never produced a finalized empty result. The stage-nothing / never-force-an-annotation intent is unchanged and remains in the same prompt.yaml bullet.",
+    "old_source": "packages/alliance/agents/allele_extractor/prompt.yaml:<stop_rules>",
+    "new_home": "render",
+    "synonyms": [
+      "If no allele finding has direct experimental support in this paper, stage nothing and explicitly call `finalize_allele_extraction(candidate_ids=[])`"
+    ]
   }
 ]

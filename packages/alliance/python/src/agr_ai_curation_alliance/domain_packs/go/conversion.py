@@ -308,7 +308,11 @@ def materialize_go_builder_state(
         )
 
     output_payload = {
-        "summary": "Finalized RGD GO paper-curation recommendations from builder state.",
+        "summary": (
+            "Finalized RGD GO paper-curation recommendations from builder state."
+            if objects
+            else "Finalized RGD GO paper curation with no retained recommendations."
+        ),
         "curatable_objects": [
             obj.model_dump(mode="json", exclude_none=True) for obj in objects
         ],
@@ -348,6 +352,16 @@ def materialize_go_builder_state(
             "warnings": [],
         },
     }
+    # Only an explicitly empty selection represents a successful no-findings run.
+    # Nonempty invalid selections must not become empty successes after normalization.
+    if not objects and candidate_ids and not issues:
+        issues.append(
+            _issue(
+                "curatable_objects",
+                "no_retained_candidates",
+                "Finalized GO paper curation produced no retained recommendations.",
+            )
+        )
     if not issues:
         try:
             validated = GOCuratorExtractionOutput.model_validate(output_payload)

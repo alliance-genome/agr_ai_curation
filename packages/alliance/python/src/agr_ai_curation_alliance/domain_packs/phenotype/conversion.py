@@ -590,7 +590,7 @@ def validate_phenotype_builder_objects(
     annotations = [
         obj for obj in output.curatable_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
     ]
-    if not annotations:
+    if output.curatable_objects and not annotations:
         errors.append("curatable_objects must contain at least one PhenotypeAnnotation")
 
     for index, obj in enumerate(annotations):
@@ -1057,7 +1057,11 @@ def materialize_phenotype_builder_state(
         "source_candidate_ids": list(normalized_candidate_ids),
     }
     output_payload = {
-        "summary": "Finalized phenotype extraction from builder-staged assertions.",
+        "summary": (
+            "Finalized phenotype extraction from builder-staged assertions."
+            if annotation_index
+            else "Finalized phenotype extraction with no retained phenotype annotations."
+        ),
         "curatable_objects": [
             obj.model_dump(mode="json", exclude_none=True) for obj in curatable_objects
         ],
@@ -1083,7 +1087,9 @@ def materialize_phenotype_builder_state(
         "schema_ref": _phenotype_annotation_schema_ref().model_dump(mode="json", exclude_none=True),
     }
 
-    if annotation_index == 0 and not issues:
+    # Only an explicitly empty selection represents a successful no-findings run.
+    # Nonempty invalid selections must not become empty successes after normalization.
+    if annotation_index == 0 and candidate_ids and not issues:
         issues.append(
             _materialization_issue(
                 field_path="curatable_objects",

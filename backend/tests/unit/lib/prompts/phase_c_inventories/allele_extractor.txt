@@ -177,7 +177,7 @@ After a successful `finalize_allele_extraction`, return JSON only, matching Extr
 Do not output AlleleExtractionResultEnvelope, `summary`, `curatable_objects[]`, `metadata.*`, `run_summary`, or validator result fields yourself.
 
 # AE-52/AE-53 stop/abstain: empty result allowed; uncertain-but-supported still staged
-If no allele finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation.
+If no allele finding has direct experimental support in this paper, stage nothing and explicitly call `finalize_allele_extraction(candidate_ids=[])`
 When allele identity stays uncertain after using the available paper context, do not guess: stage the supported, evidence-backed allele with its exact notation and paper-backed selector hints, leave `normalized_hint`/identity for the validator.
 
 # AE-52 span resolution failure recovery

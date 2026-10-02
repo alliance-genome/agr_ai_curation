@@ -3126,6 +3126,33 @@ def test_gene_expression_builder_rejects_object_level_only_evidence():
     )
 
 
+def test_explicit_empty_gene_expression_materialization_is_a_no_findings_result():
+    empty = materialize_gene_expression_builder_state(
+        workspace=ExtractionBuilderWorkspace(run_id="empty-gene-expression"),
+        candidate_ids=[], evidence_records=[],
+    )
+    assert empty.ok, empty.summary()
+    assert empty.payload["curatable_objects"] == []
+    assert empty.payload["metadata"]["evidence_records"] == []
+    assert empty.payload["metadata"]["provenance"]["source_candidate_ids"] == []
+    assert empty.payload["run_summary"]["candidate_count"] == 0
+    assert empty.payload["run_summary"]["kept_count"] == 0
+    assert "no retained observations" in empty.payload["summary"]
+    envelope = gene_expression_extraction_output_to_pending_envelope(
+        empty.payload, envelope_id="empty-gene-expression",
+    )
+    assert envelope.extracted_objects == []
+
+    # A nonempty malformed selection must not normalize into an empty success.
+    for candidate_ids in ([" "], ["unknown-candidate"]):
+        rejected = materialize_gene_expression_builder_state(
+            workspace=ExtractionBuilderWorkspace(run_id="invalid-gene-expression"),
+            candidate_ids=candidate_ids, evidence_records=[],
+        )
+        assert not rejected.ok
+        assert rejected.payload is None
+
+
 def test_fresh_gene_expression_builder_output_passes_normalization_and_persistence():
     from tests.fixtures.fresh_extraction_output import assert_fresh_output_records_every_state
 
