@@ -1,5 +1,4 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   columnOrderingFeature,
   columnResizingFeature,
@@ -78,7 +77,7 @@ import {
   uploadPdfDocument,
   validatePdfSelection,
 } from '@/features/documents/pdfUploadFlow';
-import { startDocumentLoad } from '@/features/documents/documentLoadEvents';
+import { useLoadDocumentForChat } from '@/features/documents/useLoadDocumentForChat';
 import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -308,7 +307,6 @@ const DocumentList: React.FC<DocumentListProps> = ({
 }) => {
   const extractionHealthQuery = usePdfExtractionHealth({ enabled: showUploadControls });
   const extractionHealth = extractionHealthQuery.data;
-  const navigate = useNavigate();
   const { user } = useAuth();
   const preferenceUserId = user?.uid ?? null;
 
@@ -501,22 +499,10 @@ const DocumentList: React.FC<DocumentListProps> = ({
     []
   );
 
+  const loadDocumentForChat = useLoadDocumentForChat();
   const handleLoadFromTable = React.useCallback((summary: DocumentSummary) => {
-    startDocumentLoad({
-      documentId: summary.id,
-      filename: summary.filename,
-      message: `Loading ${summary.filename || 'document'} for chat...`,
-    });
-
-    navigate('/', {
-      state: {
-        loadForChatDocument: {
-          id: summary.id,
-          filename: summary.filename,
-        },
-      },
-    });
-  }, [navigate]);
+    loadDocumentForChat({ id: summary.id, filename: summary.filename });
+  }, [loadDocumentForChat]);
 
   const handleUploadClick = () => {
     fileInputRef.current?.click();

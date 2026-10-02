@@ -18,8 +18,10 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { ExpandLess, ExpandMore } from '@mui/icons-material';
+import { ExpandLess, ExpandMore, FileOpen } from '@mui/icons-material';
+import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
 import { PDF_JOB_WINDOW_DAYS } from '@/features/documents/documentIntakeConfig';
+import { useLoadDocumentForChat } from '@/features/documents/useLoadDocumentForChat';
 import type { PdfProcessingJob } from '../../services/weaviate';
 
 interface PdfJobsPanelProps {
@@ -70,6 +72,13 @@ const canDismiss = (job: PdfProcessingJob): boolean => {
   return job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled';
 };
 
+// A job only completes after its document is fully processed and embedded,
+// which is the same readiness the document list requires before it enables
+// Load for chat and Review & Curate.
+const canOpenDocument = (job: PdfProcessingJob): boolean => {
+  return job.status === 'completed' && Boolean(job.document_id);
+};
+
 const sourceDisplayName = (value: unknown): string | null => {
   if (!value || typeof value !== 'object') {
     return null;
@@ -113,6 +122,7 @@ const conversionSummary = (job: PdfProcessingJob): string | null => {
 };
 
 const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCancelJob }) => {
+  const loadDocumentForChat = useLoadDocumentForChat();
   const [dismissedJobIds, setDismissedJobIds] = React.useState<Set<string>>(new Set());
   const [page, setPage] = React.useState(1);
   const [rowsPerPage, setRowsPerPage] = React.useState(5);
@@ -345,6 +355,25 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
                 }}>
                   Updated: {updatedLabel}
                 </Typography>
+                {canOpenDocument(job) && (
+                  <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: 'wrap', rowGap: 1 }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="success"
+                      startIcon={<FileOpen fontSize="small" />}
+                      onClick={() => loadDocumentForChat({ id: job.document_id, filename: job.filename })}
+                    >
+                      Load for chat
+                    </Button>
+                    <PreparedReviewAndCurateButton
+                      documentId={job.document_id}
+                      label="Load for curation"
+                      variant="outlined"
+                      size="small"
+                    />
+                  </Stack>
+                )}
               </Box>
             );
           })}

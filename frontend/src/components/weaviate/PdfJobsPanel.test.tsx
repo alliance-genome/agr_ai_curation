@@ -1,7 +1,33 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '../../test/test-utils';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '../../test/test-utils';
 import PdfJobsPanel from './PdfJobsPanel';
 import type { PdfProcessingJob } from '../../services/weaviate';
+import {
+  DOCUMENT_LOADING_STORAGE_KEY,
+  DOCUMENT_LOAD_START_EVENT,
+} from '../../features/documents/documentLoadEvents';
+
+const mockNavigate = vi.fn();
+const openCurationWorkspaceMock = vi.fn();
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  };
+});
+
+vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
+  const actual = await vi.importActual<typeof import('@/features/curation/navigation/openCurationWorkspace')>(
+    '@/features/curation/navigation/openCurationWorkspace'
+  );
+
+  return {
+    ...actual,
+    openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
+  };
+});
 
 const buildJobs = (count: number): PdfProcessingJob[] => {
   const now = new Date('2026-03-04T00:00:00.000Z').toISOString();
@@ -29,6 +55,12 @@ const buildJobs = (count: number): PdfProcessingJob[] => {
 };
 
 describe('PdfJobsPanel', () => {
+  beforeEach(() => {
+    mockNavigate.mockReset();
+    openCurationWorkspaceMock.mockReset();
+    sessionStorage.clear();
+  });
+
   it('starts collapsed when there are no active jobs', () => {
     render(<PdfJobsPanel jobs={[]} />);
 
@@ -136,5 +168,68 @@ describe('PdfJobsPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Show 1 hidden PDF jobs/i }));
     expect(screen.getByText('completed-file.pdf')).toBeInTheDocument();
+  });
+
+  it('offers Load for chat and Load for curation only on completed jobs', () => {
+    const [runningJob, completedJob, failedJob, cancelledJob, pendingJob] = buildJobs(5);
+    const jobs: PdfProcessingJob[] = [
+      { ...runningJob, status: 'running' },
+      { ...completedJob, status: 'completed', progress_percentage: 100 },
+      { ...failedJob, status: 'failed' },
+      { ...cancelledJob, status: 'cancelled' },
+      { ...pendingJob, status: 'pending' },
+    ];
+
+    render(<PdfJobsPanel jobs={jobs} />);
+
+    expect(screen.getAllByRole('button', { name: 'Load for chat' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Load for curation' })).toHaveLength(1);
+  });
+
+  it('loads a completed job document into chat the same way as the document list', () => {
+    const loadStartListener = vi.fn();
+    window.addEventListener(DOCUMENT_LOAD_START_EVENT, loadStartListener);
+    const job: PdfProcessingJob = {
+      ...buildJobs(1)[0],
+      status: 'completed',
+      document_id: 'doc-ready',
+      filename: 'ready-paper.pdf',
+    };
+
+    render(<PdfJobsPanel jobs={[job]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Expand PDF jobs/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load for chat' }));
+
+    expect(sessionStorage.getItem(DOCUMENT_LOADING_STORAGE_KEY)).toBe('true');
+    expect(loadStartListener).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith('/', {
+      state: {
+        loadForChatDocument: {
+          id: 'doc-ready',
+          filename: 'ready-paper.pdf',
+        },
+      },
+    });
+
+    window.removeEventListener(DOCUMENT_LOAD_START_EVENT, loadStartListener);
+  });
+
+  it('opens curation for a completed job document', async () => {
+    openCurationWorkspaceMock.mockResolvedValue('session-1');
+    const job: PdfProcessingJob = {
+      ...buildJobs(1)[0],
+      status: 'completed',
+      document_id: 'doc-ready',
+    };
+
+    render(<PdfJobsPanel jobs={[job]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Expand PDF jobs/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load for curation' }));
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({ documentId: 'doc-ready' })
+      );
+    });
   });
 });
