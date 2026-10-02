@@ -6,6 +6,7 @@ import {
   Logout as LogoutIcon,
   AutoAwesome as AgentStudioIcon,
   FactCheck as CurationIcon,
+  Leaderboard as BenchmarkIcon,
   Home as HomeIcon,
   HelpOutlined as HelpIcon,
   History as HistoryIcon,
@@ -51,6 +52,11 @@ export const queryClient = new QueryClient()
 const DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS = 4000
 const DEFAULT_RUN_COMPLETION_TOAST_AUTO_HIDE_MS = 6000
 const DEFAULT_GLOBAL_SNACKBAR_ANCHOR = { vertical: 'bottom', horizontal: 'right' } as const
+
+// Per-environment benchmark portal address. Unset or blank hides the nav link.
+export function getBenchmarkPortalUrl(): string | null {
+  return getEnvVar('VITE_BENCHMARK_PORTAL_URL')?.trim() || null
+}
 
 export function getRunCompletionToastAutoHideMs(): number {
   const configuredValue = getEnvVar('VITE_RUN_COMPLETION_TOAST_AUTO_HIDE_MS')
@@ -304,6 +310,7 @@ export function AppContent() {
   const { user, logout, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const benchmarkPortalUrl = getBenchmarkPortalUrl();
   const normalizedPathname = location.pathname.replace(/\/+$/, '');
   const suppressChangelogDialog = normalizedPathname === '/weaviate/add-literature';
   const lastAuthenticatedUserIdRef = React.useRef<string | null>(isAuthenticated ? user?.uid ?? null : null);
@@ -735,6 +742,29 @@ export function AppContent() {
             <CurationIcon fontSize="small" />
             <Typography variant="body2">Curation</Typography>
           </Box>
+          {benchmarkPortalUrl && (
+            <Box
+              component="a"
+              href={benchmarkPortalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Benchmark (opens in a new tab)"
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.5,
+                textDecoration: 'none',
+                color: 'inherit',
+                marginRight: 2,
+                '&:hover': {
+                  opacity: 0.8
+                }
+              }}
+            >
+              <BenchmarkIcon fontSize="small" />
+              <Typography variant="body2">Benchmark</Typography>
+            </Box>
+          )}
           <Box
             component={Link}
             to="/history"

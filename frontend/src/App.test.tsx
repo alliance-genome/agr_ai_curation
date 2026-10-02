@@ -578,6 +578,57 @@ describe('AppContent global notifications', () => {
     expect(screen.getByText('Chat History')).toBeInTheDocument();
   });
 
+  describe('Benchmark nav link', () => {
+    const mockNavFetch = () => {
+      vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/weaviate/pdf-jobs')) {
+          return jsonResponse({ jobs: [] });
+        }
+        if (url.includes('/api/batches')) {
+          return jsonResponse({ batches: [] });
+        }
+        return jsonResponse({});
+      });
+    };
+
+    afterEach(() => {
+      delete window.__APP_RUNTIME_CONFIG__;
+    });
+
+    it('opens the configured benchmark portal in a new tab between Curation and Chat History', async () => {
+      mockNavFetch();
+      window.__APP_RUNTIME_CONFIG__ = {
+        VITE_BENCHMARK_PORTAL_URL: 'https://benchmark.example.org',
+      };
+
+      renderAppContent('/');
+
+      const benchmarkLink = await screen.findByRole('link', { name: 'Benchmark (opens in a new tab)' });
+      expect(benchmarkLink).toHaveAttribute('href', 'https://benchmark.example.org');
+      expect(benchmarkLink).toHaveAttribute('target', '_blank');
+      expect(benchmarkLink).toHaveAttribute('rel', 'noopener noreferrer');
+      expect(benchmarkLink).toHaveTextContent('Benchmark');
+
+      const curationLink = screen.getByRole('link', { name: 'Curation' });
+      const chatHistoryLink = screen.getByRole('link', { name: 'Chat History' });
+      expect(curationLink.nextElementSibling).toBe(benchmarkLink);
+      expect(benchmarkLink.nextElementSibling).toBe(chatHistoryLink);
+    });
+
+    it('hides the link when the benchmark portal address is not configured', async () => {
+      mockNavFetch();
+      vi.stubEnv('VITE_BENCHMARK_PORTAL_URL', '');
+      window.__APP_RUNTIME_CONFIG__ = { VITE_BENCHMARK_PORTAL_URL: '  ' };
+
+      renderAppContent('/');
+
+      expect(await screen.findByRole('link', { name: 'Curation' })).toBeInTheDocument();
+      expect(screen.queryByText('Benchmark')).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /benchmark/i })).not.toBeInTheDocument();
+    });
+  });
+
   it('renders the header theme toggle and persists changes', async () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
