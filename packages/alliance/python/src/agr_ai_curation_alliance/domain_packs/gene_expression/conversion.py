@@ -689,6 +689,8 @@ def materialize_gene_expression_builder_state(
     output_payload = {
         "summary": (
             "Finalized gene-expression extraction from builder-staged observations."
+            if curatable_objects
+            else "Finalized gene-expression extraction with no retained observations."
         ),
         "curatable_objects": [
             obj.model_dump(mode="json", exclude_none=True)
@@ -714,6 +716,20 @@ def materialize_gene_expression_builder_state(
         },
         "schema_ref": _gene_expression_schema_ref().model_dump(mode="json", exclude_none=True),
     }
+
+    # Only an explicitly empty selection represents a successful no-findings run.
+    # Nonempty invalid selections must not become empty successes after normalization.
+    if not curatable_objects and candidate_ids and not issues:
+        issues.append(
+            _materialization_issue(
+                field_path="curatable_objects",
+                reason="no_retained_candidates",
+                message=(
+                    "Finalized gene-expression extraction produced no retained "
+                    "GeneExpressionAnnotation objects."
+                ),
+            )
+        )
 
     if not issues:
         try:

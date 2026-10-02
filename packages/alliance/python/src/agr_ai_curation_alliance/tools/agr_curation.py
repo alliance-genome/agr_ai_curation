@@ -463,7 +463,7 @@ class GeneExpressionFindInput(_StrictToolModel):
 
 
 class GeneExpressionFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(min_length=1, max_length=50)
+    candidate_ids: List[StrictStr] = Field(max_length=50)
 
 
 # Group-to-taxon mapping — loaded from config/groups.yaml via groups_loader
@@ -6742,9 +6742,12 @@ def _materialize_gene_expression_with_events(
 
 
 def _finalize_gene_expression_extraction_impl(
-    candidate_ids: Annotated[List[str], Field(min_length=1, max_length=50)],
+    candidate_ids: Annotated[List[str], Field(max_length=50)],
 ) -> AgrQueryResult:
     """Finalize staged gene-expression candidates through the builder handoff contract.
+
+    Pass candidate_ids=[] to explicitly finalize with no retained gene-expression observations.
+    Omitting the call or returning only prose does not finalize an empty result.
 
     Thin domain adapter: input-schema validation + run-state snapshots + the
     gene-expression result shape live here; all structural staging/finalize

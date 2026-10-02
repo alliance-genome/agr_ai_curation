@@ -1628,8 +1628,15 @@ def _spy_inline_persistence(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("domain", ["disease", "allele"])
-async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain):
+@pytest.mark.parametrize(
+    ("domain", "tools_module", "agent_key"),
+    [
+        ("disease", "disease_builder_tools", "disease_extractor"),
+        ("allele", "allele_builder_tools", "allele_extractor"),
+        ("gene_expression", "agr_curation", "gene_expression_extraction"),
+    ],
+)
+async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain, tools_module, agent_key):
     from datetime import datetime, timezone
     from importlib import import_module
     from src.lib.curation_workspace.domain_envelope_normalization import (
@@ -1638,9 +1645,9 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
     )
     from src.schemas.curation_workspace import CurationExtractionResultRecord
 
-    tools = import_module(f"agr_ai_curation_alliance.tools.{domain}_builder_tools")
+    tools = import_module(f"agr_ai_curation_alliance.tools.{tools_module}")
     finalize = getattr(tools, f"_finalize_{domain}_extraction_impl")
-    specialist_name = f"{domain.title()} Extractor"
+    specialist_name = f"{domain.replace('_', ' ').title()} Extractor"
     tool_name = f"ask_{domain}_extractor_specialist"
 
     class EmptyRun(_FakeRunResult):
@@ -1658,7 +1665,7 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
         require_recorded_resolution_states(payload, adapter_key=domain)
         record = CurationExtractionResultRecord.model_validate(
             {"extraction_result_id": f"empty-{domain}-chat", "document_id": "doc-1",
-             "adapter_key": domain, "agent_key": f"{domain}_extractor",
+             "adapter_key": domain, "agent_key": agent_key,
              "source_kind": "chat", "candidate_count": 0, "payload_json": payload,
              "created_at": datetime.now(timezone.utc), "metadata": {}}
         )
@@ -1678,7 +1685,7 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
         result_ref="extraction-result:00000000-0000-4000-8000-000000000001",
         extraction_result_id="00000000-0000-4000-8000-000000000001",
         result_status="empty_extraction", object_count=0, adapter_key=domain,
-        agent_key=f"{domain}_extractor", created_new=True,
+        agent_key=agent_key, created_new=True,
     )
     monkeypatch.setattr(streaming_tools, "_build_supervisor_extraction_handoff", lambda **kwargs: expected)
     await streaming_tools.run_specialist_with_events(

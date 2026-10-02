@@ -38,7 +38,7 @@ Extraction records what the paper supports. Validation can resolve a gene, allel
 
 Review the evidence and any unresolved or ambiguous results. A valid identifier does not establish that an observation belongs in your curation. Final export or submission also depends on the selected data type's supported fields and readiness rules.
 
-An allele extraction can finish with no retained findings. This means no mentions were retained under that agent's rules and the source text it could inspect; it does not prove the paper contains no alleles. Check the available text and selection rules before interpreting an empty result. An interrupted or unfinalized extraction is still a failure, not an empty success.
+An allele, disease, or gene-expression extraction can finish with no retained findings. This means nothing was retained under that agent's rules and the source text it could inspect; it does not prove the paper contains no data of that type. For example, a flow limited to wild-type expression finishes empty on a paper whose expression data all come from mutant or transgenic backgrounds. Check the available text and selection rules before interpreting an empty result. An interrupted or unfinalized extraction is still a failure, not an empty success.
 
 ## Reuse shared agents and flows
 

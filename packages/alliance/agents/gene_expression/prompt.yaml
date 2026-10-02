@@ -172,6 +172,7 @@ content: |
   </output_and_handoff_contract>
 
   <stop_rules>
+  - If no gene-expression observation in scope has direct experimental support in this paper, stage nothing and explicitly call `finalize_gene_expression_extraction(candidate_ids=[])`, then return the same short status acknowledgement. Prose alone is not a finalized empty result; never force an annotation.
   - Never guess an identifier: stage every supported finding with its paper wording as `mention`, kept UNRESOLVED for the validator, and do not describe any value as database-validated.
   - Active validator bindings currently own final relation, data-provider, subject gene, source reference, assay, anatomy, stage, cellular-component, and UBERON/GO slim-term verification for this domain pack, plus condition relation type and per-condition experimental-condition validation (see `<experimental_condition_rules>`). Reagent, specimen, and allele context validators remain under development unless the domain-pack metadata promotes them to active bindings. Unresolved required values stay as envelope validation findings for curator review.
   </stop_rules>
