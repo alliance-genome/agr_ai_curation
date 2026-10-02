@@ -293,6 +293,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/curation_workspace/test_session_service.py"),
     Path("backend/tests/unit/lib/document_sources/test_abc_literature_provider.py"),
     Path("backend/tests/unit/lib/document_sources/test_access_health.py"),
+    # Dev machine-reader access gate drives real ABC MOD group ids (FB/WB).
+    Path("backend/tests/unit/lib/document_sources/test_dev_reader_access.py"),
     Path("backend/tests/unit/lib/document_sources/test_identifier_import.py"),
     Path("backend/tests/unit/lib/document_sources/test_import_selection.py"),
     Path("backend/tests/unit/lib/document_sources/test_ingestion.py"),
@@ -563,41 +565,45 @@ async def test_core_plus_org_custom_runtime_loads_without_alliance_package(monke
         loaded_document_source.registration.factory,
         "__globals__",
     )["CALLBACK_CALLS"]
-    assert callback_calls == {"factory": 0, "development_credential_resolver": 0}
+    assert callback_calls == {"factory": 0, "development_reader_resolver": 0}
     assert loaded_document_source.source.package_id == "org.custom"
     assert get_document_source_provider_metadata("example_literature") == {
         "display_label": "Example Literature",
         "reference_label_priority": ["reference_curie", "reference_id"],
     }
-    assert callback_calls == {"factory": 0, "development_credential_resolver": 0}
-    from src.lib.document_sources import access, dev_curator_auth
+    assert callback_calls == {"factory": 0, "development_reader_resolver": 0}
+    from src.lib.document_sources import access, dev_reader_auth
 
     monkeypatch.setenv("DEV_MODE", "true")
     monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_ENABLED", "true")
     monkeypatch.setenv("DOCUMENT_SOURCE_PROVIDER", "example_literature")
-    monkeypatch.setattr(dev_curator_auth, "_credential_service", dev_curator_auth.DevCuratorCredentialService())
+    monkeypatch.setattr(dev_reader_auth, "_credential_service", dev_reader_auth.DevelopmentReaderService())
     monkeypatch.setattr(access, "get_group_claim_key", lambda: "groups")
     monkeypatch.setattr(access, "get_groups_for_provider_groups", lambda groups: ["CUSTOM"] if groups == ["custom-staff"] else [])
+    dev_user = {"sub": "dev-user", "groups": ["custom-staff"]}
     context = await access.build_document_source_request_context(
-        request=None, user_claims={"sub": "dev-user", "groups": ["untrusted-staff"]}
+        request=None, user_claims=dev_user
     )
+    # The machine reader supplies only the bearer; groups are the dev user's own.
     assert context.curator_token == "fixture-development-token"
     assert context.provider_groups == ("custom-staff",)
     assert context.authorized_group_ids == ("CUSTOM",)
-    assert await access.build_document_source_request_context(request=None, user_claims={}) == context
-    assert callback_calls == {"factory": 0, "development_credential_resolver": 1}
+    ungrouped = await access.build_document_source_request_context(request=None, user_claims={})
+    assert ungrouped.curator_token == "fixture-development-token"
+    assert ungrouped.authorized_group_ids == ()
+    assert callback_calls == {"factory": 0, "development_reader_resolver": 1}
     # Advancing beyond expiry must invoke the package callback again through the
     # real request path, without any Cognito configuration or Alliance package.
-    now = dev_curator_auth.time.time()
+    now = dev_reader_auth.time.time()
     with monkeypatch.context() as clock_patch:
-        clock_patch.setattr(dev_curator_auth.time, "time", lambda: now + 3601)
-        assert await access.build_document_source_request_context(request=None, user_claims={}) == context
-    assert callback_calls == {"factory": 0, "development_credential_resolver": 2}
+        clock_patch.setattr(dev_reader_auth.time, "time", lambda: now + 3601)
+        assert await access.build_document_source_request_context(request=None, user_claims=dev_user) == context
+    assert callback_calls == {"factory": 0, "development_reader_resolver": 2}
     assert (
         get_configured_document_source_provider("example_literature").provider_id
         == "example_literature"
     )
-    assert callback_calls == {"factory": 1, "development_credential_resolver": 2}
+    assert callback_calls == {"factory": 1, "development_reader_resolver": 2}
 
     registry = build_agent_registry()
     assert "demo_agent_validation" in registry

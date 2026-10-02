@@ -47,7 +47,6 @@ ABC Literature endpoint metadata/listing calls support these backend auth modes:
 ABC_LITERATURE_AUTH_MODE=none
 ABC_LITERATURE_AUTH_MODE=static_bearer
 ABC_LITERATURE_AUTH_MODE=cognito_client_credentials
-ABC_LITERATURE_AUTH_MODE=cognito_user_password  # development / benchmark-dev only
 ```
 
 Required secrets by mode:
@@ -60,47 +59,47 @@ Required secrets by mode:
   `ABC_LITERATURE_COGNITO_CLIENT_ID`,
   `ABC_LITERATURE_COGNITO_CLIENT_SECRET`, and
   `ABC_LITERATURE_COGNITO_SCOPE`.
-- `cognito_user_password`: requires `ABC_LITERATURE_COGNITO_REGION`,
-  `ABC_LITERATURE_COGNITO_USER_POOL_ID`, `ABC_LITERATURE_COGNITO_CLIENT_ID`,
-  `ABC_LITERATURE_COGNITO_USERNAME`, and `ABC_LITERATURE_COGNITO_PASSWORD`.
-  `ABC_LITERATURE_COGNITO_CLIENT_SECRET` is optional and, when set, is sent as
-  Cognito's `SECRET_HASH`. `ABC_LITERATURE_COGNITO_REFRESH_SKEW_SECONDS`
-  (default 600) controls how long before expiry the cached access token is
-  renewed. Missing settings fail provider creation with a configuration error;
-  the client never falls back to `none`.
-
-`cognito_user_password` is for development and the benchmark-dev resolver only.
-It signs in with `USER_PASSWORD_AUTH` as a dedicated development Cognito user
-(the same kind of identity as the development curator below), validates both
-returned tokens through the shared Alliance sign-in helper, caches the access
-token per process, and sends only that access token to ABC Literature.
-Production should use an allow-listed machine client through
-`cognito_client_credentials`. Never point this mode at a real curator's
-account. Development Compose passes these settings through; production Compose
-does not.
 
 Keep all token/client-secret values in uncommitted deployment env files or
 secret stores. Do not put them in Git, Linear, Jira, smoke evidence, logs, or
 Weaviate metadata.
+
+### Machine readers
+
+AI Curation services that call ABC without a real curator login authenticate
+only with a machine reader: `ABC_LITERATURE_AUTH_MODE=cognito_client_credentials`
+with a dedicated read-only Cognito app client that holds the
+`abc-literature/read` scope. The rule is:
+
+- one dedicated reader client per environment (for example the DEV benchmark
+  resolver's "AI Curation Benchmark Resolver Dev ABC Reader"), with its own
+  client secret;
+- never shared between environments, and never reused by another service;
+- never a user account. ABC deliberately rejects user-session access tokens and
+  accepts user ID tokens only from its allow-listed app clients, so a
+  username/password sign-in cannot authenticate a service to ABC.
+
+ABC grants a client-credentials token access to every file. AI Curation is
+therefore responsible for restricting what each request may import: see
+[Groups And Access](#groups-and-access).
 
 Final artifact downloads intended to represent the logged-in curator should use
 the request-local curator bearer token. The request context captures the
 validated browser `auth_token` cookie only for normal Cognito users; API-key
 requests cannot donate an arbitrary browser cookie.
 
-Login-free development uses a separate provider-only identity. Keep
-`ABC_LITERATURE_AUTH_MODE=none` and do not configure
-`ABC_LITERATURE_BEARER_TOKEN`; instead set
-`DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE=cognito_user_password` and supply the
-dedicated Cognito region, pool, no-callback app-client ID/secret, username, and
-password through the host-private environment. The app client must allow
-`USER_PASSWORD_AUTH`. The backend validates both returned tokens, derives
-provider groups from the ID-token claims, and forwards the paired access token
-only to ABC Literature. Document ownership remains attached to `dev-user-123`.
-This dev-only bearer choice avoids copying a shared production app-client
-secret or requiring an ABC audience-allow-list change. These settings are
-passed only by development Compose and are inactive unless effective dev mode,
-external import, and a non-local provider are all enabled.
+Login-free development has no curator login, so development imports use the
+environment's machine reader instead: set
+`ABC_LITERATURE_AUTH_MODE=cognito_client_credentials` with that environment's
+reader client. The backend obtains and caches the reader bearer
+(`DOCUMENT_SOURCE_DEV_READER_REFRESH_SKEW_SECONDS`) and forwards it to ABC
+Literature in place of a curator token. The bearer carries no curator identity:
+provider groups come from the development user's own claims, which are set by
+`DEV_USER_GROUPS`, and document ownership remains attached to `dev-user-123`.
+This path is active only when effective dev mode, external import, and a
+non-local provider are all enabled. Any other ABC auth mode makes development
+imports fail with a sanitized "authentication unavailable" error; nothing falls
+back to unauthenticated access.
 
 ## Groups And Access
 
@@ -113,25 +112,35 @@ Converted Markdown rows may have null MOD metadata and must not grant access by
 themselves.
 
 This cutover does not add a separate "all MOD" or full-access provider-group
-allowlist. Service credentials may be used for health/listing only when
-configured, but AI Curation must still apply source-PDF-derived access before
-showing, downloading, caching, ingesting, or serving restricted content.
+allowlist. A machine reader sees every ABC file, so AI Curation applies
+source-PDF-derived access from the requesting user's groups (for login-free
+development, `DEV_USER_GROUPS`) before it downloads or ingests a source PDF:
+identifier imports, checksum imports, and benchmark conversions select only a
+source PDF the user's groups authorize, and a user with none of the paper's
+groups gets an access-denied result with nothing downloaded.
+
+Known gap: converted Markdown and figure-metadata sidecars are currently chosen
+per reference, not by a provider link to the authorized source PDF. ABC's
+per-curator `download_file` check used to backstop this; a machine reader does
+not. For a reference that mixes an authorized PDF with a PDF restricted to
+other groups, those derived artifacts are not yet gated by the selected
+source PDF's policy.
 
 ## Timeouts And Batches
 
 Document-source operational limits are env-configurable in `.env.example`:
 
 - `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`
-- `DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS`
+- `DOCUMENT_SOURCE_DEV_READER_REFRESH_SKEW_SECONDS`
 - `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`
 - `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`
 - `DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT`
 - ABC Literature live-smoke timeout/evidence knobs
 - READY upload and identifier-import smoke timeout/evidence knobs
 
-General provider limits are passed through both Compose files. The dev curator
-settings and renewal skew are intentionally passed through development Compose
-only; production Compose continues to force `DEV_MODE=false`.
+General provider limits are passed through both Compose files. The development
+reader renewal skew is intentionally passed through development Compose only;
+production Compose continues to force `DEV_MODE=false`.
 
 ## Health And Readiness
 

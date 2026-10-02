@@ -10,33 +10,20 @@ from their main source.
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping
 from urllib.parse import quote
 
 import httpx
-import jwt
-from botocore.exceptions import BotoCoreError, ClientError
-
-from agr_ai_curation_alliance.cognito_user_password import (
-    CognitoUserPasswordAuthError,
-    CognitoUserPasswordSettings,
-    authenticate_user_password,
-)
 
 
 class ABCLiteratureAuthMode(str, Enum):
     NONE = "none"
     STATIC_BEARER = "static_bearer"
     COGNITO_CLIENT_CREDENTIALS = "cognito_client_credentials"
-    # Development/benchmark-dev only: signs in as a dedicated dev Cognito user.
-    # Production uses an allow-listed machine client (cognito_client_credentials).
-    COGNITO_USER_PASSWORD = "cognito_user_password"
 
 
 class ABCLiteratureClientError(RuntimeError):
@@ -70,84 +57,6 @@ class ABCLiteratureClientConfig:
     cognito_client_id: str | None = None
     cognito_client_secret: str | None = None
     cognito_scope: str | None = None
-    cognito_region: str | None = None
-    cognito_user_pool_id: str | None = None
-    cognito_username: str | None = field(default=None, repr=False)
-    cognito_password: str | None = field(default=None, repr=False)
-    cognito_refresh_skew_seconds: float = 600.0
-
-
-class _UserPasswordTokenCache:
-    """Process-wide access tokens for the user-password service identity.
-
-    Providers and their clients are created per request, so the token is cached
-    per Cognito identity rather than per client to avoid signing in on every call.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._tokens: dict[tuple[str, str, str, str], tuple[str, float]] = {}
-
-    @staticmethod
-    def _key(settings: CognitoUserPasswordSettings) -> tuple[str, str, str, str]:
-        return (
-            settings.region,
-            settings.user_pool_id,
-            settings.client_id,
-            settings.username,
-        )
-
-    def cached(
-        self, settings: CognitoUserPasswordSettings, refresh_skew_seconds: float
-    ) -> str | None:
-        entry = self._tokens.get(self._key(settings))
-        if entry is not None and time.time() < entry[1] - refresh_skew_seconds:
-            return entry[0]
-        return None
-
-    def get(
-        self, settings: CognitoUserPasswordSettings, refresh_skew_seconds: float
-    ) -> str:
-        """Return a usable token, signing in at most once for concurrent callers."""
-
-        with self._lock:
-            token = self.cached(settings, refresh_skew_seconds)
-            if token is not None:
-                return token
-            tokens = authenticate_user_password(settings)
-            self._tokens[self._key(settings)] = (tokens.access_token, tokens.expires_at)
-            return tokens.access_token
-
-
-_user_password_tokens = _UserPasswordTokenCache()
-
-
-def _user_password_settings(
-    config: ABCLiteratureClientConfig,
-) -> CognitoUserPasswordSettings:
-    values = {
-        "ABC_LITERATURE_COGNITO_REGION": config.cognito_region,
-        "ABC_LITERATURE_COGNITO_USER_POOL_ID": config.cognito_user_pool_id,
-        "ABC_LITERATURE_COGNITO_CLIENT_ID": config.cognito_client_id,
-        "ABC_LITERATURE_COGNITO_USERNAME": config.cognito_username,
-        "ABC_LITERATURE_COGNITO_PASSWORD": config.cognito_password,
-    }
-    stripped = {name: (value or "").strip() for name, value in values.items()}
-    missing = [name for name, value in stripped.items() if not value]
-    if missing:
-        raise ABCLiteratureConfigError(
-            "ABC_LITERATURE_AUTH_MODE=cognito_user_password is missing required "
-            f"settings: {', '.join(missing)}"
-        )
-    return CognitoUserPasswordSettings(
-        region=stripped["ABC_LITERATURE_COGNITO_REGION"],
-        user_pool_id=stripped["ABC_LITERATURE_COGNITO_USER_POOL_ID"],
-        client_id=stripped["ABC_LITERATURE_COGNITO_CLIENT_ID"],
-        client_secret=(config.cognito_client_secret or "").strip() or None,
-        username=stripped["ABC_LITERATURE_COGNITO_USERNAME"],
-        password=stripped["ABC_LITERATURE_COGNITO_PASSWORD"],
-        request_timeout_seconds=config.timeout_seconds,
-    )
 
 
 class ABCLiteratureClient:
@@ -167,11 +76,6 @@ class ABCLiteratureClient:
         )
         self._cached_token: str | None = None
         self._cached_token_expires_at: float = 0.0
-        self._user_password_settings = (
-            _user_password_settings(config)
-            if config.auth_mode is ABCLiteratureAuthMode.COGNITO_USER_PASSWORD
-            else None
-        )
 
     async def __aenter__(self) -> "ABCLiteratureClient":
         return self
@@ -433,39 +337,27 @@ class ABCLiteratureClient:
                 )
             return {"Authorization": f"Bearer {token}"}
 
-        if auth_mode is ABCLiteratureAuthMode.COGNITO_USER_PASSWORD:
-            token = await self._get_user_password_token()
-            return {"Authorization": f"Bearer {token}"}
-
         if auth_mode is not ABCLiteratureAuthMode.COGNITO_CLIENT_CREDENTIALS:
             raise ABCLiteratureConfigError(f"Unsupported auth mode: {auth_mode}")
 
         token = await self._get_cognito_token()
         return {"Authorization": f"Bearer {token}"}
 
-    async def _get_user_password_token(self) -> str:
-        settings = self._user_password_settings
-        if settings is None:
+    async def client_credentials_token(self) -> tuple[str, float]:
+        """Return the configured machine-client bearer and its Unix expiry.
+
+        Only ``cognito_client_credentials`` issues a renewable machine bearer;
+        any other mode is a configuration error rather than a silent downgrade.
+        """
+
+        if self.config.auth_mode is not ABCLiteratureAuthMode.COGNITO_CLIENT_CREDENTIALS:
             raise ABCLiteratureConfigError(
-                "cognito_user_password settings were not loaded for this client"
+                "ABC_LITERATURE_AUTH_MODE=cognito_client_credentials is required "
+                "for an ABC Literature machine reader"
             )
-        skew = self.config.cognito_refresh_skew_seconds
-        token = _user_password_tokens.cached(settings, skew)
-        if token is not None:
-            return token
-        try:
-            return await asyncio.to_thread(_user_password_tokens.get, settings, skew)
-        except (
-            CognitoUserPasswordAuthError,
-            BotoCoreError,
-            ClientError,
-            jwt.PyJWTError,
-        ) as exc:
-            raise ABCLiteratureHTTPError(
-                "ABC Literature service sign-in failed",
-                status_code=502,
-                endpoint="token",
-            ) from exc
+        token = await self._get_cognito_token()
+        remaining = self._cached_token_expires_at - time.monotonic()
+        return token, time.time() + remaining
 
     async def _get_cognito_token(self) -> str:
         now = time.monotonic()

@@ -28,7 +28,7 @@ from src.lib.document_sources.models import (
 )
 async def test_wormbase_identity_access_contract(monkeypatch, provider_groups, expected_groups):
     monkeypatch.setattr(
-        "src.lib.document_sources.access.renewable_dev_curator_auth_required",
+        "src.lib.document_sources.access.development_reader_required",
         lambda: False,
     )
     reset_cache()

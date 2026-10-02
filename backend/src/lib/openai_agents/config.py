@@ -1714,12 +1714,12 @@ def get_document_source_request_timeout_seconds() -> float:
     )
 
 
-def get_document_source_dev_curator_refresh_skew_seconds() -> int:
-    """Seconds before expiry when a cached dev curator token is renewed."""
+def get_document_source_dev_reader_refresh_skew_seconds() -> int:
+    """Seconds before expiry when a cached development reader bearer is renewed."""
     return max(
         0,
         _get_env_int_with_fallback(
-            "DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS",
+            "DOCUMENT_SOURCE_DEV_READER_REFRESH_SKEW_SECONDS",
             600,
         ),
     )

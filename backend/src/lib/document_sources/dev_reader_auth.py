@@ -1,4 +1,9 @@
-"""Provider-neutral renewal and caching for development document imports."""
+"""Provider-neutral renewal and caching of the development document-source reader.
+
+In login-free development the provider is called with a dedicated machine
+reader bearer supplied by the package. The bearer carries no curator identity:
+imports are still authorized from the requesting (development) user's groups.
+"""
 
 from __future__ import annotations
 
@@ -6,19 +11,18 @@ import asyncio
 import logging
 import math
 import time
-from collections.abc import Mapping
 
 from src.config import is_dev_mode
 from src.lib.packages.document_source_provider_models import (
-    DevCuratorCredentials,
-    DevCuratorCredentialUnavailable,
-    DevelopmentCredentialResolver,
+    DevelopmentReaderCredentials,
+    DevelopmentReaderUnavailable,
+    DevelopmentReaderResolver,
 )
 from src.lib.document_sources.registry import (
-    get_document_source_development_credential_resolver,
+    get_document_source_development_reader_resolver,
 )
 from src.lib.openai_agents.config import (
-    get_document_source_dev_curator_refresh_skew_seconds,
+    get_document_source_dev_reader_refresh_skew_seconds,
     get_document_source_import_enabled,
     get_document_source_import_timeout_seconds,
     get_document_source_provider,
@@ -28,8 +32,8 @@ from src.lib.openai_agents.config import (
 logger = logging.getLogger(__name__)
 
 
-def renewable_dev_curator_auth_required() -> bool:
-    """Return whether this process/request path needs the renewable dev identity."""
+def development_reader_required() -> bool:
+    """Return whether this process/request path uses the development reader."""
 
     return (
         is_dev_mode()
@@ -38,31 +42,31 @@ def renewable_dev_curator_auth_required() -> bool:
     )
 
 
-class DevCuratorCredentialService:
-    """Per-worker, lock-protected cache for validated dev curator credentials."""
+class DevelopmentReaderService:
+    """Per-worker, lock-protected cache for validated development reader bearers."""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._cached: dict[
-            str, tuple[DevelopmentCredentialResolver, DevCuratorCredentials]
+            str, tuple[DevelopmentReaderResolver, DevelopmentReaderCredentials]
         ] = {}
 
-    def _cache_is_usable(self, credentials: DevCuratorCredentials) -> bool:
+    def _cache_is_usable(self, credentials: DevelopmentReaderCredentials) -> bool:
         required_lifetime = max(
-            float(get_document_source_dev_curator_refresh_skew_seconds()),
+            float(get_document_source_dev_reader_refresh_skew_seconds()),
             get_document_source_import_timeout_seconds(),
         )
         return credentials.expires_at > time.time() + required_lifetime
 
-    async def get_credentials(self) -> DevCuratorCredentials:
+    async def get_credentials(self) -> DevelopmentReaderCredentials:
         """Return cached credentials or renew them once for concurrent callers."""
 
-        if not renewable_dev_curator_auth_required():
-            raise DevCuratorCredentialUnavailable(
-                "Development document-source curator authentication is not active."
+        if not development_reader_required():
+            raise DevelopmentReaderUnavailable(
+                "Development document-source reader is not active."
             )
         provider_id = get_document_source_provider().strip().lower()
-        resolver = get_document_source_development_credential_resolver(provider_id)
+        resolver = get_document_source_development_reader_resolver(provider_id)
         cached_entry = self._cached.get(provider_id)
         cached = (
             cached_entry[1] if cached_entry and cached_entry[0] is resolver else None
@@ -84,36 +88,35 @@ class DevCuratorCredentialService:
                     resolver(),
                     timeout=get_document_source_request_timeout_seconds(),
                 )
-            except DevCuratorCredentialUnavailable:
+            except DevelopmentReaderUnavailable:
                 raise
             except Exception as exc:
                 logger.warning(
-                    "Development document-source curator authentication failed",
+                    "Development document-source reader authentication failed",
                     extra={"failure_type": type(exc).__name__},
                 )
-                raise DevCuratorCredentialUnavailable(
-                    "Development document-source curator credentials are unavailable."
+                raise DevelopmentReaderUnavailable(
+                    "Development document-source reader credentials are unavailable."
                 ) from None
             if (
-                not isinstance(credentials, DevCuratorCredentials)
+                not isinstance(credentials, DevelopmentReaderCredentials)
                 or not isinstance(credentials.token, str)
                 or not credentials.token.strip()
-                or not isinstance(credentials.claims, Mapping)
                 or not isinstance(credentials.expires_at, (int, float))
                 or not math.isfinite(credentials.expires_at)
                 or credentials.expires_at <= time.time()
             ):
-                raise DevCuratorCredentialUnavailable(
+                raise DevelopmentReaderUnavailable(
                     "Development document-source resolver returned invalid credentials."
                 )
             self._cached[provider_id] = (resolver, credentials)
             return credentials
 
 
-_credential_service = DevCuratorCredentialService()
+_credential_service = DevelopmentReaderService()
 
 
-async def get_dev_curator_credentials() -> DevCuratorCredentials:
-    """Return the current worker's renewable dev curator credentials."""
+async def get_development_reader_credentials() -> DevelopmentReaderCredentials:
+    """Return the current worker's renewable development reader bearer."""
 
     return await _credential_service.get_credentials()

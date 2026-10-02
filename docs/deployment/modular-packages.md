@@ -218,7 +218,7 @@ exports:
 The module must define `get_document_source_provider_registrations()` and
 return a list or tuple of `DocumentSourceProviderRegistration` values. Each
 registration supplies a unique lowercase provider ID, a lazy provider factory,
-optional async `development_credential_resolver`, non-secret presentation metadata,
+optional async `development_reader_resolver`, non-secret presentation metadata,
 and boolean capability metadata. Factories and credential resolvers are not called
 while packages are enumerated. A configured provider is selected with
 `DOCUMENT_SOURCE_PROVIDER=<provider_id>`.
@@ -228,19 +228,22 @@ Import `DocumentSourceProviderRegistration` and
 package under `backend/tests/unit/lib/packages/fixtures/org_custom_runtime/`
 shows a minimal third-provider implementation.
 
-For login-free development imports, the resolver returns `DevCuratorCredentials`
-from `src.lib.packages.document_source_provider_models`: a bearer `token`,
-validated identity `claims`, and Unix `expires_at` covering both. The package
-owns authentication, claim validation, and provider-specific environment reads.
-Core uses the validated claims for group authorization and maintains a per-worker
-cache scoped to the provider and resolver. It renews before expiry using
-`DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS` and the import timeout, and
+For login-free development imports, the resolver returns
+`DevelopmentReaderCredentials` from
+`src.lib.packages.document_source_provider_models`: a machine reader bearer
+`token` and its Unix `expires_at`. The bearer belongs to a dedicated read-only
+service client, never a user account, and carries no curator identity: core
+authorizes every import from the requesting development user's own groups and
+only forwards the bearer to the provider. The package owns authentication and
+provider-specific environment reads. Core maintains a per-worker cache scoped to
+the provider and resolver. It renews before expiry using
+`DOCUMENT_SOURCE_DEV_READER_REFRESH_SKEW_SECONDS` and the import timeout, and
 bounds resolution with `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`.
 Missing resolvers and invalid or expired credentials fail closed. Expected
-authentication failures should raise `DevCuratorCredentialUnavailable` with a
-sanitized message; never include secrets in errors. The Alliance resolver owns
-Cognito password authentication and paired ID/access-token validation. Other
-providers can implement their own authentication without Cognito settings.
+authentication failures should raise `DevelopmentReaderUnavailable` with a
+sanitized message; never include secrets in errors. The Alliance resolver
+reuses the ABC client's `cognito_client_credentials` machine-client settings.
+Other providers can implement their own machine reader.
 
 Provider IDs are unique across all loaded packages. Missing modules, malformed
 registrations, and collisions fail startup with the package ID, manifest/module

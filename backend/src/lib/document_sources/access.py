@@ -12,9 +12,9 @@ from src.lib.config.groups_loader import (
     get_group_claim_key,
     get_groups_for_provider_groups,
 )
-from src.lib.document_sources.dev_curator_auth import (
-    get_dev_curator_credentials,
-    renewable_dev_curator_auth_required,
+from src.lib.document_sources.dev_reader_auth import (
+    get_development_reader_credentials,
+    development_reader_required,
 )
 
 
@@ -39,16 +39,17 @@ async def build_document_source_request_context(
 ) -> DocumentSourceRequestContext:
     """Build provider access context from validated user claims and cookies.
 
+    Authorization always comes from the requesting user's own groups. In
+    login-free development the provider bearer is the package's machine reader,
+    which may see every provider file, so these groups are the only access gate.
     The raw token is kept only in this in-memory request object. It must not be
     logged, serialized, stored, or returned to the browser.
     """
 
-    if renewable_dev_curator_auth_required():
-        credentials = await get_dev_curator_credentials()
-        provider_groups = _extract_provider_groups(credentials.claims)
-        curator_token = credentials.token
+    provider_groups = _extract_provider_groups(user_claims)
+    if development_reader_required():
+        curator_token = (await get_development_reader_credentials()).token
     else:
-        provider_groups = _extract_provider_groups(user_claims)
         curator_token = _extract_curator_token(request, user_claims)
     authorized_group_ids = tuple(get_groups_for_provider_groups(list(provider_groups)))
     return DocumentSourceRequestContext(

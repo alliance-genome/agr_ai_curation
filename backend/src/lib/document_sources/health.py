@@ -8,11 +8,11 @@ from src.lib.document_sources.models import (
     DocumentSourceConfigError,
     DocumentSourceHealth,
 )
-from src.lib.document_sources.dev_curator_auth import (
-    get_dev_curator_credentials,
-    renewable_dev_curator_auth_required,
+from src.lib.document_sources.dev_reader_auth import (
+    get_development_reader_credentials,
+    development_reader_required,
 )
-from src.lib.packages.document_source_provider_models import DevCuratorCredentialUnavailable
+from src.lib.packages.document_source_provider_models import DevelopmentReaderUnavailable
 from src.lib.document_sources.registry import (
     LOCAL_PDF_PROVIDER_ID,
     get_configured_document_source_provider,
@@ -29,7 +29,7 @@ _LOCAL_PDF_MESSAGE = "Using local PDF upload flow"
 _CONFIG_ERROR_MESSAGE = "Document-source provider misconfigured"
 _READY_MESSAGE = "Document-source provider ready"
 _UNAVAILABLE_MESSAGE = "Document-source provider unavailable"
-_DEV_AUTH_UNAVAILABLE_MESSAGE = "Document-source curator authentication unavailable"
+_DEV_AUTH_UNAVAILABLE_MESSAGE = "Document-source development reader unavailable"
 _VALID_ABSENT_MD5 = "00000000000000000000000000000000"
 
 
@@ -61,11 +61,11 @@ async def check_configured_document_source_health() -> DocumentSourceHealth:
         )
 
     credentials = None
-    if renewable_dev_curator_auth_required():
+    if development_reader_required():
         try:
-            credentials = await get_dev_curator_credentials()
-        except DevCuratorCredentialUnavailable as exc:
-            logger.warning("Document-source dev curator authentication failed: %s", exc)
+            credentials = await get_development_reader_credentials()
+        except DevelopmentReaderUnavailable as exc:
+            logger.warning("Document-source development reader authentication failed: %s", exc)
             return DocumentSourceHealth(
                 provider=provider_id,
                 ok=False,
@@ -106,7 +106,7 @@ async def check_configured_document_source_health() -> DocumentSourceHealth:
             provider=provider_id,
             ok=True,
             message=_READY_MESSAGE,
-            metadata={"enabled": True, "auth": "renewable_dev_curator"},
+            metadata={"enabled": True, "auth": "development_reader"},
         )
     else:
         async with provider:

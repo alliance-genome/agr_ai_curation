@@ -14,8 +14,8 @@ from src.lib.packages.document_source_provider_loader import (
     load_document_source_provider_catalog,
 )
 from src.lib.packages.document_source_provider_models import (
-    DevCuratorCredentialUnavailable,
-    DevelopmentCredentialResolver,
+    DevelopmentReaderUnavailable,
+    DevelopmentReaderResolver,
 )
 
 
@@ -61,19 +61,17 @@ def _resolve_provider_id(provider_id: str | None) -> str:
     return selected_provider_id
 
 
-# Removed legacy static development-token resolver — superseded by package-owned
-# renewable credentials in ALL-1070.
-def get_document_source_development_credential_resolver(
+def get_document_source_development_reader_resolver(
     provider_id: str,
-) -> DevelopmentCredentialResolver:
-    """Resolve the package renewal callback without constructing a provider."""
+) -> DevelopmentReaderResolver:
+    """Resolve the package's development reader callback without constructing a provider."""
 
     loaded = _registered_provider(provider_id.strip().lower())
-    if loaded is None or loaded.registration.development_credential_resolver is None:
-        raise DevCuratorCredentialUnavailable(
-            "Development document-source curator credential resolver is unavailable."
+    if loaded is None or loaded.registration.development_reader_resolver is None:
+        raise DevelopmentReaderUnavailable(
+            "Development document-source reader resolver is unavailable."
         )
-    return loaded.registration.development_credential_resolver
+    return loaded.registration.development_reader_resolver
 
 
 def get_configured_document_source_provider(
