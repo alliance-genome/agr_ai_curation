@@ -1261,6 +1261,10 @@ describe('HomePage durable session bootstrap', () => {
         return jsonResponse({ detail: 'Chat session not found' }, 404)
       }
 
+      if (url === buildAssistantHistoryDetailUrl('new-session-1')) {
+        return jsonResponse(buildTranscriptPage('new-session-1', [], null))
+      }
+
       if (url === '/api/chat/document' && init?.method === 'DELETE') {
         return jsonResponse({
           active: false,
@@ -1553,6 +1557,63 @@ describe('HomePage resumed transcript hydration', () => {
       .getAllByText(/^session-long message \d+$/)
       .map((element) => Number(element.textContent?.replace('session-long message ', '')))
     expect(renderedOrder).toEqual(Array.from({ length: 250 }, (_, index) => index))
+  })
+
+  it('loads the full server transcript when Home opens a stored session without a session link', async () => {
+    const requests: Array<{ cursor: string | null; limit: number | null }> = []
+    const serveTranscript = serveLongTranscript('session-stored', 250, requests)
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-stored')
+    // The browser cache only holds the most recent messages and must not win.
+    localStorage.setItem(chatStorageKeys.messages, JSON.stringify({
+      session_id: 'session-stored',
+      messages: [{
+        role: 'assistant',
+        content: 'stale cached message',
+        timestamp: '2026-04-20T00:00:00Z',
+        type: 'text',
+      }],
+    }))
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const response = serveTranscript(url) ?? realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/')
+
+    expect(await screen.findByText('session-stored message 249')).toBeInTheDocument()
+    expect(screen.getAllByText(/^session-stored message \d+$/)).toHaveLength(250)
+    expect(screen.getByText('session-stored message 0')).toBeInTheDocument()
+    expect(screen.queryByText('stale cached message')).not.toBeInTheDocument()
+    expect(requests.length).toBeGreaterThan(1)
+    expect(chatRenderSpy.mock.calls.at(-1)?.[0].sessionId).toBe('session-stored')
+    expect(vi.mocked(global.fetch)).not.toHaveBeenCalledWith('/api/chat/session', expect.anything())
+  })
+
+  it('keeps the stored session and shows an error when its transcript cannot load', async () => {
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-offline')
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (parseHistoryDetailRequest(url)?.sessionId === 'session-offline') {
+        return jsonResponse({ detail: 'Chat history is temporarily unavailable' }, 503)
+      }
+      const response = realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/')
+
+    expect(await screen.findByText('Chat history is temporarily unavailable')).toBeInTheDocument()
+    expect(chatRenderSpy).not.toHaveBeenCalled()
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-offline')
   })
 
   it('renders the fetched transcript even when browser storage rejects writes', async () => {

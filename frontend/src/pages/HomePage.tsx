@@ -509,15 +509,29 @@ function HomePage() {
     const documentOperation = beginDocumentOperation()
 
     const bootstrapSession = async () => {
+      let restoringStoredSession: string | null = null
       setIsBootstrappingSession(true)
       setMissingSessionId(null)
       setSessionBootstrapError(null)
       setRestoredTranscript(null)
 
       try {
-        if (requestedSessionId) {
+        const storedSession = !requestedSessionId && chatStorageKeys
+          ? safeGetItem(() => window.localStorage, chatStorageKeys.sessionId, {
+              owner: 'chat',
+              workflowCritical: true,
+            })
+          : null
+        restoringStoredSession = storedSession?.ok
+          ? normalizeChatHistoryValue(storedSession.value)
+          : null
+        const restoreSessionId = requestedSessionId ?? restoringStoredSession
+
+        // Every known session renders its full server transcript; the browser
+        // cache holds only recent messages and is never the source of truth.
+        if (restoreSessionId) {
           const detail = await fetchChatHistoryTranscript({
-            sessionId: requestedSessionId,
+            sessionId: restoreSessionId,
             chatKind: ASSISTANT_CHAT_HISTORY_KIND,
             signal: operation.signal,
           })
@@ -527,30 +541,17 @@ function HomePage() {
           }
 
           const activeSessionId =
-            normalizeChatHistoryValue(detail.session.session_id) ?? requestedSessionId
+            normalizeChatHistoryValue(detail.session.session_id) ?? restoreSessionId
           const restoredMessages = buildRestorableChatMessages(detail.messages)
           persistSessionId(activeSessionId)
           setRestoredTranscript({ sessionId: activeSessionId, messages: restoredMessages })
           persistSessionMessages(activeSessionId, restoredMessages)
-          await rehydrateDocumentContext(detail.active_document, documentOperation)
-
-          if (operation.ownsLatest()) {
-            setIsBootstrappingSession(false)
+          // A stored session keeps its current document context; only an
+          // explicit resume switches the chat to the session's document.
+          if (requestedSessionId) {
+            await rehydrateDocumentContext(detail.active_document, documentOperation)
           }
-          return
-        }
 
-        const storedSession = chatStorageKeys
-          ? safeGetItem(() => window.localStorage, chatStorageKeys.sessionId, {
-              owner: 'chat',
-              workflowCritical: true,
-            })
-          : null
-        const storedSessionId = storedSession?.ok
-          ? normalizeChatHistoryValue(storedSession.value)
-          : null
-        if (storedSessionId) {
-          persistSessionId(storedSessionId)
           if (operation.ownsLatest()) {
             setIsBootstrappingSession(false)
           }
@@ -578,23 +579,27 @@ function HomePage() {
           return
         }
 
-        persistSessionId(null)
-        clearPersistedMessages()
-        await clearDocumentContext(documentOperation)
-
-        if (!operation.ownsLatest()) {
-          return
-        }
-
         const errorMessage = error instanceof Error
           ? error.message
           : 'Unable to initialize the durable chat session.'
-
-        if (
-          requestedSessionId
+        const failedSessionId = requestedSessionId ?? restoringStoredSession
+        const sessionNotFound = Boolean(failedSessionId)
           && errorMessage.toLowerCase().includes('not found')
-        ) {
-          setMissingSessionId(requestedSessionId)
+
+        // A transient failure restoring the stored session keeps it, so a
+        // reload retries the same chat instead of starting a new one.
+        if (!restoringStoredSession || sessionNotFound) {
+          persistSessionId(null)
+          clearPersistedMessages()
+          await clearDocumentContext(documentOperation)
+
+          if (!operation.ownsLatest()) {
+            return
+          }
+        }
+
+        if (failedSessionId && sessionNotFound) {
+          setMissingSessionId(failedSessionId)
           setSessionBootstrapError(null)
         } else {
           setMissingSessionId(null)
