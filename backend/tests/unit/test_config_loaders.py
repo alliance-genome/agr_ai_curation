@@ -1340,11 +1340,11 @@ class TestGroupsLoader:
         groups_yaml = CONFIG_PATH / "groups.yaml"
         groups = load_groups(groups_yaml)
 
-        # Should have loaded all 7 Alliance MODs
-        assert len(groups) == 7, f"Expected 7 groups, got {len(groups)}"
+        # Should have loaded all 8 Alliance MODs
+        assert len(groups) == 8, f"Expected 8 groups, got {len(groups)}"
 
         # Check expected groups exist
-        expected_groups = ["FB", "WB", "MGI", "ZFIN", "RGD", "SGD", "HGNC"]
+        expected_groups = ["FB", "WB", "MGI", "ZFIN", "RGD", "SGD", "HGNC", "XB"]
         for group_id in expected_groups:
             assert group_id in groups, f"Expected group {group_id} not found"
 
@@ -1415,7 +1415,7 @@ class TestGroupsLoader:
 
         valid_ids = get_valid_group_ids()
 
-        assert len(valid_ids) == 7
+        assert len(valid_ids) == 8
         assert "FB" in valid_ids
         assert "WB" in valid_ids
         assert "MGI" in valid_ids
@@ -1429,7 +1429,7 @@ class TestGroupsLoader:
 
         groups_list = list_groups()
 
-        assert len(groups_list) == 7
+        assert len(groups_list) == 8
         # All items should be GroupDefinition instances
         for group in groups_list:
             assert hasattr(group, "group_id")
@@ -1511,7 +1511,7 @@ class TestGroupsLoader:
         # Force reload
         groups = load_groups(groups_yaml, force_reload=True)
 
-        assert len(groups) == 7
+        assert len(groups) == 8
 
     def test_concurrent_groups_loading(self):
         """Concurrent load_groups calls should not corrupt state."""
