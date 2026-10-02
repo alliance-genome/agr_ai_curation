@@ -61,6 +61,23 @@ class SourceConversionStatus(str, Enum):
     NO_SOURCES = "no_sources"
 
 
+class ProviderBearerKind(str, Enum):
+    """Whose credential a provider call carries, which decides derived-artifact trust.
+
+    ``CURATOR``: the logged-in curator's own bearer. The provider enforces that
+    curator's file access on every download, so reference-level derived
+    artifacts are safe to select.
+
+    ``SERVICE``: a machine reader that the provider lets read every file. AI
+    Curation is then the only access gate, so a derived artifact (converted
+    text, figure metadata) is used only when the provider binds it to the
+    selected, authorized source PDF; otherwise that PDF is parsed locally.
+    """
+
+    CURATOR = "curator"
+    SERVICE = "service"
+
+
 class ViewerMode(str, Enum):
     LOCAL_PDF = "local_pdf"
     TEXT_ONLY = "text_only"

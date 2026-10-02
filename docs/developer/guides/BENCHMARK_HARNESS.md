@@ -149,12 +149,15 @@ How this differs from a curator's document import:
 - For source references, AI Curation calls the configured document source
   with its own configured credentials and uses the curator's groups to decide which
   restricted PDFs may be read. The curator's `X-Benchmark-Curator-Authorization`
-  bearer is never forwarded to the provider. For ABC Literature those service
-  credentials come from `ABC_LITERATURE_AUTH_MODE`; a benchmark-dev resolver may
-  use `cognito_user_password` with a dedicated development Cognito user (see
-  `docs/developer/integrations/abc_literature/release_config.md`), while
-  production uses an allow-listed machine client. It uses the provider's main text when present;
-  otherwise it parses the selected main PDF with PDFX. It never asks the
+  bearer is never forwarded to the provider. For ABC Literature those
+  credentials are the deployment's own machine reader
+  (`ABC_LITERATURE_AUTH_MODE=cognito_client_credentials` with a dedicated
+  read-only client per environment holding `abc-literature/read`; see
+  `docs/developer/integrations/abc_literature/release_config.md`). ABC lets that
+  reader see every file, so the curator-group check is the access gate. It
+  uses the provider's main text and figure metadata only when the provider
+  binds them to that selected PDF; reference-level text and figure metadata are
+  ignored. Otherwise it parses the selected main PDF with PDFX. It never asks the
   provider to convert a paper, and when the provider's own conversion is still
   running or has failed it parses the PDF instead of waiting or stopping.
 - Conversion uses the deployment's configured document-source provider, as

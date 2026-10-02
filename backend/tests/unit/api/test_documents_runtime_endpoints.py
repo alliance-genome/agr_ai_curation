@@ -1497,14 +1497,14 @@ async def test_upload_document_endpoint_sanitizes_unexpected_error(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_upload_fails_with_typed_503_before_intake_when_dev_curator_unavailable(
+async def test_upload_fails_with_typed_503_before_intake_when_dev_reader_unavailable(
     monkeypatch,
 ):
     async def _unavailable(**_kwargs):
-        raise documents.DevCuratorCredentialUnavailable("sanitized unavailable")
+        raise documents.DevelopmentReaderUnavailable("sanitized unavailable")
 
     async def _must_not_intake(**_kwargs):
-        pytest.fail("upload intake must not begin without dev curator credentials")
+        pytest.fail("upload intake must not begin without the development reader")
 
     monkeypatch.setattr(documents, "build_document_source_request_context", _unavailable)
     monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _must_not_intake)
@@ -1520,22 +1520,22 @@ async def test_upload_fails_with_typed_503_before_intake_when_dev_curator_unavai
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail == {
         "error": "document_source_curator_token_unavailable",
-        "message": "Document-source curator authentication is unavailable.",
+        "message": "Document-source authentication is unavailable.",
         "suggestion": "Try again later or contact support if this persists.",
     }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route_kind", ["import", "resolve"])
-async def test_identifier_routes_fail_before_service_when_dev_curator_unavailable(
+async def test_identifier_routes_fail_before_service_when_dev_reader_unavailable(
     monkeypatch,
     route_kind,
 ):
     async def _unavailable(**_kwargs):
-        raise documents.DevCuratorCredentialUnavailable("sanitized unavailable")
+        raise documents.DevelopmentReaderUnavailable("sanitized unavailable")
 
     async def _must_not_run(**_kwargs):
-        pytest.fail("identifier service must not begin without dev curator credentials")
+        pytest.fail("identifier service must not begin without the development reader")
 
     monkeypatch.setattr(documents, "external_document_source_import_enabled", lambda: True)
     monkeypatch.setattr(documents, "build_document_source_request_context", _unavailable)

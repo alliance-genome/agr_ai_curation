@@ -42,6 +42,7 @@ from src.lib.pdf_limits import (
     pdf_file_size_limit_message,
 )
 from src.lib.pipeline.upload import UploadError
+from src.lib.document_sources.models import ProviderBearerKind
 
 FAKE_UPLOAD_MD5 = "f87357c6cdc4f067" + "e19f42aebabc6fb7"
 
@@ -734,6 +735,7 @@ async def test_intake_upload_enabled_provider_no_match_falls_back_to_local_pdf_p
         file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("MGIStaff",),
             authorized_group_ids=("MGI",),
             curator_token="curator-token",
@@ -746,6 +748,7 @@ async def test_intake_upload_enabled_provider_no_match_falls_back_to_local_pdf_p
             "provider": provider,
             "checksum": FAKE_UPLOAD_MD5,
             "authorized_group_ids": ("MGI",),
+            "bearer_kind": ProviderBearerKind.CURATOR,
             "request_bearer_token": "curator-token",
             "allow_conversion_request": True,
         }
@@ -824,6 +827,7 @@ async def test_intake_checksum_matched_supplement_processes_exact_uploaded_pdf(t
         ),
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("FBStaff",),
             authorized_group_ids=("FB",),
             curator_token="curator-token",
@@ -919,6 +923,7 @@ async def test_intake_upload_enabled_provider_ready_dispatches_markdown_import(t
         file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("MGIStaff",),
             authorized_group_ids=("MGI",),
             curator_token="curator-token",
@@ -1014,6 +1019,7 @@ async def test_intake_upload_provider_match_with_pending_conversion_does_not_dis
         file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("MGIStaff",),
             authorized_group_ids=("MGI",),
             curator_token="curator-token",
@@ -1114,6 +1120,7 @@ async def test_intake_upload_provider_source_only_ready_uses_presentation_label(
             file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
             user={"sub": "user-1"},
             document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
                 provider_groups=("MGIStaff",),
                 authorized_group_ids=("MGI",),
                 curator_token="curator-token",
@@ -1199,6 +1206,7 @@ async def test_intake_upload_enabled_provider_ready_requires_curator_token(tmp_p
             file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
             user={"sub": "user-1"},
             document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
                 provider_groups=("MGIStaff",),
                 authorized_group_ids=("MGI",),
             ),
@@ -1253,6 +1261,7 @@ async def test_intake_upload_enabled_provider_duplicate_short_circuits_before_lo
             file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
             user={"sub": "user-1"},
             document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
                 provider_groups=("MGIStaff",),
                 authorized_group_ids=("MGI",),
             ),

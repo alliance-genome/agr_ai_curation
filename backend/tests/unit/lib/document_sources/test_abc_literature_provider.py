@@ -40,6 +40,7 @@ from agr_ai_curation_alliance.literature.client import (
     ABCLiteratureConfigError,
     ABCLiteratureHTTPError,
 )
+from src.lib.document_sources.models import ProviderBearerKind
 
 
 def test_abc_registration_owns_public_identifier_guidance() -> None:
@@ -358,6 +359,7 @@ async def test_reference_import_uses_actual_abc_main_pdf_precedence() -> None:
     provider = provider_from_fake(fake_client)
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:41902664",
         authorized_group_ids=("FB",),
@@ -390,79 +392,6 @@ def test_package_builds_complete_abc_client_config_from_environment(monkeypatch)
     assert config.cognito_client_secret == "client-secret"
     assert config.cognito_scope == "scope/read"
     assert config.timeout_seconds == 12.5
-
-
-def _set_user_password_env(monkeypatch) -> str:
-    sign_in_value = "-".join(("synthetic", "sign", "in"))
-    monkeypatch.setenv("ABC_LITERATURE_API_BASE_URL", "https://literature.example/api")
-    monkeypatch.setenv("ABC_LITERATURE_AUTH_MODE", "cognito_user_password")
-    monkeypatch.setenv("ABC_LITERATURE_COGNITO_REGION", "us-east-1")
-    monkeypatch.setenv("ABC_LITERATURE_COGNITO_USER_POOL_ID", "pool-1")
-    monkeypatch.setenv("ABC_LITERATURE_COGNITO_CLIENT_ID", "client-1")
-    monkeypatch.delenv("ABC_LITERATURE_COGNITO_CLIENT_SECRET", raising=False)
-    monkeypatch.setenv("ABC_LITERATURE_COGNITO_USERNAME", "dev-service-user")
-    monkeypatch.setenv("ABC_LITERATURE_COGNITO_PASSWORD", sign_in_value)
-    monkeypatch.setenv("ABC_LITERATURE_COGNITO_REFRESH_SKEW_SECONDS", "120")
-    return sign_in_value
-
-
-def test_package_builds_user_password_abc_client_config_from_environment(
-    monkeypatch,
-) -> None:
-    sign_in_value = _set_user_password_env(monkeypatch)
-
-    config = _build_abc_literature_client_config()
-
-    assert config.auth_mode is ABCLiteratureAuthMode.COGNITO_USER_PASSWORD
-    assert config.cognito_region == "us-east-1"
-    assert config.cognito_user_pool_id == "pool-1"
-    assert config.cognito_client_id == "client-1"
-    assert config.cognito_client_secret is None
-    assert config.cognito_username == "dev-service-user"
-    assert config.cognito_password == sign_in_value
-    assert config.cognito_refresh_skew_seconds == 120.0
-
-
-def test_package_user_password_refresh_skew_defaults_to_600(monkeypatch) -> None:
-    _set_user_password_env(monkeypatch)
-    monkeypatch.delenv("ABC_LITERATURE_COGNITO_REFRESH_SKEW_SECONDS")
-
-    assert _build_abc_literature_client_config().cognito_refresh_skew_seconds == 600.0
-
-
-@pytest.mark.parametrize("raw_skew", ["soon", "-1", "nan", "inf"])
-def test_package_rejects_invalid_user_password_refresh_skew(monkeypatch, raw_skew) -> None:
-    _set_user_password_env(monkeypatch)
-    monkeypatch.setenv("ABC_LITERATURE_COGNITO_REFRESH_SKEW_SECONDS", raw_skew)
-
-    with pytest.raises(
-        ABCLiteratureConfigError, match="ABC_LITERATURE_COGNITO_REFRESH_SKEW_SECONDS"
-    ):
-        _build_abc_literature_client_config()
-
-
-def test_registered_factory_fails_closed_without_user_password_identity(
-    monkeypatch,
-) -> None:
-    sign_in_value = _set_user_password_env(monkeypatch)
-    monkeypatch.delenv("ABC_LITERATURE_COGNITO_USERNAME")
-    registration = get_document_source_provider_registrations()[0]
-
-    with pytest.raises(DocumentSourceConfigError) as exc_info:
-        registration.factory()
-
-    message = str(exc_info.value)
-    assert "ABC_LITERATURE_COGNITO_USERNAME" in message
-    assert sign_in_value not in message
-
-
-def test_registered_factory_builds_provider_for_user_password_mode(monkeypatch) -> None:
-    _set_user_password_env(monkeypatch)
-    registration = get_document_source_provider_registrations()[0]
-
-    provider = registration.factory()
-
-    assert isinstance(provider, ABCLiteratureDocumentSourceProvider)
 
 
 def test_package_rejects_unknown_abc_auth_mode(monkeypatch) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -610,6 +611,54 @@ async def test_missing_static_bearer_token_raises_config_error() -> None:
 
     with pytest.raises(ABCLiteratureConfigError, match="ABC_LITERATURE_BEARER_TOKEN"):
         await client.show_reference("AGRKB:101")
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_token_returns_machine_bearer_and_unix_expiry() -> None:
+    fake_http = FakeAsyncClient(
+        [json_response(200, {"access_token": "reader-token", "expires_in": 3600})]
+    )
+    client = ABCLiteratureClient(
+        ABCLiteratureClientConfig(
+            base_url="https://literature.example/api",
+            auth_mode=ABCLiteratureAuthMode.COGNITO_CLIENT_CREDENTIALS,
+            cognito_token_url="https://auth.example/oauth2/token",
+            cognito_client_id="reader-client",
+            cognito_client_secret="synthetic-" + uuid4().hex,
+            cognito_scope="abc-literature/read",
+        ),
+        http_client=fake_http,  # type: ignore[arg-type]
+    )
+    before = time.time()
+
+    token, expires_at = await client.client_credentials_token()
+
+    assert token == "reader-token"
+    assert before + 3590 <= expires_at <= time.time() + 3600
+    assert fake_http.requests[0]["data"] == {
+        "grant_type": "client_credentials",
+        "scope": "abc-literature/read",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode", [ABCLiteratureAuthMode.NONE, ABCLiteratureAuthMode.STATIC_BEARER]
+)
+async def test_client_credentials_token_requires_client_credentials_mode(mode) -> None:
+    fake_http = FakeAsyncClient()
+    client = ABCLiteratureClient(
+        ABCLiteratureClientConfig(
+            base_url="https://literature.example/api",
+            auth_mode=mode,
+            bearer_token="static-token",
+        ),
+        http_client=fake_http,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ABCLiteratureConfigError, match="cognito_client_credentials"):
+        await client.client_credentials_token()
+    assert fake_http.requests == []
 
 
 @pytest.mark.asyncio

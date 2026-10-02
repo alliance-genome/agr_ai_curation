@@ -1,17 +1,16 @@
-"""Tests for provider-neutral renewable development credentials."""
+"""Tests for the provider-neutral renewable development reader."""
 
 import asyncio
 
 import pytest
 
-from src.lib.document_sources import dev_curator_auth as auth
-from src.lib.packages.document_source_provider_models import DevCuratorCredentials
+from src.lib.document_sources import dev_reader_auth as auth
+from src.lib.packages.document_source_provider_models import DevelopmentReaderCredentials
 
 
 def _credentials(*, token: str = "provider-token", expires_at: float = 5000):
-    return DevCuratorCredentials(
+    return DevelopmentReaderCredentials(
         token=token,
-        claims={"sub": "curator", "groups": ["staff"]},
         expires_at=expires_at,
     )
 
@@ -33,15 +32,15 @@ def test_renewable_auth_gating(
     monkeypatch.setattr(auth, "get_document_source_import_enabled", lambda: enabled)
     monkeypatch.setattr(auth, "get_document_source_provider", lambda: provider)
 
-    assert auth.renewable_dev_curator_auth_required() is expected
+    assert auth.development_reader_required() is expected
 
 
 @pytest.mark.asyncio
 async def test_cache_reuse_refresh_and_concurrent_callers(monkeypatch) -> None:
-    service = auth.DevCuratorCredentialService()
-    monkeypatch.setattr(auth, "renewable_dev_curator_auth_required", lambda: True)
+    service = auth.DevelopmentReaderService()
+    monkeypatch.setattr(auth, "development_reader_required", lambda: True)
     monkeypatch.setattr(
-        auth, "get_document_source_dev_curator_refresh_skew_seconds", lambda: 600
+        auth, "get_document_source_dev_reader_refresh_skew_seconds", lambda: 600
     )
     monkeypatch.setattr(
         auth, "get_document_source_import_timeout_seconds", lambda: 300.0
@@ -57,7 +56,7 @@ async def test_cache_reuse_refresh_and_concurrent_callers(monkeypatch) -> None:
 
     monkeypatch.setattr(
         auth,
-        "get_document_source_development_credential_resolver",
+        "get_document_source_development_reader_resolver",
         lambda _: authenticate,
     )
 
@@ -77,22 +76,22 @@ async def test_cache_reuse_refresh_and_concurrent_callers(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_service_sanitizes_provider_failures(monkeypatch) -> None:
-    service = auth.DevCuratorCredentialService()
-    monkeypatch.setattr(auth, "renewable_dev_curator_auth_required", lambda: True)
+    service = auth.DevelopmentReaderService()
+    monkeypatch.setattr(auth, "development_reader_required", lambda: True)
 
     async def fail():
-        raise RuntimeError("fake-curator password-value client-secret-value")
+        raise RuntimeError("reader-client-id client-secret-value token-endpoint-body")
 
     monkeypatch.setattr(
-        auth, "get_document_source_development_credential_resolver", lambda _: fail
+        auth, "get_document_source_development_reader_resolver", lambda _: fail
     )
 
-    with pytest.raises(auth.DevCuratorCredentialUnavailable) as exc_info:
+    with pytest.raises(auth.DevelopmentReaderUnavailable) as exc_info:
         await service.get_credentials()
     message = str(exc_info.value)
-    assert "fake-curator" not in message
-    assert "password-value" not in message
+    assert "reader-client-id" not in message
     assert "client-secret-value" not in message
+    assert "token-endpoint-body" not in message
 
 
 @pytest.mark.asyncio
@@ -107,23 +106,23 @@ async def test_service_sanitizes_provider_failures(monkeypatch) -> None:
     ],
 )
 async def test_invalid_credentials_fail_closed(monkeypatch, result):
-    monkeypatch.setattr(auth, "renewable_dev_curator_auth_required", lambda: True)
+    monkeypatch.setattr(auth, "development_reader_required", lambda: True)
 
     async def resolve():
         return result
 
     monkeypatch.setattr(
-        auth, "get_document_source_development_credential_resolver", lambda _: resolve
+        auth, "get_document_source_development_reader_resolver", lambda _: resolve
     )
     with pytest.raises(
-        auth.DevCuratorCredentialUnavailable, match="invalid credentials"
+        auth.DevelopmentReaderUnavailable, match="invalid credentials"
     ):
-        await auth.DevCuratorCredentialService().get_credentials()
+        await auth.DevelopmentReaderService().get_credentials()
 
 
 @pytest.mark.asyncio
 async def test_resolver_timeout_is_sanitized(monkeypatch):
-    monkeypatch.setattr(auth, "renewable_dev_curator_auth_required", lambda: True)
+    monkeypatch.setattr(auth, "development_reader_required", lambda: True)
     monkeypatch.setattr(
         auth, "get_document_source_request_timeout_seconds", lambda: 0.001
     )
@@ -132,15 +131,15 @@ async def test_resolver_timeout_is_sanitized(monkeypatch):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(
-        auth, "get_document_source_development_credential_resolver", lambda _: resolve
+        auth, "get_document_source_development_reader_resolver", lambda _: resolve
     )
-    with pytest.raises(auth.DevCuratorCredentialUnavailable, match="unavailable"):
-        await auth.DevCuratorCredentialService().get_credentials()
+    with pytest.raises(auth.DevelopmentReaderUnavailable, match="unavailable"):
+        await auth.DevelopmentReaderService().get_credentials()
 
 
 @pytest.mark.asyncio
 async def test_cached_credentials_are_scoped_to_provider_and_resolver(monkeypatch):
-    monkeypatch.setattr(auth, "renewable_dev_curator_auth_required", lambda: True)
+    monkeypatch.setattr(auth, "development_reader_required", lambda: True)
 
     async def first():
         return _credentials(token="first", expires_at=auth.time.time() + 10000)
@@ -154,10 +153,10 @@ async def test_cached_credentials_are_scoped_to_provider_and_resolver(monkeypatc
     )
     monkeypatch.setattr(
         auth,
-        "get_document_source_development_credential_resolver",
+        "get_document_source_development_reader_resolver",
         lambda _: selected["resolver"],
     )
-    service = auth.DevCuratorCredentialService()
+    service = auth.DevelopmentReaderService()
     assert (await service.get_credentials()).token == "first"
     selected.update(provider="second", resolver=second)
     assert (await service.get_credentials()).token == "second"

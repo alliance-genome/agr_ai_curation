@@ -30,6 +30,7 @@ from src.lib.pdf_jobs.upload_execution_service import (
 from src.lib.pdf_jobs.upload_intake_service import UploadIntakeService
 from src.models.pipeline import ProcessingStage
 from src.models.sql.pdf_processing_job import PdfJobStatus
+from src.lib.document_sources.models import ProviderBearerKind
 
 FAKE_UPLOAD_MD5 = "ab2934ecd0f4b164" + "9839207786803998"
 
@@ -418,6 +419,7 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
         file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
         user={"sub": "user-provider"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("ExternalCurators",),
             authorized_group_ids=("FAKE",),
             curator_token="curator-token",

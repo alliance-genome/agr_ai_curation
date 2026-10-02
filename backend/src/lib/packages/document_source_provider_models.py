@@ -16,26 +16,26 @@ _PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _CAPABILITY_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-class DevCuratorCredentialUnavailable(RuntimeError):
-    """Raised with a sanitized message when the dev curator token is unavailable."""
+class DevelopmentReaderUnavailable(RuntimeError):
+    """Raised with a sanitized message when the development reader is unavailable."""
 
 
 @dataclass(frozen=True, slots=True)
-class DevCuratorCredentials:
-    """Package-validated bearer, identity claims, and Unix expiry timestamp.
+class DevelopmentReaderCredentials:
+    """Package-issued machine reader bearer and its Unix expiry timestamp.
 
-    The resolver must validate the bearer and claims for the same identity before
-    returning. Core uses these claims for authorization without decoding tokens.
-    Expiry must cover both the bearer and claims. Resolver failures must use
-    sanitized messages when raising ``DevCuratorCredentialUnavailable``.
+    The bearer belongs to a dedicated read-only service client, not a person, so
+    it carries no curator identity. Core authorizes imports from the requesting
+    user's own groups and only forwards this bearer to the provider. Resolver
+    failures must use sanitized messages when raising
+    ``DevelopmentReaderUnavailable``.
     """
 
     token: str = field(repr=False)
-    claims: Mapping[str, Any] = field(repr=False)
     expires_at: float
 
 
-DevelopmentCredentialResolver = Callable[[], Awaitable[DevCuratorCredentials]]
+DevelopmentReaderResolver = Callable[[], Awaitable[DevelopmentReaderCredentials]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +100,7 @@ class DocumentSourceProviderRegistration:
     factory: Callable[[], "DocumentSourceProvider"]
     presentation: DocumentSourceProviderPresentation
     capabilities: Mapping[str, bool] = field(default_factory=dict)
-    development_credential_resolver: DevelopmentCredentialResolver | None = None
+    development_reader_resolver: DevelopmentReaderResolver | None = None
 
     def __post_init__(self) -> None:
         provider_id = self.provider_id.strip()
@@ -119,12 +119,12 @@ class DocumentSourceProviderRegistration:
                 f"document-source provider '{provider_id}' presentation must use "
                 "DocumentSourceProviderPresentation"
             )
-        if self.development_credential_resolver is not None and not callable(
-            self.development_credential_resolver
+        if self.development_reader_resolver is not None and not callable(
+            self.development_reader_resolver
         ):
             raise ValueError(
                 f"document-source provider '{provider_id}' "
-                "development_credential_resolver must be callable"
+                "development_reader_resolver must be callable"
             )
 
         capabilities = dict(self.capabilities)

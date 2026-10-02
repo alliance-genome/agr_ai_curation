@@ -272,24 +272,26 @@ def test_dev_compose_trace_review_defaults_to_local_langfuse_bootstrap_keys():
     )
 
 
-def test_dev_curator_credentials_are_development_compose_only():
+def test_dev_reader_settings_are_development_compose_only():
     dev_backend = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
     production_backend = _load_compose()["services"]["backend"]["environment"]
-    expected = {
-        "DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE": "${DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE:-none}",
-        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_REGION": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_REGION:-us-east-1}",
-        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_USER_POOL_ID": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_USER_POOL_ID:-}",
-        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_ID": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_ID:-}",
-        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_SECRET": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_SECRET:-}",
-        "DOCUMENT_SOURCE_DEV_CURATOR_USERNAME": "${DOCUMENT_SOURCE_DEV_CURATOR_USERNAME:-}",
-        "DOCUMENT_SOURCE_DEV_CURATOR_PASSWORD": "${DOCUMENT_SOURCE_DEV_CURATOR_PASSWORD:-}",
-        "DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS": "${DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS:-600}",
-    }
+    key = "DOCUMENT_SOURCE_DEV_READER_REFRESH_SKEW_SECONDS"
 
-    for key, value in expected.items():
-        assert dev_backend[key] == value
-        assert key not in production_backend
+    assert dev_backend[key] == "${DOCUMENT_SOURCE_DEV_READER_REFRESH_SKEW_SECONDS:-600}"
+    assert key not in production_backend
     assert production_backend["DEV_MODE"] == "false"
+
+
+def test_no_user_password_document_source_settings_remain():
+    # Services reach ABC only through a machine reader; user sign-in settings are gone.
+    dev_backend = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
+    production_backend = _load_compose()["services"]["backend"]["environment"]
+    for environment in (dev_backend, production_backend):
+        assert not [
+            key for key in environment
+            if key.startswith("DOCUMENT_SOURCE_DEV_CURATOR_")
+            or key in {"ABC_LITERATURE_COGNITO_USERNAME", "ABC_LITERATURE_COGNITO_PASSWORD"}
+        ]
 
 
 def test_development_sentry_dsn_uses_an_isolated_compose_input():

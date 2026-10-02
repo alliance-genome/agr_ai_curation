@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session
 from ..config import get_pdf_storage_path
 from ..lib.document_cleanup import cleanup_document_curation_dependencies
 from ..lib.document_sources.access import build_document_source_request_context
-from ..lib.packages.document_source_provider_models import DevCuratorCredentialUnavailable
+from ..lib.packages.document_source_provider_models import DevelopmentReaderUnavailable
 from ..lib.document_sources.identifier_import import (
     IdentifierImportService,
     IdentifierImportValidationError,
@@ -146,16 +146,16 @@ async def _document_source_context_or_503(
             request=request,
             user_claims=user,
         )
-    except DevCuratorCredentialUnavailable as exc:
+    except DevelopmentReaderUnavailable as exc:
         raise_sanitized_http_exception(
             logger,
             status_code=503,
             detail={
                 "error": "document_source_curator_token_unavailable",
-                "message": "Document-source curator authentication is unavailable.",
+                "message": "Document-source authentication is unavailable.",
                 "suggestion": "Try again later or contact support if this persists.",
             },
-            log_message="Development document-source curator authentication unavailable",
+            log_message="Development document-source reader unavailable",
             exc=exc,
             level=logging.WARNING,
         )

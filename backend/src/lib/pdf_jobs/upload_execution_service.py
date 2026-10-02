@@ -24,6 +24,7 @@ from src.lib.document_sources.main_text import select_preferred_main_text_artifa
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceProvider,
+    ProviderBearerKind,
     SourceArtifact,
     SourceConversionResult,
     SourceConversionStatus,
@@ -166,6 +167,7 @@ class ProviderMarkdownExecutionRequest:
     filename: str
     converted_artifact_id: str
     curator_token: str = field(repr=False)
+    bearer_kind: ProviderBearerKind
     source_provenance: Mapping[str, Any]
     file_path: Path
     figure_metadata_artifact_ids: tuple[str, ...] = ()
@@ -183,6 +185,7 @@ class ProviderConversionExecutionRequest:
     reference: str
     source_artifact_id: str
     curator_token: str = field(repr=False)
+    bearer_kind: ProviderBearerKind
     source_provenance: Mapping[str, Any]
     file_path: Path
     figure_metadata_artifact_ids: tuple[str, ...] = ()
@@ -548,6 +551,7 @@ class UploadExecutionService:
                             filename=request.filename,
                             converted_artifact_id=selected_artifact.artifact_id,
                             curator_token=curator_token,
+                            bearer_kind=request.bearer_kind,
                             source_provenance=source_provenance,
                             figure_metadata_artifact_ids=figure_metadata_artifact_ids,
                             file_path=request.file_path,
@@ -639,13 +643,23 @@ class UploadExecutionService:
             request_bearer_token=curator_token,
         )
         reference_key = str(request.reference or "").strip()
-        reference_artifacts = (
-            artifact
-            for artifact in artifacts
-            if not reference_key
-            or artifact.reference_curie == reference_key
-            or artifact.reference_id == reference_key
-        )
+        if request.bearer_kind is ProviderBearerKind.SERVICE:
+            # A machine reader sees every file: only text bound to the
+            # authorized source PDF is acceptable, never reference-level text.
+            reference_artifacts = (
+                artifact
+                for artifact in artifacts
+                if artifact.parent_artifact_id
+                and artifact.parent_artifact_id == request.source_artifact_id
+            )
+        else:
+            reference_artifacts = (
+                artifact
+                for artifact in artifacts
+                if not reference_key
+                or artifact.reference_curie == reference_key
+                or artifact.reference_id == reference_key
+            )
         selected, ambiguous_count = select_preferred_main_text_artifact(
             provider,
             reference_artifacts,
@@ -658,6 +672,7 @@ class UploadExecutionService:
             provider=provider,
             artifacts=artifacts,
             source_artifact_id=request.source_artifact_id,
+            bearer_kind=request.bearer_kind,
         )
 
     async def _execute_provider_markdown_unbounded(
@@ -1307,6 +1322,7 @@ def _figure_metadata_artifact_ids_from_artifacts(
     provider: DocumentSourceProvider,
     artifacts: list[SourceArtifact],
     source_artifact_id: str,
+    bearer_kind: ProviderBearerKind,
 ) -> tuple[str, ...]:
     from src.lib.document_sources.import_selection import (
         provider_metadata_artifacts_for_source,
@@ -1328,6 +1344,7 @@ def _figure_metadata_artifact_ids_from_artifacts(
             provider=provider,
             source_artifact=source_artifact,
             artifacts=artifacts,
+            bearer_kind=bearer_kind,
         )
     )
 
@@ -1372,6 +1389,7 @@ async def _figure_metadata_artifact_ids_for_markdown_request(
                 provider=provider,
                 artifacts=artifacts,
                 source_artifact_id=source_artifact_id,
+                bearer_kind=request.bearer_kind,
             ),
         )
     )

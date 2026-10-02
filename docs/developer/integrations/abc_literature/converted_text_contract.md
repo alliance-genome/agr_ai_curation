@@ -58,6 +58,16 @@ downloads must use the request-local curator token when access needs to reflect
 the logged-in curator. Do not persist the curator token or return it to the
 browser.
 
+When AI Curation reads ABC with a machine reader (a `service` bearer: the
+login-free development reader or a benchmark conversion's application
+credential), `download_file` is no longer a per-curator gate because ABC gives
+that client every file. Under a `service` bearer, converted Markdown and figure
+metadata are used only when nested under (bound to) the selected, authorized
+source PDF. Reference-level converted rows are never selected and provider
+conversion is never requested; without bound Markdown the authorized source PDF
+is parsed locally with PDFX. A `curator` bearer keeps the reference-level
+selection below.
+
 ## Canonical Converted Text
 
 For ABC Literature, the canonical first-cut text target is:

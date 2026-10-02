@@ -27,6 +27,7 @@ from src.lib.document_sources.models import (
 from agr_ai_curation_alliance.document_sources.abc_literature import (
     ABCLiteratureDocumentSourceProvider,
 )
+from src.lib.document_sources.models import ProviderBearerKind
 
 
 class FakeChecksumProvider:
@@ -300,6 +301,7 @@ def test_provider_metadata_artifacts_for_source_filters_by_class_and_display_pre
     )
 
     assert provider_metadata_artifacts_for_source(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         source_artifact=source,
         artifacts=[source, supplement_metadata, main_metadata],
@@ -316,6 +318,7 @@ async def test_checksum_match_provider_policy_can_require_exact_local_pdf():
     provider = FakeLocalPdfChecksumProvider([source, misleading_main_text])
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=("FB",),
@@ -359,6 +362,7 @@ def test_provider_metadata_artifacts_for_source_prefers_exact_png_sidecar_match(
     )
 
     assert provider_metadata_artifacts_for_source(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         source_artifact=source,
         artifacts=[source, figure_png, prefix_only_metadata, matching_metadata],
@@ -370,6 +374,7 @@ async def test_select_checksum_import_candidate_returns_ready_for_single_authori
     provider = FakeChecksumProvider([_source("source-1"), _converted("md-1", "source-1")])
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum=" abc123 ",
         authorized_group_ids=(),
@@ -392,6 +397,7 @@ async def test_select_checksum_import_candidate_carries_provider_metadata_sideca
     provider.provider_id = "abc_literature"
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -411,6 +417,7 @@ async def test_select_checksum_import_candidate_does_not_select_metadata_json_as
     provider.provider_id = "abc_literature"
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -433,6 +440,7 @@ async def test_select_checksum_import_candidate_accepts_non_abc_markdown_classes
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -464,6 +472,7 @@ async def test_select_checksum_import_candidate_accepts_same_reference_unparente
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -480,6 +489,7 @@ async def test_select_checksum_import_candidate_returns_no_match():
     provider = FakeChecksumProvider([])
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=("FB",),
@@ -494,6 +504,7 @@ async def test_select_checksum_import_candidate_forwards_request_bearer_token():
     provider = FakeChecksumProvider([])
 
     await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=("FB",),
@@ -510,6 +521,7 @@ async def test_select_checksum_import_candidate_requires_source_artifact():
     provider = FakeChecksumProvider([_converted("md-1", "source-1")])
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=("FB",),
@@ -528,6 +540,7 @@ async def test_select_checksum_import_candidate_blocks_inaccessible_restricted_m
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=("WB",),
@@ -547,6 +560,7 @@ async def test_select_checksum_import_candidate_allows_restricted_group_case_ins
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=("FB",),
@@ -567,6 +581,7 @@ async def test_select_checksum_import_candidate_ambiguous_when_multiple_sources_
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -588,6 +603,7 @@ async def test_select_checksum_import_candidate_prefers_nxml_when_multiple_markd
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -622,6 +638,7 @@ async def test_select_checksum_import_candidate_blocks_ambiguous_equal_nxml_mark
     provider.provider_id = "abc_literature"
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -656,6 +673,7 @@ async def test_select_checksum_import_candidate_routes_abc_tei_only_main_to_conv
     provider.provider_id = "abc_literature"
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -704,6 +722,7 @@ async def test_select_checksum_import_candidate_blocks_ambiguous_post_conversion
     provider.provider_id = "abc_literature"
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -732,6 +751,7 @@ async def test_select_checksum_import_candidate_accepts_provider_mapped_readines
     provider.provider_id = "abc_literature"
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -756,6 +776,7 @@ async def test_select_checksum_import_candidate_rejects_explicit_unknown_markdow
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -785,6 +806,7 @@ async def test_select_checksum_import_candidate_prefers_ready_markdown_with_mixe
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -825,6 +847,7 @@ async def test_select_checksum_import_candidate_ignores_non_main_markdown_status
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -855,6 +878,7 @@ async def test_select_checksum_import_candidate_keeps_pdf_ready_without_converte
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -882,6 +906,7 @@ async def test_select_checksum_import_candidate_ignores_non_markdown_statuses(xm
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -904,6 +929,7 @@ async def test_select_checksum_import_candidate_reports_running_conversion():
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -925,6 +951,7 @@ async def test_select_checksum_import_candidate_reports_failed_conversion():
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -950,6 +977,7 @@ async def test_select_checksum_import_candidate_requests_conversion_when_support
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -987,6 +1015,7 @@ async def test_select_checksum_import_candidate_reports_no_sources_conversion():
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -1015,6 +1044,7 @@ async def test_select_checksum_import_candidate_can_skip_conversion_request():
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -1058,6 +1088,7 @@ async def test_select_checksum_import_candidate_uses_reference_level_non_abc_mar
     )
 
     decision = await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         checksum="abc123",
         authorized_group_ids=(),
@@ -1085,6 +1116,7 @@ async def test_select_checksum_import_candidate_requires_checksum():
 
     with pytest.raises(DocumentSourceError, match="checksum is required"):
         await select_checksum_import_candidate(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider=provider,
             checksum=" ",
             authorized_group_ids=(),

@@ -36,6 +36,7 @@ from src.lib.pdf_jobs.upload_execution_service import (
     ProviderMarkdownExecutionRequest,
     UploadExecutionRequest,
 )
+from src.lib.document_sources.models import ProviderBearerKind
 
 
 class _ExecuteResult:
@@ -415,6 +416,7 @@ async def test_select_reference_import_candidate_selects_authorized_pdf_and_mark
     provider = _FakeProvider()
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -434,6 +436,7 @@ async def test_select_reference_import_candidate_selects_authorized_pdf_and_mark
 @pytest.mark.asyncio
 async def test_select_reference_import_candidate_rejects_inaccessible_pdf():
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=_FakeProvider(),
         identifier="PMID:123",
         authorized_group_ids=("WB",),
@@ -497,6 +500,7 @@ async def test_select_reference_import_candidate_prefers_abc_mod_pdf_over_shared
     provider.provider_id = "abc_literature"
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier=f"PMID:{pmid}",
         authorized_group_ids=("FB",),
@@ -557,6 +561,7 @@ async def test_select_reference_import_candidate_keeps_true_abc_mod_tie_ambiguou
     provider.provider_id = "abc_literature"
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB", "WB"),
@@ -588,6 +593,7 @@ async def test_select_reference_import_candidate_without_provider_preference_sta
             ]
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=_ProviderWithoutSourcePreference(),  # type: ignore[arg-type]
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -608,6 +614,7 @@ async def test_select_reference_import_candidate_keeps_pdf_ready_without_matchin
     )
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -635,6 +642,7 @@ async def test_select_reference_import_candidate_requests_conversion_when_suppor
     )
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -677,6 +685,7 @@ async def test_select_reference_import_candidate_uses_reference_nxml_after_conve
     )
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -708,6 +717,7 @@ async def test_select_reference_import_candidate_accepts_provider_mapped_readine
     provider.provider_id = "abc_literature"
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -731,6 +741,7 @@ async def test_select_reference_import_candidate_rejects_explicit_unknown_markdo
     )
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -767,6 +778,7 @@ async def test_select_reference_import_candidate_prefers_canonical_nxml_markdown
     )
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -800,6 +812,7 @@ async def test_select_reference_import_candidate_routes_abc_tei_only_main_to_con
     provider.provider_id = "abc_literature"
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -848,6 +861,7 @@ async def test_select_reference_import_candidate_blocks_ambiguous_post_conversio
     provider.provider_id = "abc_literature"
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -885,6 +899,7 @@ async def test_select_reference_import_candidate_blocks_ambiguous_main_markdown(
     )
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:123",
         authorized_group_ids=("FB",),
@@ -932,6 +947,7 @@ async def test_identifier_import_service_returns_partial_success_and_dispatches_
         identifiers="123, doi:10.123/example",
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("FBStaff",),
             authorized_group_ids=("FB",),
             curator_token=" curator-token ",
@@ -1010,6 +1026,7 @@ async def test_identifier_import_reports_source_pdf_download_access_denied(tmp_p
         identifiers="PMID:123",
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("FBStaff",),
             authorized_group_ids=("FB",),
             curator_token="curator-token",
@@ -1058,6 +1075,7 @@ async def test_reference_not_found_is_per_item_without_runtime_error(tmp_path, m
     kwargs = dict(
         identifiers="123,456", user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("FBStaff",), authorized_group_ids=("FB",), curator_token="curator-token",
         ),
     )
@@ -1105,6 +1123,7 @@ async def test_identifier_import_service_resolve_does_not_download_or_dispatch(t
         identifiers="123",
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("FBStaff",),
             authorized_group_ids=("FB",),
             curator_token="curator-token",
@@ -1153,6 +1172,7 @@ async def test_identifier_resolve_cleans_phantom_provider_duplicate(tmp_path):
         identifiers="123",
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("FBStaff",),
             authorized_group_ids=("FB",),
             curator_token="curator-token",
@@ -1210,6 +1230,7 @@ async def test_identifier_import_cleans_phantom_provider_duplicate_before_import
         identifiers="123",
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("FBStaff",),
             authorized_group_ids=("FB",),
             curator_token="curator-token",
@@ -1268,6 +1289,7 @@ async def test_identifier_import_service_imports_pdf_when_markdown_is_missing(tm
         identifiers="123",
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("FBStaff",),
             authorized_group_ids=("FB",),
             curator_token="curator-token",
@@ -1365,6 +1387,7 @@ async def test_identifier_import_service_queues_abc_conversion_when_markdown_is_
         identifiers="123",
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("FBStaff",),
             authorized_group_ids=("FB",),
             curator_token="curator-token",
@@ -1414,6 +1437,7 @@ async def test_identifier_import_service_rejects_missing_curator_token_before_pr
         identifiers="123",
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
             provider_groups=("FBStaff",),
             authorized_group_ids=("FB",),
             curator_token="   ",
