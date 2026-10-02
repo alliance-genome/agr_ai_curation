@@ -460,7 +460,7 @@ async def test_request_referencefile_conversion_uses_safe_defaults() -> None:
 
 
 @pytest.mark.asyncio
-async def test_request_referencefile_conversion_can_wait_but_not_overwrite_by_default() -> None:
+async def test_request_referencefile_conversion_can_wait_and_always_overwrites_tei() -> None:
     fake_http = FakeAsyncClient([json_response(200, {"status": "converted"})])
     client = ABCLiteratureClient(
         ABCLiteratureClientConfig(base_url="https://literature.example/api"),

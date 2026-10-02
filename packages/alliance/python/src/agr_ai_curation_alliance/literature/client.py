@@ -2,7 +2,10 @@
 
 The client intentionally exposes only lookup/list/download/search operations
 plus the constrained existing-reference conversion request used by ABC-backed
-imports. It never exposes Literature upload/create or TEI-overwrite behavior.
+imports. It never exposes Literature upload/create behavior. Conversion requests
+send ``overwrite_tei_md=true`` (agreed with the Blue Team on 2026-10-02,
+SCRUM-6624) so references with only legacy TEI-derived Markdown are converted
+from their main source.
 """
 
 from __future__ import annotations

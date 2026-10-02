@@ -79,8 +79,7 @@ async def select_checksum_import_candidate(
     This helper never uploads PDFs, downloads bytes, ingests content, or calls
     direct PDFX. Converted main Markdown is preferred when ready; if an
     authorized provider match has no usable main Markdown and the provider
-    supports conversion, this helper requests/polls provider-side conversion
-    without TEI overwrite.
+    supports conversion, this helper requests/polls provider-side conversion.
     """
 
     normalized_checksum = _require_checksum(checksum)
