@@ -11,7 +11,6 @@ from src.lib.config.groups_loader import (
     load_groups,
     reset_cache,
 )
-from src.lib.group_rules import normalize_group_id
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 GROUPS_FILES = [
@@ -92,8 +91,3 @@ def test_mixed_membership_resolves_only_mod_groups(groups_file):
 def test_shipped_groups_files_define_the_same_groups():
     contents = [yaml.safe_load(path.read_text(encoding="utf-8")) for path in GROUPS_FILES]
     assert contents[0] == contents[1]
-
-
-@pytest.mark.parametrize("alias", ["xb", "Xenbase", "xenopus"])
-def test_xenbase_aliases_normalize_to_xb(alias):
-    assert normalize_group_id(alias) == "XB"

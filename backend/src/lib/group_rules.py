@@ -33,9 +33,6 @@ GROUP_ID_ALIASES: Dict[str, str] = {
     "saccharomyces": "SGD",
     "hgnc": "HGNC",
     "human": "HGNC",
-    "xb": "XB",
-    "xenbase": "XB",
-    "xenopus": "XB",
 }
 
 
