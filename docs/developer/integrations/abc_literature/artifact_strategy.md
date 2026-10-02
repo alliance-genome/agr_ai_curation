@@ -68,19 +68,20 @@ AI Curation must not create or upload Literature records in normal import flows:
 For an existing, authorized ABC reference discovered through MD5 or identifier
 lookup, AI Curation may call:
 
-- `GET /reference/referencefile/conversion_request/{curie_or_reference_id}?wait=false&overwrite_tei_md=false`
+- `GET /reference/referencefile/conversion_request/{curie_or_reference_id}?wait=false&overwrite_tei_md=true`
 
 Important constraints:
 
 - `conversion_request` is reference-wide, not source-file-scoped. A PDF MD5
   match is the access/provenance anchor, but ABC may convert nXML, main PDFs,
   and eligible supplements for the reference.
-- `overwrite_tei_md` must remain `false` in this wave. Do not ask ABC to ignore
-  and delete legacy TEI-derived Markdown rows.
+- AI Curation sends `overwrite_tei_md=true` (agreed with the Blue Team on
+  2026-10-02, SCRUM-6624) so references whose only main text is legacy
+  TEI-derived Markdown are converted from their main source. ABC deletes the
+  `_tei` rows after a successful replacement.
 - Existing `_nxml` `converted_merged_main` Markdown is preferred/canonical main
   text and should be used when available, even when the curator uploaded a PDF.
-- If nXML exists but `_nxml` Markdown does not, ABC may create it without
-  overwriting TEI rows.
+- If nXML exists but `_nxml` Markdown does not, ABC may create it.
 - AI Curation should proceed once authorized non-TEI
   `converted_merged_main` Markdown exists; supplement conversion may continue
   or fail without blocking the main chat/document import.

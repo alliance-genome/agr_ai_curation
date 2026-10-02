@@ -25,7 +25,7 @@ Normal import flows must not call:
 For an existing authorized ABC source/reference match, AI Curation may call:
 
 ```text
-GET /reference/referencefile/conversion_request/{curie_or_reference_id}?wait=false&overwrite_tei_md=false
+GET /reference/referencefile/conversion_request/{curie_or_reference_id}?wait=false&overwrite_tei_md=true
 ```
 
 The call is provider-side and reference-wide. A PDF MD5 match proves the curator
@@ -93,12 +93,14 @@ ABC exposes it. It is the canonical main text even when the curator uploaded a
 PDF, because the PDF MD5 match is the source/provenance anchor and the text
 artifact can be reference-level.
 
-`overwrite_tei_md` must remain `false` in this wave. That means AI Curation does
-not ask ABC to ignore/delete legacy `_tei` rows. It does not prevent ABC from
-creating a newer `_nxml` row when nXML is present. If only TEI-derived Markdown
-exists and no non-TEI main Markdown can be obtained without overwrite, surface a
-legacy-TEI-only/missing-canonical-text state for product and Blue Team follow-up
-rather than overwriting ABC rows.
+AI Curation sends `overwrite_tei_md=true`, agreed with the Blue Team on
+2026-10-02 (SCRUM-6624). ABC then ignores legacy `_tei` rows when deciding
+whether the reference is converted, converts the main nXML or PDF, and deletes
+the `_tei` rows after a successful replacement. With `false`, a reference whose
+only main text was TEI-derived counted as converted, its main PDF was never
+converted, and the import waited for the provider timeout before failing.
+While ABC is converting, its progress payload can still list the old `_tei`
+row; the adapter does not report that row as ready main text.
 
 The ABC adapter rejects TEI-signaled rows from its canonical-main predicate, so
 shared upload and import selection cannot revive them as a unique fallback.
@@ -148,7 +150,7 @@ can be allowed to convert without creating unknown Literature references.
 Required local coverage:
 
 - ABC client calls `conversion_request` with `wait=false` and
-  `overwrite_tei_md=false`.
+  `overwrite_tei_md=true`.
 - Provider converts ABC payloads into `SourceConversionResult`.
 - Upload checksum selection requests conversion for known authorized ABC source
   matches without canonical Markdown when a curator token exists.

@@ -181,5 +181,5 @@ deployment process and verify:
   as the selected document-source provider.
 
 Do not use disablement to introduce direct Literature uploads, reference
-creation, TEI overwrite, service-token content imports, or a new local PDFX
+creation, service-token content imports, or a new local PDFX
 fallback for known ABC papers waiting on provider conversion.

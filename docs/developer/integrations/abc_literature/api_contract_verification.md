@@ -44,7 +44,7 @@ AI Curation normal import flows may call only these Literature endpoints:
 | Reference search | `POST /search/references/` | request body `FacetsOptionsSchema`; response schema is currently unspecified (`{}`) |
 | Reference file listing | `GET /reference/referencefile/show_all/{curie_or_reference_id}` | JSON array of `ReferencefileSchemaRelated` |
 | File download | `GET /reference/referencefile/download_file/{referencefile_id}` | OpenAPI currently advertises `application/json` with an empty schema, so live fixture checks must verify actual bytes/content type |
-| Existing-reference conversion request/poll | `GET /reference/referencefile/conversion_request/{curie_or_reference_id}?wait=false&overwrite_tei_md=false` | `ConversionStatusResponseSchema`; allowed only for an existing authorized reference/source match |
+| Existing-reference conversion request/poll | `GET /reference/referencefile/conversion_request/{curie_or_reference_id}?wait=false&overwrite_tei_md=true` | `ConversionStatusResponseSchema`; allowed only for an existing authorized reference/source match |
 
 All endpoints in this allowlist are marked `HTTPBearer` in the current OpenAPI
 schema. Health checks, smoke scripts, and provider clients should not assume
@@ -62,9 +62,12 @@ Normal AI Curation import flows must not call these endpoints:
 `wait` and `overwrite_tei_md`. The endpoint can start provider-side conversion
 work, so it must not be called from health checks, startup checks, or unknown
 PDF/no-match uploads. It is allowed only after AI Curation has identified an
-existing authorized ABC reference/source match. `overwrite_tei_md=true` remains
-forbidden in this wave because it asks ABC to ignore and delete legacy
-TEI-derived Markdown rows after successful replacement.
+existing authorized ABC reference/source match. AI Curation sends
+`overwrite_tei_md=true`, agreed with the Blue Team on 2026-10-02 (SCRUM-6624):
+ABC ignores legacy TEI-derived Markdown rows, converts the main source with
+PDFX (or nXML), and deletes the TEI rows after a successful replacement.
+Without it, TEI-only references were treated as already converted and could
+not be imported.
 
 ## Important Schema Findings
 
@@ -282,7 +285,7 @@ Verified and implemented contract:
   AGRKB/reference lookup path.
 - `conversion_request/{curie_or_reference_id}` is allowed only for an existing
   authorized source/reference match, with `wait=false` and
-  `overwrite_tei_md=false`.
+  `overwrite_tei_md=true`.
 
 Fixture and test evidence:
 

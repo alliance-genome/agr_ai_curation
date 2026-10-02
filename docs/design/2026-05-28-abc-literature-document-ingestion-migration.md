@@ -8,7 +8,9 @@ Owner context: AI Curation / ABC Literature / PDFX
 
 > Implementation hold: do not start the ABC Literature ingestion cutover until Blue Team confirms or extends the Literature PDF/Markdown access-control contract. AI Curation needs user/group-scoped authorization for read-only search, MD5 lookup, file listing, converted artifact discovery, source/converted downloads, and any status endpoint it consumes.
 >
-> Read-only rule: AI Curation must never upload, edit, add, or otherwise mutate ABC Literature. The integration may only read existing Literature references/files/artifacts. That excludes `POST /reference/add/`, `POST /reference/referencefile/file_upload/`, `overwrite_tei_md=true`, and any conversion endpoint call that can create jobs or new Literature files.
+> Read-only rule: AI Curation must never upload, edit, add, or otherwise mutate ABC Literature. The integration may only read existing Literature references/files/artifacts. That excludes `POST /reference/add/` and `POST /reference/referencefile/file_upload/`.
+>
+> Update 2026-10-02 (SCRUM-6624): AI Curation requests ABC conversion for an existing authorized reference with `overwrite_tei_md=true`, as agreed with the Blue Team, so references whose only main text is legacy TEI-derived Markdown get a PDFX conversion. No uploads or reference edits; the rest of the read-only rule is unchanged.
 
 ## Executive Summary
 
@@ -243,7 +245,7 @@ Relevant referencefile endpoints:
 | --- | --- | --- |
 | MD5 lookup | `GET /reference/referencefile/by_md5/{md5sum}` | Returns all referencefiles with that MD5, plus converted Markdown rows derived from each source. |
 | File listing | `GET /reference/referencefile/show_all/{curie_or_reference_id}` | Lists all files attached to a reference. |
-| Conversion request/poll | `GET /reference/referencefile/conversion_request/{curie_or_reference_id}?wait=false&overwrite_tei_md=false` | Do not call from AI Curation unless Blue Team adds or confirms a non-mutating status-only behavior. The reviewed implementation can start conversion jobs. |
+| Conversion request/poll | `GET /reference/referencefile/conversion_request/{curie_or_reference_id}?wait=false&overwrite_tei_md=true` | Called only for an existing authorized reference/source match. It can start conversion jobs. `overwrite_tei_md=true` agreed with the Blue Team on 2026-10-02 (SCRUM-6624). |
 | Download file | `GET /reference/referencefile/download_file/{referencefile_id}` | Downloads source PDF, converted Markdown, nXML, etc. |
 | Upload file | `POST /reference/referencefile/file_upload/` | Out of scope for AI Curation. This mutates ABC Literature and must not be called by the integration. |
 
@@ -340,7 +342,7 @@ Important conversion behavior from source:
 Read-only conclusion:
 
 - Treat `conversion_request` as mutating unless Blue Team explicitly provides a status-only guarantee.
-- The cutover should not start conversion, reconversion, TEI overwrite, or PDFX jobs through Literature.
+- The cutover should not start conversion, reconversion, TEI overwrite, or PDFX jobs through Literature. (Superseded: AI Curation now calls `conversion_request` for existing authorized references, with `overwrite_tei_md=true` since 2026-10-02, SCRUM-6624.)
 - Existing converted Markdown should be discovered through `show_all` and/or a new read-only status/listing endpoint if Blue Team adds one.
 - If no acceptable converted Markdown exists, AI Curation should report that the paper must be converted in ABC Literature before import.
 
@@ -348,11 +350,11 @@ Important TEI cache trap:
 
 Literature counts `_tei` rows as cached converted Markdown unless `overwrite_tei_md=true`. If a reference has only TEI-derived Markdown, the mutating conversion endpoint can report `converted` while AI Curation's preferred non-TEI selection finds no acceptable artifact.
 
-Required handling:
+Required handling (updated 2026-10-02, SCRUM-6624):
 
-- The cutover should treat "only TEI-derived Markdown exists" as an explicit unsupported/needs-conversion state, not as a generic failure.
-- AI Curation must never set `overwrite_tei_md=true` because that mutates Literature state by replacing TEI-derived rows.
-- The UI should report that ABC Literature only has TEI-derived Markdown and cannot import the paper under the current read-only policy.
+- AI Curation requests conversion with `overwrite_tei_md=true`, agreed with the Blue Team on 2026-10-02, so a TEI-only reference gets a PDFX (or nXML) conversion of its main source. ABC ignores the `_tei` rows while it converts and removes them after a successful replacement.
+- With `overwrite_tei_md=false`, ABC counted the TEI row as cached main text and never converted the main PDF, so TEI-only papers could not be imported (the import waited for the provider timeout and failed).
+- AI Curation still never selects `_tei` rows as main text, and its conversion progress check does not treat a `_tei` row as ready main text.
 
 ## Current AI Curation Architecture
 
@@ -905,8 +907,8 @@ Supplement policy:
 TEI policy:
 
 - Do not use `tei` as canonical display/import artifact.
-- Never call `overwrite_tei_md=true` from AI Curation.
-- If only TEI-derived Markdown exists, block import and ask the curator to have the paper converted through ABC Literature.
+- Request conversion with `overwrite_tei_md=true` (agreed with the Blue Team on 2026-10-02, SCRUM-6624) so TEI-only references are converted from their main source.
+- Import only the non-TEI main Markdown that the conversion produces.
 
 ## Artifact And Viewer Strategy
 

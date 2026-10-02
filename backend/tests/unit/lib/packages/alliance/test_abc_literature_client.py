@@ -454,13 +454,13 @@ async def test_request_referencefile_conversion_uses_safe_defaults() -> None:
                 "conversion_request/AGRKB%3A101"
             ),
             "headers": {"Authorization": "Bearer curator-token"},
-            "params": {"wait": "false", "overwrite_tei_md": "false"},
+            "params": {"wait": "false", "overwrite_tei_md": "true"},
         }
     ]
 
 
 @pytest.mark.asyncio
-async def test_request_referencefile_conversion_can_wait_but_not_overwrite_by_default() -> None:
+async def test_request_referencefile_conversion_can_wait_and_always_overwrites_tei() -> None:
     fake_http = FakeAsyncClient([json_response(200, {"status": "converted"})])
     client = ABCLiteratureClient(
         ABCLiteratureClientConfig(base_url="https://literature.example/api"),
@@ -471,7 +471,7 @@ async def test_request_referencefile_conversion_can_wait_but_not_overwrite_by_de
 
     assert fake_http.requests[0]["params"] == {
         "wait": "true",
-        "overwrite_tei_md": "false",
+        "overwrite_tei_md": "true",
     }
 
 

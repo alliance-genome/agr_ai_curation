@@ -226,8 +226,13 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             converted = progress.get("converted")
             if not isinstance(converted, Mapping):
                 continue
-            if converted.get("file_class") == "converted_merged_main":
-                return True
+            if converted.get("file_class") != "converted_merged_main":
+                continue
+            # ABC lists legacy TEI-derived rows in per-file progress until its
+            # overwrite_tei_md conversion replaces them; they are not main text.
+            if _display_name_is_tei_derived(converted.get("display_name")):
+                continue
+            return True
         return False
 
     def conversion_progress_percentage(self, result: SourceConversionResult) -> int:
@@ -789,8 +794,11 @@ def _artifact_file_class(artifact: SourceArtifact) -> str:
 
 
 def _artifact_is_tei_derived(artifact: SourceArtifact) -> bool:
-    display_name = str(artifact.display_name or "").strip().lower()
-    return "_tei" in display_name
+    return _display_name_is_tei_derived(artifact.display_name)
+
+
+def _display_name_is_tei_derived(display_name: object) -> bool:
+    return "_tei" in str(display_name or "").strip().lower()
 
 
 def _expected_figure_metadata_file_class(

@@ -903,7 +903,40 @@ async def test_conversion_maps_private_per_mod_status_to_generic_readiness() -> 
 
 
 @pytest.mark.asyncio
-async def test_request_conversion_can_wait_without_tei_overwrite() -> None:
+async def test_tei_derived_progress_row_is_not_reported_as_main_text() -> None:
+    """ABC keeps listing the legacy TEI row while overwrite_tei_md re-converts the PDF."""
+    fake_client = FakeABCLiteratureClient()
+    fake_client.conversion_payload = {
+        "status": "running",
+        "converted_classes": [],
+        "per_file_progress": [
+            {
+                "source": {"file_class": "tei", "display_name": "00064359_Miwa22"},
+                "converted": {
+                    "display_name": "00064359_Miwa22_tei",
+                    "file_class": "converted_merged_main",
+                    "referencefile_id": 4880764,
+                },
+                "status": "success",
+            },
+            {
+                "source": {"file_class": "main", "display_name": "00064359_Miwa22"},
+                "status": "pending",
+            },
+        ],
+    }
+    provider = provider_from_fake(fake_client)
+    result = await provider.request_conversion("AGRKB:101000000904359")
+
+    assert provider.conversion_exposes_main_text(result) is False
+    assert provider.conversion_progress_percentage(result) == 20
+    assert provider.conversion_progress_message(result) == (
+        "ABC Literature conversion running (1 file pending)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_conversion_can_wait() -> None:
     fake_client = FakeABCLiteratureClient()
     fake_client.conversion_payload = {"status": "converted"}
     provider = provider_from_fake(fake_client)
