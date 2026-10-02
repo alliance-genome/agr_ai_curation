@@ -89,6 +89,7 @@ const mockEventSources: MockEventSource[] = [];
 const stubRoutedFetch = (
   identifierResponses: Array<unknown | Response | Promise<Response>> = [defaultImportResponse],
   providerConfiguration: unknown = defaultProviderConfiguration,
+  pdfJobsResponse: unknown = emptyPdfJobsResponse,
 ) => {
   const responses = [...identifierResponses];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -100,7 +101,7 @@ const stubRoutedFetch = (
       return okJson(providerConfiguration);
     }
     if (url.includes('/api/weaviate/pdf-jobs')) {
-      return okJson(emptyPdfJobsResponse);
+      return okJson(pdfJobsResponse);
     }
 
     const nextResponse = responses.length > 0 ? responses.shift() : defaultImportResponse;
@@ -231,6 +232,42 @@ describe('AddLiteraturePage', () => {
       body: JSON.stringify({ identifiers: 'PMID:23970418' }),
     }));
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('opens a finished paper in chat straight from PDF Jobs', async () => {
+    const now = '2026-10-02T00:00:00.000Z';
+    stubRoutedFetch([defaultImportResponse], defaultProviderConfiguration, {
+      jobs: [
+        {
+          job_id: 'job-done',
+          document_id: 'doc-done',
+          user_id: 1,
+          filename: 'finished-paper.pdf',
+          status: 'completed',
+          current_stage: 'completed',
+          progress_percentage: 100,
+          message: 'Processing completed',
+          cancel_requested: false,
+          created_at: now,
+          updated_at: now,
+          completed_at: now,
+        },
+      ],
+      pagination: { total: 1, limit: 50, offset: 0 },
+    });
+    render(<AddLiteraturePage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Load for chat' }));
+
+    expect(screen.getByRole('button', { name: 'Load for curation' })).toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenCalledWith('/', {
+      state: {
+        loadForChatDocument: {
+          id: 'doc-done',
+          filename: 'finished-paper.pdf',
+        },
+      },
+    });
   });
 
   it('places identifier results before background PDF jobs without moving focus', () => {
