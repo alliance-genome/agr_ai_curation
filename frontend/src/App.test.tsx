@@ -599,13 +599,13 @@ describe('AppContent global notifications', () => {
     it('opens the configured benchmark portal in a new tab between Curation and Chat History', async () => {
       mockNavFetch();
       window.__APP_RUNTIME_CONFIG__ = {
-        VITE_BENCHMARK_PORTAL_URL: 'https://benchmark-curation-dev.alliancegenome.org',
+        VITE_BENCHMARK_PORTAL_URL: 'https://benchmark.example.org',
       };
 
       renderAppContent('/');
 
       const benchmarkLink = await screen.findByRole('link', { name: 'Benchmark (opens in a new tab)' });
-      expect(benchmarkLink).toHaveAttribute('href', 'https://benchmark-curation-dev.alliancegenome.org');
+      expect(benchmarkLink).toHaveAttribute('href', 'https://benchmark.example.org');
       expect(benchmarkLink).toHaveAttribute('target', '_blank');
       expect(benchmarkLink).toHaveAttribute('rel', 'noopener noreferrer');
       expect(benchmarkLink).toHaveTextContent('Benchmark');
