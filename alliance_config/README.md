@@ -33,6 +33,16 @@ The `groups.yaml` file maps Cognito groups to internal group IDs:
 - MGI curators → MGI
 - etc.
 
+`provider_groups` must list the real Cognito group names (for example
+`FlyBaseCurator`, `ZFINStaff`, `XenbaseCurator`). Matching is exact and
+case-sensitive, and a Cognito group that is not listed gives the user no MOD
+group, so their group rules and prompt overrides never apply.
+
+Keep `alliance_config/groups.yaml` and the tracked `config/groups.yaml`
+identical (a unit test enforces this). A release replaces production's
+`config/groups.yaml` with the repository copy, so any hand edit made on the
+production host is lost: put every mapping change in the repository instead.
+
 ## Connections Configuration
 
 The `connections.yaml` file defines external services:

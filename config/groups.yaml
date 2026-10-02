@@ -13,6 +13,7 @@
 #   - species: Primary model organism (optional)
 #   - taxon: NCBI Taxon ID (optional)
 #   - provider_groups: List of identity provider groups that map to this group ID
+#     Names must match the identity provider's group claim exactly (case-sensitive).
 # =============================================================================
 
 identity_provider:
@@ -29,10 +30,11 @@ groups:
     species: "Drosophila melanogaster"
     taxon: "NCBITaxon:7227"
     provider_groups:
+      - "FlyBaseCurator"
+      - "FBStaff"
+      - "FlyBaseDeveloper"
       - "flybase-curators"
       - "flybase-admins"
-      - "FBStaff"
-      - "FlyBaseCurator"
 
   # ---------------------------------------------------------------------------
   # WormBase (WB)
@@ -43,10 +45,11 @@ groups:
     species: "Caenorhabditis elegans"
     taxon: "NCBITaxon:6239"
     provider_groups:
+      - "WormBaseCurator"
+      - "WBStaff"
+      - "WormBaseDeveloper"
       - "wormbase-curators"
       - "wormbase-admins"
-      - "WBStaff"
-      - "WormBaseCurator"
 
   # ---------------------------------------------------------------------------
   # Mouse Genome Informatics (MGI)
@@ -57,10 +60,11 @@ groups:
     species: "Mus musculus"
     taxon: "NCBITaxon:10090"
     provider_groups:
+      - "MGICurator"
+      - "MGIStaff"
+      - "MGIDeveloper"
       - "mgi-curators"
       - "mgi-admins"
-      - "MGIStaff"
-      - "MGICurator"
 
   # ---------------------------------------------------------------------------
   # Zebrafish Information Network (ZFIN)
@@ -71,6 +75,9 @@ groups:
     species: "Danio rerio"
     taxon: "NCBITaxon:7955"
     provider_groups:
+      - "ZFINCurator"
+      - "ZFINStaff"
+      - "ZFINDeveloper"
       - "zfin-curators"
       - "zfin-admins"
 
@@ -83,6 +90,9 @@ groups:
     species: "Rattus norvegicus"
     taxon: "NCBITaxon:10116"
     provider_groups:
+      - "RGDCurator"
+      - "RGDStaff"
+      - "RGDDeveloper"
       - "rgd-curators"
       - "rgd-admins"
 
@@ -95,6 +105,9 @@ groups:
     species: "Saccharomyces cerevisiae"
     taxon: "NCBITaxon:559292"
     provider_groups:
+      - "SGDCurator"
+      - "SGDStaff"
+      - "SGDDeveloper"
       - "sgd-curators"
       - "sgd-admins"
 
@@ -109,3 +122,17 @@ groups:
     provider_groups:
       - "hgnc-curators"
       - "hgnc-admins"
+
+  # ---------------------------------------------------------------------------
+  # Xenbase (XB)
+  # ---------------------------------------------------------------------------
+  XB:
+    name: "Xenbase"
+    description: "Xenopus genome database"
+    species: "Xenopus laevis"
+    taxon: "NCBITaxon:8355"
+    provider_groups:
+      - "XenbaseCurator"
+      - "XBStaff"
+      - "xenbase-curators"
+      - "xenbase-admins"

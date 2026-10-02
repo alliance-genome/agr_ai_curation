@@ -322,6 +322,8 @@ Use your provider's OIDC configuration values in environment variables and runti
 ## Group Mapping Configuration
 
 Group mapping uses `provider_groups` in `config/groups.yaml`.
+Each entry must match a group name in the identity provider's group claim
+exactly (matching is case-sensitive); unlisted provider groups map to no group.
 
 Example:
 

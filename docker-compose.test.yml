@@ -217,6 +217,7 @@ services:
       - ./backend:/app/backend
       - ./config:/app/config
       - ./config:/runtime/config:ro
+      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
       - ./docs:/app/docs:ro
       - ./trace_review:/app/trace_review:ro
