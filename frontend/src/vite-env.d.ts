@@ -16,6 +16,7 @@ interface ImportMetaEnv {
   readonly VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS: string;
   readonly VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS?: string;
   readonly VITE_CHAT_STREAM_RECOVERY_DELAY_MS?: string;
+  readonly VITE_BENCHMARK_PORTAL_URL?: string;
   readonly VITE_PDF_UPLOAD_MAX_SELECTED_FILES: string;
   readonly VITE_PDF_JOB_WINDOW_DAYS: string;
   readonly VITE_PDF_JOB_LIMIT: string;
