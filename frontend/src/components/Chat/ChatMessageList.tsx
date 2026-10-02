@@ -6,16 +6,19 @@ import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigati
 
 import EvidenceCard from './EvidenceCard'
 import FileDownloadCard from './FileDownloadCard'
+import FlowRunProgressBar from './FlowRunProgressBar'
 import FlowStepEvidenceCard from './FlowStepEvidenceCard'
 import MessageActions from './MessageActions'
 import { buildAssistantNoticeStyle } from './chatStyles'
 import { getAssistantStatusNotice } from './chatMessageUtils'
+import type { FlowRunProgress } from './flowRunProgress'
 import type { ChatCssVariables, Message } from './types'
 
 interface ChatMessageListProps {
   messages: Message[]
   isLoading: boolean
   progressMessage: string
+  flowProgress: FlowRunProgress | null
   messagesEndRef: RefObject<HTMLDivElement>
   chatCssVariables: ChatCssVariables
   sessionId: string | null
@@ -33,6 +36,7 @@ function ChatMessageList({
   messages,
   isLoading,
   progressMessage,
+  flowProgress,
   messagesEndRef,
   chatCssVariables,
   sessionId,
@@ -183,6 +187,9 @@ function ChatMessageList({
             </div>
           )
         })
+      )}
+      {flowProgress && (isLoading || flowProgress.status !== 'running') && (
+        <FlowRunProgressBar progress={flowProgress} />
       )}
       {isLoading && (
         <div className="loading-indicator" role="status" aria-live="polite" aria-atomic="true">

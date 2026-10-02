@@ -1708,6 +1708,63 @@ def test_execute_flow_endpoint_preserves_flow_step_evidence_payload(monkeypatch)
     assert calls["clear"] == ["session-flow-evidence"]
 
 
+def test_execute_flow_endpoint_streams_flat_step_progress_events(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-progress")
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
+        name="Flow Progress",
+        execution_count=0,
+        last_executed_at=None,
+        flow_definition={},
+    )
+    db = _DummyDB(flow=flow)
+
+    _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "FLOW_STARTED",
+            "timestamp": "2026-10-02T00:00:00+00:00",
+            "data": {"flow_name": "Flow Progress", "total_steps": 2},
+        }
+        yield {
+            "type": "FLOW_STEP_STARTED",
+            "timestamp": "2026-10-02T00:00:01+00:00",
+            "data": {
+                "flow_id": str(flow_id),
+                "flow_name": "Flow Progress",
+                "flow_run_id": "flow-run-progress",
+                "step": 2,
+                "total_steps": 2,
+                "step_name": "Find disease findings",
+            },
+        }
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+
+    assert [event["type"] for event in events] == ["FLOW_STARTED", "FLOW_STEP_STARTED"]
+    assert events[0]["total_steps"] == 2
+    step_event = events[1]
+    assert step_event["step"] == 2
+    assert step_event["total_steps"] == 2
+    assert step_event["step_name"] == "Find disease findings"
+    assert step_event["timestamp"] == "2026-10-02T00:00:01+00:00"
+    assert step_event["session_id"] == "session-flow-progress"
+
+
 def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_payload(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(

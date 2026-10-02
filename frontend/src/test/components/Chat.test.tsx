@@ -1745,6 +1745,98 @@ describe('Chat turn reconciliation', () => {
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 
+  it('shows flow step progress beside the activity line while a flow runs', async () => {
+    renderChat({
+      isLoading: true,
+      events: [
+        {
+          type: 'FLOW_STARTED',
+          session_id: 'session-1',
+          timestamp: new Date().toISOString(),
+          flow_name: 'Expression flow',
+          total_steps: 3,
+        },
+        {
+          type: 'FLOW_STEP_STARTED',
+          session_id: 'session-1',
+          timestamp: new Date().toISOString(),
+          step: 2,
+          total_steps: 3,
+          step_name: 'Find expression',
+        },
+        { type: 'PROGRESS', message: 'Searching the paper…' },
+      ],
+    })
+
+    expect(await screen.findByText('Step 2 of 3: Find expression')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: 'Flow progress' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Searching the paper…')
+  })
+
+  it('removes flow progress once the flow completes', async () => {
+    renderChat({
+      isLoading: false,
+      events: [
+        {
+          type: 'FLOW_STARTED',
+          session_id: 'session-1',
+          timestamp: new Date().toISOString(),
+          flow_name: 'Expression flow',
+          total_steps: 1,
+        },
+        {
+          type: 'FLOW_STEP_STARTED',
+          session_id: 'session-1',
+          timestamp: new Date().toISOString(),
+          step: 1,
+          total_steps: 1,
+          step_name: 'Find expression',
+        },
+        { type: 'FLOW_FINISHED', session_id: 'session-1', status: 'completed' },
+      ],
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('flow-run-progress')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+  })
+
+  it('keeps the step a failed flow stopped on next to the failure', async () => {
+    renderChat({
+      isLoading: false,
+      events: [
+        {
+          type: 'FLOW_STARTED',
+          session_id: 'session-1',
+          turn_id: 'turn-flow-failed',
+          timestamp: new Date().toISOString(),
+          flow_name: 'Expression flow',
+          total_steps: 3,
+        },
+        {
+          type: 'FLOW_STEP_STARTED',
+          session_id: 'session-1',
+          turn_id: 'turn-flow-failed',
+          timestamp: new Date().toISOString(),
+          step: 2,
+          total_steps: 3,
+          step_name: 'Find expression',
+        },
+        {
+          type: 'RUN_ERROR',
+          session_id: 'session-1',
+          turn_id: 'turn-flow-failed',
+          message: 'Flow execution failed unexpectedly.',
+        },
+      ],
+    })
+
+    expect(await screen.findByText('Stopped at step 2 of 3: Find expression')).toBeInTheDocument()
+    expect(screen.getByText('"Expression flow" did not finish')).toBeInTheDocument()
+    expect(screen.getAllByText('Flow execution failed unexpectedly.').length).toBeGreaterThan(0)
+  })
+
   it('keeps warnings and requests for input visible after activity advances', async () => {
     renderChat({
       isLoading: true,

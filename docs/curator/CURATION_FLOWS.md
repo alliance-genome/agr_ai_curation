@@ -143,7 +143,8 @@ Each step receives its task and document context. Structured results from earlie
 1. Return to the main chat and open the paper you want to process.
 2. Open **Tools** in the right panel.
 3. Find the saved flow and choose **Run**.
-4. Review the chat output, downloadable files, and any validation findings.
+4. While the flow runs, a progress bar in the chat shows the step that is running (for example, "Step 2 of 4: Find expression patterns") and how long the run has taken. The step count includes the extraction and output steps; validators attached to a step run within that step. There is no time-remaining estimate, because each step's duration depends on the paper. If the run stops, the bar stays next to the error and names the step it stopped at.
+5. Review the chat output, downloadable files, and any validation findings.
 
 You can also choose a saved flow as your **Tools → Chat default** when you want ordinary chat requests to use it. Return to **Automatic** for general routing. RGD curators should follow the [RGD paper-review guide](RGD_GO_DISEASE_PAPER_REVIEW.md) for its recipes and request fields.
 

@@ -64,6 +64,7 @@ function Chat(props: ChatProps) {
         messages={controller.messages}
         isLoading={controller.isLoading}
         progressMessage={controller.progressMessage}
+        flowProgress={controller.flowProgress}
         messagesEndRef={controller.messagesEndRef}
         chatCssVariables={chatCssVariables}
         sessionId={controller.propSessionId}

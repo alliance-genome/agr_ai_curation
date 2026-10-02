@@ -53,6 +53,7 @@ import {
   isNonRenderedMetadataEvent,
   shouldShowInChat,
 } from './chatProgress'
+import { deriveFlowRunProgress } from './flowRunProgress'
 import {
   buildEvidenceReviewAndCurateTarget,
   buildUserTurnMessageId,
@@ -128,6 +129,10 @@ export function useChatController({
   ))
   const [inputMessage, setInputMessage] = useState('')
   const [progressMessage, setProgressMessage] = useState<string>('')
+  const flowProgress = useMemo(
+    () => deriveFlowRunProgress(events, propSessionId),
+    [events, propSessionId],
+  )
   const [activeDocument, setActiveDocument] = useState<ActiveDocument | null>(null)
   const [weaviateConnected, setWeaviateConnected] = useState(true)
   const [showCurationDbWarning, setShowCurationDbWarning] = useState(false)
@@ -1774,6 +1779,7 @@ export function useChatController({
     feedbackDialogOpen,
     feedbackMessageData,
     feedbackSessionId,
+    flowProgress,
     inputMessage,
     isLoading,
     isLoadingPrepPreview,
