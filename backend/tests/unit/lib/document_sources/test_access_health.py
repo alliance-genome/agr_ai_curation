@@ -10,6 +10,7 @@ from src.lib.document_sources.access import build_document_source_request_contex
 from src.lib.packages.document_source_provider_models import DevelopmentReaderCredentials
 from src.lib.document_sources.health import check_configured_document_source_health
 from src.lib.document_sources.models import (
+    ProviderBearerKind,
     DocumentSourceConfigError,
     DocumentSourceHealth,
 )
@@ -113,6 +114,7 @@ async def test_build_document_source_request_context_uses_real_cookie_outside_re
     assert context.authorized_group_ids == ("MGI",)
     assert context.curator_token == "dev-cookie-token"
     assert context.has_curator_token is True
+    assert context.bearer_kind is ProviderBearerKind.CURATOR
 
 
 @pytest.mark.asyncio
@@ -145,6 +147,7 @@ async def test_dev_mode_uses_reader_token_with_the_dev_users_own_groups(
     assert context.provider_groups == ("zfin-curators",)
     assert context.authorized_group_ids == ("ZFIN",)
     assert context.curator_token == "renewable-dev-token"
+    assert context.bearer_kind is ProviderBearerKind.SERVICE
     assert context.has_curator_token is True
     assert "renewable-dev-token" not in repr(context)
 

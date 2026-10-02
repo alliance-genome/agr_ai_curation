@@ -669,6 +669,31 @@ async def test_source_main_text_is_used_before_the_pdf_with_ai_curation_access()
 
 
 @pytest.mark.asyncio
+async def test_source_text_not_bound_to_the_authorized_pdf_is_never_used():
+    # Conversions read the source with the application's machine credential,
+    # which the provider lets see every file: reference-level text not bound to
+    # the authorized PDF is ignored and that PDF is parsed instead.
+    row = _source_row()
+    provider = _FakeSourceProvider(
+        artifacts=[_source_pdf(), _main_text(parent=None)],
+        downloads={"md-1": MAIN_TEXT.encode("utf-8"), "pdf-1": PDF_BYTES},
+    )
+    service, repository, recorder = _service(row)
+    parser_patch, parsers = _parser_patch()
+
+    with parser_patch, _provider_patch(provider):
+        await service.run(row.id, authorized_group_ids=("group-alpha",))
+
+    assert repository.failed == []
+    assert provider.downloaded == ["pdf-1"]
+    assert provider.conversion_requests == 0
+    [parser] = parsers
+    assert parser.calls[0]["bytes"] == PDF_BYTES
+    [succeeded] = repository.succeeded
+    assert succeeded["identity"]["parser"] == "pdfx"
+
+
+@pytest.mark.asyncio
 async def test_source_without_main_text_parses_the_selected_main_pdf():
     row = _source_row()
     provider = _FakeSourceProvider(artifacts=[_source_pdf()], downloads={"pdf-1": PDF_BYTES})

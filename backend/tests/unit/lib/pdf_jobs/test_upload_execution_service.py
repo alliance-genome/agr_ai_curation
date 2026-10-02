@@ -39,6 +39,7 @@ from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
 from src.models.sql import database as database_module
 from src.models.sql.pdf_processing_job import PdfJobStatus
+from src.lib.document_sources.models import ProviderBearerKind
 
 
 class _Tracker:
@@ -672,6 +673,7 @@ async def test_execute_provider_markdown_downloads_with_curator_token_and_marks_
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -756,6 +758,7 @@ async def test_execute_provider_markdown_passes_downloaded_figure_metadata_to_in
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -862,6 +865,7 @@ async def test_execute_provider_markdown_discovers_figure_metadata_from_source_p
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -1035,6 +1039,7 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
 
     await service.execute_provider_conversion(
         ProviderConversionExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-conversion",
             job_id="job-conversion",
             user_id="user-provider",
@@ -1179,6 +1184,7 @@ async def test_execute_provider_conversion_falls_back_to_local_pdf_when_main_mar
     file_path.write_bytes(b"%PDF-1.7 local upload")
     await service.execute_provider_conversion(
         ProviderConversionExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-conversion",
             job_id="job-conversion",
             user_id="user-provider",
@@ -1290,6 +1296,7 @@ async def test_execute_provider_markdown_does_not_fallback_for_denied_figure_met
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -1393,6 +1400,7 @@ async def test_upload_selection_accepts_provider_mapped_readiness():
     selected, metadata_ids = await service._select_converted_main_artifact(
         provider=provider,
         request=ProviderConversionExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-1",
             job_id="job-1",
             user_id="user-1",
@@ -1414,6 +1422,77 @@ async def test_upload_selection_accepts_provider_mapped_readiness():
 
     assert selected is artifact
     assert metadata_ids == ()
+
+
+def _conversion_markdown(artifact_id, parent=None):
+    return SourceArtifact(
+        provider="abc_literature",
+        artifact_id=artifact_id,
+        role=SourceArtifactRole.CONVERTED_TEXT,
+        artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_curie="AGRKB:101",
+        parent_artifact_id=parent,
+        display_name=f"{artifact_id}_nxml.md",
+        metadata={"file_class": "converted_merged_main"},
+    )
+
+
+def _conversion_request(bearer_kind):
+    return ProviderConversionExecutionRequest(
+        bearer_kind=bearer_kind,
+        document_id="doc-1",
+        job_id="job-1",
+        user_id="user-1",
+        owner_user_id=1,
+        filename="paper.pdf",
+        file_path=Path("/tmp/paper.pdf"),
+        reference="AGRKB:101",
+        source_artifact_id="pdf-1",
+        curator_token="token",
+        source_provenance={"provider": "abc_literature"},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bearer_kind", "artifacts", "expected"),
+    [
+        # A machine reader accepts only text bound to the authorized source PDF.
+        (
+            ProviderBearerKind.SERVICE,
+            [_conversion_markdown("reference-level"), _conversion_markdown("other-pdf", "pdf-2"),
+             _conversion_markdown("bound", "pdf-1")],
+            "bound",
+        ),
+        (
+            ProviderBearerKind.SERVICE,
+            [_conversion_markdown("reference-level"), _conversion_markdown("other-pdf", "pdf-2")],
+            None,
+        ),
+        # A curator bearer keeps reference-level selection.
+        (ProviderBearerKind.CURATOR, [_conversion_markdown("reference-level")], "reference-level"),
+    ],
+)
+async def test_conversion_polling_binds_text_to_the_source_pdf_for_service_bearers(
+    bearer_kind, artifacts, expected
+):
+    provider = _Provider()
+    provider.artifacts = artifacts
+    service = UploadExecutionService(pipeline_tracker=_Tracker())
+
+    selected, _ = await service._select_converted_main_artifact(
+        provider=provider,
+        request=_conversion_request(bearer_kind),
+        conversion_result=SourceConversionResult(
+            provider="abc_literature",
+            status=SourceConversionStatus.CONVERTED,
+            converted_classes=("converted_merged_main",),
+        ),
+        curator_token="token",
+    )
+
+    assert (selected.artifact_id if selected else None) == expected
 
 
 @pytest.mark.asyncio
@@ -1445,6 +1524,7 @@ async def test_upload_selection_uses_non_abc_provider_declared_main_markdown():
     selected, _ = await service._select_converted_main_artifact(
         provider=provider,
         request=ProviderConversionExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-1",
             job_id="job-1",
             user_id="user-1",
@@ -1545,6 +1625,7 @@ async def test_execute_provider_conversion_fails_when_completed_without_canonica
 
     await service.execute_provider_conversion(
         ProviderConversionExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-conversion",
             job_id="job-conversion",
             user_id="user-provider",
@@ -1633,6 +1714,7 @@ async def test_execute_provider_conversion_marks_failed_when_provider_fails(monk
 
     await service.execute_provider_conversion(
         ProviderConversionExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-conversion",
             job_id="job-conversion",
             user_id="user-provider",
@@ -1711,6 +1793,7 @@ async def test_execute_provider_conversion_marks_failed_when_provider_has_no_sou
 
     await service.execute_provider_conversion(
         ProviderConversionExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-conversion",
             job_id="job-conversion",
             user_id="user-provider",
@@ -1781,6 +1864,7 @@ async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monke
 
     await service.execute_provider_conversion(
         ProviderConversionExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-conversion",
             job_id="job-conversion",
             user_id="user-provider",
@@ -1850,6 +1934,7 @@ async def test_execute_provider_markdown_times_out_and_marks_failed(monkeypatch)
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -1912,6 +1997,7 @@ async def test_execute_provider_markdown_rejects_blank_curator_token_before_down
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -1971,6 +2057,7 @@ async def test_execute_provider_markdown_syncs_sql_failure_when_download_fails(m
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -2031,6 +2118,7 @@ async def test_provider_access_denial_marks_failed_when_saved_pdf_is_missing(
 
     access_denied = DocumentSourceAccessDenied("provider access denied")
     request = ProviderMarkdownExecutionRequest(
+        bearer_kind=ProviderBearerKind.CURATOR,
         document_id="doc-provider",
         job_id="job-provider",
         user_id="user-provider",
@@ -2079,6 +2167,7 @@ async def test_sync_provider_source_import_failure_updates_owned_document(monkey
 
     service = UploadExecutionService(pipeline_tracker=cast(PipelineTracker, _Tracker()))
     request = ProviderMarkdownExecutionRequest(
+        bearer_kind=ProviderBearerKind.CURATOR,
         document_id="11111111-1111-1111-1111-111111111111",
         job_id="job-provider",
         user_id="user-provider",
@@ -2119,6 +2208,7 @@ async def test_sync_provider_source_import_failure_rejects_missing_or_other_owne
 
     service = UploadExecutionService(pipeline_tracker=cast(PipelineTracker, _Tracker()))
     request = ProviderConversionExecutionRequest(
+        bearer_kind=ProviderBearerKind.CURATOR,
         document_id="11111111-1111-1111-1111-111111111111",
         job_id="job-provider",
         user_id="user-provider",
@@ -2161,6 +2251,7 @@ async def test_provider_markdown_invalid_utf8_never_reaches_ingestion(monkeypatc
     monkeypatch.setattr(service, "_mark_failed_and_sync_tracker", failed)
     await service._execute_provider_markdown_unbounded(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider", job_id="job-provider", user_id="user-provider",
             owner_user_id=42, filename="paper.pdf", converted_artifact_id="markdown-1",
             curator_token="curator-token", source_provenance={"provider": "fake_provider"},
@@ -2225,6 +2316,7 @@ async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denie
     file_path.write_bytes(b"%PDF-1.7 local upload")
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -2311,6 +2403,7 @@ async def test_execute_provider_markdown_fails_when_local_pdf_source_state_canno
     file_path.write_bytes(b"%PDF-1.7 local upload")
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -2376,6 +2469,7 @@ async def test_execute_provider_markdown_marks_cancelled_when_cancel_requested_a
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -2434,6 +2528,7 @@ async def test_execute_provider_markdown_tracker_completed_failure_does_not_fail
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
+            bearer_kind=ProviderBearerKind.CURATOR,
             document_id="doc-provider",
             job_id="job-provider",
             user_id="user-provider",
@@ -2856,6 +2951,7 @@ async def test_provider_timeout_waits_for_storage_before_terminal_job(monkeypatc
     monkeypatch.setattr(service, "_sync_provider_markdown_sql_failure", sql_failure)
     monkeypatch.setattr(service, "_report_execution_failure", lambda *_args, **_: None)
     request = ProviderMarkdownExecutionRequest(
+        bearer_kind=ProviderBearerKind.CURATOR,
         document_id="doc-provider", job_id="job-provider", user_id="user-provider",
         owner_user_id=42, filename="paper.pdf", file_path=Path("/tmp/paper.pdf"),
         converted_artifact_id="markdown-1", curator_token="curator-token",

@@ -11,6 +11,7 @@ from src.lib.document_sources.main_text import select_preferred_main_text_artifa
 from src.lib.document_sources.models import (
     DocumentSourceError,
     DocumentSourceProvider,
+    ProviderBearerKind,
     SourceAccessPolicy,
     SourceAccessScope,
     SourceArtifact,
@@ -71,6 +72,7 @@ async def select_checksum_import_candidate(
     provider: DocumentSourceProvider,
     checksum: str,
     authorized_group_ids: tuple[str, ...] | list[str] | set[str],
+    bearer_kind: ProviderBearerKind,
     request_bearer_token: str | None = None,
     allow_conversion_request: bool = True,
 ) -> ChecksumImportDecision:
@@ -80,6 +82,10 @@ async def select_checksum_import_candidate(
     direct PDFX. Converted main Markdown is preferred when ready; if an
     authorized provider match has no usable main Markdown and the provider
     supports conversion, this helper requests/polls provider-side conversion.
+
+    Under a ``SERVICE`` bearer only derived artifacts bound to the authorized
+    source PDF are used, and without ready bound Markdown the decision is
+    ``LOCAL_PDF_REQUIRED`` so the uploaded PDF is parsed locally.
     """
 
     normalized_checksum = _require_checksum(checksum)
@@ -152,10 +158,12 @@ async def select_checksum_import_candidate(
         provider=provider,
         source_artifact=source_artifact,
         artifacts=artifacts,
+        bearer_kind=bearer_kind,
     )
     converted_artifacts = _converted_artifacts_for_source(
         source_artifact=source_artifact,
         artifacts=artifacts,
+        bearer_kind=bearer_kind,
     )
     markdown_artifacts = tuple(
         artifact for artifact in converted_artifacts if _is_converted_markdown(artifact)
@@ -198,6 +206,20 @@ async def select_checksum_import_candidate(
             candidates=(candidate,),
             source_artifacts=authorized_sources,
             message="One authorized converted Markdown artifact is ready",
+        )
+    if bearer_kind is ProviderBearerKind.SERVICE:
+        # No provider conversion or reference-level text under a machine reader:
+        # parse the exact uploaded (authorized) PDF instead.
+        source_only_candidate = ChecksumImportCandidate(source_artifact=source_artifact)
+        return _decision(
+            provider=provider.provider_id,
+            checksum=normalized_checksum,
+            status=ChecksumImportDecisionStatus.LOCAL_PDF_REQUIRED,
+            selected=source_only_candidate,
+            candidates=(source_only_candidate,),
+            source_artifacts=authorized_sources,
+            message="No converted Markdown is bound to the authorized source PDF",
+            metadata={"text_source": "local_pdf"},
         )
     if any(
         artifact.status is SourceArtifactStatus.RUNNING
@@ -252,6 +274,7 @@ async def select_checksum_import_candidate(
                 provider=provider,
                 source_artifact=source_artifact,
                 artifacts=refreshed_artifacts,
+                bearer_kind=bearer_kind,
             )
             if ambiguous_count > 1:
                 return _decision(
@@ -349,13 +372,29 @@ def source_artifact_is_authorized(
     )
 
 
+def artifact_is_bound_to_source(
+    artifact: SourceArtifact,
+    source_artifact: SourceArtifact,
+) -> bool:
+    """Return whether the provider binds a derived artifact to this source PDF."""
+
+    return bool(artifact.parent_artifact_id) and (
+        artifact.parent_artifact_id == source_artifact.artifact_id
+    )
+
+
 def provider_metadata_artifacts_for_source(
     *,
     provider: DocumentSourceProvider,
     source_artifact: SourceArtifact,
     artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
+    bearer_kind: ProviderBearerKind,
 ) -> tuple[SourceArtifact, ...]:
-    """Return provider-declared metadata sidecars associated with a source PDF."""
+    """Return provider-declared metadata sidecars associated with a source PDF.
+
+    Under a ``SERVICE`` bearer only sidecars the provider binds to the source
+    PDF are returned; the provider's reference-level matching is not trusted.
+    """
 
     metadata_artifacts_for_source = getattr(
         provider,
@@ -375,6 +414,12 @@ def provider_metadata_artifacts_for_source(
         source_artifact,
         artifacts,
     )
+    if bearer_kind is ProviderBearerKind.SERVICE:
+        metadata_candidates = [
+            artifact
+            for artifact in metadata_candidates
+            if artifact_is_bound_to_source(artifact, source_artifact)
+        ]
     return tuple(
         sorted(
             metadata_candidates,
@@ -413,10 +458,15 @@ def _converted_artifacts_for_source(
     *,
     source_artifact: SourceArtifact,
     artifacts: list[SourceArtifact],
+    bearer_kind: ProviderBearerKind,
 ) -> tuple[SourceArtifact, ...]:
     children: list[SourceArtifact] = []
     for artifact in artifacts:
         if artifact.role is not SourceArtifactRole.CONVERTED_TEXT:
+            continue
+        if bearer_kind is ProviderBearerKind.SERVICE:
+            if artifact_is_bound_to_source(artifact, source_artifact):
+                children.append(artifact)
             continue
         if artifact.parent_artifact_id:
             if artifact.parent_artifact_id == source_artifact.artifact_id:

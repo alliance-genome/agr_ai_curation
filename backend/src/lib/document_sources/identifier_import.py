@@ -24,6 +24,7 @@ from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import cleanup_document_curation_dependencies
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.import_selection import (
+    artifact_is_bound_to_source,
     provider_metadata_artifacts_for_source,
     source_artifact_is_authorized,
 )
@@ -35,6 +36,7 @@ from src.lib.document_sources.models import (
     DocumentSourceReferenceNotFound,
     DocumentSourceProvider,
     NormalizedSourceIdentifier,
+    ProviderBearerKind,
     SourceArtifact,
     SourceArtifactFormat,
     SourceArtifactRole,
@@ -271,6 +273,7 @@ async def select_reference_import_candidate(
     provider: DocumentSourceProvider,
     identifier: str,
     authorized_group_ids: tuple[str, ...] | list[str] | set[str],
+    bearer_kind: ProviderBearerKind,
     request_bearer_token: str | None = None,
     allow_conversion_request: bool = True,
 ) -> ReferenceImportDecision:
@@ -279,6 +282,11 @@ async def select_reference_import_candidate(
     Converted main Markdown is preferred when it is ready. Import callers may
     request provider conversion for known unconverted references; dry-run
     resolve callers must leave provider state untouched.
+
+    Under a ``SERVICE`` bearer only derived artifacts bound to the authorized
+    source PDF are used. Without ready bound Markdown the decision is the
+    source PDF alone, so callers parse that PDF instead of requesting or
+    waiting for provider conversion.
     """
 
     try:
@@ -352,10 +360,12 @@ async def select_reference_import_candidate(
         provider=provider,
         source_artifact=source_artifact,
         artifacts=artifacts,
+        bearer_kind=bearer_kind,
     )
     markdown_artifacts = _converted_markdown_artifacts_for_source(
         source_artifact=source_artifact,
         artifacts=artifacts,
+        bearer_kind=bearer_kind,
     )
     selected_artifact, ambiguous_count = select_preferred_main_text_artifact(
         provider,
@@ -389,6 +399,23 @@ async def select_reference_import_candidate(
             selected=candidate,
             candidates=(candidate,),
             message="One authorized converted Markdown artifact is ready",
+        )
+    if bearer_kind is ProviderBearerKind.SERVICE:
+        # No provider conversion or reference-level text under a machine reader:
+        # the authorized source PDF is parsed instead.
+        source_only_candidate = ReferenceImportCandidate(
+            reference=reference,
+            source_artifact=source_artifact,
+            provider_metadata_artifacts=provider_metadata_artifacts,
+        )
+        return _reference_decision(
+            provider=provider.provider_id,
+            identifier=identifier,
+            reference=reference,
+            status=ReferenceImportDecisionStatus.READY,
+            selected=source_only_candidate,
+            candidates=(source_only_candidate,),
+            message="No converted Markdown is bound to the authorized source PDF",
         )
     if any(
         artifact.status is SourceArtifactStatus.RUNNING
@@ -448,6 +475,7 @@ async def select_reference_import_candidate(
                 provider=provider,
                 source_artifact=source_artifact,
                 artifacts=refreshed_artifacts,
+                bearer_kind=bearer_kind,
             )
             if ambiguous_count > 1:
                 return _reference_decision(
@@ -773,6 +801,7 @@ class IdentifierImportService:
                 provider=provider,
                 identifier=normalized.normalized,
                 authorized_group_ids=document_source_context.authorized_group_ids,
+                bearer_kind=document_source_context.bearer_kind,
                 request_bearer_token=curator_token,
                 allow_conversion_request=False,
             )
@@ -867,6 +896,7 @@ class IdentifierImportService:
                 provider=provider,
                 identifier=normalized.normalized,
                 authorized_group_ids=document_source_context.authorized_group_ids,
+                bearer_kind=document_source_context.bearer_kind,
                 request_bearer_token=curator_token,
             )
             wait_for_conversion = (
@@ -910,6 +940,7 @@ class IdentifierImportService:
                 decision=decision,
                 source_provenance=source_provenance,
                 curator_token=curator_token,
+                bearer_kind=document_source_context.bearer_kind,
                 wait_for_conversion=wait_for_conversion,
             )
         except DocumentSourceAccessDenied as exc:
@@ -962,6 +993,7 @@ class IdentifierImportService:
         decision: ReferenceImportDecision,
         source_provenance: Mapping[str, Any],
         curator_token: str,
+        bearer_kind: ProviderBearerKind,
         wait_for_conversion: bool = False,
     ) -> IdentifierImportItemResult:
         assert normalized.normalized is not None
@@ -1105,6 +1137,7 @@ class IdentifierImportService:
                         filename=filename,
                         converted_artifact_id=decision.selected.converted_artifact.artifact_id,
                         curator_token=curator_token,
+                        bearer_kind=bearer_kind,
                         source_provenance=source_provenance,
                         figure_metadata_artifact_ids=tuple(
                             artifact.artifact_id
@@ -1125,6 +1158,7 @@ class IdentifierImportService:
                         reference=_reference_poll_value(decision),
                         source_artifact_id=decision.selected.source_artifact.artifact_id,
                         curator_token=curator_token,
+                        bearer_kind=bearer_kind,
                         source_provenance=source_provenance,
                         figure_metadata_artifact_ids=tuple(
                             artifact.artifact_id
@@ -1310,12 +1344,17 @@ def _converted_markdown_artifacts_for_source(
     *,
     source_artifact: SourceArtifact,
     artifacts: list[SourceArtifact],
+    bearer_kind: ProviderBearerKind,
 ) -> tuple[SourceArtifact, ...]:
     converted: list[SourceArtifact] = []
     for artifact in artifacts:
         if artifact.role is not SourceArtifactRole.CONVERTED_TEXT:
             continue
         if artifact.artifact_format is not SourceArtifactFormat.MARKDOWN:
+            continue
+        if bearer_kind is ProviderBearerKind.SERVICE:
+            if artifact_is_bound_to_source(artifact, source_artifact):
+                converted.append(artifact)
             continue
         if artifact.parent_artifact_id:
             if artifact.parent_artifact_id == source_artifact.artifact_id:

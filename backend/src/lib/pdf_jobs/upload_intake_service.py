@@ -40,6 +40,7 @@ from src.lib.document_sources.models import (
     DocumentSourceConfigError,
     DocumentSourceError,
     DocumentSourceProvider,
+    ProviderBearerKind,
     SourceArtifact,
     ViewerMode,
 )
@@ -161,6 +162,7 @@ class ProviderChecksumImportPlan:
     converted_artifact: SourceArtifact | None
     source_provenance: dict[str, Any]
     curator_token: str = field(repr=False)
+    bearer_kind: ProviderBearerKind
     wait_for_conversion: bool = False
     figure_metadata_artifact_ids: tuple[str, ...] = ()
 
@@ -479,6 +481,7 @@ class UploadIntakeService:
                 filename=document.filename,
                 converted_artifact_id=provider_import_plan.converted_artifact.artifact_id,
                 curator_token=provider_import_plan.curator_token,
+                bearer_kind=provider_import_plan.bearer_kind,
                 source_provenance=provider_import_plan.source_provenance,
                 figure_metadata_artifact_ids=provider_import_plan.figure_metadata_artifact_ids,
                 file_path=saved_path,
@@ -501,6 +504,7 @@ class UploadIntakeService:
                     ),
                     source_artifact_id=provider_import_plan.source_artifact.artifact_id,
                     curator_token=provider_import_plan.curator_token,
+                    bearer_kind=provider_import_plan.bearer_kind,
                     source_provenance=provider_import_plan.source_provenance,
                     figure_metadata_artifact_ids=provider_import_plan.figure_metadata_artifact_ids,
                     file_path=saved_path,
@@ -564,6 +568,7 @@ class UploadIntakeService:
                 provider=provider,
                 checksum=checksum,
                 authorized_group_ids=document_source_context.authorized_group_ids,
+                bearer_kind=document_source_context.bearer_kind,
                 request_bearer_token=curator_token or None,
                 allow_conversion_request=bool(curator_token),
             )
@@ -699,6 +704,7 @@ class UploadIntakeService:
             converted_artifact=decision.selected.converted_artifact,
             source_provenance=source_provenance,
             curator_token=curator_token,
+            bearer_kind=document_source_context.bearer_kind,
             wait_for_conversion=wait_for_conversion,
             figure_metadata_artifact_ids=tuple(
                 artifact.artifact_id

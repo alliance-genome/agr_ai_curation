@@ -12,6 +12,7 @@ from src.lib.config.groups_loader import (
     get_group_claim_key,
     get_groups_for_provider_groups,
 )
+from src.lib.document_sources.models import ProviderBearerKind
 from src.lib.document_sources.dev_reader_auth import (
     get_development_reader_credentials,
     development_reader_required,
@@ -24,6 +25,7 @@ class DocumentSourceRequestContext:
 
     provider_groups: tuple[str, ...]
     authorized_group_ids: tuple[str, ...]
+    bearer_kind: ProviderBearerKind
     curator_token: str | None = field(default=None, repr=False)
 
     @property
@@ -49,12 +51,15 @@ async def build_document_source_request_context(
     provider_groups = _extract_provider_groups(user_claims)
     if development_reader_required():
         curator_token = (await get_development_reader_credentials()).token
+        bearer_kind = ProviderBearerKind.SERVICE
     else:
         curator_token = _extract_curator_token(request, user_claims)
+        bearer_kind = ProviderBearerKind.CURATOR
     authorized_group_ids = tuple(get_groups_for_provider_groups(list(provider_groups)))
     return DocumentSourceRequestContext(
         provider_groups=provider_groups,
         authorized_group_ids=authorized_group_ids,
+        bearer_kind=bearer_kind,
         curator_token=curator_token,
     )
 

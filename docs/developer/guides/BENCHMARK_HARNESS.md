@@ -154,8 +154,10 @@ How this differs from a curator's document import:
   (`ABC_LITERATURE_AUTH_MODE=cognito_client_credentials` with a dedicated
   read-only client per environment holding `abc-literature/read`; see
   `docs/developer/integrations/abc_literature/release_config.md`). ABC lets that
-  reader see every file, so the curator-group check is the access gate. It uses the provider's main text when present;
-  otherwise it parses the selected main PDF with PDFX. It never asks the
+  reader see every file, so the curator-group check is the access gate. It
+  uses the provider's main text and figure metadata only when the provider
+  binds them to that selected PDF; reference-level text and figure metadata are
+  ignored. Otherwise it parses the selected main PDF with PDFX. It never asks the
   provider to convert a paper, and when the provider's own conversion is still
   running or has failed it parses the PDF instead of waiting or stopping.
 - Conversion uses the deployment's configured document-source provider, as

@@ -58,6 +58,7 @@ from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceError,
     DocumentSourceProvider,
+    ProviderBearerKind,
 )
 from src.lib.document_sources.registry import get_configured_document_source_provider
 from src.lib.exceptions import ConfigurationError, PDFCancellationError, PDFParsingError
@@ -788,6 +789,9 @@ async def _convert_source_reference(
             provider=provider,
             identifier=str(job.source_reference),
             authorized_group_ids=authorized_group_ids,
+            # The application's own source credential, never the curator's: a
+            # machine reader, so only text bound to the authorized PDF is used.
+            bearer_kind=ProviderBearerKind.SERVICE,
             request_bearer_token=None,
             allow_conversion_request=False,
         )

@@ -119,12 +119,23 @@ identifier imports, checksum imports, and benchmark conversions select only a
 source PDF the user's groups authorize, and a user with none of the paper's
 groups gets an access-denied result with nothing downloaded.
 
-Known gap: converted Markdown and figure-metadata sidecars are currently chosen
-per reference, not by a provider link to the authorized source PDF. ABC's
-per-curator `download_file` check used to backstop this; a machine reader does
-not. For a reference that mixes an authorized PDF with a PDF restricted to
-other groups, those derived artifacts are not yet gated by the selected
-source PDF's policy.
+Derived artifacts follow the bearer that reads them. Every request records its
+bearer kind explicitly: a logged-in curator's own token is `curator`; the
+development reader and the benchmark conversion's application credential are
+`service`.
+
+- `curator`: ABC enforces the curator's access on every `download_file`, so
+  converted Markdown and figure-metadata sidecars may be selected at reference
+  level as before.
+- `service`: ABC lets a machine reader download every file, so AI Curation uses
+  a converted Markdown or figure-metadata artifact only when ABC binds it to the
+  selected, authorized source PDF (nested under that PDF, so
+  `parent_artifact_id` is its ID). Reference-level artifacts are never used and
+  provider conversion is never requested or awaited. Without bound converted
+  Markdown, AI Curation parses the authorized source PDF itself with PDFX: an
+  identifier import downloads and parses that PDF, a checksum upload parses the
+  uploaded PDF, and a benchmark conversion parses the selected PDF. Conversion
+  polling and figure-sidecar discovery apply the same binding.
 
 ## Timeouts And Batches
 

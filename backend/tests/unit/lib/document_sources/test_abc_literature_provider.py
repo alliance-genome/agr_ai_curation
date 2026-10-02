@@ -40,6 +40,7 @@ from agr_ai_curation_alliance.literature.client import (
     ABCLiteratureConfigError,
     ABCLiteratureHTTPError,
 )
+from src.lib.document_sources.models import ProviderBearerKind
 
 
 def test_abc_registration_owns_public_identifier_guidance() -> None:
@@ -358,6 +359,7 @@ async def test_reference_import_uses_actual_abc_main_pdf_precedence() -> None:
     provider = provider_from_fake(fake_client)
 
     decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
         provider=provider,
         identifier="PMID:41902664",
         authorized_group_ids=("FB",),
