@@ -47,6 +47,7 @@ ABC Literature endpoint metadata/listing calls support these backend auth modes:
 ABC_LITERATURE_AUTH_MODE=none
 ABC_LITERATURE_AUTH_MODE=static_bearer
 ABC_LITERATURE_AUTH_MODE=cognito_client_credentials
+ABC_LITERATURE_AUTH_MODE=cognito_user_password  # development / benchmark-dev only
 ```
 
 Required secrets by mode:
@@ -59,6 +60,24 @@ Required secrets by mode:
   `ABC_LITERATURE_COGNITO_CLIENT_ID`,
   `ABC_LITERATURE_COGNITO_CLIENT_SECRET`, and
   `ABC_LITERATURE_COGNITO_SCOPE`.
+- `cognito_user_password`: requires `ABC_LITERATURE_COGNITO_REGION`,
+  `ABC_LITERATURE_COGNITO_USER_POOL_ID`, `ABC_LITERATURE_COGNITO_CLIENT_ID`,
+  `ABC_LITERATURE_COGNITO_USERNAME`, and `ABC_LITERATURE_COGNITO_PASSWORD`.
+  `ABC_LITERATURE_COGNITO_CLIENT_SECRET` is optional and, when set, is sent as
+  Cognito's `SECRET_HASH`. `ABC_LITERATURE_COGNITO_REFRESH_SKEW_SECONDS`
+  (default 600) controls how long before expiry the cached access token is
+  renewed. Missing settings fail provider creation with a configuration error;
+  the client never falls back to `none`.
+
+`cognito_user_password` is for development and the benchmark-dev resolver only.
+It signs in with `USER_PASSWORD_AUTH` as a dedicated development Cognito user
+(the same kind of identity as the development curator below), validates both
+returned tokens through the shared Alliance sign-in helper, caches the access
+token per process, and sends only that access token to ABC Literature.
+Production should use an allow-listed machine client through
+`cognito_client_credentials`. Never point this mode at a real curator's
+account. Development Compose passes these settings through; production Compose
+does not.
 
 Keep all token/client-secret values in uncommitted deployment env files or
 secret stores. Do not put them in Git, Linear, Jira, smoke evidence, logs, or

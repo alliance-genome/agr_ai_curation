@@ -10,11 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from agr_ai_curation_alliance import cognito_user_password as cognito
 from agr_ai_curation_alliance.document_sources import dev_curator_auth as auth
 
 
-def _settings() -> auth._CognitoSettings:
-    return auth._CognitoSettings(
+def _settings() -> cognito.CognitoUserPasswordSettings:
+    return cognito.CognitoUserPasswordSettings(
         region="us-east-1",
         user_pool_id="pool-1",
         client_id="client-1",
@@ -45,7 +46,7 @@ def test_secret_hash_matches_cognito_contract() -> None:
     ).decode("ascii")
 
     assert (
-        auth._secret_hash(
+        cognito.secret_hash(
             username="fake-curator",
             client_id="client-1",
             client_secret="client-secret-value",
@@ -146,9 +147,9 @@ def test_authenticate_uses_password_flow_and_validates_paired_tokens(
             "client_id": "client-1",
         }
 
-    monkeypatch.setattr(auth.boto3, "client", fake_boto_client)
-    monkeypatch.setattr(auth, "PyJWKClient", FakeJWKClient)
-    monkeypatch.setattr(auth.jwt, "decode", fake_decode)
+    monkeypatch.setattr(cognito.boto3, "client", fake_boto_client)
+    monkeypatch.setattr(cognito, "PyJWKClient", FakeJWKClient)
+    monkeypatch.setattr(cognito.jwt, "decode", fake_decode)
 
     result = auth._authenticate_sync(_settings())
 
@@ -161,7 +162,7 @@ def test_authenticate_uses_password_flow_and_validates_paired_tokens(
     parameters = observed["auth"]["AuthParameters"]
     assert parameters["USERNAME"] == "fake-curator"
     assert parameters["PASSWORD"] == "password-value"
-    assert parameters["SECRET_HASH"] == auth._secret_hash(
+    assert parameters["SECRET_HASH"] == cognito.secret_hash(
         username="fake-curator",
         client_id="client-1",
         client_secret="client-secret-value",
@@ -206,19 +207,19 @@ def test_authenticate_suppresses_aws_sdk_debug_secret_logging(
             }
 
     monkeypatch.setattr(
-        auth.boto3,
+        cognito.boto3,
         "client",
         lambda *_args, **_kwargs: FakeClient(),
     )
     monkeypatch.setattr(
-        auth,
+        cognito,
         "PyJWKClient",
         lambda *_args, **_kwargs: SimpleNamespace(
             get_signing_key_from_jwt=lambda _token: SimpleNamespace(key="key")
         ),
     )
     monkeypatch.setattr(
-        auth.jwt,
+        cognito.jwt,
         "decode",
         lambda *_args, **_kwargs: {
             "sub": "subject",
@@ -258,7 +259,7 @@ def test_authenticate_rejects_challenge_and_malformed_responses(
     monkeypatch, response
 ) -> None:
     monkeypatch.setattr(
-        auth.boto3,
+        cognito.boto3,
         "client",
         lambda *_args, **_kwargs: SimpleNamespace(
             initiate_auth=lambda **_auth_kwargs: response
@@ -271,7 +272,7 @@ def test_authenticate_rejects_challenge_and_malformed_responses(
 
 def test_authenticate_rejects_non_id_token(monkeypatch) -> None:
     monkeypatch.setattr(
-        auth.boto3,
+        cognito.boto3,
         "client",
         lambda *_args, **_kwargs: SimpleNamespace(
             initiate_auth=lambda **_auth_kwargs: {
@@ -283,14 +284,14 @@ def test_authenticate_rejects_non_id_token(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        auth,
+        cognito,
         "PyJWKClient",
         lambda *_args, **_kwargs: SimpleNamespace(
             get_signing_key_from_jwt=lambda _token: SimpleNamespace(key="key")
         ),
     )
     monkeypatch.setattr(
-        auth.jwt,
+        cognito.jwt,
         "decode",
         lambda *_args, **_kwargs: {
             "sub": "subject",
@@ -305,7 +306,7 @@ def test_authenticate_rejects_non_id_token(monkeypatch) -> None:
 
 def test_authenticate_rejects_expired_id_token(monkeypatch) -> None:
     monkeypatch.setattr(
-        auth.boto3,
+        cognito.boto3,
         "client",
         lambda *_args, **_kwargs: SimpleNamespace(
             initiate_auth=lambda **_auth_kwargs: {
@@ -317,7 +318,7 @@ def test_authenticate_rejects_expired_id_token(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        auth,
+        cognito,
         "PyJWKClient",
         lambda *_args, **_kwargs: SimpleNamespace(
             get_signing_key_from_jwt=lambda _token: SimpleNamespace(key="key")
@@ -325,11 +326,11 @@ def test_authenticate_rejects_expired_id_token(monkeypatch) -> None:
     )
 
     def _expired(*_args, **_kwargs):
-        raise auth.jwt.ExpiredSignatureError("expired")
+        raise cognito.jwt.ExpiredSignatureError("expired")
 
-    monkeypatch.setattr(auth.jwt, "decode", _expired)
+    monkeypatch.setattr(cognito.jwt, "decode", _expired)
 
-    with pytest.raises(auth.jwt.ExpiredSignatureError):
+    with pytest.raises(cognito.jwt.ExpiredSignatureError):
         auth._authenticate_sync(_settings())
 
 
@@ -371,7 +372,7 @@ def test_authenticate_rejects_invalid_access_token_claims(
     message,
 ) -> None:
     monkeypatch.setattr(
-        auth.boto3,
+        cognito.boto3,
         "client",
         lambda *_args, **_kwargs: SimpleNamespace(
             initiate_auth=lambda **_auth_kwargs: {
@@ -383,14 +384,14 @@ def test_authenticate_rejects_invalid_access_token_claims(
         ),
     )
     monkeypatch.setattr(
-        auth,
+        cognito,
         "PyJWKClient",
         lambda *_args, **_kwargs: SimpleNamespace(
             get_signing_key_from_jwt=lambda _token: SimpleNamespace(key="key")
         ),
     )
     monkeypatch.setattr(
-        auth.jwt,
+        cognito.jwt,
         "decode",
         lambda token, *_args, **_kwargs: (
             {
@@ -409,7 +410,7 @@ def test_authenticate_rejects_invalid_access_token_claims(
 
 def test_authenticate_rejects_expired_access_token(monkeypatch) -> None:
     monkeypatch.setattr(
-        auth.boto3,
+        cognito.boto3,
         "client",
         lambda *_args, **_kwargs: SimpleNamespace(
             initiate_auth=lambda **_auth_kwargs: {
@@ -421,7 +422,7 @@ def test_authenticate_rejects_expired_access_token(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        auth,
+        cognito,
         "PyJWKClient",
         lambda *_args, **_kwargs: SimpleNamespace(
             get_signing_key_from_jwt=lambda _token: SimpleNamespace(key="key")
@@ -430,16 +431,16 @@ def test_authenticate_rejects_expired_access_token(monkeypatch) -> None:
 
     def _decode(token, *_args, **_kwargs):
         if token == "expired-access-token":
-            raise auth.jwt.ExpiredSignatureError("expired")
+            raise cognito.jwt.ExpiredSignatureError("expired")
         return {
             "sub": "subject",
             "exp": 4102444900,
             "token_use": "id",
         }
 
-    monkeypatch.setattr(auth.jwt, "decode", _decode)
+    monkeypatch.setattr(cognito.jwt, "decode", _decode)
 
-    with pytest.raises(auth.jwt.ExpiredSignatureError):
+    with pytest.raises(cognito.jwt.ExpiredSignatureError):
         auth._authenticate_sync(_settings())
 
 
