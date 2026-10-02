@@ -2,6 +2,7 @@ import { type ComponentProps, StrictMode } from 'react'
 import { ThemeProvider } from '@mui/material/styles'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import theme from '@/theme'
@@ -15,6 +16,8 @@ import {
   dispatchChatDocumentChanged,
   loadDocumentForChat,
 } from '@/features/documents/pdfUploadFlow'
+import { CHAT_HISTORY_TRANSCRIPT_PAGE_SIZE } from '@/features/history/chatHistoryTranscript'
+import HistoryPage from '@/features/history/HistoryPage'
 import HomePage from './HomePage'
 
 const mockUseAuth = vi.hoisted(() => vi.fn())
@@ -80,7 +83,7 @@ function jsonResponse(payload: unknown, status: number = 200): Response {
 }
 
 function buildAssistantHistoryDetailUrl(sessionId: string): string {
-  return `/api/chat/history/${sessionId}?chat_kind=assistant_chat&message_limit=${DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT}`
+  return `/api/chat/history/${sessionId}?chat_kind=assistant_chat&message_limit=${CHAT_HISTORY_TRANSCRIPT_PAGE_SIZE}`
 }
 
 function LocationProbe() {
@@ -1258,6 +1261,10 @@ describe('HomePage durable session bootstrap', () => {
         return jsonResponse({ detail: 'Chat session not found' }, 404)
       }
 
+      if (url === buildAssistantHistoryDetailUrl('new-session-1')) {
+        return jsonResponse(buildTranscriptPage('new-session-1', [], null))
+      }
+
       if (url === '/api/chat/document' && init?.method === 'DELETE') {
         return jsonResponse({
           active: false,
@@ -1338,5 +1345,499 @@ describe('HomePage durable session bootstrap', () => {
     expect(screen.queryByText('Preparing chat session...')).not.toBeInTheDocument()
     expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('retry-session')
     expect(createSessionAttempts).toBe(2)
+  })
+})
+
+function buildTranscriptMessage(sessionId: string, index: number) {
+  const minute = String(Math.floor(index / 60)).padStart(2, '0')
+  const second = String(index % 60).padStart(2, '0')
+  return {
+    message_id: `${sessionId}-message-${index}`,
+    session_id: sessionId,
+    turn_id: `${sessionId}-turn-${Math.floor(index / 2)}`,
+    role: index % 2 === 0 ? 'user' : 'assistant',
+    message_type: 'text',
+    content: `${sessionId} message ${index}`,
+    created_at: `2026-04-20T01:${minute}:${second}Z`,
+  }
+}
+
+function buildTranscriptPage(
+  sessionId: string,
+  messages: Array<ReturnType<typeof buildTranscriptMessage>>,
+  nextCursor: string | null,
+) {
+  return {
+    session: {
+      session_id: sessionId,
+      created_at: '2026-04-20T00:00:00Z',
+      updated_at: '2026-04-20T00:05:00Z',
+      recent_activity_at: '2026-04-20T00:05:00Z',
+    },
+    active_document: null,
+    messages,
+    message_limit: 200,
+    next_message_cursor: nextCursor,
+  }
+}
+
+function parseHistoryDetailRequest(url: string): {
+  sessionId: string
+  cursor: string | null
+  limit: number | null
+} | null {
+  const match = /^\/api\/chat\/history\/([^?]+)\?(.*)$/.exec(url)
+  if (!match) {
+    return null
+  }
+  const params = new URLSearchParams(match[2])
+  const limit = params.get('message_limit')
+  return {
+    sessionId: decodeURIComponent(match[1]),
+    cursor: params.get('message_cursor'),
+    limit: limit ? Number(limit) : null,
+  }
+}
+
+function realChatSupportResponse(url: string, init?: RequestInit): Response | null {
+  if (url === '/api/chat/document' && init?.method === 'DELETE') {
+    return jsonResponse({ active: false, document: null })
+  }
+  if (url === '/api/chat/document') {
+    return jsonResponse({ active: false, document: null })
+  }
+  if (url === '/api/chat/conversation') {
+    return jsonResponse({ is_active: true, memory_stats: { memory_sizes: {} } })
+  }
+  if (url === '/health/deep') {
+    return jsonResponse({ services: { weaviate: 'connected', curation_db: 'connected' } })
+  }
+  return null
+}
+
+/**
+ * Serves `total` chronological messages for `sessionId` using the server's
+ * cursor contract: each page holds at most the requested limit and the cursor
+ * names the next message index.
+ */
+function serveLongTranscript(
+  sessionId: string,
+  total: number,
+  requests: Array<{ cursor: string | null; limit: number | null }>,
+) {
+  const allMessages = Array.from({ length: total }, (_, index) => buildTranscriptMessage(sessionId, index))
+  return (url: string): Response | null => {
+    const request = parseHistoryDetailRequest(url)
+    if (!request || request.sessionId !== sessionId) {
+      return null
+    }
+    requests.push({ cursor: request.cursor, limit: request.limit })
+    const start = request.cursor ? Number(request.cursor.replace('cursor-', '')) : 0
+    const pageSize = request.limit ?? DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT
+    const end = Math.min(start + pageSize, total)
+    return jsonResponse(buildTranscriptPage(
+      sessionId,
+      allMessages.slice(start, end),
+      end < total ? `cursor-${end}` : null,
+    ))
+  }
+}
+
+describe('HomePage resumed transcript hydration', () => {
+  const chatStorageKeys = getChatLocalStorageKeys('user-1')
+
+  beforeEach(() => {
+    actualChatMode.enabled = true
+    localStorage.clear()
+    sessionStorage.clear()
+    Element.prototype.scrollIntoView = vi.fn()
+    chatRenderSpy.mockReset()
+    rightPanelRenderSpy.mockReset()
+    vi.mocked(global.fetch).mockReset()
+    chatStreamStub.sendMessage.mockReset()
+    mockUseAuth.mockImplementation(() => ({ user: { uid: 'user-1' } }))
+    mockUseChatStream.mockReturnValue(chatStreamStub)
+  })
+
+  afterEach(() => {
+    actualChatMode.enabled = false
+    vi.unstubAllEnvs()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('resumes the full transcript when Resume chat is clicked on the history page', async () => {
+    const requests: Array<{ cursor: string | null; limit: number | null }> = []
+    const serveTranscript = serveLongTranscript('session-history', 130, requests)
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/chat/history?')) {
+        return jsonResponse({
+          chat_kind: 'all',
+          total_sessions: 1,
+          limit: 20,
+          next_cursor: null,
+          sessions: [{
+            session_id: 'session-history',
+            chat_kind: 'assistant_chat',
+            title: 'Long review',
+            active_document_id: null,
+            created_at: '2026-04-20T00:00:00Z',
+            updated_at: '2026-04-20T00:05:00Z',
+            last_message_at: '2026-04-20T00:05:00Z',
+            recent_activity_at: '2026-04-20T00:05:00Z',
+          }],
+        })
+      }
+      const response = serveTranscript(url) ?? realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme}>
+          <MemoryRouter initialEntries={['/history']}>
+            <Routes>
+              <Route path="/history" element={<HistoryPage />} />
+              <Route path="/" element={<HomePage />} />
+            </Routes>
+          </MemoryRouter>
+        </ThemeProvider>
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume chat' }))
+
+    expect(await screen.findByText('session-history message 129')).toBeInTheDocument()
+    expect(screen.getByText('session-history message 0')).toBeInTheDocument()
+    expect(screen.getAllByText(/^session-history message \d+$/)).toHaveLength(130)
+    expect(requests.length).toBeGreaterThan(0)
+    expect(chatRenderSpy.mock.calls.at(-1)?.[0].sessionId).toBe('session-history')
+  })
+
+  it('resumes a chat with more than 100 messages completely and in order', async () => {
+    const requests: Array<{ cursor: string | null; limit: number | null }> = []
+    const serveTranscript = serveLongTranscript('session-long', 250, requests)
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const response = serveTranscript(url) ?? realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-long')
+
+    expect(await screen.findByText('session-long message 249')).toBeInTheDocument()
+
+    // Every cursor page was followed until the server reported no more pages.
+    expect(requests.map((request) => request.cursor)).toEqual([
+      null,
+      ...requests.slice(1).map((request) => request.cursor),
+    ])
+    expect(requests.at(-1)?.cursor).not.toBeNull()
+    const fetchedCount = requests.reduce((count, request) => {
+      const start = request.cursor ? Number(request.cursor.replace('cursor-', '')) : 0
+      return Math.max(count, Math.min(start + (request.limit ?? 0), 250))
+    }, 0)
+    expect(fetchedCount).toBe(250)
+
+    // The whole transcript renders once, in chronological order.
+    for (const index of [0, 1, 99, 100, 101, 199, 200, 249]) {
+      expect(screen.getAllByText(`session-long message ${index}`)).toHaveLength(1)
+    }
+    const renderedOrder = screen
+      .getAllByText(/^session-long message \d+$/)
+      .map((element) => Number(element.textContent?.replace('session-long message ', '')))
+    expect(renderedOrder).toEqual(Array.from({ length: 250 }, (_, index) => index))
+  })
+
+  it('loads the full server transcript when Home opens a stored session without a session link', async () => {
+    const requests: Array<{ cursor: string | null; limit: number | null }> = []
+    const serveTranscript = serveLongTranscript('session-stored', 250, requests)
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-stored')
+    // The browser cache only holds the most recent messages and must not win.
+    localStorage.setItem(chatStorageKeys.messages, JSON.stringify({
+      session_id: 'session-stored',
+      messages: [{
+        role: 'assistant',
+        content: 'stale cached message',
+        timestamp: '2026-04-20T00:00:00Z',
+        type: 'text',
+      }],
+    }))
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const response = serveTranscript(url) ?? realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/')
+
+    expect(await screen.findByText('session-stored message 249')).toBeInTheDocument()
+    expect(screen.getAllByText(/^session-stored message \d+$/)).toHaveLength(250)
+    expect(screen.getByText('session-stored message 0')).toBeInTheDocument()
+    expect(screen.queryByText('stale cached message')).not.toBeInTheDocument()
+    expect(requests.length).toBeGreaterThan(1)
+    expect(chatRenderSpy.mock.calls.at(-1)?.[0].sessionId).toBe('session-stored')
+    expect(vi.mocked(global.fetch)).not.toHaveBeenCalledWith('/api/chat/session', expect.anything())
+  })
+
+  it('keeps the stored session and shows an error when its transcript cannot load', async () => {
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-offline')
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (parseHistoryDetailRequest(url)?.sessionId === 'session-offline') {
+        return jsonResponse({ detail: 'Chat history is temporarily unavailable' }, 503)
+      }
+      const response = realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/')
+
+    expect(await screen.findByText('Chat history is temporarily unavailable')).toBeInTheDocument()
+    expect(chatRenderSpy).not.toHaveBeenCalled()
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-offline')
+  })
+
+  it('clears a deleted stored session and shows the unavailable warning', async () => {
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-deleted')
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (parseHistoryDetailRequest(url)?.sessionId === 'session-deleted') {
+        return jsonResponse({ detail: 'Chat session not found' }, 404)
+      }
+      const response = realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/')
+
+    expect(
+      await screen.findByText('This chat session is unavailable. It may have been deleted.'),
+    ).toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBeNull()
+    expect(chatRenderSpy).not.toHaveBeenCalled()
+    expect(vi.mocked(global.fetch)).not.toHaveBeenCalledWith('/api/chat/session', expect.anything())
+  })
+
+  it('renders the fetched transcript even when browser storage rejects writes', async () => {
+    const requests: Array<{ cursor: string | null; limit: number | null }> = []
+    const serveTranscript = serveLongTranscript('session-quota', 3, requests)
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError')
+    })
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const response = serveTranscript(url) ?? realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-quota')
+
+    expect(await screen.findByText('session-quota message 2')).toBeInTheDocument()
+    expect(screen.getByText('session-quota message 0')).toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.messages)).toBeNull()
+  })
+
+  it('renders the fetched transcript even when browser storage is unavailable', async () => {
+    const requests: Array<{ cursor: string | null; limit: number | null }> = []
+    const serveTranscript = serveLongTranscript('session-blocked', 2, requests)
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('Access denied', 'SecurityError')
+    })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Access denied', 'SecurityError')
+    })
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const response = serveTranscript(url) ?? realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-blocked')
+
+    expect(await screen.findByText('session-blocked message 1')).toBeInTheDocument()
+    expect(screen.getByText('session-blocked message 0')).toBeInTheDocument()
+  })
+
+  it('shows a restore error instead of a partial chat when a later page fails', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const request = parseHistoryDetailRequest(url)
+      if (request?.sessionId === 'session-broken') {
+        if (!request.cursor) {
+          return jsonResponse(buildTranscriptPage(
+            'session-broken',
+            [buildTranscriptMessage('session-broken', 0)],
+            'cursor-1',
+          ))
+        }
+        return jsonResponse({ detail: 'Chat history is temporarily unavailable' }, 503)
+      }
+      const response = realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-broken')
+
+    expect(await screen.findByText('Chat history is temporarily unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('session-broken message 0')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Type your message...')).not.toBeInTheDocument()
+    expect(chatRenderSpy).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Start new chat' })).toBeInTheDocument()
+  })
+
+  it('stops paging at the configured page limit and says so', async () => {
+    vi.stubEnv('VITE_AI_CURATION_CHAT_TRANSCRIPT_MAX_PAGES', '3')
+    const requests: Array<{ cursor: string | null; limit: number | null }> = []
+    const serveTranscript = serveLongTranscript('session-huge', 5000, requests)
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const response = serveTranscript(url) ?? realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-huge')
+
+    expect(await screen.findByText(/This chat is too long to restore in full/)).toBeInTheDocument()
+    expect(screen.getByText(/more than 600 messages/)).toBeInTheDocument()
+    expect(requests).toHaveLength(3)
+    expect(chatRenderSpy).not.toHaveBeenCalled()
+  })
+
+  it('keeps the latest selected session when an older restore resolves last', async () => {
+    const firstPage = deferred<Response>()
+
+    vi.mocked(global.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const request = parseHistoryDetailRequest(url)
+      if (request?.sessionId === 'session-a') {
+        return firstPage.promise
+      }
+      if (request?.sessionId === 'session-b') {
+        return Promise.resolve(jsonResponse(buildTranscriptPage(
+          'session-b',
+          [buildTranscriptMessage('session-b', 0)],
+          null,
+        )))
+      }
+      const response = realChatSupportResponse(url, init)
+      if (response) {
+        return Promise.resolve(response)
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-a')
+    fireEvent.click(screen.getByRole('button', { name: 'Restore B' }))
+
+    expect(await screen.findByText('session-b message 0')).toBeInTheDocument()
+
+    firstPage.resolve(jsonResponse(buildTranscriptPage(
+      'session-a',
+      [buildTranscriptMessage('session-a', 0)],
+      null,
+    )))
+    await act(async () => firstPage.promise)
+
+    expect(screen.getByText('session-b message 0')).toBeInTheDocument()
+    expect(screen.queryByText('session-a message 0')).not.toBeInTheDocument()
+    expect(chatRenderSpy.mock.calls.at(-1)?.[0].sessionId).toBe('session-b')
+  })
+
+  it('replaces a previous session transcript when switching sessions', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const request = parseHistoryDetailRequest(url)
+      if (request?.sessionId === 'session-a' || request?.sessionId === 'session-b') {
+        return jsonResponse(buildTranscriptPage(
+          request.sessionId,
+          [buildTranscriptMessage(request.sessionId, 0), buildTranscriptMessage(request.sessionId, 1)],
+          null,
+        ))
+      }
+      const response = realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-a')
+    expect(await screen.findByText('session-a message 1')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore B' }))
+
+    expect(await screen.findByText('session-b message 1')).toBeInTheDocument()
+    expect(screen.queryByText('session-a message 0')).not.toBeInTheDocument()
+    expect(screen.queryByText('session-a message 1')).not.toBeInTheDocument()
+  })
+
+  it('appends a follow-up to the restored durable session', async () => {
+    const requests: Array<{ cursor: string | null; limit: number | null }> = []
+    const serveTranscript = serveLongTranscript('session-follow', 120, requests)
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const response = serveTranscript(url) ?? realChatSupportResponse(url, init)
+      if (response) {
+        return response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-follow')
+    expect(await screen.findByText('session-follow message 119')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByPlaceholderText('Type your message...'), {
+      target: { value: 'Follow-up question' },
+    })
+    fireEvent.click(document.querySelector('.send-button') as HTMLButtonElement)
+
+    expect(await screen.findByText('Follow-up question')).toBeInTheDocument()
+    expect(chatStreamStub.sendMessage).toHaveBeenCalledWith(
+      'Follow-up question',
+      'session-follow',
+      expect.objectContaining({ turnId: expect.any(String) }),
+    )
+    expect(vi.mocked(global.fetch)).not.toHaveBeenCalledWith('/api/chat/session', expect.anything())
+    expect(screen.getByText('session-follow message 0')).toBeInTheDocument()
+    expect(screen.getByText('session-follow message 119')).toBeInTheDocument()
   })
 })

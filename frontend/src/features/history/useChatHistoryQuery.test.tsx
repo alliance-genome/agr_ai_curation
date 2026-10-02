@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { chatCacheKeys } from '@/lib/chatCacheKeys'
 
+import { ChatHistoryTranscriptLimitError } from './chatHistoryTranscript'
 import {
   useAgentStudioSessionDetail,
   useBulkDeleteChatSessionsMutation,
@@ -408,9 +409,8 @@ describe('useChatHistoryQuery', () => {
     })
 
     expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenCalledTimes(50)
-    expect(result.current.error?.message).toBe(
-      'Exceeded 50 transcript pages for session session-1',
-    )
+    expect(result.current.error).toBeInstanceOf(ChatHistoryTranscriptLimitError)
+    expect(result.current.error?.message).toContain('more than 10000 messages')
   })
 
   it('provides an Agent Studio detail hook that scopes reads to agent_studio sessions', async () => {
