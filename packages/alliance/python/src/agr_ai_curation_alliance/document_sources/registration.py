@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 
 from src.lib.packages import (
@@ -66,7 +67,33 @@ def _build_abc_literature_client_config():
         cognito_client_id=os.getenv("ABC_LITERATURE_COGNITO_CLIENT_ID"),
         cognito_client_secret=os.getenv("ABC_LITERATURE_COGNITO_CLIENT_SECRET"),
         cognito_scope=os.getenv("ABC_LITERATURE_COGNITO_SCOPE"),
+        cognito_region=os.getenv("ABC_LITERATURE_COGNITO_REGION"),
+        cognito_user_pool_id=os.getenv("ABC_LITERATURE_COGNITO_USER_POOL_ID"),
+        cognito_username=os.getenv("ABC_LITERATURE_COGNITO_USERNAME"),
+        cognito_password=os.getenv("ABC_LITERATURE_COGNITO_PASSWORD"),
+        cognito_refresh_skew_seconds=_abc_literature_refresh_skew_seconds(),
     )
+
+
+def _abc_literature_refresh_skew_seconds() -> float:
+    """Read the user-password token renewal skew; invalid values fail closed."""
+
+    from agr_ai_curation_alliance.literature.client import ABCLiteratureConfigError
+
+    raw_skew = os.getenv("ABC_LITERATURE_COGNITO_REFRESH_SKEW_SECONDS", "").strip()
+    if not raw_skew:
+        return 600.0
+    try:
+        skew_seconds = float(raw_skew)
+    except ValueError as exc:
+        raise ABCLiteratureConfigError(
+            "ABC_LITERATURE_COGNITO_REFRESH_SKEW_SECONDS must be a non-negative number"
+        ) from exc
+    if not math.isfinite(skew_seconds) or skew_seconds < 0:
+        raise ABCLiteratureConfigError(
+            "ABC_LITERATURE_COGNITO_REFRESH_SKEW_SECONDS must be a non-negative number"
+        )
+    return skew_seconds
 
 
 def _create_abc_literature_provider():
