@@ -6100,9 +6100,9 @@ class TestExecuteFlowTermination:
     async def test_unavailable_step_fails_before_runner_or_formatter(
         self, monkeypatch, agent_id, reason, reason_code, advice,
     ):
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(), _agent_node("n1", agent_id), _agent_node("n2", "chat_output"),
-        ])
+        ], source_node_id="n1", output_node_id="n2")
         original_definition = deepcopy(flow.flow_definition)
         supervisor = SimpleNamespace(_flow_unavailable_steps=[{
             "step": 1, "agent_id": agent_id, "agent_name": "Required step", "reason": reason,
@@ -9316,3 +9316,201 @@ def test_flow_chat_step_takes_rendered_output_from_delivery_scope_not_tool_resul
     assert "unc-54" not in result
     assert "unc-54" not in completed_step["output"]
     assert json.loads(completed_step["output"])["delivered"] is True
+
+
+class TestFlowStepProgressEvents:
+    """Contract for the step progress curators see while a flow runs.
+
+    Counting rule: a flow's steps are its executable nodes in run order. Task
+    input and attached validators are not steps of their own, steps cannot be
+    skipped (an unavailable step fails the flow before it starts), and a step
+    that is retried reports the same position again.
+    """
+
+    @staticmethod
+    def _collect_step_started(tools, calls):
+        from src.lib.openai_agents.streaming_tools import (
+            clear_collected_events,
+            get_collected_events,
+        )
+
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        clear_collected_events()
+        results = []
+        try:
+            for index in calls:
+                try:
+                    results.append(
+                        asyncio.run(
+                            tools[index].on_invoke_tool(
+                                tool_ctx, json.dumps({"query": "run"})
+                            )
+                        )
+                    )
+                except RuntimeError as exc:
+                    results.append(exc)
+            events = [
+                event
+                for event in get_collected_events()
+                if event.get("type") == "FLOW_STEP_STARTED"
+            ]
+        finally:
+            clear_collected_events()
+        return results, events
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_each_started_step_reports_position_total_and_display_name(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return f"ok:{tool_name}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", display_name="Find genes in the paper"),
+            _agent_node("n2", "disease", display_name="Find disease findings"),
+        ])
+        tools, _ = get_all_agent_tools(flow, flow_run_id="flow-run-progress")
+
+        _results, events = self._collect_step_started(tools, [0, 1])
+
+        assert [event["data"] for event in events] == [
+            {
+                "flow_id": str(flow.id),
+                "flow_name": "Test Flow",
+                "flow_run_id": "flow-run-progress",
+                "step": 1,
+                "total_steps": 2,
+                "step_name": "Find genes in the paper",
+            },
+            {
+                "flow_id": str(flow.id),
+                "flow_name": "Test Flow",
+                "flow_run_id": "flow-run-progress",
+                "step": 2,
+                "total_steps": 2,
+                "step_name": "Find disease findings",
+            },
+        ]
+        assert all(event["timestamp"] for event in events)
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_rejected_out_of_order_call_does_not_report_a_started_step(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return f"ok:{tool_name}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        tools, _ = get_all_agent_tools(_make_flow([
+            _agent_node("n1", "gene"),
+            _agent_node("n2", "disease"),
+        ]))
+
+        results, events = self._collect_step_started(tools, [1])
+
+        assert "Flow step order is strict" in results[0]
+        assert events == []
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_retried_step_reports_the_same_position_again(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        attempts = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
+            @function_tool(
+                name_override=tool_name,
+                description_override=tool_description,
+                failure_error_function=None,
+            )
+            async def _tool(query: str) -> str:
+                attempts.append(tool_name)
+                if len(attempts) == 1:
+                    raise RuntimeError("first attempt failed")
+                return f"ok:{tool_name}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        tools, _ = get_all_agent_tools(_make_flow([
+            _agent_node("n1", "gene", display_name="Find genes"),
+            _agent_node("n2", "disease", display_name="Find diseases"),
+        ]))
+
+        results, events = self._collect_step_started(tools, [0, 0, 1])
+
+        assert isinstance(results[0], RuntimeError)
+        assert [(event["data"]["step"], event["data"]["step_name"]) for event in events] == [
+            (1, "Find genes"),
+            (1, "Find genes"),
+            (2, "Find diseases"),
+        ]
+        assert {event["data"]["total_steps"] for event in events} == {2}
+
+    @pytest.mark.asyncio
+    async def test_flow_started_counts_only_steps_that_run(self, monkeypatch):
+        flow = MagicMock()
+        flow.name = "Sidecar Flow"
+        flow.id = "22222222-2222-2222-2222-222222222222"
+        flow.flow_definition = {
+            "version": "1.1",
+            "nodes": [
+                _task_input_node(),
+                _agent_node("extract_1", "gene_extractor"),
+                _agent_node("validator_1", "custom_validator"),
+                _agent_node("prep_1", "curation_prep"),
+            ],
+            "edges": [
+                {"id": "e1", "source": "node_task", "target": "extract_1"},
+                {
+                    "id": "e2",
+                    "source": "extract_1",
+                    "target": "validator_1",
+                    "role": "validation_attachment",
+                    "satisfies_binding_id": "alliance.gene.identity",
+                },
+                {"id": "e3", "source": "extract_1", "target": "prep_1"},
+            ],
+            "entry_node_id": "node_task",
+        }
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: MagicMock(name="Flow Supervisor"),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        stream = execute_flow(flow, user_id="u1", session_id="s1")
+        flow_started = await anext(stream)
+        await stream.aclose()
+
+        assert flow_started["type"] == "FLOW_STARTED"
+        assert flow_started["data"]["total_steps"] == 2

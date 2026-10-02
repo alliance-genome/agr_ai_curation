@@ -3022,6 +3022,7 @@ def get_all_agent_tools(
         entries_by_node=custom_entries,
     )
     agent_id_counts = _count_agent_ids(flow)
+    total_steps = len(nodes)
     all_tools = []
     created_tool_names: Set[str] = set()
     unavailable_steps: List[Dict[str, Any]] = []
@@ -3524,6 +3525,23 @@ def get_all_agent_tools(
                     "claim_token": claim_token,
                 }
 
+            # Steps run once each in strict order, so a started step's configured
+            # position is its progress ("step 3 of 5"). A retried step reports the
+            # same position again; validator sidecars run inside their step.
+            _emit_flow_runtime_event(
+                {
+                    "type": "FLOW_STEP_STARTED",
+                    "timestamp": _now_iso(),
+                    "data": {
+                        "flow_id": str(flow.id),
+                        "flow_name": flow.name,
+                        "flow_run_id": flow_run_id,
+                        "step": step_number,
+                        "total_steps": total_steps,
+                        "step_name": node_data.get("agent_display_name") or agent_name,
+                    },
+                }
+            )
             try:
                 from src.lib.benchmarks.stage_measurements import measure_flow_node
                 from src.lib.openai_agents.provider_usage import provider_parent_for_tool_call
@@ -4942,12 +4960,9 @@ async def execute_flow(
     # Build flow prompt
     prompt = build_flow_prompt(flow, document_id, user_query)
 
-    # Calculate step count for metadata (exclude task_input nodes)
-    all_nodes = flow.flow_definition.get("nodes", [])
-    total_steps = sum(
-        1 for n in all_nodes
-        if n.get("type") != "task_input" and n.get("data", {}).get("agent_id") != "task_input"
-    )
+    # Count the steps that actually run, matching FLOW_STEP_STARTED positions:
+    # task input and attached validators are not steps of their own.
+    total_steps = len(_get_ordered_executable_nodes(flow))
 
     # Emit flow-specific FLOW_STARTED (before delegating)
     # This adds flow metadata that run_agent_streamed doesn't know about
