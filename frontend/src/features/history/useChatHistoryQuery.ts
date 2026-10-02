@@ -7,7 +7,8 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 
-import { chatCacheKeys } from '@/lib/chatCacheKeys'
+import { chatCacheKeys, DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT } from '@/lib/chatCacheKeys'
+import { fetchChatHistoryTranscript } from '@/services/chatHistoryTranscript'
 import {
   AGENT_STUDIO_CHAT_HISTORY_KIND,
   bulkDeleteChatSessions,
@@ -41,62 +42,7 @@ type ChatHistoryTranscriptQueryOptions = Omit<
   'queryKey' | 'queryFn'
 >
 
-const FULL_TRANSCRIPT_PAGE_SIZE = 200
-const FULL_TRANSCRIPT_MAX_PAGES = 50
-
 export type AgentStudioSessionDetailRequest = Omit<ChatHistoryDetailRequest, 'chatKind'>
-
-async function fetchChatHistoryTranscript(
-  request: ChatHistoryDetailRequest,
-): Promise<ChatHistoryDetailResponse> {
-  const sessionId = request.sessionId.trim()
-  const messageLimit = request.messageLimit ?? FULL_TRANSCRIPT_PAGE_SIZE
-  const messages: ChatHistoryDetailResponse['messages'] = []
-  const seenCursors = new Set<string>()
-
-  let nextCursor = request.messageCursor ?? null
-  let detailResponse: ChatHistoryDetailResponse | null = null
-
-  for (
-    let pageCount = 0;
-    pageCount < FULL_TRANSCRIPT_MAX_PAGES;
-    pageCount += 1
-  ) {
-    const page = await fetchChatHistoryDetail({
-      sessionId,
-      chatKind: request.chatKind,
-      messageLimit,
-      messageCursor: nextCursor,
-    })
-
-    if (!detailResponse) {
-      detailResponse = page
-    }
-
-    messages.push(...page.messages)
-
-    if (!page.next_message_cursor) {
-      return {
-        ...page,
-        session: detailResponse.session,
-        active_document: detailResponse.active_document,
-        messages,
-        next_message_cursor: null,
-      }
-    }
-
-    if (seenCursors.has(page.next_message_cursor)) {
-      throw new Error(`Detected repeated chat history cursor for session ${sessionId}`)
-    }
-
-    seenCursors.add(page.next_message_cursor)
-    nextCursor = page.next_message_cursor
-  }
-
-  throw new Error(
-    `Exceeded ${FULL_TRANSCRIPT_MAX_PAGES} transcript pages for session ${sessionId}`,
-  )
-}
 
 export function useChatHistoryListQuery(
   request: ChatHistoryListRequest,
@@ -133,10 +79,10 @@ export function useChatHistoryTranscriptQuery(
       'transcript',
       {
         chatKind: request.chatKind ?? null,
-        messageLimit: request.messageLimit ?? FULL_TRANSCRIPT_PAGE_SIZE,
+        messageLimit: request.messageLimit ?? DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
       },
     ],
-    queryFn: () => fetchChatHistoryTranscript(request),
+    queryFn: ({ signal }) => fetchChatHistoryTranscript({ ...request, signal }),
     enabled: request.sessionId.trim().length > 0,
     ...options,
   })

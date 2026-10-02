@@ -91,6 +91,7 @@ type ChatStreamEvent = SSEEvent & {
 
 export function useChatController({
   sessionId: propSessionId,
+  initialTranscript,
   onSessionChange,
   events,
   eventStreamVersion,
@@ -109,8 +110,21 @@ export function useChatController({
     () => (storageUserId ? getChatLocalStorageKeys(storageUserId) : null),
     [storageUserId],
   )
-  // Initialize messages from localStorage if available
-  const [messages, setMessages] = useState<Message[]>(() => loadMessagesFromStorage(chatStorageKeys, propSessionId))
+  // Durable resume arrives directly from Home; cache availability cannot affect it.
+  const [messages, setMessages] = useState<Message[]>(() =>
+    initialTranscript?.sessionId === propSessionId
+      ? initialTranscript.messages
+      : loadMessagesFromStorage(chatStorageKeys, propSessionId),
+  )
+  const [messageSessionId, setMessageSessionId] = useState(propSessionId)
+  if (messageSessionId !== propSessionId) {
+    // Reset during render so stale messages cannot render or persist under a new session.
+    // Same-session rerenders never replay hydration over later live messages.
+    setMessageSessionId(propSessionId)
+    setMessages(initialTranscript?.sessionId === propSessionId
+      ? initialTranscript.messages
+      : loadMessagesFromStorage(chatStorageKeys, propSessionId))
+  }
   const [inputMessage, setInputMessage] = useState('')
   const [progressMessage, setProgressMessage] = useState<string>('')
   const [activeDocument, setActiveDocument] = useState<ActiveDocument | null>(null)
@@ -147,7 +161,6 @@ export function useChatController({
   const latestSessionIdRef = useRef<string | null>(propSessionId)
   const sessionStateVersionRef = useRef(0)
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const restoredSessionRef = useRef<string | null>(null)
   const messageStorageUserIdRef = useRef<string | null>(storageUserId)
   const storageUserIdRef = useRef<string | null>(storageUserId)
   const previousSessionIdRef = useRef<string | null>(propSessionId)
@@ -165,8 +178,8 @@ export function useChatController({
   const sessionTraceIds = useRef<string[]>([])
 
   // Keep "latest" refs synchronized during render to avoid stale values during unmount cleanup.
-  latestMessagesRef.current = messages
   if (messageStorageUserIdRef.current === storageUserId) {
+    latestMessagesRef.current = messages
     latestSessionIdRef.current = propSessionId
   }
 
@@ -391,12 +404,13 @@ export function useChatController({
     }
 
     storageUserIdRef.current = storageUserId
-    messageStorageUserIdRef.current = null
-    restoredSessionRef.current = null
+    const restored = loadMessagesFromStorage(chatStorageKeys, propSessionId)
+    messageStorageUserIdRef.current = restored.length > 0 ? storageUserId : null
     sessionTraceIds.current = []
-    latestMessagesRef.current = []
+    latestMessagesRef.current = restored
+    latestSessionIdRef.current = propSessionId
     invalidateTurnRuntimeState()
-    setMessages([])
+    setMessages(restored)
     setActiveDocument(null)
     setProgressMessage('')
 
@@ -404,19 +418,7 @@ export function useChatController({
       clearTimeout(persistTimeoutRef.current)
       persistTimeoutRef.current = null
     }
-  }, [invalidateTurnRuntimeState, storageUserId])
-
-  // If session arrives after mount (or changes), restore persisted messages once per session.
-  useEffect(() => {
-    if (!propSessionId || messages.length > 0 || restoredSessionRef.current === propSessionId) return
-
-    restoredSessionRef.current = propSessionId
-    const restored = loadMessagesFromStorage(chatStorageKeys, propSessionId)
-    if (restored.length > 0) {
-      messageStorageUserIdRef.current = storageUserId
-      setMessages(restored)
-    }
-  }, [chatStorageKeys, propSessionId, messages.length, storageUserId])
+  }, [chatStorageKeys, invalidateTurnRuntimeState, propSessionId, storageUserId])
 
   useEffect(() => {
     if (previousSessionIdRef.current === propSessionId) {

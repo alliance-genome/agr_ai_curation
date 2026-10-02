@@ -334,15 +334,15 @@ describe('useChatHistoryQuery', () => {
       {
         sessionId: 'session-1',
         chatKind: undefined,
-        messageLimit: 200,
         messageCursor: null,
+        signal: expect.any(AbortSignal),
       },
     )
     expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenNthCalledWith(2, {
       sessionId: 'session-1',
       chatKind: undefined,
-      messageLimit: 200,
       messageCursor: 'cursor-2',
+      signal: expect.any(AbortSignal),
     })
     expect(result.current.data?.messages).toEqual([
       expect.objectContaining({
@@ -356,7 +356,7 @@ describe('useChatHistoryQuery', () => {
     ])
   })
 
-  it('fails transcript hydration after too many sequential pages', async () => {
+  it('loads transcripts beyond the former 50-page cap', async () => {
     const queryClient = createQueryClient()
 
     serviceMocks.fetchChatHistoryDetail.mockImplementation(async ({ messageCursor }) => {
@@ -404,13 +404,11 @@ describe('useChatHistoryQuery', () => {
     )
 
     await waitFor(() => {
-      expect(result.current.isError).toBe(true)
+      expect(result.current.isSuccess).toBe(true)
     })
 
-    expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenCalledTimes(50)
-    expect(result.current.error?.message).toBe(
-      'Exceeded 50 transcript pages for session session-1',
-    )
+    expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenCalledTimes(51)
+    expect(result.current.data?.messages).toHaveLength(51)
   })
 
   it('provides an Agent Studio detail hook that scopes reads to agent_studio sessions', async () => {

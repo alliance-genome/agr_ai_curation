@@ -1,4 +1,4 @@
-import type { ComponentProps } from 'react'
+import { StrictMode, type ComponentProps } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -237,6 +237,73 @@ describe('Chat persistence', () => {
     emitGlobalToastMock.mockReset()
     mockChatFetch()
     vi.useRealTimers()
+  })
+
+  it('consumes session-keyed hydration once, preserves live turns and replaces non-empty state on session switch', async () => {
+    const initialTranscript = {
+      sessionId: 'session-1',
+      messages: [{
+        role: 'assistant' as const, content: 'Restored first session', timestamp: new Date(),
+        id: 'restored-1', traceIds: ['trace-restored'], turnId: 'turn-restored',
+        terminalState: 'turn_failed' as const, terminalMessage: 'Preserved terminal metadata',
+        reviewAndCurateTarget: { sessionId: 'review-session', originSessionId: 'session-1', documentId: 'doc-1' },
+      }],
+    }
+    const props: ComponentProps<typeof Chat> = {
+      sessionId: 'session-1', initialTranscript, events: [], eventStreamVersion: 0,
+      processedEventCount: 0, isLoading: false, sendMessage: vi.fn().mockResolvedValue(undefined),
+      markEventsProcessed: vi.fn(),
+    }
+    const content = (nextProps: ComponentProps<typeof Chat>) => (
+      <StrictMode><MemoryRouter><Chat {...nextProps} /></MemoryRouter></StrictMode>
+    )
+    const view = render(content(props))
+    expect(screen.getAllByText('Restored first session')).toHaveLength(1)
+    const input = screen.getByRole('textbox')
+    fireEvent.change(input, { target: { value: 'Later live turn' } })
+    fireEvent.keyPress(input, { key: 'Enter', charCode: 13 })
+    await waitFor(() => expect(props.sendMessage).toHaveBeenCalled())
+    view.rerender(content({ ...props, initialTranscript: { ...initialTranscript } }))
+    expect(screen.getByText('Later live turn')).toBeInTheDocument()
+    expect(screen.getAllByText('Restored first session')).toHaveLength(1)
+    view.unmount()
+    const cached = JSON.parse(localStorage.getItem(chatStorageKeys.messages)!)
+    expect(cached.messages[0]).toMatchObject({
+      terminalState: 'turn_failed', terminalMessage: 'Preserved terminal metadata',
+      reviewAndCurateTarget: initialTranscript.messages[0].reviewAndCurateTarget,
+      traceIds: ['trace-restored'], turnId: 'turn-restored',
+    })
+
+    const secondView = render(content(props))
+    secondView.rerender(content({
+      ...props, sessionId: 'session-2',
+      initialTranscript: { sessionId: 'session-2', messages: [{ role: 'user', content: 'Restored second session', timestamp: new Date() }] },
+    }))
+    expect(screen.queryByText('Restored first session')).not.toBeInTheDocument()
+    expect(screen.queryByText('Later live turn')).not.toBeInTheDocument()
+    expect(screen.getByText('Restored second session')).toBeInTheDocument()
+    secondView.unmount()
+    expect(JSON.parse(localStorage.getItem(chatStorageKeys.messages)!)).toMatchObject({
+      session_id: 'session-2', messages: [{ content: 'Restored second session' }],
+    })
+  })
+
+  it('restores only the new user matching cache when authentication changes after mount', () => {
+    localStorage.setItem(alternateChatStorageKeys.messages, JSON.stringify({
+      session_id: 'session-2', messages: [{ role: 'assistant', content: 'User two cached turn', timestamp: new Date().toISOString() }],
+    }))
+    const props: ComponentProps<typeof Chat> = {
+      sessionId: 'session-1', events: [], eventStreamVersion: 0, processedEventCount: 0,
+      isLoading: false, sendMessage: vi.fn(), markEventsProcessed: vi.fn(),
+    }
+    const view = render(<MemoryRouter><Chat {...props} /></MemoryRouter>)
+    mockAuthState.user = { uid: 'user-2', email: 'other@example.org' }
+    view.rerender(<MemoryRouter><Chat {...props} sessionId="session-2" /></MemoryRouter>)
+    expect(screen.getByText('User two cached turn')).toBeInTheDocument()
+    view.unmount()
+    expect(JSON.parse(localStorage.getItem(alternateChatStorageKeys.messages)!)).toMatchObject({
+      session_id: 'session-2', messages: [{ content: 'User two cached turn' }],
+    })
   })
 
   it('shows the empty invitation only while idle, including before the first flow output', () => {

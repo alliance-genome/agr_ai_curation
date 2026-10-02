@@ -48,6 +48,8 @@ Workshop's Tools section shows your requests and project-visible teammate reques
 
 ## Keep your work
 
+Use **Resume chat** in assistant-chat history to reopen the saved conversation and its document. The complete conversation loads from the server before you can continue, and follow-up messages stay in that conversation. Browser storage is only a local cache; blocked or full storage does not prevent a saved conversation from opening. If restoration fails, an error appears and the prior cached conversation and document are preserved.
+
 Workshop and Flow Builder retain unsaved drafts on the current browser for your signed-in account. On returning, choose **Resume draft** or **Discard draft**. Use **Save** to keep work in your account; local recovery does not transfer between devices and can be lost if browser storage is cleared.
 
 Saved flows keep their selected agent revisions. Updating an agent does not silently replace the version used by an existing flow.

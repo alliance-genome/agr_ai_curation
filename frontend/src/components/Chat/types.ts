@@ -104,6 +104,13 @@ export interface ChatProps {
   sessionId: string | null
 
   /**
+   * Authoritative server transcript, prepared before the session's Chat mounts.
+   * Consumed once at mount; later rerenders must preserve live messages.
+   * Browser storage is only used for ordinary reloads without this payload.
+   */
+  initialTranscript?: RestoredChatTranscript | null
+
+  /**
    * Callback to notify parent when session ID changes (e.g., after reset).
    * Parent (HomePage) must update its session state when this is called.
    */
@@ -142,6 +149,11 @@ export interface ChatProps {
    * Advance the shared chat render cursor after events are processed.
    */
   markEventsProcessed: (eventStreamVersion: number, count: number) => void
+}
+
+export interface RestoredChatTranscript {
+  sessionId: string
+  messages: Message[]
 }
 
 export interface StoredChatData {

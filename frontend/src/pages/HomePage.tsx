@@ -7,6 +7,9 @@ import WorkspaceResizeHandle from '@/components/WorkspaceResizeHandle'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import Chat from '@/components/Chat'
+import { sanitizeStoredMessage } from '@/components/Chat/chatMessageUtils'
+import type { RestoredChatTranscript, SerializedMessage } from '@/components/Chat/types'
+import { fetchChatHistoryTranscript } from '@/services/chatHistoryTranscript'
 import RightPanel from '@/components/RightPanel'
 import { INITIAL_TABS } from '@/types/ComponentProps'
 import { useAuth } from '@/contexts/AuthContext'
@@ -51,9 +54,7 @@ import { readCurationApiError } from '@/features/curation/services/api'
 import {
   ASSISTANT_CHAT_HISTORY_KIND,
   buildRestorableChatMessages,
-  fetchChatHistoryDetail,
   type ChatHistoryActiveDocument,
-  type ChatHistoryDetailResponse,
 } from '@/services/chatHistoryApi'
 
 const Root = styled(Box)(({ theme }) => ({
@@ -164,6 +165,7 @@ function HomePage() {
   const [isBootstrappingSession, setIsBootstrappingSession] = useState(true)
   const [missingSessionId, setMissingSessionId] = useState<string | null>(null)
   const [sessionBootstrapError, setSessionBootstrapError] = useState<string | null>(null)
+  const [initialTranscript, setInitialTranscript] = useState<RestoredChatTranscript | null>(null)
   const [isStartingNewChat, setIsStartingNewChat] = useState(false)
 
   // Document loading overlay state
@@ -264,13 +266,12 @@ function HomePage() {
 
   const persistSessionMessages = useCallback((
     activeSessionId: string,
-    detail: ChatHistoryDetailResponse,
+    storedMessages: SerializedMessage[],
   ) => {
     if (!chatStorageKeys) {
       return
     }
 
-    const storedMessages = buildRestorableChatMessages(detail.messages)
     const prunedMessages = pruneChatMessageCacheMessages(storedMessages)
     if (prunedMessages.length === 0) {
       safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
@@ -510,10 +511,11 @@ function HomePage() {
       setIsBootstrappingSession(true)
       setMissingSessionId(null)
       setSessionBootstrapError(null)
+      setInitialTranscript(null)
 
       try {
         if (requestedSessionId) {
-          const detail = await fetchChatHistoryDetail({
+          const detail = await fetchChatHistoryTranscript({
             sessionId: requestedSessionId,
             chatKind: ASSISTANT_CHAT_HISTORY_KIND,
             messageLimit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
@@ -524,10 +526,16 @@ function HomePage() {
             return
           }
 
-          const activeSessionId =
-            normalizeChatHistoryValue(detail.session.session_id) ?? requestedSessionId
+          const activeSessionId = normalizeChatHistoryValue(detail.session.session_id)
+          if (activeSessionId !== requestedSessionId) {
+            throw new Error('The restored transcript does not belong to the requested chat session.')
+          }
+          // Convert before mounting Chat so conversion errors stay in the restore UI.
+          const storedMessages = buildRestorableChatMessages(detail.messages, { onUnknownRole: 'throw' })
+          const messages = storedMessages.map(sanitizeStoredMessage)
           persistSessionId(activeSessionId)
-          persistSessionMessages(activeSessionId, detail)
+          setInitialTranscript({ sessionId: activeSessionId, messages })
+          persistSessionMessages(activeSessionId, storedMessages)
           await rehydrateDocumentContext(detail.active_document, documentOperation)
 
           if (operation.ownsLatest()) {
@@ -574,9 +582,12 @@ function HomePage() {
           return
         }
 
-        persistSessionId(null)
-        clearPersistedMessages()
-        await clearDocumentContext(documentOperation)
+        // A failed durable restore must leave the prior cache/document intact.
+        if (!requestedSessionId) {
+          persistSessionId(null)
+          clearPersistedMessages()
+          await clearDocumentContext(documentOperation)
+        }
 
         if (!operation.ownsLatest()) {
           return
@@ -594,7 +605,7 @@ function HomePage() {
           setSessionBootstrapError(null)
         } else {
           setMissingSessionId(null)
-          setSessionBootstrapError(errorMessage)
+          setSessionBootstrapError(requestedSessionId ? `Unable to restore chat session. ${errorMessage}` : errorMessage)
         }
 
         setIsBootstrappingSession(false)
@@ -789,6 +800,7 @@ function HomePage() {
     setIsStartingNewChat(true)
     setMissingSessionId(null)
     setSessionBootstrapError(null)
+    setInitialTranscript(null)
     setLoadingError(null)
 
     try {
@@ -830,6 +842,7 @@ function HomePage() {
   const handleSessionChange = useCallback((newSessionId: string) => {
     debug.log('🔄 [HomePage] Session ID changed:', newSessionId)
     persistSessionId(newSessionId)
+    setInitialTranscript(null)
     if (chatStorageKeys) {
       safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
         owner: 'chat',
@@ -909,6 +922,7 @@ function HomePage() {
           >
             <Chat
               sessionId={sessionId}
+              initialTranscript={initialTranscript}
               onSessionChange={handleSessionChange}
               events={events}
               eventStreamVersion={eventStreamVersion}

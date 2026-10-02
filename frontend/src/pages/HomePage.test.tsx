@@ -5,6 +5,8 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import theme from '@/theme'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import HistoryPage from '@/features/history/HistoryPage'
 import { DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT, getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import {
   DOCUMENT_LOADING_STORAGE_KEY,
@@ -91,6 +93,7 @@ function LocationProbe() {
       <div data-testid="location-search">{location.search}</div>
       <button type="button" onClick={() => navigate('/?session=session-a')}>Restore A</button>
       <button type="button" onClick={() => navigate('/?session=session-b')}>Restore B</button>
+      <button type="button" onClick={() => navigate('/history')}>History</button>
     </>
   )
 }
@@ -101,6 +104,39 @@ function deferred<T>() {
     resolve = resolvePromise
   })
   return { promise, resolve }
+}
+
+function transcriptPage(sessionId: string, start = 0, count = 1, cursor: string | null = null) {
+  return {
+    session: {
+      session_id: sessionId,
+      chat_kind: 'assistant_chat',
+      title: `Conversation ${sessionId}`,
+      created_at: '2026-04-20T00:00:00Z',
+      updated_at: '2026-04-20T00:05:00Z',
+      recent_activity_at: '2026-04-20T00:05:00Z',
+    },
+    active_document: null,
+    messages: Array.from({ length: count }, (_, index) => ({
+      message_id: `${sessionId}-${start + index}`,
+      session_id: sessionId,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      message_type: 'text',
+      content: `Transcript ${sessionId} turn ${start + index}`,
+      created_at: new Date(Date.UTC(2026, 3, 20, 0, 0, start + index)).toISOString(),
+    })),
+    message_limit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+    next_message_cursor: cursor,
+  }
+}
+
+function chatContextResponse(url: string): Response {
+  if (url === '/health/deep') {
+    return jsonResponse({ services: { weaviate: 'connected', curation_db: 'connected' } })
+  }
+  if (url === '/api/chat/document') return jsonResponse({ active: false })
+  if (url === '/api/chat/conversation') return jsonResponse({ is_active: false })
+  throw new Error(`Unexpected fetch: ${url}`)
 }
 
 type HomeInitialEntry = NonNullable<ComponentProps<typeof MemoryRouter>['initialEntries']>[number]
@@ -114,21 +150,24 @@ function renderHomePageWithOptions(
   options: { strictMode?: boolean } = {},
 ): ReturnType<typeof render> {
   const content = (
-    <ThemeProvider theme={theme}>
-      <MemoryRouter initialEntries={[initialEntry]}>
-        <Routes>
-          <Route
-            path="/"
-            element={(
-              <>
-                <HomePage />
-                <LocationProbe />
-              </>
-            )}
-          />
-        </Routes>
-      </MemoryRouter>
-    </ThemeProvider>
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <ThemeProvider theme={theme}>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/history" element={<HistoryPage />} />
+            <Route
+              path="/"
+              element={(
+                <>
+                  <HomePage />
+                  <LocationProbe />
+                </>
+              )}
+            />
+          </Routes>
+        </MemoryRouter>
+      </ThemeProvider>
+    </QueryClientProvider>
   )
 
   return render(options.strictMode ? <StrictMode>{content}</StrictMode> : content)
@@ -149,12 +188,177 @@ describe('HomePage durable session bootstrap', () => {
     vi.mocked(global.fetch).mockReset()
     mockUseAuth.mockImplementation(() => authState)
     mockUseChatStream.mockReturnValue(chatStreamStub)
+    chatStreamStub.sendMessage.mockReset()
   })
 
   afterEach(() => {
     actualChatMode.enabled = false
     vi.useRealTimers()
     vi.restoreAllMocks()
+  })
+
+  it.each(['quota', 'security', 'unavailable', 'access denied'] as const)(
+    'resumes from real History into real Chat despite %s storage and appends to the durable session',
+    async (failure) => {
+      actualChatMode.enabled = true
+      const page = transcriptPage('session-b', 0, 2)
+      vi.mocked(global.fetch).mockImplementation(async (input) => {
+        const url = String(input)
+        if (url.startsWith('/api/chat/history?')) {
+          return jsonResponse({ sessions: [page.session], total_sessions: 1, next_cursor: null })
+        }
+        if (url === buildAssistantHistoryDetailUrl('session-b')) return jsonResponse(page)
+        return chatContextResponse(url)
+      })
+      renderHomePage('/history')
+      const resume = await screen.findByRole('button', { name: /Resume chat/i })
+      localStorage.setItem(chatStorageKeys.sessionId, 'session-b')
+      localStorage.setItem(chatStorageKeys.messages, JSON.stringify({
+        session_id: 'session-b',
+        messages: [{ role: 'assistant', content: 'Stale cached transcript', timestamp: '2026-04-20T00:00:00Z' }],
+      }))
+      if (failure === 'unavailable') {
+        vi.spyOn(window, 'localStorage', 'get').mockReturnValue(undefined as unknown as Storage)
+      } else if (failure === 'access denied') {
+        vi.spyOn(window, 'localStorage', 'get').mockImplementation(() => { throw new DOMException('Storage denied', 'SecurityError') })
+      } else {
+        const error = new DOMException('Storage denied', failure === 'quota' ? 'QuotaExceededError' : 'SecurityError')
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw error })
+        if (failure === 'security') {
+          vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw error })
+        }
+      }
+      fireEvent.click(resume)
+      expect(await screen.findByText('Transcript session-b turn 0')).toBeInTheDocument()
+      expect(screen.getByText('Transcript session-b turn 1')).toBeInTheDocument()
+      expect(screen.queryByText('Stale cached transcript')).not.toBeInTheDocument()
+      expect(screen.getByTestId('location-search')).toHaveTextContent('?session=session-b')
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Follow-up after resume' } })
+      fireEvent.keyPress(screen.getByRole('textbox'), { key: 'Enter', code: 'Enter', charCode: 13 })
+      await waitFor(() => expect(chatStreamStub.sendMessage).toHaveBeenCalledWith(
+        'Follow-up after resume', 'session-b', expect.any(Object),
+      ))
+      expect(screen.getByText('Transcript session-b turn 0')).toBeInTheDocument()
+      expect(screen.getByText('Follow-up after resume')).toBeInTheDocument()
+    },
+  )
+
+  it('renders all chronological pages beyond 100 messages once and replaces a non-empty previous session', async () => {
+    actualChatMode.enabled = true
+    vi.mocked(global.fetch).mockImplementation(async (input) => {
+      const url = String(input)
+      if (url === buildAssistantHistoryDetailUrl('session-a')) return jsonResponse(transcriptPage('session-a'))
+      if (url === buildAssistantHistoryDetailUrl('session-b')) return jsonResponse(transcriptPage('session-b', 0, 100, 'last-page'))
+      if (url === `${buildAssistantHistoryDetailUrl('session-b')}&message_cursor=last-page`) {
+        return jsonResponse(transcriptPage('session-b', 100, 5))
+      }
+      return chatContextResponse(url)
+    })
+    renderHomePage('/?session=session-a')
+    expect(await screen.findByText('Transcript session-a turn 0')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Restore B' }))
+    expect(await screen.findByText('Transcript session-b turn 104')).toBeInTheDocument()
+    expect(screen.queryByText('Transcript session-a turn 0')).not.toBeInTheDocument()
+    const turns = screen.getAllByText(/^Transcript session-b turn \d+$/)
+    expect(turns.map((turn) => turn.textContent)).toEqual(
+      Array.from({ length: 105 }, (_, index) => `Transcript session-b turn ${index}`),
+    )
+    expect(vi.mocked(global.fetch).mock.calls.filter(([url]) => String(url).includes('message_cursor=last-page'))).toHaveLength(1)
+  })
+
+  it('keeps only the latest transcript visible when an abandoned restore resolves last', async () => {
+    actualChatMode.enabled = true
+    const first = deferred<Response>()
+    let firstSignal: AbortSignal | null | undefined
+    vi.mocked(global.fetch).mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url === buildAssistantHistoryDetailUrl('session-a')) {
+        firstSignal = init?.signal
+        return first.promise
+      }
+      if (url === buildAssistantHistoryDetailUrl('session-b')) return jsonResponse(transcriptPage('session-b'))
+      return chatContextResponse(url)
+    })
+    renderHomePage('/?session=session-a')
+    await waitFor(() => expect(firstSignal).toBeDefined())
+    fireEvent.click(screen.getByRole('button', { name: 'Restore B' }))
+    expect(await screen.findByText('Transcript session-b turn 0')).toBeInTheDocument()
+    expect(firstSignal?.aborted).toBe(true)
+    first.resolve(jsonResponse(transcriptPage('session-a')))
+    await act(async () => { await first.promise })
+    expect(screen.queryByText('Transcript session-a turn 0')).not.toBeInTheDocument()
+    expect(screen.getByText('Transcript session-b turn 0')).toBeInTheDocument()
+    expect(screen.getByTestId('right-panel-session')).toHaveTextContent('session-b')
+  })
+
+  it('ignores an abandoned restore after leaving Home', async () => {
+    const pending = deferred<Response>()
+    let signal: AbortSignal | null | undefined
+    vi.mocked(global.fetch).mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url === buildAssistantHistoryDetailUrl('session-a')) {
+        signal = init?.signal
+        return pending.promise
+      }
+      if (url.startsWith('/api/chat/history?')) return jsonResponse({ sessions: [], total_sessions: 0, next_cursor: null })
+      return chatContextResponse(url)
+    })
+    renderHomePage('/?session=session-a')
+    await waitFor(() => expect(signal).toBeDefined())
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    expect(signal?.aborted).toBe(true)
+    pending.resolve(jsonResponse(transcriptPage('session-a', 0, 100, 'another-page')))
+    await act(async () => { await pending.promise })
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBeNull()
+    expect(localStorage.getItem(chatStorageKeys.messages)).toBeNull()
+    expect(vi.mocked(global.fetch).mock.calls.filter(([url]) => String(url).includes('message_cursor'))).toHaveLength(0)
+  })
+
+  it('hands file downloads, flow status, evidence and trace metadata to the real Chat without a cache', async () => {
+    actualChatMode.enabled = true
+    const page = transcriptPage('session-b', 0, 2)
+    const evidence = {
+      entity: 'Example entity', verified_quote: 'A supported quote.',
+      page: 3, section: 'Results', chunk_id: 'chunk-3',
+    }
+    const messages = [
+      ...page.messages,
+      { ...page.messages[0], message_id: 'status', role: 'flow', content: 'Flow completed' },
+      {
+        ...page.messages[1], message_id: 'file', message_type: 'file_download',
+        payload_json: { file_id: 'file-1', filename: 'restored.csv', format: 'csv', download_url: '/api/files/file-1' },
+      },
+      {
+        ...page.messages[1], message_id: 'evidence', role: 'flow', message_type: 'flow_step_evidence',
+        trace_id: 'restored-trace', turn_id: 'restored-turn',
+        payload_json: {
+          flow_id: 'flow-1', flow_name: 'Extraction', flow_run_id: 'run-1', step: 2,
+          tool_name: 'extract', agent_name: 'Example extractor',
+          evidence_count: 1, total_evidence_records: 1, evidence_records: [evidence],
+        },
+      },
+      {
+        ...page.messages[1], message_id: 'curation', content: 'Supported extraction',
+        payload_json: { evidence_records: [evidence], curation_supported: true, curation_adapter_key: 'example_adapter' },
+      },
+    ]
+    vi.mocked(global.fetch).mockImplementation(async (input) => {
+      const url = String(input)
+      if (url === buildAssistantHistoryDetailUrl('session-b')) return jsonResponse({ ...page, messages })
+      return chatContextResponse(url)
+    })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('Full', 'QuotaExceededError') })
+    renderHomePageWithOptions('/?session=session-b', { strictMode: true })
+    expect(await screen.findByText('restored.csv')).toBeInTheDocument()
+    expect(screen.getByText('Flow completed')).toBeInTheDocument()
+    expect(screen.getByText('Step 2 / Example extractor / extract')).toBeInTheDocument()
+    const payload = chatRenderSpy.mock.calls.at(-1)?.[0].initialTranscript
+    expect(payload.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'file', type: 'file_download', fileData: expect.objectContaining({ file_id: 'file-1' }) }),
+      expect.objectContaining({ id: 'evidence', traceIds: ['restored-trace'], turnId: 'restored-turn', evidenceRecords: [evidence] }),
+      expect.objectContaining({ id: 'curation', evidenceCurationSupported: true, evidenceCurationAdapterKey: 'example_adapter' }),
+    ]))
+    expect(screen.getAllByText('Transcript session-b turn 0')).toHaveLength(1)
   })
 
   it('opens Tools when a flow is routed from Agent Studio', async () => {
@@ -369,96 +573,29 @@ describe('HomePage durable session bootstrap', () => {
     window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
   })
 
-  it('keeps a successful latest restore when an older failed restore finishes clearing last', async () => {
-    const staleDocumentClear = deferred<Response>()
-    const loadBodies: Array<Record<string, unknown>> = []
-    const pdfDocumentChangedSpy = vi.fn()
-    window.addEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
-
-    vi.mocked(global.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+  it.each(['fetch', 'conversion'])('shows a non-destructive %s restore error', async (failure) => {
+    actualChatMode.enabled = true
+    localStorage.setItem(chatStorageKeys.sessionId, 'previous-session')
+    const cached = JSON.stringify({ session_id: 'previous-session', messages: [{ role: 'user', content: 'Previous transcript', timestamp: '2026-04-20T00:00:00Z' }] })
+    localStorage.setItem(chatStorageKeys.messages, cached)
+    localStorage.setItem(chatStorageKeys.activeDocument, 'previous-document')
+    vi.mocked(global.fetch).mockImplementation(async (input) => {
       const url = String(input)
-      if (url === buildAssistantHistoryDetailUrl('session-a')) {
-        return Promise.resolve(jsonResponse({ detail: 'Chat session not found' }, 404))
-      }
-      if (url === '/api/chat/document' && init?.method === 'DELETE') {
-        return staleDocumentClear.promise
-      }
       if (url === buildAssistantHistoryDetailUrl('session-b')) {
-        return Promise.resolve(jsonResponse({
-          session: {
-            session_id: 'session-b',
-            created_at: '2026-04-20T00:00:00Z',
-            updated_at: '2026-04-20T00:05:00Z',
-            recent_activity_at: '2026-04-20T00:05:00Z',
-          },
-          active_document: { id: 'doc-b', filename: 'b.pdf' },
-          messages: [{
-            message_id: 'message-b',
-            session_id: 'session-b',
-            role: 'assistant',
-            message_type: 'text',
-            content: 'Latest history',
-            created_at: '2026-04-20T00:01:00Z',
-          }],
-          message_limit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
-          next_message_cursor: null,
-        }))
+        if (failure === 'fetch') return jsonResponse({ detail: 'History service unavailable' }, 503)
+        const page = transcriptPage('session-b')
+        page.messages[0].role = 'unknown-role'
+        return jsonResponse(page)
       }
-      if (url === '/api/chat/document/load') {
-        loadBodies.push(JSON.parse(String(init?.body)))
-        return Promise.resolve(jsonResponse({
-          active: true,
-          document: { id: 'doc-b', filename: 'b.pdf' },
-        }))
-      }
-      if (url === '/api/pdf-viewer/documents/doc-b') {
-        return Promise.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
-      }
-      if (url === '/api/pdf-viewer/documents/doc-b/url') {
-        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b' }))
-      }
-      throw new Error(`Unexpected fetch: ${url}`)
+      return chatContextResponse(url)
     })
-
-    renderHomePage('/?session=session-a')
-
-    await waitFor(() => {
-      expect(vi.mocked(global.fetch)).toHaveBeenCalledWith(
-        '/api/chat/document',
-        expect.objectContaining({ method: 'DELETE' }),
-      )
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Restore B' }))
-
-    expect(await screen.findByText('session-b')).toBeInTheDocument()
-    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-b')
-    expect(localStorage.getItem(chatStorageKeys.messages)).toContain('Latest history')
-    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-b')
-    expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('doc-b')
-    expect(loadBodies).toEqual([expect.objectContaining({ document_id: 'doc-b' })])
-    const staleClearCall = vi.mocked(global.fetch).mock.calls.find(
-      ([url, init]) => String(url) === '/api/chat/document' && init?.method === 'DELETE',
-    )
-    const staleClearHeaders = staleClearCall?.[1]?.headers as Record<string, string>
-    expect(loadBodies[0].intent_owner).toBe(staleClearHeaders['X-Chat-Document-Intent-Owner'])
-    expect(Number(loadBodies[0].intent_generation)).toBeGreaterThan(
-      Number(staleClearHeaders['X-Chat-Document-Intent-Generation']),
-    )
-
-    staleDocumentClear.resolve(jsonResponse({ active: false, document: null }))
-    await act(async () => staleDocumentClear.promise)
-
-    expect(screen.getByText('session-b')).toBeInTheDocument()
-    expect(screen.queryByText('This chat session is unavailable. It may have been deleted.'))
-      .not.toBeInTheDocument()
-    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-b')
-    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-b')
-    expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('doc-b')
-    expect(pdfDocumentChangedSpy).toHaveBeenCalledTimes(1)
-    expect((pdfDocumentChangedSpy.mock.calls[0][0] as CustomEvent).detail.documentId).toBe('doc-b')
-
-    window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+    renderHomePage('/?session=session-b')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to restore chat session.')
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('previous-session')
+    expect(localStorage.getItem(chatStorageKeys.messages)).toBe(cached)
+    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toBe('previous-document')
+    expect(vi.mocked(global.fetch).mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
   })
 
   it('loads a Documents tab route-state handoff after Home and Chat are mounted', async () => {
