@@ -28,7 +28,7 @@ sqlalchemy>=2.0
 psycopg2-binary
 alembic
 agr-abc-document-parsers>=1.5.0
-agr-curation-api-client==0.15.0  # Bounded rich allele candidates/details and explicit discovery/display coverage.
+agr-curation-api-client==0.15.1  # Rank allele hints before bounded discovery; retain explicit coverage.
 
 # Ontology processing
 pronto  # OBO file parsing for biological ontologies

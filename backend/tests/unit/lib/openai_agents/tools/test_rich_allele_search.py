@@ -370,3 +370,32 @@ def test_detail_batch_preserves_rich_facts_and_reports_failures():
     details, failures = fetch_allele_details_bulk(FailedDB(), ["MGI:0"])
     assert details == {}
     assert failures["MGI:0"][0]["lookup_status"] == "transient"
+
+
+@pytest.mark.parametrize("method", ["search_alleles", "search_alleles_bulk"])
+def test_client_rank_order_and_capped_hint_evidence_survive_wrapper(context, method):
+    query, db, calls = context
+    db.result = response(2)
+    preferred, other = db.result["candidates"]
+    preferred["curie"] = "MGI:7584221"
+    other["curie"] = "MGI:1"
+    preferred["functional_impacts"] = ["other_impact"]
+    preferred["annotations_capped"] = ["functional_impacts"]
+    db.result["coverage"].update(
+        discovered_count=25, returned_count=2, discovery_limit=25,
+        display_limit=2, discovery_capped=True, display_capped=True,
+    )
+    args = {"allele_symbol": "H2-Ab1"} if method == "search_alleles" else {"allele_symbols": ["H2-Ab1"]}
+    result = query(
+        method=method, data_provider="MGI", allele_attribution="Cyagen",
+        allele_functional_impact="conditional_ready", discovery_limit=25, limit=2, **args,
+    )
+    item = result.model_dump() if method == "search_alleles" else result.data["items"][0]
+    rows = item["data"] if method == "search_alleles" else item["results"]
+    assert [row["curie"] for row in rows] == ["MGI:7584221", "MGI:1"]
+    assert rows[0]["annotations_capped"] == ["functional_impacts"]
+    assert "structured_functional_impact" in rows[0]["match_reasons"]
+    assert item["coverage"] == db.result["coverage"]
+    assert item["lookup_attempts"][0]["coverage"] == db.result["coverage"]
+    assert item["lookup_status"] == "ambiguous"
+    assert calls[0][1]["discovery_limit"] == 25
