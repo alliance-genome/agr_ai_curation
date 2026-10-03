@@ -13,7 +13,7 @@ application's standard pipeline elements and freezes them as an
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -82,6 +82,13 @@ STATUS_RUNNING = "running"
 STATUS_SUCCEEDED = "succeeded"
 STATUS_FAILED = "failed"
 INTERRUPTED_ERROR_CODE = "interrupted"
+# The coarse steps a running conversion goes through, in order: getting the PDF
+# (the upload, or the paper from the configured document source), extracting its
+# text, then saving the converted document as a frozen benchmark input.
+STAGE_FETCHING_SOURCE = "fetching_source"
+STAGE_EXTRACTING_TEXT = "extracting_text"
+STAGE_SAVING = "saving"
+CONVERSION_STAGES = (STAGE_FETCHING_SOURCE, STAGE_EXTRACTING_TEXT, STAGE_SAVING)
 
 _DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 # A provider-neutral identifier: bounded, non-empty, no surrounding whitespace
@@ -264,6 +271,25 @@ class DocumentConversionRepository:
             raise ConversionStateError("Only a queued conversion can start")
         row.status = STATUS_RUNNING
         row.started_at = datetime.now(timezone.utc)
+        row.stage = STAGE_FETCHING_SOURCE
+        db.flush()
+        return row
+
+    def mark_stage(
+        self, db: Session, conversion_id: UUID, stage: str
+    ) -> BenchmarkDocumentConversion:
+        """Move a running conversion on to a later stage; stages never go back."""
+
+        if stage not in CONVERSION_STAGES:
+            raise ValueError("Unknown conversion stage")
+        row = self._lock(db, conversion_id)
+        if row.status != STATUS_RUNNING:
+            raise ConversionStateError("Only a running conversion has a stage")
+        if row.stage is not None and (
+            CONVERSION_STAGES.index(stage) <= CONVERSION_STAGES.index(row.stage)
+        ):
+            raise ConversionStateError("A conversion stage can only move forward")
+        row.stage = stage
         db.flush()
         return row
 
@@ -288,6 +314,7 @@ class DocumentConversionRepository:
         if snapshot_owner != row.owner_subject:
             raise ConversionStateError("Conversion snapshot must belong to the conversion owner")
         row.status = STATUS_SUCCEEDED
+        row.stage = None
         row.snapshot_id = snapshot_id
         row.conversion_identity = identity
         row.completed_at = datetime.now(timezone.utc)
@@ -311,6 +338,7 @@ class DocumentConversionRepository:
         if row.status not in (STATUS_QUEUED, STATUS_RUNNING):
             raise ConversionStateError("Only an unfinished conversion can fail")
         row.status = STATUS_FAILED
+        row.stage = None
         row.error_code = code
         row.error_message = message
         row.completed_at = datetime.now(timezone.utc)
@@ -339,6 +367,7 @@ class DocumentConversionRepository:
             )
             .values(
                 status=STATUS_FAILED,
+                stage=None,
                 error_code=INTERRUPTED_ERROR_CODE,
                 error_message=reason,
                 completed_at=datetime.now(timezone.utc),
@@ -557,6 +586,10 @@ class _ConversionJob:
         )
 
 
+# Records that a running conversion moved on to the named stage.
+_Advance = Callable[[str], Awaitable[None]]
+
+
 @dataclass(frozen=True, slots=True)
 class _ConvertedDocument:
     elements: list[dict[str, Any]]
@@ -600,8 +633,12 @@ class DocumentConversionService:
             _report("document_conversion_start", exc)
             return
 
+        async def advance(stage: str) -> None:
+            await asyncio.to_thread(self._record_stage, job.id, stage)
+
         try:
-            converted = await self._convert(job, tuple(authorized_group_ids))
+            converted = await self._convert(job, tuple(authorized_group_ids), advance)
+            await advance(STAGE_SAVING)
             source = await asyncio.to_thread(self._materialize, job, converted)
             await asyncio.to_thread(self._freeze_and_succeed, job, source, converted.identity)
         except ConversionStateError:
@@ -628,6 +665,11 @@ class DocumentConversionService:
             db.commit()
         return job
 
+    def _record_stage(self, conversion_id: UUID, stage: str) -> None:
+        with self._session_factory() as db:
+            self._repository.mark_stage(db, conversion_id, stage)
+            db.commit()
+
     async def _fail(self, conversion_id: UUID, code: str, message: str) -> None:
         try:
             await asyncio.to_thread(self._record_failure, conversion_id, code, message)
@@ -645,17 +687,18 @@ class DocumentConversionService:
             db.commit()
 
     async def _convert(
-        self, job: _ConversionJob, authorized_group_ids: tuple[str, ...]
+        self, job: _ConversionJob, authorized_group_ids: tuple[str, ...], advance: _Advance,
     ) -> _ConvertedDocument:
         if job.input_kind == INPUT_KIND_PDF:
             content = await asyncio.to_thread(self._read_uploaded_pdf, job)
+            await advance(STAGE_EXTRACTING_TEXT)
             elements, pdfx_identity = await _parse_pdf(content, job)
             return _ConvertedDocument(
                 elements=elements,
                 identity=conversion_identity(input_kind=INPUT_KIND_PDF, **pdfx_identity),
             )
         if job.input_kind == INPUT_KIND_SOURCE_REFERENCE:
-            return await _convert_source_reference(job, authorized_group_ids)
+            return await _convert_source_reference(job, authorized_group_ids, advance)
         raise ValueError("Unsupported conversion input kind")
 
     def _read_uploaded_pdf(self, job: _ConversionJob) -> bytes:
@@ -775,7 +818,7 @@ async def _parse_pdf(
 
 
 async def _convert_source_reference(
-    job: _ConversionJob, authorized_group_ids: tuple[str, ...]
+    job: _ConversionJob, authorized_group_ids: tuple[str, ...], advance: _Advance,
 ) -> _ConvertedDocument:
     """Use the curator reference-import selection with the application's own source access."""
 
@@ -803,7 +846,7 @@ async def _convert_source_reference(
         if selected is None:
             raise _not_found()
         if selected.converted_artifact is not None:
-            return await _convert_source_main_text(provider, selected)
+            return await _convert_source_main_text(provider, selected, advance)
         pdf_bytes = await provider.download_artifact(
             selected.source_artifact.artifact_id, request_bearer_token=None,
         )
@@ -811,6 +854,7 @@ async def _convert_source_reference(
             _validate_source_pdf_bytes(pdf_bytes)
         except DocumentSourceError:
             raise _invalid_source_pdf() from None
+        await advance(STAGE_EXTRACTING_TEXT)
         elements, pdfx_identity = await _parse_pdf(pdf_bytes, job)
         return _ConvertedDocument(
             elements=elements,
@@ -842,7 +886,7 @@ async def _convert_source_reference(
 
 
 async def _convert_source_main_text(
-    provider: DocumentSourceProvider, selected: Any
+    provider: DocumentSourceProvider, selected: Any, advance: _Advance,
 ) -> _ConvertedDocument:
     """Convert provider main-text Markdown exactly as curator reference imports do."""
 
@@ -863,6 +907,7 @@ async def _convert_source_main_text(
             )
         except ValueError:
             raise _invalid_document() from None
+    await advance(STAGE_EXTRACTING_TEXT)
     try:
         elements, _warnings = provider_markdown_to_pipeline_elements(
             markdown_bytes.decode("utf-8"), tuple(figure_entries),

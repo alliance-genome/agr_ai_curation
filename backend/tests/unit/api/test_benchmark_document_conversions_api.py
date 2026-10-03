@@ -87,6 +87,7 @@ class Repository:
             idempotency_key=idempotency_key, status="queued", error_code=None,
             error_message=None, snapshot_id=None, conversion_identity=None,
             created_at=datetime(2026, 9, 27, tzinfo=timezone.utc), completed_at=None,
+            stage=None,
         )
         self.rows[row.id] = row
         return row, True
@@ -178,8 +179,8 @@ def test_status_moves_from_queued_to_succeeded_with_the_snapshot_receipt(harness
     queued = harness.client.get(f"{BASE}/{conversion_id}")
     assert queued.status_code == 200, queued.text
     assert queued.json() == {
-        "conversion_id": str(conversion_id), "status": "queued", "error": None,
-        "snapshot": None, "conversion_identity": None,
+        "conversion_id": str(conversion_id), "status": "queued", "progress": None,
+        "error": None, "snapshot": None, "conversion_identity": None,
         "created_at": "2026-09-27T00:00:00Z", "completed_at": None,
     }
     assert queued.headers["cache-control"] == "no-store"
@@ -193,6 +194,7 @@ def test_status_moves_from_queued_to_succeeded_with_the_snapshot_receipt(harness
     )
     succeeded = harness.client.get(f"{BASE}/{conversion_id}").json()
     assert succeeded["status"] == "succeeded" and succeeded["error"] is None
+    assert succeeded["progress"] is None
     assert succeeded["conversion_identity"] == identity
     assert succeeded["completed_at"] == "2026-09-27T00:05:00Z"
     assert succeeded["snapshot"] == {
@@ -204,6 +206,24 @@ def test_status_moves_from_queued_to_succeeded_with_the_snapshot_receipt(harness
         "owner_subject": "service:synthetic", "service_principal": "synthetic",
         "blob_reference": "sha256/synthetic", "created_at": "2026-09-27T00:00:00Z",
     }
+
+
+@pytest.mark.parametrize(
+    ("stage", "step"), [("fetching_source", 1), ("extracting_text", 2), ("saving", 3)],
+)
+def test_running_status_reports_the_recorded_stage_as_a_step(harness, stage, step):
+    conversion_id = UUID(post_pdf(harness.client).json()["conversion_id"])
+    harness.repository.rows[conversion_id].__dict__.update(status="running", stage=stage)
+    body = harness.client.get(f"{BASE}/{conversion_id}").json()
+    assert body["status"] == "running"
+    assert body["progress"] == {"stage": stage, "step": step, "total_steps": 3}
+
+
+def test_running_status_without_a_recorded_stage_reports_no_progress(harness):
+    conversion_id = UUID(post_pdf(harness.client).json()["conversion_id"])
+    harness.repository.rows[conversion_id].status = "running"
+    body = harness.client.get(f"{BASE}/{conversion_id}").json()
+    assert body["status"] == "running" and body["progress"] is None
 
 
 def test_failed_status_reports_the_recorded_plain_error(harness):

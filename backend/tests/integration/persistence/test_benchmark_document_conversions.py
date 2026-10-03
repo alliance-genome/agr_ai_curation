@@ -123,7 +123,7 @@ def test_migration_creates_conversion_table_with_constraints():
         "id", "owner_subject", "service_principal", "curator_subject", "curator_db_user_id",
         "input_kind", "source_digest", "source_blob_reference", "source_reference", "status",
         "error_code", "error_message", "snapshot_id", "conversion_identity",
-        "idempotency_key", "created_at", "started_at", "completed_at",
+        "idempotency_key", "created_at", "started_at", "completed_at", "stage",
     }
     unique = {c["name"] for c in inspector.get_unique_constraints("benchmark_document_conversions")}
     assert "uq_benchmark_document_conversions_owner_key" in unique
@@ -133,6 +133,7 @@ def test_migration_creates_conversion_table_with_constraints():
         "ck_benchmark_document_conversions_input_fields",
         "ck_benchmark_document_conversions_status",
         "ck_benchmark_document_conversions_status_fields",
+        "ck_benchmark_document_conversions_stage",
     } <= checks
     targets = {
         (fk["referred_table"], tuple(fk["referred_columns"]))
@@ -212,8 +213,14 @@ def test_lifecycle_running_then_succeeded_with_owned_snapshot(scope):
         running = repository.mark_running(db, row.id)
         db.commit()
         assert running.status == "running" and running.started_at is not None
+        assert running.stage == "fetching_source"
         with pytest.raises(ConversionStateError):
             repository.mark_running(db, row.id)
+        for stage in ("extracting_text", "saving"):
+            assert repository.mark_stage(db, row.id, stage).stage == stage
+            db.commit()
+        with pytest.raises(ConversionStateError):
+            repository.mark_stage(db, row.id, "extracting_text")
 
         foreign = _snapshot(db, scope["other_owner"])
         with pytest.raises(ConversionStateError):
@@ -221,7 +228,7 @@ def test_lifecycle_running_then_succeeded_with_owned_snapshot(scope):
         owned = _snapshot(db, scope["owner"])
         done = repository.mark_succeeded(db, row.id, snapshot_id=owned.id, identity=identity)
         db.commit()
-        assert done.status == "succeeded"
+        assert done.status == "succeeded" and done.stage is None
         assert done.snapshot_id == owned.id
         assert done.conversion_identity == identity
         assert done.completed_at is not None
@@ -241,6 +248,9 @@ def test_failed_is_terminal_and_never_requeued(scope):
         db.commit()
         assert (failed.status, failed.error_code) == ("failed", "oversize_payload")
         assert failed.completed_at is not None and failed.snapshot_id is None
+        assert failed.stage is None
+        with pytest.raises(ConversionStateError):
+            repository.mark_stage(db, row.id, "saving")
         with pytest.raises(ConversionStateError):
             repository.mark_running(db, row.id)
         replay, created = _pdf(repository, db, scope)
@@ -278,7 +288,7 @@ def test_fail_stale_running_only_touches_unfinished_rows_created_before_cutoff(s
             assert row.status == "failed"
             assert row.error_code == "interrupted"
             assert row.error_message == "The conversion was interrupted. Start it again."
-            assert row.completed_at is not None
+            assert row.completed_at is not None and row.stage is None
         assert repository.get_for_owner(db, finished.id, scope["owner"]).error_code == "parse_failed"
         assert repository.get_for_owner(db, fresh.id, scope["owner"]).status == "queued"
 
@@ -309,6 +319,10 @@ def test_database_rejects_inconsistent_rows(scope):
          "completed_at": datetime.now(timezone.utc)},
         {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE,
          "status": "paused"},
+        {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE,
+         "status": "queued", "stage": "fetching_source"},
+        {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE,
+         "status": "running", "started_at": datetime.now(timezone.utc), "stage": "indexing"},
     ]
     with SessionLocal() as db:
         for values in invalid_rows:
@@ -389,6 +403,37 @@ async def test_service_freezes_converted_pdf_as_snapshot_owned_by_the_service(sc
             BenchmarkSnapshotRepository(db, store).read_verified(
                 snapshot.id, owner_subject=scope["curators"][0].subject,
             )
+
+
+@pytest.mark.asyncio
+async def test_service_records_each_stage_where_a_status_read_sees_it(scope, tmp_path):
+    store = FileSystemBenchmarkSnapshotStore(tmp_path)
+    conversion_id = _queued_pdf_conversion(scope, store)
+    seen: list[str | None] = []
+
+    def stage() -> str | None:
+        with SessionLocal() as db:
+            return DocumentConversionRepository().get_for_owner(
+                db, conversion_id, scope["owner"]).stage
+
+    class _ObservingParser(_StubParser):
+        async def parse_pdf_document(self, *args, **kwargs):
+            seen.append(stage())
+            return await super().parse_pdf_document(*args, **kwargs)
+
+    class _ObservingSnapshots(BenchmarkSnapshotRepository):
+        def freeze_input(self, *args, **kwargs):
+            seen.append(stage())
+            return super().freeze_input(*args, **kwargs)
+
+    service = DocumentConversionService(
+        snapshot_store_factory=lambda: store, snapshot_repository_factory=_ObservingSnapshots,
+    )
+    with patch("src.lib.benchmarks.document_conversions.PDFXParser", _ObservingParser):
+        await service.run(conversion_id, authorized_group_ids=())
+
+    assert seen == ["extracting_text", "saving"]
+    assert stage() is None
 
 
 @pytest.mark.asyncio

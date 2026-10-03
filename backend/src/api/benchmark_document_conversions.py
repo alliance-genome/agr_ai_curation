@@ -27,6 +27,7 @@ from src.lib.benchmarks.document_conversions import (
     INPUT_KIND_SOURCE_REFERENCE,
     MAX_SOURCE_REFERENCE_LENGTH,
     STATUS_FAILED,
+    STATUS_RUNNING,
     ConversionIdempotencyConflict,
     DocumentConversionRepository,
     reconcile_stale_conversions,
@@ -53,6 +54,7 @@ from src.schemas.benchmark_document_conversions import (
     BenchmarkDocumentConversionSourceReferenceRequest,
     BenchmarkDocumentConversionAccepted,
     BenchmarkDocumentConversionFailure,
+    BenchmarkDocumentConversionProgress,
     BenchmarkDocumentConversionStatus,
 )
 
@@ -259,8 +261,12 @@ def _read_conversion(conversion_id: UUID, owner: str) -> BenchmarkDocumentConver
                 error = BenchmarkDocumentConversionFailure(
                     code=row.error_code, message=row.error_message,
                 )
+            progress = None
+            if row.status == STATUS_RUNNING and row.stage is not None:
+                progress = BenchmarkDocumentConversionProgress.of(row.stage)
             return BenchmarkDocumentConversionStatus(
-                conversion_id=row.id, status=row.status, error=error, snapshot=snapshot,
+                conversion_id=row.id, status=row.status, progress=progress, error=error,
+                snapshot=snapshot,
                 conversion_identity=row.conversion_identity, created_at=row.created_at,
                 completed_at=row.completed_at,
             )
