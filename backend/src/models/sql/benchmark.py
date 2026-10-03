@@ -150,6 +150,8 @@ class BenchmarkDocumentConversion(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The coarse step a running conversion is on; only a running conversion has one.
+    stage: Mapped[str | None] = mapped_column(String(32))
 
     __table_args__ = (
         UniqueConstraint(
@@ -195,6 +197,11 @@ class BenchmarkDocumentConversion(Base):
             "AND conversion_identity IS NULL AND error_code IS NOT NULL AND error_message IS NOT NULL "
             "AND char_length(error_code) > 0 AND char_length(error_message) > 0)",
             name="ck_benchmark_document_conversions_status_fields",
+        ),
+        CheckConstraint(
+            "stage IS NULL OR (status = 'running' "
+            "AND stage IN ('fetching_source', 'extracting_text', 'saving'))",
+            name="ck_benchmark_document_conversions_stage",
         ),
         Index(
             "ix_benchmark_document_conversions_unfinished",

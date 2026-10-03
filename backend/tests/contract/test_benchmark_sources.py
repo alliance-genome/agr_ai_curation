@@ -79,9 +79,14 @@ def test_benchmark_document_conversion_openapi_contract():
         "conversion_id", "status",
     }
     assert set(components["BenchmarkDocumentConversionStatus"]["properties"]) == {
-        "conversion_id", "status", "error", "snapshot", "conversion_identity",
+        "conversion_id", "status", "progress", "error", "snapshot", "conversion_identity",
         "created_at", "completed_at",
     }
+    progress = components["BenchmarkDocumentConversionProgress"]
+    assert set(progress["required"]) == {"stage", "step", "total_steps"}
+    assert progress["properties"]["stage"]["enum"] == [
+        "fetching_source", "extracting_text", "saving",
+    ]
     assert "X-Benchmark-Curator-Authorization" not in {
         parameter["name"] for parameter in status.get("parameters", ())
     }

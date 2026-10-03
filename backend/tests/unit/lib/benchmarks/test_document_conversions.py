@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 
 from src.lib.benchmarks.document_conversions import (
+    CONVERSION_STAGES,
     SOURCE_NOT_FOUND_MESSAGE,
     STALE_CONVERSION_MESSAGE,
     ConversionStateError,
@@ -163,6 +164,57 @@ def test_mark_failed_rejects_unsanitized_error_fields_before_touching_the_databa
     db.scalar.assert_not_called()
 
 
+def test_conversion_stages_are_the_three_coarse_steps_in_order():
+    assert CONVERSION_STAGES == ("fetching_source", "extracting_text", "saving")
+
+
+def test_mark_stage_rejects_an_unknown_stage_before_touching_the_database():
+    db = MagicMock()
+
+    with pytest.raises(ValueError):
+        DocumentConversionRepository().mark_stage(db, "any-id", "indexing")
+
+    db.scalar.assert_not_called()
+
+
+def _locked(row):
+    db = MagicMock()
+    db.scalar.return_value = row
+    return db
+
+
+def test_mark_running_starts_on_getting_the_source():
+    row = SimpleNamespace(status="queued", started_at=None, stage=None)
+
+    DocumentConversionRepository().mark_running(_locked(row), "any-id")
+
+    assert (row.status, row.stage) == ("running", "fetching_source")
+
+
+@pytest.mark.parametrize(
+    ("status", "current", "stage"),
+    [("queued", None, "extracting_text"), ("succeeded", None, "saving"),
+     ("running", "extracting_text", "extracting_text"),
+     ("running", "saving", "fetching_source")],
+    ids=["not-started", "finished", "same-stage", "backwards"],
+)
+def test_mark_stage_only_moves_a_running_conversion_forward(status, current, stage):
+    row = SimpleNamespace(status=status, stage=current)
+
+    with pytest.raises(ConversionStateError):
+        DocumentConversionRepository().mark_stage(_locked(row), "any-id", stage)
+
+    assert row.stage == current
+
+
+def test_mark_stage_moves_a_running_conversion_on():
+    row = SimpleNamespace(status="running", stage="fetching_source")
+
+    DocumentConversionRepository().mark_stage(_locked(row), "any-id", "extracting_text")
+
+    assert row.stage == "extracting_text"
+
+
 # --- Conversion service -----------------------------------------------------
 
 PDF_BYTES = b"%PDF-1.4\n%synthetic conversion fixture\n"
@@ -216,17 +268,29 @@ class _FakeConversionRepository:
         self.row = row
         self.failed: list[tuple[str, str]] = []
         self.succeeded: list[dict[str, Any]] = []
+        # Every stage the conversion was on, in order, including the one it started on.
+        self.stages: list[str] = []
 
     def mark_running(self, db, conversion_id):
         assert conversion_id == self.row.id
         if self.row.status != "queued":
             raise ConversionStateError("Only a queued conversion can start")
         self.row.status = "running"
+        self.row.stage = "fetching_source"
+        self.stages.append(self.row.stage)
+        return self.row
+
+    def mark_stage(self, db, conversion_id, stage):
+        assert conversion_id == self.row.id and self.row.status == "running"
+        assert CONVERSION_STAGES.index(stage) > CONVERSION_STAGES.index(self.row.stage)
+        self.row.stage = stage
+        self.stages.append(stage)
         return self.row
 
     def mark_succeeded(self, db, conversion_id, *, snapshot_id, identity):
         assert conversion_id == self.row.id and self.row.status == "running"
         self.row.status = "succeeded"
+        self.row.stage = None
         self.succeeded.append({"snapshot_id": snapshot_id, "identity": identity})
         return self.row
 
@@ -235,6 +299,7 @@ class _FakeConversionRepository:
         assert re.fullmatch(r"^[a-z][a-z0-9_]{0,63}$", code)
         assert message and message == message.strip() and len(message) <= 512
         self.row.status = "failed"
+        self.row.stage = None
         self.failed.append((code, message))
         return self.row
 
@@ -484,6 +549,8 @@ async def test_pdf_conversion_freezes_json_owned_by_the_calling_service():
     }
     assert source.version == source.provenance.version == identity_version(identity)
     assert row.status == "succeeded"
+    assert repository.stages == ["fetching_source", "extracting_text", "saving"]
+    assert row.stage is None
 
 
 @pytest.mark.asyncio
@@ -532,6 +599,9 @@ async def test_parser_failure_is_recorded_as_a_sanitized_terminal_failure(error_
     assert code == "extraction_failed"
     assert "internal.example" not in message and "abc123" not in message
     assert len(parsers) == 1 and len(parsers[0].calls) == 1
+    # The text was being extracted when it failed; a finished conversion has no stage.
+    assert repository.stages == ["fetching_source", "extracting_text"]
+    assert row.stage is None
 
 
 @pytest.mark.asyncio
@@ -609,6 +679,7 @@ async def test_stored_pdf_that_does_not_match_the_recorded_digest_fails():
     assert parsers == [] and recorder.frozen == []
     [(code, _message)] = repository.failed
     assert code == "source_unavailable"
+    assert repository.stages == ["fetching_source"]
 
 
 @pytest.mark.asyncio
@@ -666,6 +737,7 @@ async def test_source_main_text_is_used_before_the_pdf_with_ai_curation_access()
         "source_artifact_id": "pdf-1", "scope": "global", "group_ids": [],
     }
     assert frozen["source"].version == identity_version(identity)
+    assert repository.stages == ["fetching_source", "extracting_text", "saving"]
 
 
 @pytest.mark.asyncio
@@ -717,6 +789,7 @@ async def test_source_without_main_text_parses_the_selected_main_pdf():
     assert identity["page_provenance_receipt"] == RECEIPT
     assert identity["source_artifact"] == {"id": "pdf-1", "checksum": PDF_DIGEST}
     assert identity["source_provider"] == "example_source"
+    assert repository.stages == ["fetching_source", "extracting_text", "saving"]
 
 
 @pytest.mark.asyncio
@@ -760,6 +833,7 @@ async def test_source_pdf_restricted_to_other_groups_fails_access_denied():
     assert provider.downloaded == [] and parsers == [] and recorder.frozen == []
     [(code, _message)] = repository.failed
     assert code == "access_denied"
+    assert repository.stages == ["fetching_source"]
 
 
 @pytest.mark.asyncio
@@ -818,6 +892,24 @@ async def test_conversion_finished_elsewhere_while_running_is_not_overwritten():
 
     assert repository.mark_succeeded.called
     assert repository.failed == []
+    assert not report.called
+
+
+@pytest.mark.asyncio
+async def test_conversion_finished_elsewhere_before_its_next_stage_is_not_overwritten():
+    row = _conversion_row()
+    service, repository, recorder = _service(row)
+    repository.mark_stage = MagicMock(
+        side_effect=ConversionStateError("Only a running conversion has a stage"),
+    )
+    parser_patch, parsers = _parser_patch()
+
+    with parser_patch, patch(f"{_SERVICE_MODULE}.report_runtime_exception") as report:
+        await service.run(row.id, authorized_group_ids=())
+
+    repository.mark_stage.assert_called_once()
+    assert parsers == [] and recorder.frozen == []
+    assert repository.failed == [] and repository.succeeded == []
     assert not report.called
 
 
