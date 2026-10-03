@@ -12,6 +12,7 @@ from .tracker import PipelineTracker
 from src.models.strategy import ChunkingStrategy
 from ..exceptions import PDFCancellationError, PDFParsingError
 from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
+from src.lib.observability.cost_context import costed_document_processing
 from src.lib.observability.runtime import report_runtime_exception
 from .processing_receipt import PDFProcessingReceipt
 
@@ -77,9 +78,6 @@ class ProcessingResult:
     duration_seconds: float = 0.0
     cancelled: bool = False
     observability_receipt: dict[str, Any] = field(default_factory=dict)
-
-
-from src.lib.observability.cost_context import costed_document_processing
 
 
 class DocumentPipelineOrchestrator:
