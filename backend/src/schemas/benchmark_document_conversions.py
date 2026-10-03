@@ -16,6 +16,9 @@ from src.lib.benchmarks.snapshots import FrozenBenchmarkInputSnapshot
 
 BenchmarkDocumentConversionState = Literal["queued", "running", "succeeded", "failed"]
 BenchmarkDocumentConversionStage = Literal["fetching_source", "extracting_text", "saving"]
+BenchmarkDocumentConversionReaderDetail = Literal[
+    "waking_reader", "waiting_for_reader", "reading"
+]
 
 
 class BenchmarkDocumentConversionSourceReferenceRequest(FrozenStrictModel):
@@ -39,16 +42,25 @@ class BenchmarkDocumentConversionFailure(FrozenStrictModel):
 
 
 class BenchmarkDocumentConversionProgress(FrozenStrictModel):
-    """Which coarse step a running conversion is on: ``step`` of ``total_steps``."""
+    """Which coarse step a running conversion is on: ``step`` of ``total_steps``.
+
+    While extracting text with the PDF reader, ``detail`` is what the reader reports
+    (``waking_reader``: starting from sleep, which takes minutes; ``waiting_for_reader``;
+    ``reading``) and ``percent`` is its own reported percent while reading, when it
+    gives one. Both are null otherwise.
+    """
 
     stage: BenchmarkDocumentConversionStage
     step: int = Field(ge=1)
     total_steps: int = Field(ge=1)
+    detail: BenchmarkDocumentConversionReaderDetail | None
+    percent: int | None = Field(ge=0, le=100)
 
     @classmethod
-    def of(cls, stage: str) -> "BenchmarkDocumentConversionProgress":
+    def of(cls, stage: str, detail: str | None,
+           percent: int | None) -> "BenchmarkDocumentConversionProgress":
         return cls(stage=stage, step=CONVERSION_STAGES.index(stage) + 1,
-                   total_steps=len(CONVERSION_STAGES))
+                   total_steps=len(CONVERSION_STAGES), detail=detail, percent=percent)
 
 
 class BenchmarkDocumentConversionStatus(FrozenStrictModel):
@@ -68,6 +80,7 @@ __all__ = [
     "BenchmarkDocumentConversionAccepted",
     "BenchmarkDocumentConversionFailure",
     "BenchmarkDocumentConversionProgress",
+    "BenchmarkDocumentConversionReaderDetail",
     "BenchmarkDocumentConversionStage",
     "BenchmarkDocumentConversionState",
     "BenchmarkDocumentConversionStatus",

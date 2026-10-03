@@ -152,6 +152,9 @@ class BenchmarkDocumentConversion(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # The coarse step a running conversion is on; only a running conversion has one.
     stage: Mapped[str | None] = mapped_column(String(32))
+    # While extracting text with the PDF reader: its own state, and its reported percent.
+    reader_detail: Mapped[str | None] = mapped_column(String(32))
+    reader_percent: Mapped[int | None] = mapped_column(Integer)
 
     __table_args__ = (
         UniqueConstraint(
@@ -202,6 +205,14 @@ class BenchmarkDocumentConversion(Base):
             "stage IS NULL OR (status = 'running' "
             "AND stage IN ('fetching_source', 'extracting_text', 'saving'))",
             name="ck_benchmark_document_conversions_stage",
+        ),
+        CheckConstraint(
+            "(reader_detail IS NULL AND reader_percent IS NULL) OR "
+            "(stage = 'extracting_text' "
+            "AND reader_detail IN ('waking_reader', 'waiting_for_reader', 'reading') "
+            "AND (reader_percent IS NULL OR (reader_detail = 'reading' "
+            "AND reader_percent BETWEEN 0 AND 100)))",
+            name="ck_benchmark_document_conversions_reader",
         ),
         Index(
             "ix_benchmark_document_conversions_unfinished",

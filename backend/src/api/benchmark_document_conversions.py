@@ -263,7 +263,9 @@ def _read_conversion(conversion_id: UUID, owner: str) -> BenchmarkDocumentConver
                 )
             progress = None
             if row.status == STATUS_RUNNING and row.stage is not None:
-                progress = BenchmarkDocumentConversionProgress.of(row.stage)
+                progress = BenchmarkDocumentConversionProgress.of(
+                    row.stage, row.reader_detail, row.reader_percent,
+                )
             return BenchmarkDocumentConversionStatus(
                 conversion_id=row.id, status=row.status, progress=progress, error=error,
                 snapshot=snapshot,

@@ -87,7 +87,7 @@ class Repository:
             idempotency_key=idempotency_key, status="queued", error_code=None,
             error_message=None, snapshot_id=None, conversion_identity=None,
             created_at=datetime(2026, 9, 27, tzinfo=timezone.utc), completed_at=None,
-            stage=None,
+            stage=None, reader_detail=None, reader_percent=None,
         )
         self.rows[row.id] = row
         return row, True
@@ -216,7 +216,20 @@ def test_running_status_reports_the_recorded_stage_as_a_step(harness, stage, ste
     harness.repository.rows[conversion_id].__dict__.update(status="running", stage=stage)
     body = harness.client.get(f"{BASE}/{conversion_id}").json()
     assert body["status"] == "running"
-    assert body["progress"] == {"stage": stage, "step": step, "total_steps": 3}
+    assert body["progress"] == {"stage": stage, "step": step, "total_steps": 3,
+                                "detail": None, "percent": None}
+
+
+@pytest.mark.parametrize(("detail", "percent"), [
+    ("waking_reader", None), ("waiting_for_reader", None), ("reading", None), ("reading", 35),
+])
+def test_running_status_reports_what_the_pdf_reader_said(harness, detail, percent):
+    conversion_id = UUID(post_pdf(harness.client).json()["conversion_id"])
+    harness.repository.rows[conversion_id].__dict__.update(
+        status="running", stage="extracting_text", reader_detail=detail, reader_percent=percent)
+    body = harness.client.get(f"{BASE}/{conversion_id}").json()
+    assert body["progress"] == {"stage": "extracting_text", "step": 2, "total_steps": 3,
+                                "detail": detail, "percent": percent}
 
 
 def test_running_status_without_a_recorded_stage_reports_no_progress(harness):

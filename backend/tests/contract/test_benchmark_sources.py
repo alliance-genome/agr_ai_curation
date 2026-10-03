@@ -83,7 +83,7 @@ def test_benchmark_document_conversion_openapi_contract():
         "created_at", "completed_at",
     }
     progress = components["BenchmarkDocumentConversionProgress"]
-    assert set(progress["required"]) == {"stage", "step", "total_steps"}
+    assert set(progress["required"]) == {"stage", "step", "total_steps", "detail", "percent"}
     assert progress["properties"]["stage"]["enum"] == [
         "fetching_source", "extracting_text", "saving",
     ]

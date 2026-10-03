@@ -111,15 +111,28 @@ routes return, when succeeded), `conversion_identity`, `created_at`, and
 `completed_at`. Only the service that started a conversion can read it; other
 callers get 404.
 
-`progress` is `{"stage", "step", "total_steps"}` while a conversion is running,
-and `null` otherwise. The stages come in order and never go back:
+`progress` is `{"stage", "step", "total_steps", "detail", "percent"}` while a
+conversion is running, and `null` otherwise. The stages come in order and never go back:
 `fetching_source` (step 1: reading the uploaded PDF, or getting the paper from
 the configured document source), `extracting_text` (step 2: PDF extraction, or
 converting the source's main text) and `saving` (step 3: freezing the converted
 document as a benchmark input). They are coarse and real: each is recorded when
 the conversion reaches it, and nothing estimates a percentage. A conversion
 already running when migration `t7c8d9e0f1a2` applied reports `null` until it
-finishes. Request errors use the source error envelope, for example
+finishes.
+
+While `extracting_text` runs PDF extraction, `detail` is what the PDF reader
+(PDFX) reports, mapped from its status: `waking_reader` (its GPU worker is
+starting from sleep, reported as progress stage `ec2_starting`, a `starting` or
+`stopped` state, or a `warming` status; this takes minutes), `waiting_for_reader`
+(queued behind other work) or `reading`. `percent` is PDFX's own reported
+percent (completed extraction steps) while reading, 100 once it is complete,
+and `null` when PDFX gives none (a queued job's placeholder 0 is never used).
+Both are `null` otherwise, including for a source's main text, which needs no
+PDF reader. Only changes are recorded (migration `u8d9e0f1a2b3`). The main
+app's PDF jobs use the same mapping for their message: "Waking up the PDF reader
+(can take a few minutes)", "Waiting for the PDF reader", "Reading the PDF ·
+35%". Request errors use the source error envelope, for example
 `invalid_reference`, `invalid_document`, `oversize_payload`, `conflict`, and
 `not_found`.
 

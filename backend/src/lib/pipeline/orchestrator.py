@@ -12,6 +12,7 @@ from .tracker import PipelineTracker
 from src.models.strategy import ChunkingStrategy
 from ..exceptions import PDFCancellationError, PDFParsingError
 from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
+from src.lib.observability.cost_context import costed_document_processing
 from src.lib.observability.runtime import report_runtime_exception
 from .processing_receipt import PDFProcessingReceipt
 
@@ -77,9 +78,6 @@ class ProcessingResult:
     duration_seconds: float = 0.0
     cancelled: bool = False
     observability_receipt: dict[str, Any] = field(default_factory=dict)
-
-
-from src.lib.observability.cost_context import costed_document_processing
 
 
 class DocumentPipelineOrchestrator:
@@ -155,14 +153,16 @@ class DocumentPipelineOrchestrator:
             logger.info("Starting PDF parsing for document %s", document_id)
             await self._update_status(document_id, ProcessingStage.PARSING)
 
-            from .pdfx_parser import parse_pdf_document
+            from .pdfx_parser import ReaderProgress, parse_pdf_document
 
-            async def _track_parser_progress(message: str) -> None:
+            async def _track_parser_progress(progress: ReaderProgress) -> None:
+                # The PDF reader's own state: waking up (a cold start takes minutes),
+                # waiting, or reading with its reported percent.
                 await self._raise_if_cancel_requested(cancel_requested_callback)
                 await self.tracker.track_pipeline_progress(
                     document_id,
                     ProcessingStage.PARSING,
-                    message=message,
+                    message=progress.message,
                 )
 
             def _record_external_observation(observation: Dict[str, Any]) -> None:

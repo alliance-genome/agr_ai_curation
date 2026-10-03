@@ -13,7 +13,7 @@ from src.lib.pipeline.pdfx_parser import (
     PDFX_PROVIDER_FAILURE_MESSAGE,
     PDFX_PUBLIC_MESSAGE_DETAILS_KEY,
     PDFXParser,
-    _build_progress_message,
+    reader_progress,
     _cache_hit_from_payloads,
     _safe_provider_token,
     markdown_to_pipeline_elements,
@@ -141,50 +141,48 @@ Signal from **B cells** depends on Ca<sup>2+</sup> and *kinase* activity.
     assert elements[1]["metadata"]["section_path"] == ["Results 2+"]
 
 
-def test_build_progress_message_uses_local_text_with_valid_numeric_percent():
+@pytest.mark.parametrize(("payload", "expected"), [
+    # A sleeping reader being started (as PDFX reported it on dev).
+    ({"status": "queued", "state": "starting",
+      "progress": {"stage": "ec2_starting", "percent": 0}},
+     ("waking_reader", None, "Waking up the PDF reader (can take a few minutes)")),
+    ({"status": "queued", "state": "stopped"},
+     ("waking_reader", None, "Waking up the PDF reader (can take a few minutes)")),
+    ({"status": "warming"},
+     ("waking_reader", None, "Waking up the PDF reader (can take a few minutes)")),
+    # Queued behind other work on a reader that is awake.
+    ({"status": "queued", "state": "busy", "progress": {"stage": "queued", "percent": 0}},
+     ("waiting_for_reader", None, "Waiting for the PDF reader")),
+    ({"status": "pending"}, ("waiting_for_reader", None, "Waiting for the PDF reader")),
+    ({"status": "started"}, ("reading", None, "Reading the PDF")),
+    ({"status": "progress", "progress": {"stage": "marker", "percent": 35}},
+     ("reading", 35, "Reading the PDF · 35%")),
+    ({"status": "complete"}, ("reading", 100, "Reading the PDF · 100%")),
+    ({"status": "failed"}, (None, None, "Reading the PDF failed.")),
+    ({"status": "mystery"}, (None, None, "Reading the PDF")),
+])
+def test_reader_progress_maps_pdfx_status_to_plain_reader_state(payload, expected):
+    progress = reader_progress(payload)
+    assert (progress.detail, progress.percent, progress.message) == expected
+
+
+def test_reader_progress_never_shows_provider_prose():
     sentinel = "PRIVATE_PROVIDER_SENTINEL"
-    message = _build_progress_message(
-        {
-            "status": "progress",
-            "message": sentinel,
-            "progress": {
-                "stage_display": sentinel,
-                "stage": sentinel,
-                "percent": 80,
-            },
-        }
-    )
-    assert message == "Extracting PDF content... (80%)"
-    assert sentinel not in message
+    for status in ("queued", "progress"):
+        progress = reader_progress({"status": status, "message": sentinel, "progress": {
+            "stage_display": sentinel, "stage": sentinel, "percent": 80}})
+        assert sentinel not in progress.message and "EC2" not in progress.message
 
 
-def test_build_progress_message_does_not_surface_pdfx_queue_message():
-    sentinel = "PRIVATE_PROVIDER_SENTINEL"
-    message = _build_progress_message(
-        {
-            "status": "queued",
-            "state": "ready",
-            "message": sentinel,
-        }
-    )
-
-    assert message == "PDF extraction queued; waiting for PDFX worker..."
-    assert sentinel not in message
+@pytest.mark.parametrize("percent", [-1, 101, True, "80", None])
+def test_reader_progress_reports_only_a_valid_percent(percent):
+    progress = reader_progress({"status": "progress", "progress": {"percent": percent}})
+    assert (progress.percent, progress.message) == (None, "Reading the PDF")
 
 
-@pytest.mark.parametrize("percent", [-1, 101, True, "80"])
-def test_build_progress_message_rejects_invalid_percent(percent):
-    message = _build_progress_message(
-        {"status": "running", "progress": {"percent": percent}}
-    )
-
-    assert message == "Extracting PDF content..."
-
-
-def test_build_progress_message_uses_ready_queue_fallback():
-    message = _build_progress_message({"status": "pending", "state": "busy"})
-
-    assert message == "PDF extraction queued; waiting for PDFX worker..."
+def test_a_queued_jobs_placeholder_percent_is_never_progress():
+    progress = reader_progress({"status": "queued", "progress": {"percent": 40}})
+    assert progress.percent is None
 
 
 @pytest.mark.parametrize(
@@ -904,8 +902,8 @@ async def test_poll_retries_transient_missing_status_until_complete(parser_env, 
     )
     messages = []
 
-    async def on_progress(message: str):
-        messages.append(message)
+    async def on_progress(progress):
+        messages.append(progress)
 
     payload = await parser._poll_until_complete(
         session=session,
@@ -917,7 +915,9 @@ async def test_poll_retries_transient_missing_status_until_complete(parser_env, 
     assert payload["status"] == "complete"
     assert session.get_calls == 3
     assert parser._poll_attempt_count == 3
-    assert any("Extracting" in msg for msg in messages)
+    # The provider's own wording ("Extracting") is never passed on.
+    assert [progress.message for progress in messages][-2:] == [
+        "Reading the PDF", "Reading the PDF · 100%"]
 
 
 @pytest.mark.asyncio

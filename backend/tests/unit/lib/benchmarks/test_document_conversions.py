@@ -40,7 +40,7 @@ from src.lib.document_sources.models import (
     SourceReference,
 )
 from src.lib.exceptions import ConfigurationError, PDFCancellationError, PDFParsingError
-from src.lib.pipeline.pdfx_parser import PDFX_FAILURE_DETAILS_KEY
+from src.lib.pipeline.pdfx_parser import PDFX_FAILURE_DETAILS_KEY, reader_progress
 from src.models.sql.benchmark import BenchmarkDocumentConversion
 
 
@@ -270,6 +270,8 @@ class _FakeConversionRepository:
         self.succeeded: list[dict[str, Any]] = []
         # Every stage the conversion was on, in order, including the one it started on.
         self.stages: list[str] = []
+        # What the PDF reader reported, as recorded.
+        self.readers: list[tuple[str, int | None]] = []
 
     def mark_running(self, db, conversion_id):
         assert conversion_id == self.row.id
@@ -285,6 +287,11 @@ class _FakeConversionRepository:
         assert CONVERSION_STAGES.index(stage) > CONVERSION_STAGES.index(self.row.stage)
         self.row.stage = stage
         self.stages.append(stage)
+        return self.row
+
+    def mark_reader_progress(self, db, conversion_id, detail, percent):
+        assert conversion_id == self.row.id and self.row.stage == "extracting_text"
+        self.readers.append((detail, percent))
         return self.row
 
     def mark_succeeded(self, db, conversion_id, *, snapshot_id, identity):
@@ -359,15 +366,20 @@ def _service(row, *, store=None, snapshots=None, max_input_bytes=1_000_000):
 class _FakeParser:
     instances: list["_FakeParser"] = []
 
-    def __init__(self, *, result=None, error=None):
+    def __init__(self, *, result=None, error=None, statuses=()):
         self.methods = "grobid,marker"
         self.merge_enabled = True
         self.download_variant = "merged"
         self.calls: list[dict[str, Any]] = []
         self._result = result
         self._error = error
+        # PDFX status payloads reported to the progress callback while "reading".
+        self._statuses = statuses
 
-    async def parse_pdf_document(self, file_path, document_id, user_id, *, save_artifacts=True):
+    async def parse_pdf_document(self, file_path, document_id, user_id, *,
+                                 progress_callback=None, save_artifacts=True):
+        for status in self._statuses:
+            await progress_callback(reader_progress(status))
         self.calls.append({
             "file_path": file_path,
             "bytes": file_path.read_bytes(),
@@ -1010,3 +1022,56 @@ async def test_unusable_source_pdf_fails_as_invalid_document_without_reporting(
     [(code, _message)] = repository.failed
     assert code == "invalid_document"
     report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_what_the_pdf_reader_reports_is_recorded_when_it_changes():
+    row = _conversion_row()
+    service, repository, _recorder = _service(row)
+    statuses = (
+        {"status": "queued", "state": "starting", "progress": {"stage": "ec2_starting",
+                                                               "percent": 0}},
+        {"status": "queued", "state": "starting", "progress": {"stage": "ec2_starting",
+                                                               "percent": 0}},
+        {"status": "queued", "state": "ready", "progress": {"stage": "queued", "percent": 0}},
+        {"status": "started"},
+        {"status": "progress", "progress": {"stage": "marker", "percent": 35}},
+        {"status": "progress", "progress": {"stage": "marker", "percent": 35}},
+        {"status": "progress", "progress": {"stage": "grobid", "percent": 70}},
+        {"status": "failed"},
+        {"status": "complete"},
+    )
+    parser_patch, _parsers = _parser_patch(statuses=statuses)
+
+    with parser_patch:
+        await service.run(row.id, authorized_group_ids=())
+
+    assert repository.failed == []
+    assert repository.readers == [
+        ("waking_reader", None), ("waiting_for_reader", None), ("reading", None),
+        ("reading", 35), ("reading", 70), ("reading", 100),
+    ]
+    assert repository.stages == ["fetching_source", "extracting_text", "saving"]
+
+
+def test_mark_reader_progress_rejects_unknown_details_and_stray_percents_first():
+    db = MagicMock()
+    for detail, percent in (("napping", None), ("waking_reader", 5), ("reading", 101)):
+        with pytest.raises(ValueError):
+            DocumentConversionRepository().mark_reader_progress(db, "any-id", detail, percent)
+    db.scalar.assert_not_called()
+
+
+@pytest.mark.parametrize(("status", "stage"), [("running", "saving"), ("succeeded", None)])
+def test_mark_reader_progress_only_while_extracting_text(status, stage):
+    row = SimpleNamespace(status=status, stage=stage, reader_detail=None, reader_percent=None)
+    with pytest.raises(ConversionStateError):
+        DocumentConversionRepository().mark_reader_progress(_locked(row), "id", "reading", 5)
+    assert row.reader_detail is None
+
+
+def test_moving_on_from_extracting_text_clears_what_the_reader_reported():
+    row = SimpleNamespace(status="running", stage="extracting_text", reader_detail="reading",
+                          reader_percent=80)
+    DocumentConversionRepository().mark_stage(_locked(row), "id", "saving")
+    assert (row.stage, row.reader_detail, row.reader_percent) == ("saving", None, None)
