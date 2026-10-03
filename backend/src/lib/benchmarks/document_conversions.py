@@ -67,7 +67,13 @@ from src.lib.openai_agents.config import (
     get_benchmark_document_conversion_stale_seconds,
     get_benchmark_max_input_bytes,
 )
-from src.lib.pipeline.pdfx_parser import PDFX_FAILURE_DETAILS_KEY, PDFXParser
+from src.lib.pipeline.pdfx_parser import (
+    PDFX_FAILURE_DETAILS_KEY,
+    READER_DETAILS,
+    READING,
+    PDFXParser,
+    ReaderProgress,
+)
 from src.models.sql.benchmark import BenchmarkDocumentConversion, BenchmarkInputSnapshot
 from src.models.sql.database import SessionLocal
 
@@ -290,6 +296,25 @@ class DocumentConversionRepository:
         ):
             raise ConversionStateError("A conversion stage can only move forward")
         row.stage = stage
+        row.reader_detail = None
+        row.reader_percent = None
+        db.flush()
+        return row
+
+    def mark_reader_progress(
+        self, db: Session, conversion_id: UUID, detail: str, percent: int | None
+    ) -> BenchmarkDocumentConversion:
+        """Record what the PDF reader reports while the conversion extracts text."""
+
+        if detail not in READER_DETAILS:
+            raise ValueError("Unknown PDF reader detail")
+        if percent is not None and (detail != READING or not 0 <= percent <= 100):
+            raise ValueError("A PDF reader percent is 0-100 and only while reading")
+        row = self._lock(db, conversion_id)
+        if row.status != STATUS_RUNNING or row.stage != STAGE_EXTRACTING_TEXT:
+            raise ConversionStateError("Only a conversion extracting text has reader progress")
+        row.reader_detail = detail
+        row.reader_percent = percent
         db.flush()
         return row
 
@@ -315,6 +340,8 @@ class DocumentConversionRepository:
             raise ConversionStateError("Conversion snapshot must belong to the conversion owner")
         row.status = STATUS_SUCCEEDED
         row.stage = None
+        row.reader_detail = None
+        row.reader_percent = None
         row.snapshot_id = snapshot_id
         row.conversion_identity = identity
         row.completed_at = datetime.now(timezone.utc)
@@ -339,6 +366,8 @@ class DocumentConversionRepository:
             raise ConversionStateError("Only an unfinished conversion can fail")
         row.status = STATUS_FAILED
         row.stage = None
+        row.reader_detail = None
+        row.reader_percent = None
         row.error_code = code
         row.error_message = message
         row.completed_at = datetime.now(timezone.utc)
@@ -368,6 +397,8 @@ class DocumentConversionRepository:
             .values(
                 status=STATUS_FAILED,
                 stage=None,
+                reader_detail=None,
+                reader_percent=None,
                 error_code=INTERRUPTED_ERROR_CODE,
                 error_message=reason,
                 completed_at=datetime.now(timezone.utc),
@@ -588,6 +619,8 @@ class _ConversionJob:
 
 # Records that a running conversion moved on to the named stage.
 _Advance = Callable[[str], Awaitable[None]]
+# Records what the PDF reader reports while it reads.
+_OnReader = Callable[[ReaderProgress], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -636,8 +669,23 @@ class DocumentConversionService:
         async def advance(stage: str) -> None:
             await asyncio.to_thread(self._record_stage, job.id, stage)
 
+        recorded: list[tuple[str, int | None]] = []
+
+        async def on_reader(progress: ReaderProgress) -> None:
+            # Only a change is written; a failure or a status the parser doesn't know
+            # (detail None) leaves the last state for the parser's own outcome.
+            reported = (progress.detail, progress.percent)
+            if progress.detail is None or (recorded and recorded[-1] == reported):
+                return
+            await asyncio.to_thread(
+                self._record_reader, job.id, progress.detail, progress.percent,
+            )
+            recorded.append((progress.detail, progress.percent))
+
         try:
-            converted = await self._convert(job, tuple(authorized_group_ids), advance)
+            converted = await self._convert(
+                job, tuple(authorized_group_ids), advance, on_reader,
+            )
             await advance(STAGE_SAVING)
             source = await asyncio.to_thread(self._materialize, job, converted)
             await asyncio.to_thread(self._freeze_and_succeed, job, source, converted.identity)
@@ -670,6 +718,11 @@ class DocumentConversionService:
             self._repository.mark_stage(db, conversion_id, stage)
             db.commit()
 
+    def _record_reader(self, conversion_id: UUID, detail: str, percent: int | None) -> None:
+        with self._session_factory() as db:
+            self._repository.mark_reader_progress(db, conversion_id, detail, percent)
+            db.commit()
+
     async def _fail(self, conversion_id: UUID, code: str, message: str) -> None:
         try:
             await asyncio.to_thread(self._record_failure, conversion_id, code, message)
@@ -688,17 +741,18 @@ class DocumentConversionService:
 
     async def _convert(
         self, job: _ConversionJob, authorized_group_ids: tuple[str, ...], advance: _Advance,
+        on_reader: _OnReader,
     ) -> _ConvertedDocument:
         if job.input_kind == INPUT_KIND_PDF:
             content = await asyncio.to_thread(self._read_uploaded_pdf, job)
             await advance(STAGE_EXTRACTING_TEXT)
-            elements, pdfx_identity = await _parse_pdf(content, job)
+            elements, pdfx_identity = await _parse_pdf(content, job, on_reader)
             return _ConvertedDocument(
                 elements=elements,
                 identity=conversion_identity(input_kind=INPUT_KIND_PDF, **pdfx_identity),
             )
         if job.input_kind == INPUT_KIND_SOURCE_REFERENCE:
-            return await _convert_source_reference(job, authorized_group_ids, advance)
+            return await _convert_source_reference(job, authorized_group_ids, advance, on_reader)
         raise ValueError("Unsupported conversion input kind")
 
     def _read_uploaded_pdf(self, job: _ConversionJob) -> bytes:
@@ -782,9 +836,12 @@ class DocumentConversionService:
 
 
 async def _parse_pdf(
-    content: bytes, job: _ConversionJob
+    content: bytes, job: _ConversionJob, on_reader: _OnReader,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Extract PDF text with a fresh parser and no per-user artifacts."""
+    """Extract PDF text with a fresh parser and no per-user artifacts.
+
+    ``on_reader`` receives what the PDF reader reports while it works.
+    """
 
     try:
         parser = PDFXParser()
@@ -795,6 +852,7 @@ async def _parse_pdf(
                 pdf_path,
                 document_id=str(job.id),
                 user_id=str(job.curator_db_user_id),
+                progress_callback=on_reader,
                 save_artifacts=False,
             )
     except ConfigurationError as exc:
@@ -819,6 +877,7 @@ async def _parse_pdf(
 
 async def _convert_source_reference(
     job: _ConversionJob, authorized_group_ids: tuple[str, ...], advance: _Advance,
+    on_reader: _OnReader,
 ) -> _ConvertedDocument:
     """Use the curator reference-import selection with the application's own source access."""
 
@@ -855,7 +914,7 @@ async def _convert_source_reference(
         except DocumentSourceError:
             raise _invalid_source_pdf() from None
         await advance(STAGE_EXTRACTING_TEXT)
-        elements, pdfx_identity = await _parse_pdf(pdf_bytes, job)
+        elements, pdfx_identity = await _parse_pdf(pdf_bytes, job, on_reader)
         return _ConvertedDocument(
             elements=elements,
             identity=conversion_identity(

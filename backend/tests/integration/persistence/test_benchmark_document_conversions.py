@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import delete, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
+from src.lib.pipeline.pdfx_parser import reader_progress
 from src.lib.benchmarks.document_conversions import (
     ConversionIdempotencyConflict,
     ConversionStateError,
@@ -124,6 +125,7 @@ def test_migration_creates_conversion_table_with_constraints():
         "input_kind", "source_digest", "source_blob_reference", "source_reference", "status",
         "error_code", "error_message", "snapshot_id", "conversion_identity",
         "idempotency_key", "created_at", "started_at", "completed_at", "stage",
+        "reader_detail", "reader_percent",
     }
     unique = {c["name"] for c in inspector.get_unique_constraints("benchmark_document_conversions")}
     assert "uq_benchmark_document_conversions_owner_key" in unique
@@ -134,6 +136,7 @@ def test_migration_creates_conversion_table_with_constraints():
         "ck_benchmark_document_conversions_status",
         "ck_benchmark_document_conversions_status_fields",
         "ck_benchmark_document_conversions_stage",
+        "ck_benchmark_document_conversions_reader",
     } <= checks
     targets = {
         (fk["referred_table"], tuple(fk["referred_columns"]))
@@ -216,9 +219,17 @@ def test_lifecycle_running_then_succeeded_with_owned_snapshot(scope):
         assert running.stage == "fetching_source"
         with pytest.raises(ConversionStateError):
             repository.mark_running(db, row.id)
-        for stage in ("extracting_text", "saving"):
-            assert repository.mark_stage(db, row.id, stage).stage == stage
+        with pytest.raises(ConversionStateError):  # Not reading yet.
+            repository.mark_reader_progress(db, row.id, "waking_reader", None)
+        assert repository.mark_stage(db, row.id, "extracting_text").stage == "extracting_text"
+        db.commit()
+        for detail, percent in (("waking_reader", None), ("reading", 35)):
+            read = repository.mark_reader_progress(db, row.id, detail, percent)
             db.commit()
+            assert (read.reader_detail, read.reader_percent) == (detail, percent)
+        saving = repository.mark_stage(db, row.id, "saving")
+        db.commit()
+        assert (saving.stage, saving.reader_detail, saving.reader_percent) == ("saving", None, None)
         with pytest.raises(ConversionStateError):
             repository.mark_stage(db, row.id, "extracting_text")
 
@@ -323,6 +334,15 @@ def test_database_rejects_inconsistent_rows(scope):
          "status": "queued", "stage": "fetching_source"},
         {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE,
          "status": "running", "started_at": datetime.now(timezone.utc), "stage": "indexing"},
+        {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE,
+         "status": "running", "started_at": datetime.now(timezone.utc), "stage": "saving",
+         "reader_detail": "reading"},
+        {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE,
+         "status": "running", "started_at": datetime.now(timezone.utc),
+         "stage": "extracting_text", "reader_detail": "waking_reader", "reader_percent": 5},
+        {"input_kind": "source_reference", "source_reference": SOURCE_REFERENCE,
+         "status": "running", "started_at": datetime.now(timezone.utc),
+         "stage": "extracting_text", "reader_detail": "reading", "reader_percent": 101},
     ]
     with SessionLocal() as db:
         for values in invalid_rows:
@@ -348,8 +368,12 @@ class _StubParser:
     merge_enabled = True
     download_variant = "merged"
 
-    async def parse_pdf_document(self, file_path, document_id, user_id, *, save_artifacts):
+    async def parse_pdf_document(self, file_path, document_id, user_id, *, progress_callback,
+                                 save_artifacts):
         assert save_artifacts is False and file_path.read_bytes() == SERVICE_PDF
+        for status in ({"status": "queued", "progress": {"stage": "ec2_starting"}},
+                       {"status": "progress", "progress": {"percent": 40}}):
+            await progress_callback(reader_progress(status))
         return {
             "elements": SERVICE_ELEMENTS, "pdfx_json_path": None,
             "processed_json_path": None, "page_provenance": None,
@@ -416,10 +440,18 @@ async def test_service_records_each_stage_where_a_status_read_sees_it(scope, tmp
             return DocumentConversionRepository().get_for_owner(
                 db, conversion_id, scope["owner"]).stage
 
+    def reader() -> tuple[str | None, int | None]:
+        with SessionLocal() as db:
+            row = DocumentConversionRepository().get_for_owner(db, conversion_id, scope["owner"])
+            return row.reader_detail, row.reader_percent
+
     class _ObservingParser(_StubParser):
         async def parse_pdf_document(self, *args, **kwargs):
             seen.append(stage())
-            return await super().parse_pdf_document(*args, **kwargs)
+            result = await super().parse_pdf_document(*args, **kwargs)
+            # What the reader last reported is what a status read sees.
+            seen.append(reader())
+            return result
 
     class _ObservingSnapshots(BenchmarkSnapshotRepository):
         def freeze_input(self, *args, **kwargs):
@@ -432,7 +464,7 @@ async def test_service_records_each_stage_where_a_status_read_sees_it(scope, tmp
     with patch("src.lib.benchmarks.document_conversions.PDFXParser", _ObservingParser):
         await service.run(conversion_id, authorized_group_ids=())
 
-    assert seen == ["extracting_text", "saving"]
+    assert seen == ["extracting_text", ("reading", 40), "saving"]
     assert stage() is None
 
 

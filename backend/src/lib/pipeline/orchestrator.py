@@ -155,14 +155,16 @@ class DocumentPipelineOrchestrator:
             logger.info("Starting PDF parsing for document %s", document_id)
             await self._update_status(document_id, ProcessingStage.PARSING)
 
-            from .pdfx_parser import parse_pdf_document
+            from .pdfx_parser import ReaderProgress, parse_pdf_document
 
-            async def _track_parser_progress(message: str) -> None:
+            async def _track_parser_progress(progress: ReaderProgress) -> None:
+                # The PDF reader's own state: waking up (a cold start takes minutes),
+                # waiting, or reading with its reported percent.
                 await self._raise_if_cancel_requested(cancel_requested_callback)
                 await self.tracker.track_pipeline_progress(
                     document_id,
                     ProcessingStage.PARSING,
-                    message=message,
+                    message=progress.message,
                 )
 
             def _record_external_observation(observation: Dict[str, Any]) -> None:

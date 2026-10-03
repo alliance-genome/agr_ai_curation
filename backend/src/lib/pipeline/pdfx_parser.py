@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -10,7 +11,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 import aiohttp
 
@@ -39,7 +40,7 @@ from .pdfx_page_provenance import (
 
 logger = logging.getLogger(__name__)
 
-ProgressCallback = Callable[[str], Awaitable[None]]
+ProgressCallback = Callable[["ReaderProgress"], Awaitable[None]]
 ProcessIdCallback = Callable[[str], Awaitable[None]]
 CancelRequestedCallback = Callable[[], Awaitable[bool]]
 ObservabilityCallback = Callable[[Dict[str, Any]], None]
@@ -757,9 +758,8 @@ class PDFXParser:
                     last_logged_signature = signature
 
                 if progress_callback:
-                    message = _build_progress_message(payload)
                     try:
-                        await progress_callback(message)
+                        await progress_callback(reader_progress(payload))
                     except PDFCancellationError:
                         raise
                     except Exception:
@@ -951,36 +951,65 @@ class PDFXParser:
         return file_path.relative_to(pdf_storage)
 
 
-def _build_progress_message(payload: Dict[str, Any]) -> str:
-    """Build a stable curator-facing message without provider-authored prose."""
+ReaderDetail = Literal["waking_reader", "waiting_for_reader", "reading"]
+WAKING_READER: ReaderDetail = "waking_reader"
+WAITING_FOR_READER: ReaderDetail = "waiting_for_reader"
+READING: ReaderDetail = "reading"
+READER_DETAILS: tuple[ReaderDetail, ...] = (WAKING_READER, WAITING_FOR_READER, READING)
+# PDFX reports a sleeping GPU worker that is being started as this progress stage.
+_PDFX_WAKING_STAGE = "ec2_starting"
+_PDFX_WAKING_STATES = {"starting", "stopped"}
+
+
+@dataclass(frozen=True)
+class ReaderProgress:
+    """What the PDF reader (PDFX) reports while a PDF is read, in plain words.
+
+    ``detail`` is None once PDFX has failed or reports a status this code doesn't
+    know. ``percent`` is PDFX's own figure (completed extraction steps), only while
+    it is reading or once it is complete; it is never estimated here.
+    """
+
+    detail: ReaderDetail | None
+    percent: int | None
+    message: str
+
+
+def reader_progress(payload: Dict[str, Any]) -> ReaderProgress:
+    """Map a PDFX status payload to reader progress; no provider-authored prose is used."""
     status = str(payload.get("status", "")).strip().lower()
     state = str(payload.get("state", "")).strip().lower()
-    progress = payload.get("progress")
-    percent: int | None = None
-    if isinstance(progress, dict):
-        raw_percent = progress.get("percent")
-        if (
-            isinstance(raw_percent, (int, float))
-            and not isinstance(raw_percent, bool)
-            and 0 <= raw_percent <= 100
-        ):
-            percent = int(raw_percent)
+    progress = payload.get("progress") if isinstance(payload.get("progress"), dict) else {}
+    stage = str(progress.get("stage", "")).strip().lower()
+    raw_percent = progress.get("percent")
+    percent = (
+        int(raw_percent)
+        if isinstance(raw_percent, (int, float))
+        and not isinstance(raw_percent, bool)
+        and 0 <= raw_percent <= 100
+        else None
+    )
 
-    if status in {"queued", "pending"}:
-        if state in {"ready", "busy"}:
-            return "PDF extraction queued; waiting for PDFX worker..."
-        return "PDF extraction queued..."
-    if status in {"warming", "warming_up"}:
-        return "PDF extraction service is starting..."
+    if status in {"queued", "pending", "warming", "warming_up"}:
+        # A queued job's percent is a placeholder (0), never progress.
+        if (status in {"warming", "warming_up"} or stage == _PDFX_WAKING_STAGE
+                or state in _PDFX_WAKING_STATES):
+            return ReaderProgress(
+                WAKING_READER, None, "Waking up the PDF reader (can take a few minutes)"
+            )
+        return ReaderProgress(WAITING_FOR_READER, None, "Waiting for the PDF reader")
     if status in {"started", "progress", "running"}:
-        if percent is not None:
-            return f"Extracting PDF content... ({percent}%)"
-        return "Extracting PDF content..."
+        reported = percent if status == "progress" else None
+        return ReaderProgress(
+            READING,
+            reported,
+            "Reading the PDF" if reported is None else f"Reading the PDF · {reported}%",
+        )
     if status in {"complete", "succeeded", "success"}:
-        return "PDF extraction complete. Finalizing..."
+        return ReaderProgress(READING, 100, "Reading the PDF · 100%")
     if status in {"failed", "failure"}:
-        return "PDF extraction failed."
-    return "PDF extraction in progress..."
+        return ReaderProgress(None, None, "Reading the PDF failed.")
+    return ReaderProgress(None, None, "Reading the PDF")
 
 
 def _markdown_lines_with_byte_starts(markdown: str) -> tuple[List[str], List[int]]:
