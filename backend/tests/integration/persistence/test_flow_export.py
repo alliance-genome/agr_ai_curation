@@ -147,3 +147,14 @@ def test_a_pinned_output_structure_exports_its_exact_revision(world, builder_pol
     assert profile.source_profile_id == ref.profile_id
     assert [revision.source_revision_id for revision in profile.revisions] == [ref.profile_revision_id]
 
+
+
+def test_a_shared_agent_pinning_its_owners_private_structure_is_not_importable(
+        world, builder_policies):  # noqa: F811
+    # AI Curation won't run this step for the teammate, so it is not importable either.
+    db = world
+    agent = profile_bound(db, "Structured finder")
+    flow = make_flow(db, [(agent, head(db, agent))])
+    share(db, agent, flow)
+    evaluated = evaluate(db, flow, user_id=2)
+    assert evaluated.reason == "step_unavailable" and evaluated.bundle is None
