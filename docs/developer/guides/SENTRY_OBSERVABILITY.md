@@ -547,6 +547,15 @@ exception chains are omitted. Unmarked invalid-input/empty-document parsing
 errors and cancellation remain quiet. Terminal `extraction_failed` results are
 preserved even when capture fails, and companion warnings skip event promotion.
 
+Flow export reports a bundle main cannot build consistently with component
+`flow_export` and operation `flow_export_inconsistent`; the curator still sees the
+fixed `cannot_run` reason and the rest of the list answers. The benchmark flow import
+resolver reports untrusted, invalid and conflicting bundles, and a runnability report
+that fails after a committed import, with component `benchmark_flow_import` and the
+event name as operation. Both use chain-free wrappers carrying only a fixed check code
+or exception class; bundle content, flow names, tokens and signatures are omitted, and
+the companion ERROR logs skip event promotion.
+
 Identifier-like runtime context is hashed by the global Sentry hook when it uses
 recognized keys such as `batch_id`, `document_id`, `flow_id`, `flow_run_id`,
 `job_id`, `run_id`, `session_id`, `trace_id`, or `turn_id`.

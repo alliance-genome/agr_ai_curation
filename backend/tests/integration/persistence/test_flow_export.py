@@ -7,7 +7,6 @@ import sqlalchemy as sa
 
 from src.lib.agent_studio.execution_revision_service import append_execution_revision
 from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
-from src.lib.flow_transfer import bundle as bundle_module
 from src.lib.flow_transfer.bundle import check_bundle
 from src.lib.flow_transfer.export import ExportCurator, evaluate_flow, exportable_flows
 from src.models.sql.curation_flow import CurationFlow
@@ -106,7 +105,7 @@ def test_a_too_large_flow_is_refused(world, monkeypatch):  # noqa: F811
     db = world
     agent = make_agent(db, "Finder")
     flow = make_flow(db, [(agent, head(db, agent))])
-    monkeypatch.setattr(bundle_module, "FLOW_BUNDLE_MAX_BYTES", 10)
+    monkeypatch.setenv("FLOW_TRANSFER_BUNDLE_MAX_BYTES", "10")
     assert evaluate(db, flow).reason == "too_large"
 
 

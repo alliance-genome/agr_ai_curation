@@ -48,12 +48,37 @@ def setup(monkeypatch):
     monkeypatch.setattr(api, "latest_import", calls.latest)
     monkeypatch.setattr(api, "latest_imports", calls.latest_many)
     monkeypatch.setattr(api, "saved_flow_contracts", calls.contracts)
+    reports = []
+    monkeypatch.setattr(api, "report_runtime_exception",
+                        lambda exc, **kwargs: reports.append((exc, kwargs)) or True)
     app = FastAPI()
     app.include_router(api.router)
     app.dependency_overrides[benchmark_curator.require_benchmark_curator] = lambda: CURATOR
     app.dependency_overrides[benchmark_curator.require_benchmark_read_curator] = lambda: CURATOR
     export = FlowExportConfig(signer=key, issuer=ISSUER, bearer_client_ids=("c",))
-    return SimpleNamespace(client=TestClient(app), app=app, export=export, calls=calls, flow_id=flow_id)
+    return SimpleNamespace(client=TestClient(app), app=app, export=export, calls=calls, flow_id=flow_id,
+                           reports=reports)
+
+
+def _fake_detail():
+    """A stand-in for sensitive text an exception could carry, built at runtime."""
+    return "-".join(("fake", "sensitive", "detail", uuid4().hex))
+
+
+def _assert_reported(setup, caplog, event, check, *leaked):
+    """Exactly one facade report with a chain-free wrapper; the companion ERROR log is
+    marked so log promotion doesn't create a second event."""
+    [(error, kwargs)] = setup.reports
+    assert error.__cause__ is None and error.__context__ is None
+    assert str(error) == f"Benchmark {event} failed ({check})"
+    assert (kwargs["component"], kwargs["operation"]) == ("benchmark_flow_import", event)
+    assert kwargs["context"]["check"] == check
+    assert kwargs["fingerprint"] == ["benchmark_flow_import", event, check]
+    [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert record.getMessage() == event and record.sentry_skip_event is True
+    for value in leaked:
+        assert value not in repr(error) and value not in str(kwargs)
+        assert value not in caplog.text and value not in str(vars(record))
 
 
 def signed(setup, bundle=None, *, now=None, config=None):
@@ -112,12 +137,14 @@ def test_an_expired_or_foreign_signature_is_untrusted(setup, caplog):
     _untrusted(setup, signed(setup, config=other), caplog)
 
 
-def test_an_untrusted_bundle_logs_at_error(setup, caplog):
+def test_an_untrusted_bundle_is_reported_once(setup, caplog):
     payload = signed(setup)
-    payload["bundle"]["flow"]["name"] = "Changed after signing"
+    payload["bundle"]["flow"]["name"] = _fake_detail()
     with caplog.at_level(logging.INFO, logger=api.logger.name):
         post(setup, payload)
     assert [(r.levelno, r.getMessage()) for r in caplog.records] == [(logging.ERROR, "flow_import_untrusted")]
+    _assert_reported(setup, caplog, "flow_import_untrusted", "content",
+                     payload["bundle"]["flow"]["name"], payload["signature"])
 
 
 def test_a_malformed_bundle_is_invalid(setup):
@@ -144,11 +171,13 @@ def test_a_bundle_with_a_non_finite_number_is_invalid(setup, caplog, signer):
     assert response.status_code == 400 and response.json()["detail"] == {"code": "invalid_bundle"}
     assert response.headers["Cache-Control"] == "no-store"
     assert [(r.levelno, r.getMessage()) for r in caplog.records] == [(logging.ERROR, "flow_import_invalid")]
+    _assert_reported(setup, caplog, "flow_import_invalid", "ValueError")
     setup.calls.dependencies.assert_not_called()
 
 
 def test_an_oversized_body_is_refused_before_parsing(setup, monkeypatch):
-    monkeypatch.setattr(api, "REQUEST_MAX_BYTES", 100)
+    monkeypatch.setattr(api, "ENVELOPE_BYTES", 0)
+    monkeypatch.setenv("FLOW_TRANSFER_BUNDLE_MAX_BYTES", "100")
     response = post(setup, signed(setup))
     assert response.status_code == 413 and response.json()["detail"] == {"code": "bundle_too_large"}
     assert response.headers["Cache-Control"] == "no-store"
@@ -161,16 +190,25 @@ def test_without_config_import_is_unavailable(setup, monkeypatch):
     assert response.status_code == 503 and response.json()["detail"] == {"code": "flow_import_not_configured"}
 
 
-def test_an_unexpected_failure_is_a_sanitized_503(setup):
-    setup.calls.flow.side_effect = RuntimeError("database detail that must not leak")
-    response = post(setup, signed(setup))
+def test_an_unexpected_failure_is_a_sanitized_503(setup, monkeypatch, caplog):
+    leaked = _fake_detail()
+    setup.calls.flow.side_effect = RuntimeError(leaked)
+    sanitized = []
+    monkeypatch.setattr("src.lib.http_errors.report_runtime_exception",
+                        lambda exc, **kwargs: sanitized.append(exc) or True)
+    with caplog.at_level(logging.INFO, logger=api.logger.name):
+        response = post(setup, signed(setup))
     assert response.status_code == 503 and response.json()["detail"] == {"code": "flow_import_unavailable"}
     assert response.headers["Cache-Control"] == "no-store"
-    assert "must not leak" not in response.text
+    assert leaked not in response.text and leaked not in caplog.text
+    [error] = sanitized  # reported once, through raise_sanitized_http_exception
+    assert str(error) == "Benchmark flow_import failed (RuntimeError)" and error.__cause__ is None
+    assert all(getattr(r, "sentry_skip_event", False) for r in caplog.records if r.levelno >= logging.ERROR)
 
 
 def test_a_failed_runnability_report_keeps_the_committed_import(setup, caplog):
-    setup.calls.contracts.side_effect = RuntimeError("report detail that must not leak")
+    leaked = _fake_detail()
+    setup.calls.contracts.side_effect = RuntimeError(leaked)
     with caplog.at_level(logging.INFO, logger=api.logger.name):
         response = post(setup, signed(setup))
     assert response.status_code == 200
@@ -180,8 +218,9 @@ def test_a_failed_runnability_report_keeps_the_committed_import(setup, caplog):
     assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
         (logging.ERROR, "flow_import_report_failed"), (logging.INFO, "flow_import_done")]
     assert caplog.records[0].error_type == "RuntimeError"
-    assert "must not leak" not in caplog.text and "must not leak" not in response.text
-    assert all("must not leak" not in str(vars(record)) for record in caplog.records)
+    assert leaked not in response.text
+    _assert_reported(setup, caplog, "flow_import_report_failed", "RuntimeError", leaked)
+    assert setup.reports[0][1]["context"]["flow_id"]
 
 
 def test_a_refusal_is_a_200_with_its_reason_and_the_current_copy(setup, caplog):
@@ -192,6 +231,7 @@ def test_a_refusal_is_a_200_with_its_reason_and_the_current_copy(setup, caplog):
     assert (body["outcome"], body["reason"], body["version"]) == ("refused", "fields_need_choosing", 2)
     assert body["runnable"] is None
     assert [(r.levelno, r.getMessage()) for r in caplog.records] == [(logging.INFO, "flow_import_refused")]
+    assert setup.reports == []  # a curator-fixable refusal is not a Sentry event
 
 
 def test_a_taken_revision_number_is_a_conflict(setup, caplog):
@@ -201,6 +241,7 @@ def test_a_taken_revision_number_is_a_conflict(setup, caplog):
     assert response.status_code == 409 and response.json()["detail"] == {"code": "import_conflict"}
     assert response.headers["Cache-Control"] == "no-store"
     assert [(r.levelno, r.getMessage()) for r in caplog.records] == [(logging.ERROR, "flow_import_conflict")]
+    _assert_reported(setup, caplog, "flow_import_conflict", "agent revision number")
 
 
 def test_a_curator_who_is_not_onboarded_gets_the_existing_403(setup):
@@ -228,11 +269,22 @@ def test_the_list_shows_only_the_callers_latest_imports(setup):
 
 
 def test_the_list_takes_at_most_fifty_ids(setup):
+    fifty = ",".join(str(uuid4()) for _ in range(50))
+    assert setup.client.get(PATH, params={"source_flow_ids": fifty}).status_code == 200
     many = ",".join(str(uuid4()) for _ in range(51))
-    for value in (many, "not-a-uuid"):
+    spaced = f"{uuid4()}, {uuid4()}"
+    for value in (many, "not-a-uuid", spaced):
         response = setup.client.get(PATH, params={"source_flow_ids": value})
         assert response.status_code == 422 and response.json()["detail"] == {"code": "invalid_request"}
         assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_the_list_bound_follows_its_env_setting(setup, monkeypatch):
+    monkeypatch.setenv("FLOW_TRANSFER_IMPORT_LIST_MAX_FLOWS", "2")
+    two = f"{uuid4()},{uuid4()}"
+    assert setup.client.get(PATH, params={"source_flow_ids": two}).status_code == 200
+    response = setup.client.get(PATH, params={"source_flow_ids": f"{two},{uuid4()}"})
+    assert response.status_code == 422 and response.json()["detail"] == {"code": "invalid_request"}
 
 
 def test_the_routes_are_off_without_the_benchmark_api(setup, monkeypatch):

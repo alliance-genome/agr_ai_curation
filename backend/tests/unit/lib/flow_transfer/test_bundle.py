@@ -2,7 +2,6 @@ from copy import deepcopy
 
 import pytest
 
-from src.lib.flow_transfer import bundle as bundle_module
 from src.lib.flow_transfer.bundle import (BundleTooLarge, InvalidBundle, bundle_sha256,
                                           check_bundle)
 
@@ -66,6 +65,39 @@ def test_anything_but_the_exact_closure_is_refused(change):
 
 
 def test_an_oversized_bundle_is_refused(monkeypatch):
-    monkeypatch.setattr(bundle_module, "FLOW_BUNDLE_MAX_BYTES", 100)
+    monkeypatch.setenv("FLOW_TRANSFER_BUNDLE_MAX_BYTES", "100")
     with pytest.raises(BundleTooLarge):
         check_bundle(make_bundle())
+
+
+
+def _second_agent(raw):
+    raw["agents"].append(deepcopy(raw["agents"][0]))
+
+
+def _second_agent_revision(raw):
+    raw["agents"][0]["revisions"].append(deepcopy(raw["agents"][0]["revisions"][0]))
+
+
+def _second_output_structure_revision(raw):
+    raw["profiles"][0]["revisions"].append(deepcopy(raw["profiles"][0]["revisions"][0]))
+
+
+@pytest.mark.parametrize("key,change,later_check", [
+    ("FLOW_TRANSFER_MAX_AGENTS", _second_agent, "duplicate agent"),
+    ("FLOW_TRANSFER_MAX_REVISIONS_PER_AGENT", _second_agent_revision, "duplicate revision"),
+    ("FLOW_TRANSFER_MAX_OUTPUT_STRUCTURE_REVISIONS", _second_output_structure_revision,
+     "duplicate profile revision"),
+], ids=["agents", "revisions-per-agent", "output-structure-revisions"])
+def test_count_bounds_follow_their_env_settings(monkeypatch, key, change, later_check):
+    """Within the default bound the second item reaches the closure checks; with the
+    bound set to one, the bundle model itself refuses it."""
+    raw = _mutated(change)
+    with pytest.raises(InvalidBundle) as within:
+        check_bundle(raw)
+    assert str(within.value) == later_check
+    monkeypatch.setenv(key, "1")
+    with pytest.raises(InvalidBundle) as over:
+        check_bundle(raw)
+    assert str(over.value) == "schema"
+    check_bundle(make_bundle(with_profile=True))  # one of each stays inside a bound of one

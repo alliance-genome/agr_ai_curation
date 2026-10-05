@@ -10,7 +10,10 @@ import os
 import re
 from dataclasses import dataclass
 
+from auth_runtime.factory import create_auth_provider, create_cognito_provider, get_auth_provider
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+
+from src.lib.config.groups_loader import get_group_claim_key
 
 EXPORT_KEYS = ("FLOW_EXPORT_SIGNING_KEY", "FLOW_EXPORT_ISSUER", "FLOW_EXPORT_BEARER_CLIENT_IDS")
 IMPORT_KEYS = ("FLOW_IMPORT_EXPORT_ISSUER", "FLOW_IMPORT_EXPORT_PUBLIC_KEY")
@@ -26,6 +29,14 @@ class FlowExportConfig:
     signer: Ed25519PrivateKey
     issuer: str
     bearer_client_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FlowExportSignIn:
+    """Where export bearer ID tokens come from: the platform's own sign-in provider."""
+    provider: str  # "cognito" or "oidc", exactly as AUTH_PROVIDER selects
+    issuer_url: str
+    group_claim: str
 
 
 @dataclass(frozen=True)
@@ -82,6 +93,27 @@ def flow_export_config() -> FlowExportConfig | None:
     )
 
 
+def flow_export_sign_in() -> FlowExportSignIn:
+    """The issuer and group claim of the provider AUTH_PROVIDER selects, read through the
+    same factory the sign-in cookie uses. No other provider is ever tried."""
+    try:
+        provider = get_auth_provider()
+        if provider == "cognito":
+            platform = create_cognito_provider()
+        elif provider == "oidc":
+            platform = create_auth_provider(dev_mode=False, group_claim=get_group_claim_key())
+        else:
+            raise ValueError(provider)
+    except ValueError:
+        raise FlowTransferConfigError(
+            "FLOW_EXPORT_* needs the sign-in issuer: set AUTH_PROVIDER=cognito with its COGNITO_* "
+            "settings, or AUTH_PROVIDER=oidc with OIDC_ISSUER_URL, OIDC_CLIENT_ID and "
+            "OIDC_REDIRECT_URI"
+        ) from None
+    return FlowExportSignIn(provider=provider, issuer_url=platform.issuer_url,
+                            group_claim=platform.group_claim)
+
+
 def flow_import_config() -> FlowImportConfig | None:
     values = _values(IMPORT_KEYS)
     if values is None:
@@ -99,6 +131,8 @@ def flow_import_config() -> FlowImportConfig | None:
 
 
 def validate_flow_transfer_config() -> None:
-    """Startup check: raise for a partial or malformed set on either side."""
-    flow_export_config()
+    """Startup check: raise for a partial or malformed set on either side, or for an
+    export set whose sign-in issuer can't be resolved from the auth settings."""
+    if flow_export_config() is not None:
+        flow_export_sign_in()
     flow_import_config()

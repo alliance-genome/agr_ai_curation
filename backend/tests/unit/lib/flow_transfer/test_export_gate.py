@@ -56,6 +56,33 @@ def test_an_unreadable_definition_cannot_run_and_does_not_raise():
     assert evaluated.reason == "cannot_run" and evaluated.version.startswith("sha256:")
 
 
+@pytest.fixture
+def reports(monkeypatch):
+    calls = []
+    monkeypatch.setattr(export, "report_runtime_exception",
+                        lambda exc, **kwargs: calls.append((exc, kwargs)) or True)
+    return calls
+
+
+def _fake_detail():
+    """A stand-in for content an exception message could carry, built at runtime."""
+    return "-".join(("fake", "flow", "content", uuid4().hex))
+
+
+def _assert_one_sanitized_report(reports, caplog, check, leaked):
+    [(error, kwargs)] = reports
+    assert isinstance(error, RuntimeError) and error.__cause__ is None and error.__context__ is None
+    assert str(error) == f"Flow export bundle is inconsistent ({check})"
+    assert (kwargs["component"], kwargs["operation"]) == ("flow_export", "flow_export_inconsistent")
+    assert kwargs["context"]["check"] == check
+    assert kwargs["fingerprint"] == ["flow_export", "flow_export_inconsistent", check]
+    assert leaked not in repr(error) and leaked not in str(kwargs)
+    [record] = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert record.getMessage() == "flow_export_inconsistent" and record.check == check
+    assert record.sentry_skip_event is True  # the facade's event is the only one
+    assert leaked not in str(record.__dict__) and leaked not in caplog.text
+
+
 def _events(caplog, level):
     return [record.getMessage() for record in caplog.records if record.levelno == level]
 
@@ -67,41 +94,83 @@ def _runnable(monkeypatch, nodes=(), entries=None):
                         lambda *a, **k: SimpleNamespace(has_critical_issues=False))
 
 
-def test_an_unreadable_definition_is_a_curator_refusal_not_a_defect(caplog):
+def test_an_unreadable_definition_is_a_curator_refusal_not_a_defect(caplog, reports):
     caplog.set_level(logging.INFO, logger=export.__name__)
     assert _evaluate(_flow({"nodes": []})).reason == "cannot_run"
     assert _events(caplog, logging.INFO) == ["flow_export_refused"]
-    assert _events(caplog, logging.ERROR) == []
+    assert _events(caplog, logging.ERROR) == [] and reports == []
 
 
-def test_an_integrity_failure_in_the_closure_is_logged_as_a_defect(monkeypatch, caplog):
+def test_an_integrity_failure_in_the_closure_is_reported_as_a_defect(monkeypatch, caplog, reports):
     receipt = {"agent_id": str(uuid4()), "agent_key": "ca_finder", "agent_revision_id": str(uuid4()),
                "revision": 1, "fingerprint": "sha256:" + "0" * 64,
                "output_contract": {"output_state": "none"}}
     _runnable(monkeypatch, nodes=[SimpleNamespace(id="node_0")],
               entries={"node_0": {"execution_receipt": receipt}})
+    leaked = _fake_detail()
 
     def mismatch(*args, **kwargs):
-        raise ValueError("Executable revision fingerprint mismatch")
+        raise ValueError(f"Executable revision fingerprint mismatch {leaked}")
 
     monkeypatch.setattr(export, "get_execution_revision", mismatch)
     caplog.set_level(logging.INFO, logger=export.__name__)
     evaluated = _evaluate(_flow())
+    # The curator still sees the fixed cross-repo reason; Sentry gets the defect.
     assert evaluated.reason == "cannot_run" and evaluated.bundle is None
-    [record] = [record for record in caplog.records if record.levelno == logging.ERROR]
-    assert record.getMessage() == "flow_export_inconsistent" and record.check == "ValueError"
-    assert "mismatch" not in str(record.__dict__)
+    _assert_one_sanitized_report(reports, caplog, "ValueError", leaked)
     assert _events(caplog, logging.INFO) == []
 
 
-def test_a_bundle_the_resolver_would_refuse_is_logged_as_a_defect(monkeypatch, caplog):
+def test_a_bundle_the_resolver_would_refuse_is_reported_as_a_defect(monkeypatch, caplog, reports):
     _runnable(monkeypatch)
+    leaked = _fake_detail()
 
     def refuse(bundle_json):
         raise InvalidBundle("receipt")
 
     monkeypatch.setattr(export, "check_bundle", refuse)
     caplog.set_level(logging.INFO, logger=export.__name__)
+    flow = _flow()
+    flow.name = leaked  # flow names never reach logs or Sentry
+    assert _evaluate(flow).reason == "cannot_run"
+    _assert_one_sanitized_report(reports, caplog, "receipt", leaked)
+
+
+def test_reporting_uses_the_real_facade_without_promoting_the_log(monkeypatch, caplog):
+    """The unpatched facade receives the chain-free wrapper (Sentry SDK stubbed)."""
+    captured = []
+    fake_sdk = SimpleNamespace(
+        new_scope=lambda: _Scope(), capture_exception=lambda exc: captured.append(exc) or "event")
+    monkeypatch.setattr("src.lib.observability.runtime.importlib.import_module",
+                        lambda name: fake_sdk)
+    _runnable(monkeypatch)
+    leaked = _fake_detail()
+
+    def refuse(bundle_json):
+        raise ValueError(leaked)
+
+    monkeypatch.setattr(export, "check_bundle", refuse)
+    caplog.set_level(logging.INFO, logger=export.__name__)
     assert _evaluate(_flow()).reason == "cannot_run"
-    [record] = [record for record in caplog.records if record.levelno == logging.ERROR]
-    assert record.getMessage() == "flow_export_inconsistent" and record.check == "receipt"
+    [error] = captured
+    assert str(error) == "Flow export bundle is inconsistent (ValueError)"
+    assert error.__cause__ is None and error.__context__ is None and leaked not in caplog.text
+
+
+class _Scope:
+    fingerprint = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def set_level(self, level):
+        pass
+
+    def set_tag(self, key, value):
+        pass
+
+    def set_context(self, key, value):
+        pass

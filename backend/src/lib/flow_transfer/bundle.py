@@ -11,20 +11,30 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
+from src.lib.openai_agents.config import (get_flow_transfer_bundle_max_bytes,
+                                          get_flow_transfer_max_agents,
+                                          get_flow_transfer_max_output_structure_revisions,
+                                          get_flow_transfer_max_revisions_per_agent)
 from src.schemas.agent_execution_revision import AgentExecutionSnapshot
 from src.schemas.flows import FlowDefinition
 from src.schemas.generic_extraction_profile import canonical_json, normalize_profile_contract
 
 FORMAT = "aic-flow-export"
 FORMAT_VERSION = 1
-FLOW_BUNDLE_MAX_BYTES = 8 * 1024 * 1024
-MAX_AGENTS = 64
-MAX_REVISIONS_PER_AGENT = 64
-MAX_PROFILE_REVISIONS = 64
 
 Fingerprint = Annotated[str, StringConstraints(pattern=r"^sha256:[a-f0-9]{64}$")]
+
+
+def _at_most(limit):
+    """A list length bound read from its env getter at validation time, so export and
+    import enforce the configured value (a static ``max_length`` is fixed at import)."""
+    def check(items: list) -> list:
+        if len(items) > limit():
+            raise ValueError("too many items")
+        return items
+    return AfterValidator(check)
 
 
 class InvalidBundle(ValueError):
@@ -32,7 +42,7 @@ class InvalidBundle(ValueError):
 
 
 class BundleTooLarge(ValueError):
-    """The canonical bundle is over FLOW_BUNDLE_MAX_BYTES."""
+    """The canonical bundle is over FLOW_TRANSFER_BUNDLE_MAX_BYTES."""
 
 
 class _Part(BaseModel):
@@ -72,7 +82,8 @@ class BundleAgent(_Part):
     description: str | None
     icon: str
     category: str | None
-    revisions: list[BundleAgentRevision] = Field(min_length=1, max_length=MAX_REVISIONS_PER_AGENT)
+    revisions: Annotated[list[BundleAgentRevision],
+                         _at_most(get_flow_transfer_max_revisions_per_agent)] = Field(min_length=1)
 
 
 class BundleProfileRevision(_Part):
@@ -84,7 +95,8 @@ class BundleProfileRevision(_Part):
 
 class BundleProfile(_Part):
     source_profile_id: UUID
-    revisions: list[BundleProfileRevision] = Field(min_length=1, max_length=MAX_PROFILE_REVISIONS)
+    revisions: Annotated[list[BundleProfileRevision],
+                         _at_most(get_flow_transfer_max_output_structure_revisions)] = Field(min_length=1)
 
 
 class FlowBundle(_Part):
@@ -94,7 +106,7 @@ class FlowBundle(_Part):
     exported_for: ExportedFor
     exported_at: str = Field(min_length=1)
     flow: BundleFlow
-    agents: list[BundleAgent] = Field(max_length=MAX_AGENTS)
+    agents: Annotated[list[BundleAgent], _at_most(get_flow_transfer_max_agents)]
     profiles: list[BundleProfile]
 
 
@@ -121,14 +133,15 @@ class CheckedBundle:
 
 def check_bundle(bundle_json: dict[str, Any]) -> CheckedBundle:
     """Everything that needs neither a database nor a key: size, schema, closure, fingerprints."""
-    if len(canonical_bundle_bytes(bundle_json)) > FLOW_BUNDLE_MAX_BYTES:
+    if len(canonical_bundle_bytes(bundle_json)) > get_flow_transfer_bundle_max_bytes():
         raise BundleTooLarge("bundle")
     try:
         bundle = FlowBundle.model_validate(bundle_json)
         definition = FlowDefinition.model_validate(bundle.flow.definition)
     except ValueError:
         raise InvalidBundle("schema") from None
-    if sum(len(profile.revisions) for profile in bundle.profiles) > MAX_PROFILE_REVISIONS:
+    if (sum(len(profile.revisions) for profile in bundle.profiles)
+            > get_flow_transfer_max_output_structure_revisions()):
         raise InvalidBundle("bounds")
     if len({agent.source_agent_id for agent in bundle.agents}) != len(bundle.agents):
         raise InvalidBundle("duplicate agent")

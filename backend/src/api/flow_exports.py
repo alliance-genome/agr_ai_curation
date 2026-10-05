@@ -2,18 +2,20 @@
 
 Only ``Authorization: Bearer <ID token>`` is accepted; cookies are ignored, so a
 cross-site browser request can't use these routes. The token is checked as strictly
-as the sign-in cookie (pool issuer, signature, expiry), against an explicit audience
-allowlist (FLOW_EXPORT_BEARER_CLIENT_IDS). Nothing here writes: a curator with no
-account simply has no flows.
+as the sign-in cookie (the issuer and group claim of the provider AUTH_PROVIDER
+selects, signature, expiry), against an explicit audience allowlist
+(FLOW_EXPORT_BEARER_CLIENT_IDS). Nothing here writes: a curator with no account
+simply has no flows.
 """
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, NoReturn
 from uuid import UUID
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from jwt.exceptions import InvalidTokenError, PyJWKClientConnectionError, PyJWKClientError
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -22,9 +24,11 @@ from sqlalchemy.orm import Session
 from auth_runtime.oidc import OIDCAuthProvider
 from src.api.auth import expected_token_failure_reason, is_unknown_signing_key_error
 from src.config import get_app_version
-from src.lib.flow_transfer.config import FlowExportConfig, flow_export_config
-from src.lib.flow_transfer.export import (EXPORT_PAGE_SIZE, EvaluatedFlow, ExportCurator,
-                                          evaluate_flow, exportable_flows)
+from src.lib.benchmarks.observability import sanitized_benchmark_error
+from src.lib.flow_transfer.config import (FlowExportConfig, FlowExportSignIn, flow_export_config,
+                                          flow_export_sign_in)
+from src.lib.flow_transfer.export import (EvaluatedFlow, ExportCurator, evaluate_flow,
+                                          exportable_flows)
 from src.lib.flow_transfer.reasons import ReasonCode
 from src.lib.flow_transfer.signing import sign_bundle
 from src.lib.flows.access import get_visible_flow
@@ -33,7 +37,8 @@ from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.openai_agents.config import (get_auth_jwks_cache_ttl_seconds,
                                           get_auth_jwks_timeout_seconds,
                                           get_auth_provider_timeout_seconds,
-                                          get_benchmark_curator_auth_max_bytes)
+                                          get_benchmark_curator_auth_max_bytes,
+                                          get_flow_transfer_export_page_size)
 from src.lib.security.redaction import active_secret_redaction
 from src.models.sql import get_db
 from src.models.sql.user import User
@@ -41,7 +46,9 @@ from src.models.sql.user import User
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/flow-exports", tags=["Flow exports"])
 NO_STORE = {"Cache-Control": "no-store"}
-REQUIRED_CLAIMS = ["exp", "iat", "iss", "aud", "sub", "token_use"]
+REQUIRED_CLAIMS = ["exp", "iat", "iss", "aud", "sub"]
+# RFC 9068 marks JWT access tokens with this header type.
+ACCESS_TOKEN_TYPES = {"at+jwt", "application/at+jwt"}
 
 
 class FlowExportItem(BaseModel):
@@ -77,31 +84,60 @@ def require_flow_export_config() -> FlowExportConfig:
 
 
 _provider: OIDCAuthProvider | None = None
+_provider_key: tuple | None = None
 
 
-def _bearer_provider(config: FlowExportConfig) -> OIDCAuthProvider:
-    """Same pool issuer and keys as the sign-in cookie; only the audiences differ."""
-    global _provider
-    if _provider is None or tuple(_provider.audience) != config.bearer_client_ids:
+def _bearer_provider(config: FlowExportConfig, sign_in: FlowExportSignIn) -> OIDCAuthProvider:
+    """Same issuer, keys and group claim as the sign-in cookie; only the audiences differ."""
+    global _provider, _provider_key
+    key = (sign_in, config.bearer_client_ids)
+    if _provider is None or _provider_key != key:
+        # Cognito ID tokens always carry token_use, so it is required there; generic OIDC
+        # defines no such claim (see _require_id_token).
+        required = REQUIRED_CLAIMS + (["token_use"] if sign_in.provider == "cognito" else [])
         _provider = OIDCAuthProvider({
-            "issuer_url": (f"https://cognito-idp.{os.environ['COGNITO_REGION']}.amazonaws.com/"
-                           f"{os.environ['COGNITO_USER_POOL_ID']}"),
+            "issuer_url": sign_in.issuer_url,
             "client_id": config.bearer_client_ids[0],
             "audience": list(config.bearer_client_ids),
-            "group_claim": "cognito:groups",
-            "required_claims": REQUIRED_CLAIMS,
+            "group_claim": sign_in.group_claim,
+            "required_claims": required,
             "timeout_seconds": get_auth_provider_timeout_seconds(),
             "jwks_timeout_seconds": get_auth_jwks_timeout_seconds(),
             "jwks_cache_ttl_seconds": get_auth_jwks_cache_ttl_seconds(),
         })
+        _provider_key = key
     return _provider
+
+
+def _require_id_token(token: str, claims: dict[str, Any], sign_in: FlowExportSignIn) -> None:
+    """Accept ID tokens only, never access tokens.
+
+    Cognito: ``token_use`` must be ``id``, exactly as before. Generic OIDC has no
+    standard ID-token marker, so every access-token marker the supported providers
+    use is refused: a ``token_use`` other than ``id``, a ``typ`` claim other than
+    ``ID`` (Keycloak), a ``scope``/``scp`` claim (ID tokens never carry scopes;
+    Keycloak, Auth0, Okta and Entra access tokens do), or an RFC 9068 ``at+jwt``
+    header. The audience must also be an allowlisted client id, which a provider's
+    API access token does not carry.
+    """
+    if sign_in.provider == "cognito":
+        if claims.get("token_use") != "id":
+            raise InvalidTokenError("Only ID tokens are accepted")
+        return
+    header_type = str(jwt.get_unverified_header(token).get("typ", "")).lower()
+    if (claims.get("token_use", "id") != "id"
+            or str(claims.get("typ", "id")).lower() != "id"
+            or "scope" in claims or "scp" in claims
+            or header_type in ACCESS_TOKEN_TYPES):
+        raise InvalidTokenError("Only ID tokens are accepted")
 
 
 def _unavailable(exc: Exception) -> NoReturn:
     try:
         raise_sanitized_http_exception(
             logger, status_code=503, detail={"code": "authorization_unavailable"},
-            log_message="Flow export sign-in check unavailable", exc=exc,
+            log_message="Flow export sign-in check unavailable",
+            exc=sanitized_benchmark_error("flow_export_sign_in", type(exc).__name__),
         )
     except HTTPException as failure:
         failure.headers = NO_STORE
@@ -132,10 +168,10 @@ async def require_flow_export_curator(
         raise _rejected("missing_or_malformed")
     try:
         with active_secret_redaction(token):
-            provider = _bearer_provider(config)
+            sign_in = flow_export_sign_in()
+            provider = _bearer_provider(config, sign_in)
             claims = await provider.validate_token(token)
-        if claims.get("token_use") != "id":
-            raise InvalidTokenError("Only ID tokens are accepted")
+            _require_id_token(token, claims, sign_in)
         principal = provider.extract_principal(claims)
         if not principal.subject:
             raise InvalidTokenError("Missing subject")
@@ -176,12 +212,21 @@ def _item(evaluated: EvaluatedFlow) -> FlowExportItem:
 def list_flow_exports(
     response: Response,
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=EXPORT_PAGE_SIZE, ge=1, le=EXPORT_PAGE_SIZE),
+    limit: int | None = Query(default=None, ge=1),
     curator: ExportCurator | None = Depends(require_flow_export_curator),
     config: FlowExportConfig = Depends(require_flow_export_config),
     db: Session = Depends(get_db),
 ) -> FlowExportPage:
     """Every flow the curator can run in AI Curation (owned or project-shared)."""
+    page_size = get_flow_transfer_export_page_size()
+    if limit is None:
+        limit = page_size
+    elif limit > page_size:
+        # The same 422 a static ``le`` would give; the bound is read from env per request.
+        raise RequestValidationError([{
+            "type": "less_than_equal", "loc": ("query", "limit"),
+            "msg": f"Input should be less than or equal to {page_size}", "input": limit,
+            "ctx": {"le": page_size}}])
     response.headers.update(NO_STORE)
     if curator is None:
         return FlowExportPage(items=[], total_items=0, next_offset=None)
@@ -201,7 +246,7 @@ def export_flow(
     config: FlowExportConfig = Depends(require_flow_export_config),
     db: Session = Depends(get_db),
 ) -> SignedFlowBundle:
-    """One flow at exactly ``version``, signed for this curator for ten minutes."""
+    """One flow at exactly ``version``, signed for this curator for a short time."""
     response.headers.update(NO_STORE)
     if curator is None:
         raise _refused(404, "flow_not_found", flow_id)

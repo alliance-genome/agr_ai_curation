@@ -69,3 +69,19 @@ def test_only_eddsa_is_accepted():
     good = jwt.decode(sign_bundle(raw, config=export, now=NOW), options={"verify_signature": False})
     secret = base64.b64encode(Ed25519PrivateKey.generate().public_key().public_bytes_raw()).decode()
     _refused(jwt.encode(good, secret, algorithm="HS256"), raw, imported)
+
+
+def test_lifetime_and_leeway_follow_their_env_settings(monkeypatch):
+    export, imported = _configs()
+    raw = make_bundle()
+    monkeypatch.setenv("FLOW_TRANSFER_SIGNATURE_LIFETIME_SECONDS", "120")
+    monkeypatch.setenv("FLOW_TRANSFER_SIGNATURE_LEEWAY_SECONDS", "0")
+    token = sign_bundle(raw, config=export, now=NOW)
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert claims["exp"] - claims["iat"] == 120
+    # Expired five seconds ago: refused with no leeway, accepted with ten seconds.
+    stale = sign_bundle(raw, config=export,
+                        now=datetime.now(timezone.utc) - timedelta(seconds=125))
+    _refused(stale, raw, imported)
+    monkeypatch.setenv("FLOW_TRANSFER_SIGNATURE_LEEWAY_SECONDS", "10")
+    verify_bundle(stale, check_bundle(raw), config=imported, subject=CURATOR_SUB, issuer=CURATOR_ISS)

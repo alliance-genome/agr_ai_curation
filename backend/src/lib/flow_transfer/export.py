@@ -18,19 +18,21 @@ from src.lib.agent_studio.execution_revision_service import get_execution_revisi
 from src.lib.benchmarks.saved_flows import flow_summary
 from src.lib.flows.access import visible_flow_filter
 from src.lib.flows.execution_revisions import resolve_flow_execution_revisions
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+from src.lib.openai_agents.config import (get_flow_transfer_max_agents,
+                                          get_flow_transfer_max_output_structure_revisions,
+                                          get_flow_transfer_max_revisions_per_agent)
 from src.models.sql.agent import Agent
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.generic_extraction_profile import GenericExtractionProfileRevision
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.schemas.flows import FlowDefinition
 
-from .bundle import (FORMAT, FORMAT_VERSION, MAX_AGENTS, MAX_PROFILE_REVISIONS,
-                     MAX_REVISIONS_PER_AGENT, BundleTooLarge, FlowBundle, InvalidBundle,
+from .bundle import (FORMAT, FORMAT_VERSION, BundleTooLarge, FlowBundle, InvalidBundle,
                      check_bundle)
 from .reasons import ReasonCode, reason_for_finding
 
 logger = logging.getLogger(__name__)
-EXPORT_PAGE_SIZE = 50
 
 
 @dataclass(frozen=True)
@@ -130,9 +132,11 @@ def _closure(db: Session, curator: ExportCurator,
                     "source_revision_id": str(revision.id), "revision": revision.revision,
                     "fingerprint": revision.fingerprint, "contract": revision.contract,
                 })
-    if (len(agents) > MAX_AGENTS
-            or any(len(agent["revisions"]) > MAX_REVISIONS_PER_AGENT for agent in agents.values())
-            or sum(len(profile["revisions"]) for profile in profiles.values()) > MAX_PROFILE_REVISIONS):
+    per_agent = get_flow_transfer_max_revisions_per_agent()
+    if (len(agents) > get_flow_transfer_max_agents()
+            or any(len(agent["revisions"]) > per_agent for agent in agents.values())
+            or (sum(len(profile["revisions"]) for profile in profiles.values())
+                > get_flow_transfer_max_output_structure_revisions())):
         return None
     for agent in agents.values():
         agent["revisions"].sort(key=lambda item: item["revision"])
@@ -168,6 +172,22 @@ def _bundle(db: Session, flow: CurationFlow, curator: ExportCurator, version: st
     return None, bundle_json
 
 
+def _report_inconsistent(exc: ValueError, flow_id: UUID) -> None:
+    """Report through the Sentry facade with only the fixed check code (``InvalidBundle``
+    messages are source-owned literals) or the exception class, never its message. The
+    companion ERROR log skips log-event promotion so Sentry gets one event."""
+    check = str(exc) if isinstance(exc, InvalidBundle) else type(exc).__name__
+    report_runtime_exception(
+        sanitized_runtime_error(f"Flow export bundle is inconsistent ({check})"),
+        component="flow_export", operation="flow_export_inconsistent",
+        context={"check": check, "flow_id": str(flow_id)},
+        fingerprint=["flow_export", "flow_export_inconsistent", check],
+    )
+    logger.error("flow_export_inconsistent", extra={
+        "event": "flow_export_inconsistent", "check": check, "source_flow_id": str(flow_id),
+        "sentry_skip_event": True})
+
+
 def evaluate_flow(db: Session, flow: CurationFlow, curator: ExportCurator, *, issuer: str,
                   app_version: str, exported_at: str) -> EvaluatedFlow:
     """The flow's list item, and its bundle when it can be imported. One broken flow
@@ -178,11 +198,10 @@ def evaluate_flow(db: Session, flow: CurationFlow, curator: ExportCurator, *, is
                                       app_version=app_version, exported_at=exported_at)
     except ValueError as exc:
         # Every curator-fixable problem is a reason above. Anything else (an integrity
-        # failure, a bundle the resolver must refuse) is a defect in main: ERROR, and
-        # only the fixed check code or exception class is logged, never its message.
-        check = str(exc) if isinstance(exc, InvalidBundle) else type(exc).__name__
-        logger.error("flow_export_inconsistent", extra={
-            "event": "flow_export_inconsistent", "check": check, "source_flow_id": str(flow.id)})
+        # failure, a bundle the resolver must refuse) is a defect in main, reported to
+        # Sentry. The curator still sees the fixed "cannot_run" reason (the eight reason
+        # codes are a cross-repo contract) and the rest of the list still answers.
+        _report_inconsistent(exc, flow.id)
         reason, bundle_json = "cannot_run", None
     else:
         if reason is not None:
