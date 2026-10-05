@@ -6010,7 +6010,11 @@ def _builder_page(
             total_key: total,
             "candidates": [],
         }
-    budget = tool_result_max_bytes()
+    # The list/find tools return this page inside the AgrQueryResult envelope,
+    # so reserve the envelope's bytes; the whole tool result must fit.
+    budget = tool_result_max_bytes() - serialized_size(
+        _ok(data={}, count=total, lookup_status=LOOKUP_STATUS_SUCCESS)
+    )
     items = candidates if decorate is None else None
 
     def render(page: List[Dict[str, Any]], returned: int) -> Dict[str, Any]:
