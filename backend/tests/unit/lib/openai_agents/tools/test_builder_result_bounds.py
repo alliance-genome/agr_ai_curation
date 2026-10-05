@@ -217,3 +217,91 @@ def test_all_find_tools_read_exact_summary_and_reject_stale_or_other_workspace(m
         assert invoke(**descriptor).data["error_code"] == "invalid_result_cursor"
     finally:
         builder.reset_active_extraction_builder_workspace(token)
+
+
+def _generic_staged(index: int) -> dict[str, Any]:
+    return {
+        "class_key": "generic:generic_object",
+        "semantic_class": "genetic_entity",
+        "label": f"P{{GD{index}}}v{index}",
+        "attributes": {"synonyms": f"alias {index}", "source": "BDSC", **({"extra": "x"} if index % 3 else {})},
+    }
+
+
+@pytest.mark.parametrize("module_name,tool_suffix,staged_fields", [
+    ("generic_builder_tools", "generic_objects", _generic_staged),
+    ("allele_builder_tools", "allele_observations", None),
+    ("agr_curation", "gene_expression_observations", None),
+])
+@pytest.mark.parametrize("tool_kind", ["list", "find"])
+@pytest.mark.parametrize("budget", [8192, 32768])
+def test_size_truncated_pages_keep_the_whole_tool_result_within_budget(
+    monkeypatch, module_name, tool_suffix, staged_fields, tool_kind, budget
+):
+    """PROD-23: a page cut by the size budget must still fit once wrapped in the
+    tool's result envelope, the size the agent runtime enforces."""
+    import importlib
+
+    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", str(budget))
+    module = importlib.import_module(f"agr_ai_curation_alliance.tools.{module_name}")
+    for name in vars(module):
+        if name.startswith("_emit_") and name.endswith("_builder_event"):
+            monkeypatch.setattr(module, name, lambda *args, **kwargs: None)
+    invoke = getattr(module, f"_{tool_kind}_staged_{tool_suffix}_impl")
+    workspace = _workspace(0)
+    count = 240
+    for index in range(count):
+        workspace.upsert_candidate(
+            candidate_id=f"cand-{index:04d}",
+            staged_fields=(
+                staged_fields(index) if staged_fields else {"where_expressed_statement": f"GFP {index}"}
+            ),
+            pending_ref_ids=[f"pending-{index:04d}"],
+            evidence_record_ids=[f"evidence-{index:04d}-{part}" for part in range(8)],
+        )
+    token = builder.set_active_extraction_builder_workspace(workspace)
+    try:
+        seen: list[str] = []
+        offset = 0
+        size_truncated = 0
+        while True:
+            kwargs = {"include_discarded": False} if tool_kind == "list" else {}
+            result = invoke(limit=100, offset=offset, **kwargs)
+            assert result.status == "ok"
+            assert serialized_size(result) <= budget
+            size_truncated += result.data["page_ended_by"] == "size_budget"
+            seen.extend(candidate["candidate_id"] for candidate in result.data["candidates"])
+            if result.data["next_offset"] is None:
+                break
+            offset = result.data["next_offset"]
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)
+
+    assert seen == [f"cand-{index:04d}" for index in range(count)]
+    assert size_truncated
+
+
+def test_filtered_find_reserves_the_envelope_the_tool_returns(monkeypatch):
+    """The reserve must match the returned envelope even when a find matches
+    fewer candidates (fewer count digits) than the workspace holds."""
+    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "8192")
+    monkeypatch.setattr(agr_curation, "_emit_gene_expression_builder_event", lambda *a, **k: None)
+    workspace = _workspace(150)
+    for index in range(80):
+        workspace.get_candidate(f"cand-{index:04d}").staged_fields["note"] = "selected"
+    token = builder.set_active_extraction_builder_workspace(workspace)
+    try:
+        result = agr_curation._find_staged_gene_expression_observations_impl(
+            field_value_contains="selected", limit=100, offset=0
+        )
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)
+
+    assert result.status == "ok"
+    assert result.data["matched_candidate_count"] == 80
+    assert result.data["candidate_count"] == 150
+    envelope = agr_curation._ok(
+        data={}, count=result.count, lookup_status=agr_curation.LOOKUP_STATUS_SUCCESS
+    )
+    assert result.data["budget_bytes"] + serialized_size(envelope) <= 8192
+    assert serialized_size(result) <= 8192
