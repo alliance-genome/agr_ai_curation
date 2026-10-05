@@ -184,6 +184,39 @@ def list_execution_revisions(
     return results, next_revision
 
 
+def _require_profile_pin(
+    db: Session, saved: AgentExecutionSnapshot, user_id: int, *, include_archived: bool,
+) -> None:
+    pin = saved.output_contract.generic_profile_ref
+    if pin is None:
+        return
+    profile = get_profile_revision(
+        db, pin.profile_id, pin.revision, user_id, include_archived=include_archived,
+    )
+    if profile.id != pin.profile_revision_id or profile.fingerprint != pin.fingerprint:
+        raise ValueError("Selected profile revision identity mismatch")
+
+
+def _revision_row(
+    agent_id: UUID, saved: AgentExecutionSnapshot, *, revision_number: int, creator_id: int,
+    notes: str | None,
+) -> AgentExecutionRevision:
+    pin = saved.output_contract.generic_profile_ref
+    return AgentExecutionRevision(
+        agent_id=agent_id,
+        revision=revision_number,
+        creator_id=creator_id,
+        fingerprint=saved.fingerprint(),
+        snapshot=saved.model_dump(mode="json"),
+        notes=notes,
+        output_state=saved.output_contract.output_state,
+        output_mode=saved.output_contract.output_mode,
+        output_schema_key=saved.output_contract.output_schema_key,
+        profile_revision_id=pin.profile_revision_id if pin else None,
+        profile_fingerprint=pin.fingerprint if pin else None,
+    )
+
+
 def append_execution_revision(
     db: Session,
     agent: Agent,
@@ -220,35 +253,40 @@ def append_execution_revision(
             )
         ).scalar_one()
         revision_number = previous.revision + 1
-    pin = saved.output_contract.generic_profile_ref
-    if pin is not None:
-        profile = get_profile_revision(
-            db, pin.profile_id, pin.revision, user_id,
-            include_archived=allow_archived_profile,
-        )
-        if (
-            profile.id != pin.profile_revision_id
-            or profile.fingerprint != pin.fingerprint
-        ):
-            raise ValueError("Selected profile revision identity mismatch")
-    row = AgentExecutionRevision(
-        agent_id=agent.id,
-        revision=revision_number,
-        creator_id=user_id,
-        fingerprint=saved.fingerprint(),
-        snapshot=saved.model_dump(mode="json"),
-        notes=notes,
-        output_state=saved.output_contract.output_state,
-        output_mode=saved.output_contract.output_mode,
-        output_schema_key=saved.output_contract.output_schema_key,
-        profile_revision_id=pin.profile_revision_id if pin else None,
-        profile_fingerprint=pin.fingerprint if pin else None,
-    )
+    _require_profile_pin(db, saved, user_id, include_archived=allow_archived_profile)
+    row = _revision_row(agent.id, saved, revision_number=revision_number, creator_id=user_id,
+                        notes=notes)
     db.add(row)
     db.flush()
     locked.execution_revision_id = row.id
     # Keep the editable head's packaged schema aligned with the explicit state.
     locked.output_schema_key = saved.output_contract.output_schema_key
+    db.flush()
+    return row
+
+
+def insert_imported_execution_revision(
+    db: Session,
+    agent: Agent,
+    snapshot: AgentExecutionSnapshot,
+    *,
+    revision_id: UUID,
+    revision_number: int,
+    creator_id: int,
+) -> AgentExecutionRevision:
+    """Insert one imported immutable revision with its given id and number.
+
+    Flow import copies exactly the revisions a flow pins, keeping their numbers, so the
+    head is not moved here; the importer sets it once all of an agent's revisions exist.
+    """
+    saved = AgentExecutionSnapshot.model_validate(snapshot.model_dump(mode="json"))
+    if agent.user_id != creator_id or not agent.agent_key.startswith("ca_"):
+        raise ExecutionRevisionNotFoundError("Executable agent revision not found")
+    _require_profile_pin(db, saved, creator_id, include_archived=True)
+    row = _revision_row(agent.id, saved, revision_number=revision_number, creator_id=creator_id,
+                        notes=None)
+    row.id = revision_id
+    db.add(row)
     db.flush()
     return row
 
