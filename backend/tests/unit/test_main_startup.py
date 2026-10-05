@@ -65,6 +65,7 @@ def test_create_app_registers_benchmark_sources_without_loading_catalog(monkeypa
         ("/api/v1/benchmarks/sources/document-conversions", "POST"),
         ("/api/v1/benchmarks/sources/document-conversions/{conversion_id}", "GET"),
     }
+    assert any(route.path == "/api/flow-exports/{flow_id}" for route in application.routes)
 
 
 async def test_startup_stops_on_partial_flow_transfer_config(monkeypatch):
