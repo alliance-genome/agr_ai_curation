@@ -169,6 +169,21 @@ def test_an_unexpected_failure_is_a_sanitized_503(setup):
     assert "must not leak" not in response.text
 
 
+def test_a_failed_runnability_report_keeps_the_committed_import(setup, caplog):
+    setup.calls.contracts.side_effect = RuntimeError("report detail that must not leak")
+    with caplog.at_level(logging.INFO, logger=api.logger.name):
+        response = post(setup, signed(setup))
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["outcome"], body["version"], body["flow_id"]) == ("imported", 1, str(setup.flow_id))
+    assert body["runnable"] is None and body["run_problem"] is None and body["reason"] is None
+    assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+        (logging.ERROR, "flow_import_report_failed"), (logging.INFO, "flow_import_done")]
+    assert caplog.records[0].error_type == "RuntimeError"
+    assert "must not leak" not in caplog.text and "must not leak" not in response.text
+    assert all("must not leak" not in str(vars(record)) for record in caplog.records)
+
+
 def test_a_refusal_is_a_200_with_its_reason_and_the_current_copy(setup, caplog):
     setup.calls.flow.side_effect = ImportRefused("fields_need_choosing", "layout")
     setup.calls.latest.return_value = SimpleNamespace(flow_id=setup.flow_id, version=2)

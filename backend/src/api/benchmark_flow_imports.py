@@ -214,11 +214,21 @@ def _import(curator: BenchmarkCuratorContext, config: FlowImportConfig,
                                  runnable=None, run_problem=None)
     except ImportConflict as conflict:
         _defect("flow_import_conflict", 409, "import_conflict", curator, str(conflict))
-    with SessionLocal() as session:
-        contracts = saved_flow_contracts(session, curator, result.flow_id)
+    # The import is committed. A failure to report whether the copy can run must not
+    # turn it into an "unavailable" answer, so the outcome stands without that report.
+    runnable: bool | None = None
+    run_problem: str | None = None
+    try:
+        with SessionLocal() as session:
+            contracts = saved_flow_contracts(session, curator, result.flow_id)
+        runnable, run_problem = contracts.runnable, contracts.run_problem
+    except Exception as exc:
+        logger.error("flow_import_report_failed", extra={
+            "event": "flow_import_report_failed", "error_type": type(exc).__name__,
+            "source_flow_id": str(source.source_flow_id), "curator_user_id": curator.db_user_id})
     logger.info("flow_import_done", extra={
         "event": "flow_import_done", "outcome": result.outcome, "version": result.version,
         "source_flow_id": str(source.source_flow_id), "curator_user_id": curator.db_user_id})
     return FlowImportOutcome(outcome=result.outcome, reason=None, flow_id=result.flow_id,
                              version=result.version, source_version=source.source_version,
-                             runnable=contracts.runnable, run_problem=contracts.run_problem)
+                             runnable=runnable, run_problem=run_problem)
