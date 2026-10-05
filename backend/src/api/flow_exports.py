@@ -109,8 +109,15 @@ def _unavailable(exc: Exception) -> NoReturn:
 
 
 def _rejected(reason: str) -> HTTPException:
-    logger.info("Flow export token rejected", extra={"reason": reason})
+    logger.info("flow_export_refused", extra={"event": "flow_export_refused",
+                                              "code": "authorization_required", "reason": reason})
     return _fail(401, {"code": "authorization_required"})
+
+
+def _refused(status: int, code: str, flow_id: UUID, **detail: Any) -> HTTPException:
+    logger.info("flow_export_refused", extra={"event": "flow_export_refused", "code": code,
+                                              "source_flow_id": str(flow_id)})
+    return _fail(status, {"code": code, **detail})
 
 
 async def require_flow_export_curator(
@@ -197,15 +204,15 @@ def export_flow(
     """One flow at exactly ``version``, signed for this curator for ten minutes."""
     response.headers.update(NO_STORE)
     if curator is None:
-        raise _fail(404, {"code": "flow_not_found"})
+        raise _refused(404, "flow_not_found", flow_id)
     try:
         flow = get_visible_flow(db, flow_id, curator.user_id)
     except HTTPException:
-        raise _fail(404, {"code": "flow_not_found"}) from None
+        raise _refused(404, "flow_not_found", flow_id) from None
     evaluated = _evaluate(db, flow, curator, config)
     item = _item(evaluated).model_dump(mode="json")
     if evaluated.version != version:
-        raise _fail(409, {"code": "flow_changed", "item": item})
+        raise _refused(409, "flow_changed", flow_id, item=item)
     if evaluated.reason is not None or evaluated.bundle is None:
         raise _fail(422, {"code": evaluated.reason, "item": item})
     return SignedFlowBundle(

@@ -1,6 +1,7 @@
 """Bearer-only curator export: strict ID-token checks, read-only identity, signed bundles."""
 
 import base64
+import logging
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -66,6 +67,17 @@ def token(setup, **changes):
     return jwt.encode(claims, setup.rsa_key, algorithm="RS256", headers={"kid": "fixture"})
 
 
+def refusals(caplog):
+    return [(record.code, getattr(record, "source_flow_id", None)) for record in caplog.records
+            if record.getMessage() == "flow_export_refused"]
+
+
+@pytest.fixture
+def info_logs(caplog):
+    caplog.set_level(logging.INFO, logger=api.logger.name)
+    return caplog
+
+
 def bearer(value):
     return {"Authorization": f"Bearer {value}"}
 
@@ -94,10 +106,14 @@ def test_unconfigured_routes_answer_503(setup, monkeypatch):
     lambda s: bearer("x" * 9000),
     lambda s: {"Authorization": "Basic " + token(s)},
 ], ids=["missing", "cookie-only", "main-client-audience", "access-token", "expired", "oversized", "basic"])
-def test_every_bearer_problem_is_401(setup, make):
-    response = setup.client.get("/api/flow-exports", headers=make(setup))
+def test_every_bearer_problem_is_401(setup, make, info_logs):
+    headers = make(setup)
+    response = setup.client.get("/api/flow-exports", headers=headers)
     assert response.status_code == 401
     assert response.json()["detail"] == {"code": "authorization_required"}
+    assert refusals(info_logs) == [("authorization_required", None)]
+    for value in headers.values():
+        assert value.split(" ", 1)[-1].split("=", 1)[-1] not in info_logs.text
 
 
 def test_an_unreachable_sign_in_provider_is_503(setup, monkeypatch):
@@ -119,7 +135,7 @@ def test_a_curator_with_no_account_has_no_flows(setup):
     assert response.json() == {"items": [], "total_items": 0, "next_offset": None}
 
 
-def test_the_list_pages_and_says_why_a_flow_cannot_be_imported(setup, monkeypatch, caplog):
+def test_the_list_pages_and_says_why_a_flow_cannot_be_imported(setup, monkeypatch, info_logs):
     first, second = uuid4(), uuid4()
     monkeypatch.setattr(api, "exportable_flows", lambda db, user_id, offset, limit: (
         [SimpleNamespace(id=first), SimpleNamespace(id=second)], 3))
@@ -132,20 +148,31 @@ def test_the_list_pages_and_says_why_a_flow_cannot_be_imported(setup, monkeypatc
     assert [(item["importable"], item["reason"]) for item in body["items"]] == [
         (True, None), (False, "flexible_output")]
     assert body["total_items"] == 3 and body["next_offset"] == 2
-    assert value not in caplog.text
+    assert value not in info_logs.text
 
 
-def test_an_invisible_flow_is_404(setup, monkeypatch):
+def test_an_invisible_flow_is_404(setup, monkeypatch, info_logs):
     def invisible(db, flow_id, user_id):
         raise HTTPException(403, "Access denied")
     monkeypatch.setattr(api, "get_visible_flow", invisible)
-    response = setup.client.get(f"/api/flow-exports/{uuid4()}", params={"version": VERSION},
+    flow_id = uuid4()
+    response = setup.client.get(f"/api/flow-exports/{flow_id}", params={"version": VERSION},
                                 headers=bearer(token(setup)))
     assert response.status_code == 404 and response.json()["detail"] == {"code": "flow_not_found"}
     assert response.headers["cache-control"] == "no-store"
+    assert refusals(info_logs) == [("flow_not_found", str(flow_id))]
 
 
-def test_a_changed_or_refused_flow_answers_with_its_current_item(setup, monkeypatch):
+def test_a_curator_with_no_account_cannot_export(setup, info_logs):
+    setup.session.scalar.return_value = None
+    flow_id = uuid4()
+    response = setup.client.get(f"/api/flow-exports/{flow_id}", params={"version": VERSION},
+                                headers=bearer(token(setup)))
+    assert response.status_code == 404 and response.json()["detail"] == {"code": "flow_not_found"}
+    assert refusals(info_logs) == [("flow_not_found", str(flow_id))]
+
+
+def test_a_changed_or_refused_flow_answers_with_its_current_item(setup, monkeypatch, info_logs):
     flow_id = uuid4()
     monkeypatch.setattr(api, "get_visible_flow", lambda db, fid, user_id: SimpleNamespace(id=fid))
     monkeypatch.setattr(api, "evaluate_flow", lambda *a, **k: evaluated(flow_id, version="sha256:" + "2" * 64))
@@ -153,6 +180,8 @@ def test_a_changed_or_refused_flow_answers_with_its_current_item(setup, monkeypa
                              headers=bearer(token(setup)))
     assert stale.status_code == 409 and stale.json()["detail"]["code"] == "flow_changed"
     assert stale.json()["detail"]["item"]["version"] == "sha256:" + "2" * 64
+    assert refusals(info_logs) == [("flow_changed", str(flow_id))]
+    assert VERSION not in info_logs.text and "Flow" not in info_logs.text
     monkeypatch.setattr(api, "evaluate_flow", lambda *a, **k: evaluated(flow_id, reason="lookup_tools"))
     refused = setup.client.get(f"/api/flow-exports/{flow_id}", params={"version": VERSION},
                                headers=bearer(token(setup)))
