@@ -20,6 +20,7 @@ from src.lib.agent_studio.execution_revision_service import (
     get_execution_revision,
 )
 from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+from src.lib.prompts import cache as prompt_cache
 from src.models.sql import database
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.custom_agent import CustomAgentVersion
@@ -39,6 +40,11 @@ def converted_world(execution_db, builder_policies, monkeypatch):  # noqa: F811
     CurationFlow.__table__.create(db.connection())
     # The CLI loads the prompt cache from this table, as application startup does.
     PromptTemplate.__table__.create(db.connection())
+    # Start each test with the empty cache of a fresh `--entrypoint python` process,
+    # and restore the module's cache afterwards so later tests do not see this schema's.
+    for name, value in (("_initialized", False), ("_active_cache", {}),
+                        ("_version_cache", {}), ("_loaded_at", None)):
+        monkeypatch.setattr(prompt_cache, name, value)
     migrate(db)  # installs the flow pin-sync triggers
     # Saving as the owner with their active groups reads their project memberships.
     db.execute(text("CREATE TABLE project_members (project_id uuid, user_id integer)"))
@@ -323,16 +329,12 @@ def test_cli_apply_and_rollback_load_the_prompt_cache_without_app_startup(
     # The documented run (`--entrypoint python`) has no application startup, so the
     # prompt cache starts empty. Converting an agent built on a system agent resolves
     # that parent's prompt layers, which needs the cache loaded from this database.
-    from src.lib.prompts import cache
-
     db, agent, flow, receipt, plan = converted_world
     db.add(PromptTemplate(agent_name="pdf_extraction", prompt_type="system", group_id=None,
                           content="Read the paper and stage what it reports.", version=1,
                           is_active=True))
     agent.template_source = "pdf_extraction"
     db.flush()
-    for name, value in (("_initialized", False), ("_active_cache", {}), ("_version_cache", {})):
-        monkeypatch.setattr(cache, name, value)
     _sessions(db, monkeypatch)
 
     assert _cli()(_args(tmp_path, plan)) == 0
@@ -342,7 +344,7 @@ def test_cli_apply_and_rollback_load_the_prompt_cache_without_app_startup(
     db.refresh(flow)
     assert pinned(flow)["agent_revision_id"] == str(result.new_revision_id)
 
-    monkeypatch.setattr(cache, "_initialized", False)
+    monkeypatch.setattr(prompt_cache, "_initialized", False)
     assert _cli()(_args(tmp_path, plan, command="rollback")) == 0
     db.refresh(flow)
     assert pinned(flow)["agent_revision_id"] == str(receipt.agent_revision_id)
