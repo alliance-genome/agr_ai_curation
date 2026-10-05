@@ -36,6 +36,9 @@ tail -c 32 flow-export.der | base64 -w0 > flow-export.seed.b64      # FLOW_EXPOR
 openssl pkey -inform DER -in flow-export.der -pubout -outform DER | tail -c 32 | base64 -w0; echo
 ```
 
+Then delete the DER file (`shred -u flow-export.der`), and keep the seed file only
+until it is copied into `.env` (then `shred -u flow-export.seed.b64`).
+
 The last command prints only the public key. Rotation: replace both values and
 restart both services; bundles in flight fail as `untrusted_bundle` and the
 curator simply clicks again.
