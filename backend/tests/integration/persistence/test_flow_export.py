@@ -17,7 +17,7 @@ from .test_agent_execution_revision_persistence import builder_policies, executi
 from .test_generic_profile_persistence import profile_db  # noqa: F401
 from .test_retired_model_conversion import make_agent, make_flow, save_on_retired, world  # noqa: F401
 
-ISSUER = "https://ai-curation-dev.alliancegenome.org"
+ISSUER = "https://ai-curation-dev.example.org"
 CURATOR_ISS = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_synthetic"
 
 

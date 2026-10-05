@@ -23,7 +23,7 @@ from src.lib.flow_transfer.signing import sign_bundle
 from tests.unit.lib.flow_transfer.support import CURATOR_ISS, CURATOR_SUB, ISSUER, make_bundle
 
 CURATOR = BenchmarkCuratorContext(subject=CURATOR_SUB, auth_provider="oidc", auth_issuer=CURATOR_ISS,
-                                  db_user_id=42, active_groups=("FB",))
+                                  db_user_id=42, active_groups=("group-alpha",))
 PATH = "/api/v1/benchmarks/flow-imports"
 
 
@@ -75,7 +75,7 @@ def test_an_import_runs_both_phases_and_reports_whether_the_flow_can_run(setup):
     assert (body["outcome"], body["version"], body["runnable"]) == ("imported", 1, True)
     assert body["flow_id"] == str(setup.flow_id) and body["reason"] is None
     ctx = setup.calls.dependencies.call_args.args[1]
-    assert (ctx.user_id, ctx.subject, ctx.groups, ctx.export_issuer) == (42, CURATOR_SUB, ["FB"], ISSUER)
+    assert (ctx.user_id, ctx.subject, ctx.groups, ctx.export_issuer) == (42, CURATOR_SUB, ["group-alpha"], ISSUER)
     setup.calls.flow.assert_called_once()
 
 

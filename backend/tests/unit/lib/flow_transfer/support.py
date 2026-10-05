@@ -7,7 +7,7 @@ from src.lib.prompts.assembly import _bundle, _make_layer
 from src.schemas.agent_execution_revision import AgentExecutionSnapshot
 from src.schemas.generic_extraction_profile import normalize_profile_contract
 
-ISSUER = "https://ai-curation-dev.alliancegenome.org"
+ISSUER = "https://ai-curation-dev.example.org"
 CURATOR_ISS = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_synthetic"
 CURATOR_SUB = "curator-sub-1"
 PROFILE_CONTRACT = {

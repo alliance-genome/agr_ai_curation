@@ -37,7 +37,7 @@ def import_db(profile_db):  # noqa: F811
 
 def _row(flow, version=1):
     return BenchmarkFlowImport(
-        user_id=2, export_issuer="https://ai-curation-dev.alliancegenome.org", source_flow_id=SOURCE,
+        user_id=2, export_issuer="https://ai-curation-dev.example.org", source_flow_id=SOURCE,
         source_version="sha256:" + "1" * 64, flow_id=flow.id, version=version,
         flow_revision="sha256:" + "2" * 64, pins=[], bundle_sha256="sha256:" + "3" * 64,
         source_app_version="0.10.1",

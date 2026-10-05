@@ -17,7 +17,7 @@ def test_ids_are_stable_and_separate_per_importer_kind_and_issuer():
     others = {
         derived_id("flow", source, export_issuer=ISSUER, importer_sub="b"),
         derived_id("agent", source, export_issuer=ISSUER, importer_sub="a"),
-        derived_id("flow", source, export_issuer="https://ai-curation.alliancegenome.org", importer_sub="a"),
+        derived_id("flow", source, export_issuer="https://ai-curation.example.org", importer_sub="a"),
     }
     assert first not in others and len(others) == 3
 

@@ -30,7 +30,7 @@ from .test_flow_export import profile_bound
 from .test_generic_profile_persistence import profile_db  # noqa: F401
 from .test_retired_model_conversion import make_agent, make_flow, receipt, world  # noqa: F401
 
-ISSUER = "https://ai-curation-dev.alliancegenome.org"
+ISSUER = "https://ai-curation-dev.example.org"
 CURATOR_ISS = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_synthetic"
 
 
@@ -229,7 +229,7 @@ def test_layouts_move_with_the_exported_receipts(resolver, monkeypatch):
 
 def test_a_group_restricted_step_is_refused_outside_the_group(resolver):
     db = resolver
-    agent = make_agent(db, "FB finder")
+    agent = make_agent(db, "Group finder")
     agent.allowed_group_ids = ["FB"]
     snapshot = capture_execution_snapshot(db, agent, AgentOutputContract(output_state="none"))
     row = append_execution_revision(db, agent, snapshot, user_id=1,

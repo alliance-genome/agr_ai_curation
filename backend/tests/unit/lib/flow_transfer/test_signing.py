@@ -51,7 +51,7 @@ def test_wrong_key_wrong_issuer_and_expiry_are_refused():
     token = sign_bundle(raw, config=export, now=NOW)
     _refused(token, raw, other_key)
     _refused(token, raw, FlowImportConfig(public_key=imported.public_key,
-                                          issuer="https://ai-curation.alliancegenome.org"))
+                                          issuer="https://ai-curation.example.org"))
     _refused(sign_bundle(raw, config=export, now=NOW - timedelta(minutes=11)), raw, imported)
 
 
