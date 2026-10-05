@@ -67,6 +67,17 @@ def test_create_app_registers_benchmark_sources_without_loading_catalog(monkeypa
     }
 
 
+async def test_startup_stops_on_partial_flow_transfer_config(monkeypatch):
+    main = _main_module()
+    for key in ("FLOW_EXPORT_SIGNING_KEY", "FLOW_EXPORT_BEARER_CLIENT_IDS",
+                "FLOW_IMPORT_EXPORT_ISSUER", "FLOW_IMPORT_EXPORT_PUBLIC_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("FLOW_EXPORT_ISSUER", "https://ai-curation-dev.alliancegenome.org")
+    with pytest.raises(RuntimeError, match="FLOW_EXPORT"):
+        async with main.lifespan(FastAPI()):
+            pass
+
+
 class TestPdfExtractionTimeoutValidation:
     def test_low_timeout_recommends_canonical_default(self, monkeypatch):
         monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "299")

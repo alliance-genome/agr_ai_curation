@@ -33,6 +33,7 @@ from src.api.admin.costs import router as admin_costs_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
 from src.lib.logging_config import configure_logging, create_request_context_middleware
+from src.lib.flow_transfer.config import validate_flow_transfer_config
 from src.lib.database.postgres_connection_resolver import (
     get_postgres_connection_resolver,
 )
@@ -289,6 +290,7 @@ async def lifespan(app: FastAPI):
 
     # Validate critical environment variables
     try:
+        validate_flow_transfer_config()
         _validate_pdf_extraction_timeout()
         _validate_embedding_env()
     except RuntimeError as e:
