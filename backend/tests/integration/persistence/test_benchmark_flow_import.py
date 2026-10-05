@@ -113,6 +113,19 @@ def test_reimporting_the_same_version_changes_nothing(resolver):
     assert flow_summary(db.get(CurationFlow, first.flow_id)).revision == digest
 
 
+def test_a_concurrent_repeat_of_the_same_version_says_nothing_changed(resolver):
+    # Two tabs: both pass the early check, the second waits on the lock, then finds version 1.
+    db = resolver
+    agent = make_agent(db, "Finder")
+    source = make_flow(db, [(agent, head(db, agent))])
+    checked, ctx = exported(db, source), context()
+    first = run_import(db, ctx, checked)
+    import_dependencies(db, ctx, checked)
+    again = import_flow(db, ctx, checked)
+    assert (again.outcome, again.version, again.flow_id) == ("unchanged", 1, first.flow_id)
+    assert count(db, BenchmarkFlowImport) == 1
+
+
 def test_an_update_changes_the_same_flow_and_keeps_old_revisions(resolver):
     db = resolver
     agent = make_agent(db, "Finder")
@@ -171,7 +184,7 @@ def test_a_refused_save_changes_no_flow_and_a_retry_reuses_the_copies(resolver, 
     source = make_flow(db, [(agent, head(db, agent))])
     checked, ctx = exported(db, source), context()
     import_dependencies(db, ctx, checked)
-    agents = count(db, Agent)
+    agents, revisions = count(db, Agent), count(db, AgentExecutionRevision)
     original = importer.save_flow_definition
 
     def refuse(*args, **kwargs):
@@ -187,7 +200,7 @@ def test_a_refused_save_changes_no_flow_and_a_retry_reuses_the_copies(resolver, 
     assert db.get(CurationFlow, flow_id) is None and count(db, BenchmarkFlowImport) == 0
     monkeypatch.setattr(importer, "save_flow_definition", original)
     assert run_import(db, ctx, checked).outcome == "imported"
-    assert count(db, Agent) == agents
+    assert (count(db, Agent), count(db, AgentExecutionRevision)) == (agents, revisions)
 
 
 def test_layouts_move_with_the_exported_receipts(resolver, monkeypatch):

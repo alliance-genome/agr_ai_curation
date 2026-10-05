@@ -280,6 +280,10 @@ def _flow_name(db: Session, user_id: int, source: str, flow_id: UUID) -> str:
 def import_flow(db: Session, ctx: ImportContext, checked: CheckedBundle) -> ImportResult:
     """Phase 2: the curator's flow copy and its import record, all or nothing."""
     _lock_curator(db, ctx)
+    # A concurrent import of the same version may have finished while this one waited.
+    done = unchanged_import(db, ctx, checked)
+    if done is not None:
+        return done
     source = checked.bundle.flow
     definition = FlowDefinition.model_validate(deepcopy(source.definition))
     pins = []
