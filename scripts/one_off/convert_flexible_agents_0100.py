@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from src.lib.agent_studio import flexible_migration as migration
     from src.lib.agent_studio.custom_agent_service import CustomAgentError
+    from src.lib.prompts import cache as prompt_cache
     from src.models.sql.database import SessionLocal
 
     if args.command == "inventory":
@@ -72,6 +73,10 @@ def main(argv: list[str] | None = None) -> int:
         return _refuse(f"{args.result} already exists; it records an earlier apply")
 
     with SessionLocal() as db:
+        # This runs without application startup. Saving the converted agent
+        # resolves its parent's prompt layers through the prompt cache, so load
+        # it from this database first, as startup does.
+        prompt_cache.initialize(db)
         try:
             if recorded is None:
                 report = migration.apply(db, plan).model_dump(mode="json")

@@ -23,6 +23,7 @@ from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
 from src.models.sql import database
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.custom_agent import CustomAgentVersion
+from src.models.sql.prompts import PromptTemplate
 from src.schemas.agent_execution_revision import AgentOutputContract
 from .test_agent_execution_revision_persistence import builder_policies, execution_db  # noqa: F401
 from .test_flow_revision_persistence import migrate
@@ -36,6 +37,8 @@ def converted_world(execution_db, builder_policies, monkeypatch):  # noqa: F811
     db, *_ = execution_db
     CustomAgentVersion.__table__.create(db.connection())
     CurationFlow.__table__.create(db.connection())
+    # The CLI loads the prompt cache from this table, as application startup does.
+    PromptTemplate.__table__.create(db.connection())
     migrate(db)  # installs the flow pin-sync triggers
     # Saving as the owner with their active groups reads their project memberships.
     db.execute(text("CREATE TABLE project_members (project_id uuid, user_id integer)"))
@@ -311,5 +314,35 @@ def test_cli_a_refused_second_repin_leaves_the_agent_unconverted(
     assert calls == [flow.id, second.id]
     assert not (tmp_path / "agent.result.json").exists()
     assert _head(db, agent) == receipt.agent_revision_id
+    db.refresh(flow)
+    assert pinned(flow)["agent_revision_id"] == str(receipt.agent_revision_id)
+
+
+def test_cli_apply_and_rollback_load_the_prompt_cache_without_app_startup(
+        converted_world, tmp_path, monkeypatch):
+    # The documented run (`--entrypoint python`) has no application startup, so the
+    # prompt cache starts empty. Converting an agent built on a system agent resolves
+    # that parent's prompt layers, which needs the cache loaded from this database.
+    from src.lib.prompts import cache
+
+    db, agent, flow, receipt, plan = converted_world
+    db.add(PromptTemplate(agent_name="pdf_extraction", prompt_type="system", group_id=None,
+                          content="Read the paper and stage what it reports.", version=1,
+                          is_active=True))
+    agent.template_source = "pdf_extraction"
+    db.flush()
+    for name, value in (("_initialized", False), ("_active_cache", {}), ("_version_cache", {})):
+        monkeypatch.setattr(cache, name, value)
+    _sessions(db, monkeypatch)
+
+    assert _cli()(_args(tmp_path, plan)) == 0
+    result = migration.ConversionResult.model_validate_json(
+        (tmp_path / "agent.result.json").read_text())
+    assert _head(db, agent) == result.new_revision_id
+    db.refresh(flow)
+    assert pinned(flow)["agent_revision_id"] == str(result.new_revision_id)
+
+    monkeypatch.setattr(cache, "_initialized", False)
+    assert _cli()(_args(tmp_path, plan, command="rollback")) == 0
     db.refresh(flow)
     assert pinned(flow)["agent_revision_id"] == str(receipt.agent_revision_id)
