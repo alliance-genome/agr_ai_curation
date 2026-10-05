@@ -167,6 +167,11 @@ services:
       # /app/scripts. Dockerfile.test builds from ./backend so it cannot COPY it
       # (Dockerfile.unit-test, built from the repo root, does).
       - ./scripts/run_benchmarks.py:/app/scripts/run_benchmarks.py:ro
+      # backend-tests runs all of tests/, so it also needs the mounts that
+      # backend-unit-tests (alliance_config) and backend-persistence-tests
+      # (scripts/one_off) provide for their slices.
+      - ./alliance_config:/app/alliance_config:ro
+      - ./scripts/one_off:/app/scripts/one_off:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
