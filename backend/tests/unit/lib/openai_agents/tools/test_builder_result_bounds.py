@@ -279,3 +279,29 @@ def test_size_truncated_pages_keep_the_whole_tool_result_within_budget(
 
     assert seen == [f"cand-{index:04d}" for index in range(count)]
     assert size_truncated
+
+
+def test_filtered_find_reserves_the_envelope_the_tool_returns(monkeypatch):
+    """The reserve must match the returned envelope even when a find matches
+    fewer candidates (fewer count digits) than the workspace holds."""
+    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "8192")
+    monkeypatch.setattr(agr_curation, "_emit_gene_expression_builder_event", lambda *a, **k: None)
+    workspace = _workspace(150)
+    for index in range(80):
+        workspace.get_candidate(f"cand-{index:04d}").staged_fields["note"] = "selected"
+    token = builder.set_active_extraction_builder_workspace(workspace)
+    try:
+        result = agr_curation._find_staged_gene_expression_observations_impl(
+            field_value_contains="selected", limit=100, offset=0
+        )
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)
+
+    assert result.status == "ok"
+    assert result.data["matched_candidate_count"] == 80
+    assert result.data["candidate_count"] == 150
+    envelope = agr_curation._ok(
+        data={}, count=result.count, lookup_status=agr_curation.LOOKUP_STATUS_SUCCESS
+    )
+    assert result.data["budget_bytes"] + serialized_size(envelope) <= 8192
+    assert serialized_size(result) <= 8192
