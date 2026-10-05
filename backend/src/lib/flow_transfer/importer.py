@@ -304,7 +304,11 @@ def import_flow(db: Session, ctx: ImportContext, checked: CheckedBundle) -> Impo
         pins.append(pin)
     resolved = resolve_flow_execution_revisions(db, definition, user_id=ctx.user_id,
                                                 active_group_ids=ctx.groups)
-    errors = [finding for finding in resolved.findings if finding.severity == "error"]
+    # Only the copied steps are judged here. A selected-fields layout still records
+    # its source's old fingerprint until move_layouts runs, and the save and the
+    # check after it judge the whole flow.
+    errors = [finding for finding in resolved.findings
+              if finding.severity == "error" and finding.node_id in checked.pins]
     if errors:
         raise ImportRefused(reason_for_finding(errors[0].code), "resolve")
     try:

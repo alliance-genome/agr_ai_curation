@@ -19,11 +19,14 @@ from src.lib.flow_transfer.export import ExportCurator, evaluate_flow
 from src.lib.flow_transfer.ids import derived_agent_key, derived_id
 from src.lib.flow_transfer.importer import (ImportContext, ImportRefused, import_dependencies,
                                             import_flow, unchanged_import)
-from src.lib.flows.execution_revisions import flow_execution_revision_findings
+from src.lib.flows.execution_revisions import (flow_execution_revision_findings,
+                                               resolve_flow_execution_revisions)
 from src.models.sql import Agent, AgentExecutionRevision, BenchmarkFlowImport, CurationFlow
 from src.models.sql.generic_extraction_profile import (GenericExtractionProfile,
                                                        GenericExtractionProfileRevision)
 from src.schemas.agent_execution_revision import AgentExecutionSnapshot, AgentOutputContract
+from src.schemas.flows import FlowDefinition
+from src.schemas.generic_extraction_profile import GenericProfileContract
 from .test_agent_execution_revision_persistence import builder_policies, execution_db  # noqa: F401
 from .test_benchmark_flow_import_migration import run_flow_import_migration
 from .test_flow_export import profile_bound
@@ -260,3 +263,56 @@ def test_a_pinned_output_structure_gets_a_private_copy(resolver, builder_policie
     [record] = db.scalars(sa.select(BenchmarkFlowImport)).all()
     assert record.pins[0]["profile_revision_id"] == str(revision_id)
     assert run_import(db, context(), exported(db, source)).outcome == "unchanged"
+
+
+def _with_selected_fields_output(db, source, source_node="node_0"):
+    """Add a JSON file output step whose layout copies a field current for ``source_node``."""
+    definition = deepcopy(source.flow_definition)
+    plan = {"format": "json", "row_source": "object", "row_strategy": "wide_union",
+            "selection_mode": "selected_fields", "missing_value": None,
+            "selected_sources": [{"node_id": source_node, "schema_fingerprint": "sha256:unset"}],
+            "columns": [{"key": "Name in article", "field_ref": "object.attribute.paper_name",
+                         "source_node_id": source_node}]}
+    definition["nodes"].append({
+        "id": "output", "type": "output", "position": {"x": 300, "y": 0},
+        "data": {"agent_id": "json_formatter", "agent_display_name": "JSON File Formatter",
+                 "output_key": "export", "projection_plan": plan}})
+    definition["edges"].append({"id": "e_out", "source": source_node, "target": "output",
+                                "role": "output_attachment"})
+    # Choosing the fields records the source's current catalog fingerprint.
+    resolved = resolve_flow_execution_revisions(
+        db, FlowDefinition.model_validate(definition), user_id=source.user_id, active_group_ids=[])
+    catalog = resolved.projection_catalogs[source_node]
+    plan["selected_sources"][0]["schema_fingerprint"] = catalog["schema_fingerprint"]
+    source.flow_definition = definition
+    flag_modified(source, "flow_definition")
+    db.flush()
+    assert flow_execution_revision_findings(db, source.flow_definition, user_id=source.user_id,
+                                            active_group_ids=[]) == []
+    return catalog
+
+
+def test_a_selected_fields_layout_follows_the_copied_step(resolver, builder_policies):  # noqa: F811
+    db = resolver
+    agent = make_agent(db, "Structured finder")
+    service.update_custom_agent(
+        db, agent, expected_revision_id=agent.execution_revision_id,
+        new_generic_profile=GenericProfileContract.model_validate({
+            "name": "Things", "semantic_class": "thing", "fields": [{
+                "key": "paper_name", "required": True, "nullable": True,
+                "source_labels": ["Name in article"], "value_schema": {"kind": "string"}}]}))
+    source = make_flow(db, [(agent, head(db, agent))])
+    before = _with_selected_fields_output(db, source)
+
+    result = run_import(db, context(), exported(db, source))
+
+    assert result.outcome == "imported"
+    copy = db.get(CurationFlow, result.flow_id)
+    resolved = resolve_flow_execution_revisions(
+        db, FlowDefinition.model_validate(copy.flow_definition), user_id=2, active_group_ids=[])
+    current = resolved.projection_catalogs["node_0"]["schema_fingerprint"]
+    output = next(node for node in copy.flow_definition["nodes"] if node["id"] == "output")
+    [selected] = output["data"]["projection_plan"]["selected_sources"]
+    assert selected["schema_fingerprint"] == current != before["schema_fingerprint"]
+    assert flow_execution_revision_findings(db, copy.flow_definition, user_id=2,
+                                            active_group_ids=[]) == []
