@@ -25,6 +25,7 @@ from src.api.benchmark_sources import (
 from src.api.benchmark_document_conversions import router as benchmark_document_conversions_router
 from src.api.benchmark_jobs import router as benchmark_jobs_router
 from src.api.benchmark_catalog import router as benchmark_catalog_router
+from src.api.benchmark_flow_imports import router as benchmark_flow_imports_router
 from src.api.benchmark_assistant import router as benchmark_assistant_router
 from src.api.benchmark_onboarding import router as benchmark_onboarding_router
 from src.schemas.benchmark_job_examples import install_openapi_examples as install_benchmark_openapi_examples
@@ -965,6 +966,7 @@ def create_app() -> FastAPI:
     application.include_router(benchmark_document_conversions_router)
     application.include_router(benchmark_jobs_router)
     application.include_router(benchmark_catalog_router)
+    application.include_router(benchmark_flow_imports_router)
     application.include_router(benchmark_assistant_router)
     application.include_router(benchmark_onboarding_router)
     install_benchmark_openapi_examples(application)
