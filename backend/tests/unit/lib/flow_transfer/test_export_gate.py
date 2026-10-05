@@ -1,5 +1,6 @@
 """The export gate's order and reasons, with the resolver and flow response stubbed."""
 
+import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -7,6 +8,7 @@ import pytest
 
 from src.api import flows as flows_api
 from src.lib.flow_transfer import export
+from src.lib.flow_transfer.bundle import InvalidBundle
 from src.lib.flow_transfer.export import ExportCurator, evaluate_flow
 
 from .support import CURATOR_ISS, ISSUER, task_node
@@ -52,3 +54,54 @@ def test_remaining_critical_issues_cannot_run(monkeypatch):
 def test_an_unreadable_definition_cannot_run_and_does_not_raise():
     evaluated = _evaluate(_flow({"nodes": []}))
     assert evaluated.reason == "cannot_run" and evaluated.version.startswith("sha256:")
+
+
+def _events(caplog, level):
+    return [record.getMessage() for record in caplog.records if record.levelno == level]
+
+
+def _runnable(monkeypatch, nodes=(), entries=None):
+    monkeypatch.setattr(export, "resolve_flow_execution_revisions", lambda *a, **k: SimpleNamespace(
+        findings=(), definition=SimpleNamespace(nodes=list(nodes)), entries_by_node=entries or {}))
+    monkeypatch.setattr(flows_api, "_flow_to_response",
+                        lambda *a, **k: SimpleNamespace(has_critical_issues=False))
+
+
+def test_an_unreadable_definition_is_a_curator_refusal_not_a_defect(caplog):
+    caplog.set_level(logging.INFO, logger=export.__name__)
+    assert _evaluate(_flow({"nodes": []})).reason == "cannot_run"
+    assert _events(caplog, logging.INFO) == ["flow_export_refused"]
+    assert _events(caplog, logging.ERROR) == []
+
+
+def test_an_integrity_failure_in_the_closure_is_logged_as_a_defect(monkeypatch, caplog):
+    receipt = {"agent_id": str(uuid4()), "agent_key": "ca_finder", "agent_revision_id": str(uuid4()),
+               "revision": 1, "fingerprint": "sha256:" + "0" * 64,
+               "output_contract": {"output_state": "none"}}
+    _runnable(monkeypatch, nodes=[SimpleNamespace(id="node_0")],
+              entries={"node_0": {"execution_receipt": receipt}})
+
+    def mismatch(*args, **kwargs):
+        raise ValueError("Executable revision fingerprint mismatch")
+
+    monkeypatch.setattr(export, "get_execution_revision", mismatch)
+    caplog.set_level(logging.INFO, logger=export.__name__)
+    evaluated = _evaluate(_flow())
+    assert evaluated.reason == "cannot_run" and evaluated.bundle is None
+    [record] = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert record.getMessage() == "flow_export_inconsistent" and record.check == "ValueError"
+    assert "mismatch" not in str(record.__dict__)
+    assert _events(caplog, logging.INFO) == []
+
+
+def test_a_bundle_the_resolver_would_refuse_is_logged_as_a_defect(monkeypatch, caplog):
+    _runnable(monkeypatch)
+
+    def refuse(bundle_json):
+        raise InvalidBundle("receipt")
+
+    monkeypatch.setattr(export, "check_bundle", refuse)
+    caplog.set_level(logging.INFO, logger=export.__name__)
+    assert _evaluate(_flow()).reason == "cannot_run"
+    [record] = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert record.getMessage() == "flow_export_inconsistent" and record.check == "receipt"

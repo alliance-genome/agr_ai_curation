@@ -12,7 +12,8 @@ from src.lib.flow_transfer.bundle import check_bundle
 from src.lib.flow_transfer.export import ExportCurator, evaluate_flow, exportable_flows
 from src.models.sql.curation_flow import CurationFlow
 from src.schemas.agent_execution_revision import AgentOutputContract
-from .test_agent_execution_revision_persistence import execution_db  # noqa: F401
+from src.schemas.generic_extraction_profile import GenericProfileContract
+from .test_agent_execution_revision_persistence import builder_policies, execution_db  # noqa: F401
 from .test_generic_profile_persistence import profile_db  # noqa: F401
 from .test_retired_model_conversion import make_agent, make_flow, save_on_retired, world  # noqa: F401
 
@@ -121,3 +122,28 @@ def test_a_broken_flow_is_listed_as_cannot_run(world):  # noqa: F811
     reasons = {flow.name: evaluate(db, flow).reason for flow in flows}
     assert reasons == {"Broken": "cannot_run", "Good": None}
     assert good.id in {flow.id for flow in flows}
+
+
+def profile_bound(db, name):
+    from src.lib.agent_studio import custom_agent_service as service
+    agent = make_agent(db, name)
+    service.update_custom_agent(
+        db, agent, expected_revision_id=agent.execution_revision_id,
+        new_generic_profile=GenericProfileContract.model_validate(
+            {"name": "Things", "semantic_class": "thing", "fields": []}))
+    return agent
+
+
+def test_a_pinned_output_structure_exports_its_exact_revision(world, builder_policies):  # noqa: F811
+    db = world
+    agent = profile_bound(db, "Structured finder")
+    row = head(db, agent)
+    flow = make_flow(db, [(agent, row)])
+    evaluated = evaluate(db, flow)
+    assert evaluated.reason is None
+    checked = check_bundle(evaluated.bundle)
+    ref = checked.snapshots[row.id].output_contract.generic_profile_ref
+    [profile] = checked.bundle.profiles
+    assert profile.source_profile_id == ref.profile_id
+    assert [revision.source_revision_id for revision in profile.revisions] == [ref.profile_revision_id]
+

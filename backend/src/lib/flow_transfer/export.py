@@ -11,15 +11,16 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.execution_revision_service import get_execution_revision
-from src.lib.agent_studio.generic_profile_service import get_profile_revision
 from src.lib.benchmarks.saved_flows import flow_summary
 from src.lib.flows.access import visible_flow_filter
 from src.lib.flows.execution_revisions import resolve_flow_execution_revisions
 from src.models.sql.agent import Agent
 from src.models.sql.curation_flow import CurationFlow
+from src.models.sql.generic_extraction_profile import GenericExtractionProfileRevision
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.schemas.flows import FlowDefinition
 
@@ -63,14 +64,20 @@ def _gate(db: Session, flow: CurationFlow,
           curator: ExportCurator) -> tuple[ReasonCode | None, list[AgentExecutionReceipt]]:
     from src.api import flows as flows_api
 
-    definition = FlowDefinition.model_validate(flow.flow_definition)
+    try:
+        definition = FlowDefinition.model_validate(flow.flow_definition)
+    except ValidationError:
+        return "cannot_run", []  # the stored flow no longer opens: the curator can repair it
     resolved = resolve_flow_execution_revisions(db, definition, user_id=curator.user_id,
                                                 active_group_ids=curator.groups)
     errors = [finding for finding in resolved.findings if finding.severity == "error"]
     if errors:
         return reason_for_finding(errors[0].code), []
-    response = flows_api._flow_to_response(flow, viewer_user_id=curator.user_id,
-                                           active_group_ids=curator.groups, db=db)
+    try:
+        response = flows_api._flow_to_response(flow, viewer_user_id=curator.user_id,
+                                               active_group_ids=curator.groups, db=db)
+    except HTTPException:
+        return "cannot_run", []  # the flows page refuses it the same way
     if response.has_critical_issues:
         return "cannot_run", []
     pins = []
@@ -113,8 +120,12 @@ def _closure(db: Session, curator: ExportCurator,
                                                          "revisions": []})
             if all(item["source_revision_id"] != str(pin.profile_revision_id)
                    for item in entry["revisions"]):
-                revision = get_profile_revision(db, pin.profile_id, pin.revision, curator.user_id,
-                                                include_archived=True)
+                # The authorized snapshot names this exact revision; read it by id
+                # (spec 7.3 step 4), never by number through the owner's visibility.
+                revision = db.get(GenericExtractionProfileRevision, pin.profile_revision_id)
+                if revision is None or ((revision.profile_id, revision.revision, revision.fingerprint)
+                                        != (pin.profile_id, pin.revision, pin.fingerprint)):
+                    raise InvalidBundle("profile revision")
                 entry["revisions"].append({
                     "source_revision_id": str(revision.id), "revision": revision.revision,
                     "fingerprint": revision.fingerprint, "contract": revision.contract,
@@ -154,11 +165,6 @@ def _bundle(db: Session, flow: CurationFlow, curator: ExportCurator, version: st
         check_bundle(bundle_json)
     except BundleTooLarge:
         return "too_large", None
-    except InvalidBundle as exc:
-        # Main would hand the resolver a bundle it must refuse: a defect, not a curator problem.
-        logger.error("flow_export_inconsistent", extra={
-            "event": "flow_export_inconsistent", "check": str(exc), "source_flow_id": str(flow.id)})
-        return "cannot_run", None
     return None, bundle_json
 
 
@@ -170,11 +176,19 @@ def evaluate_flow(db: Session, flow: CurationFlow, curator: ExportCurator, *, is
     try:
         reason, bundle_json = _bundle(db, flow, curator, version, issuer=issuer,
                                       app_version=app_version, exported_at=exported_at)
-    except (ValueError, HTTPException):
+    except ValueError as exc:
+        # Every curator-fixable problem is a reason above. Anything else (an integrity
+        # failure, a bundle the resolver must refuse) is a defect in main: ERROR, and
+        # only the fixed check code or exception class is logged, never its message.
+        check = str(exc) if isinstance(exc, InvalidBundle) else type(exc).__name__
+        logger.error("flow_export_inconsistent", extra={
+            "event": "flow_export_inconsistent", "check": check, "source_flow_id": str(flow.id)})
         reason, bundle_json = "cannot_run", None
-    if reason is not None:
-        logger.info("flow_export_refused", extra={
-            "event": "flow_export_refused", "reason": reason, "source_flow_id": str(flow.id)})
+    else:
+        if reason is not None:
+            logger.info("flow_export_refused", extra={
+                "event": "flow_export_refused", "reason": reason,
+                "source_flow_id": str(flow.id)})
     return EvaluatedFlow(flow_id=flow.id, name=flow.name, description=flow.description,
                          owned=flow.user_id == curator.user_id, version=version, reason=reason,
                          bundle=bundle_json)
