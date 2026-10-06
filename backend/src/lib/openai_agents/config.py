@@ -4034,3 +4034,8 @@ def get_auth_oauth_cookie_max_age_seconds() -> int:
 def get_auth_session_cookie_max_age_seconds() -> int:
     """Shared authentication limit (AUTH_SESSION_COOKIE_MAX_AGE_SECONDS); default 86400 seconds."""
     return max(1, _get_env_int_with_fallback("AUTH_SESSION_COOKIE_MAX_AGE_SECONDS", 86400))
+
+
+def get_trace_review_langfuse_score_page_limit() -> int:
+    """Scores API v3 page size; capped at the provider's maximum of 100."""
+    return _get_bounded_positive_env_int("TRACE_REVIEW_LANGFUSE_SCORE_PAGE_LIMIT", 100, maximum=100)

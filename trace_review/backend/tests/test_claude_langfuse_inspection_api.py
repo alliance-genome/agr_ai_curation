@@ -852,7 +852,7 @@ async def test_cached_owner_extraction_preserves_provider_failure_status(
     elif failure_kind == "observations":
         extractor.get_observations.side_effect = RuntimeError("private-response")
     else:
-        extractor.client.api.scores.get_many.side_effect = RuntimeError("private-response")
+        extractor.client.api.scores_v3.get_many_v3.side_effect = RuntimeError("private-response")
     if broken:
         reporter.capture_event.side_effect = RuntimeError("reporter down")
 
@@ -898,7 +898,7 @@ async def test_authorization_reports_provider_failure_once(reporter, broken, fai
     elif failure_kind == "observations":
         extractor.get_observations.side_effect = RuntimeError("private-response")
     else:
-        extractor.client.api.scores.get_many.side_effect = RuntimeError("private-response")
+        extractor.client.api.scores_v3.get_many_v3.side_effect = RuntimeError("private-response")
     if broken:
         reporter.capture_event.side_effect = RuntimeError("reporter down")
     with patch("src.api.claude.TraceExtractor", return_value=extractor):

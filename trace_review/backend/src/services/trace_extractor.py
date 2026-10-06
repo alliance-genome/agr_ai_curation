@@ -10,6 +10,7 @@ from langfuse import Langfuse
 from ..analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from ..config import (
     get_langfuse_observation_page_limit,
+    get_langfuse_score_page_limit,
     get_langfuse_request_timeout_seconds,
     get_langfuse_search_observation_limit,
     get_langfuse_search_request_limit,
@@ -690,6 +691,12 @@ class TraceExtractor:
                     "error_type": exc.__class__.__name__,
                 }
 
+        try:
+            self.get_scores("__trace_review_health_missing_trace__")
+            checks["scores"] = {"status": "ok"}
+        except ScoreProviderError:
+            checks["scores"] = {"status": "error", "error_type": "ScoreProviderError"}
+
         return {
             "status": (
                 "ok"
@@ -889,13 +896,26 @@ class TraceExtractor:
     def get_scores(self, trace_id: str) -> List[Dict]:
         """Get all scores for a trace."""
         try:
-            response = self.client.api.scores.get_many(
-                trace_id=trace_id,
-                request_options={
-                    "timeout_in_seconds": get_langfuse_request_timeout_seconds(),
-                },
-            )
-            return [self._normalize_item(score) for score in response.data]
+            scores: List[Dict] = []
+            cursor = None
+            seen_cursors = set()
+            while True:
+                response = self.client.api.scores_v3.get_many_v3(
+                    trace_id=trace_id,
+                    fields="details,subject",
+                    limit=get_langfuse_score_page_limit(),
+                    cursor=cursor,
+                    request_options={
+                        "timeout_in_seconds": get_langfuse_request_timeout_seconds(),
+                    },
+                )
+                scores.extend(self._normalize_item(score) for score in response.data)
+                cursor = response.meta.cursor
+                if not cursor:
+                    return scores
+                if cursor in seen_cursors:
+                    raise RuntimeError("Langfuse repeated score cursor")
+                seen_cursors.add(cursor)
         except Exception:
             report_failure("scores", source=self.source, trace_id=trace_id)
             raise ScoreProviderError("Trace score provider is temporarily unavailable.") from None
