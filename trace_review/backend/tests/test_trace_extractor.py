@@ -15,11 +15,45 @@ from src.services.trace_extractor import (
 
 
 class TraceExtractorTests(unittest.TestCase):
+    def test_preflight_reports_scores_outage_when_observations_are_healthy(self):
+        extractor = self._make_extractor()
+        extractor.client.api.observations.get_many.return_value = SimpleNamespace(data=[])
+        extractor.client.api.scores_v3.get_many_v3.side_effect = RuntimeError("private-provider-error")
+        result = extractor.probe_v4_capabilities()
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["checks"]["explicit_trace"]["status"], "ok")
+        self.assertEqual(result["checks"]["scores"]["status"], "error")
+        self.assertNotIn("private-provider-error", str(result))
+
+    def test_scores_use_v3_cursor_pages_without_legacy_reads(self):
+        extractor = self._make_extractor()
+        extractor.client.api.scores.get_many.side_effect = RuntimeError("v2 unavailable in events_only mode")
+        extractor.client.api.scores_v3.get_many_v3.side_effect = [
+            SimpleNamespace(data=[{"id": "score-1", "value": "supported"}], meta=SimpleNamespace(cursor="page-2")),
+            SimpleNamespace(data=[{"id": "score-2", "value": True}], meta=SimpleNamespace(cursor=None)),
+        ]
+        self.assertEqual(extractor.get_scores("trace-1"), [
+            {"id": "score-1", "value": "supported"}, {"id": "score-2", "value": True},
+        ])
+        calls = extractor.client.api.scores_v3.get_many_v3.call_args_list
+        self.assertEqual([call.kwargs["cursor"] for call in calls], [None, "page-2"])
+        self.assertTrue(all(call.kwargs["trace_id"] == "trace-1" for call in calls))
+        extractor.client.api.scores.get_many.assert_not_called()
+
+    def test_scores_reject_repeated_cursor_without_partial_success(self):
+        extractor = self._make_extractor()
+        extractor.client.api.scores_v3.get_many_v3.return_value = SimpleNamespace(
+            data=[], meta=SimpleNamespace(cursor="repeat"),
+        )
+        with self.assertRaises(ScoreProviderError):
+            extractor.get_scores("trace-1")
+        self.assertEqual(extractor.client.api.scores_v3.get_many_v3.call_count, 2)
+
     def test_score_provider_failure_is_captured_even_when_reporter_fails(self):
         from src import observability
         for reporter_broken in (False, True):
             extractor = self._make_extractor()
-            extractor.client.api.scores.get_many.side_effect = RuntimeError("private-response")
+            extractor.client.api.scores_v3.get_many_v3.side_effect = RuntimeError("private-response")
             with patch.object(observability, "_client") as reporter:
                 if reporter_broken:
                     reporter.capture_event.side_effect = RuntimeError("sentry unavailable")
@@ -32,7 +66,7 @@ class TraceExtractorTests(unittest.TestCase):
 
     def test_successful_empty_scores_remain_empty(self):
         extractor = self._make_extractor()
-        extractor.client.api.scores.get_many.return_value = SimpleNamespace(data=[])
+        extractor.client.api.scores_v3.get_many_v3.return_value = SimpleNamespace(data=[], meta=SimpleNamespace(cursor=None))
         with patch("src.observability._client") as reporter:
             extractor.get_observations = Mock(return_value=[{"id": "root", "type": "SPAN"}])
             result = extractor.extract_complete_trace("trace")
@@ -42,7 +76,7 @@ class TraceExtractorTests(unittest.TestCase):
 
     def test_malformed_score_response_is_not_successful_empty(self):
         extractor = self._make_extractor()
-        extractor.client.api.scores.get_many.return_value = SimpleNamespace()
+        extractor.client.api.scores_v3.get_many_v3.return_value = SimpleNamespace()
         with patch("src.observability._client") as reporter:
             with self.assertRaises(ScoreProviderError):
                 extractor.get_scores("trace")
@@ -616,14 +650,17 @@ class TraceExtractorTests(unittest.TestCase):
     @patch("src.services.trace_extractor.get_langfuse_request_timeout_seconds", return_value=7)
     def test_get_scores_uses_configured_timeout(self, _timeout: Mock):
         extractor = self._make_extractor()
-        extractor.client.api.scores.get_many.return_value = SimpleNamespace(
-            data=[SimpleNamespace(dict=lambda: {"id": "score-1", "name": "quality"})]
+        extractor.client.api.scores_v3.get_many_v3.return_value = SimpleNamespace(
+            data=[SimpleNamespace(dict=lambda: {"id": "score-1", "name": "quality"})], meta=SimpleNamespace(cursor=None)
         )
 
         scores = extractor.get_scores("trace-1")
 
-        extractor.client.api.scores.get_many.assert_called_once_with(
+        extractor.client.api.scores_v3.get_many_v3.assert_called_once_with(
             trace_id="trace-1",
+            fields="details,subject",
+            limit=100,
+            cursor=None,
             request_options={"timeout_in_seconds": 7},
         )
         self.assertEqual(scores, [{"id": "score-1", "name": "quality"}])

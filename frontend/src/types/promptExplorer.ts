@@ -460,6 +460,7 @@ export interface FlowAuthoringProposal {
 
 // Context passed to Agent Studio AI Chat
 export interface ChatContext {
+  source_session_id?: string
   selected_agent_id?: string
   selected_group_id?: string
   view_mode?: 'base' | 'group' | 'combined'

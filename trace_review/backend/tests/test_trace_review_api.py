@@ -114,7 +114,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
         extractor = object.__new__(TraceExtractor)
         extractor.source = "remote"
         extractor.client = Mock()
-        extractor.client.api.scores.get_many.side_effect = RuntimeError("private-response")
+        extractor.client.api.scores_v3.get_many_v3.side_effect = RuntimeError("private-response")
         extractor.get_observations = Mock(return_value=[{"id": "root", "type": "SPAN"}])
         extractor.list_session_traces = Mock(return_value={
             "traces": [{"id": "failed"}], "meta": {"complete": True},

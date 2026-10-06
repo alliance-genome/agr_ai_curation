@@ -1,3 +1,4 @@
+import { importedChatContext } from '@/components/AgentStudio/importedChatContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { StudioNavigationContext } from '@/components/AgentStudio/studioNavigation'
 import { Root, PanelCard, ClaudePanelSection, ResizeHandle, TabBar, StyledTabs, VisuallyHidden, StyledTab, TabContent } from '@/components/AgentStudio/studioShellStyles'
@@ -395,7 +396,7 @@ function AgentStudioPage() {
   // persisted session's `chat_kind` so assistant-chat sessions seed a new Opus
   // conversation, while agent-studio sessions resume the same durable thread.
   const requestedSessionId = normalizeSearchParam(searchParams.get('session_id'))
-  const traceId = normalizeSearchParam(searchParams.get('trace_id'))
+  const requestedTraceId = normalizeSearchParam(searchParams.get('trace_id'))
   const requestedSessionDetailQuery = useChatHistoryDetailQuery(
     {
       sessionId: requestedSessionId ?? '',
@@ -422,6 +423,14 @@ function AgentStudioPage() {
       enabled: Boolean(requestedSessionId && requestedSessionChatKind),
     },
   )
+  const importedContext = importedChatContext(
+    durableTranscriptQuery.data?.session.session_id === requestedSessionId
+      ? durableTranscriptQuery.data.messages : [],
+  )
+  const sourceChatSessionId = requestedSessionChatKind === 'assistant_chat'
+    ? requestedSessionId ?? undefined
+    : normalizeSearchParam(searchParams.get('source_session_id')) ?? importedContext.sourceSessionId
+  const traceId = requestedTraceId ?? importedContext.traceId
   const seededConversation = useMemo(
     () => buildSeededOpusConversation(durableTranscriptQuery.data?.messages ?? []),
     [durableTranscriptQuery.data?.messages],
@@ -570,6 +579,7 @@ function AgentStudioPage() {
     selected_group_id: effectiveSelectedGroupId,
     view_mode: effectiveViewMode,
     trace_id: traceId || undefined,
+    source_session_id: sourceChatSessionId,
     session_id: effectiveDurableSessionId || undefined,
     // Preserve visited flow context while moving into Workshop and back.
     active_tab: activeTab === 'shared_library' ? undefined : activeTab,
@@ -625,6 +635,7 @@ function AgentStudioPage() {
       selected_group_id: effectiveSelectedGroupId,
       view_mode: effectiveViewMode,
       trace_id: traceId || undefined,
+      source_session_id: sourceChatSessionId,
       session_id: effectiveDurableSessionId || undefined,
       active_tab: activeTab === 'shared_library' ? undefined : activeTab,
       flow_id: capturedFlow?.flowId,
@@ -660,6 +671,7 @@ function AgentStudioPage() {
     flowState,
     flowsVisited,
     traceId,
+    sourceChatSessionId,
   ])
 
   useEffect(() => {
@@ -979,7 +991,7 @@ Agent ID: ${agentId}`
     setDiscussMessage(null)
   }, [])
 
-  const handleDurableSessionIdChange = useCallback((newSessionId: string) => {
+  const handleDurableSessionIdChange = useCallback((newSessionId: string, options?: { newChat?: boolean }) => {
     const currentSessionId = normalizeSearchParam(searchParamsRef.current.get('session_id'))
     if (currentSessionId === newSessionId) {
       return
@@ -988,9 +1000,15 @@ Agent ID: ${agentId}`
     setPendingUrlSwapSessionId(newSessionId)
     const nextSearchParams = new URLSearchParams(searchParamsRef.current)
     nextSearchParams.set('session_id', newSessionId)
+    if (options?.newChat) {
+      nextSearchParams.delete('source_session_id')
+      nextSearchParams.delete('trace_id')
+    } else if (sourceChatSessionId) {
+      nextSearchParams.set('source_session_id', sourceChatSessionId)
+    }
     searchParamsRef.current = nextSearchParams
     setSearchParams(nextSearchParams, { replace: true })
-  }, [setSearchParams])
+  }, [setSearchParams, sourceChatSessionId])
 
   const chatElement = (variant: 'panel' | 'drawer', panelId: string) => (
     <OpusChat

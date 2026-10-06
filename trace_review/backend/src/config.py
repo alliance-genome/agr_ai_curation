@@ -397,3 +397,8 @@ def get_env_source() -> Optional[str]:
     Useful for debugging configuration issues.
     """
     return _env_loaded_from
+
+
+def get_langfuse_score_page_limit() -> int:
+    """Page size for Scores API v3 (provider maximum: 100)."""
+    return max(1, min(100, int(os.getenv("TRACE_REVIEW_LANGFUSE_SCORE_PAGE_LIMIT", "100"))))

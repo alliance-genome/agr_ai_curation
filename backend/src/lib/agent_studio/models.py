@@ -318,6 +318,10 @@ class ChatContext(BaseModel):
         "base",
         description="Current view mode: 'base', 'group', or 'combined'"
     )
+    source_session_id: Optional[str] = Field(
+        None, max_length=255,
+        description="Original main-chat session to discuss; independent of the Studio session. Reads require curator ownership.",
+    )
     # Flow context (when on Flows tab)
     active_tab: Optional[str] = Field(
         None,
