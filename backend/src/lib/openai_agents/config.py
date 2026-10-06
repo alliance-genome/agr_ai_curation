@@ -4037,5 +4037,9 @@ def get_auth_session_cookie_max_age_seconds() -> int:
 
 
 def get_trace_review_langfuse_score_page_limit() -> int:
-    """Scores API v3 page size; capped at the provider's maximum of 100."""
+    """Canonical operational-limit getter; TraceReview mirrors it in its process.
+
+    Kept here per the repository operational-limit contract even though the
+    standalone TraceReview service cannot import backend runtime configuration.
+    """
     return _get_bounded_positive_env_int("TRACE_REVIEW_LANGFUSE_SCORE_PAGE_LIMIT", 100, maximum=100)

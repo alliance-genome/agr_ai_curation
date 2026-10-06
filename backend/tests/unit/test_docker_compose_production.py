@@ -274,6 +274,7 @@ def test_dev_compose_trace_review_defaults_to_local_langfuse_bootstrap_keys():
         "${LANGFUSE_LOCAL_SECRET_KEY:-"
         "${LANGFUSE_INIT_PROJECT_SECRET_KEY:-sk-lf-local-secret-key-default}}}"
     )
+    assert env["TRACE_REVIEW_LANGFUSE_SCORE_PAGE_LIMIT"] == "${TRACE_REVIEW_LANGFUSE_SCORE_PAGE_LIMIT:-100}"
     assert env["TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT"] == (
         "${TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT:-1000}"
     )
@@ -887,6 +888,7 @@ def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostic
     assert trace_review_backend["environment"]["TRACE_REVIEW_INTERNAL_API_TOKEN"] == (
         "${TRACE_REVIEW_INTERNAL_API_TOKEN:-}"
     )
+    assert trace_review_backend["environment"]["TRACE_REVIEW_LANGFUSE_SCORE_PAGE_LIMIT"] == "${TRACE_REVIEW_LANGFUSE_SCORE_PAGE_LIMIT:-100}"
     assert trace_review_backend["environment"][
         "TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT"
     ] == "${TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT:-1000}"
@@ -899,6 +901,7 @@ def test_standalone_template_and_installer_reference_the_production_compose_path
     env_template = ENV_TEMPLATE_PATH.read_text(encoding="utf-8")
     start_verify_script = START_VERIFY_PATH.read_text(encoding="utf-8")
 
+    assert "TRACE_REVIEW_LANGFUSE_SCORE_PAGE_LIMIT=100" in env_template
     assert "TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT=1000" in env_template
     assert "TRACE_REVIEW_LANGFUSE_REQUEST_TIMEOUT_SECONDS=30" in env_template
 

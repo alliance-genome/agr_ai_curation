@@ -257,3 +257,10 @@ def test_imported_chat_context_keeps_original_session_separate_from_studio(monke
     assert "original-trace" in prompt
     assert "Do not treat a request to discuss the chat" in prompt and "automatic fault-finding review" in prompt
     assert "Flows tab" in prompt
+
+
+def test_trace_review_score_page_limit_contract(monkeypatch):
+    from src.lib.openai_agents.config import get_trace_review_langfuse_score_page_limit
+    for setting, expected in [("7", 7), ("0", 1), ("101", 100), ("invalid", 100)]:
+        monkeypatch.setenv("TRACE_REVIEW_LANGFUSE_SCORE_PAGE_LIMIT", setting)
+        assert get_trace_review_langfuse_score_page_limit() == expected
