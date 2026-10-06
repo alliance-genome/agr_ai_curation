@@ -28,7 +28,18 @@ def prepare_trace_context(trace_id: Optional[str]) -> str:
 
 ## Trace Context
 
-The user has provided a trace ID for analysis: `{trace_id}`
+This trace belongs to the chat the curator opened in Agent Studio: `{trace_id}`
+
+Help with the curator's actual goal: explain the conversation, inspect how an
+answer or validation was produced, or turn the approach and their requested
+changes into a reusable flow. Do not treat a request to discuss the chat as an
+automatic fault-finding review. A concise visible answer is not evidence that
+validation or publication support is missing: inspect the recorded work first.
+If a tool fails, distinguish unavailable evidence from an incorrect answer.
+For flow changes, use the current flow and installed capabilities; when outside
+Flows, guide the curator to the Flows tab and continue with the same conversation.
+Propose changes for curator review; never claim the saved flow or previous
+results changed before an authorized action succeeds.
 
 To analyze this trace, use these token-aware tools:
 - **search_traces**: Find traces by session, document, run, extraction, name, or time window

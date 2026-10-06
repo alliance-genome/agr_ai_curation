@@ -2397,6 +2397,7 @@ def _build_agent_studio_user_debug_payload(
             "session_id": prepared_turn.session_id,
             "turn_id": prepared_turn.turn_id,
             "requested_context_session_id": prepared_turn.requested_context_session_id,
+            "source_session_id": context.source_session_id if context else None,
             "active_tab": context.active_tab if context else None,
             "selected_agent_id": context.selected_agent_id if context else None,
             "selected_group_id": context.selected_group_id if context else None,

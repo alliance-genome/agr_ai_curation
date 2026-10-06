@@ -61,6 +61,7 @@ def test_user_debug_payload_summarizes_workshop_prompts_without_raw_text(monkeyp
             selected_group_id="WB",
             session_id="agent-studio-session-1",
             trace_id="trace-123",
+            source_session_id="original-main-chat",
             agent_workshop=workshop,
         ),
     )
@@ -72,6 +73,7 @@ def test_user_debug_payload_summarizes_workshop_prompts_without_raw_text(monkeyp
         user_db_id=7,
     )
 
+    assert payload["debug_context"]["source_session_id"] == "original-main-chat"
     assert payload["debug_context"]["active_tab"] == "agent_workshop"
     assert payload["debug_context"]["agent_workshop"]["saved_custom_agent"] == {
         "custom_agent_id": str(custom_agent_uuid),
