@@ -11,7 +11,11 @@ from src.lib.flow_transfer.signing import AUDIENCE, UntrustedBundle, sign_bundle
 
 from .support import CURATOR_ISS, CURATOR_SUB, ISSUER, make_bundle
 
-NOW = datetime.now(timezone.utc)
+
+def _now():
+    """Signing time read when the test runs, never at collection (xdist can run a test
+    long after collection, past the signature lifetime)."""
+    return datetime.now(timezone.utc)
 
 
 def _configs(issuer=ISSUER):
@@ -23,7 +27,7 @@ def _configs(issuer=ISSUER):
 def test_a_signed_bundle_verifies_for_its_curator():
     export, imported = _configs()
     raw = make_bundle()
-    token = sign_bundle(raw, config=export, now=NOW)
+    token = sign_bundle(raw, config=export, now=_now())
     verify_bundle(token, check_bundle(raw), config=imported, subject=CURATOR_SUB, issuer=CURATOR_ISS)
     claims = jwt.decode(token, options={"verify_signature": False})
     assert claims["aud"] == AUDIENCE and claims["exp"] - claims["iat"] == 600
@@ -38,7 +42,7 @@ def _refused(token, raw, imported, subject=CURATOR_SUB, issuer=CURATOR_ISS):
 def test_another_curator_or_issuer_is_refused():
     export, imported = _configs()
     raw = make_bundle()
-    token = sign_bundle(raw, config=export, now=NOW)
+    token = sign_bundle(raw, config=export, now=_now())
     _refused(token, raw, imported, subject="someone-else")
     _refused(token, raw, imported, issuer="https://cognito-idp.us-east-1.amazonaws.com/other")
     _refused(token, raw, imported, issuer=None)
@@ -48,17 +52,17 @@ def test_wrong_key_wrong_issuer_and_expiry_are_refused():
     export, imported = _configs()
     _, other_key = _configs()
     raw = make_bundle()
-    token = sign_bundle(raw, config=export, now=NOW)
+    token = sign_bundle(raw, config=export, now=_now())
     _refused(token, raw, other_key)
     _refused(token, raw, FlowImportConfig(public_key=imported.public_key,
                                           issuer="https://ai-curation.example.org"))
-    _refused(sign_bundle(raw, config=export, now=NOW - timedelta(minutes=11)), raw, imported)
+    _refused(sign_bundle(raw, config=export, now=_now() - timedelta(minutes=11)), raw, imported)
 
 
 def test_changed_content_is_refused():
     export, imported = _configs()
     raw = make_bundle()
-    token = sign_bundle(raw, config=export, now=NOW)
+    token = sign_bundle(raw, config=export, now=_now())
     raw["flow"]["name"] = "Renamed after signing"
     _refused(token, raw, imported)
 
@@ -66,7 +70,7 @@ def test_changed_content_is_refused():
 def test_only_eddsa_is_accepted():
     export, imported = _configs()
     raw = make_bundle()
-    good = jwt.decode(sign_bundle(raw, config=export, now=NOW), options={"verify_signature": False})
+    good = jwt.decode(sign_bundle(raw, config=export, now=_now()), options={"verify_signature": False})
     secret = base64.b64encode(Ed25519PrivateKey.generate().public_key().public_bytes_raw()).decode()
     _refused(jwt.encode(good, secret, algorithm="HS256"), raw, imported)
 
@@ -76,12 +80,12 @@ def test_lifetime_and_leeway_follow_their_env_settings(monkeypatch):
     raw = make_bundle()
     monkeypatch.setenv("FLOW_TRANSFER_SIGNATURE_LIFETIME_SECONDS", "120")
     monkeypatch.setenv("FLOW_TRANSFER_SIGNATURE_LEEWAY_SECONDS", "0")
-    token = sign_bundle(raw, config=export, now=NOW)
+    token = sign_bundle(raw, config=export, now=_now())
     claims = jwt.decode(token, options={"verify_signature": False})
     assert claims["exp"] - claims["iat"] == 120
     # Expired five seconds ago: refused with no leeway, accepted with ten seconds.
     stale = sign_bundle(raw, config=export,
-                        now=datetime.now(timezone.utc) - timedelta(seconds=125))
+                        now=_now() - timedelta(seconds=125))
     _refused(stale, raw, imported)
     monkeypatch.setenv("FLOW_TRANSFER_SIGNATURE_LEEWAY_SECONDS", "10")
     verify_bundle(stale, check_bundle(raw), config=imported, subject=CURATOR_SUB, issuer=CURATOR_ISS)
