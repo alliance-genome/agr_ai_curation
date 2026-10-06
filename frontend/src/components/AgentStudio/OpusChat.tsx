@@ -485,7 +485,7 @@ interface OpusChatProps {
   /** Callback after discuss message is sent */
   onDiscussMessageSent?: () => void
   /** Notify parent when a new durable Agent Studio session is minted */
-  onDurableSessionIdChange?: (sessionId: string) => void
+  onDurableSessionIdChange?: (sessionId: string, options?: { newChat?: boolean }) => void
   /** Callback with current chat transcript for workshop tool ideation */
   onConversationSnapshotChange?: (messages: ToolIdeaConversationEntry[]) => void
   /** Apply a reviewed transient flow proposal to the in-memory editor draft. */
@@ -736,7 +736,7 @@ function OpusChat({
       setWorkshopActionError(null)
       setFeedbackMenuAnchor(null)
       onConversationSnapshotChange?.([])
-      onDurableSessionIdChange(session.session_id)
+      onDurableSessionIdChange(session.session_id, { newChat: true })
     } catch {
       setSnackbar({ open: true, severity: 'error', message: 'Could not start a new chat. Your current conversation is still here. Please try again.' })
     } finally {

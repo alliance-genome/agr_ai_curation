@@ -167,7 +167,7 @@ describe('OpusChat', () => {
     fireEvent.click(button)
     expect(serviceMocks.createAgentStudioSession).toHaveBeenCalledTimes(1)
     finish({ session_id: 'fresh-chat' })
-    await waitFor(() => expect(changeSession).toHaveBeenCalledWith('fresh-chat'))
+    await waitFor(() => expect(changeSession).toHaveBeenCalledWith('fresh-chat', { newChat: true }))
   })
 
   it('blocks an old Workshop action during reset and ignores completion after unmount', async () => {

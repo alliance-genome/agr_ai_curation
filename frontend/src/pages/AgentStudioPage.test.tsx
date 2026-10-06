@@ -66,7 +66,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async (importOriginal) => {
     onWorkshopAction?: (action: import('@/types/promptExplorer').WorkshopAction) => Promise<void>
     captureContext?: () => Promise<import('@/types/promptExplorer').ChatContext>
     onApplyWorkshopProposal?: (proposal: import('@/types/promptExplorer').WorkshopAuthoringProposal) => Promise<unknown>
-    onDurableSessionIdChange?: (sessionId: string) => void
+    onDurableSessionIdChange?: (sessionId: string, options?: { newChat?: boolean }) => void
     onConversationSnapshotChange?: (
       messages: SnapshotMessage[]
     ) => void
@@ -135,6 +135,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async (importOriginal) => {
         {(initialConversation ?? []).map((message) => message.content).join('|') || 'none'}
       </div>
       <div data-testid="opus-chat-durable-session">{durableSessionId ?? 'none'}</div>
+      <button onClick={() => onDurableSessionIdChange?.('fresh-studio', { newChat: true })}>fresh-studio-chat</button>
       <div data-testid="opus-chat-source-session">{sourceSessionId ?? 'none'}</div>
       <div data-testid="opus-chat-verify-message">{verifyMessage ?? 'none'}</div>
       <div data-testid="opus-chat-discuss-message">{discussMessage ?? 'none'}</div>
@@ -940,6 +941,7 @@ describe('AgentStudioPage', () => {
       { enabled: true },
     )
     expect(screen.getByTestId('opus-chat-context')).not.toHaveTextContent('"session_id"')
+    expect(screen.getByTestId('opus-chat-context')).toHaveTextContent('"source_session_id":"assistant-session-12345678"')
     expect(screen.getByTestId('opus-chat-context')).toHaveTextContent('"trace_id":"trace-789"')
     expect(screen.getByTestId('opus-chat-initial-conversation')).toHaveTextContent(
       'Why did the assistant pick gene X?|It prioritized the evidence ranking from the prior turn.'
@@ -1011,6 +1013,23 @@ describe('AgentStudioPage', () => {
     expect(screen.getByTestId('opus-chat-source-session')).toHaveTextContent(
       'agent-studio-session-12345678'
     )
+  })
+
+  it('restores the original chat on durable resume and clears it for New chat', async () => {
+    historyMocks.useChatHistoryDetailQuery.mockImplementation(({ sessionId }) => buildSessionDetail(sessionId, 'agent_studio'))
+    historyMocks.useChatHistoryTranscriptQuery.mockImplementation(({ sessionId }) => buildTranscript(sessionId, 'agent_studio', sessionId === 'studio-resumed' ? [{
+      message_id: 'studio-user', role: 'user', message_type: 'text', content: 'Explain this chat', created_at: '2026-04-22T00:00:01Z',
+      payload_json: { debug_context: { source_session_id: 'original-chat' }, trace_capture: { status: 'provided_context_trace_id', trace_id: 'original-trace' } },
+    }] : []))
+    render(<MemoryRouter initialEntries={['/agent-studio?session_id=studio-resumed']}><LocationProbe /><AgentStudioPage /></MemoryRouter>)
+    await waitFor(() => expect(screen.getByTestId('opus-chat-context')).toHaveTextContent('"source_session_id":"original-chat"'))
+    expect(screen.getByTestId('opus-chat-context')).toHaveTextContent('"trace_id":"original-trace"')
+    fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+    expect(screen.getByTestId('opus-chat-context')).toHaveTextContent('"source_session_id":"original-chat"')
+    fireEvent.click(screen.getByText('fresh-studio-chat'))
+    await waitFor(() => expect(screen.getByTestId('location-search')).toHaveTextContent('session_id=fresh-studio'))
+    expect(screen.getByTestId('opus-chat-context')).not.toHaveTextContent('original-chat')
+    expect(screen.getByTestId('opus-chat-context')).not.toHaveTextContent('original-trace')
   })
 
   it('adds a new session_id to the URL when Opus mints the first durable session from a clean load', async () => {
