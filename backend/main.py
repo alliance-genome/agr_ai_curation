@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
 os.environ['ANONYMIZED_TELEMETRY'] = 'False'  # Disable ChromaDB telemetry (capital F)
 
-from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, generic_profiles, logs, flows, files, maintenance, batch, pdf_jobs, curation_workspace, observability
+from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, generic_profiles, logs, flows, flow_exports, files, maintenance, batch, pdf_jobs, curation_workspace, observability
 from src.api.benchmark_sources import (
     install_benchmark_input_resolvers,
     router as benchmark_sources_router,
@@ -25,6 +25,7 @@ from src.api.benchmark_sources import (
 from src.api.benchmark_document_conversions import router as benchmark_document_conversions_router
 from src.api.benchmark_jobs import router as benchmark_jobs_router
 from src.api.benchmark_catalog import router as benchmark_catalog_router
+from src.api.benchmark_flow_imports import router as benchmark_flow_imports_router
 from src.api.benchmark_assistant import router as benchmark_assistant_router
 from src.api.benchmark_onboarding import router as benchmark_onboarding_router
 from src.schemas.benchmark_job_examples import install_openapi_examples as install_benchmark_openapi_examples
@@ -33,6 +34,7 @@ from src.api.admin.costs import router as admin_costs_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
 from src.lib.logging_config import configure_logging, create_request_context_middleware
+from src.lib.flow_transfer.config import validate_flow_transfer_config
 from src.lib.database.postgres_connection_resolver import (
     get_postgres_connection_resolver,
 )
@@ -289,6 +291,7 @@ async def lifespan(app: FastAPI):
 
     # Validate critical environment variables
     try:
+        validate_flow_transfer_config()
         _validate_pdf_extraction_timeout()
         _validate_embedding_env()
     except RuntimeError as e:
@@ -941,6 +944,7 @@ def create_app() -> FastAPI:
     application.include_router(agent_studio_custom.router, tags=["Agent Studio"])
     application.include_router(generic_profiles.router, tags=["Agent Studio"])
     application.include_router(flows.router, tags=["Flows"])
+    application.include_router(flow_exports.router)
     application.include_router(batch.router, tags=["Batches"])
     application.include_router(batch.flow_validation_router, tags=["Batches"])
     application.include_router(files.router, tags=["Files"])
@@ -962,6 +966,7 @@ def create_app() -> FastAPI:
     application.include_router(benchmark_document_conversions_router)
     application.include_router(benchmark_jobs_router)
     application.include_router(benchmark_catalog_router)
+    application.include_router(benchmark_flow_imports_router)
     application.include_router(benchmark_assistant_router)
     application.include_router(benchmark_onboarding_router)
     install_benchmark_openapi_examples(application)

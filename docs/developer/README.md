@@ -70,6 +70,7 @@ Start here for new developers:
 | [BENCHMARK_SUITE_V2.md](guides/BENCHMARK_SUITE_V2.md) | Strict execution-only suite v2 schema, route slots, frozen plans, and stable digests |
 | [BENCHMARK_PERSISTENCE.md](guides/BENCHMARK_PERSISTENCE.md) | PostgreSQL benchmark job, cell, invocation, event, lineage, and immutable result contracts |
 | [BENCHMARK_SNAPSHOT_HANDOFF.md](guides/BENCHMARK_SNAPSHOT_HANDOFF.md) | Workspace snapshot export, configured destination discovery, handoff feedback and manual JSON recovery |
+| [BENCHMARK_FLOW_IMPORT.md](guides/BENCHMARK_FLOW_IMPORT.md) | Curators import their own AI Curation flows into the benchmark: signed export routes, resolver import routes, configuration and answers |
 | [ABC Literature API Contract Verification](integrations/abc_literature/api_contract_verification.md) | Verified Literature OpenAPI hostnames, endpoint allowlist, forbidden endpoints, and fixture-backed live-check procedure |
 | [ABC Literature Conversion Handoff](integrations/abc_literature/conversion_handoff.md) | Boundary between AI Curation, ABC Literature conversion_request, nXML/TEI behavior, and local PDFX fallback |
 | [ABC Literature Import Lifecycle](integrations/abc_literature/import_lifecycle.md) | Provider-neutral ABC import lifecycle, conversion polling/status mapping, failures, cancellation, and timeout behavior |

@@ -5,6 +5,7 @@ import pytest
 
 from src.lib.agent_studio import retired_model_conversion as conversion
 from src.lib.flows.export_fields import catalog_fingerprint, source_catalog
+from src.lib.flows.repin import move_layouts
 
 MAP = {"xhigh": "high"}
 
@@ -36,7 +37,7 @@ def _output_node(fingerprint, source="node_0", mode="selected_fields"):
 def test_a_current_layout_follows_its_repinned_source():
     new_catalog = source_catalog(FIELDS, NEW)
     node = _output_node(source_catalog(FIELDS, OLD)["schema_fingerprint"])
-    moved = conversion._move_layouts(NS(nodes=[node]), {"node_0": new_catalog}, {"node_0": OLD})
+    moved = move_layouts(NS(nodes=[node]), {"node_0": new_catalog}, {"node_0": OLD})
     assert moved == [{"output_node_id": "output", "source_node_id": "node_0",
                       "from": source_catalog(FIELDS, OLD)["schema_fingerprint"],
                       "to": new_catalog["schema_fingerprint"]}]
@@ -46,13 +47,13 @@ def test_a_current_layout_follows_its_repinned_source():
 def test_a_layout_that_was_already_out_of_date_is_refused():
     node = _output_node(source_catalog([{"ref": "object.profile.other"}], OLD)["schema_fingerprint"])
     with pytest.raises(ValueError, match="choose the output fields again"):
-        conversion._move_layouts(NS(nodes=[node]), {"node_0": source_catalog(FIELDS, NEW)}, {"node_0": OLD})
+        move_layouts(NS(nodes=[node]), {"node_0": source_catalog(FIELDS, NEW)}, {"node_0": OLD})
 
 
 def test_layouts_of_other_sources_and_modes_are_left_alone():
     other = _output_node("sha256:x", source="node_9")
     agent_written = _output_node("sha256:y", mode="agent")
-    assert conversion._move_layouts(NS(nodes=[other, agent_written]), {}, {"node_0": OLD}) == []
+    assert move_layouts(NS(nodes=[other, agent_written]), {}, {"node_0": OLD}) == []
     assert other.data.projection_plan["selected_sources"][0]["schema_fingerprint"] == "sha256:x"
 
 

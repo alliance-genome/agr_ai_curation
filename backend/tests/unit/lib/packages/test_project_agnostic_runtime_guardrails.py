@@ -149,6 +149,9 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Immutable execution migrations preserve the shipped Alliance group prompts
     # and packaged builder identities, including historical access boundaries.
     Path("backend/tests/integration/persistence/test_agent_execution_revision_persistence.py"),
+    # Group-restricted flow import is checked against the shipped Alliance group
+    # ids, which allowed_group_ids validates.
+    Path("backend/tests/integration/persistence/test_benchmark_flow_import.py"),
     Path("backend/tests/integration/persistence/test_domain_output_contract_persistence.py"),
     Path("backend/tests/unit/lib/agent_studio/test_domain_output_contract.py"),
     # Exercise the installed Alliance builder catalog and opt-in gene/reference

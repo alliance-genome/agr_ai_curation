@@ -15,6 +15,7 @@ from .benchmark import (
     BenchmarkJobInputSnapshot,
     BenchmarkJobStatus,
 )
+from .benchmark_flow_import import BenchmarkFlowImport
 from .agent import Agent, Project, ProjectMember
 from .agent_execution_revision import AgentExecutionRevision
 from .chat_message import ChatMessage
@@ -63,6 +64,7 @@ __all__ = [
     "BenchmarkJobIdempotency",
     "BenchmarkJobInputSnapshot",
     "BenchmarkJobStatus",
+    "BenchmarkFlowImport",
     "Agent",
     "AgentExecutionRevision",
     "Project",

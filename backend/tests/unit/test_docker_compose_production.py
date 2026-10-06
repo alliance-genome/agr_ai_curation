@@ -192,6 +192,16 @@ def test_benchmark_cognito_m2m_profile_has_compose_and_env_parity():
     assert env_example["BENCHMARK_OIDC_COGNITO_M2M_CLIENT_IDS"] == ""
 
 
+def test_flow_export_keys_reach_the_production_backend_and_are_documented():
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    env_example = _load_env_assignments(ENV_EXAMPLE_PATH)
+    for key in ("FLOW_EXPORT_SIGNING_KEY", "FLOW_EXPORT_ISSUER", "FLOW_EXPORT_BEARER_CLIENT_IDS"):
+        assert production_env[key] == f"${{{key}:-}}"
+        assert env_example[key] == ""
+    for key in ("FLOW_IMPORT_EXPORT_ISSUER", "FLOW_IMPORT_EXPORT_PUBLIC_KEY"):
+        assert env_example[key] == ""
+
+
 def test_backend_test_services_mount_repo_config_as_explicit_runtime_override():
     services = _load_test_compose()["services"]
 

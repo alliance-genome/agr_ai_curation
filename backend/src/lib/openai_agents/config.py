@@ -1471,6 +1471,49 @@ def get_benchmark_curator_auth_max_bytes() -> int:
     return max(1, _get_env_int_with_fallback("BENCHMARK_CURATOR_AUTH_MAX_BYTES", 8_192))
 
 
+def get_flow_transfer_bundle_max_bytes() -> int:
+    """Maximum canonical bytes of one exported flow bundle (export and import)."""
+    return max(1, _get_env_int_with_fallback("FLOW_TRANSFER_BUNDLE_MAX_BYTES", 8_388_608))
+
+
+def get_flow_transfer_max_agents() -> int:
+    """Maximum distinct custom agents one exported flow bundle may carry."""
+    return max(1, _get_env_int_with_fallback("FLOW_TRANSFER_MAX_AGENTS", 64))
+
+
+def get_flow_transfer_max_revisions_per_agent() -> int:
+    """Maximum pinned revisions of one agent in an exported flow bundle."""
+    return max(1, _get_env_int_with_fallback("FLOW_TRANSFER_MAX_REVISIONS_PER_AGENT", 64))
+
+
+def get_flow_transfer_max_output_structure_revisions() -> int:
+    """Maximum output structure revisions, summed over a bundle's output structures."""
+    return max(
+        1,
+        _get_env_int_with_fallback("FLOW_TRANSFER_MAX_OUTPUT_STRUCTURE_REVISIONS", 64),
+    )
+
+
+def get_flow_transfer_signature_lifetime_seconds() -> int:
+    """Seconds an exported flow bundle's signature stays valid for import."""
+    return max(1, _get_env_int_with_fallback("FLOW_TRANSFER_SIGNATURE_LIFETIME_SECONDS", 600))
+
+
+def get_flow_transfer_signature_leeway_seconds() -> int:
+    """Clock-skew leeway, in seconds, when the importer checks a bundle signature."""
+    return max(0, _get_env_int_with_fallback("FLOW_TRANSFER_SIGNATURE_LEEWAY_SECONDS", 30))
+
+
+def get_flow_transfer_export_page_size() -> int:
+    """Default and maximum page size of the flow export list."""
+    return max(1, _get_env_int_with_fallback("FLOW_TRANSFER_EXPORT_PAGE_SIZE", 50))
+
+
+def get_flow_transfer_import_list_max_flows() -> int:
+    """Maximum source flow ids in one flow import status request."""
+    return max(1, _get_env_int_with_fallback("FLOW_TRANSFER_IMPORT_LIST_MAX_FLOWS", 50))
+
+
 def get_benchmark_delegated_source_auth_max_bytes() -> int:
     """Maximum UTF-8 bytes accepted in the delegated source auth header."""
     return max(
