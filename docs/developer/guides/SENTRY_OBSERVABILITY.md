@@ -765,3 +765,10 @@ APIs return 404 for `TraceNotFoundError` and 503 for provider failures. Score
 errors are reported at the extractor and carry a typed marker so API handlers
 do not report them again. Session export retains per-trace failures in its
 partial bundle and counts each score failure once in its aggregated event.
+
+
+### Operational failures with preserved application behavior
+
+Authentication login/callback boundaries explicitly report provider outages and malformed protocol responses. Expected invalid tokens, state mismatches, and rejected authorization grants remain quiet. Responses retain their existing status codes. Durable trace-file writes and benchmark reader-progress writes report sanitized failures while preserving best-effort diagnostics/progress; reporting itself must not interrupt work. Events contain fixed messages and exception types, never provider payloads, SQL, paths, or credentials.
+
+Application execution IDs used for file storage are canonical 32-character lowercase hex IDs, including when Langfuse is absent. File export does not depend on telemetry being configured. Saved-flow execution resolves the requested document filename through owner-authorized persistent metadata, independently of active-document UI state.
