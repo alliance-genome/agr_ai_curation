@@ -418,12 +418,13 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
                     extra={"sentry_skip_event": True},
                 )
 
-    except Exception:
+    except Exception as exc:
         report_runtime_exception(
             sanitized_runtime_error("LLM abstract extraction failed"),
             component="abstract_extraction",
             operation="extraction_failed",
             level="error",
+            context={"error_type": type(exc).__name__},
         )
         logger.warning(
             'LLM abstract extraction failed',
