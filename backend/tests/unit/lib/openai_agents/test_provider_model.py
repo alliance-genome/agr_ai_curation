@@ -365,13 +365,15 @@ async def test_invocation_limit_fails_before_next_provider_call(monkeypatch):
 
     monkeypatch.setattr(OpenAIChatCompletionsModel, "_fetch_response", fake_fetch)
     model = _model(telemetry_adapter="openrouter")
-    with capture_provider_usage(max_records=1, max_failure_detail_chars=20):
-        await model._fetch_response(
-            None, [], ModelSettings(), [], None, [], None, None, False
-        )
-        with pytest.raises(RuntimeError, match="exceeded 1"):
+    from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded
+    with pytest.raises(BenchmarkInvocationBudgetExceeded):
+        with capture_provider_usage(max_records=1, max_failure_detail_chars=20):
             await model._fetch_response(
                 None, [], ModelSettings(), [], None, [], None, None, False
             )
+            with pytest.raises(BenchmarkInvocationBudgetExceeded):
+                await model._fetch_response(
+                    None, [], ModelSettings(), [], None, [], None, None, False
+                )
 
     assert calls == 1
