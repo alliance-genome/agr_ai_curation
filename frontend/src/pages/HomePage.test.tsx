@@ -1400,6 +1400,9 @@ function parseHistoryDetailRequest(url: string): {
 }
 
 function realChatSupportResponse(url: string, init?: RequestInit): Response | null {
+  if (url === '/api/chat/studio-reminder/config') {
+    return jsonResponse({ enabled: false, message_chars: 1800, context_chars: 650, context_messages: 2 })
+  }
   if (url === '/api/chat/document' && init?.method === 'DELETE') {
     return jsonResponse({ active: false, document: null })
   }

@@ -13,6 +13,8 @@ When a live queue is set via `set_live_event_queue()`, events are pushed
 immediately, allowing real-time visibility into specialist agent activity.
 """
 
+
+from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded, raise_if_provider_budget_exhausted
 import copy
 import asyncio
 import hashlib
@@ -4021,7 +4023,10 @@ async def _dispatch_domain_envelope_validators_for_chat(
             CurationExtractionResultRecord,
             CurationExtractionSourceKind,
         )
+    except BenchmarkInvocationBudgetExceeded:
+        raise
     except Exception as exc:
+        raise_if_provider_budget_exhausted()
         logger.warning(
             "Domain-envelope chat validation unavailable for %s: %s",
             specialist_name,
@@ -4309,7 +4314,10 @@ async def _dispatch_domain_envelope_validators_for_chat(
             output_type_name=getattr(expected_output_type, "__name__", "response"),
             message=str(exc),
         ) from exc
+    except BenchmarkInvocationBudgetExceeded:
+        raise
     except Exception as exc:
+        raise_if_provider_budget_exhausted()
         logger.warning(
             "Domain-envelope chat validation failed for %s: %s",
             specialist_name,
@@ -6397,6 +6405,8 @@ async def run_specialist_with_events(
                             message=error_message
                         )
 
+                except BenchmarkInvocationBudgetExceeded:
+                    raise
                 except SpecialistOutputError:
                     # Re-raise our custom error
                     raise

@@ -845,3 +845,35 @@ async def test_body_cancellation_does_not_wait_for_completion_sql(monkeypatch, c
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)
+
+
+def test_budget_failure_has_actionable_content_free_detail():
+    from src.lib.benchmarks.worker import _bounded_failure
+    from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded
+    result = _bounded_failure('runtime_error', BenchmarkInvocationBudgetExceeded(4, 4))
+    assert result['category'] == 'invocation_budget_exhausted'
+    assert result['limit'] == result['admitted'] == 4
+    assert result['retryable'] is False
+    assert 'limit of 4 model calls' in result['detail']
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_terminalizes_cell_and_reports_once(monkeypatch):
+    from src.lib.benchmarks import worker
+    from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded
+    repository = MagicMock()
+    monkeypatch.setattr(worker, 'BenchmarkRepository', lambda db: repository)
+    reports = []
+    monkeypatch.setattr('src.lib.observability.runtime.report_runtime_exception', lambda exc, **kwargs: reports.append((exc, kwargs)))
+    instance = BenchmarkWorker(session_factory=MagicMock())
+    cell = SimpleNamespace(id=uuid4(), job_id=uuid4(), target_kind='agent', attempt_count=1)
+    instance._load_cell = MagicMock(return_value=(cell, object()))
+    instance._execute_authorized_target = AsyncMock(side_effect=BenchmarkInvocationBudgetExceeded(2, 2))
+    instance._finish_successful_cell = MagicMock()
+    await instance._execute_cell(cell.id)
+    instance._finish_successful_cell.assert_not_called()
+    repository.finish_cell.assert_called_once()
+    assert repository.finish_cell.call_args.kwargs['status'].value == 'failed'
+    assert repository.finish_cell.call_args.kwargs['failure']['category'] == 'invocation_budget_exhausted'
+    assert len(reports) == 1
+    assert reports[0][1]['component'] == 'benchmark_worker'

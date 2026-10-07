@@ -12,6 +12,7 @@ from . import chat_documents as _chat_documents
 from . import chat_sessions as _chat_sessions
 from . import chat_stream as _chat_stream
 from . import chat_execute_flow as _chat_execute_flow
+from . import chat_studio_reminder as _chat_studio_reminder  # noqa: F401 - registers advisory routes
 
 
 def _export_module_symbols(module: types.ModuleType) -> None:

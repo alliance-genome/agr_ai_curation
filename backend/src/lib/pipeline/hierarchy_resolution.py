@@ -333,6 +333,7 @@ async def _call_llm_for_hierarchy(
     from openai.types.shared import Reasoning
     from src.lib.openai_agents.config import (
         PromptCacheIdentity,
+        build_default_model_retry,
         get_hierarchy_resolution_contract_retries,
         get_hierarchy_resolution_max_turns,
         prompt_cache_extra_args,
@@ -434,6 +435,7 @@ Common abstract locations when not explicitly labeled:
         logger.info('[HIERARCHY] Calling %s (reasoning=%s) for hierarchy resolution...', model_name, reasoning_effort)
 
         model_settings = ModelSettings(
+            retry=build_default_model_retry(),
             temperature=0.0 if supports_temperature(model_name) else None,
             reasoning=Reasoning(effort=reasoning_effort),
             # A string model always runs on the native OpenAI client (owned

@@ -7,6 +7,8 @@ shared selector and envelope finding contracts.
 
 from __future__ import annotations
 
+from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded, raise_if_provider_budget_exhausted
+
 import asyncio
 import concurrent.futures
 import contextvars
@@ -1216,7 +1218,13 @@ def _run_validator_jobs(
                 )
                 future_by_run_group[future] = run_group
             for future in concurrent.futures.as_completed(future_by_run_group):
-                result = future.result()
+                try:
+                    result = future.result()
+                except BenchmarkInvocationBudgetExceeded:
+                    for pending in future_by_run_group:
+                        pending.cancel()
+                    # Executor exit drains already-running work and its usage records.
+                    raise
                 group_results.update(result.dedupe_group_results)
                 validator_agent_run_count += result.validator_agent_run_count
                 batch_validator_run_count += result.batch_validator_run_count
@@ -1341,6 +1349,7 @@ def _execute_validator_run_group(
     batch_runner: DomainValidatorBatchAgentRunner,
     event_emitter: ValidatorDispatchEventEmitter | None,
 ) -> _ValidatorRunGroupResult:
+    raise_if_provider_budget_exhausted()
     if run_group.batch_key is None:
         group_index = run_group.dedupe_group_indexes[0]
         return _ValidatorRunGroupResult(
@@ -1490,7 +1499,9 @@ def _execute_validator_job_batch(
     output_validation_duration_seconds = 0.0
     runner_started_at = time.monotonic()
     try:
+        raise_if_provider_budget_exhausted()
         raw_output = batch_runner(jobs, binding=binding)
+        raise_if_provider_budget_exhausted()
         runner_duration_seconds = time.monotonic() - runner_started_at
         validation_started_at = time.monotonic()
         validator_results = _validated_results_from_agent_batch_output(
@@ -1520,10 +1531,13 @@ def _execute_validator_job_batch(
             summary=summary,
         )
         return validator_results, summary
+    except BenchmarkInvocationBudgetExceeded:
+        raise
     except Exception as exc:
         from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
 
         record_handled_stage_failure(exc)
+        raise_if_provider_budget_exhausted()
         if runner_duration_seconds == 0.0:
             runner_duration_seconds = time.monotonic() - runner_started_at
         LOGGER.warning(
@@ -1588,7 +1602,9 @@ def _execute_single_validator_job(
     request = job.request
     try:
         runner_started_at = time.monotonic()
+        raise_if_provider_budget_exhausted()
         raw_output = agent_runner(request, binding=job.match.binding)
+        raise_if_provider_budget_exhausted()
         runner_duration_seconds = time.monotonic() - runner_started_at
         validation_started_at = time.monotonic()
         if isinstance(raw_output, _ValidatorAgentRunOutput):
@@ -1607,10 +1623,13 @@ def _execute_single_validator_job(
             runner_duration_seconds,
             output_validation_duration_seconds,
         )
+    except BenchmarkInvocationBudgetExceeded:
+        raise
     except Exception as exc:
         from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
 
         record_handled_stage_failure(exc)
+        raise_if_provider_budget_exhausted()
         LOGGER.warning(
             "Package-scoped validator agent failed for binding %s request %s",
             request.validator_binding_id,
