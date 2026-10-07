@@ -16,6 +16,24 @@ from src.lib.cost_ledger.facts import TokenUsage
 logger = logging.getLogger(__name__)
 
 
+class BenchmarkInvocationBudgetExceeded(RuntimeError):
+    """Terminal per-cell admission failure; contains no curator content."""
+
+    def __init__(self, limit: int, admitted: int) -> None:
+        self.limit = limit
+        self.admitted = admitted
+        super().__init__(f"This benchmark stopped after reaching its configured limit of {limit} model calls ({admitted} admitted).")
+
+
+def raise_if_provider_budget_exhausted() -> None:
+    capture = _provider_usage_records.get()
+    if capture is not None:
+        with capture.lock:
+            terminal = capture.terminal
+        if terminal is not None:
+            raise BenchmarkInvocationBudgetExceeded(*terminal)
+
+
 class _ProviderUsageEmissionError(RuntimeError):
     """Sanitized provider-usage telemetry failure safe for reporting."""
 
@@ -95,6 +113,7 @@ class _ProviderUsageCapture:
     max_records: int
     max_failure_detail_chars: int
     reserved: int = 0
+    terminal: tuple[int, int] | None = None
     lock: Any = dataclass_field(default_factory=Lock, repr=False)
     tool_parents: dict[tuple[str | None, str], int | None] = dataclass_field(default_factory=dict)
 
@@ -151,6 +170,13 @@ def capture_provider_usage(
     token = _provider_usage_records.set(capture)
     try:
         yield records
+    except Exception:
+        # SDK tool handlers may wrap a terminal condition. Preserve its meaning.
+        raise_if_provider_budget_exhausted()
+        raise
+    else:
+        # A swallowed tool error must never become a successful benchmark.
+        raise_if_provider_budget_exhausted()
     finally:
         _provider_usage_records.reset(token)
 
@@ -164,9 +190,8 @@ def emit_provider_usage(record: ProviderUsageRecord) -> None:
     if capture is not None:
         with capture.lock:
             if len(capture.records) >= capture.max_records:
-                raise RuntimeError(
-                    f"Benchmark cell exceeded {capture.max_records} provider invocations"
-                )
+                capture.terminal = (capture.max_records, max(capture.reserved, len(capture.records)))
+                raise BenchmarkInvocationBudgetExceeded(*capture.terminal)
             capture.records.append(record)
     _emit_provider_usage_trace_event(record)
 
@@ -188,9 +213,8 @@ def begin_provider_invocation(
     # Reserve and snapshot the sequence together, before any observer I/O.
     with capture.lock:
         if capture.reserved >= capture.max_records:
-            raise RuntimeError(
-                f"Benchmark cell exceeded {capture.max_records} provider invocations"
-            )
+            capture.terminal = (capture.max_records, capture.reserved)
+            raise BenchmarkInvocationBudgetExceeded(*capture.terminal)
         capture.reserved += 1
         sequence = capture.reserved
     from src.lib.benchmarks.stage_measurements import current_stage

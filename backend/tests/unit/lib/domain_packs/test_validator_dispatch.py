@@ -4365,3 +4365,62 @@ def test_accepted_validator_receipt_does_not_echo_large_result(batch):
     assert receipt["status"] == "accepted"
     assert serialized_size(receipt) < 2048
     assert (feedback.accepted_results[0] if batch else feedback.accepted_result).explanation == explanation
+
+
+@pytest.mark.parametrize('batch', [False, True])
+def test_terminal_benchmark_budget_is_not_a_biological_unresolved_result(tmp_path, monkeypatch, batch):
+    from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded
+    pack = _loaded_pack(tmp_path, batch_enabled=batch)
+    reports = []
+    monkeypatch.setattr('src.lib.domain_packs.validator_dispatch.report_runtime_exception', lambda *a, **k: reports.append(a))
+
+    def exhausted(*args, **kwargs):
+        raise BenchmarkInvocationBudgetExceeded(2, 2)
+
+    with pytest.raises(BenchmarkInvocationBudgetExceeded):
+        dispatch_active_validator_bindings(
+            _multi_object_envelope(['BAD:0001', 'BAD:0002']), pack,
+            runner=exhausted, batch_runner=exhausted, max_parallel_validators=1,
+        )
+    assert reports == []
+
+
+def test_parallel_budget_stops_queue_and_drains_admitted_usage(tmp_path, monkeypatch):
+    import threading
+    from src.lib.openai_agents.provider_usage import (
+        capture_provider_usage, begin_provider_invocation,
+        complete_generic_provider_invocation, BenchmarkInvocationBudgetExceeded,
+    )
+    pack = _loaded_pack(tmp_path, batch_enabled=False)
+    admitted = threading.Event()
+    exhausted = threading.Event()
+    calls = []
+    reports = []
+    monkeypatch.setattr('src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event', lambda record: None)
+    monkeypatch.setattr('src.lib.domain_packs.validator_dispatch.report_runtime_exception', lambda *a, **k: reports.append(a))
+
+    def runner(request, **kwargs):
+        calls.append(request)
+        if len(calls) == 1:
+            pending = begin_provider_invocation(requested_provider='openai', requested_model='test', started_at=1)
+            admitted.set()
+            assert exhausted.wait(5)
+            complete_generic_provider_invocation(pending, {'usage': {'input_tokens': 2, 'output_tokens': 3}}, latency_ms=1)
+            return _result_payload(request)
+        assert admitted.wait(5)
+        try:
+            begin_provider_invocation(requested_provider='openai', requested_model='test', started_at=1)
+        finally:
+            exhausted.set()
+
+    with pytest.raises(BenchmarkInvocationBudgetExceeded):
+        with capture_provider_usage(max_records=1, max_failure_detail_chars=20) as records:
+            dispatch_active_validator_bindings(
+                _multi_object_envelope(['BAD:0001', 'BAD:0002', 'BAD:0003', 'BAD:0004']), pack,
+                runner=runner, max_parallel_validators=2,
+            )
+    assert len(calls) == 2
+    assert len(records) == 1
+    assert records[0].input_tokens == 2
+    assert records[0].output_tokens == 3
+    assert reports == []

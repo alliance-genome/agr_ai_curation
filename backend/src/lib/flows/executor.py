@@ -18,6 +18,8 @@ Architecture:
     to capture internal tool calls (read_section, search_document, etc.) and emit
     events for the audit panel and PDF highlighting.
 """
+
+from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded, raise_if_provider_budget_exhausted
 import asyncio
 import json
 import logging
@@ -5167,7 +5169,10 @@ async def execute_flow(
                 event = await anext(runner_stream)
             except StopAsyncIteration:
                 break
+            except BenchmarkInvocationBudgetExceeded:
+                raise
             except Exception as exc:
+                raise_if_provider_budget_exhausted()
                 terminal_output_ready = bool(pending_output_events) and not (
                     _missing_consumed_tool_completions()
                 )
@@ -5392,6 +5397,7 @@ async def execute_flow(
                 }
                 break
             if event_type == "RUN_FINISHED":
+                raise_if_provider_budget_exhausted()
                 pending_run_finished_event = dict(event)
                 missing_steps = _missing_consumed_tool_completions()
                 if missing_steps:
@@ -5427,6 +5433,7 @@ async def execute_flow(
         # nested runner so its provider teardown cannot be bypassed.
         await runner_stream.aclose()
 
+    raise_if_provider_budget_exhausted()
     inspected_result_refs = sorted(
         str(result_ref)
         for result_ref in flow_execution_state.get("inspected_result_refs") or set()
