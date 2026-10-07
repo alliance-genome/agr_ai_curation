@@ -677,9 +677,15 @@ class DocumentConversionService:
             reported = (progress.detail, progress.percent)
             if progress.detail is None or (recorded and recorded[-1] == reported):
                 return
-            await asyncio.to_thread(
-                self._record_reader, job.id, progress.detail, progress.percent,
-            )
+            try:
+                await asyncio.to_thread(
+                    self._record_reader, job.id, progress.detail, progress.percent,
+                )
+            except (ConversionStateError, PDFCancellationError):
+                raise
+            except Exception as exc:
+                _report("document_conversion_reader_progress", exc)
+                raise
             recorded.append((progress.detail, progress.percent))
 
         try:
