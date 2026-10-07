@@ -6,6 +6,8 @@ import logging
 import os
 import secrets
 import threading
+
+import httpx
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -24,6 +26,8 @@ from jwt.exceptions import (
 from sqlalchemy.orm import Session
 
 from auth_runtime.base import AuthProvider
+from auth_runtime.oidc import OIDCProviderResponseError
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from auth_runtime.browser import (
     authenticate_callback,
     create_pkce,
@@ -98,6 +102,28 @@ def _get_provider_or_503() -> AuthProvider:
     return _provider
 
 
+def _report_auth_failure(operation: str, exc: Exception) -> None:
+    """Capture outages without promoting expected credential rejection or secrets."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        operational = exc.response.status_code >= 500 or exc.response.status_code == 429
+    elif isinstance(exc, (OIDCProviderResponseError, httpx.RequestError, PyJWKClientConnectionError)):
+        operational = True
+    elif isinstance(exc, PyJWKClientError) and is_unknown_signing_key_error(exc):
+        operational = False
+    else:
+        operational = not isinstance(exc, (InvalidTokenError, ValueError))
+    if not operational:
+        return
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error("Authentication provider operation failed"),
+            component="authentication", operation=operation, level="error",
+            context={"error_type": type(exc).__name__},
+        )
+    except Exception:
+        pass  # Reporting cannot change the authentication response.
+
+
 @router.get("/login")
 async def login(request: Request) -> RedirectResponse:
     """Initiate OAuth2 authorization code flow with PKCE."""
@@ -113,7 +139,8 @@ async def login(request: Request) -> RedirectResponse:
             provider.get_login_url, state, code_challenge, "S256"
         )
     except Exception as exc:
-        logger.error("Failed to build login URL: %s", exc)
+        _report_auth_failure("login", exc)
+        logger.error("Failed to build login URL", extra={"sentry_skip_event": True})
         raise HTTPException(status_code=503, detail="Authentication provider unavailable")
 
     redirect_response = RedirectResponse(url=authorize_url, status_code=302)
@@ -158,6 +185,7 @@ async def callback(
     try:
         tokens, principal = await authenticate_callback(provider, code, code_verifier)
     except Exception as exc:
+        _report_auth_failure("callback", exc)
         raise_sanitized_http_exception(
             logger,
             status_code=400,
