@@ -5,6 +5,7 @@ import { useTheme } from '@mui/material/styles'
 import PrepScopeConfirmationDialog from '@/features/curation/components/PrepScopeConfirmationDialog'
 
 import ChatComposer from './Chat/ChatComposer'
+import StudioReminder from './Chat/StudioReminder'
 import ChatHeader from './Chat/ChatHeader'
 import ChatMessageList from './Chat/ChatMessageList'
 import ChatNoticeBars from './Chat/ChatNoticeBars'
@@ -74,6 +75,8 @@ function Chat(props: ChatProps) {
         onReviewAndCurateOpened={controller.handleReviewAndCurateOpened}
         onUnsupportedEvidenceReview={controller.handleUnsupportedEvidenceReview}
       />
+
+      {controller.studioReminder.visible && <StudioReminder onDismiss={controller.studioReminder.dismiss} />}
 
       <ChatComposer
         textareaRef={controller.textareaRef}

@@ -1,3 +1,4 @@
+import { useStudioReminder } from './useStudioReminder'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type React from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -113,6 +114,7 @@ export function useChatController({
     ? propSessionId.trim()
     : null
   const storageUserId = user?.uid ?? null
+  const studioReminder = useStudioReminder(storageUserId, propSessionId)
   const chatStorageKeys = useMemo(
     () => (storageUserId ? getChatLocalStorageKeys(storageUserId) : null),
     [storageUserId],
@@ -1603,6 +1605,7 @@ export function useChatController({
     setLimitNotices([])
 
     const messageToSend = inputMessage
+    studioReminder.screen(messageToSend, messages)
     const turnId = buildTurnId()
     activeTurnIdRef.current = turnId
     rescuedTurnIdsRef.current.delete(turnId)
@@ -1666,6 +1669,7 @@ export function useChatController({
       turnId,
     }
 
+    studioReminder.screen(text, messages)
     setMessages(prev => [...prev, userMessage])
 
     try {
@@ -1822,6 +1826,7 @@ export function useChatController({
     handleResetConversation,
     handleReviewAndCurateOpened,
     handleSendMessage,
+    studioReminder,
     handleSendQuickMessage,
     handleUnloadPDF,
     handleUnsupportedEvidenceReview,
