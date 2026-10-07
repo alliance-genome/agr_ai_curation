@@ -7399,12 +7399,13 @@ class TestExecuteFlowTermination:
 
     @pytest.mark.parametrize(
         "drain_error_timing",
-        [None, "post-output", "pre-output", "early-close"],
+        [None, "post-output", "pre-output", "early-close", "budget"],
         ids=[
             "clean-drain",
             "failed-drain",
             "pre-output-failure",
             "early-close",
+            "budget-exhausted",
         ],
     )
     @pytest.mark.parametrize(
@@ -7556,6 +7557,9 @@ class TestExecuteFlowTermination:
                     raise RuntimeError("pre-output supervisor failure")
                 for sdk_event in sdk_events:
                     yield sdk_event
+                if drain_error_timing == "budget":
+                    from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded
+                    raise BenchmarkInvocationBudgetExceeded(1, 1)
                 if drain_error_timing == "post-output":
                     raise RuntimeError("post-output supervisor failure")
                 lifecycle_order.append("sdk_stream_drained")
@@ -7662,6 +7666,17 @@ class TestExecuteFlowTermination:
             assert lifecycle_order == ["provider_closed", "client_closed"]
             assert reported_drain_errors == []
             assert persisted_requests == []
+            return
+
+        if drain_error_timing == "budget":
+            from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded
+            events = []
+            with pytest.raises(BenchmarkInvocationBudgetExceeded):
+                async for event in flow_events:
+                    events.append(event)
+            assert not any(event.get("type") == "FLOW_FINISHED" for event in events)
+            assert persisted_requests == []
+            assert reported_drain_errors == []
             return
 
         events = [event async for event in flow_events]

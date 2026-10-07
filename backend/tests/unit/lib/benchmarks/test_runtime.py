@@ -309,3 +309,32 @@ async def test_resolved_flow_cell_passes_complete_routes_and_stable_invocations(
         "extractor-model",
         "validator-model",
     ]
+
+
+@pytest.mark.asyncio
+async def test_swallowed_budget_failure_marks_direct_stage_failed(monkeypatch):
+    from src.lib.openai_agents.provider_usage import begin_provider_invocation, BenchmarkInvocationBudgetExceeded
+    from src.lib.benchmarks.stage_measurements import observe_stages, measure_stage, StageIdentity
+    route = BenchmarkSuiteRoute(provider='openai', model='extractor-model')
+    cell = _resolved_cell('agent', 'extractor', {'agent:extractor': route})
+    monkeypatch.setattr(benchmark_runtime, 'get_benchmark_max_invocations_per_cell', lambda: 1)
+    monkeypatch.setattr(benchmark_runtime, 'get_agent_by_id', lambda *a, **k: SimpleNamespace(model=SimpleNamespace()))
+    monkeypatch.setattr(benchmark_runtime, 'measure_declared_stage', lambda name: measure_stage(StageIdentity(name, 'extraction')))
+    completed = []
+    observer = SimpleNamespace(started=lambda stage: None, completed=completed.append)
+
+    async def stream(**kwargs):
+        begin_provider_invocation(requested_provider='openai', requested_model='test', started_at=1)
+        try:
+            begin_provider_invocation(requested_provider='openai', requested_model='test', started_at=1)
+        except BenchmarkInvocationBudgetExceeded:
+            pass  # SDK tool error text can hide the exception from its caller.
+        yield {'type': 'STRUCTURED_RESULT', 'data': {'result': {'records': []}}}
+        yield {'type': 'RUN_FINISHED', 'data': {'response': 'done'}}
+
+    monkeypatch.setattr(benchmark_runtime, 'run_agent_streamed', stream)
+    with observe_stages(observer), pytest.raises(BenchmarkInvocationBudgetExceeded):
+        await benchmark_runtime.execute_resolved_agent_cell(cell, {'messages': []}, 'run-1')
+    assert len(completed) == 1
+    assert completed[0].status == 'failed'
+    assert completed[0].failure_type == 'BenchmarkInvocationBudgetExceeded'

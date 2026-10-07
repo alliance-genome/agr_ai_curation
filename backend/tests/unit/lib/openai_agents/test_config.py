@@ -1700,3 +1700,49 @@ def test_inspect_results_object_pages_are_env_configured(monkeypatch):
     monkeypatch.setenv("INSPECT_RESULTS_OBJECT_MAX_PAGE_SIZE", "0")
     assert get_inspect_results_object_page_size() == 7
     assert get_inspect_results_object_max_page_size() == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('unsafe,retries,failures,expected_attempts', [
+    (False, 2, 1, 2), (False, 2, 5, 3), (True, 2, 1, 1), (False, 0, 1, 1),
+])
+async def test_overload_policy_obeys_real_sdk_provider_advice(
+    monkeypatch, unsafe, retries, failures, expected_attempts,
+):
+    from agents.models.openai_responses import get_openai_retry_advice
+    from agents.run_internal.model_retry import stream_response_with_retry
+
+    monkeypatch.setenv('OPENAI_MODEL_MAX_RETRIES', str(retries))
+    _zero_model_retry_delay(monkeypatch)
+    attempts = 0
+
+    def get_stream():
+        async def stream():
+            nonlocal attempts
+            attempts += 1
+            if attempts <= failures:
+                error = _responses_websocket_error()
+                if unsafe:
+                    error.unsafe_to_replay = True
+                raise error
+            yield {'type': 'response.completed'}
+        return stream()
+
+    async def rewind():
+        pass
+
+    async def consume():
+        return [event async for event in stream_response_with_retry(
+            get_stream=get_stream, rewind=rewind,
+            retry_settings=build_default_model_retry(),
+            get_retry_advice=get_openai_retry_advice,
+            previous_response_id='previous-response', conversation_id=None,
+        )]
+
+    if unsafe or failures > retries:
+        with pytest.raises(Exception) as error:
+            await consume()
+        assert error.value.code == 'server_is_overloaded'
+    else:
+        assert await consume() == [{'type': 'response.completed'}]
+    assert attempts == expected_attempts

@@ -47,6 +47,7 @@ from src.models.sql.benchmark import (
     BenchmarkInvocationStatus,
     BenchmarkJob,
 )
+from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded
 from src.models.sql.database import SessionLocal
 
 
@@ -93,6 +94,9 @@ def _utcnow() -> datetime:
 
 
 def _bounded_failure(category: str, exc: BaseException) -> dict[str, Any]:
+    if isinstance(exc, BenchmarkInvocationBudgetExceeded):
+        return {"category": "invocation_budget_exhausted", "retryable": False,
+                "detail": str(exc), "limit": exc.limit, "admitted": exc.admitted}
     return {
         "category": category,
         "retryable": False,

@@ -8,6 +8,8 @@ from openai.types.chat import ChatCompletion
 import pytest
 
 from src.lib.openai_agents.provider_usage import (
+    BenchmarkInvocationBudgetExceeded,
+    raise_if_provider_budget_exhausted,
     PendingProviderInvocation,
     ProviderUsageRecord,
     begin_provider_invocation,
@@ -133,7 +135,8 @@ def test_parallel_validator_threads_share_atomic_invocation_budget(monkeypatch):
                 started_at=1.0,
             )
         except RuntimeError as exc:
-            assert "exceeded 4 provider invocations" in str(exc)
+            assert isinstance(exc, BenchmarkInvocationBudgetExceeded)
+            assert exc.limit == exc.admitted == 4
             return None
         assert pending is not None
         response = ModelResponse(
@@ -143,7 +146,7 @@ def test_parallel_validator_threads_share_atomic_invocation_budget(monkeypatch):
         complete_generic_provider_invocation(pending, response, latency_ms=1)
         return pending.sequence
 
-    with capture_provider_usage(max_records=4, max_failure_detail_chars=20) as records:
+    with pytest.raises(BenchmarkInvocationBudgetExceeded), capture_provider_usage(max_records=4, max_failure_detail_chars=20) as records:
         with ThreadPoolExecutor(max_workers=8) as pool:
             futures = [pool.submit(copy_context().run, invoke) for _ in range(8)]
             sequences = [future.result() for future in futures]
@@ -596,3 +599,26 @@ def test_emit_provider_usage_reports_sanitized_emission_failure_without_raising(
         "operation": "trace_event_emission_failed",
         "tags": {"provider": "openrouter"},
     }
+
+
+@pytest.mark.asyncio
+async def test_sdk_tool_swallow_cannot_turn_exhausted_budget_into_success(monkeypatch):
+    from agents import function_tool
+    from agents.tool_context import ToolContext
+    monkeypatch.setattr("src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event", lambda record: None)
+
+    @function_tool
+    async def consume_budget() -> str:
+        begin_provider_invocation(requested_provider="openai", requested_model="test", started_at=1.0)
+        return "unexpected success"
+
+    with pytest.raises(BenchmarkInvocationBudgetExceeded) as failure:
+        with capture_provider_usage(max_records=1, max_failure_detail_chars=20):
+            pending = begin_provider_invocation(requested_provider="openai", requested_model="test", started_at=1.0)
+            # The default SDK tool error handler absorbs the exception into text.
+            await consume_budget.on_invoke_tool(ToolContext(context=None, tool_name=consume_budget.name, tool_call_id='budget', tool_arguments='{}'), '{}')
+            # An already-admitted completion must still retain its usage.
+            complete_generic_provider_invocation(pending, {"usage": {"input_tokens": 1, "output_tokens": 2}}, latency_ms=1)
+    assert failure.value.limit == failure.value.admitted == 1
+    # Capture scope cleanup must not poison a later request.
+    raise_if_provider_budget_exhausted()

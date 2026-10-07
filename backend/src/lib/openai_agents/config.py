@@ -4043,3 +4043,28 @@ def get_trace_review_langfuse_score_page_limit() -> int:
     standalone TraceReview service cannot import backend runtime configuration.
     """
     return _get_bounded_positive_env_int("TRACE_REVIEW_LANGFUSE_SCORE_PAGE_LIMIT", 100, maximum=100)
+
+
+# Advisory main-chat screening; separate from agent execution and model routing.
+def get_studio_reminder_enabled() -> bool:
+    return _get_env_bool("STUDIO_REMINDER_ENABLED", False)
+
+
+def get_studio_reminder_timeout_seconds() -> float:
+    return max(0.1, _get_env_float_with_fallback("STUDIO_REMINDER_TIMEOUT_SECONDS", 2.0))
+
+
+def get_studio_reminder_threshold() -> float:
+    return min(1.0, max(0.0, _get_env_float_with_fallback("STUDIO_REMINDER_THRESHOLD", 0.5)))
+
+
+def get_studio_reminder_message_chars() -> int:
+    return max(1, _get_env_int_with_fallback("STUDIO_REMINDER_MESSAGE_CHARS", 1800))
+
+
+def get_studio_reminder_context_chars() -> int:
+    return max(1, _get_env_int_with_fallback("STUDIO_REMINDER_CONTEXT_CHARS", 650))
+
+
+def get_studio_reminder_context_messages() -> int:
+    return max(0, _get_env_int_with_fallback("STUDIO_REMINDER_CONTEXT_MESSAGES", 2))

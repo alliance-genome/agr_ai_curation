@@ -203,7 +203,7 @@ async def test_call_llm_for_hierarchy_returns_empty_when_api_key_missing(monkeyp
 
 
 def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
-    from agents import AgentHooks
+    from agents import AgentHooks, retry_policies
     # Resolve the real wrapper before substituting the deliberately small SDK
     # module, so this fixture also works when run without prior runner tests.
     from src.lib.openai_agents import runner as _runner  # noqa: F401
@@ -211,7 +211,8 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
     agents_module = types.ModuleType("agents")
 
     class FakeModelSettings:
-        def __init__(self, temperature=None, reasoning=None, extra_args=None):
+        def __init__(self, temperature=None, reasoning=None, extra_args=None, retry=None):
+            captured["retry"] = retry
             captured["temperature"] = temperature
             captured["reasoning"] = reasoning
             captured["extra_args"] = extra_args
@@ -235,6 +236,7 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
 
     agents_module.Agent = FakeAgent
     agents_module.AgentHooks = AgentHooks
+    agents_module.retry_policies = retry_policies
     agents_module.Runner = FakeRunner
     agents_module.ModelSettings = FakeModelSettings
 
@@ -1130,3 +1132,18 @@ async def test_provider_failure_preserves_flat_document_and_redacts_report(
         _assert_runtime_report(runtime_reports, "RuntimeError")
     assert "private" not in caplog.text
     assert "fake-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry_limit", [0, 3])
+async def test_hierarchy_classifier_receives_shared_retry_policy(monkeypatch, hierarchy_env, retry_limit):
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", str(retry_limit))
+    captured, _ = _install_sequenced_runner(monkeypatch, [_paper_output()])
+    sections, _, _ = await hierarchy._call_llm_for_hierarchy(_PAPER_SECTIONS)
+    assert sections
+    if retry_limit == 0:
+        assert captured["retry"] is None
+    else:
+        assert captured["retry"].max_retries == retry_limit
+    assert captured["reasoning"].effort == "low"
+    assert captured["extra_args"]

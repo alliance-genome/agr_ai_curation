@@ -10,6 +10,8 @@ Langfuse Integration:
     OpenInference exports those SDK spans to Langfuse through OpenTelemetry.
 """
 
+
+from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded, raise_if_provider_budget_exhausted
 import asyncio
 import json
 import logging
@@ -2172,6 +2174,8 @@ async def _run_agent_with_owned_resources(
                 conversation_context_manager.__exit__(None, None, None)
             reset_benchmark_invocation_route(benchmark_route_token)
 
+    raise_if_provider_budget_exhausted()
+
     # Get final output if not captured from streaming
     if builder_materializer_agent:
         finalization = builder_workspace.finalization
@@ -3132,7 +3136,10 @@ async def run_agent_streamed(
                     extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
                 )
 
+        except BenchmarkInvocationBudgetExceeded:
+            raise
         except Exception as e:
+            raise_if_provider_budget_exhausted()
             if e is traced_runtime_exception:
                 raise
             logger.error(

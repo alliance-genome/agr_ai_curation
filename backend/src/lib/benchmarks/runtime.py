@@ -23,6 +23,7 @@ from src.lib.openai_agents.benchmark_routing import (
 )
 from src.lib.openai_agents.provider_usage import (
     capture_provider_usage,
+    raise_if_provider_budget_exhausted,
     provider_usage_metadata,
 )
 from src.models.sql.curation_flow import CurationFlow
@@ -121,6 +122,7 @@ async def execute_resolved_agent_cell(
                     output = (event.get("data") or {}).get("result")
                 if event.get("type") == "RUN_FINISHED":
                     terminal_seen = True
+            raise_if_provider_budget_exhausted()
             if not terminal_seen:
                 raise RuntimeError("Agent benchmark target ended without a terminal event")
             if not isinstance(output, dict):
@@ -230,6 +232,7 @@ async def execute_resolved_flow_cell(
                 if event.get("type") == "FLOW_ERROR":
                     raise RuntimeError("Flow benchmark target failed")
                 if event.get("type") == "FLOW_FINISHED":
+                    raise_if_provider_budget_exhausted()
                     terminal_seen = True
                     completion = event.get("data")
                     if not isinstance(completion, dict):
@@ -240,6 +243,7 @@ async def execute_resolved_flow_cell(
                         user_id=str(case_input.get("user_id") or "benchmark"),
                         run_id=run_id,
                     )
+            raise_if_provider_budget_exhausted()
             if not terminal_seen:
                 raise RuntimeError("Flow benchmark target ended without a terminal event")
     return BenchmarkCellExecutionResult(
