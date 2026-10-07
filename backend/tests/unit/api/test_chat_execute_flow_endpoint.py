@@ -530,6 +530,7 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
     _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
+    monkeypatch.setattr(chat, "require_owned_document", lambda *_args: SimpleNamespace(filename="paper.pdf"))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     monkeypatch.setattr(chat, "inaccessible_flow_agent_keys", lambda *_args, **_kwargs: [])
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
@@ -2766,6 +2767,7 @@ def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypat
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
+    monkeypatch.setattr(chat, "require_owned_document", lambda *_args: SimpleNamespace(filename="paper.pdf"))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
 
     async def _deny_register(
@@ -2817,6 +2819,7 @@ def test_execute_flow_endpoint_rejects_local_session_collision_before_register(m
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
+    monkeypatch.setattr(chat, "require_owned_document", lambda *_args: SimpleNamespace(filename="paper.pdf"))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
 
     async def _register_active_stream(
@@ -2869,6 +2872,7 @@ def test_execute_flow_endpoint_rejects_same_user_when_session_already_active(mon
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
+    monkeypatch.setattr(chat, "require_owned_document", lambda *_args: SimpleNamespace(filename="paper.pdf"))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
 
     with pytest.raises(chat.HTTPException) as exc:
@@ -3544,3 +3548,40 @@ def test_flow_summary_row_marks_new_records_without_step_codes():
         terminal_events=[{"type": "FLOW_FINISHED", "status": "completed", "flow_run_id": "run-1"}],
     )
     assert row.payload_json["unavailable_step_reason_codes"] == []
+
+
+@pytest.mark.parametrize("active", [None, {"filename": "wrong.pdf"}, {"filename": "8447967_J393047.pdf"}])
+def test_flow_name_comes_from_owned_requested_document(monkeypatch, active):
+    flow_id, document_id = uuid4(), uuid4()
+    flow = SimpleNamespace(id=flow_id, user_id=7, is_active=True, visibility="private", project_id=None, shared_at=None, name="Flow A", execution_count=0, last_executed_at=None, flow_definition={})
+    db = _DummyDB(flow=flow)
+    _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _: active))
+    def owned(actual_db, actual_id, owner):
+        assert actual_db is db and actual_id == document_id and owner == 7
+        return SimpleNamespace(filename="8447967_J393047.pdf")
+    monkeypatch.setattr(chat, "exclude_benchmark_document", lambda *args: None)
+    monkeypatch.setattr(chat, "require_owned_document", owned)
+    captured = {}
+    async def run(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "a" * 32}}
+    _patch_chat_impl(monkeypatch, "execute_flow", run)
+    response = asyncio.run(chat.execute_flow_endpoint(request=chat.ExecuteFlowRequest(flow_id=flow_id, session_id="filename-test", document_id=document_id), db=db, user={"sub": "auth-sub", "cognito:groups": []}))
+    asyncio.run(_consume_stream(response))
+    assert captured["document_name"] == "8447967_J393047.pdf"
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_flow_rejects_unavailable_document_before_stream(monkeypatch, status):
+    from fastapi import HTTPException
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, user_id=7, is_active=True, visibility="private", project_id=None, shared_at=None, name="Flow", flow_definition={})
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    def reject(*args):
+        raise HTTPException(status_code=status, detail="unavailable")
+    monkeypatch.setattr(chat, "exclude_benchmark_document", lambda *args: None)
+    monkeypatch.setattr(chat, "require_owned_document", reject)
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(chat.execute_flow_endpoint(request=chat.ExecuteFlowRequest(flow_id=flow_id, session_id="deny", document_id=uuid4()), db=_DummyDB(flow=flow), user={"sub": "auth-sub", "cognito:groups": []}))
+    assert caught.value.status_code == status and not calls["register"]
