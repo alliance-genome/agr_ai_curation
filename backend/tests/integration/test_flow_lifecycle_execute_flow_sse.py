@@ -539,7 +539,8 @@ def test_execute_flow_saves_and_replays_finalized_empty_extraction(
         test_db.commit()
 
     request.addfinalizer(cleanup_persisted_fixture)
-    owner = User(auth_sub=f"test_empty_extraction_owner_{uuid4()}", is_active=True)
+    # The fixture PDF belongs to the authenticated caller, as in real flow runs.
+    owner = User(auth_sub="test_valid_user_00u1abc2def4", is_active=True)
     test_db.add(owner)
     test_db.flush()
     test_db.add(PDFDocument(id=document_id, user_id=owner.id, filename="empty-fixture.pdf",
