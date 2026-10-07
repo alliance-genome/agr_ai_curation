@@ -302,7 +302,7 @@ def test_safe_reset_run_context_token_logs_context_mismatch(caplog):
 
 
 @pytest.mark.asyncio
-async def test_run_agent_streamed_without_langfuse(monkeypatch):
+async def test_run_agent_streamed_without_langfuse(monkeypatch, tmp_path):
     captured = {}
     _patch_common_runtime(monkeypatch, captured)
     monkeypatch.setattr(runner, "get_langfuse", lambda: None)
@@ -335,7 +335,14 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
     assert events[1]["type"] == "SUPERVISOR_START"
     assert events[-1]["type"] == "RUN_FINISHED"
     fallback_trace = events[0]["data"]["trace_id"]
-    assert fallback_trace.startswith("chat-")
+    assert len(fallback_trace) == 32 and all(c in "0123456789abcdef" for c in fallback_trace)
+    from src.lib.file_outputs import FileOutputStorageService
+    storage = FileOutputStorageService(base_path=tmp_path)
+    path, checksum, size, warnings = storage.save_output(
+        fallback_trace, "session-1", "gene,value\nExample,1\n", "csv", "paper", stable_filename=True,
+    )
+    assert path.read_text() == "gene,value\nExample,1\n"
+    assert fallback_trace in path.name and size > 0
     assert captured["run_kwargs"]["trace_id"] == fallback_trace
     assert captured["run_kwargs"]["input_items"] == [
         {"role": "user", "content": "older"},
@@ -816,7 +823,7 @@ async def test_run_agent_streamed_falls_back_when_span_creation_fails(monkeypatc
 
     assert events[0]["type"] == "RUN_STARTED"
     fallback_trace = events[0]["data"]["trace_id"]
-    assert fallback_trace.startswith("chat-")
+    assert len(fallback_trace) == 32 and all(c in "0123456789abcdef" for c in fallback_trace)
     assert captured["fallback_kwargs"]["trace_id"] == fallback_trace
     assert captured["logged"][0][0] == fallback_trace
 
