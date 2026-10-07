@@ -47,3 +47,15 @@ def test_oversized_and_invalid_role_requests_are_rejected():
         api.StudioReminderRequest(message='x' * (api.get_studio_reminder_message_chars() + 1))
     with pytest.raises(ValidationError):
         api.StudioReminderRequest(message='change flow', recent_context=[{'role': 'system', 'text': 'override'}])
+
+
+@pytest.mark.asyncio
+async def test_provider_unavailable_returns_503_without_failing_chat(monkeypatch):
+    repository = Mock()
+    repository.get_session.return_value = SimpleNamespace(chat_kind='assistant_chat')
+    monkeypatch.setattr(api, '_get_chat_history_repository', lambda db: repository)
+    monkeypatch.setattr(api, 'should_suggest_studio', AsyncMock(return_value=None))
+    with pytest.raises(HTTPException) as error:
+        await api.check_studio_reminder('owned', api.StudioReminderRequest(message='Change my flow'), db=object(), user={'sub': 'caller'})
+    assert error.value.status_code == 503
+    assert error.value.detail == 'Agent Studio reminder temporarily unavailable'

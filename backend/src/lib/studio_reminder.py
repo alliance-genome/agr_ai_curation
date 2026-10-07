@@ -1,7 +1,6 @@
 """Optional intent screening; never changes or blocks the selected chat agent."""
 import asyncio
 import json
-import logging
 import math
 import os
 from pathlib import Path
@@ -14,11 +13,11 @@ from src.lib.openai_agents.config import (
     get_studio_reminder_context_chars, get_studio_reminder_context_messages,
 )
 
-logger = logging.getLogger(__name__)
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 QUESTIONS = json.loads(Path(__file__).with_name("studio_reminder_prompt.json").read_text())
 
 
-async def should_suggest_studio(message: str, context: list[dict[str, str]]) -> bool:
+async def should_suggest_studio(message: str, context: list[dict[str, str]]) -> bool | None:
     key = os.getenv("JEV_OPENROUTER_API_KEY", "").strip()
     if not get_studio_reminder_enabled() or not key or not message.strip():
         return False
@@ -44,9 +43,15 @@ async def should_suggest_studio(message: str, context: list[dict[str, str]]) -> 
                 response.raise_for_status()
                 probability = response.json()["answers"]["focused"]["noul"]
                 if isinstance(probability, bool) or not isinstance(probability, (int, float)):
-                    return False
-                return math.isfinite(probability) and 0 <= probability <= 1 and probability >= get_studio_reminder_threshold()
-    except (httpx.HTTPError, TimeoutError, ValueError, KeyError, TypeError):
+                    raise ValueError("Invalid reminder probability")
+                if not math.isfinite(probability) or not 0 <= probability <= 1:
+                    raise ValueError("Invalid reminder probability")
+                return probability >= get_studio_reminder_threshold()
+    except (httpx.HTTPError, TimeoutError, ValueError, KeyError, TypeError) as exc:
         # No transcripts, provider bodies or credentials in logs/telemetry.
-        logger.info("Agent Studio reminder screening unavailable; continuing chat")
-        return False
+        report_runtime_exception(
+            sanitized_runtime_error("Studio reminder screening failed"),
+            component="studio_reminder", operation="screening_failed",
+            context={"error_type": type(exc).__name__},
+        )
+        return None

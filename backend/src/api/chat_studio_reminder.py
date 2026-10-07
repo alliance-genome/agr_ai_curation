@@ -38,9 +38,12 @@ async def check_studio_reminder(
     )
     if session is None or session.chat_kind != "assistant_chat":
         raise HTTPException(status_code=404, detail="Chat session not found")
-    return {"show_reminder": await should_suggest_studio(
+    decision = await should_suggest_studio(
         request.message, [item.model_dump() for item in request.recent_context],
-    )}
+    )
+    if decision is None:
+        raise HTTPException(status_code=503, detail="Agent Studio reminder temporarily unavailable")
+    return {"show_reminder": decision}
 
 
 @router.get("/chat/studio-reminder/config")
