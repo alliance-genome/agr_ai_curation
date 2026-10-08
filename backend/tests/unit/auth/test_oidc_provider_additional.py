@@ -304,3 +304,11 @@ def test_extract_principal_and_provider_name():
     assert provider.provider_name == "oidc"
     assert principal.subject == "user-123"
     assert principal.groups == ["developers"]
+
+
+@pytest.mark.parametrize("content", [b"not-json", b"[]", b"null"])
+def test_provider_response_shape_is_operational_failure(content):
+    import httpx
+    from auth_runtime.oidc import _response_object, OIDCProviderResponseError
+    with pytest.raises(OIDCProviderResponseError):
+        _response_object(httpx.Response(200, content=content))

@@ -19,6 +19,20 @@ from .base import AuthPrincipal, AuthProvider, TokenSet
 DEFAULT_JWT_ALGORITHMS = ["RS256", "RS384", "ES256", "ES384"]
 
 
+class OIDCProviderResponseError(ValueError):
+    """An identity provider returned an unusable protocol response."""
+
+
+def _response_object(response: httpx.Response) -> Dict[str, Any]:
+    try:
+        payload = response.json()
+    except ValueError:
+        raise OIDCProviderResponseError("Invalid OIDC JSON response") from None
+    if not isinstance(payload, dict):
+        raise OIDCProviderResponseError("Invalid OIDC response object")
+    return payload
+
+
 class OIDCAuthProvider(AuthProvider):
     """OIDC provider implementation with discovery."""
 
@@ -66,7 +80,7 @@ class OIDCAuthProvider(AuthProvider):
             discovery_url = f"{self.issuer_url}/.well-known/openid-configuration"
             response = httpx.get(discovery_url, timeout=self.timeout_seconds)
             response.raise_for_status()
-            self._discovery = response.json()
+            self._discovery = _response_object(response)
         assert self._discovery is not None
         return self._discovery
 
@@ -85,7 +99,7 @@ class OIDCAuthProvider(AuthProvider):
             discovery = self._discover()
             jwks_uri = discovery.get("jwks_uri")
             if not jwks_uri:
-                raise ValueError("OIDC discovery missing jwks_uri")
+                raise OIDCProviderResponseError("OIDC discovery missing jwks_uri")
 
             jwks_options: Dict[str, Any] = {}
             if self.jwks_timeout_seconds is not None:
@@ -122,7 +136,7 @@ class OIDCAuthProvider(AuthProvider):
         discovery = self._discover()
         authorize_endpoint = discovery.get("authorization_endpoint")
         if not authorize_endpoint:
-            raise ValueError("OIDC discovery missing authorization_endpoint")
+            raise OIDCProviderResponseError("OIDC discovery missing authorization_endpoint")
 
         params = {
             "client_id": self.client_id,
@@ -139,7 +153,7 @@ class OIDCAuthProvider(AuthProvider):
         discovery = await self._discover_async()
         token_endpoint = discovery.get("token_endpoint")
         if not token_endpoint:
-            raise ValueError("OIDC discovery missing token_endpoint")
+            raise OIDCProviderResponseError("OIDC discovery missing token_endpoint")
 
         data = {
             "grant_type": "authorization_code",
@@ -163,11 +177,11 @@ class OIDCAuthProvider(AuthProvider):
                 headers=headers,
             )
         response.raise_for_status()
-        payload = response.json()
+        payload = _response_object(response)
 
         id_token = payload.get("id_token")
-        if not id_token:
-            raise ValueError("OIDC token response missing id_token")
+        if not isinstance(id_token, str) or not id_token:
+            raise OIDCProviderResponseError("OIDC token response missing id_token or invalid type")
 
         return TokenSet(
             id_token=id_token,

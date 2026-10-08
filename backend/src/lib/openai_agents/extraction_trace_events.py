@@ -448,11 +448,22 @@ def _append_jsonl(trace_id: str, event: dict[str, Any]) -> None:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, sort_keys=True, default=str))
             handle.write("\n")
-    except Exception:
+    except Exception as exc:
+        try:
+            from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+
+            report_runtime_exception(
+                sanitized_runtime_error("Durable extraction trace write failed"),
+                component="extraction_trace_events",
+                operation="write_failed",
+                level="error",
+                context={"error_type": type(exc).__name__},
+            )
+        except Exception:
+            pass  # Optional diagnostics must never interrupt extraction or mirroring.
         logger.warning(
             "Failed to write extraction trace event",
-            extra={"trace_id": trace_id, "event_type": event.get("event_type")},
-            exc_info=True,
+            extra={"sentry_skip_event": True},
         )
 
 

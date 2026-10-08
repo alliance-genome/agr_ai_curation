@@ -446,3 +446,85 @@ async def test_browser_auth_rejects_retired_cognito_cookie(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await auth_api._get_user_from_cookie_impl(_request(cookies={"cognito_token": "legacy-token"}))
     assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,expected", [("timeout", True), ("server", True), ("invalid_grant", False), ("invalid_token", False), ("malformed", True)])
+@pytest.mark.parametrize("report_fails", [False, True])
+async def test_callback_operational_reporting_preserves_response(monkeypatch, kind, expected, report_fails):
+    import httpx
+    from auth_runtime.oidc import OIDCProviderResponseError
+    from jwt.exceptions import InvalidTokenError
+    errors = {
+        "timeout": httpx.ConnectTimeout("sensitive-provider-details"),
+        "server": httpx.HTTPStatusError("sensitive-provider-details", request=httpx.Request("POST", "https://example.org/token"), response=httpx.Response(503)),
+        "invalid_grant": httpx.HTTPStatusError("sensitive-provider-details", request=httpx.Request("POST", "https://example.org/token"), response=httpx.Response(400, json={"error": "invalid_grant"})),
+        "invalid_token": InvalidTokenError("sensitive-provider-details"),
+        "malformed": OIDCProviderResponseError("sensitive-provider-details"),
+    }
+    async def fail(*args):
+        raise errors[kind]
+    calls = []
+    def report(exc, **kwargs):
+        calls.append((str(exc), kwargs))
+        if report_fails:
+            raise RuntimeError("report failed")
+    monkeypatch.setattr(auth_api, "authenticate_callback", fail)
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: object())
+    monkeypatch.setattr(auth_api, "report_runtime_exception", report)
+    with pytest.raises(HTTPException) as caught:
+        await auth_api.callback(_request(cookies={"oauth_state": "s", "oauth_code_verifier": "v"}), Response(), "c", "s", object())
+    assert caught.value.status_code == 400
+    assert bool(calls) == expected
+    assert "sensitive-provider-details" not in str(calls)
+
+
+@pytest.mark.asyncio
+async def test_login_outage_report_cannot_break_503(monkeypatch):
+    import httpx
+    from unittest.mock import Mock
+    provider = SimpleNamespace(get_login_url=Mock(side_effect=httpx.ConnectTimeout("sensitive")))
+    monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: provider)
+    report = Mock(side_effect=RuntimeError("report failed"))
+    monkeypatch.setattr(auth_api, "report_runtime_exception", report)
+    with pytest.raises(HTTPException) as caught:
+        await auth_api.login(_request())
+    assert caught.value.status_code == 503 and report.call_count == 1
+    assert report.call_args.kwargs["operation"] == "login"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("id_token", [{"bad": "shape"}, ["token"], 123, True, None, ""])
+async def test_malformed_token_response_is_reported_at_callback(monkeypatch, id_token):
+    import httpx
+    from unittest.mock import AsyncMock, Mock
+    from auth_runtime.oidc import OIDCAuthProvider
+
+    provider = OIDCAuthProvider({
+        "issuer_url": "https://issuer.example.org",
+        "client_id": "client",
+        "redirect_uri": "https://app.example.org/auth/callback",
+    })
+    monkeypatch.setattr(provider, "_discover_async", AsyncMock(return_value={
+        "token_endpoint": "https://issuer.example.org/token",
+    }))
+    monkeypatch.setattr(provider, "validate_token", AsyncMock(side_effect=AssertionError("invalid token shape reached validation")))
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(
+        200, json={"id_token": id_token},
+        request=httpx.Request("POST", "https://issuer.example.org/token"),
+    )
+    monkeypatch.setattr("auth_runtime.oidc.httpx.AsyncClient", lambda **kwargs: client)
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: provider)
+    report = Mock()
+    monkeypatch.setattr(auth_api, "report_runtime_exception", report)
+    with pytest.raises(HTTPException) as caught:
+        await auth_api.callback(
+            _request(cookies={"oauth_state": "s", "oauth_code_verifier": "v"}),
+            Response(), "c", "s", object(),
+        )
+    assert caught.value.status_code == 400
+    assert report.call_count == 1
+    assert report.call_args.kwargs["context"]["error_type"] == "OIDCProviderResponseError"

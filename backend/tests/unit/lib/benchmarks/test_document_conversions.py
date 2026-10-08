@@ -1075,3 +1075,61 @@ def test_moving_on_from_extracting_text_clears_what_the_reader_reported():
                           reader_percent=80)
     DocumentConversionRepository().mark_stage(_locked(row), "id", "saving")
     assert (row.stage, row.reader_detail, row.reader_percent) == ("saving", None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("report_fails", [False, True])
+@pytest.mark.parametrize("error_type", [ConnectionError, ConversionStateError, PDFCancellationError])
+async def test_reader_progress_failure_reports_then_propagates_without_ack(monkeypatch, report_fails, error_type):
+    row = _conversion_row()
+    service, repository, _ = _service(row)
+    error = error_type("private SQL and credentials")
+    seen = []
+    def fail(*args):
+        raise error
+    monkeypatch.setattr(service, "_record_reader", fail)
+    async def convert(job, groups, advance, on_reader):
+        # This is the optional parser callback boundary: neither failed attempt
+        # may be acknowledged/deduplicated and the original error must survive.
+        for _ in range(2):
+            with pytest.raises(type(error)) as caught:
+                await on_reader(reader_progress({"status": "progress", "progress": {"stage": "marker", "percent": 35}}))
+            assert caught.value is error
+            seen.append(True)
+        raise ConversionStateError("finish fixture without materializing")
+    monkeypatch.setattr(service, "_convert", convert)
+    with patch(f"{_SERVICE_MODULE}.report_runtime_exception", side_effect=RuntimeError("report failed") if report_fails else None) as report:
+        await service.run(row.id, authorized_group_ids=())
+    assert len(seen) == 2
+    assert report.call_count == (2 if error_type is ConnectionError else 0)
+    assert "private SQL" not in str(report.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_real_polling_continues_after_reported_reader_write_failure(monkeypatch):
+    from src.lib.pipeline.pdfx_parser import PDFXParser
+    row = _conversion_row()
+    service, repository, _ = _service(row)
+    def fail(*args):
+        raise ConnectionError("sensitive database details")
+    monkeypatch.setattr(service, "_record_reader", fail)
+    class Response:
+        status = 200
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def text(self): return '{"status":"complete"}'
+    class Session:
+        def get(self, *args, **kwargs): return Response()
+    async def convert(job, groups, advance, callback):
+        parser = object.__new__(PDFXParser)
+        parser.service_url = "https://example.org"
+        parser.timeout_seconds = 10
+        parser._poll_attempt_count = 0
+        result = await parser._poll_until_complete(Session(), "synthetic", {}, callback)
+        assert result["status"] == "complete"
+        raise ConversionStateError("stop fixture after polling")
+    monkeypatch.setattr(service, "_convert", convert)
+    with patch(f"{_SERVICE_MODULE}.report_runtime_exception") as report:
+        await service.run(row.id, authorized_group_ids=())
+    assert report.call_count == 1
+    assert report.call_args.kwargs["operation"] == "document_conversion_reader_progress"

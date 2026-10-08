@@ -428,6 +428,7 @@ async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
         assert exc.__context__ is None and exc.__cause__ is None
         assert report.call_args.kwargs == {
             "component": "abstract_extraction", "operation": "extraction_failed", "level": "error",
+            "context": {"error_type": "ConfigError" if outcome == "configuration" else "RuntimeError"},
         }
         assert "SECRET" not in caplog.text
         assert all(getattr(record, "sentry_skip_event", False) for record in caplog.records if record.name == prompt_utils.logger.name)

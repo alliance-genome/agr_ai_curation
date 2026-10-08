@@ -2717,9 +2717,8 @@ async def run_agent_streamed(
             emit_trace_event=True,
         )
 
-    # Generate a fallback trace ID (used when Langfuse not configured)
-    doc_prefix = document_id[:8] if document_id else "nodoc"
-    fallback_trace_id = f"chat-{doc_prefix}-{uuid.uuid4().hex[:8]}"
+    # Application execution identity must satisfy storage contracts even without telemetry.
+    fallback_trace_id = uuid.uuid4().hex
 
     # Get Langfuse client for tracing
     langfuse = get_langfuse()

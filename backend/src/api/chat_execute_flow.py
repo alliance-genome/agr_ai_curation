@@ -44,7 +44,7 @@ from src.lib.flows.outcome import (
 )
 from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
 from src.lib.flows.access import get_visible_flow
-from src.services.document_access import exclude_benchmark_document
+from src.services.document_access import exclude_benchmark_document, require_owned_document
 from src.lib.flows.execution_revisions import flow_execution_revision_findings
 from src.lib.flows.unavailable_steps import stored_flow_step_reason_codes
 
@@ -870,8 +870,10 @@ async def execute_flow_endpoint(
     set_current_session_id(request.session_id)
     set_current_user_id(user_id)
 
-    active_doc = document_state.get_document(user_id)
-    document_name = active_doc.get("filename") if active_doc else None
+    document_name = (
+        require_owned_document(db, request.document_id, db_user.id).filename
+        if request.document_id else None
+    )
 
     logger.info(
         "Starting flow execution: flow_id=%s flow_name=%s document_id=%s document_name=%s turn_id=%s",
