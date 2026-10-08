@@ -192,3 +192,27 @@ def test_mirror_to_langfuse_uses_metadata_payload_to_preserve_trace_io(monkeypat
         "trace_id": "trace-abc",
         "parent_span_id": "span-abc",
     }
+
+
+def test_write_failure_reports_safely_and_still_mirrors(tmp_path, monkeypatch):
+    from src.lib.observability import runtime
+    root = tmp_path / "not-a-directory"
+    root.write_text("occupied")
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(root))
+    captured, mirrored = [], []
+    monkeypatch.setattr(runtime, "report_runtime_exception", lambda exc, **kw: captured.append((str(exc), kw)))
+    monkeypatch.setattr(events, "_mirror_to_langfuse", mirrored.append)
+    events.start_extraction_trace_run(trace_id="a" * 32, session_id="session", user_id="owner")
+    try:
+        result = events.write_extraction_trace_event(event_type="test.failure", input_summary={"paper_text": "private"})
+        assert result is not None and mirrored
+        assert len(captured) == 1
+        assert captured[0][1]["operation"] == "write_failed"
+        assert str(root) not in str(captured) and "private" not in str(captured)
+        def broken(*args, **kwargs):
+            raise RuntimeError("reporting failed")
+        monkeypatch.setattr(runtime, "report_runtime_exception", broken)
+        assert events.write_extraction_trace_event(event_type="test.failure") is not None
+        assert len(mirrored) == 2
+    finally:
+        events.clear_extraction_trace_run()
