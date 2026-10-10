@@ -822,11 +822,6 @@
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
     "required_context": [],
-    "required_tool_call": {
-      "enforce": true,
-      "failure_message": "did not call required database lookup tools before answering",
-      "guardrail_message": "You must query the package-declared curation lookup tool before answering. Use agr_curation_query first."
-    },
     "source_file": "python/src/agr_ai_curation_alliance/tools/agr_curation.py"
   },
   "agr_literature_reference_lookup": {
@@ -4359,7 +4354,7 @@
     "agent_studio": {
       "diagnostic": {
         "category": "database",
-        "description": "Resolve organism-scoped gene-product identity through a fixed hierarchy:\n1. Exact current gene/locus identity in the read-only Alliance curation database.\n2. Exact species-specific mature RNA identity in RNAcentral.\n3. Active miRBase mature accession from the RNAcentral cross-reference.\n4. Every current Alliance gene/locus carrying the mature RNAcentral cross-reference.\n\nStatus is one of: resolved, ambiguous, not_found, or upstream_error.\nThe resolver never selects one candidate from an ambiguous mapping.\ncandidate_limit_reached explicitly reports when the configured result\nbound omitted additional candidates from the returned list.\nOnly validated Alliance gene CURIEs accepted by go_api_call appear as\nresolved_gene_id or candidate_mappings[].gene_id.",
+        "description": "Retrieve organism-scoped candidates from the Alliance curation database;\nwhen the exact query has no candidates, search RNAcentral and retrieve\nmiRBase cross-references and associated Alliance gene records.\nStatus describes retrieval: success, not_found, invalid_input, upstream_error.\nSuccess never means identity was resolved. The calling LLM evaluates\ncandidates and their descriptions, types and provenance. No gene is\nselected automatically. candidate_limit_reached reports incomplete\ncoverage. Only structurally valid gene CURIEs appear in candidate_mappings.",
         "enabled": true,
         "input_schema": {
           "properties": {
@@ -4407,11 +4402,11 @@
           "typed"
         ]
       },
-      "prompt_description": "Resolve a gene, precursor locus, or mature RNA product to typed, source-grounded Alliance gene candidates without choosing among ambiguous precursor mappings."
+      "prompt_description": "Retrieve source-grounded gene and RNA product candidates without selecting an identity."
     },
     "binding_kind": "static",
     "category": "Database",
-    "description": "Resolve genes, precursor loci, and mature RNA products to typed evidence-backed Alliance gene candidates.",
+    "description": "Retrieve genes and RNA products as typed source candidates for LLM evaluation.",
     "documentation": {
       "parameters": [
         {
@@ -4439,7 +4434,7 @@
           "type": "string"
         }
       ],
-      "summary": "Distinguishes ordinary genes, precursor loci, and mature RNA products using current Alliance curation identity, RNAcentral, and miRBase evidence; returns ambiguity explicitly and never synthesizes an RGD CURIE."
+      "summary": "Returns Alliance curation, RNAcentral and miRBase source facts and candidate mappings; the calling LLM judges identity and relevance."
     },
     "identity_lookup": true,
     "methods": null,

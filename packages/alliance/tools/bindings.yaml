@@ -559,10 +559,6 @@ tools:
                 type: integer
                 description: Max results
             required: [method]
-      required_tool_call:
-        enforce: true
-        failure_message: did not call required database lookup tools before answering
-        guardrail_message: You must query the package-declared curation lookup tool before answering. Use agr_curation_query first.
       bulk_list_optimization:
         enabled: true
         minimum_entities: 8

@@ -169,7 +169,7 @@ def test_normal_validator_dispatch_enters_frozen_stage(monkeypatch, batch, faile
     }
     request = SimpleNamespace(validator_binding_id="test", request_id="request")
     job = SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(binding_id="test")))
-    result = SimpleNamespace(status="unresolved" if failed else "resolved")
+    result = SimpleNamespace(status="unresolved" if failed else "resolved", is_resolved=not failed)
     clock = [0.0]
     monkeypatch.setattr("src.lib.benchmarks.stage_measurements.monotonic", lambda: clock[0])
 

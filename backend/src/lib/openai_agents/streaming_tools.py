@@ -145,7 +145,7 @@ from src.lib.curation_workspace.extraction_results import (
     persist_inline_validated_extraction_result,
 )
 from src.schemas.curation_workspace import CurationExtractionSourceKind
-from src.schemas.domain_validator import is_domain_validator_result_schema
+from src.schemas.domain_validator import DomainValidatorResultBase, is_domain_validator_result_schema
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 from src.lib.packages import tool_roles
 from .model_request_measurement import install_model_request_measurement
@@ -2377,6 +2377,7 @@ def _structured_specialist_finalization_feedback(
     finalization_config: Mapping[str, Any] | None = None,
     tool_calls: List["SpecialistToolCall"],
     live_evidence_records: List[Dict[str, Any]],
+    compact_result: DomainValidatorResultBase | None = None,
 ) -> _StructuredSpecialistFinalizationFeedback:
     output_type_name = _output_type_name(expected_output_type)
     finalization_config = finalization_config or {}
@@ -2426,7 +2427,6 @@ def _structured_specialist_finalization_feedback(
             ],
         )
 
-    from src.schemas.domain_validator import DomainValidatorResultBase
     if isinstance(validated, DomainValidatorResultBase) and not validated.is_complete:
         return _StructuredSpecialistFinalizationFeedback(
             accepted_payload=None,
@@ -2543,12 +2543,22 @@ def _structured_specialist_finalization_feedback(
             "Use only evidence_record_id values returned by record_evidence in this run, without editing their verified quote metadata."
         )
 
-    lookup_errors, lookup_report = _lookup_provenance_finalization_errors(
-        canonical_payload,
-        output_type_name=output_type_name,
-        finalization_config=finalization_config,
-        tool_calls=tool_calls,
-    )
+    if compact_result is not None:
+        # This object comes only from this invocation's compact workspace.
+        # Source records, copied facts and actual lookup audit were already
+        # verified there. A second success-label/raw-output check must not
+        # override that canonical judgment. Never select this branch from
+        # model-authored data or finalization configuration.
+        if compact_result.model_dump() != canonical_payload:
+            raise ValueError("Canonical compact result changed during finalization")
+        lookup_errors, lookup_report = [], {"lookup_attempt_count": len(compact_result.lookup_attempts)}
+    else:
+        lookup_errors, lookup_report = _lookup_provenance_finalization_errors(
+            canonical_payload,
+            output_type_name=output_type_name,
+            finalization_config=finalization_config,
+            tool_calls=tool_calls,
+        )
     if lookup_errors:
         field_errors.extend(lookup_errors)
         repair_instructions.append(
@@ -2685,6 +2695,7 @@ def _build_structured_specialist_finalization_tool(
             )
         else:
             try:
+                assembled = None
                 if compact_runtime is not None:
                     assembled = compact_runtime.assemble(result)
                     result = assembled.model_dump(mode="json")
@@ -2697,6 +2708,7 @@ def _build_structured_specialist_finalization_tool(
                     finalization_config=finalization_state.config,
                     tool_calls=tool_calls,
                     live_evidence_records=live_evidence_records,
+                    compact_result=assembled,
                 )
             except (TypeError, KeyError):
                 if compact_runtime is None:

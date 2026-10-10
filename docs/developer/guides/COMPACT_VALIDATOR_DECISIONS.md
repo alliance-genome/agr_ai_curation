@@ -102,9 +102,20 @@ The RGD policy evaluator is unchanged: proposed facts come from supplied inputs,
 scientific judgments and policy consequences come from the model. Code copies
 proposal facts and preserves those judgments without fabricating lookup events.
 
-Runtime finalization instructions supersede older full-result authoring
-instructions without modifying saved custom prompts or execution revisions.
-No saved data is migrated by this change.
+Runtime finalization instructions supersede older full-result authoring and
+blanket lookup-before-output instructions, including frozen generated layers,
+without modifying saved custom prompts or execution revisions. Curator scientific
+criteria and actual database-verification obligations remain in force. An explicit
+unresolved judgment does not require a ceremonial lookup. No saved data is migrated
+by this change; execution evidence must identify the current runtime layer and
+application commit alongside the original saved revision.
+
+For compact decisions, the invocation's source workspace checks record membership,
+identity and evidence references before assembling canonical output. Streaming
+finalization does not recheck that output with the older success-outcome filter:
+an LLM can select a supported record from an ambiguous lookup response. The legacy
+provenance check remains for noncompact callers; schema, completeness and document
+evidence checks still apply to compact output.
 
 Expected decision/schema errors remain repairable finalizer rejections. Unexpected
 adapter type/key errors clear accepted state, report a content-free operational
