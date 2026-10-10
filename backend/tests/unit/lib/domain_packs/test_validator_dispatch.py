@@ -4503,6 +4503,57 @@ def test_batch_correction_retains_each_requested_result_without_losing_peers():
     assert second.explanation == partial["explanation"]
     assert third.status == "unresolved"
     assert third.lookup_attempts[0].method == "invalid_schema"
+    # A correction may omit or corrupt peers; neither may erase their earlier
+    # safe judgment, nor make a partially supplied batch accepted.
+    assert finalize([complete[1]])["status"] == "rejected"
+    assert state.incomplete_results[0] == first
+    assert state.incomplete_results[1].is_resolved
+    for invalid_first in ([{"request_id": requests[0].request_id}],
+                          [complete[0], complete[0]],
+                          [{**complete[0], "validator_binding_id": "foreign"}]):
+        assert finalize([*invalid_first, complete[1]])["status"] == "rejected"
+        assert state.incomplete_results[0] == first
+        assert state.incomplete_results[1].is_resolved
+        assert not state.accepted_results
     assert finalize(complete)["status"] == "accepted"
     assert state.incomplete_results == ()
     assert len(state.accepted_results) == 3
+
+
+@pytest.mark.parametrize("ending", ["stopped", "max_turns"])
+def test_batch_exhaustion_returns_safe_judgments_across_partial_compact_retries(monkeypatch, ending):
+    from agents.exceptions import MaxTurnsExceeded
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import _unwrap_function_tool
+
+    requests = [_validation_request().model_copy(update={"request_id": f"request-{index}"}) for index in range(2)]
+    binding = SimpleNamespace(raw={}, max_tool_calls=4)
+    jobs = [SimpleNamespace(request=request, match=SimpleNamespace(binding=binding)) for request in requests]
+    source_agent = SimpleNamespace(output_type=GeneResultEnvelope, tools=[_compact_lookup_tool()],
+                                   instructions="Validate the evidence.")
+    monkeypatch.setattr("src.lib.config.agent_loader.get_agent_definition_for_package",
+                        lambda package_id, agent_id: AgentDefinition(
+                            folder_name="gene", agent_id=agent_id, name="Gene Validation", package_id=package_id,
+                            batch_capabilities=["domain_validator_batch"]))
+    monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_agent_by_id", lambda _: source_agent)
+    decisions = [{"request_id": request.request_id, "status": "unresolved",
+                  "explanation": f"Scientific judgment for {request.request_id}",
+                  "candidates": [], "slots": {}} for request in requests]
+
+    def run(agent, **kwargs):
+        finalize = _unwrap_function_tool(next(tool for tool in agent.tools
+                                              if tool.name == "finalize_validator_batch_results"))
+        bad = {**decisions[1], "status": "resolved", "slots": {
+            "identifier": {"kind": "record", "record_ref": "fabricated", "field": "identifier"}}}
+        assert finalize(results=[decisions[0], bad])["status"] == "rejected"
+        assert finalize(results=[decisions[1]])["status"] == "rejected"
+        if ending == "max_turns":
+            raise MaxTurnsExceeded("Correction turn budget exhausted")
+        return {"ignored": "unfinalized answer"}
+
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", run)
+    output = run_package_scoped_validator_agent_batch(jobs, binding=binding)
+    results = _validated_results_from_agent_batch_output(output, jobs=jobs)
+    assert [result.explanation for result in results] == [decision["explanation"] for decision in decisions]
+    assert all(result.status == "unresolved" and result.resolved_values == {} for result in results)
+    assert all(not result.lookup_attempts for result in results)

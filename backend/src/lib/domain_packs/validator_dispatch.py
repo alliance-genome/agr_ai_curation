@@ -280,6 +280,7 @@ class _ValidatorRunGroupResult:
 class _ValidatorFinalizationState:
     incomplete_result: DomainValidatorResultBase | None = None
     incomplete_results: tuple[DomainValidatorResultBase, ...] = ()
+    retained_results: dict[str, DomainValidatorResultBase] = dataclasses.field(default_factory=dict)
     accepted_result: DomainValidatorResultBase | None = None
     accepted_results: tuple[DomainValidatorResultBase, ...] = ()
 
@@ -293,6 +294,7 @@ class _ValidatorFinalizationFeedback:
     result_errors: tuple[dict[str, Any], ...] = ()
     incomplete_result: DomainValidatorResultBase | None = None
     incomplete_results: tuple[DomainValidatorResultBase, ...] = ()
+    retained_results: tuple[DomainValidatorResultBase, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2704,28 +2706,34 @@ def _build_finalize_validator_batch_results_tool(
     ) -> dict[str, Any]:
         """Validate the final batch results before answering."""
 
-        if compact_runtime is not None:
-            try:
-                assembled = compact_runtime.assemble_batch(results)
-            except (TypeError, KeyError):
-                from src.lib.domain_packs.compact_runtime import fail_compact_assembly
-                finalization_state.accepted_results = ()
-                fail_compact_assembly()
-            except ValueError as exc:
-                finalization_state.accepted_results = ()
-                return {"status": "rejected", "message": str(exc)}
-            results = list(assembled)
-        feedback = _validator_batch_results_finalization_feedback(
-            results, jobs=jobs,
-            result_schemas={key: contract.result_schema for key, contract in compact_runtime.contracts.items()}
-            if compact_runtime is not None else None,
+        try:
+            feedback = _validator_batch_results_finalization_feedback(
+                results, jobs=jobs,
+                result_schemas={key: contract.result_schema for key, contract in compact_runtime.contracts.items()}
+                if compact_runtime is not None else None,
+                compact_runtime=compact_runtime,
+            )
+        except (TypeError, KeyError):
+            if compact_runtime is None:
+                raise
+            from src.lib.domain_packs.compact_runtime import fail_compact_assembly
+            finalization_state.accepted_results = ()
+            fail_compact_assembly()
+        # Only independently safe results may replace a previously retained
+        # judgment. Missing/malformed peers and synthetic failures never do.
+        finalization_state.retained_results.update(
+            (result.request_id, result) for result in feedback.retained_results
         )
-        if feedback.incomplete_results or feedback.accepted_results:
-            finalization_state.incomplete_results = feedback.incomplete_results
         if feedback.accepted_results:
             finalization_state.accepted_results = feedback.accepted_results
+            finalization_state.incomplete_results = ()
+            finalization_state.retained_results.clear()
         else:
             finalization_state.accepted_results = ()
+            if finalization_state.retained_results:
+                finalization_state.incomplete_results = _retained_batch_results(
+                    jobs, finalization_state.retained_results,
+                )
         return _validator_finalization_tool_payload(feedback)
 
     if compact_runtime is not None:
@@ -2841,6 +2849,7 @@ def _validator_batch_results_finalization_feedback(
     *,
     jobs: list[ValidatorDispatchJob],
     result_schemas: dict[str, type[DomainValidatorResultBase]] | None = None,
+    compact_runtime: Any = None,
 ) -> _ValidatorFinalizationFeedback:
     if not isinstance(raw_results, list):
         message = (
@@ -2903,6 +2912,12 @@ def _validator_batch_results_finalization_feedback(
                 }
             )
             continue
+        if compact_runtime is not None:
+            try:
+                raw_result = compact_runtime.assemble(raw_result)
+            except ValueError as exc:
+                result_errors.append({"request_id": request.request_id, "message": str(exc)})
+                continue
         feedback = _validator_result_finalization_feedback(
             raw_result,
             request=request,
@@ -2933,18 +2948,26 @@ def _validator_batch_results_finalization_feedback(
             message=message,
             repair_instructions=_validator_repair_instructions(message),
             result_errors=tuple(result_errors),
-            incomplete_results=tuple(
-                retained_results.get(job.request.request_id) or _unresolved_result_for_dispatch_problem(
-                    job.request, reason="invalid_schema",
-                    explanation="Validator batch did not supply a structurally valid result for this request.",
-                ) for job in jobs
-            ) if retained_results else (),
+            incomplete_results=_retained_batch_results(jobs, retained_results) if retained_results else (),
+            retained_results=tuple(retained_results.values()),
         )
 
     return _ValidatorFinalizationFeedback(
         accepted_result=None,
         message="Validator batch results accepted.",
         accepted_results=tuple(accepted_results),
+    )
+
+
+def _retained_batch_results(
+    jobs: list[ValidatorDispatchJob],
+    retained_results: Mapping[str, DomainValidatorResultBase],
+) -> tuple[DomainValidatorResultBase, ...]:
+    return tuple(
+        retained_results.get(job.request.request_id) or _unresolved_result_for_dispatch_problem(
+            job.request, reason="invalid_schema",
+            explanation="Validator batch did not supply a structurally valid result for this request.",
+        ) for job in jobs
     )
 
 
