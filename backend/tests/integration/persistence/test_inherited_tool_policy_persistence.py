@@ -263,7 +263,7 @@ def _expression_extractor_with_inherited_lookup(db, groups):
     """Exercise saved lookup inheritance with a currently installed tool.
 
     Retired resolver tools no longer have executable bindings or installed
-    policies; their historical migration has separate SQL regression coverage.
+    policies; their editable-state retirement is covered below.
     """
     from src.lib.agent_studio.domain_output_contract import initial_agent_output_contract
     from src.lib.agent_studio.execution_revision_service import append_execution_revision
@@ -389,3 +389,109 @@ def test_workshop_accepts_a_legacy_expression_extractor_but_refuses_an_attached_
             db, head, tool_ids=[*snapshot.tool_ids, "agr_curation_query"],
             expected_revision_id=saved.id, active_group_ids=groups,
         )
+
+
+def _retired_resolver_migration():
+    path = Path(__file__).resolve().parents[3] / "alembic/versions/b8f2c3d4e5a6_remove_retired_resolver_tool_configuration.py"
+    spec = spec_from_file_location("retired_resolver_configuration", path)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("active", [True, False])
+def test_retired_resolver_migration_preserves_activity_and_executable_history(policy_db, monkeypatch, active):
+    """Retirement cleans editable state, not immutable history or owner flow pins."""
+    from copy import deepcopy
+    from sqlalchemy.orm import Session
+    from src.lib.agent_studio import catalog_service, runtime_validation
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision
+    from src.lib.config import get_valid_group_ids
+    from src.lib.openai_agents import langfuse_client
+    from src.models.sql import database
+
+    db = policy_db
+    groups = list(get_valid_group_ids())
+    head, snapshot, previous = _expression_extractor_with_inherited_lookup(db, groups)
+    snapshot = snapshot.model_copy(update={
+        "tool_ids": [tool for tool in snapshot.tool_ids if tool not in INHERITED_LOOKUPS],
+        "system_managed_tool_ids": [tool for tool in snapshot.system_managed_tool_ids if tool not in INHERITED_LOOKUPS],
+    })
+    retirement = _retired_resolver_migration()
+    retired = list(retirement.RETIRED_TOOLS)
+    legacy = snapshot.model_copy(update={
+        "tool_ids": [snapshot.tool_ids[0], *retired, *snapshot.tool_ids[1:]],
+        "system_managed_tool_ids": [*snapshot.system_managed_tool_ids, *retired],
+    })
+    head.tool_ids = list(legacy.tool_ids)
+    head.is_active = active
+    head.supervisor_enabled = active
+    old = append_execution_revision(db, head, legacy, user_id=1, expected_revision_id=previous.id)
+    for tool in retired:
+        db.add(ToolPolicy(tool_key=tool, display_name=tool, config={"operator_note": "old policy"}))
+    db.flush()
+    monkeypatch.setattr(runtime_validation, "SessionLocal", lambda: Session(bind=db.connection(), join_transaction_mode="create_savepoint"))
+    if active:
+        before_report = runtime_validation.build_agent_runtime_report(strict_mode=False)
+        assert next(row for row in before_report["agents"] if row["agent_key"] == head.agent_key)["disabled"]
+    before_history = deepcopy(old.snapshot), old.fingerprint
+    before_policy = db.execute(sa.text("SELECT row_to_json(p) FROM tool_policies p WHERE tool_key='read_chunk'")).scalar_one()
+    unchanged = db.execute(sa.text("SELECT row_to_json(a) FROM agents a WHERE id != :id"), {"id": head.id}).all()
+    with Operations.context(MigrationContext.configure(db.connection())):
+        retirement.upgrade()
+    db.expire_all()
+    assert head.tool_ids == snapshot.tool_ids
+    assert (head.is_active, head.supervisor_enabled, head.user_id) == (active, active, 1)
+    assert head.execution_revision_id == old.id
+    assert (old.snapshot, old.fingerprint) == before_history
+    assert db.execute(sa.text("SELECT row_to_json(p) FROM tool_policies p WHERE tool_key='read_chunk'")).scalar_one() == before_policy
+    assert db.execute(sa.text("SELECT row_to_json(a) FROM agents a WHERE id != :id"), {"id": head.id}).all() == unchanged
+    assert not db.query(ToolPolicy).filter(ToolPolicy.tool_key.in_(retired)).count()
+    # Idempotent upgrade, forward-only downgrade: neither restores dead tools.
+    after = db.execute(sa.text("SELECT row_to_json(a) FROM agents a WHERE id=:id"), {"id": head.id}).scalar_one()
+    with Operations.context(MigrationContext.configure(db.connection())):
+        retirement.upgrade()
+        retirement.downgrade()
+    assert db.execute(sa.text("SELECT row_to_json(a) FROM agents a WHERE id=:id"), {"id": head.id}).scalar_one() == after
+
+    monkeypatch.setattr(runtime_validation, "SessionLocal", lambda: Session(bind=db.connection(), join_transaction_mode="create_savepoint"))
+    report = runtime_validation.build_agent_runtime_report(strict_mode=False)
+    rows = [row for row in report["agents"] if row["agent_key"] == head.agent_key]
+    assert (len(rows) == 1 and not rows[0].get("disabled")) if active else not rows
+    runtime_validation._disable_agents_with_missing_tools(report)
+    db.refresh(head)
+    assert (head.is_active, head.supervisor_enabled) == (active, active)
+    if not active:
+        return  # Never reactivate an archived agent to demonstrate execution.
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(db))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-a-credential")
+    monkeypatch.setattr(langfuse_client, "log_agent_config", lambda **kwargs: None)
+    get_tool_policy_cache().refresh(db)
+    context = {"db_user_id": 1, "user_id": "test-curator", "document_id": str(uuid4()), "authenticated_groups": groups}
+    with pytest.raises(ValueError, match="no longer available for execution"):
+        catalog_service.get_agent_by_id(head.agent_key, **context)
+    # Explicit normal save advances the executable head, without rewriting old
+    # snapshots. No tool_ids are sent: use the migration-cleaned editable list.
+    service.update_custom_agent(db, head, description="Reviewed retired-tool removal", expected_revision_id=old.id, active_group_ids=groups)
+    assert head.execution_revision_id != old.id
+    _, current = get_execution_revision(db, head.id, head.execution_revision_id, 1, active_group_ids=groups)
+    assert not set(retired) & set(current.tool_ids)
+    assert not set(retired) & set(current.system_managed_tool_ids)
+    built = catalog_service.get_agent_by_id(head.agent_key, **context)
+    assert built.execution_revision_id == str(head.execution_revision_id)
+    with pytest.raises(ValueError, match="no longer available for execution"):
+        catalog_service.get_agent_by_id(head.agent_key, execution_revision_id=str(old.id), **context)
+    db.refresh(old)
+    assert (old.snapshot, old.fingerprint) == before_history
+
+
+def test_retired_resolver_migration_only_removes_exact_tool_strings(policy_db):
+    db = policy_db
+    head = db.query(Agent).first()
+    head.tool_ids = ["read_chunk", None, "inspect_ontology_term", "read_chunk", 42, "inspect_ontology_term_extra"]
+    db.flush()
+    with Operations.context(MigrationContext.configure(db.connection())):
+        _retired_resolver_migration().upgrade()
+    db.refresh(head)
+    assert head.tool_ids == ["read_chunk", None, "read_chunk", 42, "inspect_ontology_term_extra"]

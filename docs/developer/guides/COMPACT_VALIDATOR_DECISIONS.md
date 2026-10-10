@@ -176,3 +176,31 @@ incomplete output from a resolved scientific judgment. Standalone specialist
 finalization rejects incomplete results and attaches the retained snapshot to its
 terminal structured-output failure; custom flow dispatch rechecks request identity
 before carrying that snapshot into the normal incomplete-result materialization.
+
+
+## Upgrading saved agents after resolver-tool retirement
+
+Migration `b8f2c3d4e5a6` removes only `search_domain_field_terms`,
+`inspect_ontology_term`, and `resolve_domain_field_term` from editable
+`agents.tool_ids` and removes their `tool_policies` rows. Run migrations before
+startup runtime validation: otherwise an editable row with an unavailable tool
+can be persistently deactivated. The migration preserves other tool order,
+activity/routing flags, ownership, custom prompts, and unrelated policies. It
+does not reactivate agents that were already inactive.
+
+Executable revisions, fingerprints, saved flow pins, and historical results are
+immutable and are not rewritten. Cleaning an editable row is **not** an
+executable upgrade: an old pin with a retired tool remains inspectable but cannot
+run. Inventory affected heads and pinned consumers before deployment. For each
+reviewed agent, save a new revision through the normal owner-authorized update
+API with its current `expected_revision_id`, omitting `tool_ids` so the cleaned
+editable list is used. Review any additional authoring errors; do not bypass
+model, tool, ownership, or output-contract checks. Select the accepted new
+revision explicitly in each intended flow. Do not silently advance historical
+runs or unrelated pins.
+
+This is a forward-only cleanup, following the model-retirement migration
+precedent. Downgrade does not restore unavailable tools. Other missing package
+tools retain their existing availability checks. The migration was added during
+the v0.10.5 merge-back review; it is not part of the immutable v0.10.5 tag. The
+production release inventory had no editable rows containing these tools.
