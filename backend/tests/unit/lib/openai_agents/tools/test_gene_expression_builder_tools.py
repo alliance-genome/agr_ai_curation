@@ -317,12 +317,12 @@ def test_stage_rejects_missing_evidence_ids(active_builder_context):
     assert {issue["reason"] for issue in result.data["validation_issues"]} == {"too_short"}
 
 
-def test_stage_rejects_placeholder_reference(active_builder_context):
-    result = _stage(reference={"mention": "PMID:..."})
-
-    assert {issue["reason"] for issue in result.data["validation_issues"]} == {
-        "placeholder_reference"
-    }
+@pytest.mark.parametrize("mention", ["PMID:12345678", "PMID12345678", "WB:..."])
+def test_stage_preserves_reference_wording_without_placeholder_blacklist(active_builder_context, mention):
+    workspace, _events = active_builder_context
+    result = _stage(reference={"mention": mention})
+    assert result.status == "ok"
+    assert workspace.candidates["gex-candidate-1"].staged_fields["single_reference"]["mention"] == mention
 
 
 def test_patch_rejects_free_form_field_and_requires_wording_for_controlled_patch(
@@ -580,7 +580,7 @@ def test_finalize_rejects_relation_without_contract_state(active_builder_context
     )
 
 
-def test_finalize_rejects_placeholder_pmid(active_builder_context):
+def test_finalize_preserves_example_looking_pmid(active_builder_context):
     workspace, events = active_builder_context
     _stage_materializable_observation()
     staged_fields = dict(workspace.get_candidate("gex-candidate-1").staged_fields)
@@ -592,11 +592,8 @@ def test_finalize_rejects_placeholder_pmid(active_builder_context):
 
     result = _finalize(["gex-candidate-1"])
 
-    assert result.status == "error"
-    assert {issue["reason"] for issue in result.data["validation_issues"]} == {
-        "placeholder_reference"
-    }
-    assert any(
+    assert result.status == "ok"
+    assert not any(
         event["event_type"] == "gene_expression_materializer.placeholder_reference_rejected"
         for event in events
     )
@@ -830,58 +827,8 @@ def test_stage_requires_paper_wording_for_every_controlled_field(active_builder_
     assert result.data["validation_issues"][0]["field_path"].endswith("mention")
 
 
-@pytest.mark.parametrize("status", ["unresolved", "ambiguous", "blocked"])
-def test_resolver_instructions_tell_the_model_to_stage_unmatched_wording(status):
-    """Regression (ALL-1283): no "preserve it in unresolved metadata" instruction remains."""
-
-    lines = agr_curation._resolver_instruction(
-        resolution_status=status,
-        field_path="expression_pattern.where_expressed.anatomical_structure",
-        source_phrase=_RESIDUAL_BODY,
-        resolver={},
-    )
-    text = " ".join(lines)
-    assert "metadata" not in text
-    # Shared with every builder: no builder-specific parameter names.
-    assert "selected_value" not in text
-    assert f"{_RESIDUAL_BODY!r} as the paper's wording (its mention), leaving the identifier empty" in text
-    assert "the validator will check it" in text
 
 
-def test_resolver_selection_reads_only_the_selected_terms_own_keys():
-    """Regression (ALL-1283): no name/curie/value fallback chains in resolver output."""
-
-    ontology_source = {"kind": "ontology", "ontology_family": "anatomy"}
-    no_curie = {"name": "cilium", "term_name": "cilium", "value": "cilium"}
-    selection = agr_curation._resolver_helper_selection(
-        field_path="expression_pattern.where_expressed.anatomical_structure",
-        source_phrase="cilia",
-        candidate=no_curie,
-        term_source=ontology_source,
-        policy={},
-        evidence_context={},
-        resolved_at="2026-09-23T00:00:00Z",
-    )
-    assert "selected_value" not in selection
-    assert selection["selected_name"] == "cilium"
-
-    vocabulary = {"kind": "controlled_vocabulary", "vocabulary": "Expression Relation"}
-    assert agr_curation._payload_field_instructions(
-        field_path="relation.name",
-        candidate={"name": "expressed in", "value": "expressed in"},
-        term_source=vocabulary,
-    ) == {"set": [{"field_path": "relation.name", "value": None}]}
-    # A stage-name path no longer takes the CURIE as its name.
-    assert agr_curation._payload_field_instructions(
-        field_path="when_expressed_stage_name",
-        candidate={"curie": "WBls:0000024"},
-        term_source=ontology_source,
-    ) == {
-        "set": [
-            {"field_path": "when_expressed_stage_name.curie", "value": "WBls:0000024"},
-            {"field_path": "when_expressed_stage_name.name", "value": None},
-        ]
-    }
 
 
 # ---------------------------------------------------------------------------------------
@@ -1046,36 +993,3 @@ def test_search_builder_candidates_pages_matches():
     assert second["returned_candidate_count"] == 1
     assert second["next_offset"] is None
     assert second["truncated"] is False
-
-
-def test_inspect_ontology_term_carries_the_paper_wording_not_the_term_name(monkeypatch):
-    """Regression (ALL-1283 S4): the suggested resolve call uses the staged paper wording."""
-
-    def _lookup(*, method: str, **kwargs: Any) -> agr_curation.AgrQueryResult:
-        if method == "get_ontology_term":
-            return agr_curation.AgrQueryResult(
-                status="ok",
-                data={"curie": kwargs["term"], "name": "cilium", "ontology_type": kwargs.get("ontology_term_type")},
-            )
-        return agr_curation.AgrQueryResult(status="ok", data=[])
-
-    monkeypatch.setattr(agr_curation, "_AGR_QUERY_CALLABLE", _lookup)
-    inspect = _tool_fn(agr_curation.inspect_ontology_term, "inspect_ontology_term")
-    arguments = {
-        "domain_pack_id": agr_curation.GENE_EXPRESSION_DOMAIN_PACK_ID,
-        "object_type": "GeneExpressionAnnotation",
-        "field_path": "expression_pattern.where_expressed.anatomical_structure",
-        "curie": "WBbt:0001234",
-        "include_parents": False,
-        "include_children": False,
-    }
-
-    result = inspect(**arguments, source_phrase="cilia")
-    assert result.status == "ok", result
-    assert result.data["next_tool_call"]["arguments"]["source_phrase"] == "cilia"
-    assert "cilium" not in str(result.data["next_tool_call"])
-    assert "cilia" in result.data["diagnostic_summary"]
-
-    missing = inspect(**arguments, source_phrase="  ")
-    assert missing.status == "error"
-    assert "requires source_phrase: the paper's wording" in str(missing.message)

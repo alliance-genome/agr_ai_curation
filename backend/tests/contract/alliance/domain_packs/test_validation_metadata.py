@@ -775,68 +775,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
             "agr.alliance.gene_expression"
         ).metadata.object_definitions[0].fields
     }
-    relation_helper = expression_fields["relation.name"].metadata["term_helper"]
-    assert relation_helper["term_source"] == {
-        "kind": "controlled_vocabulary",
-        "vocabulary": "Expression Relation",
-    }
-    assert relation_helper["resolver"]["primary_tool"] == "resolve_domain_field_term"
-    assert relation_helper["lookup"]["package_tool"] == "search_domain_field_terms"
-    site_helper = expression_fields[
-        "expression_pattern.where_expressed"
-    ].metadata["term_helper"]
-    assert site_helper["site_routing"]["required_any"] == [
-        "expression_pattern.where_expressed.anatomical_structure",
-        "expression_pattern.where_expressed.cellular_component",
-    ]
-    assert {
-        candidate["slot_hint"]
-        for candidate in site_helper["site_routing"]["candidates"]
-    } == {
-        "expression_pattern.where_expressed.anatomical_structure",
-        "expression_pattern.where_expressed.cellular_component",
-    }
-    assert expression_fields[
-        "expression_experiment.expression_assay_used"
-    ].metadata["term_helper"]["term_source"] == {
-        "kind": "ontology",
-        "ontology_family": "assay",
-        "ontology_term_type": "MMOTerm",
-    }
-    # The stage term is looked up on developmental_stage_start; when_expressed_stage_name
-    # is the paper's stage wording and has no term helper (ALL-1283).
-    assert "term_helper" not in expression_fields["when_expressed_stage_name"].metadata
-    assert expression_fields[
-        "expression_pattern.when_expressed.developmental_stage_start"
-    ].metadata["term_helper"]["lookup"] == {
-        "package_tool": "search_domain_field_terms",
-        "method": "search_life_stage_terms",
-        "provider_required": True,
-        "candidate_authority": "selector_evidence",
-    }
-    assert expression_fields[
-        "expression_pattern.where_expressed.cellular_component"
-    ].metadata["term_helper"]["term_source"] == {
-        "kind": "ontology",
-        "ontology_family": "go",
-        "go_aspect": "cellular_component",
-    }
-    helper_gaps = {
-        gap["field_path"]
-        for gap in (
-            alliance_registry.get_pack(
-                "agr.alliance.gene_expression"
-            ).metadata.object_definitions[0].metadata["controlled_field_helper_gaps"]
-        )
-    }
-    # condition_relations[].condition_relation_type is no longer a helper gap — experimental
-    # conditions are now fully wired (active composite + relation-type CV bindings).
-    assert {
-        "expression_experiment.detection_reagents",
-        "expression_experiment.specimen_genomic_model",
-        "expression_experiment.specimen_alleles",
-    } <= helper_gaps
-    assert "condition_relations[].condition_relation_type" not in helper_gaps
+    assert all("term_helper" not in field.metadata for field in expression_fields.values())
 
     expression_provider_binding = gene_expression_bindings["data_provider_validation"]
     assert expression_provider_binding.validator_agent is not None

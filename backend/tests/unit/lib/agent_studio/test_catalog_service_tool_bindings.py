@@ -490,7 +490,7 @@ def test_get_agent_metadata_does_not_inherit_curation_when_custom_agent_no_longe
     assert metadata["curation"] is None
 
 
-def test_create_db_agent_requires_package_declared_lookup_tool_call(monkeypatch):
+def test_create_db_agent_does_not_require_a_curation_lookup_call(monkeypatch):
     fake_row = SimpleNamespace(
         id="agent-id",
         agent_key="ca_custom_gene_validation",
@@ -543,10 +543,9 @@ def test_create_db_agent_requires_package_declared_lookup_tool_call(monkeypatch)
 
     built = catalog_service._create_db_agent(fake_row)
 
-    assert isinstance(captured["tracker"], _DummyTracker)
-    assert captured["minimum_calls"] == 1
-    assert "package-declared curation lookup tool" in captured["error_message"]
-    assert built.kwargs["output_guardrails"] == [{"kind": "tool_required", "minimum_calls": 1}]
+    assert captured == {}
+    assert built.kwargs["output_guardrails"] == []
+    assert [tool.name for tool in built.tools] == ["agr_curation_query"]
 
 
 @pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])

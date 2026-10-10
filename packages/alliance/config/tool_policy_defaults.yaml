@@ -10,36 +10,6 @@ tool_policies:
     config:
       system_managed_inheritance: true
 
-  search_domain_field_terms:
-    display_name: Search Domain Field Terms
-    description: Inherited search domain field terms helper for the selected package agent.
-    category: Runtime Helpers
-    curator_visible: false
-    allow_attach: false
-    allow_execute: true
-    config:
-      system_managed_inheritance: false
-
-  inspect_ontology_term:
-    display_name: Inspect Ontology Term
-    description: Inherited inspect ontology term helper for the selected package agent.
-    category: Runtime Helpers
-    curator_visible: false
-    allow_attach: false
-    allow_execute: true
-    config:
-      system_managed_inheritance: false
-
-  resolve_domain_field_term:
-    display_name: Resolve Domain Field Term
-    description: Inherited resolve domain field term helper for the selected package agent.
-    category: Runtime Helpers
-    curator_visible: false
-    allow_attach: false
-    allow_execute: true
-    config:
-      system_managed_inheritance: false
-
   list_generic_object_classes:
     display_name: List Generic Object Classes
     description: Inherited list generic object classes helper for the selected package agent.

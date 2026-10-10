@@ -51,15 +51,8 @@ ENVELOPE_EXTRACTOR_TOOLS = [
 ]
 
 
-# Optional resolver/lookup tools that domains with controlled-vocabulary or
-# ontology fields (disease, phenotype, gene_expression) declare between the shared
-# evidence prefix and their builder verbs. Domains without grounded fields (gene,
-# allele) omit them. Order-preserving subset of the canonical resolver block.
-RESOLVER_LOOKUP_TOOLS = [
-    "search_domain_field_terms",
-    "inspect_ontology_term",
-    "resolve_domain_field_term",
-]
+# Extractors do not carry retired identity-selection helpers.
+RESOLVER_LOOKUP_TOOLS = []
 
 
 def _assert_builder_extractor_tools(tools, *, domain: str):
@@ -677,10 +670,9 @@ def test_packaged_identity_lookup_tools_are_declared_in_their_bindings(monkeypat
     try:
         assert tool_roles.identity_lookup_tool_names() == frozenset({
             "agr_curation_query", "agr_literature_reference_lookup", "alliance_api_call",
-            "chebi_api_call", "curation_db_sql", "go_api_call", "inspect_ontology_term",
-            "quickgo_api_call", "resolve_domain_field_term", "resolve_gene_product",
-            "search_domain_field_terms",
-        })
+            "chebi_api_call", "curation_db_sql", "go_api_call",
+            "quickgo_api_call", "resolve_gene_product",
+                })
     finally:
         tool_roles.reset_cache()
 
@@ -700,8 +692,8 @@ def test_no_packaged_extraction_agent_carries_identity_lookup_tools(monkeypatch)
 
     assert "agr_species_context_lookup" not in lookups
     assert {
-        "agr_curation_query", "search_domain_field_terms", "resolve_domain_field_term",
-        "inspect_ontology_term", "agr_literature_reference_lookup", "quickgo_api_call",
+        "agr_curation_query",
+        "agr_literature_reference_lookup", "quickgo_api_call",
     } <= lookups
     violations = {
         agent.agent_id: sorted(

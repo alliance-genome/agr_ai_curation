@@ -80,10 +80,9 @@ def test_a_partly_filled_result_is_incomplete(outcomes):
     assert validator_failure_classification(result) == "missing_expected_result_field"
 
 
-def test_a_result_without_lookups_is_incomplete_or_unclassifiable():
-    assert validator_failure_classification(_result((), missing=("curie",))) == "missing_expected_result_field"
-    with pytest.raises(ValueError, match="Unable to classify"):
-        validator_failure_classification(_result(()))
+def test_a_result_without_lookups_preserves_an_explicit_unresolved_judgment():
+    assert validator_failure_classification(_result((), missing=("curie",))) == "unresolved"
+    assert validator_failure_classification(_result(())) == "unresolved"
 
 
 @pytest.mark.parametrize(("method", "classification"), [

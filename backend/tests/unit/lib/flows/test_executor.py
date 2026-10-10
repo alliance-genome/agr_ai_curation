@@ -4127,7 +4127,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @pytest.mark.parametrize("benchmark", [False, True])
     @pytest.mark.parametrize("custom", [False, True])
-    @pytest.mark.parametrize("accepted_status", ["resolved", "unresolved", None])
+    @pytest.mark.parametrize("accepted_status", ["resolved", "unresolved", "incomplete", None])
     def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch, benchmark, custom, accepted_status):
         executor = _executor_module()
         from src.schemas.domain_validator import (
@@ -4177,10 +4177,11 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "validator_binding_id": request.validator_binding_id,
             "validator_agent": request.validator_agent.model_dump(mode="json"),
             "target": request.target.model_dump(mode="json"),
-            "status": accepted_status,
-            "resolved_values": {"identifier": "AGR:0001"} if accepted_status == "resolved" else {},
+            "status": "resolved" if accepted_status == "incomplete" else accepted_status,
+            "output_issues": ["Unfinished structural correction."] if accepted_status == "incomplete" else [],
+            "resolved_values": {"identifier": "AGR:0001"} if accepted_status in {"resolved", "incomplete"} else {},
             "resolved_objects": [],
-            "missing_expected_fields": [] if accepted_status == "resolved" else ["identifier"],
+            "missing_expected_fields": [] if accepted_status in {"resolved", "incomplete"} else ["identifier"],
             "candidates": [{"value": "AGR:0001", "details": {"evidence_record_ids": ["evidence-1"], "source_record": {"curie": "AGR:0001"}}}],
             "lookup_attempts": [{"provider": "fixture", "method": "search", "query": {"identifier": "AGR:0001"}, "result_count": 1, "outcome": "success"}],
             "curator_message": None,
@@ -4192,6 +4193,11 @@ class TestGetAllAgentToolsStepOrderRuntime:
             async def on_invoke_tool(self, tool_ctx, args_json):
                 captured["tool_name"] = tool_ctx.tool_name
                 captured["args"] = json.loads(args_json)
+                if accepted_status == "incomplete":
+                    from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+                    raise SpecialistOutputError("Validator", "GeneResultEnvelope", details=[{
+                        "incomplete_validator_result": accepted_payload,
+                    }])
                 callback = captured.get("validated_result_callback")
                 if callback is not None and accepted_status is not None:
                     callback(accepted_payload)
@@ -4241,7 +4247,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert result.candidates[0].details == accepted_payload["candidates"][0]["details"]
         assert result.lookup_attempts[0].result_count == 1
         materialized = executor.validator_result_from_agent_output(result, request=request)
-        assert materialized.status == accepted_status
+        assert materialized.status == ("resolved" if accepted_status == "incomplete" else accepted_status)
+        assert materialized.is_complete is (accepted_status != "incomplete")
         assert materialized.resolved_values == accepted_payload["resolved_values"]
         assert materialized.target == request.target
         assert materialized.explanation == "Accepted scientific decision"

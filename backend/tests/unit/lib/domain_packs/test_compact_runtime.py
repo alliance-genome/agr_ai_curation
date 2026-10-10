@@ -47,6 +47,44 @@ def test_core_compact_instruction_does_not_inject_package_semantics():
     assert "allele_symbols" not in text
 
 
+def test_batch_finalizer_retains_safe_peers_of_foreign_record_and_later_bad_retries():
+    from src.lib.domain_packs.validator_dispatch import (
+        _ValidatorFinalizationState, _build_finalize_validator_batch_results_tool,
+    )
+
+    runtime = CompactValidatorRuntime([contract("a"), contract("b")], adapter)
+    jobs = [SimpleNamespace(request=item.request, match=SimpleNamespace(
+        binding=SimpleNamespace(raw={"profile_validation": True})))
+        for item in runtime.contracts.values()]
+    state = _ValidatorFinalizationState()
+    finalize = _build_finalize_validator_batch_results_tool(
+        jobs, finalization_state=state, compact_runtime=runtime,
+        function_tool_factory=lambda **_: lambda function: function,
+    )
+    safe = {"request_id": "a", "status": "unresolved",
+            "explanation": "No candidate fits the evidence; preserve this judgment.",
+            "candidates": [], "slots": {}}
+    bad = decision("b", "fabricated-record-reference")
+    response = finalize([safe, bad])
+    assert response["status"] == "rejected"
+    assert "foreign" in str(response)
+    first, second = state.incomplete_results
+    assert first.explanation == safe["explanation"]
+    assert first.status == "unresolved"
+    assert second.resolved_values == {}
+    assert second.lookup_attempts[0].method == "invalid_schema"
+    assert not state.accepted_results
+
+    # Correcting B alone cannot erase A, and does not accept an incomplete batch.
+    corrected = {**safe, "request_id": "b", "explanation": "B remains unresolved."}
+    assert finalize([corrected])["status"] == "rejected"
+    assert state.incomplete_results[0] == first
+    assert state.incomplete_results[1].explanation == corrected["explanation"]
+    assert not state.accepted_results
+    assert finalize([safe, corrected])["status"] == "accepted"
+    assert not state.incomplete_results
+
+
 @pytest.mark.asyncio
 async def test_batch_lookup_preserves_raw_count_and_projects_records_by_request():
     calls = []

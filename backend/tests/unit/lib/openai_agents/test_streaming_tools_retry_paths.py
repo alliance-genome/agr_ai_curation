@@ -814,8 +814,8 @@ def test_validator_lookup_audit_events_dedupe_identical_batch_attempts(monkeypat
         "request-opsin",
     ]
     assert complete_details["friendlyName"] == (
-        "Gene Extraction: Validator Lookup success "
-        "(3 targets, mixed validation)"
+        "Gene Extraction: Validator Lookup review required "
+        "(3 targets, mixed validation) (alliance_gene_reference_lookup)"
     )
 
 
@@ -871,3 +871,48 @@ def test_validator_lookup_audit_events_keep_distinct_queries(monkeypatch):
         len([event for event in captured_events if event["type"] == "TOOL_COMPLETE"])
         == 2
     )
+
+
+@pytest.mark.parametrize("outcome,success", [("conflict", True), ("error", False)])
+def test_validator_review_outcome_is_distinct_from_technical_failure(monkeypatch, outcome, success):
+    events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
+    result = SimpleNamespace(validator_binding_id="policy-review", status="unresolved", request_id="request-1",
+        explanation="The evidence is inconclusive.", target=None, lookup_attempts=[SimpleNamespace(
+            provider="test", method="review", outcome=outcome, query={}, message="reason", result_count=1)])
+    streaming_tools._emit_validator_lookup_audit_events(specialist_name="Reviewer", dispatch_result=SimpleNamespace(validator_results=[result]))
+    details = events[-1]["details"]
+    assert details["success"] is success
+    assert "policy-review" in details["friendlyName"]
+    assert details["validatorExplanations"] == [result.explanation]
+    assert ("review required" in details["friendlyName"]) is success
+
+
+@pytest.mark.asyncio
+async def test_streamed_turn_exhaustion_retains_incomplete_validator_judgment(monkeypatch):
+    from agents.exceptions import MaxTurnsExceeded
+
+    snapshot = {"status": "resolved", "explanation": "Evidence supports this identity.",
+                "resolved_values": {"identifier": "EX:1"}, "output_issues": ["Missing symbol."]}
+    state_type = streaming_tools._StructuredSpecialistFinalizationState
+    def state_factory(**kwargs):
+        state = state_type(**kwargs)
+        state.incomplete_payload = snapshot
+        state.last_rejection = {"message": "Missing symbol."}
+        return state
+    monkeypatch.setattr(streaming_tools, "_StructuredSpecialistFinalizationState", state_factory)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    calls = []
+    def run(*args, **kwargs):
+        calls.append(kwargs)
+        return _FailingStreamRunResult(error=MaxTurnsExceeded("Correction budget exhausted"))
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", run)
+    agent = SimpleNamespace(name="Validator", tools=[], output_type=None, instructions="", model="gpt-4o")
+    with pytest.raises(streaming_tools.SpecialistOutputError) as failure:
+        await streaming_tools.run_specialist_with_events(
+            agent=agent, input_text="Validate supplied evidence", specialist_name=agent.name,
+            max_turns=3, tool_name=None,
+        )
+    assert len(calls) == 1
+    assert failure.value.details[0]["incomplete_validator_result"] == snapshot

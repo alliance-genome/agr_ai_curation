@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -166,7 +165,6 @@ FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
     }
 )
 GENE_EXPRESSION_MATERIALIZER_ID = "gene_expression.builder_materializer.v1"
-PLACEHOLDER_REFERENCE_IDS = frozenset({"PMID:12345678", "PMID12345678"})
 
 
 @dataclass(frozen=True)
@@ -918,18 +916,13 @@ def _materialized_gene_expression_payload(
 
 
 def _reference_mention_issue(mention: Any) -> dict[str, str] | None:
-    """A placeholder reference (e.g. PMID:12345678) cannot be finalized."""
+    """Require reference wording without judging its identity from spelling."""
 
     text = _clean_text(mention)
     if text is None:
         return {
             "reason": "missing_reference_id",
             "message": "single_reference.mention is required.",
-        }
-    if re.sub(r"[\s_-]+", "", text).upper() in PLACEHOLDER_REFERENCE_IDS:
-        return {
-            "reason": "placeholder_reference",
-            "message": "Placeholder references such as PMID:12345678 cannot be finalized.",
         }
     return None
 
@@ -1704,7 +1697,6 @@ __all__ = [
     "GENE_EXPRESSION_MATERIALIZER_ID",
     "GeneExpressionExtractionOutput",
     "GeneExpressionMaterializationResult",
-    "PLACEHOLDER_REFERENCE_IDS",
     "REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS",
     "VALID_GENE_EXPRESSION_RELATION_NAMES",
     "gene_expression_extraction_output_to_pending_envelope",

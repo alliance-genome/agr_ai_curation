@@ -16,7 +16,6 @@ from agr_ai_curation_alliance.domain_packs.disease.legacy import (
     validate_disease_envelope,
 )
 from agr_ai_curation_alliance.domain_packs.gene import GeneMentionEvidenceExportAdapter
-from agr_ai_curation_alliance.domain_packs.gene import normalize_gene_extraction_payload
 from agr_ai_curation_alliance.domain_packs.generic import (
     GENERIC_DOMAIN_PACK_ID,
     get_generated_generic_domain_pack,
@@ -93,7 +92,6 @@ _REVIEW_ROW_MATERIALIZERS = {
     "go": GOReviewRowMaterializer,
 }
 _EXTRACTION_PAYLOAD_NORMALIZERS = {
-    "gene": normalize_gene_extraction_payload,
     "phenotype": normalize_phenotype_extraction_payload,
 }
 

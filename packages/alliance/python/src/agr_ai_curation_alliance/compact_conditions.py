@@ -12,7 +12,7 @@ from src.lib.domain_packs.compact_decisions import (
     CandidateAssessment, CompactValidatorDecision, DecisionContract, RecordValue,
 )
 from src.lib.domain_packs.resolvable_values import (
-    OUTCOME_MATCHED, OUTCOME_MISSING_EXPECTED_RESULT_FIELD, OUTCOME_NOT_VALIDATED,
+    OUTCOME_MATCHED, OUTCOME_NOT_VALIDATED,
     has_resolution_state, lookup_outcome_for_failure,
 )
 from src.lib.domain_packs.validator_result_classification import validator_failure_classification
@@ -85,9 +85,8 @@ def _component_resolution(request, component, judgment, attempts, values, select
 
     Keyed by the component's ``<component>_curie`` result field. A resolved component
     takes its CURIE from its own selection and its name from the selected ontology
-    record's ``name``; when either is empty that component alone stays unresolved
-    (``missing_expected_result_field``). An unresolved one records the outcome of its
-    own lookups; a component nobody looked up (supplemental ``not_checked``) stays not
+    record's ``name``; missing fields are reported separately from its judgment.
+    An unresolved one records the outcome of its own lookups; a component nobody looked up (supplemental ``not_checked``) stays not
     validated. Returns (key, decision, fields).
     """
 
@@ -103,9 +102,6 @@ def _component_resolution(request, component, judgment, attempts, values, select
         resolved_values = {key: values.get("curie", values.get("chebi_id"))}
         if name_field in fields:
             resolved_values[name_field] = record.values.get(_ONTOLOGY_RECORD_NAME_KEY)
-        if not all(_present(resolved_values[field]) for field in fields):
-            return key, {**base, "status": "unresolved", "resolved_values": {},
-                         "lookup_outcome": OUTCOME_MISSING_EXPECTED_RESULT_FIELD}, fields
         return key, {**base, "status": "resolved", "lookup_outcome": OUTCOME_MATCHED,
                      "resolved_values": resolved_values}, fields
     if judgment.status == "unresolved":
@@ -143,8 +139,8 @@ def _component_outcome(request, attempts) -> str:
     """The lookup outcome of an unresolved lookup component, derived from its own lookups."""
 
     if not attempts:
-        # The component was judged without a lookup of its own: nothing validated it.
-        return OUTCOME_NOT_VALIDATED
+        # An explicit scientific judgment does not require a lookup.
+        return "unresolved"
     return lookup_outcome_for_failure(validator_failure_classification(
         # A component's decision rests on its own lookups: nothing of it was filled.
         SimpleNamespace(lookup_attempts=attempts, missing_expected_fields=[], resolved_values={},
@@ -177,6 +173,8 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                 "Use the exact component names and statuses in this request's domain_contract."
             )
         validations, normalized, unresolved = [], [], []
+        output_issues = []
+        missing_fields = []
         field_resolutions: dict[str, Any] = {}
         for judgment in decision.components:
             component = components[judgment.component_type]
@@ -222,7 +220,7 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                         "Root slots are separate; see domain_contract.component_slots."
                     )
                 values[slot] = deepcopy(record.values[selection.field])
-            if judgment.status == "resolved" and (not attempts or len(selected) != 1 or not values):
+            if judgment.status == "resolved" and len(selected) != 1:
                 raise ValueError("Resolved component requires one authoritative selection and resolved fields")
             owner = {"package_id": "agr.alliance", "agent_id": component.owner} if component.owner else None
             validation = {
@@ -238,13 +236,14 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                 if resolution is not None:
                     key, decided, _fields = resolution
                     field_resolutions[key] = decided
-                    if judgment.status == "resolved" and decided["status"] != "resolved":
-                        # The authoritative record can be incomplete even when
-                        # the model selected it confidently. Preserve the other
-                        # components, but do not advertise this one as resolved.
-                        validation["status"] = decided["status"]
-                        validation["resolved_values"] = {}
-                        values = {}
+                    if judgment.status == "resolved":
+                        missing = [field for field in _fields if not _present(decided["resolved_values"].get(field))]
+                        if missing:
+                            missing_fields.extend(missing)
+                            validation["missing_expected_fields"] = missing
+                            output_issues.append(
+                                f"Component {component.component_type} omitted expected field(s): {', '.join(missing)}"
+                            )
             if values:
                 normalized.append({
                     "component_type": component.component_type, "field_path": component.field_path,
@@ -253,7 +252,7 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                 })
             if component.required and judgment.status != "resolved":
                 if decision.status == "resolved":
-                    raise ValueError("An unresolved required component keeps the condition unresolved")
+                    output_issues.append("Overall resolved status contradicts an unresolved required component")
             if component.required and validation["status"] != "resolved":
                 unresolved.append(component.component_type)
         values = deepcopy(payload["resolved_values"])
@@ -276,21 +275,19 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
             curie = component_values.get("curie", component_values.get("chebi_id"))
             if curie is not None:
                 if root_slot in values and values[root_slot] != curie:
-                    raise ValueError("Condition root value contradicts its component selection")
-                values[root_slot] = curie
+                    output_issues.append(f"Condition root value {root_slot} contradicts its component selection")
+                else:
+                    values[root_slot] = curie
         if "normalized_components" in request.expected_result_fields and normalized:
             values["normalized_components"] = deepcopy(normalized)
         assembled = {"resolved_values": values, "normalized_components": normalized,
                      "component_validations": validations, "unresolved_components": unresolved,
                      "condition_id": values.get("condition_id")}
-        if unresolved:
-            assembled["status"] = "unresolved"
+        assembled["output_issues"] = output_issues
         if field_resolutions:
-            # Each stored component carries its own complete decision (ALL-1283; an incomplete
-            # resolved one is recorded as unresolved); values without one are not written, so
-            # no decided field is missing.
+            # Preserve each scientific judgment and report completeness separately.
             assembled["field_resolutions"] = field_resolutions
-            assembled["missing_expected_fields"] = []
+            assembled["missing_expected_fields"] = missing_fields
         return assembled
 
     return DecisionContract(request=request, result_schema=result_schema,
@@ -320,7 +317,7 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                                          "Root component CURIE/name slots must refer only to listed components; "
                                          "omit root identity slots for absent components even when a lookup returns them. "
                                          "Lookup components use candidate record_refs and their actual lookup_refs. "
-                                         "Resolved requires one selected record, lookup evidence and resolved fields. "
+                                         "Database identity claims require one selected source record and its fields. "
                                          "Supplemental not_checked components have no candidates, slots or lookup_refs. "
                                          "An unresolved required component keeps the condition unresolved.",
                             },

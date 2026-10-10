@@ -71,7 +71,7 @@ def _recorded_requester(fixture: dict, calls: list[tuple[str, dict]]):
     return requester
 
 
-def test_recorded_rat_mature_product_returns_every_current_mapping_as_ambiguous(
+def test_recorded_rat_mature_product_returns_every_current_mapping_without_selection(
     monkeypatch,
 ):
     monkeypatch.delenv("RNA_GENE_PRODUCT_REQUEST_TIMEOUT_SECONDS", raising=False)
@@ -94,12 +94,11 @@ def test_recorded_rat_mature_product_returns_every_current_mapping_as_ambiguous(
         use_cache=False,
     )
 
-    assert result.status == "ambiguous"
-    assert result.identity_kind == "mature_product"
-    assert result.resolved_gene_id is None
-    assert result.mature_product is not None
-    assert result.mature_product.rnacentral_id == "RNAcentral:URS000020BE6A_10116"
-    assert result.mature_product.mirbase_id == "miRBase:MIMAT0000828"
+    assert result.status == "success"
+    assert "resolved_gene_id" not in result.model_dump()
+    assert len(result.product_candidates) == 1
+    assert result.product_candidates[0].rnacentral_id == "RNAcentral:URS000020BE6A_10116"
+    assert result.product_candidates[0].mirbase_ids == ["miRBase:MIMAT0000828"]
     assert {candidate.gene_id for candidate in result.candidate_mappings} == {
         "RGD:2325336",
         "RGD:2325458",
@@ -108,9 +107,6 @@ def test_recorded_rat_mature_product_returns_every_current_mapping_as_ambiguous(
     assert result.candidate_mappings[0].provenance[0].source_url.startswith(
         "https://rgd.mcw.edu/rgdweb/report/gene/main.html?id="
     )
-    assert {candidate.identity_kind for candidate in result.candidate_mappings} == {
-        "precursor_locus"
-    }
     assert {
         hairpin_id
         for candidate in result.candidate_mappings
@@ -125,7 +121,7 @@ def test_recorded_rat_mature_product_returns_every_current_mapping_as_ambiguous(
     }
 
 
-def test_mapping_cardinality_is_data_driven_not_fixed_by_rat_fixture(monkeypatch):
+def test_mapping_counts_never_select_identity_and_bounds_are_explicit(monkeypatch):
     fixture = _fixture()
     candidates = [_candidate(row) for row in fixture["curation_db_candidates"]]
 
@@ -145,28 +141,26 @@ def test_mapping_cardinality_is_data_driven_not_fixed_by_rat_fixture(monkeypatch
     one = resolve_with(candidates[:1])
     two = resolve_with(candidates[:2])
 
-    assert one.status == "resolved"
-    assert one.resolved_gene_id == candidates[0].gene_id
-    assert one.identity_kind == "mature_product"
-    assert two.status == "ambiguous"
-    assert two.resolved_gene_id is None
+    assert one.status == "success"
+    assert "resolved_gene_id" not in one.model_dump()
+    assert two.status == "success"
+    assert "resolved_gene_id" not in two.model_dump()
     assert len(two.candidate_mappings) == 2
 
     monkeypatch.setenv("RNA_GENE_PRODUCT_MAX_CANDIDATES", "1")
     bounded = resolve_with(candidates[:2])
-    assert bounded.status == "ambiguous"
+    assert bounded.status == "success"
     assert len(bounded.candidate_mappings) == 1
     assert bounded.candidate_limit_reached is True
 
 
-def test_exact_precursor_and_ordinary_gene_are_distinct_and_grounded():
+def test_exact_records_retain_source_gene_types_and_cross_references():
     fixture = _fixture()
     precursor = _candidate(fixture["curation_db_candidates"][0])
     ordinary = GeneProductCandidate(
         gene_id="RGD:1594961",
         symbol="Cttn",
         name="cortactin",
-        identity_kind="ordinary_gene",
         organism_taxon_id="NCBITaxon:10116",
         gene_type="protein_coding_gene",
     )
@@ -181,9 +175,8 @@ def test_exact_precursor_and_ordinary_gene_are_distinct_and_grounded():
         use_cache=False,
     )
 
-    assert precursor_result.status == "resolved"
-    assert precursor_result.identity_kind == "precursor_locus"
-    assert precursor_result.resolved_gene_id == precursor.gene_id
+    assert precursor_result.status == "success"
+    assert "resolved_gene_id" not in precursor_result.model_dump()
     assert precursor_result.candidate_mappings[0].mirbase_hairpin_ids == [
         fixture["curation_db_candidates"][0]["mirbase_hairpin_id"]
     ]
@@ -204,12 +197,11 @@ def test_exact_precursor_and_ordinary_gene_are_distinct_and_grounded():
         curation_lookup=lambda **_kwargs: [ordinary],
         use_cache=False,
     )
-    assert ordinary_result.status == "resolved"
-    assert ordinary_result.identity_kind == "ordinary_gene"
-    assert ordinary_result.resolved_gene_id == ordinary.gene_id
+    assert ordinary_result.status == "success"
+    assert "resolved_gene_id" not in ordinary_result.model_dump()
 
 
-def test_truncated_rnacentral_search_is_ambiguous_without_resolved_identity():
+def test_truncated_rnacentral_search_reports_incomplete_coverage():
     fixture = _fixture()
     truncated_search = {**fixture["rnacentral_search"], "hitCount": 7}
 
@@ -230,12 +222,12 @@ def test_truncated_rnacentral_search_is_ambiguous_without_resolved_identity():
         use_cache=False,
     )
 
-    assert result.status == "ambiguous"
+    assert result.status == "success"
     assert result.candidate_limit_reached is True
-    assert result.resolved_gene_id is None
+    assert "resolved_gene_id" not in result.model_dump()
 
 
-def test_truncated_rnacentral_xrefs_are_ambiguous_without_resolved_identity():
+def test_truncated_rnacentral_xrefs_report_incomplete_coverage():
     fixture = _fixture()
     truncated_xrefs = {
         **fixture["rnacentral_mature_xrefs"],
@@ -259,12 +251,12 @@ def test_truncated_rnacentral_xrefs_are_ambiguous_without_resolved_identity():
         use_cache=False,
     )
 
-    assert result.status == "ambiguous"
+    assert result.status == "success"
     assert result.candidate_limit_reached is True
-    assert result.resolved_gene_id is None
+    assert "resolved_gene_id" not in result.model_dump()
 
 
-def test_truncated_precursor_xrefs_are_ambiguous_without_resolved_identity():
+def test_truncated_precursor_xrefs_report_incomplete_coverage():
     fixture = _fixture()
     precursor = _candidate(fixture["curation_db_candidates"][0])
     complete_requester = _recorded_requester(fixture, [])
@@ -292,10 +284,9 @@ def test_truncated_precursor_xrefs_are_ambiguous_without_resolved_identity():
         use_cache=False,
     )
 
-    assert result.status == "ambiguous"
-    assert result.identity_kind == "precursor_locus"
+    assert result.status == "success"
     assert result.candidate_limit_reached is True
-    assert result.resolved_gene_id is None
+    assert "resolved_gene_id" not in result.model_dump()
 
 
 def test_not_found_has_no_synthetic_identity_or_candidates():
@@ -312,8 +303,7 @@ def test_not_found_has_no_synthetic_identity_or_candidates():
     )
 
     assert result.status == "not_found"
-    assert result.identity_kind == "unknown"
-    assert result.resolved_gene_id is None
+    assert "resolved_gene_id" not in result.model_dump()
     assert result.product_candidates == []
     assert result.candidate_mappings == []
 
@@ -368,8 +358,8 @@ def test_invalid_synthetic_rgd_curie_is_rejected_without_source_dispatch():
         use_cache=False,
     )
 
-    assert result.status == "not_found"
-    assert result.resolved_gene_id is None
+    assert result.status == "invalid_input"
+    assert "resolved_gene_id" not in result.model_dump()
     assert result.candidate_mappings == []
     assert "Rejected synthetic or invalid RGD gene CURIE" == result.message
     assert calls == 0
@@ -409,7 +399,7 @@ def test_unsafe_curation_mapping_is_upstream_error_and_never_emitted():
     )
 
     assert result.status == "upstream_error"
-    assert result.resolved_gene_id is None
+    assert "resolved_gene_id" not in result.model_dump()
     assert result.candidate_mappings == []
     assert "not accepted by go_api_call" in result.message
 
@@ -436,7 +426,6 @@ def test_cache_ttl_capacity_and_backend_configuration_share_environment(monkeypa
     result = resolver_module._base_result(
         status="not_found",
         query="first",
-        identity_kind="unknown",
         organism_taxon_id="NCBITaxon:10116",
         provider_prefix="RGD",
         message="not found",
@@ -449,3 +438,73 @@ def test_cache_ttl_capacity_and_backend_configuration_share_environment(monkeypa
     assert resolver_module._cached(second_key) == result
     now = 106.0
     assert resolver_module._cached(second_key) is None
+
+
+def test_single_candidate_is_lookup_data_not_an_identity_verdict():
+    candidate = _candidate(_fixture()["curation_db_candidates"][0])
+    result = resolve_gene_product(
+        "Mir124-1", "NCBITaxon:10116", "RGD", "rno",
+        requester=_recorded_requester(_fixture(), []),
+        curation_lookup=lambda **kwargs: [candidate], use_cache=False,
+    )
+    assert result.status == "success"
+    assert result.candidate_mappings[0].gene_id == candidate.gene_id
+    assert "resolved_gene_id" not in result.model_dump()
+    assert "identity_kind" not in result.model_dump()
+    assert "identity_kind" not in result.candidate_mappings[0].model_dump()
+
+
+def test_search_returns_candidates_without_description_type_or_source_veto():
+    fixture = _fixture()
+    entry = fixture["rnacentral_search"]["entries"][0]
+    entry["fields"] = {
+        "description": ["Different wording for a potentially relevant RNA"],
+        "rna_type": ["other RNA"], "expert_db": ["another source"],
+    }
+    result = resolve_gene_product(
+        "miR-124-3p", "NCBITaxon:10116", "RGD", "rno",
+        requester=_recorded_requester(fixture, []),
+        curation_lookup=lambda **kwargs: [], use_cache=False,
+    )
+    assert result.status == "success"
+    assert result.product_candidates[0].descriptions == entry["fields"]["description"]
+    assert result.product_candidates[0].rna_types == ["other RNA"]
+    assert result.product_candidates[0].expert_databases == ["another source"]
+    assert "resolved_gene_id" not in result.model_dump()
+
+
+def test_multiple_products_keep_all_source_mappings_even_without_mirbase_match():
+    from copy import deepcopy
+    fixture = _fixture()
+    first = fixture["rnacentral_search"]["entries"][0]
+    second = deepcopy(first)
+    second["id"] = "URS0000000001_10116"
+    second["fields"]["description"] = ["Another possible RNA"]
+    fixture["rnacentral_search"] = {"hitCount": 2, "entries": [first, second]}
+    fixture["rnacentral_mature_xrefs"] = {"count": 0, "next": None, "results": []}
+    recorded = _recorded_requester(fixture, [])
+    calls = []
+    candidate = _candidate(fixture["curation_db_candidates"][0])
+
+    def requester(url, **kwargs):
+        if url.endswith('/rna/URS0000000001/xrefs/10116/'):
+            return _Response(200, {"count": 0, "next": None, "results": []})
+        return recorded(url, **kwargs)
+
+    def lookup(**kwargs):
+        calls.append(kwargs["rnacentral_id"])
+        return [candidate] if kwargs["rnacentral_id"] else []
+
+    result = resolve_gene_product(
+        "miR-124-3p", "NCBITaxon:10116", "RGD", "rno",
+        requester=requester, curation_lookup=lookup, use_cache=False,
+    )
+    assert result.status == "success"
+    assert len(result.product_candidates) == 2
+    assert all(product.mirbase_ids == [] for product in result.product_candidates)
+    assert calls == [None, "RNAcentral:URS000020BE6A", "RNAcentral:URS0000000001"]
+    assert len(result.candidate_mappings) == 1
+    relations = [p.evidence for p in result.candidate_mappings[0].provenance]
+    assert any("URS000020BE6A_10116" in text for text in relations)
+    assert any("URS0000000001_10116" in text for text in relations)
+    assert "resolved_gene_id" not in result.model_dump()

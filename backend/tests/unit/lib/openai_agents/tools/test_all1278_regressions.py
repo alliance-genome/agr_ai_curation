@@ -102,25 +102,10 @@ async def test_e_section_max_chunks_is_capped(monkeypatch):
     assert result.section.returned_chunk_count <= 100
 
 
-def _lookup_limit(result):
-    return result.lookup_attempts[0]["attempted_query"]["limit"]
 
 
-def test_term_search_limit_is_capped(monkeypatch):
-    monkeypatch.setenv("TOOL_PAGE_MAX_LIMIT", "50")
-    search = agr_curation._unwrap_function_tool_callable(
-        agr_curation.search_domain_field_terms, "search_domain_field_terms")
-    result = search(domain_pack_id="pack", object_type="Obj", field_path="f", query=" ", limit=10**6)
-    assert result.status == "error"
-    assert _lookup_limit(result) == 50
 
 
-def test_term_resolver_limit_is_capped(monkeypatch):
-    monkeypatch.setenv("TOOL_PAGE_MAX_LIMIT", "50")
-    result = agr_curation._resolve_domain_field_term_impl(
-        domain_pack_id="pack", object_type="Obj", field_path="f", source_phrase=" ", limit=10**6)
-    assert result.status == "error"
-    assert _lookup_limit(result) == 50
 
 
 def test_b1_recall_chat_history_recent_page_is_bounded(monkeypatch):

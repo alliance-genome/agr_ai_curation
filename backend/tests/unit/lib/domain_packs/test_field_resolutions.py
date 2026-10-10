@@ -328,7 +328,7 @@ def test_field_resolutions_use_the_lookup_outcome_vocabulary(resolution):
         ValidatorFieldResolution.model_validate(resolution)
 
 
-def test_each_resolved_decision_obeys_the_allowed_term_list():
+def test_each_field_preserves_validator_judgment_despite_allowed_term_guidance():
     metadata, envelope = _metadata(), _envelope()
     item = _item(
         metadata, envelope, status="unresolved",
@@ -348,11 +348,10 @@ def test_each_resolved_decision_obeys_the_allowed_term_list():
 
     setting = result.envelope.extracted_objects[0].payload["setting"]
     assert (setting["kind"]["resolution_state"], setting["kind"]["lookup_outcome"], setting["kind"]["curie"]) == (
-        UNRESOLVED, "invalid_schema", None)
-    # The other decision is still written, and the violation is reported.
+        RESOLVED, "matched", "ONT:1")
+    assert setting["kind"]["name"] == "heat"
     assert setting["agent"]["lookup_outcome"] == "not_found"
-    [finding] = [f for f in result.appended_findings if f.code == "domain_pack.validator_materialization_invalid"]
-    assert "allowed term list" in finding.details["materialization_error"]
+    assert not any(f.code == "domain_pack.validator_materialization_invalid" for f in result.appended_findings)
 
 
 def _binding_finding(result):

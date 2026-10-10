@@ -559,10 +559,6 @@ tools:
                 type: integer
                 description: Max results
             required: [method]
-      required_tool_call:
-        enforce: true
-        failure_message: did not call required database lookup tools before answering
-        guardrail_message: You must query the package-declared curation lookup tool before answering. Use agr_curation_query first.
       bulk_list_optimization:
         enabled: true
         minimum_entities: 8
@@ -609,185 +605,6 @@ tools:
             type: integer
             required: false
             description: The most matching groups to return.
-  - tool_id: search_domain_field_terms
-    binding_kind: static
-    callable: agr_ai_curation_alliance.tools.agr_curation:search_domain_field_terms
-    required_context: []
-    description: Search for candidate standard terms (from an ontology or controlled list) that could fill one specific field, based on a phrase the agent read in the paper.
-    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
-    metadata:
-      # Searches a database or service for an identity: validators and lookup agents only;
-      # extraction agents cannot carry it.
-      identity_lookup: true
-      name: Search Domain Field Terms
-      category: Database
-      audit:
-        display_name: Search Domain Field Terms
-      documentation:
-        summary: Casts a wide net for possible standard-term matches for one field, starting from a phrase backed by evidence in the paper. The results are suggestions to compare, not a final choice — the agent settles on the official term separately with Resolve Domain Field Term.
-        parameters:
-          - name: domain_pack_id
-            type: string
-            required: true
-            description: Which curation area this field belongs to (for example, gene expression).
-          - name: object_type
-            type: string
-            required: true
-            description: The kind of record this field is part of.
-          - name: field_path
-            type: string
-            required: true
-            description: Which field the agent is trying to fill (for example, "where expressed").
-          - name: query
-            type: string
-            required: true
-            description: The phrase from the paper to look up candidate terms for.
-          - name: evidence_context
-            type: object
-            required: false
-            description: Optional supporting context from the paper — the source phrase, quote, figure, provider, or species.
-          - name: data_provider
-            type: string
-            required: false
-            description: The Alliance group to scope a species-specific anatomy lookup to.
-          - name: taxon
-            type: string
-            required: false
-            description: The species context, kept for the record.
-          - name: branch_root_curie
-            type: string
-            required: false
-            description: Reserved for a future option to limit matches to one branch of an ontology. It is accepted but does not yet narrow results.
-          - name: limit
-            type: integer
-            required: false
-            description: The most candidate terms to return.
-          - name: exact_match
-            type: boolean
-            required: false
-            description: Require an exact name match instead of close matches, where supported.
-  - tool_id: inspect_ontology_term
-    binding_kind: static
-    callable: agr_ai_curation_alliance.tools.agr_curation:inspect_ontology_term
-    required_context: []
-    description: Look at one ontology term in detail, plus a limited view of its neighbors in the term tree (broader terms above it, narrower terms below it, or terms beside it).
-    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
-    metadata:
-      # Searches a database or service for an identity: validators and lookup agents only;
-      # extraction agents cannot carry it.
-      identity_lookup: true
-      namespace: ontology_term_lookup
-      name: Inspect Ontology Term
-      category: Database
-      audit:
-        display_name: Inspect Ontology Term
-      documentation:
-        summary: Shows one ontology term and a small, bounded set of nearby terms so the agent can walk the term tree and compare candidates. It is for exploring and comparing; the official term choice is settled separately with Resolve Domain Field Term.
-        parameters:
-          - name: domain_pack_id
-            type: string
-            required: true
-            description: Which curation area this field belongs to.
-          - name: object_type
-            type: string
-            required: true
-            description: The kind of record this field is part of.
-          - name: field_path
-            type: string
-            required: true
-            description: The field whose rules apply to this term.
-          - name: curie
-            type: string
-            required: true
-            description: The ID of the ontology term to look at.
-          - name: source_phrase
-            type: string
-            required: true
-            description: The paper's own wording for this value, exactly as it will be recorded.
-          - name: data_provider
-            type: string
-            required: false
-            description: The Alliance group to scope species-specific anatomy context to.
-          - name: include_parents
-            type: boolean
-            required: false
-            description: Also show the broader terms above this one.
-          - name: include_children
-            type: boolean
-            required: false
-            description: Also show the narrower terms below this one.
-          - name: include_siblings
-            type: boolean
-            required: false
-            description: Also show neighboring terms at the same level.
-          - name: max_depth
-            type: integer
-            required: false
-            description: How many levels up or down the term tree to walk.
-          - name: limit
-            type: integer
-            required: false
-            description: The most neighboring terms to return for each relationship.
-  - tool_id: resolve_domain_field_term
-    binding_kind: static
-    callable: agr_ai_curation_alliance.tools.agr_curation:resolve_domain_field_term
-    required_context: []
-    description: Settle the official standard term for one field and return a confirmed value with its supporting trail, ready to use.
-    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
-    metadata:
-      # Searches a database or service for an identity: validators and lookup agents only;
-      # extraction agents cannot carry it.
-      identity_lookup: true
-      name: Resolve Domain Field Term
-      category: Database
-      # Run-state tool: platform closure-binds the builder workspace and evidence records
-      # into this tool per run (streaming_tools._bind_run_state_into_tools).
-      builder_run_state: true
-      audit:
-        display_name: Resolve Domain Field Term
-      documentation:
-        summary: Confirms the one official standard term for a field, after the agent has explored candidates with the search and inspect tools. Its result is the trusted choice the agent can record, with a clear trail of how the term was decided.
-        parameters:
-          - name: domain_pack_id
-            type: string
-            required: true
-            description: Which curation area this field belongs to.
-          - name: object_type
-            type: string
-            required: true
-            description: The kind of record this field is part of.
-          - name: field_path
-            type: string
-            required: true
-            description: Which field is being settled.
-          - name: source_phrase
-            type: string
-            required: true
-            description: The phrase from the paper that this term is being matched to.
-          - name: evidence_context
-            type: object
-            required: false
-            description: Optional supporting context — quote, page, section, provider, or species.
-          - name: candidate_curie
-            type: string
-            required: false
-            description: The ID of the candidate term picked from the search or inspect results.
-          - name: candidate_value
-            type: string
-            required: false
-            description: A candidate value that is a name rather than an ID, picked from the search results (for example a controlled-list term name).
-          - name: data_provider
-            type: string
-            required: false
-            description: The Alliance group to scope the lookup to.
-          - name: taxon
-            type: string
-            required: false
-            description: The species context, kept for the record.
-          - name: limit
-            type: integer
-            required: false
-            description: The most candidates to check while confirming.
   - tool_id: stage_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:stage_gene_expression_observation
@@ -2898,7 +2715,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_product_resolution:resolve_gene_product_tool
     required_context: []
-    description: Resolve genes, precursor loci, and mature RNA products to typed evidence-backed Alliance gene candidates.
+    description: Retrieve genes and RNA products as typed source candidates for LLM evaluation.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_product_resolution.py
     metadata:
       # Searches a database or service for an identity: validators and lookup agents only;
@@ -2908,7 +2725,7 @@ tools:
       name: Alliance Gene Product Resolver
       category: Database
       documentation:
-        summary: Distinguishes ordinary genes, precursor loci, and mature RNA products using current Alliance curation identity, RNAcentral, and miRBase evidence; returns ambiguity explicitly and never synthesizes an RGD CURIE.
+        summary: Returns Alliance curation, RNAcentral and miRBase source facts and candidate mappings; the calling LLM judges identity and relevance.
         parameters:
         - name: query
           type: string
@@ -2927,22 +2744,18 @@ tools:
           required: true
           description: miRBase organism prefix, such as rno for rat.
       agent_studio:
-        prompt_description: Resolve a gene, precursor locus, or mature RNA product to typed, source-grounded Alliance gene candidates without choosing among ambiguous precursor mappings.
+        prompt_description: Retrieve source-grounded gene and RNA product candidates without selecting an identity.
         diagnostic:
           enabled: true
           description: |-
-            Resolve organism-scoped gene-product identity through a fixed hierarchy:
-            1. Exact current gene/locus identity in the read-only Alliance curation database.
-            2. Exact species-specific mature RNA identity in RNAcentral.
-            3. Active miRBase mature accession from the RNAcentral cross-reference.
-            4. Every current Alliance gene/locus carrying the mature RNAcentral cross-reference.
-
-            Status is one of: resolved, ambiguous, not_found, or upstream_error.
-            The resolver never selects one candidate from an ambiguous mapping.
-            candidate_limit_reached explicitly reports when the configured result
-            bound omitted additional candidates from the returned list.
-            Only validated Alliance gene CURIEs accepted by go_api_call appear as
-            resolved_gene_id or candidate_mappings[].gene_id.
+            Retrieve organism-scoped candidates from the Alliance curation database;
+            when the exact query has no candidates, search RNAcentral and retrieve
+            miRBase cross-references and associated Alliance gene records.
+            Status describes retrieval: success, not_found, invalid_input, upstream_error.
+            Success never means identity was resolved. The calling LLM evaluates
+            candidates and their descriptions, types and provenance. No gene is
+            selected automatically. candidate_limit_reached reports incomplete
+            coverage. Only structurally valid gene CURIEs appear in candidate_mappings.
           category: database
           tags: [gene, rna, mirna, rgd, rnacentral, mirbase, provenance, typed]
           result_contract:

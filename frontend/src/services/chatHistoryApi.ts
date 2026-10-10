@@ -48,6 +48,8 @@ export type RestorableChatMessageRole = 'user' | 'assistant' | 'flow'
 export interface RestorableChatMessage {
   id?: string
   role: RestorableChatMessageRole
+  terminalState?: 'turn_failed'
+  terminalMessage?: string
   content: string
   timestamp: string
   traceIds?: string[]
@@ -330,6 +332,9 @@ function toRestorableChatMessage(
   return {
     ...baseMessage,
     type: 'text',
+    ...(role === 'assistant' && payload?.terminal_state === 'turn_failed'
+      ? { terminalState: 'turn_failed' as const, terminalMessage: readString(payload.terminal_message) ?? message.content }
+      : {}),
     evidenceRecords: evidenceRecords.length > 0 ? evidenceRecords : undefined,
     evidenceCurationSupported: curationSupport?.supported,
     evidenceCurationAdapterKey: curationSupport?.adapterKey ?? undefined,

@@ -90,6 +90,8 @@ class LookupOutcome(StrEnum):
     MISSING_EXPECTED_RESULT_FIELD = "missing_expected_result_field"
     # Every lookup succeeded, but the validator judged that no candidate fits.
     REJECTED_CANDIDATES = "rejected_candidates"
+    # The validator could not resolve the supplied evidence without a lookup.
+    UNRESOLVED = "unresolved"
     # No validator ran yet: pending, binding in development, or skipped.
     NOT_VALIDATED = "not_validated"
     # Read time only, for values stored before this contract.
@@ -129,17 +131,19 @@ _OUTCOME_FOR_FAILURE: dict[ValidatorFailureClassification, LookupOutcome] = {
     "invalid_schema": LookupOutcome.INVALID_SCHEMA,
     "missing_expected_result_field": LookupOutcome.MISSING_EXPECTED_RESULT_FIELD,
     "rejected_candidates": LookupOutcome.REJECTED_CANDIDATES,
+    "unresolved": LookupOutcome.UNRESOLVED,
 }
 # Outcomes a stored unresolved value may carry (legacy_unverified is read-time only).
 # Only these outcomes may overrule a value that already reads as resolved: the
-# lookup ran and decided against it. The rest (a transient error, invalid or
-# incomplete validator output, a blocked lookup, an allowed-term violation)
+# validator decided against it, with or without tools. The rest (a transient
+# error, invalid or incomplete validator output, or a blocked lookup)
 # add a finding but never touch a resolved value (ALL-1283 review H2).
 DECISIVE_OUTCOMES = (
     LookupOutcome.NOT_FOUND.value,
     LookupOutcome.AMBIGUOUS.value,
     LookupOutcome.CONFLICT.value,
     LookupOutcome.REJECTED_CANDIDATES.value,
+    LookupOutcome.UNRESOLVED.value,
 )
 STORED_UNRESOLVED_OUTCOMES = tuple(
     outcome.value
@@ -159,6 +163,7 @@ LOOKUP_OUTCOME_LABELS: dict[str, str] = {
     OUTCOME_INVALID_SCHEMA: "Invalid validator output",
     OUTCOME_MISSING_EXPECTED_RESULT_FIELD: "Validator result incomplete",
     OUTCOME_REJECTED_CANDIDATES: "Candidates rejected",
+    LookupOutcome.UNRESOLVED.value: "Unresolved by validator",
     OUTCOME_NOT_VALIDATED: "Not validated yet",
     OUTCOME_LEGACY_UNVERIFIED: "Legacy, unverified",
     OUTCOME_CURATOR_OVERRIDE: "Curator override",
