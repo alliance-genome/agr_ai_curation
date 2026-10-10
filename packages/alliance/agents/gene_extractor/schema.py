@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import re
 from collections.abc import Mapping
 from typing import Any, Literal
 
@@ -59,29 +58,6 @@ def _optional_text(value: object) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
-
-
-def _is_unsupported_zfin_drug_like_payload(payload: Mapping[str, Any]) -> bool:
-    zfin_context = (
-        payload.get("data_provider_hint") == "ZFIN"
-        or payload.get("taxon_hint") == ZFIN_TAXON_CURIE
-        or payload.get("proposed_taxon") == ZFIN_TAXON_CURIE
-        or (_optional_text(payload.get("species")) or "").lower()
-        in {"danio rerio", "zebrafish"}
-    )
-    if not zfin_context:
-        return False
-
-    proposed_symbol = _optional_text(payload.get("proposed_gene_symbol"))
-    has_gene_identity_hint = bool(
-        _optional_text(payload.get("proposed_primary_external_id"))
-        or (proposed_symbol and proposed_symbol == proposed_symbol.lower())
-    )
-    if has_gene_identity_hint:
-        return False
-
-    mention = _optional_text(payload.get("mention")) or ""
-    return bool(re.search(r"[A-Z]", mention) and re.search(r"\d", mention))
 
 
 def _align_metadata_evidence_record_chunk_id(
@@ -212,33 +188,6 @@ class GeneMentionEvidencePayload(BaseModel):
             raise ValueError("page must be an integer")
         return value
 
-    @model_validator(mode="after")
-    def _reject_unresolved_zfin_drug_like_mentions(self) -> "GeneMentionEvidencePayload":
-        zfin_context = (
-            self.data_provider_hint == "ZFIN"
-            or self.taxon_hint == ZFIN_TAXON_CURIE
-            or self.proposed_taxon == ZFIN_TAXON_CURIE
-            or (self.species or "").strip().lower() in {"danio rerio", "zebrafish"}
-        )
-        if not zfin_context:
-            return self
-
-        proposed_symbol = (self.proposed_gene_symbol or "").strip()
-        has_gene_identity_hint = bool(
-            self.proposed_primary_external_id
-            or (proposed_symbol and proposed_symbol == proposed_symbol.lower())
-        )
-        if has_gene_identity_hint:
-            return self
-
-        mention = self.mention.strip()
-        if re.search(r"[A-Z]", mention) and re.search(r"\d", mention):
-            raise ValueError(
-                "ZFIN gene_mention_evidence payloads must not retain uppercase "
-                "drug-like compound codes as genes unless a lowercase proposed_gene_symbol "
-                "or proposed_primary_external_id is present"
-            )
-        return self
 
 
 class GeneMentionEvidenceObjectEnvelope(CuratableObjectEnvelope):
@@ -294,7 +243,7 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
 
     @model_validator(mode="before")
     @classmethod
-    def _exclude_unsupported_gene_like_compounds(cls, value: object) -> object:
+    def _align_evidence_metadata(cls, value: object) -> object:
         if not isinstance(value, Mapping):
             return value
 
@@ -318,51 +267,15 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
             if evidence_id
         }
 
-        kept_objects: list[object] = []
-        exclusions: list[dict[str, Any]] = []
         for obj in curatable_objects:
             if not isinstance(obj, Mapping):
-                kept_objects.append(obj)
                 continue
             payload = obj.get("payload")
-            if (
-                obj.get("object_type") == GENE_MENTION_EVIDENCE_OBJECT_TYPE
-                and isinstance(payload, Mapping)
-                and _is_unsupported_zfin_drug_like_payload(payload)
-            ):
-                evidence_record_id = _optional_text(payload.get("evidence_record_id"))
-                exclusions.append(
-                    {
-                        "mention": _optional_text(payload.get("mention"))
-                        or "unsupported ZFIN-like code",
-                        "reason_code": "unsupported_entity_type",
-                        "evidence_record_ids": (
-                            [evidence_record_id] if evidence_record_id else []
-                        ),
-                        "details": (
-                            "Dropped uppercase/digit ZFIN-context mention before "
-                            "schema validation because no lowercase gene symbol or "
-                            "primary external ID was present."
-                        ),
-                    }
-                )
-                continue
-            if (
-                obj.get("object_type") == GENE_MENTION_EVIDENCE_OBJECT_TYPE
-                and isinstance(payload, Mapping)
-            ):
+            if obj.get("object_type") == GENE_MENTION_EVIDENCE_OBJECT_TYPE and isinstance(payload, Mapping):
                 evidence_id = _optional_text(payload.get("evidence_record_id"))
                 metadata_record = evidence_by_id.get(evidence_id or "")
                 if isinstance(metadata_record, dict):
                     _align_metadata_evidence_record_chunk_id(payload, metadata_record)
-            kept_objects.append(obj)
-
-        if exclusions:
-            normalized["curatable_objects"] = kept_objects
-            existing_exclusions = metadata.get("exclusions")
-            if not isinstance(existing_exclusions, list):
-                existing_exclusions = []
-            metadata["exclusions"] = [*existing_exclusions, *exclusions]
 
         return normalized
 

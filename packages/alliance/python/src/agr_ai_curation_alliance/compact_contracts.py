@@ -66,8 +66,6 @@ def simple_decision_contract(request, result_schema, *, profile_mapped=False, sc
         sources = workspace.source_payloads(request.request_id)
         attempts = workspace.lookup_attempts(request.request_id)
         if decision.status == "resolved":
-            if not attempts:
-                raise ValueError("Resolved lookup decisions require an actual lookup")
             if not selected:
                 confirmed_empty_collection = (
                     name in {"GOAnnotationsResult", "OrthologsResult"}

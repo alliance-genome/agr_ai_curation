@@ -242,104 +242,15 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
         description="Whether the GO term is catalytic activity or a descendant"
     )
     policy_violations: list[RGDGOPolicyViolation] = Field(
-        description="Deterministically ordered policy violations for this proposal"
+        description="Policy findings identified by the LLM for this proposal"
     )
 
     @model_validator(mode="after")
-    def _enforce_approved_policy(
-        self,
-        info: ValidationInfo,
-    ) -> "RGDGOEvidencePolicyValidationResult":
+    def _enforce_structural_contract(self, info: ValidationInfo) -> "RGDGOEvidencePolicyValidationResult":
         self._enforce_canonical_request_copies(info)
-        violations = self.computed_policy_violations(info)
-
-        self._validate_policy_consequences(violations)
+        if self.resolved_values:
+            raise ValueError("policy validation must not rewrite candidate payload values")
         return self
-
-    def computed_policy_violations(self, info: ValidationInfo) -> list[str]:
-        """Evaluate the approved policy from typed scientific judgments and facts."""
-        violations: list[str] = []
-
-        if self.evidence_basis == "ambiguous":
-            violations.append("ambiguous_evidence")
-        elif self.evidence_basis == "insufficient":
-            violations.append("insufficient_primary_evidence")
-        else:
-            expected_code, expected_eco = EVIDENCE_POLICY[self.evidence_basis]
-            if self.proposed_evidence_code != expected_code:
-                violations.append("evidence_code_mismatch")
-            if self.proposed_evidence_eco_curie != expected_eco:
-                violations.append("eco_mapping_mismatch")
-
-        if self.primary_evidence_location not in PRIMARY_EVIDENCE_LOCATIONS:
-            if "insufficient_primary_evidence" not in violations:
-                violations.append("insufficient_primary_evidence")
-        if not self.primary_evidence_record_ids and self.evidence_basis not in {
-            "ambiguous",
-            "insufficient",
-        }:
-            if "insufficient_primary_evidence" not in violations:
-                violations.append("insufficient_primary_evidence")
-        if self.proposed_resolution_state != "resolved":
-            violations.append("identity_unresolved")
-
-        if self.evidence_basis == "mutant_phenotype" and not self._imp_support_is_recorded(
-            info
-        ):
-            if "insufficient_primary_evidence" not in violations:
-                violations.append("insufficient_primary_evidence")
-
-        if self.evidence_basis == "direct_assay" and self.proposed_with_from:
-            violations.append("with_from_forbidden")
-        elif self.evidence_basis in {"physical_interaction", "genetic_interaction"}:
-            if not self.proposed_with_from:
-                violations.append("with_from_required")
-            elif not self.with_from_supported:
-                violations.append("with_from_unsupported")
-        elif self.proposed_with_from and not self.with_from_supported:
-            violations.append("with_from_unsupported")
-
-        if (
-            self.evidence_basis == "expression_pattern"
-            and self.proposed_aspect != "biological_process"
-        ):
-            violations.append("iep_non_biological_process")
-        if (
-            self.evidence_basis == "physical_interaction"
-            and self.go_term_is_catalytic_activity_or_descendant
-        ):
-            violations.append("ipi_catalytic_activity_unsupported")
-        if self.proposed_qualifiers and not self.qualifiers_supported:
-            violations.append("qualifier_unsupported")
-        if self.proposed_negated and not self.negation_supported:
-            violations.append("negation_unsupported")
-        if self.proposed_negated and self.proposed_go_term_curie in {
-            "GO:0005488",
-            "GO:0005515",
-        }:
-            violations.append("negated_binding_disallowed")
-        if self.proposed_negated and self.proposed_annotation_extensions:
-            violations.append("negated_extension_disallowed")
-        # A proposal is never submit-ready while any of its values is unresolved.
-        if self.proposed_evidence_code_resolution_state != "resolved":
-            violations.append("evidence_code_unresolved")
-        if self.proposed_go_term_resolution_state != "resolved":
-            violations.append("go_term_unresolved")
-        if self.proposed_reference_resolution_state != "resolved":
-            violations.append("reference_unresolved")
-        # Entries are validated here too: the compact path builds this model unvalidated.
-        if any(
-            RGDGOWithFromEntry.model_validate(entry).resolution_state != "resolved"
-            for entry in self.proposed_with_from
-        ):
-            violations.append("with_from_unresolved")
-        if any(
-            RGDGOQualifierEntry.model_validate(entry).resolution_state != "resolved"
-            for entry in self.proposed_qualifiers
-        ):
-            violations.append("qualifier_unresolved")
-
-        return violations
 
     @classmethod
     def proposal_facts(cls, selected_inputs: Mapping[str, object]) -> dict[str, object]:
@@ -371,69 +282,6 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
             "proposed_rationale": selected_inputs.get("rationale"),
             "proposed_resolution_state": selected_inputs.get("resolution_state"),
         }
-
-    def _validate_policy_consequences(self, violations: list[str]) -> None:
-
-        if self.policy_violations != violations:
-            raise ValueError(
-                "policy_violations must exactly match the approved RGD GO policy: "
-                f"{violations}"
-            )
-
-        expected_status = "resolved" if not violations else "unresolved"
-        expected_decision = (
-            "submit_ready" if not violations else "curator_review_required"
-        )
-        if self.status != expected_status:
-            raise ValueError(
-                f"status must be {expected_status!r} for the computed policy decision"
-            )
-        if self.decision != expected_decision:
-            raise ValueError(
-                f"decision must be {expected_decision!r} for the computed policy decision"
-            )
-        expected_attempt_outcome = "success" if not violations else "conflict"
-        if not any(
-            attempt.provider == "agr.alliance.go"
-            and attempt.method == "approved_rgd_evidence_policy"
-            and attempt.outcome == expected_attempt_outcome
-            for attempt in self.lookup_attempts
-        ):
-            raise ValueError(
-                "lookup_attempts must record the approved RGD GO policy evaluation "
-                f"with outcome {expected_attempt_outcome!r}"
-            )
-        if self.resolved_values:
-            raise ValueError("policy validation must not rewrite candidate payload values")
-        if self.evidence_basis == "ambiguous" and (
-            not self.candidates or not self.ambiguity or not self.ambiguity.strip()
-        ):
-            raise ValueError(
-                "ambiguous evidence must return candidates and the unresolved ambiguity"
-            )
-        if self.identity_resolution == "one_to_many" and (
-            self.proposed_resolution_state != "unresolved"
-            or not self.candidates
-            or not self.ambiguity
-            or not self.ambiguity.strip()
-            or any(not candidate.value.startswith("RGD:") for candidate in self.candidates)
-        ):
-            raise ValueError(
-                "one-to-many identity must remain unresolved and list supported candidate loci"
-            )
-        if (self.identity_resolution == "resolved") != (
-            self.proposed_resolution_state == "resolved"
-        ):
-            raise ValueError(
-                "identity_resolution must agree with proposed_resolution_state"
-            )
-        if (
-            "insufficient_primary_evidence" in violations
-            and self.curator_message != INSUFFICIENT_EVIDENCE_MESSAGE
-        ):
-            raise ValueError(
-                "insufficient primary evidence must use the approved curator finding message"
-            )
 
     def _enforce_canonical_request_copies(self, info: ValidationInfo) -> None:
         context = info.context
@@ -485,34 +333,6 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
             ]
         return value
 
-    def _imp_support_is_recorded(self, info: ValidationInfo) -> bool:
-        perturbation = (self.imp_perturbation or "").strip()
-        phenotype = (self.imp_phenotype or "").strip()
-        if not perturbation or not phenotype:
-            return False
-        rationale = self.proposed_rationale.casefold()
-        if perturbation.casefold() not in rationale or phenotype.casefold() not in rationale:
-            return False
-
-        context = info.context
-        if not isinstance(context, Mapping):
-            return True
-        request = context.get("domain_validation_request")
-        selected_inputs = getattr(request, "selected_inputs", None)
-        if not isinstance(selected_inputs, Mapping):
-            return True
-        evidence_quotes = selected_inputs.get("evidence_quotes", [])
-        selected_ids = set(self.primary_evidence_record_ids)
-        exact_evidence = " ".join(
-            str(bundle.get("verified_quote", ""))
-            for bundle in evidence_quotes
-            if isinstance(bundle, Mapping)
-            and bundle.get("evidence_record_id") in selected_ids
-        ).casefold()
-        return (
-            perturbation.casefold() in exact_evidence
-            and phenotype.casefold() in exact_evidence
-        )
 
 
 __all__ = [

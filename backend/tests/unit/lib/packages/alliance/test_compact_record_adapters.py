@@ -1,6 +1,7 @@
 """Package-owned projections keep factual fields and reject unrecognized shapes."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -74,7 +75,7 @@ def test_collections_include_provider_conflicts_and_reject_silent_data_loss():
             source_records("agr_curation_query", malformed)
 
 
-def test_simple_contract_requires_lookup_and_preserves_typed_judgment(schemas):
+def test_identity_contract_requires_source_record_and_preserves_typed_judgment(schemas):
     from agr_ai_curation_alliance.compact_contracts import simple_decision_contract
     from agr_ai_curation_alliance.compact_validation import canonical_record
     from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
@@ -89,7 +90,7 @@ def test_simple_contract_requires_lookup_and_preserves_typed_judgment(schemas):
     workspace = ValidatorDecisionWorkspace([contract])
     decision = contract.decision_schema(request_id="agm", status="resolved", explanation="Resolved.",
                                          scientific={"unresolved_explanations": []})
-    with pytest.raises(ValueError, match="actual lookup"):
+    with pytest.raises(ValueError, match="selected authoritative record"):
         workspace.assemble(decision)
     refs = workspace.record_lookup("agm", call_id="call-1", attempt=ValidatorLookupAttempt(
         provider="agr_curation_query", method="map_entity_curies_to_info", query={"curies": ["ZFIN:1"]},
@@ -153,13 +154,18 @@ def test_composite_assembles_component_facts_audits_and_partial_results(schemas)
         values={"curie": "ZECO:2"})])[0]
     payload["candidates"].append({"record_ref": other, "disposition": "selected", "explanation": "Other class."})
     payload["slots"]["condition_class_curie"]["record_ref"] = other
-    with pytest.raises(ValueError, match="contradicts"):
-        workspace.assemble(contract.decision_schema.model_validate(payload))
+    contradictory = workspace.assemble(contract.decision_schema.model_validate(payload))
+    assert not contradictory.is_complete
+    assert "contradicts" in "; ".join(contradictory.output_issues)
+    assert contradictory.resolved_values["condition_class_curie"] == "ZECO:2"
+    assert contradictory.component_validations[0].resolved_values["curie"] == "ZECO:1"
     payload["candidates"].pop()
     payload["slots"]["condition_class_curie"]["record_ref"] = ref
     payload["status"] = "resolved"
-    with pytest.raises(ValueError, match="required component"):
-        workspace.assemble(contract.decision_schema.model_validate(payload))
+    incomplete = workspace.assemble(contract.decision_schema.model_validate(payload))
+    assert incomplete.status == "resolved"
+    assert not incomplete.is_complete
+    assert "required component" in "; ".join(incomplete.output_issues)
 
 
 def _simple_workspace(schemas, name, **request_fields):
@@ -558,7 +564,9 @@ def test_stored_condition_finalization_preserves_component_completeness(schemas,
     kwargs = {"finalization_state": state, "compact_runtime": runtime,
               "function_tool_factory": lambda **kwargs: lambda function: function}
     if batch:
-        tool = _build_finalize_validator_batch_results_tool([], **kwargs)
+        tool = _build_finalize_validator_batch_results_tool([SimpleNamespace(
+            request=contract.request, match=SimpleNamespace(binding=SimpleNamespace(raw={})),
+        )], **kwargs)
         response = tool([decision])
         assert response["status"] == "accepted", response
         [result] = _validated_results_from_agent_batch_output(
@@ -623,7 +631,7 @@ def test_condition_rejects_root_identity_for_an_absent_component(schemas, root_k
     assert not any(key.startswith("condition_taxon_") for key in result.resolved_values)
 
 
-def test_stored_component_judged_without_its_own_lookup_is_not_validated(schemas):
+def test_stored_component_judged_without_its_own_lookup_preserves_unresolved(schemas):
     contract, workspace, decision = _stored_condition_workspace(schemas)
     decision["components"][1] = {
         "component_type": "condition_chemical", "status": "unresolved",
@@ -632,7 +640,7 @@ def test_stored_component_judged_without_its_own_lookup_is_not_validated(schemas
 
     result = workspace.assemble(contract.decision_schema.model_validate(decision))
 
-    assert result.field_resolutions["condition_chemical_curie"].lookup_outcome == "not_validated"
+    assert result.field_resolutions["condition_chemical_curie"].lookup_outcome == "unresolved"
 
 
 @pytest.mark.parametrize("record_values", [
@@ -641,9 +649,8 @@ def test_stored_component_judged_without_its_own_lookup_is_not_validated(schemas
     {"curie": "ZECO:0000111", "term_name": "chemical treatment"},
     {"curie": "ZECO:0000111", "label": "chemical treatment"},
 ])
-def test_resolved_component_without_a_record_name_stays_unresolved_alone(schemas, record_values):
-    """Review #3: an empty or differently keyed record name never raises for the whole call;
-    that component alone is recorded as missing_expected_result_field."""
+def test_resolved_component_without_a_record_name_preserves_incomplete_judgment(schemas, record_values):
+    """Missing source fields trigger correction without changing or clearing judgments."""
 
     from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord
     from src.lib.domain_packs.compact_runtime import CompactValidatorRuntime
@@ -682,18 +689,18 @@ def test_resolved_component_without_a_record_name_stays_unresolved_alone(schemas
         contract.request, result_schema=contract.result_schema, compact_runtime=runtime,
         finalization_state=state, function_tool_factory=lambda **kwargs: lambda function: function)
     response = tool(decision)
-    assert response["status"] == "accepted", response
-    result = state.accepted_result
+    assert response["status"] == "rejected", response
+    assert state.accepted_result is None
+    result = state.incomplete_result
+    assert not result.is_complete
 
     decided = result.field_resolutions["condition_class_curie"]
-    assert (decided.status, decided.lookup_outcome, decided.resolved_values) == (
-        "unresolved", "missing_expected_result_field", {},
-    )
-    assert result.missing_expected_fields == []
-    assert result.status == "unresolved"
-    assert result.unresolved_components == ["condition_class"]
-    assert result.component_validations[0].status == "unresolved"
-    assert result.component_validations[0].resolved_values == {}
+    assert decided.status == "resolved"
+    assert decided.resolved_values["condition_class_curie"] == "ZECO:0000111"
+    assert result.missing_expected_fields == ["condition_class_name"]
+    assert result.status == "resolved"
+    assert result.component_validations[0].status == "resolved"
+    assert result.component_validations[0].resolved_values == {"curie": "ZECO:0000111"}
     assert result.field_resolutions["condition_chemical_curie"].status == "resolved"
     assert result.field_resolutions["condition_chemical_curie"].resolved_values == {
         "condition_chemical_curie": "CHEBI:9168", "condition_chemical_name": "rapamycin",
@@ -702,7 +709,7 @@ def test_resolved_component_without_a_record_name_stays_unresolved_alone(schemas
 
 @pytest.mark.parametrize(("outcomes", "expected"), [
     (["not_found"], "not_found"), (["success"], "rejected_candidates"),
-    (["not_found", "error"], "transient"), ([], "not_validated"),
+    (["not_found", "error"], "transient"), ([], "unresolved"),
 ])
 def test_a_condition_component_outcome_follows_the_shared_classification(outcomes, expected):
     """V3: a component's outcome comes from its own lookups by the shared rule, with nothing filled."""

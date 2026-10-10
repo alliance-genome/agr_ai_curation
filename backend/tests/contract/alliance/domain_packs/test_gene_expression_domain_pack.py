@@ -1212,18 +1212,10 @@ def test_gene_expression_uberon_slim_metadata_carries_linkml_allowlists():
     # vocabulary (UBERON:0000068, UBERON:0000113, post embryonic, pre-adult), not UBERON terms.
     stage_field = fields_by_path["expression_pattern.when_expressed.stage_uberon_slim_terms"]
     assert stage_field.model_ref == "VocabularyTermSnapshotPayload"
-    assert stage_field.metadata["term_helper"]["term_source"] == {
-        "kind": "controlled_vocabulary",
-        "vocabulary": _STAGE_SLIM_VOCABULARY,
-    }
-
-    anatomical_helper = fields_by_path[
+    assert "term_helper" not in stage_field.metadata
+    assert "term_helper" not in fields_by_path[
         "expression_pattern.where_expressed.anatomical_structure_uberon_terms"
-    ].metadata["term_helper"]
-    assert anatomical_helper["term_source"]["slim_membership"] == {
-        "source": "alliance_linkml",
-        "allowed_term_curies": ANATOMICAL_UBERON_SLIM_ALLOWED_CURIES,
-    }
+    ].metadata
 
 
 def test_gene_expression_cellular_component_only_site_remains_validatable():
@@ -1504,16 +1496,6 @@ def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_re
     ] == [_validated("nuclear lumen", curie="GO:0031981", name="nuclear lumen")]
 
 
-def _out_of_slim(element: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        **element,
-        "resolution_state": "unresolved",
-        "lookup_outcome": "invalid_schema",
-        "validator_explanation": _VALIDATOR_EXPLANATION,
-        "validator_curator_message": "Fixture resolved ontology result.",
-    }
-
-
 def test_gene_expression_stage_slim_outside_the_vocabulary_stays_unresolved():
     envelope = _converted_tmem67_envelope()
     payload = copy.deepcopy(envelope.extracted_objects[0].payload)
@@ -1540,7 +1522,7 @@ def test_gene_expression_stage_slim_outside_the_vocabulary_stays_unresolved():
     assert (element["resolution_state"], element["lookup_outcome"]) == ("unresolved", "not_found")
 
 
-def test_gene_expression_anatomical_uberon_slim_rejects_out_of_slim_materialization():
+def test_gene_expression_anatomical_slim_preserves_validator_judgment():
     envelope = _converted_tmem67_envelope()
     payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     staged = _slim(_ANATOMY_SLIM, "kidney")
@@ -1554,12 +1536,15 @@ def test_gene_expression_anatomical_uberon_slim_rejects_out_of_slim_materializat
         resolved_values={"curie": "UBERON:0002113", "name": "kidney"},
     )
 
-    assert result.envelope.extracted_objects[0].payload["expression_pattern"][
+    [element] = result.envelope.extracted_objects[0].payload["expression_pattern"][
         "where_expressed"
-    ]["anatomical_structure_uberon_terms"] == [_out_of_slim(staged)]
-    finding = result.appended_findings[0]
-    assert finding.code == "domain_pack.validator_materialization_invalid"
-    assert "UBERON:0002113" in finding.details["materialization_error"]
+    ]["anatomical_structure_uberon_terms"]
+    assert element["curie"] == "UBERON:0002113"
+    assert element["name"] == "kidney"
+    assert element["mention"] == staged["mention"]
+    assert element["resolution_state"] == "resolved"
+    assert element["validator_explanation"] == _VALIDATOR_EXPLANATION
+    assert not any(f.code == "domain_pack.validator_materialization_invalid" for f in result.appended_findings)
 
 
 @pytest.mark.parametrize(

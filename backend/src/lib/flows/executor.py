@@ -1564,17 +1564,31 @@ async def _run_custom_flow_validator_agent(
         emit_runtime_event=True,
     )
     payload = json.dumps(provider_payload, sort_keys=True)
-    if hasattr(streaming_tool, "on_invoke_tool"):
-        # Pass the parent RunConfig only as a trace/template source. The flow tool
-        # wrapper clones it onto a step-owned provider so the validator WebSocket
-        # closes cleanly before flow teardown.
-        tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=get_current_run_config())
-        await streaming_tool.on_invoke_tool(
-            tool_ctx,
-            json.dumps({"query": payload}),
-        )
-    else:
-        await streaming_tool(query=payload)
+    from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+    try:
+        if hasattr(streaming_tool, "on_invoke_tool"):
+            # Pass the parent RunConfig only as a trace/template source. The flow tool
+            # wrapper clones it onto a step-owned provider so the validator WebSocket
+            # closes cleanly before flow teardown.
+            tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=get_current_run_config())
+            await streaming_tool.on_invoke_tool(
+                tool_ctx,
+                json.dumps({"query": payload}),
+            )
+        else:
+            await streaming_tool(query=payload)
+    except SpecialistOutputError as exc:
+        for detail in exc.details:
+            incomplete = detail.get("incomplete_validator_result")
+            if not isinstance(incomplete, dict) or not incomplete.get("output_issues"):
+                continue
+            # The finalizer retains only assembled, request-scoped canonical data.
+            # Recheck request identity before returning it for incomplete findings.
+            return validator_result_from_agent_output({
+                key: value for key, value in incomplete.items()
+                if key in DomainValidatorResultBase.model_fields
+            }, request=request)
+        raise
     if accepted_payload is None:
         raise ValueError("Flow validator did not deliver an accepted structured result")
     # Match the dispatcher's existing typed-subclass projection: package-specific
@@ -1937,7 +1951,10 @@ def _flow_validator_result_metadata(
 
     return {
         **dict(base),
-        "status": validator_result.status,
+        "status": "incomplete" if not validator_result.is_complete else validator_result.status,
+        "scientific_status": validator_result.status,
+        "output_issues": list(validator_result.output_issues),
+        "explanation": validator_result.explanation,
         "request_id": request.request_id,
         "validator_agent": request.validator_agent.model_dump(mode="json"),
         "target": request.target.model_dump(mode="json"),
@@ -2655,7 +2672,7 @@ def _build_flow_validator_lookup_audit_events(
                         "error": attempt.get("message") if outcome == "error" else None,
                         "friendlyName": (
                             f"{agent_name}: Validator Lookup "
-                            f"{outcome or 'complete'}"
+                            f"{'review required' if outcome != 'error' and (outcome == 'conflict' or status in {'unresolved', 'incomplete'}) else outcome or 'complete'} ({binding_id})"
                         ),
                         "isSpecialistInternal": True,
                         "lookupIndex": index,

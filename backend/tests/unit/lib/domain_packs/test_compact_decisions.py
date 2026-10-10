@@ -85,7 +85,6 @@ def test_canonical_assembly_keeps_counts_facts_assessments_and_typed_profile_slo
     (lambda d: d["slots"]["identifier"].update(field="invented"), "does not supply"),
     (lambda d: d["slots"]["identifier"].update(field="provider"), "declared source"),
     (lambda d: d["slots"].update(identifier={"kind":"scientific", "value":"EX:999", "explanation":"guessed"}), "authoritative"),
-    (lambda d: d.update(unresolved_questions=["Which supplier?"]), "unresolved questions"),
 ])
 def test_rejects_foreign_contradictory_or_invented_decisions(mutation, message):
     store, ref = workspace()
@@ -155,8 +154,11 @@ def test_a_composite_result_reports_the_missing_fields_of_the_values_it_decided(
 
     # Without per-value decisions every expected field must still come back.
     plain_store, plain_payload = _composite_store(lambda payload, decision, workspace: {})
-    with pytest.raises(ValueError, match="missing fields"):
-        plain_store.assemble(CompactValidatorDecision.model_validate(plain_payload))
+    incomplete = plain_store.assemble(CompactValidatorDecision.model_validate(plain_payload))
+    assert incomplete.status == "resolved"
+    assert not incomplete.is_complete
+    assert incomplete.resolved_values == {"identifier": "EX:101"}
+    assert incomplete.explanation == plain_payload["explanation"]
 
 
 def _optional_store():
@@ -206,3 +208,45 @@ def test_a_slot_neither_expected_nor_optional_is_still_rejected():
 
     with pytest.raises(ValueError, match="Unexpected result slot: provider"):
         store.assemble(CompactValidatorDecision.model_validate(payload))
+
+
+def test_scientific_slots_can_resolve_supplied_evidence_without_a_lookup():
+    evidence_request = request().model_copy(update={
+        "expected_result_fields": {"design_matches": "identity.matches"},
+    })
+    store = ValidatorDecisionWorkspace([DecisionContract(
+        evidence_request, profile_mapped=True,
+        scientific_slots={"design_matches": TypeAdapter(bool)},
+    )])
+    result = store.assemble(CompactValidatorDecision.model_validate({
+        "request_id": "first", "status": "resolved",
+        "slots": {"design_matches": {
+            "kind": "scientific", "value": True,
+            "explanation": "The supplied paper evidence describes this design.",
+            "evidence_record_ids": ["evidence-1"],
+        }},
+        "explanation": "The evidence is sufficient without a database lookup.",
+    }))
+    assert result.status == "resolved"
+    assert result.resolved_values == {"design_matches": True}
+    assert result.lookup_attempts == []
+    assert "evidence-1" in result.explanation
+
+
+def test_domain_assembler_cannot_fabricate_or_replace_lookup_audit():
+    store, payload = _composite_store(
+        lambda payload, decision, workspace: {"lookup_attempts": []}
+    )
+    with pytest.raises(ValueError, match="cannot replace runtime identity or lookup audit"):
+        store.assemble(CompactValidatorDecision.model_validate(payload))
+
+
+def test_contradictory_questions_preserve_judgment_for_structural_correction():
+    store, ref = workspace()
+    payload = decision(ref)
+    payload["unresolved_questions"] = ["Which supplier?"]
+    result = store.assemble(CompactValidatorDecision.model_validate(payload))
+    assert result.status == "resolved"
+    assert not result.is_complete
+    assert result.resolved_values["identifier"] == "EX:101"
+    assert "Which supplier?" in result.explanation

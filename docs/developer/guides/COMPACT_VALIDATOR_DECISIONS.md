@@ -2,8 +2,8 @@
 
 Alliance validators return scientific decisions to a finalization tool, not a
 second model-authored copy of database records. The public canonical result
-schemas remain unchanged for validation, curator review, materialization and
-exports.
+schemas serve validation, curator review, materialization and exports.
+Scientific `status` is separate from structural completeness (`output_issues`).
 
 ## Ownership
 
@@ -99,7 +99,8 @@ invalid component-slot mappings return explicit repair diagnostics. This
 guidance is request-specific even in a batch and does not copy provider records
 or weaken the existing grounding checks.
 The RGD policy evaluator is unchanged: proposed facts come from supplied inputs,
-scientific judgments come from the model, and code computes policy consequences.
+scientific judgments and policy consequences come from the model. Code copies
+proposal facts and preserves those judgments without fabricating lookup events.
 
 Runtime finalization instructions supersede older full-result authoring
 instructions without modifying saved custom prompts or execution revisions.
@@ -134,3 +135,33 @@ Fixtures must exercise actual wrapped lookup outputs rather than manufacture
 canonical finalization payloads. These deterministic tests do not establish paid
 model quality or production release readiness; those require separately approved
 replay and release gates.
+
+
+## Scientific judgment and incomplete output
+
+The LLM decides whether tools are needed. Evidence-grounded scientific slots can
+be resolved without a lookup. Database-verification claims and record slots still
+need real supporting records; source-copy, request ownership and evidence checks
+remain mandatory. Neither a successful lookup nor any lookup at all is a universal
+requirement for a scientific judgment. An explicit unresolved judgment without tools
+is saved as `unresolved`, with its explanation, rather than an invented tool failure.
+
+`DomainValidatorResultBase.status` always records the model's judgment.
+`output_issues` records structural problems such as missing required fields or
+contradictory aggregate/component outputs. Consumers must use `is_resolved` for
+write-back and completion, not `status == "resolved"` alone. A result is complete
+when `is_complete` is true. Incomplete results are rejected for bounded correction;
+valid values, explanations, candidates and actual lookup history remain intact.
+Single and batch finalizers retain the latest safely assembled incomplete result
+when the run ends or reaches its existing turn budget. Invalid later attempts do
+not erase that snapshot. Request identity failures and fabricated references never
+become trusted partial values. Benchmark budgets and cancellation still propagate.
+
+Materialization writes open incomplete-output findings and preserves the full
+canonical snapshot, including required nullable fields, for persistence round trips.
+It does not publish the incomplete result's values as validated identities. Existing
+curator overrides remain authoritative. Chat and flow audit labels distinguish
+incomplete output from a resolved scientific judgment. Standalone specialist
+finalization rejects incomplete results and attaches the retained snapshot to its
+terminal structured-output failure; custom flow dispatch rechecks request identity
+before carrying that snapshot into the normal incomplete-result materialization.

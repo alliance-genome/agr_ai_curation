@@ -167,3 +167,15 @@ def test_alliance_specialist_models_follow_extraction_validation_roles():
         assert configured_model.endswith(f":-{expected_model}}}"), agent_dir.name
 
     assert seen_categories == set(expected_model_by_category)
+
+
+def test_active_tool_catalog_excludes_legacy_semantic_selectors():
+    from src.lib.agent_studio.catalog_service import get_tool_registry
+    from agr_ai_curation_alliance.tools import agr_curation
+
+    catalog = get_tool_registry()
+    for name in ("search_domain_field_terms", "inspect_ontology_term", "resolve_domain_field_term"):
+        assert name not in catalog
+        assert not hasattr(agr_curation, name)
+    assert "agr_curation_query" in catalog
+    assert hasattr(agr_curation, "agr_curation_query")

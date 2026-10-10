@@ -75,7 +75,7 @@ class BuilderFinalizationOutcome:
     finalized_candidate_count: int = 0
     materialized_candidate_id: str | None = None
     # Domain-pack/materializer-issue reasons that the adapter may want to surface
-    # as their own trace events (e.g. placeholder_reference rejections).
+    # as their own trace events.
     materialization_issues: tuple[dict[str, Any], ...] = ()
 
 

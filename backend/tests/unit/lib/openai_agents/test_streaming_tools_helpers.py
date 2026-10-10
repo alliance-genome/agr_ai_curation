@@ -797,6 +797,25 @@ async def test_compact_streaming_finalization_copies_provider_facts_and_counts(
         "candidates": [{"record_ref": ref, "disposition": "selected", "explanation": "Scientific match."}],
         "slots": {"curie": {"kind": "record", "record_ref": ref, "field": "curie"}}}
     finalizer = agent.tools[-1]
+    incomplete = {**decision, "slots": {}}
+    rejected = await finalizer.on_invoke_tool(ToolContext(context=None, tool_name=finalizer.name,
+        tool_call_id="incomplete", tool_arguments=json.dumps({"result": incomplete})),
+        json.dumps({"result": incomplete}))
+    assert rejected["status"] == "rejected"
+    assert state.accepted_payload is None
+    assert state.incomplete_payload["status"] == "resolved"
+    assert state.incomplete_payload["explanation"] == decision["explanation"]
+    assert state.incomplete_payload["candidates"][0]["value"] == "MGI:0"
+    assert state.incomplete_payload["output_issues"]
+    recorded = []
+    workspace = SimpleNamespace(finalization=None, record_validation_failure=lambda **kwargs: recorded.append(kwargs))
+    with pytest.raises(streaming_tools.SpecialistOutputError) as terminal:
+        streaming_tools._raise_missing_structured_specialist_finalization(
+            state=state, specialist_name="Allele validator", builder_workspace=workspace,
+            tool_name=finalizer.name, candidate_id="candidate-1",
+        )
+    assert terminal.value.details[0]["incomplete_validator_result"] == state.incomplete_payload
+    assert recorded[0]["errors"][0]["incomplete_validator_result"] == state.incomplete_payload
     finalized = await finalizer.on_invoke_tool(ToolContext(context=None, tool_name=finalizer.name,
         tool_call_id="finalize", tool_arguments=json.dumps({"result": decision})), json.dumps({"result": decision}))
     assert finalized["status"] == "accepted", finalized

@@ -75,7 +75,7 @@ def test_vocabularies_are_closed_enums():
     assert RESOLUTION_STATES == ("resolved", "unresolved")
     assert LOOKUP_OUTCOMES == (
         "matched", "not_found", "ambiguous", "conflict", "blocked", "transient", "invalid_schema",
-        "missing_expected_result_field", "rejected_candidates", "not_validated", "legacy_unverified",
+        "missing_expected_result_field", "rejected_candidates", "unresolved", "not_validated", "legacy_unverified",
         "curator_override",
     )
     assert tuple(ResolutionState) == RESOLUTION_STATES
@@ -127,8 +127,7 @@ def test_all_lookups_succeeding_without_a_fit_is_rejected_candidates():
     # A lookup found something the validator rejected, even where another found nothing.
     assert _classify(["success", "not_found"]) == "rejected_candidates"
     assert lookup_outcome_for_failure("rejected_candidates") == "rejected_candidates"
-    with pytest.raises(ValueError, match="Unable to classify"):
-        _classify([])
+    assert _classify([]) == "unresolved"
 
 
 def test_builders_write_mention_state_outcome_and_explanation():
@@ -1361,7 +1360,7 @@ def test_non_decisive_outcomes_leave_a_resolved_value_as_it_was(outcome):
     assert value == _validated_gene_site()
 
 
-@pytest.mark.parametrize("outcome", ["not_found", "ambiguous", "conflict", "rejected_candidates"])
+@pytest.mark.parametrize("outcome", ["not_found", "ambiguous", "conflict", "rejected_candidates", "unresolved"])
 def test_decisive_outcomes_overrule_a_resolved_value(outcome):
     value = _validated_gene_site()
     mark_unresolved(value, outcome, explanation="Decided.", identity_keys=TERM_KEYS)
@@ -1861,3 +1860,42 @@ def test_materialization_reports_invalid_record_once(monkeypatch, caplog):
     warnings = [record for record in caplog.records if "unresolved" in record.message]
     assert warnings
     assert all(record.sentry_skip_event for record in warnings)
+
+
+def test_unresolved_evidence_judgment_without_lookup_is_preserved_in_saved_value():
+    metadata = _metadata(mirror=True)
+    envelope = _envelope({"site": _validated_gene_site(), "copy": _validated_gene_site()})
+    item = _item(metadata, envelope, status="unresolved")
+    item.result.lookup_attempts = []
+    item.result.missing_expected_fields = ["curie", "name"]
+    item.result.explanation = "The paper evidence does not establish this identity."
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+    payload = result.envelope.extracted_objects[0].payload
+    for key in ("site", "copy"):
+        assert payload[key]["resolution_state"] == "unresolved"
+        assert payload[key]["lookup_outcome"] == "unresolved"
+        assert payload[key]["curie"] is None
+        assert payload[key]["overruled_curie"] == "G:1"
+        assert payload[key]["validator_explanation"] == item.result.explanation
+
+
+def test_incomplete_judgment_roundtrips_without_publishing_resolved_values():
+    metadata = _metadata(mirror=True)
+    envelope = _envelope({"site": _staged_site(), "copy": _staged_site()})
+    item = _item(metadata, envelope, values={"curie": "ONT:1", "name": "epidermis"})
+    item.result.output_issues = ["Overall status contradicts a required component."]
+    materialized = materialize_validator_results_into_envelope(envelope, metadata, [item])
+    restored = DomainEnvelope.model_validate_json(materialized.envelope.model_dump_json())
+    for field in ("site", "copy"):
+        value = restored.extracted_objects[0].payload[field]
+        assert value["resolution_state"] == "unresolved"
+        assert value["curie"] is None
+        assert value["lookup_outcome"] == "invalid_schema"
+    finding = next(f for f in restored.validation_findings if f.code == "domain_pack.validator_output_incomplete")
+    assert finding.status.value == "open"
+    saved = DomainValidatorResultBase.model_validate(finding.details["validation_result"])
+    assert saved.status == "resolved"
+    assert not saved.is_complete
+    assert saved.resolved_values == {"curie": "ONT:1", "name": "epidermis"}
+    assert saved.explanation == item.result.explanation
+    assert saved.output_issues == item.result.output_issues

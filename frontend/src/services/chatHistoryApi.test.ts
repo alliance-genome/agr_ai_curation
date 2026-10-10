@@ -227,3 +227,17 @@ describe('chatHistoryApi', () => {
     expect(message.type).toBe('text')
   })
 })
+
+
+it('restores a failed summary with durable saved results as a failed turn', () => {
+  const messages = buildRestorableChatMessages([{
+    message_id: 'partial-1', session_id: 'session-1', chat_kind: 'assistant_chat',
+    role: 'assistant', message_type: 'text', content: 'Extraction saved; summary failed.',
+    turn_id: 'turn-1', trace_id: 'trace-1', created_at: '2026-10-08T15:46:28Z',
+    payload_json: { terminal_state: 'turn_failed', terminal_message: 'Use Review & Curate.' },
+  }])
+  expect(messages[0]).toMatchObject({
+    terminalState: 'turn_failed', terminalMessage: 'Use Review & Curate.',
+    content: 'Extraction saved; summary failed.',
+  })
+})

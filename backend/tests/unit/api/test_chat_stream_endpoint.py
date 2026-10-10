@@ -1189,7 +1189,8 @@ def test_chat_stream_endpoint_persists_internal_extraction_result_without_stream
     assert persisted_requests[0].metadata["tool_name"] == "ask_gene_expression_specialist"
 
 
-def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkeypatch):
+@pytest.mark.parametrize("summary_failed", [False, True, "save_failed"])
+def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkeypatch, summary_failed):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -1247,10 +1248,15 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkey
             "details": {"toolName": "ask_gene_expression_specialist"},
             "internal": {"tool_output": "Extraction result ready: gene"},
         }
-        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+        if summary_failed:
+            yield {"type": "RUN_ERROR", "data": {"message": "Provider overloaded", "error_type": "ResponsesWebSocketError"}}
+        else:
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
     def _finalize(**kwargs):
         captured_finalize.update(kwargs)
+        if summary_failed == "save_failed":
+            raise RuntimeError("Assistant transcript save failed")
         return _assistant_record(
             session_id=kwargs["session_id"],
             turn_id=kwargs["turn_id"],
@@ -1274,7 +1280,14 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkey
 
     events = asyncio.run(_consume_stream(response))
 
-    assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
+    assert events[-1]["type"] == ("turn_failed" if summary_failed else "turn_completed")
+    if summary_failed == "save_failed":
+        assert "could not be saved to chat history" in events[-1]["message"]
+        assert not any(event["type"] == "turn_completed" for event in events)
+    elif summary_failed:
+        assert "Review & Curate" in events[-1]["message"]
+        assert captured_finalize["failure_message"]
+        assert "summary" in captured_finalize["assistant_message"]
     assert captured_finalize["extraction_candidates"] == []
     refs = captured_finalize["persisted_extraction_refs"]
     assert len(refs) == 1
@@ -2124,7 +2137,8 @@ def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatc
     assert finalize_calls == []
 
 
-def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(monkeypatch):
+@pytest.mark.parametrize("failed_summary", [False, True])
+def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(monkeypatch, failed_summary):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -2138,6 +2152,7 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
         turn_id="turn-replay",
         content="stored response",
         trace_id="trace-replay",
+        payload_json={"terminal_state": "turn_failed", "terminal_message": "Saved results; summary failed"} if failed_summary else None,
     )
     _patch_chat_impl(
         monkeypatch,
@@ -2196,7 +2211,7 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
 
     events = asyncio.run(_consume_stream(response))
 
-    assert [event["type"] for event in events] == ["TEXT_MESSAGE_CONTENT", "turn_completed"]
+    assert [event["type"] for event in events] == ["TEXT_MESSAGE_CONTENT", "turn_failed" if failed_summary else "turn_completed"]
     assert events[0]["content"] == "stored response"
     assert events[1]["turn_id"] == "turn-replay"
     assert events[1]["trace_id"] == "trace-replay"

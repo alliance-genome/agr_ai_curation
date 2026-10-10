@@ -523,7 +523,7 @@ async def test_singleton_canonical_is_normalized_from_structured_panel(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_panel_only_singleton_without_figure_number_is_downgraded_to_uncertain(
+async def test_panel_only_singleton_without_figure_number_preserves_judgment_without_link(
     monkeypatch,
 ) -> None:
     chunk = _chunk("chunk-0", "Figure 5. (D) Representative image.")
@@ -553,12 +553,24 @@ async def test_panel_only_singleton_without_figure_number_is_downgraded_to_uncer
     await locator.resolve_figure_locators([chunk])
 
     annotation = _resolution_for(chunk).annotations[0]
-    assert annotation.cardinality == "uncertain"
+    assert annotation.cardinality == "single"
     assert annotation.canonical_reference is None
+    stored = DocumentChunk.model_validate_json(chunk.model_dump_json())
+    assert _resolution_for(stored).annotations[0] == annotation
+    span = next(
+        span for span in build_evidence_spans(chunk_id=stored.id, chunk_text=stored.content)
+        if span.char_start < annotation.char_end and annotation.char_start < span.char_end
+    )
+    link = _resolve_stored_figure_reference(
+        {"text": stored.content, "metadata": stored.metadata.model_dump(mode="json")}, span
+    )
+    assert link.reference is None
+    assert link.blocked is True
+    assert _resolution_for(stored).annotations[0].cardinality == "single"
 
 
 @pytest.mark.asyncio
-async def test_malformed_singleton_number_is_downgraded_to_uncertain(monkeypatch) -> None:
+async def test_malformed_singleton_number_preserves_judgment_without_link(monkeypatch) -> None:
     chunk = _chunk("chunk-0", "Figures 2-4 summarize the experiments.")
     monkeypatch.setattr(
         locator,
@@ -585,8 +597,20 @@ async def test_malformed_singleton_number_is_downgraded_to_uncertain(monkeypatch
     await locator.resolve_figure_locators([chunk])
 
     annotation = _resolution_for(chunk).annotations[0]
-    assert annotation.cardinality == "uncertain"
+    assert annotation.cardinality == "single"
     assert annotation.canonical_reference is None
+    stored = DocumentChunk.model_validate_json(chunk.model_dump_json())
+    assert _resolution_for(stored).annotations[0] == annotation
+    span = next(
+        span for span in build_evidence_spans(chunk_id=stored.id, chunk_text=stored.content)
+        if span.char_start < annotation.char_end and annotation.char_start < span.char_end
+    )
+    link = _resolve_stored_figure_reference(
+        {"text": stored.content, "metadata": stored.metadata.model_dump(mode="json")}, span
+    )
+    assert link.reference is None
+    assert link.blocked is True
+    assert _resolution_for(stored).annotations[0].cardinality == "single"
 
 
 @pytest.mark.parametrize(

@@ -262,7 +262,7 @@ def test_gene_extractor_schema_canonicalizes_evidence_chunk_id_scaffold():
     )
 
 
-def test_gene_extractor_schema_excludes_unresolved_zfin_drug_like_mentions():
+def test_gene_extractor_schema_preserves_model_classification_regardless_of_name():
     payload = _valid_gene_extractor_payload()
     obj = payload["curatable_objects"][0]
     obj["pending_ref_id"] = "gene-mention-evidence-sb225002"
@@ -302,10 +302,9 @@ def test_gene_extractor_schema_excludes_unresolved_zfin_drug_like_mentions():
 
     envelope = _gene_extractor_schema().model_validate(payload)
 
-    assert envelope.curatable_objects == []
-    assert envelope.metadata.exclusions[-1].mention == "SB225002"
-    assert envelope.metadata.exclusions[-1].reason_code == "unsupported_entity_type"
-    assert envelope.metadata.exclusions[-1].evidence_record_ids == ["ev-sb225002"]
+    assert len(envelope.curatable_objects) == 1
+    assert envelope.curatable_objects[0].payload.mention == "SB225002"
+    assert [item.mention for item in envelope.metadata.exclusions] == ["FOXO family"]
 
 
 def test_gene_extractor_schema_accepts_uppercase_zfin_mention_with_gene_hint():
@@ -435,7 +434,7 @@ def test_gene_extractor_payload_persists_as_curatable_objects_only_for_new_runs(
     assert evidence_metadata["evidence_records"][0]["evidence_record_id"] == "ev-daf16-1"
 
 
-def test_gene_package_normalizer_drops_zfin_compound_like_gene_objects():
+def test_gene_package_preserves_model_classification_regardless_of_name():
     payload = _valid_gene_extractor_payload()
     retained_obj = payload["curatable_objects"][0]
     retained_obj["pending_ref_id"] = "gene-mention-evidence-her1"
@@ -496,21 +495,9 @@ def test_gene_package_normalizer_drops_zfin_compound_like_gene_objects():
 
     assert candidate is not None
     assert [obj["pending_ref_id"] for obj in candidate.payload_json["curatable_objects"]] == [
-        "gene-mention-evidence-her1"
+        "gene-mention-evidence-her1", "gene-mention-evidence-SB225002"
     ]
-    assert candidate.payload_json["metadata"]["exclusions"][-1] == {
-        "mention": "SB225002",
-        "reason_code": "unsupported_entity_type",
-        "evidence_record_ids": ["ev-sb225002"],
-        "details": (
-            "Dropped from gene curatable_objects because ZFIN context plus "
-            "uppercase/digit notation indicates a compound or reagent without "
-            "a gene identity hint."
-        ),
-    }
-    assert "dropped_non_gene_zfin_candidate:SB225002" in candidate.payload_json[
-        "run_summary"
-    ]["warnings"]
+    assert candidate.payload_json["metadata"]["exclusions"] == payload["metadata"]["exclusions"]
 
 
 def test_builder_gene_envelope_carries_evidence_quotes_into_validator_requests():

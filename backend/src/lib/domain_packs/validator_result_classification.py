@@ -47,6 +47,7 @@ ValidatorFailureClassification = Literal[
     "conflict",
     "blocked",
     "rejected_candidates",
+    "unresolved",
 ]
 VALIDATOR_FAILURE_CLASSIFICATIONS: tuple[str, ...] = get_args(ValidatorFailureClassification)
 
@@ -61,21 +62,25 @@ def validator_failure_classification(
     Every value maps to a resolvable value's lookup outcome through
     ``resolvable_values.lookup_outcome_for_failure``. The order matters,
     because a decisive outcome (not_found, ambiguous, conflict,
-    rejected_candidates) overrules a value that reads as resolved:
+    rejected_candidates, unresolved) overrules a value that reads as resolved:
 
     1. A lookup that could not run (an ``error`` or ``blocked`` outcome)
        makes the whole result non-decisive (transient, blocked): an outage
        never overrules a value, whatever the other lookups found.
-    2. A result that filled some expected fields but not others is
+    2. With no lookup, preserve the explicit unresolved scientific judgment.
+       Missing resolved fields do not turn that judgment into a tool failure.
+    3. A result that filled some expected fields but not others is
        incomplete (missing_expected_result_field). An unresolved result that
        filled none lists every expected field as missing whatever the
        reason, so that list alone does not decide.
-    3. Otherwise what the lookups found decides: several matches
+    4. Otherwise what the lookups found decides: several matches
        (ambiguous), a conflict, nothing anywhere (not_found), or lookups that
        found something the validator judged does not fit
        (rejected_candidates).
     """
 
+    if getattr(result, "output_issues", []):
+        return "missing_expected_result_field" if result.missing_expected_fields else "invalid_schema"
     methods = {attempt.method for attempt in result.lookup_attempts}
     if "invalid_schema" in methods:
         return "invalid_schema"
@@ -86,9 +91,13 @@ def validator_failure_classification(
         return "transient"
     if "blocked" in outcomes:
         return "blocked"
+    if not outcomes:
+        # Missing resolved fields are natural for an explicit unresolved judgment.
+        # They do not imply a tool failed or that the validator failed to answer.
+        return "unresolved"
     filled = any(not missing_resolved_value(value) for value in result.resolved_values.values())
-    if result.missing_expected_fields and (filled or not outcomes):
-        # Some expected fields filled and others not, or nothing looked up: incomplete.
+    if result.missing_expected_fields and filled:
+        # Some expected fields filled and others not: incomplete.
         return "missing_expected_result_field"
     if "ambiguous" in outcomes:
         return "ambiguous"

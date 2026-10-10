@@ -632,6 +632,7 @@ def _single_result_finding(result):
             "domain_pack.validator_resolved",
             "domain_pack.validator_unresolved",
             "domain_pack.validator_error",
+            "domain_pack.validator_output_incomplete",
         }
     )
 
@@ -2396,7 +2397,7 @@ def test_unknown_lookup_outcome_becomes_invalid_schema_result(tmp_path: Path):
     assert "incompatible output" in result.validator_results[0].explanation
 
 
-def test_resolved_validator_without_lookup_evidence_becomes_invalid_schema_result(
+def test_resolved_validator_without_lookup_preserves_judgment(
     tmp_path: Path,
 ):
     pack = _loaded_pack(tmp_path)
@@ -2412,14 +2413,9 @@ def test_resolved_validator_without_lookup_evidence_becomes_invalid_schema_resul
         runner=_runner,
     )
 
-    finding = _single_result_finding(result)
-    assert result.validator_results[0].status == "unresolved"
-    assert finding.details["failure_classification"] == "invalid_schema"
-    assert "successful lookup_attempt" in result.validator_results[0].explanation
-    assert not any(
-        domain_object.object_type == "Gene"
-        for domain_object in result.envelope.extracted_objects
-    )
+    assert result.validator_results[0].status == "resolved"
+    assert result.validator_results[0].lookup_attempts == []
+    assert result.validator_results[0].explanation == "Fixture validator result."
 
 
 def test_conflict_lookup_outcome_uses_explicit_blocked_status(tmp_path: Path):
@@ -2466,7 +2462,7 @@ def test_blocked_lookup_outcome_uses_explicit_blocked_status(tmp_path: Path):
     assert finding.details["lookup_attempts"][0]["lookup_status"] == "blocked"
 
 
-def test_unclassifiable_unresolved_output_becomes_invalid_schema_result(
+def test_unresolved_judgment_without_lookup_is_preserved(
     tmp_path: Path,
 ):
     pack = _loaded_pack(tmp_path)
@@ -2488,13 +2484,12 @@ def test_unclassifiable_unresolved_output_becomes_invalid_schema_result(
 
     finding = _single_result_finding(result)
     assert result.validator_results[0].status == "unresolved"
-    assert finding.details["failure_classification"] == "invalid_schema"
-    assert "Unable to classify unresolved validator result" in (
-        result.validator_results[0].explanation
-    )
+    assert finding.details["failure_classification"] == "unresolved"
+    assert result.validator_results[0].explanation == "Fixture validator result."
+    assert result.validator_results[0].lookup_attempts == []
 
 
-def test_resolved_validator_missing_expected_fields_is_unresolved(
+def test_resolved_validator_missing_expected_fields_preserves_incomplete_judgment(
     tmp_path: Path,
 ):
     pack = _loaded_pack(tmp_path)
@@ -2512,7 +2507,17 @@ def test_resolved_validator_missing_expected_fields_is_unresolved(
     )
 
     finding = _single_result_finding(result)
-    assert result.validator_results[0].status == "unresolved"
+    assert result.validator_results[0].status == "resolved"
+    assert not result.validator_results[0].is_complete
+    assert result.validator_results[0].explanation == "Fixture validator result."
+    assert finding.status.value == "open"
+    assert finding.code == "domain_pack.validator_output_incomplete"
+    snapshot = finding.details["validation_result"]
+    assert snapshot["status"] == "resolved"
+    assert snapshot["resolved_values"] == {"identifier": "AGR:0001"}
+    assert snapshot["explanation"] == "Fixture validator result."
+    assert snapshot["output_issues"]
+    assert not any(obj.object_type == "Gene" for obj in result.envelope.extracted_objects)
     assert result.validator_results[0].missing_expected_fields == ["symbol"]
     assert finding.details["failure_classification"] == "missing_expected_result_field"
     assert finding.details["missing_expected_fields"] == ["symbol"]
@@ -2559,9 +2564,12 @@ def test_resolved_array_validator_result_rejects_invalid_item_projection(
 
     result = validator_result_from_agent_output(payload, request=request)
 
-    assert result.status == "unresolved"
+    assert result.status == "resolved"
+    assert not result.is_complete
+    assert result.explanation == payload["explanation"]
+    assert result.resolved_values == payload["resolved_values"]
     assert result.missing_expected_fields == ["terms"]
-    assert "one resolved value per selected array item" in result.explanation
+    assert "one resolved value per selected array item" in "; ".join(result.output_issues)
 
 
 def test_resolved_array_validator_result_accepts_allowed_term_curies():
@@ -2591,7 +2599,7 @@ def test_resolved_array_validator_result_accepts_allowed_term_curies():
 
 
 @pytest.mark.parametrize("violation", ["cardinality", "allowed_term"])
-def test_assembled_completeness_does_not_bypass_array_or_policy_checks(violation):
+def test_assembled_completeness_checks_shape_without_rejudging_allowed_terms(violation):
     from src.lib.domain_packs.validator_dispatch import _enforce_expected_result_fields
     from src.schemas.domain_validator import ValidatorFieldResolution
 
@@ -2609,13 +2617,17 @@ def test_assembled_completeness_does_not_bypass_array_or_policy_checks(violation
         status="resolved", lookup_outcome="matched", resolved_values={"terms": terms},
         explanation="Program-assembled fixture.")}
     checked = _enforce_expected_result_fields(result, request=request)
-    assert checked.status == "unresolved"
-    assert checked.missing_expected_fields == ["terms"]
-    expected = "one resolved value per selected array item" if violation == "cardinality" else "outside the field-specific allowed term list"
-    assert expected in checked.explanation
+    if violation == "allowed_term":
+        assert checked == result
+    else:
+        assert checked.status == "resolved"
+        assert not checked.is_complete
+        assert checked.explanation == result.explanation
+        assert checked.missing_expected_fields == ["terms"]
+        assert "one resolved value per selected array item" in "; ".join(checked.output_issues)
 
 
-def test_resolved_array_validator_result_rejects_out_of_allowlist_term_curie():
+def test_resolved_array_validator_result_preserves_out_of_allowlist_judgment():
     base_request = _array_terms_validation_request()
     request = base_request.model_copy(
         update={
@@ -2637,13 +2649,13 @@ def test_resolved_array_validator_result_rejects_out_of_allowlist_term_curie():
 
     result = validator_result_from_agent_output(payload, request=request)
 
-    assert result.status == "unresolved"
-    assert result.missing_expected_fields == ["terms"]
-    assert "outside the field-specific allowed term list" in result.explanation
-    assert "GO:0005654" in result.explanation
+    assert result.status == "resolved"
+    assert result.missing_expected_fields == []
+    assert result.explanation == payload["explanation"]
+    assert result.resolved_values == payload["resolved_values"]
 
 
-def test_resolved_array_validator_result_rejects_schema_allowed_unresolved_label():
+def test_resolved_array_validator_result_preserves_label_judgment():
     base_request = _array_terms_validation_request()
     request = base_request.model_copy(
         update={
@@ -2664,9 +2676,10 @@ def test_resolved_array_validator_result_rejects_schema_allowed_unresolved_label
 
     result = validator_result_from_agent_output(payload, request=request)
 
-    assert result.status == "unresolved"
-    assert result.missing_expected_fields == ["terms"]
-    assert "post embryonic, pre-adult" in result.explanation
+    assert result.status == "resolved"
+    assert result.missing_expected_fields == []
+    assert result.explanation == payload["explanation"]
+    assert result.resolved_values == payload["resolved_values"]
 
 
 @pytest.mark.parametrize("outcome", ["ambiguous", "not_found", "conflict"])
@@ -3056,7 +3069,7 @@ def test_validator_finalization_feedback_accepts_valid_result():
     assert "validator_result" not in payload
 
 
-def test_validator_finalization_feedback_rejects_resolved_without_success_lookup():
+def test_validator_finalization_feedback_preserves_judgment_after_ambiguous_lookup():
     request = _validation_request()
 
     feedback = _validator_result_finalization_feedback(
@@ -3065,13 +3078,10 @@ def test_validator_finalization_feedback_rejects_resolved_without_success_lookup
     )
     payload = _validator_finalization_tool_payload(feedback)
 
-    assert payload["status"] == "rejected"
-    assert feedback.accepted_result is None
-    assert "successful lookup_attempt" in payload["message"]
-    assert any(
-        'outcome "success"' in instruction
-        for instruction in payload["repair_instructions"]
-    )
+    assert payload["status"] == "accepted"
+    assert feedback.accepted_result is not None
+    assert feedback.accepted_result.status == "resolved"
+    assert feedback.accepted_result.lookup_attempts[0].outcome == "ambiguous"
 
 
 @pytest.mark.parametrize("profile_mapped", [False, True])
@@ -4318,33 +4328,18 @@ def test_an_update_leaves_the_object_reference_intact():
     assert updated.extracted_objects[0].evidence_record_ids == ["evidence-1"]
 
 
-def test_allowed_term_list_checks_identifier_fields_not_per_element_labels():
-    """A slim element's name comes back as a plain label; only its CURIE is checked."""
-
-    from src.lib.domain_packs.validator_result_policies import allowed_term_policy_violations
-
+@pytest.mark.parametrize("curie", ["UBERON:0000068", "UBERON:0000092"])
+def test_allowed_term_guidance_does_not_override_per_element_judgment(curie):
     base_request = _array_terms_validation_request()
-    request = base_request.model_copy(
-        update={
-            "selected_inputs": {**base_request.selected_inputs, "allowed_term_curies": ["UBERON:0000068"]},
-            "expected_result_fields": {
-                "curie": "stage_uberon_slim_terms[1].curie",
-                "name": "stage_uberon_slim_terms[1].name",
-            },
-        }
-    )
-
-    def violations(values):
-        result = DomainValidatorResultBase.model_validate(
-            _result_payload(request, resolved_values=values)
-        )
-        return [violation.field_name for violation in allowed_term_policy_violations(result, request=request)]
-
-    assert violations({"curie": "UBERON:0000068", "name": "embryo stage"}) == []
-    assert violations({"curie": "UBERON:0000092", "name": "embryo stage"}) == ["curie"]
-    # A result field named as an identifier is checked even when its write leaf is not.
-    request = request.model_copy(update={"expected_result_fields": {"id": "stage_term_ref"}})
-    assert violations({"id": "UBERON:0000092"}) == ["id"]
+    request = base_request.model_copy(update={
+        "selected_inputs": {**base_request.selected_inputs, "allowed_term_curies": ["UBERON:0000068"]},
+        "expected_result_fields": {"curie": "stage_uberon_slim_terms[1].curie", "name": "stage_uberon_slim_terms[1].name"},
+    })
+    payload = _result_payload(request, resolved_values={"curie": curie, "name": "embryo stage"})
+    result = validator_result_from_agent_output(payload, request=request)
+    assert result.status == "resolved"
+    assert result.resolved_values == payload["resolved_values"]
+    assert result.explanation == payload["explanation"]
 
 
 @pytest.mark.parametrize("batch", [False, True])
@@ -4424,3 +4419,90 @@ def test_parallel_budget_stops_queue_and_drains_admitted_usage(tmp_path, monkeyp
     assert records[0].input_tokens == 2
     assert records[0].output_tokens == 3
     assert reports == []
+
+
+@pytest.mark.parametrize("batch", [False, True])
+@pytest.mark.parametrize("ending", ["corrected", "stopped", "max_turns"])
+def test_validator_correction_preserves_judgment_until_complete(monkeypatch, batch, ending):
+    from agents.exceptions import MaxTurnsExceeded
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import _unwrap_function_tool
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(output_type=GeneResultEnvelope, tools=[_compact_lookup_tool()],
+                                   instructions="Validate the evidence.")
+    monkeypatch.setattr("src.lib.config.agent_loader.get_agent_definition_for_package",
+                        lambda package_id, agent_id: AgentDefinition(
+                            folder_name="gene", agent_id=agent_id, name="Gene Validation", package_id=package_id,
+                            batch_capabilities=["domain_validator_batch"]))
+    monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_agent_by_id", lambda _: source_agent)
+
+    def run(agent, **kwargs):
+        assert kwargs["max_turns"] > 0
+        name = "finalize_validator_batch_results" if batch else "finalize_validator_result"
+        finalize = _unwrap_function_tool(next(tool for tool in agent.tools if tool.name == name))
+        decision = _compact_test_decision(agent, request)
+        complete_slots = decision["slots"]
+        decision["slots"] = {}
+        def submit():
+            return finalize(results=[decision]) if batch else finalize(result=decision)
+        feedback = submit()
+        assert feedback["status"] == "rejected"
+        assert "missing" in str(feedback)
+        if ending == "corrected":
+            decision["slots"] = complete_slots
+            assert submit()["status"] == "accepted"
+        elif ending == "max_turns":
+            decision["request_id"] = "another-request"
+            assert submit()["status"] == "rejected"
+            raise MaxTurnsExceeded("Correction turn budget exhausted")
+        return {"ignored": "unfinalized answer"}
+
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", run)
+    binding = SimpleNamespace(raw={}, max_tool_calls=4)
+    if batch:
+        job = SimpleNamespace(request=request, match=SimpleNamespace(binding=binding))
+        raw = run_package_scoped_validator_agent_batch([job], binding=binding)
+        [result] = _validated_results_from_agent_batch_output(raw, jobs=[job])
+    else:
+        raw = run_package_scoped_validator_agent(request, binding=binding)
+        result = validator_result_from_agent_output(raw, request=request)
+    assert result.status == "resolved"
+    assert result.explanation == "Verified identity."
+    assert result.is_complete is (ending == "corrected")
+    assert result.candidates[0].value == "AGR:0001"
+    assert result.lookup_attempts
+    if ending == "corrected":
+        assert result.resolved_values == {"identifier": "AGR:0001"}
+    else:
+        assert result.missing_expected_fields == ["identifier"]
+        assert result.output_issues
+        assert not result.is_resolved
+
+
+def test_batch_correction_retains_each_requested_result_without_losing_peers():
+    from src.lib.domain_packs.validator_dispatch import (
+        _ValidatorFinalizationState, _build_finalize_validator_batch_results_tool,
+    )
+    requests = [_validation_request().model_copy(update={"request_id": f"request-{index}"}) for index in range(3)]
+    jobs = [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={}))) for request in requests]
+    state = _ValidatorFinalizationState()
+    finalize = _build_finalize_validator_batch_results_tool(
+        jobs, finalization_state=state,
+        function_tool_factory=lambda **_: lambda function: function,
+    )
+    complete = [_result_payload(request) for request in requests]
+    partial = _result_payload(requests[1], resolved_values={})
+    response = finalize([complete[0], partial])
+    assert response["status"] == "rejected"
+    assert state.accepted_results == ()
+    assert [result.request_id for result in state.incomplete_results] == [r.request_id for r in requests]
+    first, second, third = state.incomplete_results
+    assert first.is_resolved
+    assert second.status == "resolved" and not second.is_complete
+    assert second.explanation == partial["explanation"]
+    assert third.status == "unresolved"
+    assert third.lookup_attempts[0].method == "invalid_schema"
+    assert finalize(complete)["status"] == "accepted"
+    assert state.incomplete_results == ()
+    assert len(state.accepted_results) == 3

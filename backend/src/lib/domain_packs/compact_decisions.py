@@ -269,7 +269,7 @@ class ValidatorDecisionWorkspace:
         }
         if contract.assemble_domain is not None:
             additions = contract.assemble_domain(deepcopy(payload), decision, self)
-            protected = {"request_id", "validator_binding_id", "validator_agent", "target"}
+            protected = {"request_id", "validator_binding_id", "validator_agent", "target", "lookup_attempts", "status"}
             if protected.intersection(additions):
                 raise ValueError("Domain assembler cannot replace runtime identity or lookup audit")
             payload.update(additions)
@@ -285,7 +285,9 @@ class ValidatorDecisionWorkspace:
                 or payload["resolved_values"][name] is None or payload["resolved_values"][name] == ""
             ]
         if payload["status"] == "resolved" and (payload["missing_expected_fields"] or decision.unresolved_questions):
-            raise ValueError("Resolved decision still has missing fields or unresolved questions")
+            payload.setdefault("output_issues", []).append(
+                "Resolved decision still has missing fields or unresolved questions"
+            )
         result = contract.result_schema.model_validate(payload, context={"domain_validation_request": request})
         if contract.assemble_domain is not None and result.field_resolutions:
             result._assembled_field_completeness = True

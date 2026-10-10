@@ -380,8 +380,8 @@ def _map_mentions_to_chunk(
             if cardinality == "single"
             else None
         )
-        if cardinality == "single" and canonical_reference is None:
-            cardinality = "uncertain"
+        # Link serialization cannot revise the classifier's interpretation.
+        # A missing canonical reference explicitly means no link is available.
         annotations.append(
             FigureLocatorAnnotation(
                 text=mention.text,

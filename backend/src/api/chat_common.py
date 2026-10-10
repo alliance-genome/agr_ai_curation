@@ -1573,8 +1573,9 @@ def _persist_completed_chat_stream_turn(
     persisted_extraction_refs: Sequence[PersistedExtractionResultRef] | None = None,
     document_id: Optional[str],
     flow_terminal_events: Sequence[Dict[str, Any]] | None = None,
+    failure_message: str | None = None,
 ) -> ChatMessageRecord:
-    """Persist the completed stream assistant turn using a fresh SQL session."""
+    """Persist an assistant outcome and link existing extraction without revalidation."""
 
     completion_db = SessionLocal()
     try:
@@ -1585,6 +1586,22 @@ def _persist_completed_chat_stream_turn(
         )
         if session is None:
             raise ChatHistorySessionNotFoundError("Chat session not found")
+
+        if failure_message:
+            # Only already durable results from this owner's session may be recovered.
+            # Do not materialize in-memory candidates or rerun scientific validation.
+            if extraction_candidates or not persisted_extraction_refs:
+                raise ValueError("Partial recovery requires durable extraction references only")
+            ids = {UUID(str(ref.extraction_result_id)) for ref in persisted_extraction_refs}
+            owned = completion_db.execute(
+                select(CurationExtractionResultRecordModel.id).where(
+                    CurationExtractionResultRecordModel.id.in_(ids),
+                    CurationExtractionResultRecordModel.user_id == user_id,
+                    CurationExtractionResultRecordModel.origin_session_id == session_id,
+                )
+            ).scalars().all()
+            if set(owned) != ids:
+                raise ValueError("Partial recovery references are missing or not owned by this session")
 
         existing_assistant_turn = repository.get_message_by_turn_id(
             session_id=session_id,
@@ -1633,9 +1650,10 @@ def _persist_completed_chat_stream_turn(
                 turn_id=turn_id,
                 trace_id=trace_id,
                 payload_json=(
+                    {"terminal_state": "turn_failed", "terminal_message": failure_message}
+                    if failure_message else
                     {_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: list(flow_terminal_events)}
-                    if flow_terminal_events
-                    else None
+                    if flow_terminal_events else None
                 ),
             )
             _link_persisted_extraction_results_to_chat_turn(

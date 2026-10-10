@@ -61,6 +61,8 @@ enum_definitions:
         label: Validator result incomplete
       - value: rejected_candidates
         label: Candidates rejected
+      - value: unresolved
+        label: Unresolved by validator
       - value: not_validated
         label: Not validated yet
       - value: legacy_unverified

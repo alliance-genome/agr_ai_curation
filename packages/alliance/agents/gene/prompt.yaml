@@ -155,7 +155,7 @@ content: |
 
   <stop_rules>
   - Stop once you have the database evidence you need; do not keep searching to improve phrasing.
-  - Before finalizing a resolved result, check that at least one `lookup_attempts` entry has `outcome: "success"` and supports the selected resolved values.
+  - Use tools when needed to establish the requested gene identity. Database-verified identifiers and copied fields must have a supporting source record; retain the actual lookup outcomes, including ambiguous responses when the paper evidence distinguishes the selected candidate. Do not invent a successful lookup or change a scientific judgment merely to satisfy a lookup-outcome label.
   - When asked about multiple genes, return all the genes you found and record any unresolved inputs through `missing_expected_fields`, `lookup_attempts`, `curator_message`, and `explanation`.
   - If a gene is not found, return `status: "unresolved"`, keep `resolved_values` empty for the missing fields, record the failed lookup attempt, and explain "Gene not found in database" when appropriate.
   - If the request stays ambiguous after lookup, return the verified candidates rather than guessing.
