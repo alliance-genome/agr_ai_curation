@@ -661,13 +661,15 @@ async def chat_stream_endpoint(
                         content=prepared_turn.replay_assistant_turn.content,
                     )
                 )
+            saved_payload = prepared_turn.replay_assistant_turn.payload_json
+            failed_summary = isinstance(saved_payload, dict) and saved_payload.get("terminal_state") == "turn_failed"
             yield _stream_event_sse(
                 _build_terminal_turn_event(
-                    "turn_completed",
+                    "turn_failed" if failed_summary else "turn_completed",
                     session_id=session_id,
                     turn_id=prepared_turn.turn_id,
                     trace_id=prepared_turn.replay_assistant_turn.trace_id,
-                    message="Chat turn completed.",
+                    message=saved_payload.get("terminal_message") if failed_summary else "Chat turn completed.",
                 )
             )
 
@@ -960,6 +962,37 @@ async def chat_stream_endpoint(
                 return
 
             if runner_error_message:
+                if persisted_extraction_refs:
+                    saved_notice = (
+                        "Extraction results were saved, but the final summary failed. "
+                        "Use Review & Curate to open the saved results. "
+                        "Any unresolved findings still need review."
+                    )
+                    try:
+                        _persist_completed_chat_stream_turn(
+                            session_id=current_session_id, user_id=user_id,
+                            turn_id=current_turn_id,
+                            user_message=prepared_turn.effective_user_message,
+                            assistant_message=saved_notice, trace_id=trace_id,
+                            extraction_candidates=[],
+                            persisted_extraction_refs=persisted_extraction_refs,
+                            document_id=document_id,
+                            failure_message=saved_notice,
+                        )
+                    except ChatHistorySessionNotFoundError:
+                        yield _stream_event_sse(_build_terminal_turn_event(
+                            "session_gone", session_id=current_session_id,
+                            turn_id=current_turn_id, trace_id=trace_id,
+                            message="Chat session is no longer available.",
+                        ))
+                        return
+                    except Exception:
+                        logger.exception("Failed to preserve saved extraction access after chat error")
+                        runner_error_message = (
+                            "The response failed and links to saved results could not be saved to chat history."
+                        )
+                    else:
+                        runner_error_message = saved_notice
                 sentry_terminal_status = "error"
                 set_sentry_span_status(sentry_transaction, "internal_error")
                 yield _stream_event_sse(

@@ -256,31 +256,21 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
         )
 
 
-RESOLVER_HELPERS = ("search_domain_field_terms", "inspect_ontology_term", "resolve_domain_field_term")
+INHERITED_LOOKUPS = ("agr_literature_reference_lookup",)
 
 
-def resolver_inheritance_migration():
-    path = (
-        Path(__file__).resolve().parents[3]
-        / "alembic/versions/s6t7u8v9w0x1_stop_inheriting_extraction_resolver_helpers.py"
-    )
-    spec = spec_from_file_location("resolver_inheritance_persistence", path)
-    assert spec is not None and spec.loader is not None
-    module = module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def _expression_extractor_with_inherited_lookup(db, groups):
+    """Exercise saved lookup inheritance with a currently installed tool.
 
-
-def _legacy_expression_extractor(db, groups, *, migrated):
-    """A custom extractor saved from the gene expression template while it inherited the
-    term resolver helpers, as in production; optionally after s6t7u8v9w0x1 runs."""
+    Retired resolver tools no longer have executable bindings or installed
+    policies; their editable-state retirement is covered below.
+    """
     from src.lib.agent_studio.domain_output_contract import initial_agent_output_contract
     from src.lib.agent_studio.execution_revision_service import append_execution_revision
     from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
     from src.lib.config.agent_loader import get_agent_definition
 
-    # Before s6t7u8v9w0x1 the resolver helpers were designated for inheritance.
-    for tool_key in RESOLVER_HELPERS:
+    for tool_key in INHERITED_LOOKUPS:
         policy = db.get(ToolPolicy, tool_key)
         policy.config = {**policy.config, "system_managed_inheritance": True}
     db.flush()
@@ -294,7 +284,7 @@ def _legacy_expression_extractor(db, groups, *, migrated):
         instructions="Record zebrafish expression patterns.", model_id="gpt-6.1-sol",
         model_temperature=0.1, model_reasoning="medium", visibility="private",
         template_source="gene_expression_extraction",
-        tool_ids=list(dict.fromkeys([*definition.tools, *RESOLVER_HELPERS])),
+        tool_ids=list(dict.fromkeys([*definition.tools, *INHERITED_LOOKUPS])),
         allowed_group_ids=list(definition.access.allowed_group_ids), group_rules_enabled=False,
     )
     db.add(head)
@@ -302,31 +292,25 @@ def _legacy_expression_extractor(db, groups, *, migrated):
     snapshot = capture_execution_snapshot(
         db, head, initial_agent_output_contract(head), active_group_ids=groups,
     )
-    # The saved revision carries the helpers as inherited, like the ones in production.
-    assert set(RESOLVER_HELPERS) <= set(snapshot.system_managed_tool_ids)
+    assert set(INHERITED_LOOKUPS) <= set(snapshot.system_managed_tool_ids)
     saved = append_execution_revision(db, head, snapshot, user_id=1, expected_revision_id=None)
 
-    if migrated:
-        with Operations.context(MigrationContext.configure(db.connection())):
-            resolver_inheritance_migration().upgrade()
-        get_tool_policy_cache().refresh(db)
     return head, snapshot, saved
 
 
-@pytest.mark.parametrize("migrated", [False, True])
 @pytest.mark.parametrize("submit", ["visible", "saved_without_lookups", "saved_unchanged"])
 def test_resaving_a_gene_expression_extractor_leaves_out_inherited_identity_lookups(
-    policy_db, migrated, submit,
+    policy_db, submit,
 ):
     """ALL-1276: a custom extractor saved from the gene expression template while it
-    inherited the term resolver helpers re-saves without any identity lookup tool,
+    inherited a lookup re-saves without any identity lookup tool,
     including when the Workshop sends its saved tool list back unchanged."""
     from src.lib.config import get_valid_group_ids
     from src.lib.packages.tool_roles import identity_lookup_tool_names
 
     db = policy_db
     groups = list(get_valid_group_ids())
-    head, snapshot, saved = _legacy_expression_extractor(db, groups, migrated=migrated)
+    head, snapshot, saved = _expression_extractor_with_inherited_lookup(db, groups)
 
     lookups = identity_lookup_tool_names()
     if submit == "visible":
@@ -352,9 +336,8 @@ def test_resaving_a_gene_expression_extractor_leaves_out_inherited_identity_look
     assert "agr_species_context_lookup" in updated.tool_ids
 
 
-@pytest.mark.parametrize("migrated", [False, True])
 def test_workshop_accepts_a_legacy_expression_extractor_but_refuses_an_attached_lookup(
-    policy_db, monkeypatch, migrated,
+    policy_db, monkeypatch,
 ):
     """ALL-1276: the Workshop validates the saved tool list unchanged (inherited lookups
     are withheld, as Save withholds them), but a lookup the curator attaches is refused."""
@@ -376,7 +359,7 @@ def test_workshop_accepts_a_legacy_expression_extractor_but_refuses_an_attached_
     for name in ("_active_cache", "_version_cache", "_initialized", "_loaded_at"):
         monkeypatch.setattr(cache, name, getattr(cache, name))
     cache.initialize(db)
-    head, snapshot, saved = _legacy_expression_extractor(db, groups, migrated=migrated)
+    head, snapshot, saved = _expression_extractor_with_inherited_lookup(db, groups)
     output = snapshot.output_contract
     workshop = AgentWorkshopContext(
         getting_started_mode="template", template_source="gene_expression_extraction",
@@ -406,3 +389,110 @@ def test_workshop_accepts_a_legacy_expression_extractor_but_refuses_an_attached_
             db, head, tool_ids=[*snapshot.tool_ids, "agr_curation_query"],
             expected_revision_id=saved.id, active_group_ids=groups,
         )
+
+
+def _retired_resolver_migration():
+    path = Path(__file__).resolve().parents[3] / "alembic/versions/b8f2c3d4e5a6_remove_retired_resolver_tool_configuration.py"
+    spec = spec_from_file_location("retired_resolver_configuration", path)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("active", [True, False])
+def test_retired_resolver_migration_preserves_activity_and_executable_history(policy_db, monkeypatch, active):
+    """Retirement cleans editable state, not immutable history or owner flow pins."""
+    from copy import deepcopy
+    from sqlalchemy.orm import Session
+    from src.lib.agent_studio import catalog_service, runtime_validation
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision
+    from src.lib.config import get_valid_group_ids
+    from src.lib.openai_agents import langfuse_client
+    from src.models.sql import database
+
+    db = policy_db
+    groups = list(get_valid_group_ids())
+    head, snapshot, previous = _expression_extractor_with_inherited_lookup(db, groups)
+    snapshot = snapshot.model_copy(update={
+        "tool_ids": [tool for tool in snapshot.tool_ids if tool not in INHERITED_LOOKUPS],
+        "system_managed_tool_ids": [tool for tool in snapshot.system_managed_tool_ids if tool not in INHERITED_LOOKUPS],
+    })
+    retirement = _retired_resolver_migration()
+    retired = list(retirement.RETIRED_TOOLS)
+    legacy = snapshot.model_copy(update={
+        "tool_ids": [snapshot.tool_ids[0], *retired, *snapshot.tool_ids[1:]],
+        "system_managed_tool_ids": [*snapshot.system_managed_tool_ids, *retired],
+    })
+    head.tool_ids = list(legacy.tool_ids)
+    head.is_active = active
+    head.supervisor_enabled = active
+    old = append_execution_revision(db, head, legacy, user_id=1, expected_revision_id=previous.id)
+    for tool in retired:
+        db.add(ToolPolicy(tool_key=tool, display_name=tool, config={"operator_note": "old policy"}))
+    db.flush()
+    monkeypatch.setattr(runtime_validation, "SessionLocal", lambda: Session(bind=db.connection(), join_transaction_mode="create_savepoint"))
+    if active:
+        before_report = runtime_validation.build_agent_runtime_report(strict_mode=False)
+        assert next(row for row in before_report["agents"] if row["agent_key"] == head.agent_key)["disabled"]
+    before_history = deepcopy(old.snapshot), old.fingerprint
+    before_policy = db.execute(sa.text("SELECT row_to_json(p) FROM tool_policies p WHERE tool_key='read_chunk'")).scalar_one()
+    unchanged = db.execute(sa.text("SELECT row_to_json(a) FROM agents a WHERE id != :id"), {"id": head.id}).all()
+    with Operations.context(MigrationContext.configure(db.connection())):
+        retirement.upgrade()
+    db.expire_all()
+    assert head.tool_ids == snapshot.tool_ids
+    assert (head.is_active, head.supervisor_enabled, head.user_id) == (active, active, 1)
+    assert head.execution_revision_id == old.id
+    assert (old.snapshot, old.fingerprint) == before_history
+    assert db.execute(sa.text("SELECT row_to_json(p) FROM tool_policies p WHERE tool_key='read_chunk'")).scalar_one() == before_policy
+    assert db.execute(sa.text("SELECT row_to_json(a) FROM agents a WHERE id != :id"), {"id": head.id}).all() == unchanged
+    assert not db.query(ToolPolicy).filter(ToolPolicy.tool_key.in_(retired)).count()
+    # Idempotent upgrade, forward-only downgrade: neither restores dead tools.
+    after = db.execute(sa.text("SELECT row_to_json(a) FROM agents a WHERE id=:id"), {"id": head.id}).scalar_one()
+    with Operations.context(MigrationContext.configure(db.connection())):
+        retirement.upgrade()
+        retirement.downgrade()
+    assert db.execute(sa.text("SELECT row_to_json(a) FROM agents a WHERE id=:id"), {"id": head.id}).scalar_one() == after
+
+    monkeypatch.setattr(runtime_validation, "SessionLocal", lambda: Session(bind=db.connection(), join_transaction_mode="create_savepoint"))
+    report = runtime_validation.build_agent_runtime_report(strict_mode=False)
+    rows = [row for row in report["agents"] if row["agent_key"] == head.agent_key]
+    assert (len(rows) == 1 and not rows[0].get("disabled")) if active else not rows
+    runtime_validation._disable_agents_with_missing_tools(report)
+    db.refresh(head)
+    assert (head.is_active, head.supervisor_enabled) == (active, active)
+    if not active:
+        return  # Never reactivate an archived agent to demonstrate execution.
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(db))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-a-credential")
+    monkeypatch.setattr(langfuse_client, "log_agent_config", lambda **kwargs: None)
+    get_tool_policy_cache().refresh(db)
+    context = {"db_user_id": 1, "user_id": "test-curator", "document_id": str(uuid4()), "authenticated_groups": groups}
+    with pytest.raises(ValueError, match="no longer available for execution"):
+        catalog_service.get_agent_by_id(head.agent_key, **context)
+    # Explicit normal save advances the executable head, without rewriting old
+    # snapshots. No tool_ids are sent: use the migration-cleaned editable list.
+    service.update_custom_agent(db, head, description="Reviewed retired-tool removal", expected_revision_id=old.id, active_group_ids=groups)
+    assert head.execution_revision_id != old.id
+    _, current = get_execution_revision(db, head.id, head.execution_revision_id, 1, active_group_ids=groups)
+    assert not set(retired) & set(current.tool_ids)
+    assert not set(retired) & set(current.system_managed_tool_ids)
+    built = catalog_service.get_agent_by_id(head.agent_key, **context)
+    assert built.execution_revision_id == str(head.execution_revision_id)
+    with pytest.raises(ValueError, match="no longer available for execution"):
+        catalog_service.get_agent_by_id(head.agent_key, execution_revision_id=str(old.id), **context)
+    db.refresh(old)
+    assert (old.snapshot, old.fingerprint) == before_history
+
+
+def test_retired_resolver_migration_only_removes_exact_tool_strings(policy_db):
+    db = policy_db
+    head = db.query(Agent).first()
+    head.tool_ids = ["read_chunk", None, "inspect_ontology_term", "read_chunk", 42, "inspect_ontology_term_extra"]
+    db.flush()
+    with Operations.context(MigrationContext.configure(db.connection())):
+        _retired_resolver_migration().upgrade()
+    db.refresh(head)
+    assert head.tool_ids == ["read_chunk", None, "read_chunk", 42, "inspect_ontology_term_extra"]

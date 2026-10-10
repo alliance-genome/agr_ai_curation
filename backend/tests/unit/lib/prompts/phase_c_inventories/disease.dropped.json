@@ -1,13 +1,11 @@
 [
   {
     "phrase": "Call `agr_curation_query` before returning any disease term, DOID, synonym, definition, or ontology type.",
-    "synonyms": [
-      "call at least one of agr_curation_query before final output"
-    ],
-    "category": "relocated",
-    "reason": "DISV-RTC / DISV-03 de-dup. The pre-rewrite <success_criteria> restated the required-tool-call imperative that the locked Generated Runtime Contract already injects ('Required tool-call policy: call at least one of agr_curation_query before final output'). The lean rewrite drops the base imperative and folds the curator-facing rule into <goal> once ('call it before reporting any disease term, DOID, name, definition, synonym, or ontology type'); the machine imperative survives in the core half of the assembled render. The literal `agr_curation_query` token is still present in the base prompt.",
+    "synonyms": [],
+    "category": "deleted",
+    "reason": "Approved semantic-boundary decision #9 removes the unconditional generated curation-tool-call requirement. The LLM decides whether lookup is needed; compact source-record selection and provenance still protect database-verified facts. The former relocation to a blanket generated imperative is intentionally retired, including for explicit unresolved judgments without tool calls. Task-specific instructions to ground database claims remain.",
     "old_source": "packages/alliance/agents/disease/prompt.yaml:<success_criteria>",
-    "new_home": "render"
+    "new_home": ""
   },
   {
     "phrase": "return one root JSON object matching `DiseaseValidationResult`. Return only a `DiseaseValidationResult` JSON object with the shared fields at the root.",

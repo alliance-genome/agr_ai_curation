@@ -90,6 +90,8 @@ enum_definitions:
         label: Validator result incomplete
       - value: rejected_candidates
         label: Candidates rejected
+      - value: unresolved
+        label: Unresolved by validator
       - value: not_validated
         label: Not validated yet
       - value: legacy_unverified
@@ -1465,29 +1467,6 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
-          term_helper:
-            field_path: condition_relations.conditions.condition_class.curie
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-              - resolve_domain_field_term
-              search_channels:
-              - exact_label
-              - exact_synonym
-              - trigram_label
-              - trigram_synonym
-              - definition
-            term_source:
-              kind: ontology
-              ontology_family: zeco
-              ontology_term_type: ZECOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1554,29 +1533,6 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
-          term_helper:
-            field_path: condition_relations.conditions.condition_id.curie
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-              - resolve_domain_field_term
-              search_channels:
-              - exact_label
-              - exact_synonym
-              - trigram_label
-              - trigram_synonym
-              - definition
-            term_source:
-              kind: ontology
-              ontology_family: zeco
-              ontology_term_type: ZECOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2840,29 +2796,6 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
-          term_helper:
-            field_path: condition_relations.conditions.condition_class.curie
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-              - resolve_domain_field_term
-              search_channels:
-              - exact_label
-              - exact_synonym
-              - trigram_label
-              - trigram_synonym
-              - definition
-            term_source:
-              kind: ontology
-              ontology_family: zeco
-              ontology_term_type: ZECOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2929,29 +2862,6 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
-          term_helper:
-            field_path: condition_relations.conditions.condition_id.curie
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-              - resolve_domain_field_term
-              search_channels:
-              - exact_label
-              - exact_synonym
-              - trigram_label
-              - trigram_synonym
-              - definition
-            term_source:
-              kind: ontology
-              ontology_family: zeco
-              ontology_term_type: ZECOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -4206,29 +4116,6 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
-          term_helper:
-            field_path: condition_relations.conditions.condition_class.curie
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-              - resolve_domain_field_term
-              search_channels:
-              - exact_label
-              - exact_synonym
-              - trigram_label
-              - trigram_synonym
-              - definition
-            term_source:
-              kind: ontology
-              ontology_family: zeco
-              ontology_term_type: ZECOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -4295,29 +4182,6 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
-          term_helper:
-            field_path: condition_relations.conditions.condition_id.curie
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-              - resolve_domain_field_term
-              search_channels:
-              - exact_label
-              - exact_synonym
-              - trigram_label
-              - trigram_synonym
-              - definition
-            term_source:
-              kind: ontology
-              ontology_family: zeco
-              ontology_term_type: ZECOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -5574,29 +5438,6 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
-          term_helper:
-            field_path: condition_relations.conditions.condition_class.curie
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-              - resolve_domain_field_term
-              search_channels:
-              - exact_label
-              - exact_synonym
-              - trigram_label
-              - trigram_synonym
-              - definition
-            term_source:
-              kind: ontology
-              ontology_family: zeco
-              ontology_term_type: ZECOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -5663,29 +5504,6 @@ object_definitions:
         metadata:
           editable: true
           curator_action_note: 'Curator override: typing an ID or name here marks this value as a curator override.'
-          term_helper:
-            field_path: condition_relations.conditions.condition_id.curie
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-              - resolve_domain_field_term
-              search_channels:
-              - exact_label
-              - exact_synonym
-              - trigram_label
-              - trigram_synonym
-              - definition
-            term_source:
-              kind: ontology
-              ontology_family: zeco
-              ontology_term_type: ZECOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml

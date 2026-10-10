@@ -55,7 +55,6 @@ _LAZY_EXPORTS = {
         ".agr_curation",
         "find_staged_gene_expression_observations",
     ),
-    "inspect_ontology_term": (".agr_curation", "inspect_ontology_term"),
     "list_staged_gene_expression_observations": (
         ".agr_curation",
         "list_staged_gene_expression_observations",
@@ -64,8 +63,6 @@ _LAZY_EXPORTS = {
         ".agr_curation",
         "patch_gene_expression_observation",
     ),
-    "resolve_domain_field_term": (".agr_curation", "resolve_domain_field_term"),
-    "search_domain_field_terms": (".agr_curation", "search_domain_field_terms"),
     "stage_gene_expression_observation": (
         ".agr_curation",
         "stage_gene_expression_observation",

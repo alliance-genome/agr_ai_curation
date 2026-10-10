@@ -409,21 +409,18 @@ def test_approved_abstention_rows_require_curator_review(
         assert result.curator_message == INSUFFICIENT_EVIDENCE_MESSAGE
 
 
-def test_policy_schema_rejects_a_permissive_or_misordered_decision(monkeypatch):
+def test_policy_schema_preserves_model_decision_without_recomputing_policy(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
     schema = schema_discovery.discover_agent_schemas(force_reload=True)[
         "RGDGOEvidencePolicyValidationResult"
     ]
 
-    with pytest.raises(ValidationError, match="policy_violations must exactly match"):
-        schema.model_validate(
-            _result_payload(
-                evidence_basis="physical_interaction",
-                proposed_evidence_code="IPI",
-                proposed_evidence_eco_curie="ECO:0000353",
-                policy_violations=[],
-            )
-        )
+    result = schema.model_validate(_result_payload(
+        evidence_basis="physical_interaction", proposed_evidence_code="IPI",
+        proposed_evidence_eco_curie="ECO:0000353", policy_violations=[]))
+    assert result.status == "resolved"
+    assert result.policy_violations == []
+
 
 
 @pytest.mark.parametrize(
@@ -437,7 +434,7 @@ def test_policy_schema_rejects_a_permissive_or_misordered_decision(monkeypatch):
         },
     ],
 )
-def test_candidate_bearing_abstentions_reject_missing_candidates(
+def test_abstention_can_preserve_uncertainty_without_inventing_candidates(
     overrides, monkeypatch
 ):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
@@ -445,8 +442,9 @@ def test_candidate_bearing_abstentions_reject_missing_candidates(
         "RGDGOEvidencePolicyValidationResult"
     ]
 
-    with pytest.raises(ValidationError, match="candidate"):
-        schema.model_validate(_result_payload(**overrides))
+    result = schema.model_validate(_result_payload(**overrides))
+    assert result.status == "unresolved"
+    assert result.candidates == []
 
 
 def test_imp_requires_perturbation_and_phenotype_in_rationale(monkeypatch):
@@ -509,7 +507,7 @@ def _selected_inputs_for_result(payload):
     ("insufficient", ["insufficient_primary_evidence"]),
     ("physical_interaction", ["evidence_code_mismatch", "eco_mapping_mismatch", "with_from_required"]),
 ])
-def test_compact_policy_assembles_request_facts_and_computes_consequences(monkeypatch, basis, expected):
+def test_compact_policy_assembles_facts_and_preserves_model_findings(monkeypatch, basis, expected):
     from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
     from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
 
@@ -524,9 +522,11 @@ def test_compact_policy_assembles_request_facts_and_computes_consequences(monkey
     contract = policy_decision_contract(request, schema)
     scientific = {name: original[name] for name in _SCIENTIFIC_FIELDS}
     scientific["evidence_basis"] = basis
+    scientific["policy_violations"] = expected
     decision = contract.decision_schema(
         request_id=request.request_id, status="unresolved" if expected else "resolved",
         explanation="Assessment of the supplied evidence.", scientific=scientific,
+        curator_message=INSUFFICIENT_EVIDENCE_MESSAGE if basis == "insufficient" else None,
     )
     result = ValidatorDecisionWorkspace([contract]).assemble(decision)
     assert result.policy_violations == expected
@@ -534,8 +534,11 @@ def test_compact_policy_assembles_request_facts_and_computes_consequences(monkey
     assert result.proposed_go_term_curie == original["proposed_go_term_curie"]
     assert result.proposed_rationale == original["proposed_rationale"]
     assert result.primary_evidence_record_ids == ["evidence-1"]
-    assert result.lookup_attempts[0].method == "approved_rgd_evidence_policy"
-    assert result.lookup_attempts[0].outcome == ("conflict" if expected else "success")
+    assert result.lookup_attempts == []
+    from src.lib.domain_packs.validator_dispatch import _validator_result_finalization_feedback
+    feedback = _validator_result_finalization_feedback(result, request=request)
+    assert feedback.accepted_result is not None
+    assert feedback.accepted_result.explanation == decision.explanation
     if basis == "insufficient":
         assert result.curator_message == INSUFFICIENT_EVIDENCE_MESSAGE
 
@@ -575,10 +578,8 @@ def test_compact_policy_reads_with_from_entries_and_an_unmatched_evidence_code(m
 
     result = ValidatorDecisionWorkspace([contract]).assemble(decision)
 
-    assert result.policy_violations == [
-        "evidence_code_mismatch", "eco_mapping_mismatch", "with_from_forbidden",
-        "evidence_code_unresolved", "with_from_unresolved",
-    ]
+    assert result.policy_violations == decision.scientific.policy_violations
+    assert result.status == "unresolved"
     assert result.proposed_evidence_code is None
     assert result.proposed_evidence_eco_curie is None
     assert [entry.model_dump(mode="json", exclude_unset=True) for entry in result.proposed_with_from] == [partner]
@@ -705,7 +706,7 @@ def test_typed_finalization_rejects_unsupplied_exact_evidence_location(monkeypat
     assert "primary_evidence_record_ids" in feedback.message
 
 
-def test_typed_finalization_requires_imp_facts_in_selected_exact_evidence(monkeypatch):
+def test_typed_finalization_preserves_llm_evidence_assessment(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
     schema = schema_discovery.discover_agent_schemas(force_reload=True)[
         "RGDGOEvidencePolicyValidationResult"
@@ -737,8 +738,8 @@ def test_typed_finalization_requires_imp_facts_in_selected_exact_evidence(monkey
         result_schema=schema,
     )
 
-    assert feedback.accepted_result is None
-    assert "insufficient_primary_evidence" in feedback.message
+    assert feedback.accepted_result is not None
+    assert feedback.accepted_result.status == "resolved"
 
 
 def test_typed_finalization_accepts_imp_facts_in_rationale_and_exact_evidence(
@@ -788,8 +789,8 @@ def test_typed_finalization_accepts_imp_facts_in_rationale_and_exact_evidence(
           "proposed_evidence_code_resolution_state": "unresolved"}, "evidence_code_unresolved"),
     ],
 )
-def test_compact_policy_never_passes_a_proposal_with_an_unresolved_value(monkeypatch, unresolved, violation):
-    """ALL-1302 review #1: an unresolved GO term (null CURIE) is valid input, and blocks submit_ready."""
+def test_compact_policy_preserves_model_abstention_for_unresolved_value(monkeypatch, unresolved, violation):
+    """ALL-1302 review #1: an unresolved GO term (null CURIE) is valid input; retain model abstention."""
 
     from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
     from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
@@ -811,7 +812,7 @@ def test_compact_policy_never_passes_a_proposal_with_an_unresolved_value(monkeyp
 
     result = ValidatorDecisionWorkspace([contract]).assemble(decision)
 
-    assert violation in result.policy_violations
+    assert result.policy_violations == decision.scientific.policy_violations
     assert (result.status, result.decision) == ("unresolved", "curator_review_required")
 
 
@@ -844,7 +845,7 @@ def test_policy_compares_the_matched_code_not_the_paper_wording(monkeypatch):
     assert result.policy_violations == []
 
 
-def test_policy_never_passes_a_proposal_with_an_unresolved_qualifier(monkeypatch):
+def test_policy_preserves_model_abstention_with_an_unresolved_qualifier(monkeypatch):
     """ALL-1302: a qualifier outside the GO relation vocabulary keeps the proposal in review."""
 
     from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
@@ -874,7 +875,7 @@ def test_policy_never_passes_a_proposal_with_an_unresolved_qualifier(monkeypatch
 
     result = ValidatorDecisionWorkspace([contract]).assemble(decision)
 
-    assert result.policy_violations == ["qualifier_unresolved"]
+    assert result.policy_violations == decision.scientific.policy_violations
     assert (result.status, result.decision) == ("unresolved", "curator_review_required")
 
 
@@ -940,3 +941,27 @@ def test_a_dumped_and_revalidated_policy_result_still_copies_its_entries(monkeyp
     )
 
     assert feedback.accepted_result is not None, feedback.message
+
+
+@pytest.mark.parametrize("status", ["resolved", "unresolved"])
+def test_llm_judgment_is_not_vetoed_by_imp_phrase_matching(monkeypatch, status):
+    from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
+    from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)["RGDGOEvidencePolicyValidationResult"]
+    original = _result_payload(evidence_basis="mutant_phenotype", proposed_evidence_code="IMP",
+        proposed_evidence_eco_curie="ECO:0000315",
+        imp_perturbation="LBP-/- under HFD (compared to WT controls)",
+        imp_phenotype="a phenotype described in different words")
+    request = DomainValidationRequest(request_id=original["request_id"],
+        validator_binding_id=original["validator_binding_id"], validator_agent=original["validator_agent"],
+        target=original["target"], selected_inputs=_selected_inputs_for_result(original))
+    contract = policy_decision_contract(request, schema)
+    decision = contract.decision_schema(request_id=request.request_id, status=status,
+        explanation="Model assessment, including uncertainty.",
+        curator_message="Review the interpretation." if status == "unresolved" else None,
+        scientific={name: original[name] for name in _SCIENTIFIC_FIELDS})
+    result = ValidatorDecisionWorkspace([contract]).assemble(decision)
+    assert result.status == status
+    assert result.explanation == decision.explanation
+    assert result.curator_message == decision.curator_message

@@ -14,7 +14,6 @@ from .conversion import (
     GeneBuilderExtractionOutput,
     GeneMaterializationResult,
     materialize_gene_builder_state,
-    normalize_gene_extraction_payload,
     validate_gene_builder_objects,
 )
 from .export import (
@@ -40,6 +39,5 @@ __all__ = [
     "build_gene_mention_evidence_export",
     "build_gene_mention_evidence_submission_plan",
     "materialize_gene_builder_state",
-    "normalize_gene_extraction_payload",
     "validate_gene_builder_objects",
 ]

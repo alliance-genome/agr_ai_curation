@@ -65,9 +65,6 @@ from src.lib.domain_packs.validator_result_classification import (
     lookup_status_for_validator_outcome,
     validator_failure_classification,
 )
-from src.lib.domain_packs.validator_result_policies import (
-    allowed_term_policy_violations,
-)
 from src.lib.domain_packs.resolvable_values import (
     CURATOR_OVERRIDE_KEY,
     DECISIVE_OUTCOMES,
@@ -658,6 +655,8 @@ class _CuratorOverrides:
         did not resolve is overridden or absent.
         """
 
+        if not result.is_complete:
+            return self.covers_every_write
         return self.settles_decisions(
             {key: resolution.status for key, resolution in result.field_resolutions.items()}
         )
@@ -828,11 +827,11 @@ def _curator_override_disagreements(
             ),
             None,
         )
-        if resolution is not None:
+        if resolution is not None and result.is_complete:
             status, resolved_values, outcome = (
                 resolution.status, resolution.resolved_values, resolution.lookup_outcome,
             )
-        elif result.status == "resolved":
+        elif result.is_resolved:
             status, resolved_values, outcome = "resolved", result.resolved_values, OUTCOME_MATCHED
         else:
             status, resolved_values = "unresolved", {}
@@ -908,7 +907,7 @@ def _patch_target_object_from_resolved_values(
         else {}
     )
 
-    if result.field_resolutions:
+    if result.field_resolutions and result.is_complete:
         # A composite validator decides each value itself (ALL-1299).
         if target is None or object_definition is None:
             return envelope, None
@@ -922,7 +921,7 @@ def _patch_target_object_from_resolved_values(
             resolvable_fields=resolvable_fields,
         )
 
-    if result.status != "resolved":
+    if not result.is_resolved:
         if target is None or object_definition is None:
             return envelope, None
         outcome = lookup_outcome_for_failure(
@@ -951,16 +950,6 @@ def _patch_target_object_from_resolved_values(
                 resolvable_fields=resolvable_fields,
             ),
             None,
-        )
-    policy_violations = allowed_term_policy_violations(result, request=item.request)
-    if policy_violations:
-        if target is not None and object_definition is not None:
-            envelope = _with_unresolved_values(
-                envelope, item, target, declared_fields, OUTCOME_INVALID_SCHEMA,
-                resolvable_fields=resolvable_fields,
-            )
-        return envelope, "; ".join(
-            violation.message for violation in policy_violations
         )
     if target is None or object_definition is None:
         return envelope, None
@@ -1162,7 +1151,6 @@ def _patch_target_object_from_field_resolutions(
         return envelope, problem
 
     written: list[str] = []
-    policy_problems: list[str] = []
     for key, (container_path, fields) in targets.items():
         resolution = result.field_resolutions[key]
         container = _payload_container(payload, container_path)
@@ -1173,18 +1161,7 @@ def _patch_target_object_from_field_resolutions(
             materialized_field_path: resolution.resolved_values.get(result_field)
             for result_field, materialized_field_path in fields
         }
-        violated = False
-        if resolution.status == "resolved":
-            # Each decision obeys the request's allowed-term list, like a whole result.
-            violations = allowed_term_policy_violations(
-                result.model_copy(
-                    update={"status": "resolved", "resolved_values": dict(resolution.resolved_values)}
-                ),
-                request=item.request,
-            )
-            policy_problems.extend(violation.message for violation in violations)
-            violated = bool(violations)
-        if resolution.status == "resolved" and not violated and not any(
+        if resolution.status == "resolved" and not any(
             missing_resolved_value(value) for value in values.values()
         ):
             mark_resolved(
@@ -1207,9 +1184,7 @@ def _patch_target_object_from_field_resolutions(
         mark_unresolved(
             container,
             (
-                OUTCOME_INVALID_SCHEMA
-                if violated
-                else resolution.lookup_outcome
+                resolution.lookup_outcome
                 if resolution.status == "unresolved"
                 else OUTCOME_MISSING_EXPECTED_RESULT_FIELD
             ),
@@ -1227,11 +1202,7 @@ def _patch_target_object_from_field_resolutions(
                 resolvable_fields=resolvable_fields,
             )
 
-    overall_violations = (
-        allowed_term_policy_violations(result, request=item.request) if result.status == "resolved" else []
-    )
-    policy_problems.extend(violation.message for violation in overall_violations)
-    if result.status == "resolved" and not overall_violations:
+    if result.is_resolved:
         for result_field, raw_field_path in item.request.expected_result_fields.items():
             materialized_field_path = _materialized_field_path(
                 raw_field_path,
@@ -1270,8 +1241,7 @@ def _patch_target_object_from_field_resolutions(
         materialized_field_paths=written,
         source_envelope_revision=source_envelope_revision,
     )
-    # The other decisions are written; an allowed-term violation is reported.
-    return patched, ("; ".join(dict.fromkeys(policy_problems)) if policy_problems else None)
+    return patched, None
 
 
 def _field_resolution_for(
@@ -1689,7 +1659,7 @@ def _referenced_decision(
         for field in declared
         if field.metadata.get("validation_result_field")
     }
-    if result.status != "resolved":
+    if not result.is_resolved:
         outcome = lookup_outcome_for_failure(
             validator_failure_classification(result, error_type=DomainEnvelopeMaterializationError)
         )
@@ -2056,7 +2026,7 @@ def _materialized_objects_for_result(
     source_envelope_revision: int | None,
 ) -> tuple[list[CuratableObjectEnvelope], str | None]:
     result = item.result
-    if result.status != "resolved":
+    if not result.is_resolved:
         return [], None
     resolved_objects = [
         raw_object
@@ -2565,7 +2535,7 @@ def _finding_for_validator_result(
     source_envelope_revision: int | None,
 ) -> ValidationFinding:
     result = item.result
-    resolved = result.status == "resolved"
+    resolved = result.is_resolved
     # A validator that could not RUN its lookup (e.g. a flaky validator tool call) records a
     # lookup attempt with outcome "error". That is distinct from a validator that ran and found
     # no match ("unresolved"): surface it as a separate, more prominent validator_error finding so
@@ -2584,7 +2554,12 @@ def _finding_for_validator_result(
             error_type=DomainEnvelopeMaterializationError,
         )
 
-    if resolved:
+    if not result.is_complete:
+        severity = ValidationFindingSeverity.BLOCKER if item.match.binding.blocking else ValidationFindingSeverity.WARNING
+        finding_status = ValidationFindingStatus.OPEN
+        code = "domain_pack.validator_output_incomplete"
+        outcome_label = "returned incomplete output for"
+    elif resolved:
         severity = ValidationFindingSeverity.INFO
         finding_status = ValidationFindingStatus.RESOLVED
         code = "domain_pack.validator_resolved"
@@ -2613,7 +2588,8 @@ def _finding_for_validator_result(
         status=finding_status,
         code=code,
         message=(
-            result.curator_message
+            ("Validator output is incomplete: " + "; ".join(result.output_issues))
+            if not result.is_complete else result.curator_message
             or result.explanation
             or (
                 f"Validator binding '{item.request.validator_binding_id}' "
@@ -2713,7 +2689,7 @@ def _field_findings_for_expected_result_fields(
                 )
         if not mapped_result_field:
             unmapped_fields.append((result_field, raw_field_path))
-    if unmapped_fields and item.result.status == "resolved":
+    if unmapped_fields and item.result.is_resolved:
         findings.append(
             _finding_for_unmapped_expected_result_fields(
                 item,
@@ -2812,7 +2788,7 @@ def _field_finding_for_expected_result_field(
     result = item.result
     resolved_value = result.resolved_values.get(result_field)
     result_field_missing = result_field in result.missing_expected_fields
-    if field_resolution is not None:
+    if field_resolution is not None and result.is_complete:
         # A composite validator's own decision for this value (ALL-1299).
         resolved_value = field_resolution.resolved_values.get(result_field)
         resolved = field_resolution.status == "resolved" and not missing_resolved_value(
@@ -2838,7 +2814,7 @@ def _field_finding_for_expected_result_field(
             or validator_finding.message
         )
         extra_details = {} if resolved else {"failure_classification": outcome}
-    elif result.status == "resolved" and not (
+    elif result.is_resolved and not (
         result_field_missing or missing_resolved_value(resolved_value)
     ):
         severity = ValidationFindingSeverity.INFO
@@ -2846,7 +2822,7 @@ def _field_finding_for_expected_result_field(
         code = validator_finding.code
         message = validator_finding.message
         extra_details: dict[str, Any] = {}
-    elif result.status == "resolved":
+    elif result.is_resolved:
         severity = (
             ValidationFindingSeverity.BLOCKER
             if item.match.binding.blocking
@@ -3056,6 +3032,8 @@ def _validation_result_finding_payload(
     result: DomainValidatorResultBase,
 ) -> dict[str, Any]:
     payload = result.model_dump(mode="json", exclude_none=True)
+    if not result.is_complete:
+        return result.model_dump(mode="json")
     compact: dict[str, Any] = {
         key: payload[key]
         for key in (
@@ -3080,7 +3058,7 @@ def _validation_result_finding_payload(
         ]
         if len(resolved_objects) > _VALIDATION_DETAIL_LIST_LIMIT:
             compact["resolved_object_count"] = len(resolved_objects)
-    if result.field_resolutions:
+    if result.field_resolutions and result.is_complete:
         # Each composite decision's status, which a later curator override settles against.
         compact["field_resolution_statuses"] = {
             key: resolution.status for key, resolution in result.field_resolutions.items()

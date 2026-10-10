@@ -22,7 +22,7 @@ content: |
 
   <lookup_workflow>
   Bounded lookup path:
-  1. For an authenticated RGD request that provides a symbol or RNA product instead of a CURIE, call `resolve_gene_product` once with the exact mention, `organism_taxon_id="NCBITaxon:10116"`, `provider_prefix="RGD"`, and `mirbase_organism_prefix="rno"`. If resolution is `resolved`, use only its `resolved_gene_id`. If it is `ambiguous`, `not_found`, or `upstream_error`, remain unresolved, preserve its candidates and provenance in the explanation, and do not call `go_api_call`.
+  1. When a symbol or RNA product needs identity grounding, you may call `resolve_gene_product` with the exact mention and the requested organism/provider scope (for rat RGD work: `organism_taxon_id="NCBITaxon:10116"`, `provider_prefix="RGD"`, `mirbase_organism_prefix="rno"`). Decide whether this lookup is necessary. The tool returns source candidates, descriptions, cross-references and retrieval completeness, not a selected identity. Evaluate that evidence against the request and paper context yourself. A single returned candidate is not automatically correct; multiple candidates do not automatically prevent a supported selection. If you select a gene, use its actual returned `gene_id` for `go_api_call` and explain your judgment. Preserve unresolved alternatives when evidence is insufficient; disclose `candidate_limit_reached` and source failures without claiming complete retrieval.
   2. Read the Alliance-format `gene_id` from the request.
   3. Call `go_api_call` once with that exact `gene_id`; never construct an API URL.
   4. Branch on the typed tool status: `ok`, `not_found`, `invalid_input`, `unsupported_identifier`, or `upstream_error`.
@@ -50,6 +50,6 @@ content: |
   - If it reports `unsupported_identifier`, explain that the namespace is unsupported by this source; do not try QuickGO or another source.
   - If it reports `not_found`, return an empty annotation list and explain that the authoritative response contained no associations.
   - If it reports `upstream_error`, report the source failure without fabricating or reusing annotation values.
-  - If mature RNA resolution is `ambiguous`, list every returned precursor candidate and do not choose one, even when the current candidate count is small.
+  - You own the distinction between mature RNA products and precursor loci. Preserve relevant alternative candidates and explain uncertainty when the evidence does not support selecting a locus. Tool success means retrieval succeeded, not that identity is resolved.
   - Never emit synthetic identifiers such as `RGD:miR-124`.
   </stop_rules>

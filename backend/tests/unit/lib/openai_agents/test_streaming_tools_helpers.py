@@ -751,8 +751,9 @@ def _lookup_tool_call(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("profile_mapped", [False, True])
+@pytest.mark.parametrize("lookup_outcome", ["success", "ambiguous"])
 async def test_compact_streaming_finalization_copies_provider_facts_and_counts(
-    monkeypatch, _repo_package_curation_registry, profile_mapped,
+    monkeypatch, _repo_package_curation_registry, profile_mapped, lookup_outcome,
 ):
     from agents import function_tool
     from agents.tool_context import ToolContext
@@ -764,7 +765,7 @@ async def test_compact_streaming_finalization_copies_provider_facts_and_counts(
         validator_agent={"package_id": "agr.alliance", "agent_id": "allele_validation"},
         target={"domain_pack_id": "test"}, selected_inputs={"symbol": "Example"},
         expected_result_fields={"curie": "allele.curie"})
-    source = {"status": "ok", "data": {"items": [{"input": "Example", "results": [
+    source = {"status": "ok", "lookup_status": lookup_outcome, "data": {"items": [{"input": "Example", "results": [
         {"curie": f"MGI:{i}", "symbol": "Example", "data_provider": None} for i in range(26)
     ]}]}}
 
@@ -797,16 +798,77 @@ async def test_compact_streaming_finalization_copies_provider_facts_and_counts(
         "candidates": [{"record_ref": ref, "disposition": "selected", "explanation": "Scientific match."}],
         "slots": {"curie": {"kind": "record", "record_ref": ref, "field": "curie"}}}
     finalizer = agent.tools[-1]
+    incomplete = {**decision, "slots": {}}
+    rejected = await finalizer.on_invoke_tool(ToolContext(context=None, tool_name=finalizer.name,
+        tool_call_id="incomplete", tool_arguments=json.dumps({"result": incomplete})),
+        json.dumps({"result": incomplete}))
+    assert rejected["status"] == "rejected"
+    assert state.accepted_payload is None
+    assert state.incomplete_payload["status"] == "resolved"
+    assert state.incomplete_payload["explanation"] == decision["explanation"]
+    assert state.incomplete_payload["candidates"][0]["value"] == "MGI:0"
+    assert state.incomplete_payload["output_issues"]
+    recorded = []
+    workspace = SimpleNamespace(finalization=None, record_validation_failure=lambda **kwargs: recorded.append(kwargs))
+    with pytest.raises(streaming_tools.SpecialistOutputError) as terminal:
+        streaming_tools._raise_missing_structured_specialist_finalization(
+            state=state, specialist_name="Allele validator", builder_workspace=workspace,
+            tool_name=finalizer.name, candidate_id="candidate-1",
+        )
+    assert terminal.value.details[0]["incomplete_validator_result"] == state.incomplete_payload
+    assert recorded[0]["errors"][0]["incomplete_validator_result"] == state.incomplete_payload
     finalized = await finalizer.on_invoke_tool(ToolContext(context=None, tool_name=finalizer.name,
         tool_call_id="finalize", tool_arguments=json.dumps({"result": decision})), json.dumps({"result": decision}))
     assert finalized["status"] == "accepted", finalized
     assert state.accepted_payload["resolved_values"] == {"curie": "MGI:0"}
     assert state.accepted_payload["lookup_attempts"][0]["result_count"] == 26
+    assert state.accepted_payload["lookup_attempts"][0]["outcome"] == lookup_outcome
     assert state.accepted_payload["allele_candidates"][0]["data_provider"] is None
     assert state.accepted_payload["candidates"][0]["details"]["scientific_assessment"]["explanation"] == "Scientific match."
     if profile_mapped:
         assert state.accepted_payload["resolved_objects"] == []
     assert "validator_result" not in finalized
+
+
+@pytest.mark.asyncio
+async def test_compact_streaming_accepts_unresolved_judgment_without_lookup(_repo_package_curation_registry):
+    from agents.tool_context import ToolContext
+    from src.lib.domain_packs.compact_runtime import runtime_for_schema
+    from src.schemas.domain_validator import DomainValidationRequest
+
+    schema = _package_schema("GeneResultEnvelope")
+    request = DomainValidationRequest(request_id="no-lookup", validator_binding_id="gene",
+        validator_agent={"package_id": "agr.alliance", "agent_id": "gene_validation"},
+        target={"domain_pack_id": "test"}, expected_result_fields={"identifier": "gene.id"})
+    runtime = runtime_for_schema([request], result_schema=schema)
+    state = streaming_tools._StructuredSpecialistFinalizationState(required=True,
+        tool_name="finalize_gene_validation_result", output_type_name="GeneResultEnvelope",
+        agent_name="Gene", config=_finalization_config("ask_gene_validation_specialist"))
+    frozen_instructions = (
+        "Keep the curator's matching criteria.\n"
+        "You must call at least one of agr_curation_query before final output."
+    )
+    source_agent = SimpleNamespace(name="Saved gene", instructions=frozen_instructions,
+        tools=[], output_type=schema)
+    configured = streaming_tools._configure_structured_specialist_finalization(
+        copy.copy(source_agent), source_agent, expected_output_type=schema,
+        finalization_state=state, tool_calls=[], live_evidence_records=[], compact_runtime=runtime)
+    assert source_agent.instructions == frozen_instructions
+    assert configured.instructions.startswith(frozen_instructions)
+    assert "supersedes earlier blanket requirements" in configured.instructions[len(frozen_instructions):]
+    assert "Preserve the curator's scientific criteria" in configured.instructions
+    finalizer = next(tool for tool in configured.tools if tool.name == state.tool_name)
+    decision = {"request_id": request.request_id, "status": "unresolved",
+                "explanation": "The supplied evidence does not identify a gene.", "slots": {}, "candidates": []}
+    args = json.dumps({"result": decision})
+    response = await finalizer.on_invoke_tool(ToolContext(context=None, tool_name=finalizer.name,
+        tool_call_id="no-lookup-finalize", tool_arguments=args), args)
+    assert response["status"] == "accepted", response
+    assert state.accepted_payload["status"] == "unresolved"
+    assert state.accepted_payload["explanation"] == decision["explanation"]
+    assert state.accepted_payload["lookup_attempts"] == []
+    agent = SimpleNamespace(tools=[SimpleNamespace(name="agr_curation_query")])
+    assert streaming_tools._required_tool_failure_message(agent=agent, specialist_name="Gene", tool_calls=[]) is None
 
 
 @pytest.mark.parametrize("change", [
@@ -2991,9 +3053,15 @@ def test_extract_tool_name_prefers_name_then_tool_name():
     assert streaming_tools._extract_tool_name(SimpleNamespace()) == ""
 
 
-def test_required_tool_names_for_agent_returns_agr_when_only_agr_tool_present():
+def test_curation_tool_availability_does_not_require_calling_it(_repo_package_curation_registry):
+    from src.lib.agent_studio.catalog_service import _required_package_tool_call_specs
+
     agent = SimpleNamespace(tools=[SimpleNamespace(name="agr_curation_query")])
-    assert streaming_tools._required_tool_names_for_agent(agent) == {"agr_curation_query"}
+    assert streaming_tools._required_tool_names_for_agent(agent) is None
+    assert _required_package_tool_call_specs(["agr_curation_query"]) == []
+    assert streaming_tools._required_tool_failure_message(
+        agent=agent, specialist_name="Gene validator", tool_calls=[],
+    ) is None
 
 
 def test_agent_tool_names_normalizes_known_tools():

@@ -583,7 +583,7 @@ def test_one_disagreement_per_value_ignoring_empty_slots_with_the_validator_word
     item = SimpleNamespace(
         request=SimpleNamespace(expected_result_fields={
             "curie": "attributes.gene.gene_id", "symbol": "attributes.gene.symbol", "taxon": "attributes.gene.taxon"}),
-        result=SimpleNamespace(status="resolved", resolved_values={"curie": "EX:1", "symbol": "daf-16", "taxon": ""},
+        result=SimpleNamespace(status="resolved", is_resolved=True, resolved_values={"curie": "EX:1", "symbol": "daf-16", "taxon": ""},
                                validator_binding_id="lookup", request_id="request-1",
                                explanation="Exact symbol match.", curator_message="Check the symbol."),
     )

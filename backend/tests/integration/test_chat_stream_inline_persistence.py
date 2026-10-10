@@ -24,7 +24,11 @@ Design Part 6 integration scenarios covered:
 
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
 
 from sqlalchemy import select
 
@@ -92,6 +96,10 @@ def _configure_stream_mocks(
         check_cancel_signal or _default_check_cancel_signal,
     )
     patch_chat_impl(monkeypatch, chat_modules, "run_agent_streamed", run_agent_streamed)
+    async def get_document_metadata(_user_id, _document_id):
+        return {"document": document_state_payload}
+    patch_chat_impl(monkeypatch, chat_modules, "get_document", get_document_metadata)
+
 
 
 def _canonical_gene_envelope(*, object_count: int = 1) -> dict:
@@ -127,7 +135,7 @@ def _canonical_gene_envelope(*, object_count: int = 1) -> dict:
     }
 
 
-def _persist_inline_row(*, document_id: str, session_id: str, trace_id: str):
+def _persist_inline_row(*, document_id: str, session_id: str, trace_id: str, user_id: str):
     """Simulate the specialist runtime's inline durable write for this turn."""
 
     return persist_inline_validated_extraction_result(
@@ -139,7 +147,7 @@ def _persist_inline_row(*, document_id: str, session_id: str, trace_id: str):
         source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id=session_id,
         trace_id=trace_id,
-        user_id="user-inline-chat",
+        user_id=user_id,
         builder_finalization={
             "builder_run_id": trace_id,
             "builder_invocation_id": "builder-invocation-inline-chat",
@@ -169,18 +177,20 @@ def _internal_extraction_result_event(persisted_ref, trace_id: str) -> dict:
     }
 
 
+@pytest.mark.parametrize("summary_failed", [False, True])
 def test_stream_completion_links_inline_row_without_duplicate(
-    client, monkeypatch, test_db, evidence_integration_context
+    client, monkeypatch, test_db, evidence_integration_context, summary_failed
 ):
     """Scenario 4 (streaming): completion links the inline row, no duplicate."""
 
-    session_id = "inline-stream-link-session"
+    session_id = f"inline-stream-link-session-{uuid4()}"
     turn_id = "inline-stream-link-turn"
     trace_id = "trace-inline-stream-link"
     document_id = evidence_integration_context["document_id"]
 
     persisted_ref = _persist_inline_row(
-        document_id=document_id, session_id=session_id, trace_id=trace_id
+        document_id=document_id, session_id=session_id, trace_id=trace_id,
+        user_id=evidence_integration_context["current_user_auth_sub"],
     )
 
     async def _run_agent_streamed(**_kwargs):
@@ -190,10 +200,10 @@ def test_stream_completion_links_inline_row_without_duplicate(
             "type": "TEXT_MESSAGE_CONTENT",
             "data": {"content": "Found 2 gene mentions.", "trace_id": trace_id},
         }
-        yield {
-            "type": "RUN_FINISHED",
-            "data": {"response": "Found 2 gene mentions.", "trace_id": trace_id},
-        }
+        if summary_failed:
+            yield {"type": "RUN_ERROR", "data": {"message": "Provider overloaded", "error_type": "ResponsesWebSocketError"}}
+        else:
+            yield {"type": "RUN_FINISHED", "data": {"response": "Found 2 gene mentions.", "trace_id": trace_id}}
 
     _configure_stream_mocks(
         monkeypatch,
@@ -210,7 +220,7 @@ def test_stream_completion_links_inline_row_without_duplicate(
         events = collect_sse_events(stream_response)
         assert stream_response.status_code == 200
 
-    assert events[-1]["type"] == "turn_completed"
+    assert events[-1]["type"] == ("turn_failed" if summary_failed else "turn_completed")
 
     test_db.expire_all()
     rows = test_db.scalars(
@@ -221,6 +231,7 @@ def test_stream_completion_links_inline_row_without_duplicate(
     # Exactly the one inline row -- the completion path did not first-insert.
     assert len(rows) == 1
     row = rows[0]
+    original_payload = deepcopy(row.payload_json)
     assert str(row.id) == persisted_ref.extraction_result_id
     # The completion path link-updated final-turn metadata onto the existing row.
     final_turn = row.extraction_metadata.get("final_chat_turn")
@@ -229,18 +240,63 @@ def test_stream_completion_links_inline_row_without_duplicate(
     assert final_turn["turn_id"] == turn_id
 
 
+    if summary_failed:
+        # Reload history, then retry the same turn: the runner must not execute again.
+        history = client.get(f"/api/chat/history/{session_id}")
+        assert history.status_code == 200, history.text
+        assistant = next(message for message in history.json()["messages"] if message["role"] == "assistant")
+        assert assistant["payload_json"]["terminal_state"] == "turn_failed"
+        async def unexpected_runner(**kwargs):
+            raise AssertionError("Failed turn replay must not repeat extraction")
+            yield
+        _configure_stream_mocks(monkeypatch, run_agent_streamed=unexpected_runner,
+                                document_state_payload={"id": document_id, "filename": "paper.pdf"},
+                                tool_agent_map={"ask_gene_specialist": "gene"})
+        with client.stream("POST", "/api/chat/stream", json={
+            "message": "list genes", "session_id": session_id, "turn_id": turn_id,
+        }) as replay:
+            replay_events = collect_sse_events(replay)
+        assert replay_events[-1]["type"] == "turn_failed"
+        test_db.expire_all()
+        assert len(test_db.scalars(select(ExtractionResultModel).where(
+            ExtractionResultModel.origin_session_id == session_id)).all()) == 1
+        availability = client.get(f"/api/curation-workspace/documents/{document_id}/bootstrap-availability",
+                                  params={"origin_session_id": session_id, "adapter_key": "gene"})
+        assert availability.status_code == 200, availability.text
+        assert availability.json()["eligible"] is True
+        opened = client.post(f"/api/curation-workspace/documents/{document_id}/bootstrap",
+                             json={"origin_session_id": session_id, "adapter_key": "gene"})
+        assert opened.status_code == 200, opened.text
+        review = opened.json()["session"]
+        review_id = review["session_id"]
+        reloaded = client.get(f"/api/curation-workspace/sessions/{review_id}")
+        assert reloaded.status_code == 200, reloaded.text
+        assert reloaded.json()["session_id"] == review_id
+        test_db.expire_all()
+        persisted_rows = test_db.scalars(select(ExtractionResultModel).where(
+            ExtractionResultModel.origin_session_id == session_id)).all()
+        # Bootstrap creates its normal curation-prep record, not a second extraction.
+        source_rows = [record for record in persisted_rows if record.agent_key == "gene"]
+        assert len(source_rows) == 1
+        assert str(source_rows[0].id) == persisted_ref.extraction_result_id
+        assert source_rows[0].payload_json == original_payload
+        assert [record.agent_key for record in persisted_rows if record.agent_key != "gene"] == ["curation_prep"]
+
+
+
 def test_non_stream_completion_links_inline_row_without_duplicate(
     client, monkeypatch, test_db, evidence_integration_context
 ):
     """Scenario 2 (non-streaming parity): same link-only behavior, no duplicate."""
 
-    session_id = "inline-nonstream-link-session"
+    session_id = f"inline-nonstream-link-session-{uuid4()}"
     turn_id = "inline-nonstream-link-turn"
     trace_id = "trace-inline-nonstream-link"
     document_id = evidence_integration_context["document_id"]
 
     persisted_ref = _persist_inline_row(
-        document_id=document_id, session_id=session_id, trace_id=trace_id
+        document_id=document_id, session_id=session_id, trace_id=trace_id,
+        user_id=evidence_integration_context["current_user_auth_sub"],
     )
 
     async def _run_agent_streamed(**_kwargs):
@@ -290,13 +346,14 @@ def test_cancel_after_inline_persistence_leaves_inspectable_row(
     queryable/inspectable, which is the whole point of moving persistence inline.
     """
 
-    session_id = "inline-cancel-session"
+    session_id = f"inline-cancel-session-{uuid4()}"
     turn_id = "inline-cancel-turn"
     trace_id = "trace-inline-cancel"
     document_id = evidence_integration_context["document_id"]
 
     persisted_ref = _persist_inline_row(
-        document_id=document_id, session_id=session_id, trace_id=trace_id
+        document_id=document_id, session_id=session_id, trace_id=trace_id,
+        user_id=evidence_integration_context["current_user_auth_sub"],
     )
 
     check_calls = {"count": 0}

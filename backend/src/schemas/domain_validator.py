@@ -281,6 +281,19 @@ class DomainValidatorResultBase(DomainValidatorBaseModel):
         ),
     )
 
+    output_issues: list[StrictStr] = Field(
+        default_factory=list,
+        description="Structural output problems; separate from the validator scientific judgment",
+    )
+
+    @property
+    def is_complete(self) -> bool:
+        return not self.output_issues
+
+    @property
+    def is_resolved(self) -> bool:
+        return self.status == "resolved" and self.is_complete
+
     @field_validator("status", mode="before")
     @classmethod
     def _reject_metadata_only_statuses(cls, value: object) -> object:

@@ -822,11 +822,6 @@
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
     "required_context": [],
-    "required_tool_call": {
-      "enforce": true,
-      "failure_message": "did not call required database lookup tools before answering",
-      "guardrail_message": "You must query the package-declared curation lookup tool before answering. Use agr_curation_query first."
-    },
     "source_file": "python/src/agr_ai_curation_alliance/tools/agr_curation.py"
   },
   "agr_literature_reference_lookup": {
@@ -3102,96 +3097,6 @@
     "runtime_bound": true,
     "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
   },
-  "inspect_ontology_term": {
-    "agent_methods": null,
-    "audit": {
-      "display_name": "Inspect Ontology Term"
-    },
-    "binding_kind": "static",
-    "category": "Database",
-    "description": "Look at one ontology term in detail, plus a limited view of its neighbors in the term tree (broader terms above it, narrower terms below it, or terms beside it).",
-    "documentation": {
-      "parameters": [
-        {
-          "description": "Which curation area this field belongs to.",
-          "name": "domain_pack_id",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "The kind of record this field is part of.",
-          "name": "object_type",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "The field whose rules apply to this term.",
-          "name": "field_path",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "The ID of the ontology term to look at.",
-          "name": "curie",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "The paper's own wording for this value, exactly as it will be recorded.",
-          "name": "source_phrase",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "The Alliance group to scope species-specific anatomy context to.",
-          "name": "data_provider",
-          "required": false,
-          "type": "string"
-        },
-        {
-          "description": "Also show the broader terms above this one.",
-          "name": "include_parents",
-          "required": false,
-          "type": "boolean"
-        },
-        {
-          "description": "Also show the narrower terms below this one.",
-          "name": "include_children",
-          "required": false,
-          "type": "boolean"
-        },
-        {
-          "description": "Also show neighboring terms at the same level.",
-          "name": "include_siblings",
-          "required": false,
-          "type": "boolean"
-        },
-        {
-          "description": "How many levels up or down the term tree to walk.",
-          "name": "max_depth",
-          "required": false,
-          "type": "integer"
-        },
-        {
-          "description": "The most neighboring terms to return for each relationship.",
-          "name": "limit",
-          "required": false,
-          "type": "integer"
-        }
-      ],
-      "summary": "Shows one ontology term and a small, bounded set of nearby terms so the agent can walk the term tree and compare candidates. It is for exploring and comparing; the official term choice is settled separately with Resolve Domain Field Term."
-    },
-    "identity_lookup": true,
-    "methods": null,
-    "name": "Inspect Ontology Term",
-    "package_backed": true,
-    "package_display_name": "Alliance Defaults",
-    "package_export_name": "default",
-    "package_id": "agr.alliance",
-    "package_version": "1.0.0",
-    "required_context": [],
-    "source_file": "python/src/agr_ai_curation_alliance/tools/agr_curation.py"
-  },
   "inspect_output_artifacts": {
     "agent_methods": null,
     "binding_kind": "runtime_context_factory",
@@ -4444,97 +4349,12 @@
     ],
     "source_file": "python/src/agr_ai_curation_alliance/tools/documents.py"
   },
-  "resolve_domain_field_term": {
-    "agent_methods": null,
-    "audit": {
-      "display_name": "Resolve Domain Field Term"
-    },
-    "binding_kind": "static",
-    "builder_run_state": true,
-    "category": "Database",
-    "description": "Settle the official standard term for one field and return a confirmed value with its supporting trail, ready to use.",
-    "documentation": {
-      "parameters": [
-        {
-          "description": "Which curation area this field belongs to.",
-          "name": "domain_pack_id",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "The kind of record this field is part of.",
-          "name": "object_type",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "Which field is being settled.",
-          "name": "field_path",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "The phrase from the paper that this term is being matched to.",
-          "name": "source_phrase",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "Optional supporting context \u2014 quote, page, section, provider, or species.",
-          "name": "evidence_context",
-          "required": false,
-          "type": "object"
-        },
-        {
-          "description": "The ID of the candidate term picked from the search or inspect results.",
-          "name": "candidate_curie",
-          "required": false,
-          "type": "string"
-        },
-        {
-          "description": "A candidate value that is a name rather than an ID, picked from the search results (for example a controlled-list term name).",
-          "name": "candidate_value",
-          "required": false,
-          "type": "string"
-        },
-        {
-          "description": "The Alliance group to scope the lookup to.",
-          "name": "data_provider",
-          "required": false,
-          "type": "string"
-        },
-        {
-          "description": "The species context, kept for the record.",
-          "name": "taxon",
-          "required": false,
-          "type": "string"
-        },
-        {
-          "description": "The most candidates to check while confirming.",
-          "name": "limit",
-          "required": false,
-          "type": "integer"
-        }
-      ],
-      "summary": "Confirms the one official standard term for a field, after the agent has explored candidates with the search and inspect tools. Its result is the trusted choice the agent can record, with a clear trail of how the term was decided."
-    },
-    "identity_lookup": true,
-    "methods": null,
-    "name": "Resolve Domain Field Term",
-    "package_backed": true,
-    "package_display_name": "Alliance Defaults",
-    "package_export_name": "default",
-    "package_id": "agr.alliance",
-    "package_version": "1.0.0",
-    "required_context": [],
-    "source_file": "python/src/agr_ai_curation_alliance/tools/agr_curation.py"
-  },
   "resolve_gene_product": {
     "agent_methods": null,
     "agent_studio": {
       "diagnostic": {
         "category": "database",
-        "description": "Resolve organism-scoped gene-product identity through a fixed hierarchy:\n1. Exact current gene/locus identity in the read-only Alliance curation database.\n2. Exact species-specific mature RNA identity in RNAcentral.\n3. Active miRBase mature accession from the RNAcentral cross-reference.\n4. Every current Alliance gene/locus carrying the mature RNAcentral cross-reference.\n\nStatus is one of: resolved, ambiguous, not_found, or upstream_error.\nThe resolver never selects one candidate from an ambiguous mapping.\ncandidate_limit_reached explicitly reports when the configured result\nbound omitted additional candidates from the returned list.\nOnly validated Alliance gene CURIEs accepted by go_api_call appear as\nresolved_gene_id or candidate_mappings[].gene_id.",
+        "description": "Retrieve organism-scoped candidates from the Alliance curation database;\nwhen the exact query has no candidates, search RNAcentral and retrieve\nmiRBase cross-references and associated Alliance gene records.\nStatus describes retrieval: success, not_found, invalid_input, upstream_error.\nSuccess never means identity was resolved. The calling LLM evaluates\ncandidates and their descriptions, types and provenance. No gene is\nselected automatically. candidate_limit_reached reports incomplete\ncoverage. Only structurally valid gene CURIEs appear in candidate_mappings.",
         "enabled": true,
         "input_schema": {
           "properties": {
@@ -4582,11 +4402,11 @@
           "typed"
         ]
       },
-      "prompt_description": "Resolve a gene, precursor locus, or mature RNA product to typed, source-grounded Alliance gene candidates without choosing among ambiguous precursor mappings."
+      "prompt_description": "Retrieve source-grounded gene and RNA product candidates without selecting an identity."
     },
     "binding_kind": "static",
     "category": "Database",
-    "description": "Resolve genes, precursor loci, and mature RNA products to typed evidence-backed Alliance gene candidates.",
+    "description": "Retrieve genes and RNA products as typed source candidates for LLM evaluation.",
     "documentation": {
       "parameters": [
         {
@@ -4614,7 +4434,7 @@
           "type": "string"
         }
       ],
-      "summary": "Distinguishes ordinary genes, precursor loci, and mature RNA products using current Alliance curation identity, RNAcentral, and miRBase evidence; returns ambiguity explicitly and never synthesizes an RGD CURIE."
+      "summary": "Returns Alliance curation, RNAcentral and miRBase source facts and candidate mappings; the calling LLM judges identity and relevance."
     },
     "identity_lookup": true,
     "methods": null,
@@ -4820,90 +4640,6 @@
       "user_id"
     ],
     "source_file": "python/src/agr_ai_curation_alliance/tools/documents.py"
-  },
-  "search_domain_field_terms": {
-    "agent_methods": null,
-    "audit": {
-      "display_name": "Search Domain Field Terms"
-    },
-    "binding_kind": "static",
-    "category": "Database",
-    "description": "Search for candidate standard terms (from an ontology or controlled list) that could fill one specific field, based on a phrase the agent read in the paper.",
-    "documentation": {
-      "parameters": [
-        {
-          "description": "Which curation area this field belongs to (for example, gene expression).",
-          "name": "domain_pack_id",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "The kind of record this field is part of.",
-          "name": "object_type",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "Which field the agent is trying to fill (for example, \"where expressed\").",
-          "name": "field_path",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "The phrase from the paper to look up candidate terms for.",
-          "name": "query",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "Optional supporting context from the paper \u2014 the source phrase, quote, figure, provider, or species.",
-          "name": "evidence_context",
-          "required": false,
-          "type": "object"
-        },
-        {
-          "description": "The Alliance group to scope a species-specific anatomy lookup to.",
-          "name": "data_provider",
-          "required": false,
-          "type": "string"
-        },
-        {
-          "description": "The species context, kept for the record.",
-          "name": "taxon",
-          "required": false,
-          "type": "string"
-        },
-        {
-          "description": "Reserved for a future option to limit matches to one branch of an ontology. It is accepted but does not yet narrow results.",
-          "name": "branch_root_curie",
-          "required": false,
-          "type": "string"
-        },
-        {
-          "description": "The most candidate terms to return.",
-          "name": "limit",
-          "required": false,
-          "type": "integer"
-        },
-        {
-          "description": "Require an exact name match instead of close matches, where supported.",
-          "name": "exact_match",
-          "required": false,
-          "type": "boolean"
-        }
-      ],
-      "summary": "Casts a wide net for possible standard-term matches for one field, starting from a phrase backed by evidence in the paper. The results are suggestions to compare, not a final choice \u2014 the agent settles on the official term separately with Resolve Domain Field Term."
-    },
-    "identity_lookup": true,
-    "methods": null,
-    "name": "Search Domain Field Terms",
-    "package_backed": true,
-    "package_display_name": "Alliance Defaults",
-    "package_export_name": "default",
-    "package_id": "agr.alliance",
-    "package_version": "1.0.0",
-    "required_context": [],
-    "source_file": "python/src/agr_ai_curation_alliance/tools/agr_curation.py"
   },
   "search_genes": {
     "agent_methods": null,

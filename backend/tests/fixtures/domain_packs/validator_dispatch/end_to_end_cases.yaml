@@ -284,7 +284,7 @@ cases:
       selected_inputs:
         identifier: BAD:0002
     expected_projection:
-      finding_code: domain_pack.validator_unresolved
+      finding_code: domain_pack.validator_output_incomplete
       finding_status: open
       failure_classification: missing_expected_result_field
       missing_expected_fields:
@@ -292,7 +292,7 @@ cases:
     readiness_outcome:
       ready: false
       blockers:
-        - domain_pack.validator_unresolved
+        - domain_pack.validator_output_incomplete
 
   - case_id: ambiguous_candidates
     active_binding_ids:

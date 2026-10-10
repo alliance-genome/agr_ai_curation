@@ -145,7 +145,7 @@ from src.lib.curation_workspace.extraction_results import (
     persist_inline_validated_extraction_result,
 )
 from src.schemas.curation_workspace import CurationExtractionSourceKind
-from src.schemas.domain_validator import is_domain_validator_result_schema
+from src.schemas.domain_validator import DomainValidatorResultBase, is_domain_validator_result_schema
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 from src.lib.packages import tool_roles
 from .model_request_measurement import install_model_request_measurement
@@ -492,6 +492,7 @@ class _StructuredSpecialistFinalizationState:
     max_attempts: int = _STRUCTURED_FINALIZATION_DEFAULT_MAX_ATTEMPTS
     attempt_limit_exceeded: bool = False
     accepted_payload: Optional[Dict[str, Any]] = None
+    incomplete_payload: Optional[Dict[str, Any]] = None
     last_rejection: Optional[Dict[str, Any]] = None
     calls: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -2376,6 +2377,7 @@ def _structured_specialist_finalization_feedback(
     finalization_config: Mapping[str, Any] | None = None,
     tool_calls: List["SpecialistToolCall"],
     live_evidence_records: List[Dict[str, Any]],
+    compact_result: DomainValidatorResultBase | None = None,
 ) -> _StructuredSpecialistFinalizationFeedback:
     output_type_name = _output_type_name(expected_output_type)
     finalization_config = finalization_config or {}
@@ -2425,6 +2427,12 @@ def _structured_specialist_finalization_feedback(
             ],
         )
 
+    if isinstance(validated, DomainValidatorResultBase) and not validated.is_complete:
+        return _StructuredSpecialistFinalizationFeedback(
+            accepted_payload=None,
+            message="Validator output is incomplete: " + "; ".join(validated.output_issues),
+            repair_instructions=["Correct the reported structural problems without replacing the scientific judgment."],
+        )
     raw_payload = validated.model_dump()
     checks_pdf_evidence = _structured_finalization_has_check(
         finalization_config,
@@ -2535,12 +2543,22 @@ def _structured_specialist_finalization_feedback(
             "Use only evidence_record_id values returned by record_evidence in this run, without editing their verified quote metadata."
         )
 
-    lookup_errors, lookup_report = _lookup_provenance_finalization_errors(
-        canonical_payload,
-        output_type_name=output_type_name,
-        finalization_config=finalization_config,
-        tool_calls=tool_calls,
-    )
+    if compact_result is not None:
+        # This object comes only from this invocation's compact workspace.
+        # Source records, copied facts and actual lookup audit were already
+        # verified there. A second success-label/raw-output check must not
+        # override that canonical judgment. Never select this branch from
+        # model-authored data or finalization configuration.
+        if compact_result.model_dump() != canonical_payload:
+            raise ValueError("Canonical compact result changed during finalization")
+        lookup_errors, lookup_report = [], {"lookup_attempt_count": len(compact_result.lookup_attempts)}
+    else:
+        lookup_errors, lookup_report = _lookup_provenance_finalization_errors(
+            canonical_payload,
+            output_type_name=output_type_name,
+            finalization_config=finalization_config,
+            tool_calls=tool_calls,
+        )
     if lookup_errors:
         field_errors.extend(lookup_errors)
         repair_instructions.append(
@@ -2677,14 +2695,20 @@ def _build_structured_specialist_finalization_tool(
             )
         else:
             try:
+                assembled = None
                 if compact_runtime is not None:
-                    result = compact_runtime.assemble(result).model_dump(mode="json")
+                    assembled = compact_runtime.assemble(result)
+                    result = assembled.model_dump(mode="json")
+                    if not assembled.is_complete:
+                        finalization_state.incomplete_payload = result
+                        raise ValueError("Validator output is incomplete: " + "; ".join(assembled.output_issues))
                 feedback = _structured_specialist_finalization_feedback(
                     result,
                     expected_output_type=expected_output_type,
                     finalization_config=finalization_state.config,
                     tool_calls=tool_calls,
                     live_evidence_records=live_evidence_records,
+                    compact_result=assembled,
                 )
             except (TypeError, KeyError):
                 if compact_runtime is None:
@@ -2701,6 +2725,7 @@ def _build_structured_specialist_finalization_tool(
                 )
         if feedback.accepted_payload is not None:
             finalization_state.accepted_payload = feedback.accepted_payload
+            finalization_state.incomplete_payload = None
             finalization_state.last_rejection = None
         else:
             finalization_state.accepted_payload = None
@@ -2934,7 +2959,8 @@ def _raise_missing_structured_specialist_finalization(
         reason=reason,
         message=error_message,
         candidate_id=candidate_id,
-        extra={"finalization_tool": state.tool_name},
+        extra={"finalization_tool": state.tool_name,
+               **({"incomplete_validator_result": state.incomplete_payload} if state.incomplete_payload else {})},
     )
     raise SpecialistOutputError(
         specialist_name=specialist_name,
@@ -2944,6 +2970,7 @@ def _raise_missing_structured_specialist_finalization(
             "reason": reason,
             "finalization_tool": state.tool_name,
             "last_rejection": state.last_rejection,
+            **({"incomplete_validator_result": state.incomplete_payload} if state.incomplete_payload else {}),
         }],
     )
 
@@ -3637,7 +3664,7 @@ def _validator_dispatch_status_counts(dispatch_result: Any) -> dict[str, int]:
 
     counts: dict[str, int] = {}
     for result in getattr(dispatch_result, "validator_results", ()) or ():
-        status = str(getattr(result, "status", "unknown") or "unknown")
+        status = "incomplete" if getattr(result, "output_issues", []) else str(getattr(result, "status", "unknown") or "unknown")
         counts[status] = counts.get(status, 0) + 1
     return counts
 
@@ -3748,7 +3775,7 @@ def _emit_validator_lookup_audit_events(
     lookup_record_by_key: dict[str, dict[str, Any]] = {}
     for result in getattr(dispatch_result, "validator_results", ()) or ():
         binding_id = getattr(result, "validator_binding_id", None)
-        status = getattr(result, "status", None)
+        status = "incomplete" if getattr(result, "output_issues", []) else getattr(result, "status", None)
         request_id = getattr(result, "request_id", None)
         for attempt in getattr(result, "lookup_attempts", ()) or ():
             key = _validator_lookup_audit_key(binding_id, attempt)
@@ -3759,9 +3786,17 @@ def _emit_validator_lookup_audit_events(
                     "binding_id": binding_id,
                     "statuses": {},
                     "request_ids": [],
+                    "explanations": [],
+                    "targets": [],
                 }
                 lookup_record_by_key[key] = record
                 lookup_records.append(record)
+            explanation = getattr(result, "curator_message", None) or getattr(result, "explanation", None)
+            if explanation and explanation not in record["explanations"]:
+                record["explanations"].append(explanation)
+            target = getattr(result, "target", None)
+            if target is not None:
+                record["targets"].append(target.model_dump(mode="json") if hasattr(target, "model_dump") else str(target))
             status_key = str(status or "unknown")
             record["statuses"][status_key] = (
                 int(record["statuses"].get(status_key, 0)) + 1
@@ -3810,11 +3845,13 @@ def _emit_validator_lookup_audit_events(
                 "toolName": "domain_validator_lookup",
                 "friendlyName": _validator_lookup_complete_label(
                     specialist_name,
-                    outcome,
+                    "review required" if outcome != "error" and (outcome == "conflict" or "unresolved" in status_counts or "incomplete" in status_counts) else outcome,
                     target_count=duplicate_count,
                     status_summary=status_summary,
-                ),
-                "success": outcome not in {"error", "conflict"},
+                ) + f" ({binding_id})",
+                "success": outcome != "error",
+                "validatorTargets": record["targets"],
+                "validatorExplanations": record["explanations"],
                 "error": message if outcome == "error" else None,
                 "isSpecialistInternal": True,
                 "validatorBindingId": binding_id,
@@ -4877,6 +4914,7 @@ async def run_specialist_with_events(
     start_time = datetime.now(timezone.utc)
     wall_started_at = time.monotonic()
     phase_timings_ms: Dict[str, int] = {}
+    builder_candidate_id = f"{tool_name or specialist_name}:structured_result"
     tool_calls: List[SpecialistToolCall] = []
     formatter_save_handoff: Optional[Dict[str, Any]] = None
     live_evidence_records: List[Dict[str, Any]] = []
@@ -5870,6 +5908,12 @@ async def run_specialist_with_events(
                 terminal_failure_capture_owned() or provider_policy_error(e) is not None
             )},
         )
+        if type(e).__name__ == "MaxTurnsExceeded" and structured_finalization_state.incomplete_payload:
+            _raise_missing_structured_specialist_finalization(
+                state=structured_finalization_state, specialist_name=specialist_name,
+                builder_workspace=builder_workspace, tool_name=tool_name,
+                candidate_id=builder_candidate_id,
+            )
         builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
         raise
     finally:
@@ -5928,7 +5972,6 @@ async def run_specialist_with_events(
     stream_duration_ms = int(stream_duration.total_seconds() * 1000)
 
     post_stream_started_at = time.monotonic()
-    builder_candidate_id = f"{tool_name or specialist_name}:structured_result"
     required_tool_error = _required_tool_failure_message(
         agent=runtime_agent,
         specialist_name=specialist_name,

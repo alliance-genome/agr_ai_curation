@@ -51,6 +51,8 @@ enum_definitions:
         label: Validator result incomplete
       - value: rejected_candidates
         label: Candidates rejected
+      - value: unresolved
+        label: Unresolved by validator
       - value: not_validated
         label: Not validated yet
       - value: legacy_unverified
@@ -444,16 +446,6 @@ object_definitions:
             label: Rationale
             fields:
               - rationale
-      controlled_field_helper_gaps:
-        - field_path: expression_experiment.detection_reagents
-          status: under_development
-          reason: Detection reagent/probe/construct/reporter is LinkML-backed, but controlled reagent lookup and export join materialization are not active yet; preserve exact paper labels with this field path and use structured placeholders only when evidence supports them.
-        - field_path: expression_experiment.specimen_genomic_model
-          status: under_development
-          reason: Specimen AGM/genotype is LinkML-backed, but helper-backed AGM materialization is not active for Gene Expression extraction yet; preserve specimen context with this field path.
-        - field_path: expression_experiment.specimen_alleles
-          status: under_development
-          reason: Specimen allele context is LinkML-backed, but helper-backed allele materialization is not active for Gene Expression extraction yet; preserve allele/genotype context with this field path.
     fields:
       - field_path: unique_id
         field_type: string
@@ -751,27 +743,6 @@ object_definitions:
           editable: true
           curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           source_of_truth: alliance_linkml
-          term_helper:
-            field_path: relation.name
-            authority: live_validated_option
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - configured_mapping
-                - current_api_label_or_synonym_search
-            term_source:
-              kind: controlled_vocabulary
-              vocabulary: Expression Relation
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_vocabulary_terms
-              candidate_authority: live_validated_option
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -997,53 +968,6 @@ object_definitions:
           validatable: true
           validator_binding_id: expression_assay_ontology_validation
           validator_state: active
-          term_helper:
-            field_path: expression_experiment.expression_assay_used
-            authority: selector_evidence
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              query_expansion:
-                evidence_local_terms: true
-                abbreviation_expansion: true
-                organism_specific_synonyms: false
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - trigram_label
-                - trigram_synonym
-                - definition
-                - configured_mapping
-            term_source:
-              kind: ontology
-              ontology_family: assay
-              ontology_term_type: MMOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: selector_evidence
-            configured_mappings:
-              - mapping_id: gene_expression_assay.whole_mount_in_situ_hybridization
-                labels:
-                  - whole-mount in situ hybridization
-                  - whole mount in situ hybridization
-                  - WISH
-                candidate:
-                  curie: MMO:0000658
-                  name: whole mount in situ hybridization assay
-                  ontology_type: MMOTerm
-              - mapping_id: gene_expression_assay.reverse_transcription_pcr
-                labels:
-                  - reverse transcription polymerase chain reaction assay
-                  - reverse transcription polymerase chain reaction
-                  - RT-PCR
-                candidate:
-                  curie: MMO:0000655
-                  name: reverse transcription polymerase chain reaction assay
-                  ontology_type: MMOTerm
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1584,29 +1508,6 @@ object_definitions:
           curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           # Per-condition component (ZECO). Grounded by the extractor via the term helper and
           # composed (not separately bound) by experimental_condition_validation at the condition grain.
-          term_helper:
-            field_path: condition_relations.conditions.condition_class.curie
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - trigram_label
-                - trigram_synonym
-                - definition
-            term_source:
-              kind: ontology
-              ontology_family: zeco
-              ontology_term_type: ZECOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1677,29 +1578,6 @@ object_definitions:
           curator_action_note: "Curator override: typing an ID marks this value as a curator override."
           # Per-condition component (ZECO/XCO). Grounded by the extractor; composed by the
           # condition-grain composite validator.
-          term_helper:
-            field_path: condition_relations.conditions.condition_id.curie
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - trigram_label
-                - trigram_synonym
-                - definition
-            term_source:
-              kind: ontology
-              ontology_family: zeco
-              ontology_term_type: ZECOTerm
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1972,32 +1850,6 @@ object_definitions:
           validatable: true
           validator_binding_id: expression_stage_ontology_validation
           validator_state: active
-          term_helper:
-            field_path: expression_pattern.when_expressed.developmental_stage_start
-            authority: selector_evidence
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              query_expansion:
-                evidence_local_terms: true
-                abbreviation_expansion: true
-                organism_specific_synonyms: true
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - trigram_label
-                - trigram_synonym
-            term_source:
-              kind: ontology
-              ontology_family: life_stage
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_life_stage_terms
-              provider_required: true
-              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2103,27 +1955,6 @@ object_definitions:
           validator_state: active
           # LinkML range VocabularyTerm: the curation DB stores these as terms of the
           # Stage Uberon Slim Terms vocabulary (the UBERON ones named by their CURIE).
-          term_helper:
-            field_path: expression_pattern.when_expressed.stage_uberon_slim_terms
-            authority: live_validated_option
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - configured_mapping
-                - current_api_label_or_synonym_search
-            term_source:
-              kind: controlled_vocabulary
-              vocabulary: Stage Uberon Slim Terms
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_vocabulary_terms
-              candidate_authority: live_validated_option
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2198,52 +2029,6 @@ object_definitions:
             required_any:
               - expression_pattern.where_expressed.anatomical_structure
               - expression_pattern.where_expressed.cellular_component
-          term_helper:
-            field_path: expression_pattern.where_expressed
-            authority: hint_only
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              query_expansion:
-                evidence_local_terms: true
-                abbreviation_expansion: true
-                organism_specific_synonyms: true
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - trigram_label
-                - trigram_synonym
-                - definition
-                - configured_mapping
-                - vector_recall
-            term_source:
-              kind: anatomical_site
-            site_routing:
-              required_any:
-                - expression_pattern.where_expressed.anatomical_structure
-                - expression_pattern.where_expressed.cellular_component
-              candidates:
-                - slot_hint: expression_pattern.where_expressed.anatomical_structure
-                  term_source:
-                    kind: ontology
-                    ontology_family: anatomy
-                  lookup:
-                    package_tool: search_domain_field_terms
-                    method: search_anatomy_terms
-                    provider_required: true
-                    candidate_authority: hint_only
-                - slot_hint: expression_pattern.where_expressed.cellular_component
-                  term_source:
-                    kind: ontology
-                    ontology_family: go
-                    go_aspect: cellular_component
-                  lookup:
-                    package_tool: search_domain_field_terms
-                    method: search_go_terms
-                    candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2262,35 +2047,6 @@ object_definitions:
           validatable: true
           validator_binding_id: expression_anatomical_structure_validation
           validator_state: active
-          term_helper:
-            field_path: expression_pattern.where_expressed.anatomical_structure
-            authority: selector_evidence
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              query_expansion:
-                evidence_local_terms: true
-                abbreviation_expansion: true
-                organism_specific_synonyms: true
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - trigram_label
-                - trigram_synonym
-                - definition
-                - configured_mapping
-                - vector_recall
-            term_source:
-              kind: ontology
-              ontology_family: anatomy
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_anatomy_terms
-              provider_required: true
-              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2390,57 +2146,6 @@ object_definitions:
           validatable: true
           validator_binding_id: expression_anatomical_uberon_slim_validation
           validator_state: active
-          term_helper:
-            field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms
-            authority: selector_evidence
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - configured_mapping
-                - current_api_label_or_synonym_search
-            term_source:
-              kind: ontology
-              ontology_family: uberon
-              ontology_term_type: UBERONTerm
-              slim_membership:
-                source: alliance_linkml
-                allowed_term_curies:
-                  - UBERON:0001009
-                  - UBERON:0005409
-                  - UBERON:0000949
-                  - UBERON:0001008
-                  - UBERON:0002330
-                  - UBERON:0002193
-                  - UBERON:0002416
-                  - UBERON:0002423
-                  - UBERON:0002204
-                  - UBERON:0001016
-                  - UBERON:0000990
-                  - UBERON:0001004
-                  - UBERON:0001032
-                  - UBERON:0005726
-                  - UBERON:0007037
-                  - UBERON:0002105
-                  - UBERON:0002104
-                  - UBERON:0000924
-                  - UBERON:0000925
-                  - UBERON:0000926
-                  - UBERON:0003104
-                  - UBERON:0001013
-                  - UBERON:0000026
-                  - UBERON:0016887
-                  - UBERON:6005023
-                  - UBERON:0002539
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_ontology_terms
-              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2509,35 +2214,6 @@ object_definitions:
           validatable: true
           validator_binding_id: expression_cellular_component_validation
           validator_state: active
-          term_helper:
-            field_path: expression_pattern.where_expressed.cellular_component
-            authority: selector_evidence
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              query_expansion:
-                evidence_local_terms: true
-                abbreviation_expansion: true
-                organism_specific_synonyms: false
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - trigram_label
-                - trigram_synonym
-                - definition
-                - configured_mapping
-                - vector_recall
-            term_source:
-              kind: ontology
-              ontology_family: go
-              go_aspect: cellular_component
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_go_terms
-              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -2637,35 +2313,6 @@ object_definitions:
           validatable: true
           validator_binding_id: expression_cellular_component_qualifier_validation
           validator_state: active
-          term_helper:
-            field_path: expression_pattern.where_expressed.cellular_component_qualifiers
-            authority: selector_evidence
-            resolver:
-              primary_tool: resolve_domain_field_term
-              search_tool: search_domain_field_terms
-              inspect_tool: inspect_ontology_term
-              accepted_provenance_tools:
-                - resolve_domain_field_term
-              query_expansion:
-                evidence_local_terms: true
-                abbreviation_expansion: true
-                organism_specific_synonyms: false
-              search_channels:
-                - exact_label
-                - exact_synonym
-                - trigram_label
-                - trigram_synonym
-                - definition
-                - configured_mapping
-                - vector_recall
-            term_source:
-              kind: ontology
-              ontology_family: go
-              go_aspect: cellular_component
-            lookup:
-              package_tool: search_domain_field_terms
-              method: search_go_terms
-              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml

@@ -76,7 +76,6 @@ from .validator_result_classification import (
     validator_failure_classification,
 )
 from .not_validatable import is_not_validatable, not_validatable_object_keys
-from .validator_result_policies import allowed_term_policy_violations
 from .value_presence import missing_resolved_value
 from .validation_findings import append_validation_findings_to_envelope
 
@@ -279,6 +278,9 @@ class _ValidatorRunGroupResult:
 
 @dataclass
 class _ValidatorFinalizationState:
+    incomplete_result: DomainValidatorResultBase | None = None
+    incomplete_results: tuple[DomainValidatorResultBase, ...] = ()
+    retained_results: dict[str, DomainValidatorResultBase] = dataclasses.field(default_factory=dict)
     accepted_result: DomainValidatorResultBase | None = None
     accepted_results: tuple[DomainValidatorResultBase, ...] = ()
 
@@ -290,6 +292,9 @@ class _ValidatorFinalizationFeedback:
     accepted_results: tuple[DomainValidatorResultBase, ...] = ()
     repair_instructions: tuple[str, ...] = ()
     result_errors: tuple[dict[str, Any], ...] = ()
+    incomplete_result: DomainValidatorResultBase | None = None
+    incomplete_results: tuple[DomainValidatorResultBase, ...] = ()
+    retained_results: tuple[DomainValidatorResultBase, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -419,7 +424,7 @@ def _with_returned_optional_fields(
     """
 
     optional = item.request.optional_result_fields
-    if not optional or item.result.status != "resolved":
+    if not optional or not item.result.is_resolved:
         return item
     returned = {
         result_field: field_path
@@ -1519,10 +1524,10 @@ def _execute_validator_job_batch(
             ),
             "status": "completed",
             "resolved_count": sum(
-                1 for result in validator_results if result.status == "resolved"
+                1 for result in validator_results if result.is_resolved
             ),
             "unresolved_count": sum(
-                1 for result in validator_results if result.status == "unresolved"
+                1 for result in validator_results if not result.is_resolved
             ),
         }
         _emit_validator_batch_event(
@@ -1794,7 +1799,7 @@ def run_package_scoped_validator_agent(
             function_tool_factory=function_tool,
             profile_mapped=bool(binding.raw.get("profile_validation")),
             result_schema=(
-                output_type
+                cast(type[DomainValidatorResultBase], output_type)
                 if is_domain_validator_result_schema(output_type)
                 else DomainValidatorResultBase
             ),
@@ -1878,7 +1883,7 @@ def run_package_scoped_validator_agent(
     run_failed = False
     try:
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
-    except Exception:
+    except Exception as exc:
         run_failed = True
         set_redacted_ai_span_data(
             sentry_span,
@@ -1895,6 +1900,9 @@ def run_package_scoped_validator_agent(
             time.monotonic() - run_started_at,
             exc_info=True,
         )
+        from agents.exceptions import MaxTurnsExceeded
+        if isinstance(exc, MaxTurnsExceeded) and finalization_state.incomplete_result:
+            return _ValidatorAgentRunOutput(raw_output=None, accepted_result=finalization_state.incomplete_result)
         raise
     finally:
         if not run_failed:
@@ -1927,6 +1935,8 @@ def run_package_scoped_validator_agent(
             raw_output=result,
             accepted_result=finalization_state.accepted_result,
         )
+    if finalization_state.incomplete_result:
+        return _ValidatorAgentRunOutput(raw_output=result, accepted_result=finalization_state.incomplete_result)
     raise ValueError(
         "Validator agent did not complete mandatory finalize_validator_result "
         "tool call with status accepted."
@@ -2137,7 +2147,7 @@ def run_package_scoped_validator_agent_batch(
     run_failed = False
     try:
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
-    except Exception:
+    except Exception as exc:
         run_failed = True
         set_redacted_ai_span_data(
             sentry_span,
@@ -2154,6 +2164,9 @@ def run_package_scoped_validator_agent_batch(
             time.monotonic() - run_started_at,
             exc_info=True,
         )
+        from agents.exceptions import MaxTurnsExceeded
+        if isinstance(exc, MaxTurnsExceeded) and finalization_state.incomplete_results:
+            return _ValidatorBatchAgentRunOutput(raw_output=None, accepted_results=finalization_state.incomplete_results)
         raise
     finally:
         if not run_failed:
@@ -2191,6 +2204,8 @@ def run_package_scoped_validator_agent_batch(
             raw_output=result,
             accepted_results=finalization_state.accepted_results,
         )
+    if finalization_state.incomplete_results:
+        return _ValidatorBatchAgentRunOutput(raw_output=result, accepted_results=finalization_state.incomplete_results)
     raise ValueError(
         "Validator batch agent did not complete mandatory "
         "finalize_validator_batch_results tool call with status accepted."
@@ -2663,6 +2678,8 @@ def _build_finalize_validator_result_tool(
             finalization_state.accepted_result = feedback.accepted_result
         else:
             finalization_state.accepted_result = None
+        if feedback.incomplete_result is not None or feedback.accepted_result is not None:
+            finalization_state.incomplete_result = feedback.incomplete_result
         payload = _validator_finalization_tool_payload(feedback)
         return payload
 
@@ -2689,37 +2706,34 @@ def _build_finalize_validator_batch_results_tool(
     ) -> dict[str, Any]:
         """Validate the final batch results before answering."""
 
-        if compact_runtime is not None:
-            try:
-                assembled = compact_runtime.assemble_batch(results)
-            except (TypeError, KeyError):
-                from src.lib.domain_packs.compact_runtime import fail_compact_assembly
-                finalization_state.accepted_results = ()
-                fail_compact_assembly()
-            except ValueError as exc:
-                finalization_state.accepted_results = ()
-                return {"status": "rejected", "message": str(exc)}
-            checked = []
-            for result in assembled:
-                contract = compact_runtime.contracts[result.request_id]
-                feedback = _validator_result_finalization_feedback(
-                    result, request=contract.request,
-                    result_schema=contract.result_schema, profile_mapped=contract.profile_mapped,
-                )
-                if feedback.accepted_result is None:
-                    finalization_state.accepted_results = ()
-                    return {"status": "rejected", "message": feedback.message}
-                checked.append(feedback.accepted_result)
-            finalization_state.accepted_results = tuple(checked)
-            return {"status": "accepted", "message": "All compact decisions assembled and validated."}
-        feedback = _validator_batch_results_finalization_feedback(
-            results,
-            jobs=jobs,
+        try:
+            feedback = _validator_batch_results_finalization_feedback(
+                results, jobs=jobs,
+                result_schemas={key: contract.result_schema for key, contract in compact_runtime.contracts.items()}
+                if compact_runtime is not None else None,
+                compact_runtime=compact_runtime,
+            )
+        except (TypeError, KeyError):
+            if compact_runtime is None:
+                raise
+            from src.lib.domain_packs.compact_runtime import fail_compact_assembly
+            finalization_state.accepted_results = ()
+            fail_compact_assembly()
+        # Only independently safe results may replace a previously retained
+        # judgment. Missing/malformed peers and synthetic failures never do.
+        finalization_state.retained_results.update(
+            (result.request_id, result) for result in feedback.retained_results
         )
         if feedback.accepted_results:
             finalization_state.accepted_results = feedback.accepted_results
+            finalization_state.incomplete_results = ()
+            finalization_state.retained_results.clear()
         else:
             finalization_state.accepted_results = ()
+            if finalization_state.retained_results:
+                finalization_state.incomplete_results = _retained_batch_results(
+                    jobs, finalization_state.retained_results,
+                )
         return _validator_finalization_tool_payload(feedback)
 
     if compact_runtime is not None:
@@ -2803,12 +2817,13 @@ def _validator_result_finalization_feedback(
         normalized,
         request=request,
     )
-    if normalized.status == "resolved" and expected_result.status != "resolved":
-        message = f"Validator result rejected: {expected_result.explanation}."
+    if not expected_result.is_complete:
+        message = "Validator result rejected: " + "; ".join(expected_result.output_issues)
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
             repair_instructions=_validator_repair_instructions(message),
+            incomplete_result=expected_result,
         )
 
     classifiability_error = _validator_result_classifiability_error(expected_result)
@@ -2833,6 +2848,8 @@ def _validator_batch_results_finalization_feedback(
     raw_results: Any,
     *,
     jobs: list[ValidatorDispatchJob],
+    result_schemas: dict[str, type[DomainValidatorResultBase]] | None = None,
+    compact_runtime: Any = None,
 ) -> _ValidatorFinalizationFeedback:
     if not isinstance(raw_results, list):
         message = (
@@ -2875,6 +2892,7 @@ def _validator_batch_results_finalization_feedback(
         )
 
     accepted_results: list[DomainValidatorResultBase] = []
+    retained_results: dict[str, DomainValidatorResultBase] = {}
     for job in jobs:
         request = job.request
         raw_result = raw_result_by_request_id.get(request.request_id)
@@ -2894,11 +2912,21 @@ def _validator_batch_results_finalization_feedback(
                 }
             )
             continue
+        if compact_runtime is not None:
+            try:
+                raw_result = compact_runtime.assemble(raw_result)
+            except ValueError as exc:
+                result_errors.append({"request_id": request.request_id, "message": str(exc)})
+                continue
         feedback = _validator_result_finalization_feedback(
             raw_result,
             request=request,
+            result_schema=(result_schemas or {}).get(request.request_id, DomainValidatorResultBase),
             profile_mapped=bool(job.match.binding.raw.get("profile_validation")),
         )
+        retained = feedback.accepted_result or feedback.incomplete_result
+        if retained is not None:
+            retained_results[request.request_id] = retained
         if feedback.accepted_result is None:
             result_errors.append(
                 {
@@ -2920,12 +2948,26 @@ def _validator_batch_results_finalization_feedback(
             message=message,
             repair_instructions=_validator_repair_instructions(message),
             result_errors=tuple(result_errors),
+            incomplete_results=_retained_batch_results(jobs, retained_results) if retained_results else (),
+            retained_results=tuple(retained_results.values()),
         )
 
     return _ValidatorFinalizationFeedback(
         accepted_result=None,
         message="Validator batch results accepted.",
         accepted_results=tuple(accepted_results),
+    )
+
+
+def _retained_batch_results(
+    jobs: list[ValidatorDispatchJob],
+    retained_results: Mapping[str, DomainValidatorResultBase],
+) -> tuple[DomainValidatorResultBase, ...]:
+    return tuple(
+        retained_results.get(job.request.request_id) or _unresolved_result_for_dispatch_problem(
+            job.request, reason="invalid_schema",
+            explanation="Validator batch did not supply a structurally valid result for this request.",
+        ) for job in jobs
     )
 
 
@@ -2955,20 +2997,17 @@ def _validator_repair_instructions(message: str) -> tuple[str, ...]:
             "exactly from the DomainValidationRequest."
         ),
     ]
-    if "successful lookup_attempt" in message or "lookup_attempt" in message:
+    if "lookup_attempt" in message:
         instructions.append(
-            "For status resolved, include at least one lookup_attempt with "
-            'outcome "success" that records the supporting lookup call.'
-        )
-        instructions.append(
-            "If no successful lookup supports the resolution, change status to "
-            "unresolved and preserve the failed or ambiguous lookup attempt."
+            "Describe only lookup calls actually performed, using the declared "
+            "lookup outcome vocabulary. Do not invent a lookup to support a judgment."
         )
     if "expected resolved field" in message or "expected field" in message:
         instructions.append(
-            "If the evidence resolves the expected field, add the missing "
-            "resolved_values entry; otherwise return status unresolved and list "
-            "the field in missing_expected_fields."
+            "Supply the missing expected field from supported data, or correct "
+            "the reported shape or contradiction. Keep valid values and explain "
+            "any uncertainty. Change the scientific judgment only if your "
+            "assessment changes; do not invent a value to complete the output."
         )
     return tuple(instructions)
 
@@ -3387,10 +3426,8 @@ def _enforce_expected_result_fields(
         if missing_resolved_value(result.resolved_values.get(field_name))
     ]
     invalid_array_fields = _invalid_array_resolved_fields(result, request=request)
-    policy_violations = allowed_term_policy_violations(result, request=request)
-    invalid_policy_fields = [violation.field_name for violation in policy_violations]
     invalid_fields: list[str] = []
-    for field_name in [*invalid_array_fields, *invalid_policy_fields]:
+    for field_name in invalid_array_fields:
         if field_name not in missing_fields and field_name not in invalid_fields:
             invalid_fields.append(field_name)
     if not missing_fields and not invalid_fields:
@@ -3398,11 +3435,7 @@ def _enforce_expected_result_fields(
 
     unresolved_fields = [*missing_fields, *invalid_fields]
     explanation = "Validator result omitted expected resolved field(s): "
-    if invalid_policy_fields and not missing_fields and not invalid_array_fields:
-        explanation = "; ".join(
-            violation.message for violation in policy_violations
-        ) + ". Expected field(s): "
-    elif invalid_fields and not missing_fields:
+    if invalid_fields and not missing_fields:
         explanation = (
             "Validator result did not return one resolved value per selected "
             "array item for expected field(s): "
@@ -3414,9 +3447,10 @@ def _enforce_expected_result_fields(
 
     return result.model_copy(
         update={
-            "status": "unresolved",
             "missing_expected_fields": unresolved_fields,
-            "explanation": explanation + ", ".join(unresolved_fields),
+            "output_issues": list(dict.fromkeys([
+                *result.output_issues, explanation + ", ".join(unresolved_fields),
+            ])),
         },
     )
 
@@ -3665,13 +3699,6 @@ def _validator_result_classifiability_error(
     try:
         for attempt in result.lookup_attempts:
             lookup_status_for_validator_outcome(attempt.outcome)
-        if result.status == "resolved" and not any(
-            attempt.outcome == "success" for attempt in result.lookup_attempts
-        ):
-            raise ValueError(
-                "Resolved validator result must include at least one successful "
-                "lookup_attempt"
-            )
         if result.status == "unresolved":
             validator_failure_classification(result)
     except ValueError as exc:

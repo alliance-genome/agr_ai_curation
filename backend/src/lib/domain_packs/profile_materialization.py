@@ -25,7 +25,6 @@ from src.lib.domain_packs.resolvable_values import (
     lookup_outcome_for_failure, mark_resolved, mark_unresolved,
 )
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
-from src.lib.domain_packs.validator_result_policies import allowed_term_policy_violations
 from src.lib.domain_packs.validator_result_classification import validator_failure_classification
 from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.schemas.agent_execution_revision import GenericProfilePin
@@ -146,9 +145,6 @@ def _approved_updates(item, canonical, context, target):
         return "resolved_objects has no approved custom-profile destination; use explicitly mapped typed result slots", []
     if set(result.resolved_values) - expected.expected_result_fields.keys():
         return "Validator returned extra result slots outside the approved mapping", []
-    violations = allowed_term_policy_violations(result, request=expected)
-    if violations:
-        return "; ".join(violation.message for violation in violations), []
     mapping_id = canonical.binding.raw["profile_validation"]["mapping"]["mapping_id"]
     mapping = next(m for m in context.profile.contract.validator_mappings if m.mapping_id == mapping_id)
     capability = next(cap for cap in context.capabilities if cap.ref == mapping.capability_ref)
@@ -172,7 +168,7 @@ def _approved_updates(item, canonical, context, target):
         issues = ResolvedGenericProfile(slot_pin, slot_contract).validate_attributes(values)
         if issues:
             return "Validator result violates the mapped capability slot type: " + "; ".join(i["message"] for i in issues), []
-    if result.status != "resolved":
+    if not result.is_resolved:
         try:
             classification = validator_failure_classification(result, error_type=ValueError)
         except ValueError as exc:
@@ -244,7 +240,7 @@ def _override_disagreements(item, overrides, target, *, source_envelope_revision
     for destination, value in overrides.items():
         container_path, _, key = destination.rpartition(".")
         by_value[container_path][destination] = (key, value)
-    if result.status == "resolved":
+    if result.is_resolved:
         outcome = "matched"
         slot_by_destination = {path: slot for slot, path in item.request.expected_result_fields.items()}
         details = {}
@@ -302,7 +298,7 @@ def profile_result_finding(
     if mapping is not None:
         details["profile_validator_mapping"] = mapping.model_dump(mode="json")
     severity = finding.severity
-    if mapping is not None and (failed or item.result.status != "resolved"):
+    if mapping is not None and (failed or not item.result.is_resolved):
         severity = (ValidationFindingSeverity.BLOCKER if mapping.policy.blocks_readiness else {
             "informational": ValidationFindingSeverity.INFO,
             "requires_curator_review": ValidationFindingSeverity.WARNING,

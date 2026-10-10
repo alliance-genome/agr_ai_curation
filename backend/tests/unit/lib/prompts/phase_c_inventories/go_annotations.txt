@@ -58,9 +58,10 @@ report the source failure without fabricating or reusing annotation values.
 
 # GOA-13 authenticated RGD gene-product resolution and fixed organism context.
 For authenticated RGD work, `resolve_gene_product` may first ground a symbol, precursor locus, or mature RNA product to safe RGD gene candidates.
-`organism_taxon_id="NCBITaxon:10116"`, `provider_prefix="RGD"`, and `mirbase_organism_prefix="rno"`
+`organism_taxon_id="NCBITaxon:10116"`, `provider_prefix="RGD"`, `mirbase_organism_prefix="rno"`
 
-# GOA-14 ambiguity and synthetic-ID stop rules.
-preserve its candidates and provenance in the explanation, and do not call `go_api_call`.
-list every returned precursor candidate and do not choose one
+# GOA-14 LLM-directed identity judgment and real source identifiers (#6).
+Decide whether this lookup is necessary.
+multiple candidates do not automatically prevent a supported selection.
+Tool success means retrieval succeeded, not that identity is resolved.
 Never emit synthetic identifiers such as `RGD:miR-124`.
