@@ -394,6 +394,7 @@ def test_workshop_accepts_a_legacy_expression_extractor_but_refuses_an_attached_
 def _retired_resolver_migration():
     path = Path(__file__).resolve().parents[3] / "alembic/versions/b8f2c3d4e5a6_remove_retired_resolver_tool_configuration.py"
     spec = spec_from_file_location("retired_resolver_configuration", path)
+    assert spec is not None and spec.loader is not None
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

@@ -10,7 +10,7 @@ Immutable executable snapshots and flow pins remain untouched: affected owners
 must explicitly save a replacement revision and select it in their flows. This
 is not a promise that historical executable revisions become runnable.
 """
-from alembic import op
+from alembic import op  # pyright: ignore[reportAttributeAccessIssue]
 import sqlalchemy as sa
 
 revision = "b8f2c3d4e5a6"
