@@ -4220,13 +4220,15 @@ def _patch_gene_expression_observation_impl(
     """Patch enumerated fields on one staged gene-expression observation.
 
     Args:
-        updates: Field updates, each a field_path with its string_value, mention,
-            proposed_curie or evidence_record_ids. subject, reference and data_provider take the
-            new paper wording in string_value. A controlled field takes its paper wording in
-            mention and, only when the paper prints one, its ontology ID in proposed_curie; a
-            list field gains one more value. Every patched value stays UNRESOLVED until its
-            validator looks it up. A `rationale` update must be non-empty; it cannot be
-            cleared.
+        updates: Field updates, each a field_path with its string_value, bool_value,
+            mention, proposed_curie or evidence_record_ids. For negated, supply true or
+            false in bool_value and null in every other value slot; bool_value must be
+            null for other fields. subject, reference and data_provider take the new
+            paper wording in string_value. A controlled field takes its paper wording
+            in mention and, only when the paper prints one, its ontology ID in
+            proposed_curie; a list field gains one more value. These lookup-dependent
+            values stay UNRESOLVED until their validator looks them up.
+            A `rationale` update must be non-empty; it cannot be cleared.
     """
 
     attempted_query = _attempt_query(
