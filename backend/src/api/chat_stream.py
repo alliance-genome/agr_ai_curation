@@ -11,6 +11,7 @@ from src.lib.executable_runs import (
 )
 from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
 from src.lib.openai_agents.event_types import curator_facing_run_error_message
+from src.lib.observability.runtime import sanitized_runtime_error
 from src.lib.observability.sentry import (
     gen_ai_workflow_transaction,
     hash_sentry_identifier,
@@ -986,8 +987,22 @@ async def chat_stream_endpoint(
                             message="Chat session is no longer available.",
                         ))
                         return
-                    except Exception:
-                        logger.exception("Failed to preserve saved extraction access after chat error")
+                    except Exception as exc:
+                        try:
+                            report_runtime_exception(
+                                sanitized_runtime_error("Chat partial-result recovery persistence failed"),
+                                component="chat_stream",
+                                operation="partial_result_recovery_persistence_failed",
+                                context={"exception_type": type(exc).__name__},
+                            )
+                        except Exception:
+                            # Reporting must not interrupt the terminal failure response.
+                            pass
+                        logger.error(
+                            "Failed to preserve saved extraction access after chat error (%s)",
+                            type(exc).__name__,
+                            extra={"sentry_skip_event": True},
+                        )
                         runner_error_message = (
                             "The response failed and links to saved results could not be saved to chat history."
                         )
