@@ -423,6 +423,7 @@ async def test_direct_expression_stage_preserves_unresolved_mentions_without_res
                 "pending_ref_id": "synthetic-expression",
                 "evidence_record_ids": ["synthetic-evidence"],
                 "where_expressed_statement": "Synthetic expression observation",
+                "negated": False,
                 "rationale": "The paper reports this expression observation.",
                 "data_provider": "WB",
                 "subject": {"mention": "synthetic", "proposed_primary_external_id": None},

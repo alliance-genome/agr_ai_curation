@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Optional, List, Dict, Any, Tuple, Literal, Annotated, Sequence, Union
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, field_validator, model_validator
 from agents import function_tool
 
 from agr_ai_curation_runtime.agr_lookup import (
@@ -122,6 +122,7 @@ GeneExpressionControlledFieldPath = Literal[
 ]
 
 GeneExpressionPatchFieldPath = Literal[
+    "negated",
     "pending_ref_id",
     "evidence_record_ids",
     "where_expressed_statement",
@@ -351,6 +352,9 @@ def _check_proposed_curie(field_path: str, proposed_curie: Optional[str]) -> Non
 
 class GeneExpressionPatchUpdateInput(_StrictToolModel):
     field_path: GeneExpressionPatchFieldPath
+    bool_value: Optional[StrictBool] = Field(
+        description="Required true or false when patching negated; null for every other field."
+    )
     string_value: Optional[StrictStr] = Field(
         description=(
             "The new text for a plain field. For subject, reference and data_provider it is "
@@ -365,6 +369,16 @@ class GeneExpressionPatchUpdateInput(_StrictToolModel):
 
     @model_validator(mode="after")
     def _validate_update_shape(self) -> "GeneExpressionPatchUpdateInput":
+        if self.field_path == "negated":
+            if self.bool_value is None:
+                raise ValueError("negated patch requires bool_value true or false")
+            if any(value is not None for value in (
+                self.string_value, self.mention, self.proposed_curie, self.evidence_record_ids
+            )):
+                raise ValueError("negated patch takes only bool_value; pass other values null")
+            return self
+        if self.bool_value is not None:
+            raise ValueError("bool_value is only valid for negated; pass null")
         if self.field_path in _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS:
             if not _clean_string(self.mention):
                 raise ValueError(
@@ -392,6 +406,7 @@ class GeneExpressionPatchUpdateInput(_StrictToolModel):
 
 
 class GeneExpressionStageInput(_StrictToolModel):
+    negated: StrictBool
     pending_ref_id: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
     where_expressed_statement: StrictStr
@@ -3704,6 +3719,7 @@ def _stage_payload_from_gene_expression_input(
         "object_type": GENE_EXPRESSION_OBJECT_TYPE,
         "pending_ref_id": stage_input.pending_ref_id,
         "where_expressed_statement": stage_input.where_expressed_statement,
+        "negated": stage_input.negated,
         "rationale": stage_input.rationale,
         "data_provider": staged_gene_expression_value("data_provider", stage_input.data_provider),
         "expression_annotation_subject": _gene_expression_subject_value(stage_input.subject),
@@ -4056,6 +4072,7 @@ def _search_builder_candidates(
 
 @document_rationale_arg
 def _stage_gene_expression_observation_impl(
+    negated: StrictBool,
     pending_ref_id: str,
     evidence_record_ids: Annotated[List[str], Field(min_length=1, max_length=20)],
     where_expressed_statement: str,
@@ -4081,6 +4098,10 @@ def _stage_gene_expression_observation_impl(
     ConditionRelation list (see ``<experimental_condition_rules>`` in the extractor prompt).
 
     Args:
+        negated: True only when the paper explicitly reports expression was not
+            detected in the specified location or stage; false for a positive
+            expression observation. Silence about expression is not evidence of
+            absence. Preserve the supporting paper wording in the evidence record.
         data_provider: The Alliance member database for the paper's organism, as its
             abbreviation (for example ZFIN, MGI, FB, WB). The data-provider validator
             confirms it against the Alliance provider list.
@@ -4088,6 +4109,7 @@ def _stage_gene_expression_observation_impl(
 
     attempted_query = _attempt_query(
         "stage_gene_expression_observation",
+        negated=negated,
         pending_ref_id=pending_ref_id,
         evidence_record_ids=evidence_record_ids,
         where_expressed_statement=where_expressed_statement,
@@ -4107,6 +4129,7 @@ def _stage_gene_expression_observation_impl(
     )
     try:
         stage_input = GeneExpressionStageInput(
+            negated=negated,
             pending_ref_id=pending_ref_id,
             evidence_record_ids=evidence_record_ids,
             where_expressed_statement=where_expressed_statement,
@@ -4268,6 +4291,9 @@ def _patch_gene_expression_observation_impl(
     payload = deepcopy(candidate.staged_fields)
     evidence_ids = list(candidate.evidence_record_ids)
     for update in patch_input.updates:
+        if update.field_path == "negated":
+            payload["negated"] = update.bool_value
+            continue
         if update.field_path in _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS:
             _place_gene_expression_controlled_value(
                 payload,
