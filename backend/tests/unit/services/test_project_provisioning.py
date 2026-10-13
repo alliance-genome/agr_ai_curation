@@ -53,7 +53,7 @@ def test_unconfigured_does_not_pick_arbitrary_project(db):
     assert db.scalars(select(ProjectMember)).all() == []
 
 
-@pytest.mark.parametrize('setting', ['invalid', str(uuid.uuid4()), 'inactive'])
+@pytest.mark.parametrize('setting', ['invalid', '00000000-0000-0000-0000-000000000001', 'inactive'])
 def test_invalid_default_does_not_persist_partial_user(db, monkeypatch, setting):
     if setting == 'inactive':
         project(db, monkeypatch, active=False)
