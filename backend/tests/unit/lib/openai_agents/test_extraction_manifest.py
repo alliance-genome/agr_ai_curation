@@ -302,3 +302,21 @@ def test_duplicate_validator_findings_keep_rejected_writeback():
     assert decision["open_finding"] is True
     assert page["validation"]["error_count"] == 1
     assert "must not be described as an accepted identity" in render_extraction_manifest_page(page)
+
+
+@pytest.mark.parametrize("object_count", [0, 1, 3])
+def test_manifest_preserves_complete_specialist_explanation(object_count):
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    explanation = "  Findings and exclusions: αβ\n" + ("Uncertain; inspect evidence. " * 1000) + "\nEnd.  "
+    payload = _payload(object_count)
+    payload["specialist_explanation"] = explanation
+    # Simulate storage serialization and read-back through the canonical schema.
+    restored = DomainEnvelope.model_validate_json(json.dumps(payload)).model_dump(mode="json")
+    page = build_extraction_manifest_page(restored, result_ref="extraction-result:fixture", limit=1)
+    rendered = render_extraction_manifest_page(page)
+    assert page["specialist_explanation"] == explanation
+    assert explanation in rendered
+    assert page["object_count"] == object_count
+    assert "extraction-result:fixture" in rendered
+    assert "Hidden evidence" not in rendered

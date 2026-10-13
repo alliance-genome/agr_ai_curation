@@ -6018,6 +6018,14 @@ async def run_specialist_with_events(
                 message=required_tool_error,
         )
 
+    # Preserve the authored narrative independently of canonical extraction data.
+    # In particular, do not parse or shorten a builder specialist's final text.
+    specialist_explanation = (
+        result.final_output
+        if builder_materializer_agent and isinstance(getattr(result, "final_output", None), str)
+        else None
+    )
+
     # Get final output - handle both structured and string outputs
     final_output = ""
     logger.info(
@@ -6166,6 +6174,8 @@ async def run_specialist_with_events(
                 len(text_from_items),
             )
             final_output = text_from_items
+            if builder_materializer_agent:
+                specialist_explanation = text_from_items
         elif output_type is not None:
             logger.warning(
                 "%s: No text found in new_items, cannot extract %s",
@@ -6185,6 +6195,8 @@ async def run_specialist_with_events(
             and hasattr(result, "_accumulated_text")
             and result._accumulated_text
         ):
+            if builder_materializer_agent:
+                specialist_explanation = result._accumulated_text
             accumulated_text = result._accumulated_text.strip()
             if accumulated_text:
                 logger.info(
@@ -6752,6 +6764,13 @@ async def run_specialist_with_events(
     phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
         validator_dispatch_started_at
     )
+    if builder_finalization is not None and specialist_explanation is not None:
+        builder_finalization = replace(
+            builder_finalization,
+            payload={**builder_finalization.payload, "specialist_explanation": specialist_explanation},
+        )
+        builder_workspace.finalization = builder_finalization
+
     retained_evidence_source = (
         json.dumps(builder_finalization.payload)
         if builder_finalization is not None

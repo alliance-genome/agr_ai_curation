@@ -125,7 +125,13 @@ measurement/blocking.
     Keep the complete answer, including scientific text; do not silently shorten
     it or claim a byte bound. Evidence:
     `test_streaming_tools_helpers.py::test_specialist_answer_handoff_preserves_exact_scientific_text`.
-    Structured extraction results still use the existing supervisor manifests.
+    Structured extraction results use supervisor manifests alongside the complete
+    specialist-authored final explanation. `DomainEnvelope.specialist_explanation`
+    persists that text for empty and nonempty builder extractions; it is not truncated
+    in the initial handoff. Saved objects/findings remain authoritative for persisted
+    state. `inspect_results(action="summary")` exposes an explanation read descriptor;
+    `action="explanation"` retrieves exact budgeted chunks with the existing result-hash
+    continuation contract. No model rerun is needed to inspect the explanation.
   - Curation-prep `envelope_refs` are an application handoff manifest, not source
     scientific content. `flows/executor.py::_make_curation_prep_tool` returns
     `CurationPrepAgentOutput`; `curation_workspace/pipeline.py` consumes the

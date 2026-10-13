@@ -74,6 +74,7 @@ def build_extraction_manifest_page(
             if manifest_objects
             else "empty_extraction"
         ),
+        "specialist_explanation": envelope.specialist_explanation,
         "object_count": len(manifest_objects),
         "page": {
             "cursor": cursor,
@@ -179,6 +180,15 @@ def render_extraction_manifest_page(page: Mapping[str, Any]) -> str:
         f"Result status: {result_status}",
         f"Manifest page: {page_number} of {page_count}, page_size={page_limit}",
     ]
+
+    explanation = page.get("specialist_explanation")
+    if isinstance(explanation, str) and explanation:
+        lines.extend([
+            "Specialist explanation (complete authored text; saved objects and "
+            "validation findings determine persisted state):",
+            explanation,
+            "End specialist explanation.",
+        ])
 
     if result_status == "non_empty_extraction_ready":
         lines.extend(
@@ -577,7 +587,7 @@ def _next_actions(
 ) -> list[str]:
     if not has_objects:
         return [
-            "Report that the extractor returned zero retained objects.",
+            "Report that the extractor returned zero retained objects and preserve its explanation. An explained empty result can fully answer the request.",
             "Ask for clarification or make one better-scoped retry only when the missing scope is clear.",
         ]
 

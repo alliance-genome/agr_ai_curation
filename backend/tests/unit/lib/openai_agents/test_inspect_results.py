@@ -799,3 +799,23 @@ async def test_supervisor_objects_read_values_like_exports(monkeypatch, events, 
         action="objects", result_ref=f"extraction-result:{RESULT_ID}"))
 
     assert objects["objects"][0]["fields"].get("gene.curie") == shown
+
+
+@pytest.mark.asyncio
+async def test_saved_explanation_is_discoverable_and_exactly_readable(monkeypatch):
+    explanation = "  No eligible disease annotations. αβ\n" + "Exclusion and uncertainty. " * 10000
+    payload = _payload()
+    payload["specialist_explanation"] = explanation
+    _patch_records(monkeypatch, [_InspectRecord(payload_json=payload)])
+    summary = json.loads(await inspect_results_module.inspect_results(action="summary"))
+    call = summary["specialist_explanation"]["read"]
+    chunks = []
+    while call is not None:
+        response = json.loads(await inspect_results_module.inspect_results(**call))
+        assert response["status"] == "ok"
+        if "value" in response:
+            chunks.append(response["value"])
+        else:
+            chunks.append(response["detail"]["content"])
+        call = response.get("next_call")
+    assert "".join(chunks) == explanation

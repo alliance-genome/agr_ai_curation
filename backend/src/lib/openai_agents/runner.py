@@ -1291,6 +1291,7 @@ async def _run_agent_with_owned_resources(
     giving immediate visibility into specialist agent activity.
     """
     full_response = ""
+    final_message_text: str | None = None
     structured_result = None
     tools_called: List[str] = []
     pending_tool_calls: deque[Dict[str, Any]] = deque()
@@ -1996,6 +1997,8 @@ async def _run_agent_with_owned_resources(
                         try:
                             from agents.items import ItemHelpers
                             message_text = ItemHelpers.text_message_output(item)
+                            if message_text:
+                                final_message_text = message_text
                             if message_text and not full_response:
                                 full_response = message_text
                         except Exception:
@@ -2194,6 +2197,15 @@ async def _run_agent_with_owned_resources(
             return
         # The original extraction was checked before dispatch; the shared
         # validator returns a normalized DomainEnvelope with retained findings.
+        authored_explanation = getattr(result, "final_output", None)
+        if authored_explanation is None:
+            authored_explanation = final_message_text if final_message_text is not None else (full_response or None)
+        if isinstance(authored_explanation, str):
+            finalization = replace(
+                finalization,
+                payload={**finalization.payload, "specialist_explanation": authored_explanation},
+            )
+            builder_workspace.finalization = finalization
         structured_result = finalization.payload
         if not full_response:
             full_response = str(getattr(result, "final_output", "") or "Extraction finalized.")

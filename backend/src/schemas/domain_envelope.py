@@ -548,6 +548,14 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
         default=None,
         description="Domain pack version used to produce or interpret this envelope",
     )
+    specialist_explanation: Optional[str] = Field(
+        default=None,
+        description=(
+            "Complete specialist-authored final explanation, including conclusions, "
+            "exclusions and uncertainty. Saved objects and validation findings remain "
+            "authoritative for persisted state; this text is not a validation decision."
+        ),
+    )
     status: DomainEnvelopeStatus = Field(default=DomainEnvelopeStatus.EXTRACTED)
     schema_ref: Optional[SchemaRef] = Field(
         default=None,

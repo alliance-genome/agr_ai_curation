@@ -38,9 +38,10 @@ async def run_direct(resources, agent, trace):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("profile_bound", [False, True])
+@pytest.mark.parametrize("text_source", ["final_output", "message"])
 @pytest.mark.parametrize("outcome", ["persisted", "persistence_failed", "missing_owner", "missing_session",
                                      "missing_finalization", "validator_failed"])
-async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkeypatch, outcome, profile_bound):
+async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkeypatch, outcome, profile_bound, text_source):
     from uuid import UUID
     from agr_ai_curation_alliance.tools.gene_builder_tools import finalize_gene_extraction
     from src.api import chat_common
@@ -102,16 +103,20 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
             raise streaming_tools.SpecialistOutputError(agent.name, "builder_finalization")
         return json.dumps(validated)
 
+    explanation = "  Findings, exclusions and uncertainty.\nComplete authored explanation.  "
+    from agents.items import ItemHelpers
+    monkeypatch.setattr(ItemHelpers, "text_message_output", lambda item: explanation)
+
     class Result:
-        final_output = "Completion manifest, not the canonical payload"
+        final_output = explanation if text_source == "final_output" else None
 
         async def stream_events(self):
             workspace = builder.get_active_extraction_builder_workspace()
             workspace.upsert_candidate(candidate_id="materialized", staged_fields=payload)
             if outcome != "missing_finalization":
                 workspace.finalize(candidate_ids=["materialized"])
-            if False:
-                yield None
+            if text_source == "message":
+                yield SimpleNamespace(type="run_item_stream_event", item=SimpleNamespace(type="message_output_item"))
 
     monkeypatch.setattr(runner, "capture_source_document", capture)
     monkeypatch.setattr(runner, "persist_inline_validated_extraction_result", persist)
@@ -155,7 +160,7 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
     await consume()
     assert len(calls) == 1
     stored = calls[0]
-    assert stored["payload_json"] == validated
+    assert stored["payload_json"] == {**validated, "specialist_explanation": explanation}
     assert (stored["document_id"], stored["user_id"], stored["origin_session_id"], stored["trace_id"]) == (
         document_id, "synthetic-owner", "synthetic-session", "synthetic-trace")
     assert stored["agent_key"] == stored["tool_name"] == agent.agent_key
@@ -253,7 +258,7 @@ async def test_direct_builder_requires_and_harvests_canonical_finalization(runti
     if finalized:
         structured = [event for event in events if event["type"] == "STRUCTURED_RESULT"]
         assert len(structured) == 1
-        assert structured[0]["data"]["result"] == expected
+        assert structured[0]["data"]["result"] == {**expected, "specialist_explanation": Result.final_output}
         assert workspaces[0].finalized_candidate_ids == ("materialized",)
         assert list(workspaces[0].candidates) == ["materialized"]
         assert events[-1]["type"] == "RUN_FINISHED"
@@ -372,7 +377,8 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
     }, "synthetic-cell")
     if outcome == "accepted":
         result = await call
-        assert result.output == captured["canonical"] == captured["dispatch"]
+        assert result.output == {**captured["canonical"], "specialist_explanation": "Extraction finished."}
+        assert captured["canonical"] == captured["dispatch"]
         assert captured["workspace"].finalization.source_candidate_ids == ("gene-candidate-1",)
         assert not any(event["event_type"] == "extraction_builder.top_level_curation_shaped_structured_output"
                        for event in trace_events)

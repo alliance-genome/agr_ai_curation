@@ -92,6 +92,7 @@ _ACTIONS = frozenset(
         "list",
         "search",
         "summary",
+        "explanation",
         "objects",
         "object",
         "field",
@@ -164,6 +165,7 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
     "list": frozenset(),
     "search": frozenset({"query"}),
     "summary": frozenset(),
+    "explanation": frozenset(),
     "objects": frozenset(
         {"object_type", "status", "validation_state", "severity", "query", "field_path", "fields"}
     ),
@@ -514,6 +516,13 @@ def _inspect(
     normalized_path = _optional_text(field_path)
     normalized_detail = _optional_text(detail_path)
 
+    if action == "explanation":
+        return _exact_value(
+            result.envelope.specialist_explanation,
+            head=result.head("explanation"), call=result.call("explanation"),
+            sha=result.sha(action="explanation"), expected_sha=result_sha256, cursor=cursor,
+            message="Complete specialist-authored explanation; saved objects and findings determine persisted state.",
+        )
     if action == "summary":
         return _summary_response(result)
     if action == "objects":
@@ -610,7 +619,7 @@ def _continuation_arguments(
 
     if action in {"summary", "object"}:
         return frozenset()
-    if action == "field":
+    if action in {"field", "explanation"}:
         return _CHUNK_ARGUMENTS
     if (action == "validation" and finding_ref) or (
         action == "validator_results" and validator_result_key
@@ -673,7 +682,8 @@ def _help_response() -> dict[str, Any]:
         "status": "ok",
         "message": (
             "inspect_results browses persisted canonical extraction results without "
-            "rerunning specialists. Start with summary (counts), then filter pages."
+            "rerunning specialists. Start with summary (counts), read explanation for the "
+            "complete specialist conclusion, then filter pages."
         ),
         "action": "help",
         "actions": sorted(_ACTIONS),
@@ -1341,6 +1351,9 @@ def _summary_response(result: _Result) -> dict[str, Any]:
         **result.head("summary"),
         "summary": _record_summary(result.record),
         "domain_pack_id": result.envelope.domain_pack_id,
+        "specialist_explanation": _descriptor(
+            result.envelope.specialist_explanation, read=result.call("explanation")
+        ) if result.envelope.specialist_explanation is not None else None,
         "inventory": inventory,
         "filterable_fields": {
             object_type: list(policy.field_paths)

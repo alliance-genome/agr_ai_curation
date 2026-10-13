@@ -405,8 +405,9 @@ _LEDGER_REPLAY_RESULT_GUIDANCE = (
 )
 _LEDGER_REPLAY_EMPTY_RESULT_GUIDANCE = (
     "This repeated request already produced an empty extraction result at "
-    "{result_ref}. Report the empty result, ask for clarification, or make one "
-    "materially different retry if the curator's intended scope is clear."
+    "{result_ref}. Report the empty result and the specialist explanation below. "
+    "An explained empty result can answer the request. Make a materially different retry "
+    "only when scope is unresolved or the curator requests a scope change."
 )
 _LEDGER_BUDGET_EXCEEDED_MESSAGE = (
     "You have made enough specialist lookups for this turn. Stop and summarize what "
@@ -1337,7 +1338,11 @@ def _build_runtime_tool_availability_note(
         "EXTRACTION RESULT COMPLETION: A non-empty extractor manifest is "
         "normally enough to answer the curator's current request unless the "
         "curator asks to broaden/narrow/rerun or the manifest says the "
-        "requested scope was not handled. Answer from the manifest; use "
+        "requested scope was not handled. Answer from the manifest and complete specialist "
+        "explanation, preserving exclusions and uncertainty. An explained empty result "
+        "can also fully answer the request. Saved objects and findings determine persisted "
+        "state; authored prose does not override them. Use action=\"explanation\" with "
+        "inspect_results to read the saved explanation exactly. Use "
         "inspect_results to search or browse existing persisted results, more manifest "
         "objects, evidence, validation findings, or exact YAML-declared field "
         "slices. When the curator asks about earlier evidence, prior outputs, "
