@@ -1189,12 +1189,27 @@ def test_chat_stream_endpoint_persists_internal_extraction_result_without_stream
     assert persisted_requests[0].metadata["tool_name"] == "ask_gene_expression_specialist"
 
 
-@pytest.mark.parametrize("summary_failed", [False, True, "save_failed"])
-def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkeypatch, summary_failed):
+@pytest.mark.parametrize(
+    ("summary_failed", "reporting_fails"),
+    [(False, False), (True, False), ("save_failed", False), ("save_failed", True), ("session_gone", False)],
+)
+def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(
+    monkeypatch, caplog, summary_failed, reporting_fails,
+):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
     captured_finalize = {}
+    captured_reports = []
+    sensitive_detail = "private curator text SQL params password=secret-recovery-token"
+
+    def _report(exc, **kwargs):
+        captured_reports.append((exc, kwargs))
+        if reporting_fails:
+            raise RuntimeError("Sentry unavailable")
+        return True
+
+    monkeypatch.setattr(chat_stream, "report_runtime_exception", _report)
 
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
@@ -1256,7 +1271,9 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkey
     def _finalize(**kwargs):
         captured_finalize.update(kwargs)
         if summary_failed == "save_failed":
-            raise RuntimeError("Assistant transcript save failed")
+            raise RuntimeError(sensitive_detail)
+        if summary_failed == "session_gone":
+            raise chat_common.ChatHistorySessionNotFoundError(sensitive_detail)
         return _assistant_record(
             session_id=kwargs["session_id"],
             turn_id=kwargs["turn_id"],
@@ -1280,11 +1297,40 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkey
 
     events = asyncio.run(_consume_stream(response))
 
-    assert events[-1]["type"] == ("turn_failed" if summary_failed else "turn_completed")
+    expected_terminal = "session_gone" if summary_failed == "session_gone" else (
+        "turn_failed" if summary_failed else "turn_completed"
+    )
+    assert events[-1]["type"] == expected_terminal
     if summary_failed == "save_failed":
-        assert "could not be saved to chat history" in events[-1]["message"]
+        assert events[-1]["message"] == (
+            "The response failed and links to saved results could not be saved to chat history."
+        )
+        assert events[-1]["error_type"] == "ResponsesWebSocketError"
         assert not any(event["type"] == "turn_completed" for event in events)
-    elif summary_failed:
+        assert len(captured_reports) == 1
+        reported, metadata = captured_reports[0]
+        assert str(reported) == "Chat partial-result recovery persistence failed"
+        assert reported.__traceback__ is not None
+        assert reported.__context__ is None
+        assert reported.__cause__ is None
+        assert metadata == {
+            "component": "chat_stream",
+            "operation": "partial_result_recovery_persistence_failed",
+            "context": {"exception_type": "RuntimeError"},
+        }
+        companion_logs = [
+            record for record in caplog.records
+            if record.msg.startswith("Failed to preserve saved extraction access")
+        ]
+        assert len(companion_logs) == 1
+        assert companion_logs[0].sentry_skip_event is True
+        assert companion_logs[0].exc_info is None
+    else:
+        assert captured_reports == []
+    assert sensitive_detail not in caplog.text + repr(captured_reports) + repr(events)
+    if summary_failed == "session_gone":
+        assert events[-1]["message"] == "Chat session is no longer available."
+    elif summary_failed is True:
         assert "Review & Curate" in events[-1]["message"]
         assert captured_finalize["failure_message"]
         assert "summary" in captured_finalize["assistant_message"]

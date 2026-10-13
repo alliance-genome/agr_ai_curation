@@ -560,6 +560,13 @@ Identifier-like runtime context is hashed by the global Sentry hook when it uses
 recognized keys such as `batch_id`, `document_id`, `flow_id`, `flow_run_id`,
 `job_id`, `run_id`, `session_id`, `trace_id`, or `turn_id`.
 
+Chat partial-result recovery reports failures saving access to durable extraction
+results after a summary failure with component `chat_stream` and operation
+`partial_result_recovery_persistence_failed`. The fixed, chain-free exception
+includes only exception-type context; SQL, chat content, and result references
+are omitted. The companion error log skips event promotion. Reporting failures
+preserve the existing `turn_failed` response, and missing sessions remain quiet.
+
 Agent Studio reports unexpected registered diagnostic and flow-tool handler
 exceptions with component `agent_studio`, operation `tool_handler_failed`, and
 the registered `tool_name` tag. The sanitized exception and companion log retain
