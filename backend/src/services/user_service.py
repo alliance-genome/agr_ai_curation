@@ -9,6 +9,8 @@ Requirements: FR-005, FR-006
 """
 
 import logging
+import os
+import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
@@ -16,6 +18,7 @@ from sqlalchemy.orm import Session
 from weaviate.classes.tenants import Tenant
 
 from auth_runtime.base import AuthPrincipal
+from src.models.sql.agent import Project, ProjectMember
 from src.models.sql.user import User
 from src.lib.weaviate_helpers import get_connection, get_tenant_name
 
@@ -79,7 +82,7 @@ def provision_user(db: Session, principal: AuthPrincipal) -> User:
         User database model (either existing or newly created)
 
     Behavior:
-        - First login: Create user record + Weaviate tenants
+        - First login: Create user and configured default-project membership atomically, then Weaviate tenants
         - Subsequent logins: Update last_login timestamp
         - Email changes: Update email from identity provider profile
 
@@ -113,6 +116,19 @@ def provision_user(db: Session, principal: AuthPrincipal) -> User:
     db_user = db.query(User).filter_by(auth_sub=auth_sub).one_or_none()
 
     if db_user is None:
+        # Enrollment is explicit deployment policy, never inferred from the first
+        # project. Validate before creating the user so both rows commit together.
+        project_id = None
+        configured_project = os.getenv("DEFAULT_PROJECT_ID", "").strip()
+        if configured_project:
+            try:
+                project_id = uuid.UUID(configured_project)
+            except ValueError as exc:
+                raise ValueError("DEFAULT_PROJECT_ID must be a project UUID") from exc
+            project = db.query(Project).filter_by(id=project_id, is_active=True).one_or_none()
+            if project is None:
+                raise ValueError("DEFAULT_PROJECT_ID must identify an active project")
+
         # First login - create new user
         logger.info('First login detected for principal %s - creating account', auth_sub)
 
@@ -126,6 +142,9 @@ def provision_user(db: Session, principal: AuthPrincipal) -> User:
             is_active=True
         )
         db.add(db_user)
+        if project_id is not None:
+            db.flush()
+            db.add(ProjectMember(project_id=project_id, user_id=db_user.id, role="member"))
         db.commit()
         db.refresh(db_user)
 
