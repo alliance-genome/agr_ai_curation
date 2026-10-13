@@ -17,6 +17,16 @@ it with the public key and imports as that same curator. Copies get `uuid5` ids
 (`backend/src/lib/flow_transfer/ids.py`), so a re-import updates the same flow in
 place. Each import adds an append-only `benchmark_flow_imports` row.
 
+Before committing private dependencies, the resolver checks every imported
+snapshot and the actual revision it will activate as each agent's head against
+its model catalog, supported reasoning options, and registered output schemas.
+The active head can be newer than the incoming pins when updating an existing
+copy. An incompatible dependency refuses the import and rolls back that phase,
+preserving existing copies and import versions. Models are never substituted.
+Unavailable models or unsupported reasoning return `model_unavailable`; an
+unregistered output schema returns `cannot_run`. Startup validation retains the
+same runtime contracts.
+
 ## Configuration (all-or-none per side; a partial set stops startup)
 
 | Side | Key | Notes |

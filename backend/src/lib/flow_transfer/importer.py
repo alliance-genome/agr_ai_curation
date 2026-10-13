@@ -2,8 +2,9 @@
 
 Design section 8.3. Flow save validation looks agents up through its own database
 session, so the private copies of output structures, agents and their revisions are
-written and committed first (phase 1, all or nothing). The flow, its definition and
-the import record then change together in one transaction (phase 2). Phase 1 rows
+checked for destination runtime compatibility, then written and committed first
+(phase 1, all or nothing). The flow, its definition and the import record then
+change together in one transaction (phase 2). Phase 1 rows
 are private, deterministic and reused unchanged by a retry, so a phase 2 failure
 leaves nothing a curator can see. Callers own the sessions and the commits.
 """
@@ -21,7 +22,9 @@ from src.lib.agent_studio.custom_agent_service import custom_agent_name_exists, 
 from src.lib.agent_studio.execution_revision_service import insert_imported_execution_revision
 from src.lib.agent_studio.profile_mapping_service import (persist_capability_references,
                                                           validate_profile_mappings)
+from src.lib.agent_studio.runtime_validation import agent_runtime_compatibility_errors
 from src.lib.benchmarks.saved_flows import flow_summary
+from src.lib.config.models_loader import ModelDefinition, list_models
 from src.lib.flows.execution_revisions import (flow_execution_revision_findings,
                                                resolve_flow_execution_revisions)
 from src.lib.flows.flow_service import save_flow_definition
@@ -215,8 +218,20 @@ def _copy_head(row: Agent, saved: AgentExecutionSnapshot) -> None:
     row.output_schema_key = saved.output_contract.output_schema_key
 
 
+def _require_runtime_compatibility(
+    saved: AgentExecutionSnapshot, models_by_id: dict[str, ModelDefinition],
+) -> None:
+    errors = agent_runtime_compatibility_errors(
+        model_id=saved.model_id, model_reasoning=saved.model_reasoning,
+        output_schema_key=saved.output_contract.output_schema_key, models_by_id=models_by_id,
+    )
+    if errors:
+        raise ImportRefused(reason_for_finding(next(iter(errors))), "runtime compatibility")
+
+
 def _import_agent(db: Session, ctx: ImportContext, agent: BundleAgent, checked: CheckedBundle,
-                  profile_pins: dict[UUID, tuple[UUID, UUID]]) -> None:
+                  profile_pins: dict[UUID, tuple[UUID, UUID]],
+                  models_by_id: dict[str, ModelDefinition]) -> None:
     agent_id = _derived(ctx, "agent", agent.source_agent_id)
     key = make_custom_agent_id(agent_id)
     snapshots = {revision.source_revision_id: _rewritten(checked.snapshots[revision.source_revision_id],
@@ -256,17 +271,24 @@ def _import_agent(db: Session, ctx: ImportContext, agent: BundleAgent, checked: 
                                            revision_number=revision.revision, creator_id=ctx.user_id)
     head = db.execute(select(AgentExecutionRevision).where(AgentExecutionRevision.agent_id == agent_id)
                       .order_by(AgentExecutionRevision.revision.desc()).limit(1)).scalar_one()
+    saved_head = AgentExecutionSnapshot.model_validate(head.snapshot)
+    # A local copy can have newer history than any incoming pin. Check the actual
+    # head that this transaction activates before phase 1 can be committed.
+    _require_runtime_compatibility(saved_head, models_by_id)
     row.execution_revision_id = head.id
-    _copy_head(row, AgentExecutionSnapshot.model_validate(head.snapshot))
+    _copy_head(row, saved_head)
     db.flush()
 
 
 def import_dependencies(db: Session, ctx: ImportContext, checked: CheckedBundle) -> None:
-    """Phase 1: private copies of output structures, agents and the pinned revisions."""
+    """Phase 1: compatible private dependencies, all or nothing before commit."""
     _lock_curator(db, ctx)
+    models_by_id = {model.model_id: model for model in list_models()}
+    for saved in checked.snapshots.values():
+        _require_runtime_compatibility(saved, models_by_id)
     profile_pins = _import_profiles(db, ctx, checked)
     for agent in checked.bundle.agents:
-        _import_agent(db, ctx, agent, checked, profile_pins)
+        _import_agent(db, ctx, agent, checked, profile_pins, models_by_id)
     db.flush()
 
 

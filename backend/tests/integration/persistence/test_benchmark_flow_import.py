@@ -1,26 +1,38 @@
 """The resolver imports a curator's flow as their own private copy (design 8.3 and 15.2)."""
 
 from copy import deepcopy
+from dataclasses import replace
 from uuid import UUID
 
 import pytest
 import sqlalchemy as sa
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import HTTPException
+from pydantic import create_model
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.orm import Session
 
+from src.api import benchmark_flow_imports as api
 from src.lib.agent_studio import custom_agent_service as service
+from src.lib.agent_studio import runtime_validation
+from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
+from src.lib.config.models_loader import get_model
+from src.lib.config import schema_discovery
 from src.lib.agent_studio.execution_revision_service import (append_execution_revision,
                                                              authorize_execution_receipt)
 from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
 from src.lib.benchmarks.saved_flows import flow_summary
 from src.lib.flow_transfer import importer
 from src.lib.flow_transfer.bundle import check_bundle
+from src.lib.flow_transfer.config import FlowImportConfig
 from src.lib.flow_transfer.export import ExportCurator, evaluate_flow
 from src.lib.flow_transfer.ids import derived_agent_key, derived_id
 from src.lib.flow_transfer.importer import (ImportContext, ImportRefused, import_dependencies,
                                             import_flow, unchanged_import)
 from src.lib.flows.execution_revisions import (flow_execution_revision_findings,
                                                resolve_flow_execution_revisions)
+from src.lib.flows import execution_revisions
+from src.models.sql import database
 from src.models.sql import Agent, AgentExecutionRevision, BenchmarkFlowImport, CurationFlow
 from src.models.sql.generic_extraction_profile import (GenericExtractionProfile,
                                                        GenericExtractionProfileRevision)
@@ -53,6 +65,7 @@ def exported(db, flow, owner=1, groups=()):
     evaluated = evaluate_flow(db, flow, curator, issuer=ISSUER, app_version="0.10.1",
                               exported_at="2026-10-06T10:00:00Z")
     assert evaluated.reason is None
+    assert evaluated.bundle is not None
     return check_bundle(evaluated.bundle)
 
 
@@ -76,6 +89,148 @@ def count(db, model):
 def copy_of(db, agent, user_id=2):
     return db.scalar(sa.select(Agent).where(Agent.agent_key == derived_agent_key(
         agent.id, export_issuer=ISSUER, importer_sub=f"sub-{user_id}")))
+
+
+@pytest.fixture
+def committed_import(resolver, monkeypatch):
+    """Run the endpoint's real phase commits in fresh sessions, isolated by the fixture."""
+    connection = resolver.get_bind()
+    commits = []
+
+    def sessions():
+        session = Session(bind=connection, join_transaction_mode="create_savepoint")
+        sa.event.listen(session, "after_commit", lambda _: commits.append(True))
+        return session
+
+    monkeypatch.setattr(api, "SessionLocal", sessions)
+    monkeypatch.setattr(database, "SessionLocal", sessions)
+    monkeypatch.setattr(runtime_validation, "SessionLocal", sessions)
+    monkeypatch.setattr(runtime_validation, "_load_expected_system_agent_keys", lambda: (set(), None))
+    curator = BenchmarkCuratorContext(subject="sub-2", auth_provider="oidc", auth_issuer=CURATOR_ISS,
+                                     db_user_id=2, active_groups=())
+    config = FlowImportConfig(public_key=Ed25519PrivateKey.generate().public_key(), issuer=ISSUER)
+
+    def run(checked):
+        resolver.commit()
+        commits.clear()
+        return api._import(curator, config, checked)
+
+    return run, sessions, commits
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("incompatible,reason", [
+    ("model", "model_unavailable"), ("reasoning", "model_unavailable"), ("schema", "cannot_run"),
+])
+def test_destination_incompatibility_refuses_before_dependency_commit(
+    resolver, committed_import, monkeypatch, existing, incompatible, reason,
+):
+    db = resolver
+    run, sessions, commits = committed_import
+    agent = make_agent(db, "Source-only configuration")
+    source = make_flow(db, [(agent, head(db, agent))])
+    first = run(exported(db, source)) if existing else None
+    if first is not None:
+        assert (first.outcome, first.version) == ("imported", 1)
+        assert len(commits) == 2
+
+    # Export is valid in the source catalog; the resolver lacks this configuration.
+    saved = capture_execution_snapshot(db, agent, AgentOutputContract(output_state="none"))
+    changes = {
+        "model": {"model_id": "source-only-model"},
+        "reasoning": {"model_reasoning": "minimal"},
+        "schema": {"output_contract": AgentOutputContract(
+            output_state="structured_extraction", output_mode="domain",
+            output_schema_key="SourceOnlyEnvelope")},
+    }
+    saved = saved.model_copy(update=changes[incompatible])
+    newer = append_execution_revision(db, agent, saved, user_id=1,
+                                      expected_revision_id=agent.execution_revision_id)
+    agent.model_id = "gpt-6.1-sol"  # Source rows are fixture scaffolding, not resolver copies.
+    agent.output_schema_key = None
+    definition = deepcopy(source.flow_definition)
+    definition["nodes"][1]["data"]["agent_revision_id"] = str(newer.id)
+    definition["nodes"][1]["data"]["execution_receipt"] = receipt(agent, newer)
+    source.flow_definition = definition
+    db.flush()
+    destination_model = get_model("gpt-6.1-sol")
+    assert destination_model is not None
+    with monkeypatch.context() as source_catalog:
+        source_model = replace(destination_model, reasoning_options=["minimal", "low", "medium", "high"])
+        source_catalog.setattr(execution_revisions, "get_model", lambda _: source_model)
+        resolve_schema = schema_discovery.resolve_output_schema
+        source_schema = create_model("SourceOnlyEnvelope", value=(str, ...))
+        source_catalog.setattr(schema_discovery, "resolve_output_schema", lambda key: (
+            source_schema if key == "SourceOnlyEnvelope" else resolve_schema(key)))
+        checked = exported(db, source)
+    db.commit()
+    with sessions() as session:
+        before = (count(session, Agent), count(session, AgentExecutionRevision),
+                  count(session, BenchmarkFlowImport), count(session, CurationFlow))
+        copy = copy_of(session, agent)
+        old_head = copy.execution_revision_id if copy else None
+
+    refused = run(checked)
+
+    assert (refused.outcome, refused.reason) == ("refused", reason)
+    assert commits == []
+    assert (refused.flow_id, refused.version) == ((first.flow_id, 1) if first is not None else (None, None))
+    with sessions() as session:
+        assert (count(session, Agent), count(session, AgentExecutionRevision),
+                count(session, BenchmarkFlowImport), count(session, CurationFlow)) == before
+        copy = copy_of(session, agent)
+        if existing:
+            assert first is not None
+            assert copy.is_active and copy.model_id == "gpt-6.1-sol"
+            assert copy.execution_revision_id == old_head
+            flow = session.get(CurationFlow, first.flow_id)
+            assert flow_execution_revision_findings(session, flow.flow_definition, user_id=2,
+                                                    active_group_ids=[]) == []
+        else:
+            assert copy is None
+    report = runtime_validation.validate_and_cache_agent_runtime_contracts(strict_mode=False)
+    assert report["errors"] == []
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_compatible_bundle_cannot_promote_an_incompatible_existing_head(
+    resolver, committed_import, active,
+):
+    db = resolver
+    run, sessions, commits = committed_import
+    agent = make_agent(db, "Finder")
+    source = make_flow(db, [(agent, head(db, agent))])
+    first = run(exported(db, source))
+    assert first.outcome == "imported" and len(commits) == 2
+
+    # The local copy has newer history than the imported pin. Import selects that
+    # history as its active head, even though the incoming snapshot is compatible.
+    copy = copy_of(db, agent)
+    snapshot = AgentExecutionSnapshot.model_validate(head(db, copy).snapshot)
+    newer = append_execution_revision(
+        db, copy, snapshot.model_copy(update={"model_id": "source-only-model"}),
+        user_id=2, expected_revision_id=copy.execution_revision_id)
+    copy.model_id = "gpt-6.1-sol"
+    copy.is_active = active
+    copy.description = "Keep local metadata on refusal"
+    new_head = newer.id
+    source.description = "New source version with the original compatible pin"
+    checked = exported(db, source)
+    db.commit()
+    assert runtime_validation.validate_and_cache_agent_runtime_contracts(strict_mode=False)["errors"] == []
+
+    refused = run(checked)
+
+    assert (refused.outcome, refused.reason, refused.flow_id, refused.version) == (
+        "refused", "model_unavailable", first.flow_id, 1)
+    assert commits == []
+    with sessions() as session:
+        copy = copy_of(session, agent)
+        assert copy.is_active == active and copy.model_id == "gpt-6.1-sol"
+        assert copy.execution_revision_id == new_head
+        assert copy.description == "Keep local metadata on refusal"
+        assert count(session, BenchmarkFlowImport) == 1
+    assert runtime_validation.validate_and_cache_agent_runtime_contracts(strict_mode=False)["errors"] == []
 
 
 def test_a_first_import_makes_private_copies_and_records_version_1(resolver):
@@ -129,11 +284,13 @@ def test_a_concurrent_repeat_of_the_same_version_says_nothing_changed(resolver):
     assert count(db, BenchmarkFlowImport) == 1
 
 
-def test_an_update_changes_the_same_flow_and_keeps_old_revisions(resolver):
+def test_an_update_changes_the_same_flow_and_keeps_old_revisions(resolver, committed_import):
     db = resolver
+    run, _, commits = committed_import
     agent = make_agent(db, "Finder")
     source = make_flow(db, [(agent, head(db, agent))])
-    first = run_import(db, context(), exported(db, source))
+    first = run(exported(db, source))
+    assert len(commits) == 2
     old_receipt = deepcopy(db.get(CurationFlow, first.flow_id).flow_definition["nodes"][1]["data"]
                            ["execution_receipt"])
     service.update_custom_agent(db, agent, expected_revision_id=agent.execution_revision_id,
@@ -145,7 +302,8 @@ def test_an_update_changes_the_same_flow_and_keeps_old_revisions(resolver):
     source.flow_definition = definition
     flag_modified(source, "flow_definition")
     db.flush()
-    second = run_import(db, context(), exported(db, source))
+    second = run(exported(db, source))
+    assert len(commits) == 2
     assert (second.outcome, second.version, second.flow_id) == ("updated", 2, first.flow_id)
     assert copy_of(db, agent).execution_revision_id == derived_id(
         "agent_revision", newer.id, export_issuer=ISSUER, importer_sub="sub-2")
