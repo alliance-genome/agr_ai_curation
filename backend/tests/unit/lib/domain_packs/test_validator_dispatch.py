@@ -4421,10 +4421,60 @@ def test_parallel_budget_stops_queue_and_drains_admitted_usage(tmp_path, monkeyp
     assert reports == []
 
 
+@pytest.fixture(params=[False, True], ids=["capture_ok", "capture_fails"])
+def recovery_reports(monkeypatch, request, caplog):
+    reports = []
+
+    def capture(exc, **kwargs):
+        reports.append((exc, kwargs))
+        if request.param:
+            raise RuntimeError("Reporting unavailable")
+
+    monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.report_runtime_exception", capture)
+    yield reports
+    owned_run_warnings = [record for record in caplog.get_records("call")
+                          if record.message.startswith("Package-scoped owned validator")]
+    assert len(owned_run_warnings) == len(reports)
+    assert all(record.sentry_skip_event for record in owned_run_warnings)
+
+
+def _assert_recovery_reporting(reports, stages, *, ending, request, phase, request_count):
+    assert len(stages) == 1
+    if ending != "max_turns":
+        assert stages[0].status == "succeeded"
+        assert stages[0].failure_type is None
+        assert reports == []
+        return
+    assert stages[0].status == "failed"
+    assert stages[0].failure_type == "MaxTurnsExceeded"
+    assert len(reports) == 1
+    exc, kwargs = reports[0]
+    assert type(exc).__name__ == "_ValidatorDispatchRuntimeError"
+    assert str(exc) == "Package validator execution failed"
+    assert exc.__traceback__ is not None
+    assert exc.__context__ is None
+    assert exc.__cause__ is None
+    assert kwargs == {
+        "component": "domain_pack_validator_dispatch",
+        "operation": f"{phase}_validator_run_failed",
+        "tags": {"phase": phase},
+        "context": {
+            "domain_pack_id": request.target.domain_pack_id,
+            "validator_package_id": request.validator_agent.package_id,
+            "validator_agent_id": request.validator_agent.agent_id,
+            "validator_binding_id": request.validator_binding_id,
+            "request_count": request_count,
+        },
+        "level": "error",
+    }
+    assert "sensitive exhaustion detail" not in str(exc) + repr(kwargs)
+
+
 @pytest.mark.parametrize("batch", [False, True])
 @pytest.mark.parametrize("ending", ["corrected", "stopped", "max_turns"])
-def test_validator_correction_preserves_judgment_until_complete(monkeypatch, batch, ending):
+def test_validator_correction_preserves_judgment_until_complete(monkeypatch, batch, ending, recovery_reports):
     from agents.exceptions import MaxTurnsExceeded
+    from src.lib.benchmarks.stage_measurements import StageIdentity, measure_stage, observe_stages
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
     from src.lib.agent_studio.diagnostic_tools.tool_definitions import _unwrap_function_tool
 
@@ -4455,18 +4505,25 @@ def test_validator_correction_preserves_judgment_until_complete(monkeypatch, bat
         elif ending == "max_turns":
             decision["request_id"] = "another-request"
             assert submit()["status"] == "rejected"
-            raise MaxTurnsExceeded("Correction turn budget exhausted")
+            raise MaxTurnsExceeded("sensitive exhaustion detail")
         return {"ignored": "unfinalized answer"}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", run)
     binding = SimpleNamespace(raw={}, max_tool_calls=4)
-    if batch:
-        job = SimpleNamespace(request=request, match=SimpleNamespace(binding=binding))
-        raw = run_package_scoped_validator_agent_batch([job], binding=binding)
-        [result] = _validated_results_from_agent_batch_output(raw, jobs=[job])
-    else:
-        raw = run_package_scoped_validator_agent(request, binding=binding)
-        result = validator_result_from_agent_output(raw, request=request)
+    stages = []
+    observer = SimpleNamespace(started=lambda _: None, completed=stages.append)
+    with observe_stages(cast(Any, observer)), measure_stage(StageIdentity("validator", "validation")):
+        if batch:
+            job = SimpleNamespace(request=request, match=SimpleNamespace(binding=binding))
+            raw = run_package_scoped_validator_agent_batch([job], binding=binding)
+            [result] = _validated_results_from_agent_batch_output(raw, jobs=[job])
+        else:
+            raw = run_package_scoped_validator_agent(request, binding=binding)
+            result = validator_result_from_agent_output(raw, request=request)
+    _assert_recovery_reporting(
+        recovery_reports, stages, ending=ending, request=request,
+        phase="batch" if batch else "single", request_count=1,
+    )
     assert result.status == "resolved"
     assert result.explanation == "Verified identity."
     assert result.is_complete is (ending == "corrected")
@@ -4521,8 +4578,9 @@ def test_batch_correction_retains_each_requested_result_without_losing_peers():
 
 
 @pytest.mark.parametrize("ending", ["stopped", "max_turns"])
-def test_batch_exhaustion_returns_safe_judgments_across_partial_compact_retries(monkeypatch, ending):
+def test_batch_exhaustion_returns_safe_judgments_across_partial_compact_retries(monkeypatch, ending, recovery_reports):
     from agents.exceptions import MaxTurnsExceeded
+    from src.lib.benchmarks.stage_measurements import StageIdentity, measure_stage, observe_stages
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
     from src.lib.agent_studio.diagnostic_tools.tool_definitions import _unwrap_function_tool
 
@@ -4548,12 +4606,19 @@ def test_batch_exhaustion_returns_safe_judgments_across_partial_compact_retries(
         assert finalize(results=[decisions[0], bad])["status"] == "rejected"
         assert finalize(results=[decisions[1]])["status"] == "rejected"
         if ending == "max_turns":
-            raise MaxTurnsExceeded("Correction turn budget exhausted")
+            raise MaxTurnsExceeded("sensitive exhaustion detail")
         return {"ignored": "unfinalized answer"}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", run)
-    output = run_package_scoped_validator_agent_batch(jobs, binding=binding)
-    results = _validated_results_from_agent_batch_output(output, jobs=jobs)
+    stages = []
+    observer = SimpleNamespace(started=lambda _: None, completed=stages.append)
+    with observe_stages(cast(Any, observer)), measure_stage(StageIdentity("validator", "validation")):
+        output = run_package_scoped_validator_agent_batch(jobs, binding=binding)
+        results = _validated_results_from_agent_batch_output(output, jobs=jobs)
+    _assert_recovery_reporting(
+        recovery_reports, stages, ending=ending, request=requests[0],
+        phase="batch", request_count=len(jobs),
+    )
     assert [result.explanation for result in results] == [decision["explanation"] for decision in decisions]
     assert all(result.status == "unresolved" and result.resolved_values == {} for result in results)
     assert all(not result.lookup_attempts for result in results)

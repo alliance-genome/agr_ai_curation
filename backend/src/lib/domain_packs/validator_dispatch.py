@@ -1899,9 +1899,14 @@ def run_package_scoped_validator_agent(
             request.request_id,
             time.monotonic() - run_started_at,
             exc_info=True,
+            extra={"sentry_skip_event": True},
         )
         from agents.exceptions import MaxTurnsExceeded
         if isinstance(exc, MaxTurnsExceeded) and finalization_state.incomplete_result:
+            from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
+
+            record_handled_stage_failure(exc)
+            _report_validator_dispatch_failure(request, phase="single", request_count=1)
             return _ValidatorAgentRunOutput(raw_output=None, accepted_result=finalization_state.incomplete_result)
         raise
     finally:
@@ -2163,9 +2168,16 @@ def run_package_scoped_validator_agent_batch(
             len(jobs),
             time.monotonic() - run_started_at,
             exc_info=True,
+            extra={"sentry_skip_event": True},
         )
         from agents.exceptions import MaxTurnsExceeded
         if isinstance(exc, MaxTurnsExceeded) and finalization_state.incomplete_results:
+            from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
+
+            record_handled_stage_failure(exc)
+            _report_validator_dispatch_failure(
+                representative_request, phase="batch", request_count=len(jobs),
+            )
             return _ValidatorBatchAgentRunOutput(raw_output=None, accepted_results=finalization_state.incomplete_results)
         raise
     finally:
