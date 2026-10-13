@@ -105,6 +105,8 @@ def _get_provider_or_503() -> AuthProvider:
 def _report_auth_failure(operation: str, exc: Exception) -> None:
     """Capture outages without promoting expected credential rejection or secrets."""
     if isinstance(exc, httpx.HTTPStatusError):
+        # Discovery HTTP failures arrive as OIDCProviderResponseError, so this
+        # status policy keeps credential/grant rejection quiet.
         operational = exc.response.status_code >= 500 or exc.response.status_code == 429
     elif isinstance(exc, (OIDCProviderResponseError, httpx.RequestError, PyJWKClientConnectionError)):
         operational = True

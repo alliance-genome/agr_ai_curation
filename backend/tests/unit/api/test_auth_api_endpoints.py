@@ -495,6 +495,72 @@ async def test_login_outage_report_cannot_break_503(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [403, 404])
+@pytest.mark.parametrize("operation", ["login", "callback"])
+@pytest.mark.parametrize("report_fails", [False, True])
+async def test_discovery_http_failure_reporting_preserves_response(
+    monkeypatch, caplog, status_code, operation, report_fails,
+):
+    import httpx
+    from unittest.mock import Mock
+    from auth_runtime.oidc import OIDCAuthProvider
+
+    provider = OIDCAuthProvider({
+        "issuer_url": "https://sensitive-issuer.example.org",
+        "client_id": "sensitive-client",
+        "client_secret": "sensitive-secret",
+    })
+    discovery_response = httpx.Response(
+        status_code, text="sensitive-provider-payload",
+        headers={"x-provider-detail": "sensitive-provider-header"},
+        request=httpx.Request(
+            "GET", f"{provider.issuer_url}/.well-known/openid-configuration",
+            headers={"Authorization": "Bearer sensitive-credential"},
+        ),
+    )
+    discovery_get = Mock(return_value=discovery_response)
+    monkeypatch.setattr("auth_runtime.oidc.httpx.get", discovery_get)
+    monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: provider)
+    report = Mock(side_effect=RuntimeError("report failed") if report_fails else None)
+    monkeypatch.setattr(auth_api, "report_runtime_exception", report)
+    caplog.set_level(logging.ERROR, logger=auth_api.logger.name)
+
+    with pytest.raises(HTTPException) as caught:
+        if operation == "login":
+            await auth_api.login(_request())
+        else:
+            await auth_api.callback(
+                _request(cookies={"oauth_state": "s", "oauth_code_verifier": "sensitive-verifier"}),
+                Response(), "sensitive-code", "s", object(),
+            )
+
+    assert caught.value.status_code == (503 if operation == "login" else 400)
+    assert caught.value.detail == (
+        "Authentication provider unavailable" if operation == "login"
+        else "Authentication callback failed"
+    )
+    discovery_get.assert_called_once_with(
+        f"{provider.issuer_url}/.well-known/openid-configuration",
+        timeout=provider.timeout_seconds,
+    )
+    assert provider._discovery is None
+    assert report.call_count == 1
+    reported = report.call_args.args[0]
+    assert str(reported) == "Authentication provider operation failed"
+    assert reported.__traceback__ is not None
+    assert reported.__cause__ is None
+    assert reported.__context__ is None
+    assert report.call_args.kwargs == {
+        "component": "authentication", "operation": operation, "level": "error",
+        "context": {"error_type": "OIDCProviderResponseError"},
+    }
+    assert "sensitive" not in str(report.call_args)
+    assert "sensitive" not in caplog.text
+    assert all(getattr(record, "sentry_skip_event", False) for record in caplog.records)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("id_token", [{"bad": "shape"}, ["token"], 123, True, None, ""])
 async def test_malformed_token_response_is_reported_at_callback(monkeypatch, id_token):
     import httpx

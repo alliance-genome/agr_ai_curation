@@ -79,7 +79,12 @@ class OIDCAuthProvider(AuthProvider):
 
             discovery_url = f"{self.issuer_url}/.well-known/openid-configuration"
             response = httpx.get(discovery_url, timeout=self.timeout_seconds)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                # Discovery uses configured metadata, not user credentials;
+                # every HTTP failure here is an operational provider failure.
+                raise OIDCProviderResponseError("OIDC discovery request failed") from None
             self._discovery = _response_object(response)
         assert self._discovery is not None
         return self._discovery
