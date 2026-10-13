@@ -46,6 +46,36 @@ def _resolve_output_schema(schema_key: str) -> Optional[Any]:
     return resolve_output_schema(schema_key)
 
 
+def agent_runtime_compatibility_errors(
+    *, model_id: str, model_reasoning: Any, output_schema_key: Optional[str],
+    models_by_id: Dict[str, Any],
+) -> Dict[str, str]:
+    """Catalog/schema contracts shared by startup and pre-commit import checks.
+
+    Keys are flow finding codes, so import preserves the existing refusal reasons.
+    These checks concern runtime availability, not an agent's semantic judgment.
+    """
+    from src.lib.openai_agents.config import unsupported_reasoning_effort
+
+    errors: Dict[str, str] = {}
+    model_id = str(model_id or "").strip()
+    model = models_by_id.get(model_id)
+    if not model_id:
+        errors["unavailable_model"] = "model_id is required"
+    elif model is None:
+        errors["unavailable_model"] = f"Unknown model_id '{model_id}'"
+    else:
+        unsupported = unsupported_reasoning_effort(model, model_reasoning)
+        if unsupported is not None:
+            errors["unsupported_reasoning_effort"] = (
+                f"model_reasoning '{unsupported}' is not supported by model '{model_id}'"
+            )
+    schema_key = str(output_schema_key or "").strip()
+    if schema_key and _resolve_output_schema(schema_key) is None:
+        errors["unknown_output_schema"] = f"Unknown output_schema_key '{schema_key}'"
+    return errors
+
+
 def _load_runtime_policy() -> Dict[str, Any]:
     """Load catalog-backed runtime policy primitives lazily."""
     from src.lib.agent_studio import catalog_service
@@ -207,7 +237,6 @@ def build_agent_runtime_report(
     try:
         load_models()
         models_by_id = {model.model_id: model for model in list_models()}
-        known_model_ids = set(models_by_id)
     except Exception as exc:
         return {
             "status": "unhealthy",
@@ -332,35 +361,22 @@ def build_agent_runtime_report(
                 )
 
         model_id = str(getattr(row, "model_id", "") or "").strip()
-        if not model_id:
-            row_errors.append("model_id is required")
-        elif model_id not in known_model_ids:
-            row_errors.append(f"Unknown model_id '{model_id}'")
-
         reasoning = getattr(row, "model_reasoning", None)
         if isinstance(reasoning, str) and reasoning.strip():
-            from src.lib.openai_agents.config import (
-                normalize_reasoning_effort,
-                unsupported_reasoning_effort,
-            )
+            from src.lib.openai_agents.config import normalize_reasoning_effort
 
             if normalize_reasoning_effort(reasoning) is None:
                 row_warnings.append(f"Invalid model_reasoning '{reasoning}'")
-            elif model_id in models_by_id:
-                unsupported = unsupported_reasoning_effort(models_by_id[model_id], reasoning)
-                if unsupported is not None:
-                    row_errors.append(
-                        f"model_reasoning '{unsupported}' is not supported by model "
-                        f"'{model_id}'"
-                    )
 
         visibility = str(getattr(row, "visibility", "") or "").strip()
         user_id = getattr(row, "user_id", None)
         project_id = getattr(row, "project_id", None)
 
         output_schema_key = str(getattr(row, "output_schema_key", "") or "").strip()
-        if output_schema_key and _resolve_output_schema(output_schema_key) is None:
-            row_errors.append(f"Unknown output_schema_key '{output_schema_key}'")
+        row_errors.extend(agent_runtime_compatibility_errors(
+            model_id=model_id, model_reasoning=reasoning, output_schema_key=output_schema_key,
+            models_by_id=models_by_id,
+        ).values())
         for violation in validate_agent_finalize_tool_invariant(
             agent_key=str(getattr(row, "agent_key", "") or ""),
             category=str(getattr(row, "category", "") or ""),
