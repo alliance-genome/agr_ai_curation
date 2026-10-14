@@ -2,7 +2,6 @@
 from copy import deepcopy
 from dataclasses import replace
 import json
-from types import SimpleNamespace
 
 import pytest
 from agents import Agent, RunConfig
