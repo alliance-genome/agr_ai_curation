@@ -49,6 +49,21 @@ preserve. If extraction identifies that context, it must remain in the payload
 when a safe placeholder is available or remain field-addressed in metadata with
 an explicit unresolved reason.
 
+## Observation polarity in builder tools
+
+`stage_gene_expression_observation` requires a boolean `negated`: `true` for
+an explicitly reported absence of expression at the stated location/stage,
+`false` for a positive observation. Missing discussion of expression is not an
+absence observation. Keep the supporting paper wording in linked evidence.
+
+To correct polarity, use `patch_gene_expression_observation` with
+`field_path: "negated"` and `bool_value: true` or `false`; all other value slots
+must be null. For other patch fields, `bool_value` must be null. Strings such as
+`"false"`, numbers, and null are rejected as negation values. The boolean is
+preserved through draft storage, annotation materialization, and the export
+column `geneexpressionannotation.negated`. Existing saved observations are not
+rewritten by this tool-contract change.
+
 ## Validation
 
 Validation is split deliberately:

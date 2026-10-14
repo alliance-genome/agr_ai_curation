@@ -156,6 +156,8 @@ def _stub_stream_turn_persistence(monkeypatch):
         persisted_extraction_refs=None,
         document_id: str | None = None,
         flow_terminal_events=None,
+        failure_message=None,
+        failure_state="turn_failed",
     ):
         chat._persist_extraction_candidates(
             candidates=extraction_candidates,
@@ -1298,13 +1300,11 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(
     events = asyncio.run(_consume_stream(response))
 
     expected_terminal = "session_gone" if summary_failed == "session_gone" else (
-        "turn_failed" if summary_failed else "turn_completed"
+        "turn_save_failed" if summary_failed == "save_failed" else "turn_failed" if summary_failed else "turn_completed"
     )
     assert events[-1]["type"] == expected_terminal
     if summary_failed == "save_failed":
-        assert events[-1]["message"] == (
-            "The response failed and links to saved results could not be saved to chat history."
-        )
+        assert "could not be saved to chat history" in events[-1]["message"]
         assert events[-1]["error_type"] == "ResponsesWebSocketError"
         assert not any(event["type"] == "turn_completed" for event in events)
         assert len(captured_reports) == 1
@@ -1329,11 +1329,11 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(
         assert captured_reports == []
     assert sensitive_detail not in caplog.text + repr(captured_reports) + repr(events)
     if summary_failed == "session_gone":
-        assert events[-1]["message"] == "Chat session is no longer available."
+        assert events[-1]["message"].startswith("Chat session is no longer available.")
     elif summary_failed is True:
         assert "Review & Curate" in events[-1]["message"]
         assert captured_finalize["failure_message"]
-        assert "summary" in captured_finalize["assistant_message"]
+        assert "Extraction results were saved" in captured_finalize["assistant_message"]
     assert captured_finalize["extraction_candidates"] == []
     refs = captured_finalize["persisted_extraction_refs"]
     assert len(refs) == 1
@@ -1968,8 +1968,7 @@ _TOOL_GROUP_CAP_MESSAGE = (
         (
             "runner exploded",
             "RuntimeError",
-            "An error occurred. Please provide feedback using the ⋮ menu on this message, "
-            "then try your query again.",
+            "This request could not be completed. You can restore the request to review it before trying again later. If it keeps failing, report it using the feedback menu.",
         ),
         # Written for the curator (ALL-1280 custom agent over the tool-group cap).
         (_TOOL_GROUP_CAP_MESSAGE, "ToolGroupCapError", _TOOL_GROUP_CAP_MESSAGE),
@@ -2180,7 +2179,7 @@ def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatc
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "turn_interrupted"]
     assert events[-1]["turn_id"] == "generated-turn"
-    assert finalize_calls == []
+    assert finalize_calls == ["finalize"]
 
 
 @pytest.mark.parametrize("failed_summary", [False, True])
@@ -2321,7 +2320,8 @@ def test_preferred_flow_answer_and_file_live_persisted_and_replayed(monkeypatch,
             raise RuntimeError("Controlled save failure")
         record = _assistant_record(session_id=kwargs["session_id"], turn_id=kwargs["turn_id"],
                                    content=kwargs["assistant_message"], payload_json={
-            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: kwargs["flow_terminal_events"]})
+            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: kwargs["flow_terminal_events"],
+            **({"terminal_state": "turn_failed", "terminal_message": kwargs["failure_message"]} if kwargs.get("failure_message") else {})})
         saved.append(record)
         return record
 
@@ -2336,7 +2336,18 @@ def test_preferred_flow_answer_and_file_live_persisted_and_replayed(monkeypatch,
         return asyncio.run(_consume_stream(response))
 
     live = consume()
-    if outcome_kind in {"flow_failed", "save_failed"}:
+    if outcome_kind == "flow_failed":
+        assert len(saved) == 1
+        assert saved[0].payload_json["terminal_state"] == "turn_failed"
+        assert live[-1]["type"] == "turn_failed"
+        assert sum(event["type"] == "FILE_READY" for event in live) == 1
+        assert not any(event["type"] in {"CHAT_OUTPUT_READY", "turn_completed"} for event in live)
+        replay = consume()
+        assert sum(event["type"] == "FILE_READY" for event in replay) == 1
+        assert replay[-1]["type"] == "turn_failed"
+        assert len(executions) == 1
+        return
+    if outcome_kind == "save_failed":
         assert not saved
         assert live[-1]["type"] == "turn_failed"
         assert not any(event["type"] in {"FILE_READY", "CHAT_OUTPUT_READY", "TEXT_MESSAGE_CONTENT", "turn_completed"} for event in live)
@@ -2768,3 +2779,63 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
     assert len(calls) == 1
     assert calls[0][1]["component"] == "api"
     assert calls[0][1]["operation"] == "sanitized_http_exception"
+
+
+@pytest.mark.parametrize("ending", ["error", "eof", "exception", "cancel"])
+def test_visible_partial_text_survives_failed_turn_and_replay(monkeypatch, ending):
+    saved, executions = [], []
+    for name in ("set_current_session_id", "set_current_user_id"):
+        _patch_chat_impl(monkeypatch, name, lambda *_: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda *_: {})
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _: SimpleNamespace(
+        list_recent_messages=lambda **_: [], get_message_by_turn_id=lambda **_: saved[0] if saved else None))
+    _patch_chat_impl(monkeypatch, "_prepare_chat_stream_turn", lambda **_: chat.PreparedChatStreamTurn(
+        turn_id="partial-turn", effective_user_message="extract", route=chat.ResolvedChatRoute(mode="automatic"),
+        user_turn_created=not saved, replay_assistant_turn=saved[0] if saved else None))
+
+    async def noop(*_args, **_kwargs):
+        return None
+    async def register(*_args, **_kwargs):
+        return True
+    async def not_cancelled(*_args, **_kwargs):
+        return False
+    for name in ("unregister_active_stream", "clear_cancel_signal"):
+        _patch_chat_impl(monkeypatch, name, noop)
+    _patch_chat_impl(monkeypatch, "register_active_stream", register)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", not_cancelled)
+
+    async def execute(**_kwargs):
+        executions.append(True)
+        yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "Partial "}}
+        yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"content": "work β"}}
+        if ending == "error":
+            yield {"type": "RUN_ERROR", "data": {"error_type": "server_is_overloaded", "message": "private"}}
+        elif ending == "exception":
+            raise ConnectionError("private connection details")
+        elif ending == "cancel":
+            raise asyncio.CancelledError()
+
+    def persist(**kwargs):
+        record = _assistant_record(session_id=kwargs["session_id"], turn_id=kwargs["turn_id"],
+            content=kwargs["assistant_message"], payload_json={
+                "terminal_state": kwargs["failure_state"], "terminal_message": kwargs["failure_message"]})
+        saved.append(record)
+        return record
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", execute)
+    _patch_chat_impl(monkeypatch, "_persist_completed_chat_stream_turn", persist)
+    def consume():
+        response = asyncio.run(chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="extract", session_id="partial-session", turn_id="partial-turn"),
+            user={"sub": "auth-sub", "cognito:groups": []}))
+        return asyncio.run(_consume_stream(response))
+    live = consume()
+    assert len(saved) == 1
+    assert "Partial response (the request did not finish):\nPartial work β" in saved[0].content
+    assert saved[0].payload_json["terminal_state"] in {"turn_failed", "turn_interrupted"}
+    assert not any(item["type"] == "turn_completed" for item in live)
+    replay = consume()
+    assert next(item["content"] for item in replay if item["type"] == "TEXT_MESSAGE_CONTENT") == saved[0].content
+    assert replay[-1]["type"] == saved[0].payload_json["terminal_state"]
+    assert len(executions) == 1

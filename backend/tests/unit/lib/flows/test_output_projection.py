@@ -9,6 +9,7 @@ from typing import get_args
 from pydantic import ValidationError
 
 import src.lib.flows.output_projection as output_projection_module
+
 from src.lib.config import schema_discovery
 from src.lib.flows.output_projection import (
     FlowOutputColumnSpec,
@@ -2587,3 +2588,72 @@ def test_payload_refs_on_a_resolvable_root_read_the_legacy_rule():
     covered = {"validator_resolved_value_materialization": [
         {"materialized_field_paths": ["primary_external_id", "gene_symbol", "taxon"]}]}
     assert rows(covered) == [{"id": "FB:FBgn0000108", "wording": "Appl"}]
+
+def test_statement_evidence_join_preserves_multiple_quotes_and_missing_ambiguous_links():
+    items = [
+        {"object_type": "Expression", "pending_ref_id": "a", "evidence_record_ids": ["e1", "e2", "missing"]},
+        {"object_type": "Expression", "pending_ref_id": "b", "evidence_record_ids": ["e2", "conflict"]},
+        {"object_type": "Expression", "pending_ref_id": "c", "evidence_record_ids": []},
+    ]
+    first = {"evidence_record_id": "e1", "verified_quote": "β is absent here.", "page": 3, "chunk_id": "chunk1"}
+    second = {"evidence_record_id": "e2", "verified_quote": "β is present there.", "page": 7, "section": "Results"}
+    payload = {"metadata": {"evidence_records": [first, second, first.copy(),
+               {"evidence_record_id": "conflict", "verified_quote": "A"},
+               {"evidence_record_id": "conflict", "verified_quote": "B"}]}}
+    rows = [{}, {}, {}]
+    output_projection_module._attach_source_linked_evidence(rows, items, payload)
+    assert rows[0]["object.supporting_evidence"] == [first, second]
+    assert rows[1]["object.supporting_evidence"] == [second]
+    assert rows[2]["object.supporting_evidence"] == []
+    assert rows[0]["object.evidence_link_issues"] == [{"evidence_record_id": "missing", "status": "missing"}]
+    assert rows[1]["object.evidence_link_issues"] == [{"evidence_record_id": "conflict", "status": "ambiguous"}]
+    # No cross-artifact lookup or label-based association.
+    other = [{}]
+    output_projection_module._attach_source_linked_evidence(other, items[:1], {})
+    assert other[0]["object.supporting_evidence"] == []
+
+
+@pytest.mark.parametrize("selection_mode", ["guided", "selected_fields"])
+def test_expression_statements_with_source_evidence_reach_final_chat(selection_mode):
+    from src.lib.flows.output_projection import finalize_output_projection, render_chat_projection
+
+    step = _completed_domain_source_step(
+        step=1, agent_id="gene_expression", adapter_key="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation", object_id="statement-1",
+        payload={"rationale": "β expression was absent in the tested tissue."},
+    )
+    step["node_id"] = "expression"
+    payload = step["candidate"].payload_json
+    payload["extracted_objects"][0]["evidence_record_ids"] = ["e1", "e2"]
+    payload["extracted_objects"].append({
+        "object_type": "GeneExpressionAnnotation", "object_id": "statement-2", "status": "candidate",
+        "payload": {"rationale": "β expression was present in another tissue."}, "evidence_record_ids": ["e3", "not-saved"],
+    })
+    payload["metadata"] = {"evidence_records": [
+        {"evidence_record_id": "e1", "verified_quote": "No signal was detected.", "page": 3},
+        {"evidence_record_id": "e2", "verified_quote": "Negative tissue control.", "section": "Results"},
+        {"evidence_record_id": "e3", "verified_quote": "Signal was detected elsewhere.", "page": 4},
+    ]}
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Expression", output_format="chat")
+    artifact = bundle.artifacts[0]
+    assert "object.supporting_evidence" in {field.ref for field in artifact.declared_fields}
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": "csv" if selection_mode == "selected_fields" else "chat", "row_source": "object", "row_strategy": "wide_union", "selection_mode": selection_mode,
+        "selected_sources": [{"node_id": "expression", "schema_fingerprint": artifact.export_schema_fingerprint}]
+        if selection_mode == "selected_fields" else [],
+        "columns": [
+            {"key": "statement", "header": "Expression statement", "field_ref": "object.pack.GeneExpressionAnnotation.rationale", "source_node_id": "expression"},
+            {"key": "evidence", "header": "Supporting evidence", "field_ref": "object.supporting_evidence", "source_node_id": "expression"},
+            {"key": "issues", "header": "Evidence link issues", "field_ref": "object.evidence_link_issues", "source_node_id": "expression"},
+        ],
+    })
+    projection = finalize_output_projection(bundle, plan)
+    assert projection.total_count == 2
+    assert "No signal" in json.dumps(projection.rows[0]["evidence"])
+    assert "Signal was detected elsewhere" not in json.dumps(projection.rows[0]["evidence"])
+    assert "not-saved" in json.dumps(projection.rows[1]["issues"])
+    rendered = render_chat_projection(rows=projection.rows, columns=projection.columns, layout="table", total_count=projection.total_count, truncated=False)
+    assert "No signal was detected." in rendered
+    assert "Negative tissue control." in rendered
+    assert "Signal was detected elsewhere." in rendered
+    assert "not-saved" in rendered

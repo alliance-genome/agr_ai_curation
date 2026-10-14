@@ -261,7 +261,10 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
                     continue
                 assert len(records) == 1
                 record = records[0]
-                assert record.payload_json == captured["validated"].model_dump(mode="json")
+                assert record.payload_json == {
+                    **captured["validated"].model_dump(mode="json"),
+                    "specialist_explanation": Result.final_output,
+                }
                 assert record.origin_session_id == session_id
                 assert record.trace_id == captured["trace_id"]
                 assert record.user_id == "test_pdf_owner_inline_extraction"
@@ -285,7 +288,9 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
         internal[0], tool_agent_map={}, conversation_summary=None) is None
     # The actual persistence primitive's stable identity is reusable, not another row.
     again = persist_inline_validated_extraction_result(
-        payload_json=captured["validated"].model_dump(mode="json"), document_id=document_id, agent_key="gene_extractor",
+        payload_json={**captured["validated"].model_dump(mode="json"),
+                      "specialist_explanation": Result.final_output},
+        document_id=document_id, agent_key="gene_extractor",
         adapter_key="gene", tool_name="gene_extractor", source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id=session_id, trace_id=captured["trace_id"], user_id="test_pdf_owner_inline_extraction",
         builder_finalization=captured["finalization"],

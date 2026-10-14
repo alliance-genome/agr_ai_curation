@@ -342,8 +342,8 @@ def test_cancel_after_inline_persistence_leaves_inspectable_row(
 
     The inline durable write happened inside the (simulated) specialist runtime
     BEFORE the stream is cancelled. The turn is interrupted before RUN_FINISHED,
-    so no assistant row is saved -- but the extraction row persists and stays
-    queryable/inspectable, which is the whole point of moving persistence inline.
+    so the assistant row carries an interruption notice and the extraction row
+    stays queryable/inspectable, which is the whole point of moving persistence inline.
     """
 
     session_id = f"inline-cancel-session-{uuid4()}"
@@ -359,7 +359,8 @@ def test_cancel_after_inline_persistence_leaves_inspectable_row(
     check_calls = {"count": 0}
 
     async def _check_cancel_signal(_session_id) -> bool:
-        # Allow the extraction event through, then cancel before RUN_FINISHED.
+        # Cancel as the already-persisted extraction event arrives. Its reference
+        # must still be attached to the interrupted turn.
         check_calls["count"] += 1
         return check_calls["count"] > 1
 
@@ -391,13 +392,16 @@ def test_cancel_after_inline_persistence_leaves_inspectable_row(
     assert events[-1]["type"] == "turn_interrupted"
 
     test_db.expire_all()
-    # No assistant row was saved (turn interrupted before completion).
+    # The interruption notice remains alongside the durable extraction.
     chat_rows = test_db.scalars(
         select(ChatMessageModel)
         .where(ChatMessageModel.session_id == session_id)
         .order_by(ChatMessageModel.created_at.asc(), ChatMessageModel.message_id.asc())
     ).all()
-    assert [(row.role, row.content) for row in chat_rows] == [("user", "list genes")]
+    assert [row.role for row in chat_rows] == ["user", "assistant"]
+    assert chat_rows[0].content == "list genes"
+    assert chat_rows[1].payload_json["terminal_state"] == "turn_interrupted"
+    assert "Extraction results were saved" in chat_rows[1].content
 
     # The inline-persisted extraction row survived cancellation and is queryable.
     rows = test_db.scalars(

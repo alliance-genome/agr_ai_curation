@@ -1804,4 +1804,8 @@ async def test_chat_propagated_provider_failure(monkeypatch, caplog, error_type,
         assert "PRIVATE" not in str(events)
         assert "Please try again" not in str(events)
     else:
-        assert terminal["data"]["message"] == "PRIVATE SDK WRAPPER"
+        assert "PRIVATE" not in terminal["data"]["message"]
+        assert terminal["data"]["failure_category"] == ("context_limit" if code == "context_length_exceeded" else "provider_unavailable")
+        assert terminal["data"]["retryable"] is (code != "context_length_exceeded")
+        audit = next(event for event in events if event["type"] == "SUPERVISOR_ERROR")
+        assert "PRIVATE" not in str(audit)

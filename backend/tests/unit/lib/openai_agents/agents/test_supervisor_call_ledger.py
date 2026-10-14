@@ -134,7 +134,8 @@ async def test_cached_empty_extraction_replay_guides_report_or_clarify_path():
     assert factory.calls == 1
     assert replay.startswith(_LEDGER_REPLAY_INSTRUCTION)
     assert "already produced an empty extraction result" in replay
-    assert "ask for clarification" in replay
+    assert "specialist explanation" in replay
+    assert "explained empty result can answer" in replay
     assert "materially different retry" in replay
 
 

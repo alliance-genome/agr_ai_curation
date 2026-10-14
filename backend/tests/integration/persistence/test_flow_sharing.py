@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 import pytest
@@ -80,7 +81,7 @@ def test_alembic_upgrade_head_preserves_existing_private_flow(historical_migrati
         with engine.connect() as connection:
             assert connection.execute(text(
                 "SELECT version_num FROM alembic_version"
-            )).scalar_one() == "b8f2c3d4e5a6"
+            )).scalar_one() == ScriptDirectory.from_config(config).get_current_head()
             assert connection.execute(text(
                 "SELECT visibility, project_id, shared_at FROM curation_flows WHERE id = :id"
             ), {"id": flow_id}).one() == ("private", None, None)

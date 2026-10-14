@@ -201,10 +201,13 @@ def _latest_extraction_result(records: Sequence[Any]) -> Any | None:
 def _formatter_runtime_context_for_records(records: Sequence[Any]) -> str:
     """Build formatter-only runtime guidance for the bound result bundle."""
 
+    from src.lib.flows.output_projection import SOURCE_LINKED_EVIDENCE_GUIDANCE
+
     latest = _latest_extraction_result(records)
     latest_ref = _record_result_ref(latest) if latest is not None else ""
     lines = [
         "FORMATTER SOURCE BUNDLE:",
+        SOURCE_LINKED_EVIDENCE_GUIDANCE,
         "This bundle contains saved extraction results from the active session and loaded document. Use only the formatter projection tools to inspect, plan, validate, preview, finalize, or report that the requested file cannot be produced.",
     ]
     if latest_ref:
@@ -405,8 +408,9 @@ _LEDGER_REPLAY_RESULT_GUIDANCE = (
 )
 _LEDGER_REPLAY_EMPTY_RESULT_GUIDANCE = (
     "This repeated request already produced an empty extraction result at "
-    "{result_ref}. Report the empty result, ask for clarification, or make one "
-    "materially different retry if the curator's intended scope is clear."
+    "{result_ref}. Report the empty result and the specialist explanation below. "
+    "An explained empty result can answer the request. Make a materially different retry "
+    "only when scope is unresolved or the curator requests a scope change."
 )
 _LEDGER_BUDGET_EXCEEDED_MESSAGE = (
     "You have made enough specialist lookups for this turn. Stop and summarize what "
@@ -1334,10 +1338,22 @@ def _build_runtime_tool_availability_note(
         notes.append(formatter_unavailable_note)
 
     notes.append(
+        "VALIDATION COVERAGE: Object, validator-decision and finding counts are separate units. "
+        "Current decisions exclude superseded history. A rejected proposal may be replaced by a "
+        "resolved alternative; inspect saved state instead of inferring unresolved status from disagreement. "
+        "Manifest previews put outstanding decisions first and report omitted coverage. Use inspect_results "
+        "to page validator_results and read original.result or original.request exactly. A historical "
+        "result with original_available=false cannot be reconstructed from a finding preview. Direct "
+        "validator calls return validator-result references; use validator_runs to find them in this chat. "
+        "Do not call validators again just to recover existing details.\n\n"
         "EXTRACTION RESULT COMPLETION: A non-empty extractor manifest is "
         "normally enough to answer the curator's current request unless the "
         "curator asks to broaden/narrow/rerun or the manifest says the "
-        "requested scope was not handled. Answer from the manifest; use "
+        "requested scope was not handled. Answer from the manifest and complete specialist "
+        "explanation, preserving exclusions and uncertainty. An explained empty result "
+        "can also fully answer the request. Saved objects and findings determine persisted "
+        "state; authored prose does not override them. Use action=\"explanation\" with "
+        "inspect_results to read the saved explanation exactly. Use "
         "inspect_results to search or browse existing persisted results, more manifest "
         "objects, evidence, validation findings, or exact YAML-declared field "
         "slices. When the curator asks about earlier evidence, prior outputs, "
@@ -1697,7 +1713,11 @@ def create_supervisor_agent(
             "query/target to choose among results. Values shown withheld are read "
             "exactly with their read call (detail_path/cursor); pass cursor, limit and "
             "result_sha256 only from a next_call. Address a specific "
-            "result with result_ref in extraction-result:<uuid> form. This tool does not "
+            "result with result_ref in extraction-result:<uuid> form. Direct validators use "
+            "validator-result:<uuid>; action=\"validator_runs\" lists this chat's runs. "
+            "For either kind, validator_results plus validator_result_key and "
+            "detail_path=\"original.result\" reads the complete saved validator output. "
+            "Historical projections explicitly report original_unavailable. This tool does not "
             "export, prepare for curation, inspect files or review sessions, or debug traces."
         ),
     )

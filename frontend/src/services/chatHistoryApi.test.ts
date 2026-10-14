@@ -241,3 +241,14 @@ it('restores a failed summary with durable saved results as a failed turn', () =
     content: 'Extraction saved; summary failed.',
   })
 })
+
+
+it('restores an interrupted turn without presenting it as completed', () => {
+  const messages = buildRestorableChatMessages([{
+    message_id: 'interrupted', session_id: 'session-1', chat_kind: 'assistant_chat',
+    role: 'assistant', message_type: 'text', content: 'Partial response',
+    turn_id: 'turn-1', created_at: '2026-10-14T00:00:00Z',
+    payload_json: { terminal_state: 'turn_interrupted', terminal_message: 'Request interrupted; try again later.' },
+  }])
+  expect(messages[0]).toMatchObject({ terminalState: 'turn_interrupted', terminalMessage: 'Request interrupted; try again later.' })
+})

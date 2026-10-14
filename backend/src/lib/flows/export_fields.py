@@ -12,6 +12,8 @@ COMMON_FIELDS = [
     {"ref": "object.label", "label": "Item label", "value_type": "string"},
     {"ref": "object.object_type", "label": "Item type", "value_type": "string"},
     {"ref": "object.evidence_record_ids", "label": "Supporting evidence IDs", "value_type": "list"},
+    {"ref": "object.supporting_evidence", "label": "Supporting evidence (saved quotes and locations)", "value_type": "list"},
+    {"ref": "object.evidence_link_issues", "label": "Missing or ambiguous evidence links", "value_type": "list"},
     {"ref": "object.validation_status", "label": "Validation status", "value_type": "string"},
     {"ref": "artifact.agent_name", "label": "Source agent", "value_type": "string"},
 ]

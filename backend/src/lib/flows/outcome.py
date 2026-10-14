@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
+
 FlowRunStatus = Literal["running", "completed", "failed"]
 FlowPersistenceStatus = Literal["pending", "succeeded", "failed"]
 
@@ -64,17 +65,19 @@ class FlowRunOutcome:
     ``FLOW_FINISHED`` event is observed and transcript persistence succeeds.
     ``CHAT_OUTPUT_READY`` owns textual output when present; otherwise retain
     ``RUN_FINISHED`` text alongside any files. A failed terminal status always
-    discards all success candidates.
+    preserves already-generated files while discarding unfinalized chat text.
     """
 
     status: FlowRunStatus = "running"
     failure_reason: str | None = None
     failure_type: str | None = None
+    failure_category: str | None = None
     failure_phase: str | None = None
     failure_tool: str | None = None
     failure_provider: str | None = None
     failure_already_reported: bool = False
     final_user_visible_text: str | None = None
+    output_status: str | None = None
     persistence_status: FlowPersistenceStatus = "pending"
     persistence_result: dict[str, Any] = field(default_factory=dict)
     _success_output_events: list[dict[str, Any]] = field(default_factory=list)
@@ -118,12 +121,13 @@ class FlowRunOutcome:
             self.failure_phase = self._machine_failure_value(event, "phase") or "runner"
             self.failure_tool = self._machine_failure_value(event, "tool_name")
             self.failure_provider = self._machine_failure_value(event, "provider")
+            self.failure_category = self._machine_failure_value(event, "failure_category")
             self.failure_already_reported = (
                 self._machine_failure_value(event, "reason", "error_type")
                 in FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
             )
             self.final_user_visible_text = None
-            self._success_output_events = []
+            self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
             self._run_finished_event = None
             self._curation_handoff_ready_event = None
             return
@@ -153,12 +157,16 @@ class FlowRunOutcome:
             self.failure_provider = (
                 self.failure_provider or self._machine_failure_value(event, "provider")
             )
+            self.failure_category = (
+                self.failure_category or self._machine_failure_value(event, "failure_category")
+            )
             return
 
         if event_type != "FLOW_FINISHED":
             return
 
         self._flow_finished_event = dict(event)
+        self.output_status = event.get("output_status")
         terminal_status = str(event.get("status") or "failed")
         if terminal_status != "completed" or self.status == "failed":
             self.status = "failed"
@@ -166,7 +174,7 @@ class FlowRunOutcome:
                 event.get("failure_reason") or self.failure_reason or "Flow execution failed."
             )
             self.final_user_visible_text = None
-            self._success_output_events = []
+            self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
             self._run_finished_event = None
             self._curation_handoff_ready_event = None
             self._flow_finished_event["status"] = "failed"
@@ -181,10 +189,23 @@ class FlowRunOutcome:
             self.status = "completed"
             self.failure_reason = None
             self.failure_type = None
+            self.failure_category = None
             self.failure_phase = None
             self.failure_tool = None
             self.failure_provider = None
             self.failure_already_reported = False
+            if self.output_status == "partial":
+                self.final_user_visible_text = self._partial_notice() + (
+                    "\n\n" + self._selected_visible_text() if self._selected_visible_text() else ""
+                )
+
+    def _partial_notice(self) -> str:
+        return (
+            "Partial result: some requested outputs could not be produced. "
+            "The available outputs are shown below and saved files remain available. "
+            "Review what is missing before restoring your request to try again. "
+            "A saved result does not by itself establish curation readiness."
+        )
 
     @property
     def terminal(self) -> bool:
@@ -194,20 +215,34 @@ class FlowRunOutcome:
         """Return the canonical terminal order to store for durable replay."""
 
         if self.status == "failed" and self._replacement_failure_events:
-            return [dict(event) for event in self._replacement_failure_events]
+            return [dict(event) for event in [*self._success_output_events, *self._replacement_failure_events]]
 
         events: list[dict[str, Any]] = []
         if self.status == "completed":
             events.extend(dict(event) for event in self._success_output_events)
             if not self._has_chat_output and self._run_finished_event is not None:
                 events.append(dict(self._run_finished_event))
-        elif self.status == "failed" and self._run_error_event is not None:
-            events.append(dict(self._run_error_event))
+        elif self.status == "failed":
+            events.extend(dict(event) for event in self._success_output_events)
+            if self._run_error_event is not None:
+                events.append(dict(self._run_error_event))
         if (
             self.status == "completed"
             and self._curation_handoff_ready_event is not None
         ):
             events.append(dict(self._curation_handoff_ready_event))
+        if self.status == "completed" and self.output_status == "partial":
+            # Outputs are held until this durable terminal outcome is committed,
+            # so live delivery and replay receive the exact same partial notice.
+            text_event = next((item for item in events if item.get("type") in {"CHAT_OUTPUT_READY", "RUN_FINISHED"}), None)
+            if text_event is None:
+                events.append({"type": "RUN_FINISHED", "response": self._partial_notice()})
+            elif text_event["type"] == "CHAT_OUTPUT_READY":
+                details = dict(text_event.get("details") or {})
+                details["output"] = self._partial_notice() + "\n\n" + str(details.get("output") or text_event.get("output") or "")
+                text_event["details"] = details
+            else:
+                text_event["response"] = self._partial_notice() + "\n\n" + str(text_event.get("response") or "")
         if self._flow_finished_event is not None:
             events.append(dict(self._flow_finished_event))
         return events
@@ -237,7 +272,7 @@ class FlowRunOutcome:
         self.failure_tool = None
         self.failure_already_reported = True
         self.final_user_visible_text = None
-        self._success_output_events = []
+        self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
         self._run_finished_event = None
         self._curation_handoff_ready_event = None
         self._run_error_event = None

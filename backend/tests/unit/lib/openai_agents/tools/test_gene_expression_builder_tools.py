@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from collections.abc import Mapping
 from typing import Any
 
 import pytest
 
 from agr_ai_curation_alliance.tools import agr_curation
+from agr_ai_curation_alliance.domain_packs.gene_expression import (
+    GeneExpressionExportAdapter,
+    GENE_EXPRESSION_TARGET_KEY,
+)
+from src.schemas.curation_workspace import SubmissionMode
 from src.lib.openai_agents import extraction_builder_workspace as builder
 from src.lib.openai_agents.tools import evidence_workspace
 
@@ -109,6 +115,7 @@ def _stage(**overrides: Any):
         "where_expressed_statement": "PEF-1::GFP expression in the cilium",
         "rationale": "Anti-GFP staining localizes the reporter to the cilium, not the cell body.",
         "data_provider": "WB",
+        "negated": False,
         "subject": _SUBJECT,
         "reference": _REFERENCE,
         "controlled_fields": [_relation_field()],
@@ -157,6 +164,7 @@ def _patch(updates: list[dict[str, Any]]):
         updates=[
             {
                 "string_value": None,
+                "bool_value": None,
                 "mention": None,
                 "proposed_curie": None,
                 "evidence_record_ids": None,
@@ -993,3 +1001,125 @@ def test_search_builder_candidates_pages_matches():
     assert second["returned_candidate_count"] == 1
     assert second["next_offset"] is None
     assert second["truncated"] is False
+
+
+@pytest.mark.parametrize("negated", [True, False])
+@pytest.mark.parametrize("site", ["body wall muscle basement membrane", "intestinal basement membrane"])
+@pytest.mark.asyncio
+async def test_negated_observation_survives_stage_patch_and_materialization(active_builder_context, negated, site):
+    workspace, _ = active_builder_context
+    evidence = evidence_workspace.find_active_evidence_record("evidence-67598e5688f123c8", document_id="doc-1")
+    statement = f"Endogenous AGR-1 is {'not detectable' if negated else 'detected'} in the {site}."
+    evidence["verified_quote"] = statement
+    evidence.pop("pending_ref_id")
+    evidence["envelope_target"] = {"field_path": "where_expressed_statement"}
+    evidence["envelope_targets"] = [{"field_path": "where_expressed_statement"}]
+    attach = evidence_workspace.create_attach_evidence_to_object_tool("doc-1", "user-1")
+    await _tool_fn(attach, "attach_evidence_to_object")(evidence["evidence_record_id"], pending_ref_id="gene-expression-annotation-pef-1", field_path="where_expressed_statement")
+    result = _stage(
+        subject={"mention": "agr-1", "proposed_primary_external_id": None},
+        where_expressed_statement=statement,
+        negated=negated,
+        controlled_fields=[
+            _relation_field(),
+            _controlled_field("expression_experiment.expression_assay_used", "confocal microscopy"),
+            _controlled_field("expression_pattern.when_expressed.developmental_stage_start", "L4 larvae"),
+            _controlled_field("expression_pattern.where_expressed.anatomical_structure", site),
+        ],
+    )
+    assert result.status == "ok"
+    candidate = workspace.get_candidate("gex-candidate-1")
+    assert candidate.staged_fields["negated"] is negated
+    assert _patch([{"field_path": "negated", "bool_value": not negated}]).status == "ok"
+    assert workspace.get_candidate("gex-candidate-1").staged_fields["negated"] is not negated
+    assert _patch([{"field_path": "negated", "bool_value": negated}]).status == "ok"
+    assert _finalize(["gex-candidate-1"]).status == "ok"
+    annotation = workspace.finalization.payload["curatable_objects"][0]
+    assert annotation["payload"]["negated"] is negated
+    assert annotation["payload"]["where_expressed_statement"] == statement
+    assert annotation["evidence_record_ids"] == [evidence["evidence_record_id"]]
+    assert workspace.finalization.payload["metadata"]["evidence_records"][0]["verified_quote"] == statement
+
+    # Deterministic validator results make the materialized object export-ready.
+    # Keep its actual polarity, statement and evidence; no live database/model calls.
+    exported_annotation = deepcopy(annotation)
+    payload = exported_annotation["payload"]
+    resolved = {
+        "data_provider": {"abbreviation": "WB"},
+        "expression_annotation_subject": {"primary_external_id": "WB:WBGene00018304", "gene_symbol": "agr-1"},
+        "relation": {"name": "is_expressed_in"},
+        "single_reference": {"reference_id": 39550471},
+        "expression_experiment.single_reference": {"reference_id": 39550471},
+        "expression_experiment.entity_assayed": {"primary_external_id": "WB:WBGene00018304", "gene_symbol": "agr-1"},
+        "expression_experiment.expression_assay_used": {"curie": "MMO:0000685", "name": "confocal microscopy"},
+        "expression_pattern.when_expressed.developmental_stage_start": {"curie": "WBls:0000038", "name": "L4 larva Ce"},
+        "expression_pattern.where_expressed.anatomical_structure": {
+            "curie": "WBbt:0006804" if site.startswith("body") else "WBbt:0005772", "name": site,
+        },
+    }
+    for path, identity in resolved.items():
+        value = payload
+        for part in path.split("."):
+            value = value[part]
+        value.update(identity, resolution_state="resolved", lookup_outcome="matched", validator_explanation=None)
+    payload["when_expressed_stage_name"] = "L4 larva Ce"
+    candidate = {
+        **exported_annotation,
+        "candidate_id": "gex-candidate-1",
+        "object": exported_annotation,
+        "object_id": exported_annotation["pending_ref_id"],
+        "projection_ref": {"envelope_id": "negated-envelope", "object_id": exported_annotation["pending_ref_id"], "envelope_revision": 1},
+        "envelope_id": "negated-envelope", "envelope_revision": 1,
+        "domain_pack_id": agr_curation.GENE_EXPRESSION_DOMAIN_PACK_ID,
+    }
+    result = GeneExpressionExportAdapter().build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key=GENE_EXPRESSION_TARGET_KEY,
+        payload_context={
+            "session_id": "negated-regression", "candidate_ids": ["gex-candidate-1"],
+            "candidate_count": 1, "candidates": [], "domain_envelope_candidates": [candidate],
+            "domain_envelopes": [], "readiness_blockers": [], "warnings": [],
+        },
+    )
+    exported = result.payload_json["gene_expression_annotations"][0]
+    assert exported["target_rows"]["geneexpressionannotation"]["columns"]["negated"] is negated
+    assert exported["evidence"]["evidence_record_ids"] == [evidence["evidence_record_id"]]
+    detach = evidence_workspace.create_detach_evidence_from_object_tool("doc-1", "user-1")
+    await _tool_fn(detach, "detach_evidence_from_object")(evidence["evidence_record_id"], pending_ref_id="gene-expression-annotation-pef-1")
+    assert evidence["envelope_targets"] == [{"field_path": "where_expressed_statement"}]
+    assert "object_ref" not in evidence
+
+
+@pytest.mark.parametrize("value", [None, "true", "false", 0, 1])
+def test_stage_rejects_non_boolean_negated(active_builder_context, value):
+    workspace, _ = active_builder_context
+    assert _stage(negated=value).status != "ok"
+    assert not workspace.candidates
+
+
+@pytest.mark.parametrize("value", [None, "true", "false", 0, 1])
+def test_patch_rejects_non_boolean_negated_without_mutation(active_builder_context, value):
+    workspace, _ = active_builder_context
+    assert _stage(negated=True).status == "ok"
+    assert _patch([{"field_path": "negated", "bool_value": value}]).status != "ok"
+    assert workspace.get_candidate("gex-candidate-1").staged_fields["negated"] is True
+
+
+def test_negated_tool_schema_exposes_required_boolean_and_typed_patch():
+    stage = agr_curation.stage_gene_expression_observation.params_json_schema
+    assert stage["properties"]["negated"]["type"] == "boolean"
+    assert "negated" in stage["required"]
+    patch = _defs_schema(agr_curation.patch_gene_expression_observation.params_json_schema, "GeneExpressionPatchUpdateInput")
+    assert "negated" in patch["properties"]["field_path"]["enum"]
+    assert {x["type"] for x in patch["properties"]["bool_value"]["anyOf"]} == {"boolean", "null"}
+
+
+@pytest.mark.parametrize("update", [
+    {"field_path": "negated", "bool_value": True, "string_value": "false"},
+    {"field_path": "rationale", "string_value": "Supported by the paper.", "bool_value": True},
+])
+def test_patch_rejects_boolean_in_wrong_value_slot(active_builder_context, update):
+    workspace, _ = active_builder_context
+    _stage(negated=False)
+    assert _patch([update]).status != "ok"
+    assert workspace.get_candidate("gex-candidate-1").staged_fields["negated"] is False

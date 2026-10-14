@@ -77,6 +77,11 @@ def test_complete_commit_preserves_original_and_audits_exact_contract(example, m
     assert finding.details["execution_receipt"] == context.receipt.model_dump(mode="json")
     assert finding.details["profile_validator_mapping"]["mapping_id"] == "lookup"
     assert finding.details["linkml_alignment"] == "not_assessed"
+    assert len(output.envelope.validator_results) == 1
+    ref = finding.details["validation_result_ref"]
+    assert output.envelope.validator_results[ref]["result"] == items[0].result.model_dump(mode="json")
+    assert output.envelope.validator_results[ref]["request"] == items[0].request.model_dump(mode="json")
+
 
 
 @pytest.mark.parametrize("value", [1, True, [], {}, None])

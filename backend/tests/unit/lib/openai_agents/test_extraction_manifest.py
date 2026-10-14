@@ -173,6 +173,10 @@ def test_manifest_lists_all_objects_up_to_page_size_and_paginates():
     ]
     assert page["objects"][1]["validation"] == {
         "total": 1,
+        "unit": "validation_findings",
+        "status_counts": {"open": 1, "resolved": 0, "waived": 0},
+        "open_error_count": 0,
+        "open_warning_count": 1,
         "error_count": 0,
         "warning_count": 1,
         "unresolved_count": 1,
@@ -284,7 +288,13 @@ def test_validation_summary_distinguishes_absence_and_unresolved_and_bounds_deta
     assert summary["total"] == 3
     assert summary["status_counts"] == {"unresolved": 3}
     assert summary["details_complete"] is False
-    assert summary["results"] == [{"status": "unresolved", "open_finding": True, "details_omitted": True}]
+    assert len(summary["results"]) == 1
+    entry = summary["results"][0]
+    assert entry["status"] == "unresolved" and entry["open_finding"]
+    assert entry["details_omitted"] and entry["request_id"] == "0"
+    assert entry["validator_result_key"] == "request:0"
+    assert entry["read"]["validator_result_key"] == "request:0"
+    assert summary["outstanding_remaining"] == 2
 
 
 def test_duplicate_validator_findings_keep_rejected_writeback():
@@ -302,3 +312,71 @@ def test_duplicate_validator_findings_keep_rejected_writeback():
     assert decision["open_finding"] is True
     assert page["validation"]["error_count"] == 1
     assert "must not be described as an accepted identity" in render_extraction_manifest_page(page)
+
+
+@pytest.mark.parametrize("object_count", [0, 1, 3])
+def test_manifest_preserves_complete_specialist_explanation(object_count):
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    explanation = "  Findings and exclusions: αβ\n" + ("Uncertain; inspect evidence. " * 1000) + "\nEnd.  "
+    payload = _payload(object_count)
+    payload["specialist_explanation"] = explanation
+    # Simulate storage serialization and read-back through the canonical schema.
+    restored = DomainEnvelope.model_validate_json(json.dumps(payload)).model_dump(mode="json")
+    page = build_extraction_manifest_page(restored, result_ref="extraction-result:fixture", limit=1)
+    rendered = render_extraction_manifest_page(page)
+    assert page["specialist_explanation"] == explanation
+    assert explanation in rendered
+    assert page["object_count"] == object_count
+    assert "extraction-result:fixture" in rendered
+    assert "Hidden evidence" not in rendered
+
+
+def test_latest_resolved_correction_is_not_counted_as_unresolved_history(monkeypatch):
+    from src.lib.domain_packs.validator_result_records import validator_result_snapshot
+
+    payload = _payload(1)
+    payload["validation_findings"] = []
+    originals = {}
+    for order, status in enumerate(["unresolved", "resolved"]):
+        raw = {"status": status, "request_id": f"round-{order}", "validator_binding_id": "binding",
+               "target": {"object_type": "Assertion", "object_id": "assertion-1", "field_path": "curie"},
+               "resolved_values": {"curie": "TEST:corrected"} if status == "resolved" else {}}
+        key, original = validator_result_snapshot(raw, source_envelope_revision=order + 1)
+        originals[key] = {**original, "recorded_order": order}
+    old_ref = next(iter(originals))
+    payload["validation_findings"] = [{
+        "severity": "error", "status": "resolved", "message": "Earlier rejected value, corrected in the later round.",
+        "details": {"validation_result_ref": old_ref, "materialization": "rejected"},
+    }]
+    payload["validator_results"] = dict(reversed(list(originals.items())))  # JSONB key ordering is immaterial.
+    page = build_extraction_manifest_page(payload)
+    decisions = page["validator_results"]
+    assert decisions["status_counts"] == {"resolved": 1, "unresolved": 1}
+    assert decisions["current_status_counts"] == {"resolved": 1}
+    assert decisions["historical_total"] == 1
+    assert decisions["outstanding_total"] == 0
+    assert page["object_count"] == 1
+    assert page["validation"]["total"] == 1
+    assert page["validation"]["status_counts"]["resolved"] == 1
+    assert page["validation"]["open_error_count"] == 0
+
+
+def test_last_outstanding_decision_reaches_front_of_bounded_preview(monkeypatch):
+    from src.lib.domain_packs.validator_result_records import validator_result_snapshot
+
+    monkeypatch.setenv("SUPERVISOR_MANIFEST_PAGE_SIZE", "3")
+    payload = _payload(0)
+    payload["validator_results"] = {}
+    for order in range(110):
+        raw = {"status": "unresolved" if order == 109 else "resolved", "request_id": f"r-{order}",
+               "validator_binding_id": "binding", "target": {"object_id": f"object-{order}"},
+               "resolved_values": {"curie": "TEST:" + "X" * 1000}}
+        key, original = validator_result_snapshot(raw, source_envelope_revision=1)
+        payload["validator_results"][key] = {**original, "recorded_order": order}
+    summary = build_extraction_manifest_page(payload, result_ref="extraction-result:fixture")["validator_results"]
+    assert summary["total"] == 110
+    assert summary["results"][0]["request_id"] == "r-109"
+    assert summary["outstanding_remaining"] == 0
+    assert summary["details_complete"] is False
+    assert all(item["validator_result_key"] == item["read"]["validator_result_key"] for item in summary["results"])

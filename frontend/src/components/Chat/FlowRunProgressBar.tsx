@@ -42,6 +42,9 @@ export default function FlowRunProgressBar({ progress }: FlowRunProgressBarProps
   if (isRunning) {
     headline = progress.flowName ? `Running ${flowLabel}` : 'Running the flow'
     detail = stepText
+  } else if (progress.status === 'partial') {
+    headline = `${flowLabel} produced a partial result`
+    detail = 'Some requested outputs are missing. Review the saved outputs and the chat notice.'
   } else if (progress.currentStep) {
     const position = `step ${progress.currentStep.step} of ${progress.totalSteps}: ${progress.currentStep.name}`
     headline = progress.status === 'stopped' ? `${flowLabel} was stopped` : `${flowLabel} did not finish`
@@ -64,7 +67,7 @@ export default function FlowRunProgressBar({ progress }: FlowRunProgressBarProps
         px: 2,
         py: 1.5,
         borderRadius: 1,
-        border: `1px solid ${isRunning ? theme.palette.divider : theme.palette.error.main}`,
+        border: `1px solid ${isRunning ? theme.palette.divider : (progress.status === 'partial' ? theme.palette.warning.main : theme.palette.error.main)}`,
         backgroundColor: theme.palette.background.paper,
       })}
     >
@@ -74,7 +77,7 @@ export default function FlowRunProgressBar({ progress }: FlowRunProgressBarProps
       <LinearProgress
         variant="determinate"
         value={value}
-        color={isRunning ? 'primary' : 'error'}
+        color={isRunning ? 'primary' : (progress.status === 'partial' ? 'warning' : 'error')}
         aria-label="Flow progress"
         aria-valuetext={`${finishedSteps} of ${progress.totalSteps} steps finished`}
         sx={{ height: 6, borderRadius: 3 }}
@@ -82,7 +85,7 @@ export default function FlowRunProgressBar({ progress }: FlowRunProgressBarProps
       <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
         <Typography
           variant="body2"
-          color={isRunning ? 'text.secondary' : 'error'}
+          color={isRunning ? 'text.secondary' : (progress.status === 'partial' ? 'warning.main' : 'error')}
           aria-live="polite"
           aria-atomic="true"
         >
