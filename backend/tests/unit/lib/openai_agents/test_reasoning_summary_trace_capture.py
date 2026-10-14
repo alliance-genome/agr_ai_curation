@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from agents import RunConfig as SDKRunConfig
+
 import pytest
 
 from src.lib.openai_agents import streaming_tools
@@ -143,7 +145,7 @@ async def test_specialist_reasoning_item_persists_only_first_class_summary_text(
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools.Runner,
@@ -205,7 +207,7 @@ async def test_specialist_reasoning_item_does_not_persist_raw_item_dump_as_summa
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools.Runner,

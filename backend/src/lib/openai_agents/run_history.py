@@ -395,6 +395,12 @@ def record_builder_history(kind: str, workspace: Any, *, output: Any, validation
     history = ACTIVE_HISTORY.get()
     if not history or not history.healthy:
         return
+    with workspace._mutation_lock:
+        _record_builder_delta(history, kind, workspace, output=output, validation=validation)
+
+
+def _record_builder_delta(history: RunHistory, kind: str, workspace: Any, *, output: Any, validation: Any) -> None:
+    """Called while the same lock protects candidate mutations and publication."""
     seen = history.builder_revisions.setdefault(workspace.builder_invocation_id, {})
     changed = [candidate.snapshot() for candidate in workspace.candidates.values()
                if seen.get(candidate.candidate_id) != candidate.revision]

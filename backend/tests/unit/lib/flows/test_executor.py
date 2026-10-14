@@ -1,4 +1,6 @@
 """Tests for flow executor custom_instructions wiring."""
+from agents import RunConfig as SDKRunConfig
+
 import asyncio
 from copy import deepcopy
 from dataclasses import replace
@@ -7657,7 +7659,7 @@ class TestExecuteFlowTermination:
         monkeypatch.setattr(
             runner,
             "_build_agents_run_config",
-            lambda **kwargs: SimpleNamespace(**kwargs),
+            lambda **kwargs: SDKRunConfig(),
         )
         monkeypatch.setattr(runner, "get_collected_events", lambda: [])
         monkeypatch.setattr(runner.Runner, "run_streamed", _fake_sdk_run_streamed)

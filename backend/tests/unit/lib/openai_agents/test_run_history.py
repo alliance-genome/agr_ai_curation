@@ -146,6 +146,55 @@ def test_builder_archive_failure_is_counted_without_undoing_mutation(scope, monk
         ACTIVE_HISTORY.reset(token)
 
 
+def test_concurrent_builder_writers_cannot_publish_a_broken_history_chain(scope, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from src.lib.openai_agents import extraction_builder_workspace as builder
+    monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **kwargs: None)
+    first_append, release_first, second_started = Event(), Event(), Event()
+    records = []
+    class BlockingStore:
+        def append(self, scope, kind, content, **metadata):
+            if not records:
+                first_append.set()
+                assert release_first.wait(5)
+            records.append(json.loads(content))
+            return str(len(records))
+    history = RunHistory(scope, BlockingStore())
+    workspace = builder.ExtractionBuilderWorkspace(run_id=scope.run_id)
+    def mutate(candidate_id):
+        token = ACTIVE_HISTORY.set(history)
+        try:
+            if candidate_id == "B":
+                second_started.set()
+            workspace.upsert_candidate(candidate_id=candidate_id, staged_fields={"items": [{"id": candidate_id}]})
+        finally:
+            ACTIVE_HISTORY.reset(token)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(mutate, "A")
+        assert first_append.wait(5)
+        second = pool.submit(mutate, "B")
+        assert second_started.wait(5)
+        try:
+            assert not second.done()
+            # B is blocked before touching the live workspace, not merely before
+            # publishing its delta. A's archived revision cannot be overwritten.
+            assert set(workspace.candidates) == {"A"}
+        finally:
+            release_first.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+    mutate("C")
+    reconstructed, previous = {}, None
+    for index, record in enumerate(records, 1):
+        assert record["previous_event_id"] == previous
+        previous = str(index)
+        reconstructed.update((c["candidate_id"], c) for c in record["changed_candidates"])
+    assert list(reconstructed.values()) == workspace.snapshot(redact_payload=False)["candidates"]
+    assert [len(record["changed_candidates"]) for record in records] == [1, 1, 1]
+    assert history.healthy and history.events_written == 3
+
+
 @pytest.mark.asyncio
 async def test_large_nested_exact_read_pages_and_search_are_bounded(store, scope, monkeypatch):
     monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")

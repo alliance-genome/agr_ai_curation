@@ -8,6 +8,8 @@ from contextvars import ContextVar, Token
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import wraps
+from threading import RLock
 from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
@@ -19,6 +21,15 @@ from .event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from .extraction_trace_events import write_extraction_trace_event
 
 logger = logging.getLogger(__name__)
+
+
+def _synchronized_workspace(method):
+    """Keep a mutation, its exact journal record and revision publication atomic."""
+    @wraps(method)
+    def synchronized(self, *args, **kwargs):
+        with self._mutation_lock:
+            return method(self, *args, **kwargs)
+    return synchronized
 
 BUILDER_STATE_ACTIVE = "active"
 BUILDER_STATE_FINALIZED = "finalized"
@@ -126,6 +137,7 @@ class ExtractionBuilderWorkspace:
         generic_profile: Any = None,
         execution_receipt: dict[str, Any] | None = None,
     ) -> None:
+        self._mutation_lock = RLock()
         self.run_id = _optional_string(run_id) or _new_builder_run_id()
         self.document_id = _optional_string(document_id)
         self.domain_pack_id = _optional_string(domain_pack_id)
@@ -144,6 +156,7 @@ class ExtractionBuilderWorkspace:
         self.created_at = _now_iso()
         self.updated_at = self.created_at
 
+    @_synchronized_workspace
     def upsert_candidate(
         self,
         *,
@@ -182,6 +195,7 @@ class ExtractionBuilderWorkspace:
         )
         return candidate
 
+    @_synchronized_workspace
     def apply_scope_metadata(
         self,
         *,
@@ -192,6 +206,7 @@ class ExtractionBuilderWorkspace:
         self._ensure_scope_value("document_id", document_id)
         self._ensure_scope_value("domain_pack_id", domain_pack_id)
 
+    @_synchronized_workspace
     def discard_candidate(self, candidate_id: str, *, reason: str | None = None) -> None:
         self._ensure_mutable()
         candidate = self._candidate(candidate_id)
@@ -208,6 +223,7 @@ class ExtractionBuilderWorkspace:
             },
         )
 
+    @_synchronized_workspace
     def record_validation_failure(
         self,
         *,
@@ -254,12 +270,15 @@ class ExtractionBuilderWorkspace:
             output_summary=self.snapshot(redact_payload=False),
         )
 
+    @_synchronized_workspace
     def mark_cancelled(self, *, reason: str | None = None) -> None:
         self._mark_terminal(BUILDER_STATE_CANCELLED, reason=reason)
 
+    @_synchronized_workspace
     def mark_aborted(self, *, reason: str | None = None) -> None:
         self._mark_terminal(BUILDER_STATE_ABORTED, reason=reason)
 
+    @_synchronized_workspace
     def finalize(
         self,
         *,
@@ -383,6 +402,7 @@ class ExtractionBuilderWorkspace:
         )
         return self.finalization
 
+    @_synchronized_workspace
     def snapshot(self, *, redact_payload: bool = True) -> dict[str, Any]:
         candidates = [candidate.snapshot() for candidate in self.candidates.values()]
         if redact_payload:
