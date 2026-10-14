@@ -848,6 +848,7 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             result = base_on_invoke_tool(inline_ctx, input_str)
             if inspect.isawaitable(result):
                 result = await result
+            result = _document_model_result(tool_id, result)
             _report_inline_package_result(tool_id, result)
             return result
 
@@ -912,15 +913,16 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             raise RuntimeError(
                 f"Package tool '{tool_id}' execution failed: {error_message}"
             )
+        model_result = _document_model_result(tool_id, result.result)
         if not requery_pages:
-            _report_inline_package_result(tool_id, result.result)
-            return result.result
+            _report_inline_package_result(tool_id, model_result)
+            return model_result
         if is_write and not full_tool_results_are_requested() and serialized_size(result.result) > tool_result_budget():
             result_ref = str(uuid4())
             captured_writes[result_ref] = (scope, request_identity, result.result)
         return _bounded_package_result(
             tool_id,
-            result.result,
+            model_result,
             view_arguments,
             result_ref=result_ref,
         )
@@ -932,6 +934,21 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
         on_invoke_tool=_runner_invoke,
         params_json_schema=_with_result_view_arguments(base_tool),
     )
+
+
+def _document_model_result(tool_id: str, result: Any) -> Any:
+    from src.lib.openai_agents.document_result_view import DOCUMENT_READ_TOOLS, document_result_view
+
+    if tool_id not in DOCUMENT_READ_TOOLS or full_tool_results_are_requested():
+        return result
+
+    view, events = document_result_view(tool_id, result)
+    if events:
+        from src.lib.openai_agents.streaming_tools import add_specialist_event
+
+        for event in events:
+            add_specialist_event(event)
+    return view
 
 
 def _with_result_view_arguments(tool: Any) -> Dict[str, Any]:
