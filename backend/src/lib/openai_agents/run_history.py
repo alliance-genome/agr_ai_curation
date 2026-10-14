@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import time
+from threading import Lock
 from typing import Any
 from uuid import uuid4
 
@@ -35,6 +36,35 @@ def exact_json(value: Any) -> str:
             return item.model_dump(mode="json")
         raise TypeError(f"Unsupported history payload type: {type(item).__name__}")
     return json.dumps(value, default=encode, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def searchable_text(content: str) -> str:
+    """Decode JSON leaves for literal search without changing the stored original.
+
+    Tool arguments/results may themselves be JSON strings. Include their decoded
+    leaves too, so quotes, backslashes and line breaks are searchable as seen by
+    the caller, rather than requiring knowledge of each serialization layer.
+    """
+    pending, parts = [json.loads(content)], []
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            pending.extend(reversed(list(value.values())))
+            parts.extend(value.keys())
+        elif isinstance(value, list):
+            pending.extend(reversed(value))
+        elif isinstance(value, str):
+            parts.append(value)
+            if value.lstrip().startswith(("{", "[", '"')):
+                try:
+                    pending.append(json.loads(value))
+                except ValueError:
+                    pass
+        else:
+            parts.append(exact_json(value))
+    # PostgreSQL text cannot store NUL. Apply the same reversible search spelling
+    # to the query; the canonical JSON body already retains its escaped form.
+    return "\n".join(parts).replace("\x00", "\\u0000")
 
 
 @dataclass(frozen=True)
@@ -63,7 +93,8 @@ class HistoryStore:
                 from sqlalchemy.dialects.postgresql import insert
             else:
                 from sqlalchemy.dialects.sqlite import insert
-            db.execute(insert(AgentHistoryPayload).values(sha256=digest, content=content).on_conflict_do_nothing(index_elements=["sha256"]))
+            db.execute(insert(AgentHistoryPayload).values(sha256=digest, content=content,
+                search_text=searchable_text(content)).on_conflict_do_nothing(index_elements=["sha256"]))
             db.add(AgentHistoryEvent(event_id=event_id, owner_id=scope.owner_id,
                 session_id=scope.session_id, run_id=scope.run_id,
                 invocation_id=scope.invocation_id, parent_invocation_id=scope.parent_invocation_id,
@@ -104,7 +135,8 @@ class HistoryStore:
         stmt = select(AgentHistoryEvent).join(AgentHistoryPayload).where(
             self._authorized(scope), AgentHistoryEvent.sequence > after)
         if query:
-            stmt = stmt.where(AgentHistoryPayload.content.icontains(query, autoescape=True))
+            stmt = stmt.where(AgentHistoryPayload.search_text.icontains(
+                query.replace("\x00", "\\u0000"), autoescape=True))
         if tool_name:
             stmt = stmt.where(AgentHistoryEvent.tool_name == tool_name)
         with self.session_factory() as db:
@@ -125,6 +157,9 @@ class RunHistory:
     item_refs: dict[tuple[str, int], str] = field(default_factory=dict)
     model_view: Any = None
     tool_output_metadata: dict[str, dict] = field(default_factory=dict)
+    builder_revisions: dict[str, dict[str, int]] = field(default_factory=dict)
+    builder_previous_events: dict[str, str] = field(default_factory=dict)
+    _metrics_lock: Any = field(default_factory=Lock, repr=False)
 
     def assert_current_scope(self) -> None:
         from src.lib.context import get_current_user_id, get_current_trace_id, get_current_session_id
@@ -133,25 +168,31 @@ class RunHistory:
                 or get_current_session_id() != self.scope.session_id):
             raise ValueError("History instance is not authorized for this request.")
 
-    async def record(self, kind: str, value: Any, **metadata) -> str | None:
+    def record_sync(self, kind: str, value: Any, **metadata) -> str | None:
         if not self.healthy:
             return None
         started = time.perf_counter()
         try:
             content = exact_json(value)
-            ref = await asyncio.to_thread(self.store.append, self.scope, kind, content, **metadata)
-            self.events_written += 1
-            self.submitted_payload_bytes += len(content.encode("utf-8"))
+            ref = self.store.append(self.scope, kind, content, **metadata)
+            with self._metrics_lock:
+                self.events_written += 1
+                self.submitted_payload_bytes += len(content.encode("utf-8"))
             return ref
         except Exception:
-            self.healthy = False
-            self.write_failures += 1
+            with self._metrics_lock:
+                self.healthy = False
+                self.write_failures += 1
             logger.exception("Agent history write failed; active context will be retained",
                 extra={"operation": "agent_history_write_failed", "run_id": self.scope.run_id,
                        "invocation_id": self.scope.invocation_id, "history_kind": kind})
             return None
         finally:
-            self.write_duration_ms += (time.perf_counter() - started) * 1000
+            with self._metrics_lock:
+                self.write_duration_ms += (time.perf_counter() - started) * 1000
+
+    async def record(self, kind: str, value: Any, **metadata) -> str | None:
+        return await asyncio.to_thread(self.record_sync, kind, value, **metadata)
 
     async def capture_input(self, items: list[Any], instructions: str | None) -> dict[int, str]:
         occurrences: dict[str, int] = {}
@@ -345,17 +386,30 @@ async def record_model_history(agent: Any, kind: str, value: Any, **metadata) ->
         await history.record(kind, value, **metadata)
 
 
-def record_builder_history(kind: str, value: Any) -> None:
+def record_builder_history(kind: str, workspace: Any, *, output: Any, validation: Any) -> None:
     """Synchronous builder mutation boundary, before diagnostic trace reduction.
 
     Builder APIs are synchronous and cannot await a queued write. Commit here so
     a later context checkpoint cannot overtake an unpersisted object revision.
     """
     history = ACTIVE_HISTORY.get()
-    if history and history.healthy:
-        try:
-            history.store.append(history.scope, kind, exact_json(value))
-        except Exception:
-            history.healthy = False
-            logger.exception("Builder history write failed; retaining model context",
-                             extra={"operation": "agent_history_write_failed"})
+    if not history or not history.healthy:
+        return
+    seen = history.builder_revisions.setdefault(workspace.builder_invocation_id, {})
+    changed = [candidate.snapshot() for candidate in workspace.candidates.values()
+               if seen.get(candidate.candidate_id) != candidate.revision]
+    # Cumulative candidate bodies are already retained in earlier deltas. Never
+    # archive the growing workspace again for every unrelated candidate mutation.
+    metadata = {key: getattr(workspace, key) for key in (
+        "run_id", "document_id", "domain_pack_id", "agent_id", "builder_invocation_id",
+        "state", "validation_errors", "created_at", "updated_at")}
+    metadata.update(workspace_revision=workspace.revision, candidate_count=len(workspace.candidates),
+        generic_profile_ref=workspace.generic_profile.receipt if workspace.generic_profile else None,
+        execution_receipt=workspace.execution_receipt,
+        finalization=workspace.finalization.summary() if workspace.finalization else None)
+    ref = history.record_sync(kind, {"history_format": "workspace_delta_v1", "workspace": metadata,
+        "previous_event_id": history.builder_previous_events.get(workspace.builder_invocation_id),
+        "changed_candidates": changed, "output": output, "validation": validation})
+    if ref:
+        seen.update((candidate["candidate_id"], candidate["revision"]) for candidate in changed)
+        history.builder_previous_events[workspace.builder_invocation_id] = ref

@@ -15,7 +15,8 @@ depends_on = None
 def upgrade():
     op.create_table("agent_history_payloads",
         sa.Column("sha256", sa.String(64), primary_key=True),
-        sa.Column("content", sa.Text(), nullable=False))
+        sa.Column("content", sa.Text(), nullable=False),
+        sa.Column("search_text", sa.Text(), nullable=False))
     op.create_table("agent_history_events",
         sa.Column("sequence", sa.BigInteger(), primary_key=True, autoincrement=True),
         sa.Column("event_id", sa.String(36), nullable=False, unique=True),

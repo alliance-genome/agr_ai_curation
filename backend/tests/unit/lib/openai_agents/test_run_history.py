@@ -73,6 +73,79 @@ def test_literal_search_paging_does_not_treat_wildcards_as_sql_patterns(store, s
     assert store.search(scope, "", after=0, limit=10, tool_name="different") == []
 
 
+@pytest.mark.parametrize("serialization_layers", [0, 1, 2])
+def test_literal_search_recovers_quotes_newlines_backslashes_and_unicode(store, scope, serialization_layers):
+    quote = 'No "eve" signal.\nNot observed in adults. Path A\\B. α😀_100%\x00'
+    value = {"text": quote}
+    for _ in range(serialization_layers):
+        value = {"output": exact_json(value)}
+    ref = store.append(scope, "tool_result", exact_json(value))
+    for query in (quote, 'No "eve" signal.', 'signal.\nNot observed', 'A\\B', 'α😀_100%\x00'):
+        assert store.search(scope, query, after=0, limit=10)[0]["event_id"] == ref
+    assert store.read(scope, ref)["payload"] == value
+
+
+def test_builder_history_growth_is_linear_and_revisions_reconstruct_exactly(scope, monkeypatch):
+    from src.lib.openai_agents import extraction_builder_workspace as builder
+    monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **kwargs: None)
+    class CaptureStore:
+        def __init__(self):
+            self.records = []
+        def append(self, scope, kind, content, **metadata):
+            self.records.append(json.loads(content))
+            return str(len(self.records))
+    store = CaptureStore()
+    history = RunHistory(scope, store)
+    workspace = builder.ExtractionBuilderWorkspace(run_id=scope.run_id)
+    token = ACTIVE_HISTORY.set(history)
+    try:
+        for index in range(100):
+            workspace.upsert_candidate(candidate_id=str(index), staged_fields={"items": [{"quote": "NOT α😀 " * 300}]})
+        first_half_bytes = history.submitted_payload_bytes
+        for index in range(100, 200):
+            workspace.upsert_candidate(candidate_id=str(index), staged_fields={"items": [{"quote": "NOT α😀 " * 300}]})
+        assert history.submitted_payload_bytes < first_half_bytes * 2.1
+        assert history.events_written == 200
+        assert history.write_duration_ms > 0
+        workspace.record_validation_failure(errors=[{"message": "validation A", "resolved_to": "B"}], candidate_ids=["0"])
+        workspace.record_validation_failure(errors=[{"message": "validation B", "negated": True}], candidate_ids=["0"])
+        workspace.discard_candidate("0", reason="superseded")
+        workspace.finalize(candidate_ids=["1"])
+        reconstructed = {}
+        previous = None
+        for index, record in enumerate(store.records, 1):
+            assert record["previous_event_id"] == previous
+            previous = str(index)
+            reconstructed.update((candidate["candidate_id"], candidate) for candidate in record["changed_candidates"])
+        assert list(reconstructed.values()) == workspace.snapshot(redact_payload=False)["candidates"]
+        assert history.events_written == len(store.records) == 204
+        assert history.submitted_payload_bytes == sum(len(exact_json(record).encode()) for record in store.records)
+        assert store.records[200]["changed_candidates"][0]["validation_errors"][0]["message"] == "validation A"
+        assert store.records[201]["changed_candidates"][0]["validation_errors"][0]["negated"] is True
+        assert len(store.records[-1]["changed_candidates"]) == 1
+        assert store.records[-1]["output"]["payload"] == workspace.finalization.payload
+    finally:
+        ACTIVE_HISTORY.reset(token)
+
+
+def test_builder_archive_failure_is_counted_without_undoing_mutation(scope, monkeypatch):
+    from src.lib.openai_agents import extraction_builder_workspace as builder
+    monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **kwargs: None)
+    class BrokenStore:
+        def append(self, *args, **kwargs):
+            raise OSError("unavailable")
+    history = RunHistory(scope, BrokenStore())
+    workspace = builder.ExtractionBuilderWorkspace(run_id=scope.run_id)
+    token = ACTIVE_HISTORY.set(history)
+    try:
+        workspace.upsert_candidate(candidate_id="one", staged_fields={"items": []})
+        assert workspace.get_candidate("one").revision == 1
+        assert not history.healthy and history.write_failures == 1
+        assert history.events_written == history.submitted_payload_bytes == 0
+    finally:
+        ACTIVE_HISTORY.reset(token)
+
+
 @pytest.mark.asyncio
 async def test_large_nested_exact_read_pages_and_search_are_bounded(store, scope, monkeypatch):
     monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")

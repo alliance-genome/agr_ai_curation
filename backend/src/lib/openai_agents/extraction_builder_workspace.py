@@ -486,8 +486,17 @@ class ExtractionBuilderWorkspace:
         validation: Mapping[str, Any] | None = None,
     ) -> None:
         from .run_history import record_builder_history
-        record_builder_history(event_type, {"workspace": self.snapshot(redact_payload=False),
-                                           "output": output_summary, "validation": validation})
+        # The journal retains exact changed candidate revisions separately. Avoid
+        # serializing them again in trace-oriented cumulative workspace outputs.
+        history_output = output_summary
+        if event_type == "extraction_builder.validation_failure":
+            history_output = None
+        elif isinstance(output_summary, dict) and "workspace" in output_summary:
+            history_output = {key: value for key, value in output_summary.items() if key != "workspace"}
+        elif isinstance(output_summary, dict) and "candidate" in output_summary:
+            history_output = {key: value for key, value in output_summary.items() if key != "candidate"}
+            history_output["candidate_id"] = output_summary["candidate"]["candidate_id"]
+        record_builder_history(event_type, self, output=history_output, validation=validation)
         write_extraction_trace_event(
             event_type=event_type,
             trace_id=self.run_id,

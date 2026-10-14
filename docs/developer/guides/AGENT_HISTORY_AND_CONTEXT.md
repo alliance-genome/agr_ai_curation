@@ -40,12 +40,19 @@ batch invocations, validators and authoring assistants.
    sequence, kind, tool/call identity and transport outcome. `returned` describes
    a tool returning, not whether a biological finding was valid. Original package
    and Studio results are captured before their model projections. Builder
-   snapshots are captured before diagnostic trace reduction. Model input items,
+   changed candidate revisions are captured before diagnostic trace reduction. Each
+   workspace event links to its predecessor and includes exact changed candidates,
+   workspace metadata and the original finalization payload when produced. Earlier
+   candidates are not copied again for every unrelated mutation; replaying the
+   deltas reconstructs each workspace version. Model input items,
    manifests and final/error outputs are retained too. No source that was never
    read is claimed to be present. Diagnostic JSONL remains a separate redacted,
    bounded observation channel and is not the canonical store.
 
-   `search_run_history` performs a literal search over the stored content and
+   A derived search column contains decoded JSON scalar text, including nested
+   serialized tool arguments/results, so quotes, line breaks and backslashes
+   match literally. It does not replace the canonical JSON or its hash.
+   `search_run_history` performs a literal search over this text and
    returns paged identities. `read_run_history` reads complete nested values in
    exact chunks. It never repeats the original tool or mutation. A root chat/flow
    supervisor or authoring assistant can read its own session history; a nested
@@ -85,7 +92,8 @@ batch invocations, validators and authoring assistants.
 5. **Measurement stays attached to the real request.** Existing request records
    now include `context_view`: policy/checkpoint, before/after component sizes,
    estimated total and output reserve, archived/retained item counts, externalized
-   outputs, archive health/write counts/submitted bytes, and retrieval call/output
+   outputs, archive health/write counts/submitted canonical bytes (including synchronous
+   builder writes), and retrieval call/output
    overhead. Provider input, cached input, output and reasoning usage remain in
    the existing accounting record. No second cost ledger or fabricated dollar
    saving is introduced. `output_reserve_tokens` remains visible in redacted
@@ -122,7 +130,10 @@ validation results, an early negated finding, restart recovery, owner/session
 isolation, and an archive failure after a completed mutation. A real SDK loop
 with a deterministic fake model verifies that the canonical returned history
 still contains the original output after the provider-facing copy shrinks.
-PostgreSQL tests exercise concurrent payload deduplication and durable recovery.
+Growth checks verify that new independent candidates add journal bytes linearly
+   and that replaying candidate deltas exactly reconstructs the workspace. Search
+   checks cover quotes, newlines, backslashes and nested JSON serialization.
+   PostgreSQL tests exercise concurrent payload deduplication and durable recovery.
 No paid model call is required for these tests.
 
 Release comparison should use actual provider input/cached/output usage and

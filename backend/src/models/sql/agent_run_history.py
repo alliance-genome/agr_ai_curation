@@ -11,6 +11,7 @@ class AgentHistoryPayload(Base):
     __tablename__ = "agent_history_payloads"
     sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    search_text: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class AgentHistoryEvent(Base):
