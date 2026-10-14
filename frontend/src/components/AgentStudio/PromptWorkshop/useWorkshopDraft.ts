@@ -20,6 +20,7 @@ import {
   getWorkshopSavedReference,
   getWorkshopCloneSource,
   getAgentExecutionRevision,
+  getAgentExecutionProfileRevision,
   deleteCustomAgent,
   fetchAgentTemplates,
   fetchModelOptions,
@@ -739,12 +740,18 @@ export function useWorkshopDraft({
           let output = outputDraftFromContract(revision.snapshot.output_contract)
           let sourceProfile: GenericProfileDetail | null = null
           if (output.profilePin) {
-            const [detail, savedProfile] = await Promise.all([
-              getGenericProfile(output.profilePin.profile_id),
-              getGenericProfileRevision(output.profilePin.profile_id, output.profilePin.revision),
-            ])
-            output = hydrateProfileOutput(output, savedProfile)
-            sourceProfile = { ...detail, revision: savedProfile }
+            if (source.id !== selectedCustomAgentId) {
+              // A shared clone source grants its exact structure, not its owner's
+              // profile library or permission to edit that original structure.
+              output = hydrateProfileOutput(output, await getAgentExecutionProfileRevision(source.id, revision.id))
+            } else {
+              const [detail, savedProfile] = await Promise.all([
+                getGenericProfile(output.profilePin.profile_id),
+                getGenericProfileRevision(output.profilePin.profile_id, output.profilePin.revision),
+              ])
+              output = hydrateProfileOutput(output, savedProfile)
+              sourceProfile = { ...detail, revision: savedProfile }
+            }
           }
           if (!canceled) {
             setProfileSource(sourceProfile)
@@ -1006,13 +1013,18 @@ export function useWorkshopDraft({
       let nextProfileSource: GenericProfileDetail | null = null
       const selectedPin = candidate.draft_output.profilePin
       if (selectedPin) {
-        const [detail, revision] = await Promise.all([
-          getGenericProfile(selectedPin.profile_id),
-          getGenericProfileRevision(selectedPin.profile_id, selectedPin.revision),
-        ])
-        // Validate exact source identity without replacing the reviewed edits.
-        hydrateProfileOutput(candidate.draft_output, revision)
-        nextProfileSource = { ...detail, revision }
+        if (!selectedCustomAgentId && selectedCloneSource?.execution_revision_id) {
+          const revision = await getAgentExecutionProfileRevision(selectedCloneSource.id, selectedCloneSource.execution_revision_id)
+          hydrateProfileOutput(candidate.draft_output, revision)
+        } else {
+          const [detail, revision] = await Promise.all([
+            getGenericProfile(selectedPin.profile_id),
+            getGenericProfileRevision(selectedPin.profile_id, selectedPin.revision),
+          ])
+          // Validate exact source identity without replacing the reviewed edits.
+          hydrateProfileOutput(candidate.draft_output, revision)
+          nextProfileSource = { ...detail, revision }
+        }
       }
       if (!authoringMountedRef.current
         || workshopDraftKey(liveAuthoringRef.current.captureAuthoringContext()) !== beforeKey

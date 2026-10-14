@@ -2621,12 +2621,15 @@ def _get_pinned_agent_by_id(agent_id: str, *, _benchmark_slot: str | None = None
                 raise ValueError("A saved tool is no longer available for execution")
         resolved_profile = None
         if saved.output_contract.generic_profile_ref is not None:
-            from src.lib.agent_studio.generic_profile_service import get_profile_revision
+            from src.lib.agent_studio.execution_revision_service import get_execution_profile_revision
             from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile
             from src.schemas.generic_extraction_profile import normalize_profile_contract
 
             pin = saved.output_contract.generic_profile_ref
-            profile_revision = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+            profile_revision = get_execution_profile_revision(
+                db, head.id, revision.id, user_id,
+                active_group_ids=list(kwargs.get("authenticated_groups") or []),
+            )
             resolved_profile = ResolvedGenericProfile(pin, normalize_profile_contract(profile_revision.contract))
         built = _create_db_agent(head, execution_snapshot=saved, resolved_profile=resolved_profile,
                                  _benchmark_slot=_benchmark_slot, **kwargs)

@@ -28,6 +28,7 @@ const serviceMocks = vi.hoisted(() => ({
   getWorkshopSavedReference: vi.fn(),
   getWorkshopCloneSource: vi.fn(),
   getAgentExecutionRevision: vi.fn(),
+  getAgentExecutionProfileRevision: vi.fn(),
   deleteCustomAgent: vi.fn(),
   fetchAgentTemplates: vi.fn(),
   fetchModelOptions: vi.fn(),
@@ -1989,6 +1990,32 @@ describe('PromptWorkshop', () => {
     await waitFor(() => expect(ref.current?.captureAuthoringContext().clone_source_agent_id).toBe(agent.agent_id))
     expect(await screen.findByText("This agent uses retired Flexible extraction, so it can't be copied. Convert the original agent to Custom Output Structure first, then copy it.")).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Convert to Custom Output Structure' })).not.toBeInTheDocument()
+  })
+
+  it('loads a shared clone source through its exact agent profile without opening the private profile library', async () => {
+    const agent = buildCustomAgent()
+    const pin = { profile_id: 'private-profile', profile_revision_id: 'private-revision', revision: 2, fingerprint: 'sha256:profile' }
+    const contract = { name: 'Shared structure', semantic_class: 'record', fields: [] }
+    const revision = { id: pin.profile_revision_id, profile_id: pin.profile_id, revision: 2, fingerprint: pin.fingerprint, contract }
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [agent], total: 1 })
+    serviceMocks.getAgentExecutionRevision.mockResolvedValue({
+      ...buildVersion(2), id: agent.execution_revision_id, agent_id: agent.id,
+      snapshot: { ...buildVersion(2).snapshot, output_contract: { output_state: 'structured_extraction', output_mode: 'profile_bound_generic', generic_profile_ref: pin } },
+    })
+    serviceMocks.getAgentExecutionProfileRevision.mockResolvedValue(revision)
+    const action: import('@/types/promptExplorer').WorkshopAction = {
+      success: true, contract_version: 'workshop_action.v1',
+      request: { action: 'new_agent', mode: 'clone', agent_id: agent.agent_id },
+      source: { agent_id: agent.agent_id, name: agent.name, updated_at: agent.updated_at, agent_revision_id: agent.execution_revision_id || null },
+      label: 'Open agent', origin: null, active_tab: 'agents', flow_draft_fingerprint: null, workshop_draft_fingerprint: null,
+      saved: false, message: 'Nothing saved.',
+    }
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialChatAction={action} authoringContextRef={ref} />)
+    await waitFor(() => expect(ref.current?.captureAuthoringContext().draft_output?.profileContract).toEqual(contract))
+    expect(serviceMocks.getAgentExecutionProfileRevision).toHaveBeenCalledWith(agent.id, agent.execution_revision_id)
+    expect(profileMocks.getGenericProfile).not.toHaveBeenCalled()
+    expect(profileMocks.getGenericProfileRevision).not.toHaveBeenCalled()
   })
 
   it.each([true, false])('saves a loaded profile as an exact revision edit only when editable (%s)', async (canEdit) => {

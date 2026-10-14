@@ -723,7 +723,7 @@ async def clone_agent_endpoint(
         _raise_agent_studio_validation_http_exception(
             exc=exc,
             status_code=400,
-            detail="Agent clone request is invalid",
+            detail="Could not clone this agent. Refresh the library and try again. If it still fails, ask the owner to check its sharing and saved output structure.",
             log_message=f"Failed to clone visible agent '{agent_id}'",
         )
 

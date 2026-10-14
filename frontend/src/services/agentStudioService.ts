@@ -657,6 +657,14 @@ export async function getAgentExecutionRevision(
   return response.json()
 }
 
+export async function getAgentExecutionProfileRevision(
+  customAgentId: string, revisionId: string,
+): Promise<import('./genericProfileService').GenericProfileRevision> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/execution-revisions/${encodeURIComponent(revisionId)}/output-profile`)
+  if (!response.ok) throw new Error(await readCurationApiError(response))
+  return response.json()
+}
+
 export async function restoreAgentExecutionRevision(
   customAgentId: string, revisionId: string, expectedRevisionId: string,
 ): Promise<CustomAgent> {
@@ -690,7 +698,8 @@ export async function cloneAgentToWorkshop(
     }
   )
   if (!response.ok) {
-    throw new Error(`Failed to clone agent: ${response.status}`)
+    const error = await response.json().catch(() => ({}))
+    throw new Error(extractErrorMessage(error, 'Could not clone this agent. Refresh the library and try again. If it still fails, ask the owner to check its sharing and saved output structure.'))
   }
   return response.json()
 }

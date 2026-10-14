@@ -329,7 +329,16 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
             if draft_output.get("profilePin"):
                 output_validation_path = "custom_agent.output_contract.profilePin"
                 pin = GenericProfilePin.model_validate(draft_output["profilePin"])
-                saved = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+                if workshop.clone_source_agent_id and source is not None:
+                    from src.lib.agent_studio.execution_revision_service import get_execution_profile_revision
+                    saved = get_execution_profile_revision(
+                        db, source.id, source.execution_revision_id, user_id,
+                        active_group_ids=active_group_ids,
+                    )
+                    if saved is None or saved.profile_id != pin.profile_id or saved.revision != pin.revision:
+                        raise ValueError("The source profile revision pin does not match")
+                else:
+                    saved = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
                 if saved.id != pin.profile_revision_id or saved.fingerprint != pin.fingerprint:
                     raise ValueError("The source profile revision pin does not match")
             output_validation_path = "custom_agent.output_contract.profileContract"
