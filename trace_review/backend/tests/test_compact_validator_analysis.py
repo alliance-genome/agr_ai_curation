@@ -94,3 +94,42 @@ def test_duplicate_sdk_observations_do_not_create_false_conflicts():
     joined = calls[2]["compact_validation"][0]["references"][0]
     assert joined["status"] == "matched"
     assert len(joined["sources"]) == 2
+
+
+def test_original_validator_metadata_links_findings_without_reconstructing_history():
+    ref = "validator-result:" + "a" * 64
+    snapshot = {"schema_version": 1, "source_envelope_revision": 3, "recorded_order": 2,
+        "request": {"private_query": "do not copy into preview"}, "result": {
+            "status": "resolved", "validator_binding_id": "gene_identity",
+            "target": {"object_id": "object-1", "input_values": {"long": "x" * 1000}},
+            "output_issues": [], "explanation": "Full original retained elsewhere"}}
+    envelope = {"envelope_id": "envelope-1", "domain_pack_id": "gene", "revision": 4,
+        "objects": [], "validator_results": {ref: snapshot}, "validation_findings": [
+            {"finding_id": "current", "severity": "info", "status": "resolved",
+             "details": {"validation_result_ref": ref}},
+            {"finding_id": "historical", "severity": "warning", "status": "open", "details": {}},
+        ]}
+    original = deepcopy(envelope)
+    summary = DomainEnvelopeTraceAnalyzer.analyze_payload([envelope, deepcopy(envelope)])
+    assert envelope == original
+    assert summary["summary"]["validator_result_count"] == 1
+    assert summary["envelopes"][0]["validator_result_count"] == 1
+    row = summary["validator_results"][0]
+    assert row["ref"] == ref and row["source_envelope_revision"] == 3
+    assert row["recorded_order"] == 2 and row["status"] == "resolved"
+    assert row["validator_binding_id"] == "gene_identity" and row["output_complete"] is True
+    assert row["target"]["input_values"]["long"].endswith("...")
+    assert "request" not in row and "explanation" not in row
+    findings = {f["finding_id"]: f for f in summary["validation_findings"]}
+    assert findings["current"]["validation_result_ref"] == ref
+    assert findings["current"]["original_available"] is True
+    assert findings["historical"]["validation_result_ref"] is None
+    assert findings["historical"]["original_available"] is False
+    assert DomainEnvelopeTraceAnalyzer.compact(summary)["validator_results"] == [row]
+
+
+def test_original_validator_output_completeness_is_structural_and_missing_is_unknown():
+    for issues, complete in [(["missing_results"], False), (None, None)]:
+        summary = DomainEnvelopeTraceAnalyzer.analyze_payload({"envelope_id": "env", "objects": [],
+            "validator_results": {"ref": {"result": {"status": "resolved", "output_issues": issues}}}})
+        assert summary["validator_results"][0]["output_complete"] is complete
