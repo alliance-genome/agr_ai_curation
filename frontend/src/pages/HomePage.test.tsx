@@ -52,11 +52,11 @@ vi.mock('@/components/Chat', async () => {
 })
 
 vi.mock('@/components/RightPanel', () => ({
-  default: (props: { sessionId: string | null; currentDocumentId?: string }) => {
+  default: (props: { sessionId: string | null }) => {
     rightPanelRenderSpy(props)
     return (
       <div data-testid="right-panel-session">
-        {props.sessionId ?? 'none'}::{props.currentDocumentId ?? 'no-document'}
+        Tools: {props.sessionId ?? 'none'}
       </div>
     )
   },
@@ -1843,4 +1843,143 @@ describe('HomePage resumed transcript hydration', () => {
     expect(screen.getByText('session-follow message 0')).toBeInTheDocument()
     expect(screen.getByText('session-follow message 119')).toBeInTheDocument()
   })
+})
+
+describe('flow document selection', () => {
+  const keys = getChatLocalStorageKeys('user-1')
+  let selectedDocument: { id: string; filename: string } | null
+  let resetResponse: Promise<Response> | null
+  let textOnly: boolean
+  const runFlow = () => rightPanelRenderSpy.mock.calls.at(-1)![0].onExecuteFlow('flow-1') as Promise<void>
+
+  beforeEach(() => {
+    actualChatMode.enabled = true
+    selectedDocument = { id: 'selected-paper', filename: 'paper.pdf' }
+    resetResponse = null
+    textOnly = false
+    localStorage.clear()
+    sessionStorage.clear()
+    chatRenderSpy.mockReset()
+    rightPanelRenderSpy.mockReset()
+    chatStreamStub.executeFlow.mockReset()
+    mockUseAuth.mockReturnValue({ user: { uid: 'user-1' } })
+    mockUseChatStream.mockReturnValue(chatStreamStub)
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.mocked(global.fetch).mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.startsWith('/api/chat/history/')) return jsonResponse({
+        session: { session_id: 'session-a' }, active_document: selectedDocument,
+        messages: [], next_message_cursor: null,
+      })
+      if (url === '/api/chat/document/load') return jsonResponse({ active: true, document: selectedDocument })
+      if (url === '/api/chat/document') return jsonResponse({ active: Boolean(selectedDocument), document: selectedDocument })
+      if (url === '/api/chat/conversation/reset') return resetResponse ?? jsonResponse({ session_id: 'session-new' })
+      if (url.startsWith('/api/pdf-viewer/documents/')) return jsonResponse(url.endsWith('/url')
+        ? { viewer_url: textOnly ? null : '/paper.pdf', viewer_mode: textOnly ? 'text_only' : 'local_pdf' }
+        : { filename: selectedDocument?.filename ?? 'paper.pdf', page_count: 1 })
+      const support = realChatSupportResponse(url, init)
+      if (support) return support
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+  })
+
+  afterEach(() => {
+    actualChatMode.enabled = false
+    vi.restoreAllMocks()
+  })
+
+  async function openChat() {
+    renderHomePage('/?session=session-a')
+    await screen.findByText('Active PDF: paper.pdf')
+    await waitFor(() => expect(localStorage.getItem(keys.activeDocument)).toContain('selected-paper'))
+  }
+
+  it.each(['missing', 'stale', 'inaccessible', 'text-only'])('uses the selected chat document with a %s viewer cache', async (cache) => {
+    textOnly = cache === 'text-only'
+    await openChat()
+    if (cache === 'stale') localStorage.setItem(keys.pdfViewerSession, JSON.stringify({ documentId: 'wrong-paper' }))
+    else localStorage.removeItem(keys.pdfViewerSession)
+    if (cache === 'inaccessible') {
+      const getItem = Storage.prototype.getItem
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key) {
+        if (key === keys.pdfViewerSession) throw new DOMException('Blocked', 'SecurityError')
+        return getItem.call(this, key)
+      })
+    }
+    await act(async () => { await runFlow() })
+    expect(chatStreamStub.executeFlow).toHaveBeenCalledWith('flow-1', 'session-a', 'selected-paper')
+  })
+
+  it('blocks execution until a new document and replacement session are ready', async () => {
+    await openChat()
+    const reset = deferred<Response>()
+    resetResponse = reset.promise
+    selectedDocument = { id: 'next-paper', filename: 'next.pdf' }
+    act(() => { dispatchChatDocumentChanged({ active: true, document: selectedDocument }) })
+    await expect(runFlow()).rejects.toThrow(/document selection/i)
+    expect(chatStreamStub.executeFlow).not.toHaveBeenCalled()
+    await act(async () => { reset.resolve(jsonResponse({ session_id: 'session-new' })) })
+    await waitFor(() => expect(rightPanelRenderSpy.mock.calls.at(-1)![0].sessionId).toBe('session-new'))
+    await act(async () => { await runFlow() })
+    expect(chatStreamStub.executeFlow).toHaveBeenCalledWith('flow-1', 'session-new', 'next-paper')
+  })
+
+  it('does not resurrect the viewer document after an explicit unload', async () => {
+    await openChat()
+    selectedDocument = null
+    act(() => { dispatchChatDocumentChanged({ active: false, document: null }) })
+    localStorage.setItem(keys.pdfViewerSession, JSON.stringify({ documentId: 'selected-paper' }))
+    await act(async () => { await runFlow() })
+    expect(chatStreamStub.executeFlow).toHaveBeenCalledWith('flow-1', 'session-a', undefined)
+  })
+
+  it('rejects a launch superseded while it awaits the session', async () => {
+    await openChat()
+    const pending = runFlow()
+    act(() => { dispatchChatDocumentChanged({ active: false, document: null }) })
+    await expect(pending).rejects.toThrow(/document selection/i)
+    expect(chatStreamStub.executeFlow).not.toHaveBeenCalled()
+  })
+  it('keeps flow execution blocked when document session preparation fails', async () => {
+    await openChat()
+    resetResponse = Promise.resolve(jsonResponse({ detail: 'unavailable' }, 503))
+    selectedDocument = { id: 'next-paper', filename: 'next.pdf' }
+    await act(async () => { dispatchChatDocumentChanged({ active: true, document: selectedDocument }) })
+    expect(await screen.findByText(/paper could not be connected to a new chat/)).toBeInTheDocument()
+    await expect(runFlow()).rejects.toThrow(/document selection/i)
+    expect(chatStreamStub.executeFlow).not.toHaveBeenCalled()
+  })
+
+  it('ignores a delayed document reset after a newer unload', async () => {
+    await openChat()
+    const reset = deferred<Response>()
+    resetResponse = reset.promise
+    selectedDocument = { id: 'next-paper', filename: 'next.pdf' }
+    act(() => { dispatchChatDocumentChanged({ active: true, document: selectedDocument }) })
+    act(() => { dispatchChatDocumentChanged({ active: false, document: null }) })
+    await act(async () => { reset.resolve(jsonResponse({ session_id: 'superseded-session' })) })
+    await act(async () => { await runFlow() })
+    expect(chatStreamStub.executeFlow).toHaveBeenCalledWith('flow-1', 'session-a', undefined)
+  })
+
+  it('blocks an old launcher while a different session is being restored', async () => {
+    await openChat()
+    const oldLauncher = rightPanelRenderSpy.mock.calls.at(-1)![0].onExecuteFlow
+    const history = deferred<Response>()
+    const original = vi.mocked(global.fetch).getMockImplementation()!
+    vi.mocked(global.fetch).mockImplementation((input, init) => String(input) === buildAssistantHistoryDetailUrl('session-b')
+      ? history.promise : original(input, init))
+    fireEvent.click(screen.getByRole('button', { name: 'Restore B' }))
+    await expect(oldLauncher('flow-1')).rejects.toThrow(/document selection/i)
+    expect(chatStreamStub.executeFlow).not.toHaveBeenCalled()
+    selectedDocument = { id: 'next-paper', filename: 'next.pdf' }
+    await act(async () => { history.resolve(jsonResponse({
+      session: { session_id: 'session-b' }, active_document: selectedDocument,
+      messages: [], next_message_cursor: null,
+    })) })
+    await screen.findByText('Active PDF: next.pdf')
+    await act(async () => { await runFlow() })
+    expect(chatStreamStub.executeFlow).toHaveBeenCalledWith('flow-1', 'session-b', 'next-paper')
+  })
+
 })
