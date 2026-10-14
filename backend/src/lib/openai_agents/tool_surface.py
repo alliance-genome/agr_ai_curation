@@ -155,6 +155,7 @@ class ToolSurface:
     eager_chars: int
     deferred_chars: int
     namespace_header_chars: int
+    run_history: Any = field(default=None, repr=False)
     source_tools: list[Any] = field(default_factory=list, repr=False)
     namespace_descriptions: dict[str, str] = field(default_factory=dict)
     loaded_names: set[str] = field(default_factory=set)
@@ -479,6 +480,8 @@ def run_config_for_tool_surface(run_config: Any, surface: ToolSurface) -> Any:
     search. Eager surfaces keep the run config unchanged.
     """
 
+    from .model_context_view import run_config_with_history
+    run_config = run_config_with_history(run_config, surface.run_history)
     if surface.mode != MODE_DEFERRED:
         return run_config
     if run_config.tool_error_formatter is not None:
@@ -759,6 +762,8 @@ def apply_tool_surface(
         tools = list(previous.source_tools)
     effective_runtime = runtime or runtime_for_agent(agent)
     agent_key = _agent_key(agent)
+    from .run_history import HISTORY_TOOL_NAMES, prepare_history_tools
+    tools, history = prepare_history_tools(agent, tools, agent_key=agent_key, runtime=effective_runtime)
     # A named tool_choice must target a visible tool (the SDK rejects a named
     # choice that only a deferred tool could satisfy).
     tool_choice = getattr(getattr(agent, "model_settings", None), "tool_choice", None)
@@ -782,7 +787,7 @@ def apply_tool_surface(
         namespace_resolver=(
             declarative_namespace_resolver() if policy.mode == "deferred" else _no_namespace
         ),
-        forced_tool_names=(*forced_tool_names, *named_choice),
+        forced_tool_names=(*forced_tool_names, *named_choice, *(HISTORY_TOOL_NAMES if history else ())),
         required_tool_names=required_tool_names,
         model=model_id,
         provider=provider_id,
@@ -797,6 +802,7 @@ def apply_tool_surface(
         agent.instructions = f"{base_instructions}\n\n{deferred_tools_note(surface)}"
     elif hasattr(agent, "tool_surface_base_instructions"):
         agent.instructions = base_instructions
+    surface.run_history = history
     agent.tools = surface.tools
     agent.tool_surface = surface
     return surface

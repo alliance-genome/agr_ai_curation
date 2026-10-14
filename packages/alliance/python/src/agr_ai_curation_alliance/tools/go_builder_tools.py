@@ -882,6 +882,7 @@ def _list_staged_go_recommendations_impl(
     include_discarded: bool,
     limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
+    workspace_revision: Optional[int] = None,
 ) -> AgrQueryResult:
     attempted_query = _attempt_query(
         "list_staged_go_recommendations",
@@ -909,6 +910,7 @@ def _list_staged_go_recommendations_impl(
         include_discarded=list_input.include_discarded,
         limit=list_input.limit,
         offset=list_input.offset,
+        workspace_revision=workspace_revision,
     )
     _emit_go_builder_event(
         "go_builder.list_completed",
@@ -935,10 +937,13 @@ def _find_staged_go_recommendations_impl(
     detail_path: Optional[str] = None,
     detail_cursor: Optional[int] = None,
     result_sha256: Optional[str] = None,
+    workspace_revision: Optional[int] = None,
 ) -> AgrQueryResult:
-    """Find staged GO recommendations or read a withheld summary exactly.
-
-    Pass its detail_read arguments, retain result_sha256 and advance detail_cursor.
+    """Search drafts and return a versioned index. For complete original fields,
+    refs and errors, pass a row's detail_read arguments. For a nested value use
+    detail_path='candidate.staged_fields.<field>' and result_sha256=null on the
+    first chunk, then retain the returned detail.sha256 and advance detail_cursor.
+    Retain workspace_revision across list pages and detail reads; restart if stale.
     """
     attempted_query = _attempt_query(
         "find_staged_go_recommendations",
@@ -986,6 +991,7 @@ def _find_staged_go_recommendations_impl(
         detail_path=detail_path,
         detail_cursor=detail_cursor,
         result_sha256=result_sha256,
+        workspace_revision=workspace_revision,
     )
     _emit_go_builder_event(
         "go_builder.find_completed",

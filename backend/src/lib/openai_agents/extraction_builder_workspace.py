@@ -62,6 +62,7 @@ class ExtractionBuilderCandidate:
     """One staged extraction candidate owned by the backend builder."""
 
     candidate_id: str
+    revision: int = 0
     staged_fields: dict[str, Any] = field(default_factory=dict)
     pending_ref_ids: list[str] = field(default_factory=list)
     evidence_record_ids: list[str] = field(default_factory=list)
@@ -73,6 +74,7 @@ class ExtractionBuilderCandidate:
     def snapshot(self) -> dict[str, Any]:
         return {
             "candidate_id": self.candidate_id,
+            "revision": self.revision,
             "status": self.status,
             "pending_ref_ids": list(self.pending_ref_ids),
             "evidence_record_ids": list(self.evidence_record_ids),
@@ -133,6 +135,7 @@ class ExtractionBuilderWorkspace:
         self.builder_invocation_id = (
             _optional_string(builder_invocation_id) or f"builder-invocation-{uuid4()}"
         )
+        self.revision = 0
         self.state = BUILDER_STATE_ACTIVE
         self.candidates: dict[str, ExtractionBuilderCandidate] = {}
         self.validation_errors: list[dict[str, Any]] = []
@@ -167,6 +170,7 @@ class ExtractionBuilderWorkspace:
         candidate.pending_ref_ids = _string_list(pending_ref_ids)
         candidate.evidence_record_ids = _string_list(evidence_record_ids)
         candidate.status = status
+        self._touch_candidate(candidate)
         candidate.updated_at = now
         self.updated_at = now
         self._emit(
@@ -192,6 +196,7 @@ class ExtractionBuilderWorkspace:
         self._ensure_mutable()
         candidate = self._candidate(candidate_id)
         candidate.status = CANDIDATE_STATUS_DISCARDED
+        self._touch_candidate(candidate)
         candidate.updated_at = _now_iso()
         self.updated_at = candidate.updated_at
         self._emit(
@@ -225,6 +230,7 @@ class ExtractionBuilderWorkspace:
             if not finalized_workspace:
                 candidate.status = CANDIDATE_STATUS_NEEDS_PATCH
             candidate.validation_errors = deepcopy(normalized_errors)
+            self._touch_candidate(candidate)
             candidate.updated_at = _now_iso()
         self.validation_errors = deepcopy(normalized_errors)
         self.state = BUILDER_STATE_VALIDATION_FAILED
@@ -334,6 +340,7 @@ class ExtractionBuilderWorkspace:
         )
         for candidate in selected:
             candidate.status = CANDIDATE_STATUS_FINALIZED
+            self._touch_candidate(candidate)
             candidate.updated_at = _now_iso()
 
         self.state = BUILDER_STATE_FINALIZED
@@ -386,6 +393,7 @@ class ExtractionBuilderWorkspace:
                 }
         return {
             "run_id": self.run_id,
+            "workspace_revision": self.revision,
             "document_id": self.document_id,
             "domain_pack_id": self.domain_pack_id,
             "agent_id": self.agent_id,
@@ -411,6 +419,10 @@ class ExtractionBuilderWorkspace:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+    def _touch_candidate(self, candidate: ExtractionBuilderCandidate) -> None:
+        candidate.revision += 1
+        self.revision += 1
 
     def get_candidate(self, candidate_id: str) -> ExtractionBuilderCandidate:
         """Return a staged candidate by ID."""
@@ -440,6 +452,7 @@ class ExtractionBuilderWorkspace:
         current = getattr(self, field_name)
         if current is None:
             setattr(self, field_name, normalized)
+            self.revision += 1
             self.updated_at = _now_iso()
             return
         if current != normalized:
@@ -454,6 +467,7 @@ class ExtractionBuilderWorkspace:
                 "Extraction builder workspace is finalized; cancellation/abort is rejected."
             )
         self.state = state
+        self.revision += 1
         self.updated_at = _now_iso()
         self._emit(
             f"extraction_builder.{state}",
@@ -471,6 +485,9 @@ class ExtractionBuilderWorkspace:
         output_summary: Any = None,
         validation: Mapping[str, Any] | None = None,
     ) -> None:
+        from .run_history import record_builder_history
+        record_builder_history(event_type, {"workspace": self.snapshot(redact_payload=False),
+                                           "output": output_summary, "validation": validation})
         write_extraction_trace_event(
             event_type=event_type,
             trace_id=self.run_id,

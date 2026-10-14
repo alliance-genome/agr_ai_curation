@@ -40,15 +40,16 @@ def _workspace(candidate_count: int, *, wide: bool = False) -> builder.Extractio
 def _page_all(page_fn, **kwargs) -> tuple[list[str], list[dict[str, Any]]]:
     seen: list[str] = []
     pages: list[dict[str, Any]] = []
-    offset = 0
+    offset, revision = 0, None
     while True:
-        page = page_fn(offset=offset, **kwargs)
+        page = page_fn(offset=offset, workspace_revision=revision, **kwargs)
         pages.append(page)
         seen.extend(candidate["candidate_id"] for candidate in page["candidates"])
         if page["next_offset"] is None:
             return seen, pages
         assert page["next_offset"] > offset
         offset = page["next_offset"]
+        revision = page["workspace_revision"]
 
 
 def test_builder_ack_does_not_grow_with_the_workspace():
@@ -137,7 +138,7 @@ def test_per_row_decorations_count_toward_the_page_budget(monkeypatch):
         assert all(candidate["attribute_key_notices"] for candidate in page["candidates"])
 
 
-def test_oversized_single_candidate_is_withheld_with_identity_and_counts(monkeypatch):
+def test_large_validation_list_stays_out_of_index_with_exact_read_reference(monkeypatch):
     monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
     workspace = _workspace(2)
     workspace.get_candidate("cand-0000").validation_errors = [
@@ -149,9 +150,10 @@ def test_oversized_single_candidate_is_withheld_with_identity_and_counts(monkeyp
     assert serialized_size(page) <= 4096
     withheld = page["candidates"][0]
     assert withheld["candidate_id"] == "cand-0000"
-    assert withheld["withheld"] is True
+    assert "validation_errors" not in withheld
+    assert withheld["detail_read"]["detail_path"] == "candidate"
     assert withheld["validation_error_count"] == 40
-    assert page["next_offset"] == 1
+    assert page["next_offset"] is None
 
 
 @pytest.mark.parametrize("offset", [-3, 99])
@@ -176,7 +178,7 @@ def test_invalid_builder_offset_is_explicit(offset):
     ("generic_builder_tools", "find_staged_generic_objects"),
 ])
 @pytest.mark.parametrize("budget", [2048, 8192])
-def test_all_find_tools_read_exact_summary_and_reject_stale_or_other_workspace(monkeypatch, module_name, tool_name, budget):
+def test_all_find_tools_read_exact_fields_and_reject_stale_or_other_workspace(monkeypatch, module_name, tool_name, budget):
     import importlib
     import json
 
@@ -205,7 +207,7 @@ def test_all_find_tools_read_exact_summary_and_reject_stale_or_other_workspace(m
             descriptor["detail_cursor"] = detail["next_cursor"]
         restored = json.loads("".join(parts))
         assert restored["validation_errors"] == errors
-        assert restored["staged_fields"] == {"keys": ["where_expressed_statement"], "field_count": 1}
+        assert restored["staged_fields"] == {"where_expressed_statement": "GFP 0"}
         workspace.get_candidate("cand-0000").validation_errors = []
         assert invoke(**descriptor).data["error_code"] == "stale_result_cursor"
         assert invoke(candidate_id="missing", detail_path="candidate").data["error_code"] == "invalid_result_cursor"
@@ -214,7 +216,7 @@ def test_all_find_tools_read_exact_summary_and_reject_stale_or_other_workspace(m
         builder.reset_active_extraction_builder_workspace(token)
     token = builder.set_active_extraction_builder_workspace(_workspace(0))
     try:
-        assert invoke(**descriptor).data["error_code"] == "invalid_result_cursor"
+        assert invoke(**descriptor).data["error_code"] == "stale_result_cursor"
     finally:
         builder.reset_active_extraction_builder_workspace(token)
 
@@ -266,7 +268,7 @@ def test_size_truncated_pages_keep_the_whole_tool_result_within_budget(
         size_truncated = 0
         while True:
             kwargs = {"include_discarded": False} if tool_kind == "list" else {}
-            result = invoke(limit=100, offset=offset, **kwargs)
+            result = invoke(limit=100, offset=offset, workspace_revision=workspace.revision, **kwargs)
             assert result.status == "ok"
             assert serialized_size(result) <= budget
             size_truncated += result.data["page_ended_by"] == "size_budget"
@@ -305,3 +307,37 @@ def test_filtered_find_reserves_the_envelope_the_tool_returns(monkeypatch):
     )
     assert result.data["budget_bytes"] + serialized_size(envelope) <= 8192
     assert serialized_size(result) <= 8192
+
+
+def test_nested_exact_fields_survive_unicode_and_reject_a_revision_change(monkeypatch):
+    import json
+    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")
+    workspace = _workspace(0)
+    expected = {"negative": False, "note": "Not expressed β😀. " * 200, "empty": None}
+    workspace.upsert_candidate(candidate_id="c", staged_fields={"attributes": expected})
+    index = agr_curation._builder_candidate_list(workspace)
+    revision = index["workspace_revision"]
+    parts = []
+    cursor, digest = 0, None
+    while cursor is not None:
+        result = agr_curation._search_builder_candidates(workspace, candidate_id="c",
+            detail_path="candidate.staged_fields.attributes", detail_cursor=cursor,
+            result_sha256=digest, workspace_revision=revision)
+        detail = result["detail"]
+        parts.append(detail["content"])
+        cursor, digest = detail["next_cursor"], detail["sha256"]
+    assert json.loads("".join(parts)) == expected
+    workspace.discard_candidate("c", reason="duplicate")
+    assert workspace.get_candidate("c").revision == 2
+    assert agr_curation._builder_candidate_list(workspace, workspace_revision=revision)["error_code"] == "stale_result_cursor"
+    assert agr_curation._search_builder_candidates(workspace, candidate_id="c")["matched_candidate_count"] == 0
+    discarded = agr_curation._search_builder_candidates(workspace, candidate_id="c", include_discarded=True)
+    assert discarded["candidates"][0]["status"] == "discarded"
+
+
+def test_continuation_without_revision_or_detail_hash_is_rejected():
+    workspace = _workspace(5)
+    assert agr_curation._builder_candidate_list(workspace, offset=1)["error_code"] == "invalid_result_cursor"
+    assert agr_curation._search_builder_candidates(workspace, offset=1)["error_code"] == "invalid_result_cursor"
+    assert agr_curation._search_builder_candidates(workspace, candidate_id="cand-0000",
+        detail_path="candidate", detail_cursor=1)["error_code"] == "invalid_result_cursor"

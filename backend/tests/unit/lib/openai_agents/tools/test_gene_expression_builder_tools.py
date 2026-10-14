@@ -881,7 +881,7 @@ def test_builder_candidate_list_pages_with_offset_and_next_offset():
     assert first["truncated"] is True
     assert [c["candidate_id"] for c in first["candidates"]] == ["cand-alpha", "cand-beta"]
 
-    second = agr_curation._builder_candidate_list(workspace, limit=2, offset=2)
+    second = agr_curation._builder_candidate_list(workspace, limit=2, offset=2, workspace_revision=first["workspace_revision"])
     assert second["returned_candidate_count"] == 1
     assert second["offset"] == 2
     assert second["next_offset"] is None
@@ -889,16 +889,15 @@ def test_builder_candidate_list_pages_with_offset_and_next_offset():
     assert [c["candidate_id"] for c in second["candidates"]] == ["cand-gamma"]
 
 
-def test_builder_candidate_list_redacts_staged_field_values():
+def test_builder_candidate_list_returns_index_and_exact_read_reference():
     workspace = _seed_search_workspace()
 
     result = agr_curation._builder_candidate_list(workspace, limit=10, offset=0)
 
     first_candidate = result["candidates"][0]
-    assert first_candidate["staged_fields"] == {
-        "keys": ["where_expressed_statement"],
-        "field_count": 1,
-    }
+    assert "staged_fields" not in first_candidate
+    assert first_candidate["staged_field_count"] == 1
+    assert first_candidate["detail_read"]["detail_path"] == "candidate"
 
 
 def test_search_builder_candidates_filters_by_field_value_contains():
@@ -910,11 +909,8 @@ def test_search_builder_candidates_filters_by_field_value_contains():
 
     assert result["matched_candidate_count"] == 2
     assert {c["candidate_id"] for c in result["candidates"]} == {"cand-alpha", "cand-gamma"}
-    # RETURN must be redacted: raw staged-field text is never echoed back.
-    assert result["candidates"][0]["staged_fields"] == {
-        "keys": ["where_expressed_statement"],
-        "field_count": 1,
-    }
+    assert "staged_fields" not in result["candidates"][0]
+    assert result["candidates"][0]["staged_field_count"] == 1
 
 
 def test_search_builder_candidates_filters_by_pending_ref_and_evidence_and_candidate_id():
@@ -996,7 +992,7 @@ def test_search_builder_candidates_pages_matches():
     assert first["next_offset"] == 2
     assert first["truncated"] is True
 
-    second = agr_curation._search_builder_candidates(workspace, limit=2, offset=2)
+    second = agr_curation._search_builder_candidates(workspace, limit=2, offset=2, workspace_revision=first["workspace_revision"])
     assert second["matched_candidate_count"] == 3
     assert second["returned_candidate_count"] == 1
     assert second["next_offset"] is None

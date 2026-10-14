@@ -84,7 +84,7 @@ def test_model_settings_pin_openai_reasoning_serial_tools_and_shared_retry():
     assert settings.top_p is None
     assert settings.tool_choice == "save_flow"
     assert settings.parallel_tool_calls is False
-    assert settings.truncation == "auto"
+    assert settings.truncation == "disabled"
     assert settings.max_tokens == 8192
     assert settings.store is True
     assert settings.include_usage is True
@@ -795,3 +795,50 @@ def test_studio_trace_correlates_user_session_and_unwinds_on_all_outcomes(monkey
     assert observed["trace"]["trace_context"] == {"trace_id": state.trace_id}
     assert observed["attributes"]["session_id"] == "session"
     assert observed["attributes"]["user_id"] == "curator"
+
+
+def test_history_read_does_not_reuse_an_unrelated_studio_tool_result():
+    state = runtime.AgentStudioRunState(trace_id="trace", executed_tools=[
+        runtime.ExecutedTool(tool_name="save", call_id="saved", arguments={}, output={"saved": True})])
+    assert runtime._execution_for_call(state, "history-read") is None
+    assert runtime._execution_for_call(state, "saved").tool_name == "save"
+
+
+def test_studio_trace_scope_binds_and_restores_history_identity(monkeypatch):
+    from src.lib.context import agent_request_scope, get_current_user_id, get_current_session_id, get_current_trace_id
+    monkeypatch.setattr(runtime, "_studio_langfuse_scope", lambda **kwargs: nullcontext())
+    with agent_request_scope(user_id="outer", session_id="outer-chat", trace_id="outer-run"):
+        with runtime._studio_trace_scope(state=runtime.AgentStudioRunState(trace_id="studio-run"), session_id="studio-chat", user_id="curator"):
+            assert (get_current_user_id(), get_current_session_id(), get_current_trace_id()) == ("curator", "studio-chat", "studio-run")
+        assert (get_current_user_id(), get_current_session_id(), get_current_trace_id()) == ("outer", "outer-chat", "outer-run")
+
+
+def test_preparing_studio_history_preserves_deferred_namespaces_and_adds_only_two_read_tools(monkeypatch):
+    from agents import Agent, RunConfig
+    from src.lib.context import agent_request_scope
+    from src.lib.openai_agents.run_history import prepare_history_run
+    state = runtime.AgentStudioRunState(trace_id="studio-run")
+    async def execute(*args):
+        raise AssertionError("No tool executes during preparation")
+    tools, _ = runtime.build_agent_studio_tools(
+        [_tool_definition("save_flow"), _tool_definition("inspect_trace")], executor=execute, state=state,
+        namespace_for_tool=lambda name: ("studio_debug", "Debugging"), forced_tool_name="save_flow")
+    agent = Agent(name="studio", tools=tools)
+    agent.tool_surface = state.tool_surface
+    agent.tool_surface_runtime = "agent_studio"
+    before = agent.tool_surface
+    with agent_request_scope(user_id="owner", session_id="chat", trace_id="run"):
+        config = prepare_history_run(agent, RunConfig(tracing_disabled=True))
+    after = agent.tool_surface
+    assert after.deferred_names == before.deferred_names
+    assert after.namespace_names == before.namespace_names
+    assert set(after.eager_names) == {*before.eager_names, "read_run_history", "search_run_history"}
+    assert after.counts["candidate_count"] == before.counts["candidate_count"] + 2
+    assert config.call_model_input_filter is not None
+
+    monkeypatch.setenv("AGENT_HISTORY_ENABLED", "false")
+    with agent_request_scope(user_id="another-owner", session_id="other-chat", trace_id="other-run"):
+        disabled = prepare_history_run(agent, config)
+    assert disabled.call_model_input_filter is None
+    assert not {"read_run_history", "search_run_history"}.intersection(t.name for t in agent.tools if isinstance(t, FunctionTool))
+    assert agent.tool_surface.deferred_names == before.deferred_names

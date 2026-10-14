@@ -6191,6 +6191,10 @@ async def run_specialist_with_events(
                     )
 
                     retry_start_time = datetime.now(timezone.utc)
+                    from .model_context_view import run_config_with_history
+                    retry_agent.run_history = getattr(runtime_agent, "run_history", None)
+                    retry_config = run_config_with_history(effective_config, retry_agent.run_history,
+                                                           allow_projection=False)
                     retry_route_token = set_benchmark_invocation_route(retry_agent)
                     try:
                         retry_result = Runner.run_streamed(
@@ -6199,7 +6203,7 @@ async def run_specialist_with_events(
                             # Reduced turns - just need output synthesis.
                             # Env-configurable via STRUCTURED_FINALIZATION_RETRY_MAX_TURNS.
                             max_turns=get_structured_finalization_retry_max_turns(),
-                            run_config=effective_config
+                            run_config=retry_config
                         )
 
                         # Consume the retry stream with debug logging

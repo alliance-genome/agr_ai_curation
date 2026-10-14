@@ -22,6 +22,7 @@ Each request gets its own set of context variables.
 """
 
 from contextvars import ContextVar, Token
+from contextlib import contextmanager
 from typing import Any, Optional
 
 # Context variables set by API layer at start of each request
@@ -177,3 +178,21 @@ def clear_context() -> None:
     _current_output_filename_stem.set(None)
     _current_flow_output_attachment.set(None)
     _current_run_config.set(None)
+
+
+@contextmanager
+def agent_request_scope(*, user_id: str, session_id: str, trace_id: str):
+    """Bind an authenticated caller's identity for an SDK run and restore it.
+
+    Inputs are supplied by runtime entrypoints after authentication, never tools.
+    Tokens also isolate nested authoring runs from their caller's history scope.
+    """
+    user_token = _current_user_id.set(user_id)
+    session_token = _current_session_id.set(session_id)
+    trace_token = _current_trace_id.set(trace_id)
+    try:
+        yield
+    finally:
+        _current_trace_id.reset(trace_token)
+        _current_session_id.reset(session_token)
+        _current_user_id.reset(user_token)

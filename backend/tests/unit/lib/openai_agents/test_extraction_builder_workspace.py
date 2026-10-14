@@ -222,3 +222,19 @@ def test_scope_metadata_model_dump_failure_surfaces_loudly(captured_events):
 
     with pytest.raises(RuntimeError, match="cannot serialize in json mode"):
         builder._scope_value_from_payload({"nested": BrokenPayload()}, "document_id")
+
+
+def test_revisions_cover_patch_validation_discard_and_finalization(captured_events):
+    workspace = _workspace()
+    first = workspace.upsert_candidate(candidate_id="a", staged_fields={"items": [{"label": "A"}]})
+    second = workspace.upsert_candidate(candidate_id="b", staged_fields={"items": [{"label": "B"}]})
+    assert (first.revision, second.revision, workspace.revision) == (1, 1, 2)
+    workspace.record_validation_failure(errors=[{"reason": "needs evidence"}], candidate_ids=["a"])
+    assert (first.revision, second.revision, workspace.revision) == (2, 1, 3)
+    workspace.upsert_candidate(candidate_id="a", staged_fields={"items": [{"label": "A revised"}]})
+    workspace.discard_candidate("b", reason="duplicate")
+    workspace.finalize(candidate_ids=["a"])
+    assert (first.revision, second.revision, workspace.revision) == (4, 2, 6)
+    snapshot = workspace.snapshot(redact_payload=False)
+    assert snapshot["workspace_revision"] == 6
+    assert snapshot["candidates"][1]["status"] == "discarded"

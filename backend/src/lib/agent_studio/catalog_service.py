@@ -848,6 +848,9 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             result = base_on_invoke_tool(inline_ctx, input_str)
             if inspect.isawaitable(result):
                 result = await result
+            from src.lib.openai_agents.run_history import record_runtime_payload
+            await record_runtime_payload("canonical_tool_result", result, tool_name=tool_id,
+                                         call_id=getattr(ctx, "tool_call_id", None))
             result = _document_model_result(tool_id, result)
             _report_inline_package_result(tool_id, result)
             return result
@@ -913,6 +916,9 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             raise RuntimeError(
                 f"Package tool '{tool_id}' execution failed: {error_message}"
             )
+        from src.lib.openai_agents.run_history import record_runtime_payload
+        await record_runtime_payload("canonical_tool_result", result.result, tool_name=tool_id,
+                                     call_id=getattr(ctx, "tool_call_id", None))
         model_result = _document_model_result(tool_id, result.result)
         if not requery_pages:
             _report_inline_package_result(tool_id, model_result)
