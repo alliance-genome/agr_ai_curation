@@ -62,3 +62,42 @@ def test_partial_recovery_deleted_session_is_not_recreated(monkeypatch):
             document_id=None, failure_message="summary failed")
     repo.append_message.assert_not_called()
     db.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("state", ["turn_failed", "turn_interrupted"])
+def test_failed_or_interrupted_request_without_extraction_survives_reload(monkeypatch, state):
+    db, repo = Mock(), Mock()
+    db.execute.return_value.scalars.return_value.all.return_value = []
+    repo.get_message_by_turn_id.return_value = None
+    record = SimpleNamespace(message_id=uuid4(), content="Provider busy; request incomplete")
+    repo.append_message.return_value = SimpleNamespace(message=record)
+    monkeypatch.setattr(chat_common, "SessionLocal", lambda: db)
+    monkeypatch.setattr(chat_common, "_get_chat_history_repository", lambda _: repo)
+    monkeypatch.setattr(chat_common, "_persist_extraction_candidates", Mock())
+    monkeypatch.setattr(chat_common, "_link_persisted_extraction_results_to_chat_turn", Mock())
+    chat_common._persist_completed_chat_stream_turn(
+        session_id="existing-session", user_id="owner", turn_id="turn", user_message="Original request",
+        assistant_message=record.content, trace_id="support-trace", extraction_candidates=[],
+        persisted_extraction_refs=[], document_id=None, failure_message=record.content, failure_state=state,
+    )
+    args = repo.append_message.call_args.kwargs
+    assert args["payload_json"] == {"terminal_state": state, "terminal_message": record.content}
+    assert args["content"] == record.content
+    assert args["turn_id"] == "turn"
+    db.commit.assert_called()
+
+
+def test_failed_notice_save_does_not_authorize_completed_response_rescue(monkeypatch):
+    from src.api import chat_stream
+    monkeypatch.setattr(chat_stream, "_persist_completed_chat_stream_turn", Mock(side_effect=RuntimeError("database down")))
+    terminal, message = chat_stream._persist_failure_notice(
+        session_id="session", user_id="owner", turn_id="turn", user_message="original",
+        message="Provider busy; request incomplete", partial_response="Partial work",
+        trace_id=None, document_id=None, persisted_extraction_refs=[],
+    )
+    assert terminal == "turn_save_failed"
+    assert "could not be saved" in message
+    event = chat_common._build_terminal_turn_event(
+        terminal, session_id="session", turn_id="turn", message=message, assistant_rescue_allowed=False,
+    )
+    assert event["assistant_rescue_allowed"] is False

@@ -201,10 +201,13 @@ def _latest_extraction_result(records: Sequence[Any]) -> Any | None:
 def _formatter_runtime_context_for_records(records: Sequence[Any]) -> str:
     """Build formatter-only runtime guidance for the bound result bundle."""
 
+    from src.lib.flows.output_projection import SOURCE_LINKED_EVIDENCE_GUIDANCE
+
     latest = _latest_extraction_result(records)
     latest_ref = _record_result_ref(latest) if latest is not None else ""
     lines = [
         "FORMATTER SOURCE BUNDLE:",
+        SOURCE_LINKED_EVIDENCE_GUIDANCE,
         "This bundle contains saved extraction results from the active session and loaded document. Use only the formatter projection tools to inspect, plan, validate, preview, finalize, or report that the requested file cannot be produced.",
     ]
     if latest_ref:
@@ -1335,6 +1338,14 @@ def _build_runtime_tool_availability_note(
         notes.append(formatter_unavailable_note)
 
     notes.append(
+        "VALIDATION COVERAGE: Object, validator-decision and finding counts are separate units. "
+        "Current decisions exclude superseded history. A rejected proposal may be replaced by a "
+        "resolved alternative; inspect saved state instead of inferring unresolved status from disagreement. "
+        "Manifest previews put outstanding decisions first and report omitted coverage. Use inspect_results "
+        "to page validator_results and read original.result or original.request exactly. A historical "
+        "result with original_available=false cannot be reconstructed from a finding preview. Direct "
+        "validator calls return validator-result references; use validator_runs to find them in this chat. "
+        "Do not call validators again just to recover existing details.\n\n"
         "EXTRACTION RESULT COMPLETION: A non-empty extractor manifest is "
         "normally enough to answer the curator's current request unless the "
         "curator asks to broaden/narrow/rerun or the manifest says the "
@@ -1702,7 +1713,11 @@ def create_supervisor_agent(
             "query/target to choose among results. Values shown withheld are read "
             "exactly with their read call (detail_path/cursor); pass cursor, limit and "
             "result_sha256 only from a next_call. Address a specific "
-            "result with result_ref in extraction-result:<uuid> form. This tool does not "
+            "result with result_ref in extraction-result:<uuid> form. Direct validators use "
+            "validator-result:<uuid>; action=\"validator_runs\" lists this chat's runs. "
+            "For either kind, validator_results plus validator_result_key and "
+            "detail_path=\"original.result\" reads the complete saved validator output. "
+            "Historical projections explicitly report original_unavailable. This tool does not "
             "export, prepare for curation, inspect files or review sessions, or debug traces."
         ),
     )

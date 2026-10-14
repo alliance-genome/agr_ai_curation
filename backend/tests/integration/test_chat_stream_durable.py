@@ -122,7 +122,7 @@ def test_chat_stream_persists_durable_rows_and_emits_turn_completed(client, monk
     ]
 
 
-def test_chat_stream_emits_turn_interrupted_and_leaves_only_user_row(client, monkeypatch, test_db):
+def test_chat_stream_emits_turn_interrupted_and_persists_recovery_notice(client, monkeypatch, test_db):
     session_id = "chat-stream-interrupted-session"
     turn_id = "chat-stream-interrupted-turn"
     check_calls = {"count": 0}
@@ -158,9 +158,10 @@ def test_chat_stream_emits_turn_interrupted_and_leaves_only_user_row(client, mon
         .where(ChatMessageModel.session_id == session_id)
         .order_by(ChatMessageModel.created_at.asc(), ChatMessageModel.message_id.asc())
     ).all()
-    assert [(row.role, row.turn_id, row.content) for row in rows] == [
-        ("user", turn_id, "hello"),
-    ]
+    assert [(row.role, row.turn_id) for row in rows] == [("user", turn_id), ("assistant", turn_id)]
+    assert rows[0].content == "hello"
+    assert rows[1].payload_json["terminal_state"] == "turn_interrupted"
+    assert "stopped" in rows[1].content.lower()
 
 
 def test_chat_stream_extraction_persistence_failure_emits_turn_failed(client, monkeypatch, test_db, evidence_integration_context):

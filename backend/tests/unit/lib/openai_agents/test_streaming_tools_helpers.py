@@ -2909,10 +2909,11 @@ def test_domain_validator_reduction_never_returns_raw_json():
     )
 
     assert "GeneResultEnvelope validator result: status=resolved" in result
-    assert "binding=alliance_gene_reference_lookup" in result
-    assert "primary_external_id=FB:FBgn0259685" in result
-    assert "gene_symbol=crb" in result
-    assert "Full validated payload is retained" in result
+    preview = json.loads(result.split("\n", 1)[1])
+    assert preview["unit"] == "validator_decision"
+    assert preview["lookup_attempt_count"] == 1
+    assert preview["original_available"] is False
+    assert preview["output_complete"] is True
     assert '"resolved_values"' not in result
     with pytest.raises(json.JSONDecodeError):
         json.loads(result)
@@ -4129,3 +4130,51 @@ async def test_policy_failure_aborts_staged_workspace_without_finalization(monke
     records = [record for record in caplog.records if "stream error:" in record.message]
     assert len(records) == (1 if phase == "stream" else 0)
     assert all(record.sentry_skip_event for record in records)
+
+
+@pytest.mark.parametrize("tool_name", sorted(streaming_tools.tool_roles.builder_finalization_tool_names()))
+def test_current_empty_result_guidance_applies_without_rewriting_saved_prompt(tool_name):
+    source = SimpleNamespace(instructions="Curator scientific scope stays intact.", tools=[SimpleNamespace(name=tool_name)])
+    runtime = streaming_tools._with_builder_finalization_guidance(source)
+    assert runtime is not source
+    assert source.instructions == "Curator scientific scope stays intact."
+    assert runtime.instructions.startswith(source.instructions)
+    assert "candidate_ids=[]" in runtime.instructions
+    assert tool_name in runtime.instructions
+    assert runtime.tools is source.tools
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("storage_fails", [False, True])
+async def test_nested_validator_original_is_durable_before_compact_handoff(monkeypatch, storage_fails):
+    from src.schemas.domain_validator import DomainValidatorResultBase
+    from src.lib.domain_packs import validator_result_storage
+    payload = _validator_result_payload(status="unresolved", missing_expected_fields=["results"])
+    payload["explanation"] = "Complete lookup explanation β😀 " * 500
+    payload["lookup_attempts"] = [{"provider": "fixture", "method": "lookup", "query": {"nested": {"original": "kept"}}, "outcome": "not_found"}]
+    typed = DomainValidatorResultBase.model_validate(payload)
+    calls = []
+    def persist(original, **identity):
+        calls.append((original, identity))
+        if storage_fails:
+            raise RuntimeError("Database unavailable")
+        return "validator-result:12345678-1234-1234-1234-123456789abc"
+    monkeypatch.setattr(validator_result_storage, "persist_validator_result", persist)
+    monkeypatch.setattr(streaming_tools, "get_current_user_id", lambda: "authenticated-owner")
+    monkeypatch.setattr(streaming_tools, "get_current_session_id", lambda: "active-session")
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda *_: None)
+    monkeypatch.setattr(streaming_tools, "_structured_specialist_finalization_required", lambda *a, **k: False)
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", lambda *a, **k: _FakeRunResult(final_output=typed))
+    agent = SimpleNamespace(name="Fixture validator", tools=[], output_type=DomainValidatorResultBase, instructions="", model="gpt-4o")
+    run = streaming_tools.run_specialist_with_events(agent, "validate this", "Fixture validator", max_turns=3, tool_name="validate_fixture", inline_chat_persistence=False)
+    if storage_fails:
+        with pytest.raises(streaming_tools.SpecialistOutputError, match="could not be saved"):
+            await run
+    else:
+        handoff = await run
+        assert "validator-result:12345678-1234-1234-1234-123456789abc" in handoff
+        assert len(handoff) < len(payload["explanation"])
+    assert len(calls) == 1
+    assert calls[0][0] == typed.model_dump(mode="json")
+    assert calls[0][1]["user_id"] == "authenticated-owner"
+    assert calls[0][1]["session_id"] == "active-session"

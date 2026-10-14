@@ -156,6 +156,8 @@ def _stub_stream_turn_persistence(monkeypatch):
         persisted_extraction_refs=None,
         document_id: str | None = None,
         flow_terminal_events=None,
+        failure_message=None,
+        failure_state="turn_failed",
     ):
         chat._persist_extraction_candidates(
             candidates=extraction_candidates,
@@ -1280,14 +1282,14 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkey
 
     events = asyncio.run(_consume_stream(response))
 
-    assert events[-1]["type"] == ("turn_failed" if summary_failed else "turn_completed")
+    assert events[-1]["type"] == ("turn_save_failed" if summary_failed == "save_failed" else "turn_failed" if summary_failed else "turn_completed")
     if summary_failed == "save_failed":
         assert "could not be saved to chat history" in events[-1]["message"]
         assert not any(event["type"] == "turn_completed" for event in events)
     elif summary_failed:
         assert "Review & Curate" in events[-1]["message"]
         assert captured_finalize["failure_message"]
-        assert "summary" in captured_finalize["assistant_message"]
+        assert "Extraction results were saved" in captured_finalize["assistant_message"]
     assert captured_finalize["extraction_candidates"] == []
     refs = captured_finalize["persisted_extraction_refs"]
     assert len(refs) == 1
@@ -1922,8 +1924,7 @@ _TOOL_GROUP_CAP_MESSAGE = (
         (
             "runner exploded",
             "RuntimeError",
-            "An error occurred. Please provide feedback using the ⋮ menu on this message, "
-            "then try your query again.",
+            "This request could not be completed. You can restore the request to review it before trying again later. If it keeps failing, report it using the feedback menu.",
         ),
         # Written for the curator (ALL-1280 custom agent over the tool-group cap).
         (_TOOL_GROUP_CAP_MESSAGE, "ToolGroupCapError", _TOOL_GROUP_CAP_MESSAGE),
@@ -2134,7 +2135,7 @@ def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatc
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "turn_interrupted"]
     assert events[-1]["turn_id"] == "generated-turn"
-    assert finalize_calls == []
+    assert finalize_calls == ["finalize"]
 
 
 @pytest.mark.parametrize("failed_summary", [False, True])
@@ -2275,7 +2276,8 @@ def test_preferred_flow_answer_and_file_live_persisted_and_replayed(monkeypatch,
             raise RuntimeError("Controlled save failure")
         record = _assistant_record(session_id=kwargs["session_id"], turn_id=kwargs["turn_id"],
                                    content=kwargs["assistant_message"], payload_json={
-            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: kwargs["flow_terminal_events"]})
+            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: kwargs["flow_terminal_events"],
+            **({"terminal_state": "turn_failed", "terminal_message": kwargs["failure_message"]} if kwargs.get("failure_message") else {})})
         saved.append(record)
         return record
 
@@ -2290,7 +2292,18 @@ def test_preferred_flow_answer_and_file_live_persisted_and_replayed(monkeypatch,
         return asyncio.run(_consume_stream(response))
 
     live = consume()
-    if outcome_kind in {"flow_failed", "save_failed"}:
+    if outcome_kind == "flow_failed":
+        assert len(saved) == 1
+        assert saved[0].payload_json["terminal_state"] == "turn_failed"
+        assert live[-1]["type"] == "turn_failed"
+        assert sum(event["type"] == "FILE_READY" for event in live) == 1
+        assert not any(event["type"] in {"CHAT_OUTPUT_READY", "turn_completed"} for event in live)
+        replay = consume()
+        assert sum(event["type"] == "FILE_READY" for event in replay) == 1
+        assert replay[-1]["type"] == "turn_failed"
+        assert len(executions) == 1
+        return
+    if outcome_kind == "save_failed":
         assert not saved
         assert live[-1]["type"] == "turn_failed"
         assert not any(event["type"] in {"FILE_READY", "CHAT_OUTPUT_READY", "TEXT_MESSAGE_CONTENT", "turn_completed"} for event in live)

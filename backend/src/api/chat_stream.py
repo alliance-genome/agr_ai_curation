@@ -10,7 +10,7 @@ from src.lib.executable_runs import (
     executable_run_manager,
 )
 from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
-from src.lib.openai_agents.event_types import curator_facing_run_error_message
+from src.lib.openai_agents.curator_errors import classify_failure, failure_for_event
 from src.lib.observability.sentry import (
     gen_ai_workflow_transaction,
     hash_sentry_identifier,
@@ -20,6 +20,44 @@ from src.lib.observability.sentry import (
 )
 
 _LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
+
+
+def _persist_failure_notice(
+    *, session_id: str, user_id: str, turn_id: str, user_message: str,
+    message: str, partial_response: str, trace_id: str | None,
+    document_id: str | None, persisted_extraction_refs: Any,
+    failure_state: str = "turn_failed",
+    flow_terminal_events: Any = None,
+) -> tuple[str, str]:
+    """Keep the original request and safe failure available after a reload."""
+    if persisted_extraction_refs:
+        message += (
+            " Extraction results were saved. Use Review & Curate to open them; "
+            "any unresolved findings still need review."
+        )
+    # File events identify outputs already created; publish only after this
+    # failed-turn transcript is durable. Never replay provisional success text.
+    recovery_events = [dict(event) for event in (flow_terminal_events or []) if event.get("type") == "FILE_READY"]
+    if recovery_events:
+        message += " Generated files from completed steps remain available below."
+    content = message
+    if partial_response.strip():
+        content += "\n\nPartial response (the request did not finish):\n" + partial_response
+    try:
+        _persist_completed_chat_stream_turn(
+            session_id=session_id, user_id=user_id, turn_id=turn_id,
+            user_message=user_message, assistant_message=content,
+            trace_id=trace_id, document_id=document_id,
+            extraction_candidates=[], persisted_extraction_refs=persisted_extraction_refs,
+            failure_message=message, failure_state=failure_state,
+            flow_terminal_events=recovery_events,
+        )
+    except ChatHistorySessionNotFoundError:
+        return "session_gone", "Chat session is no longer available. Copy any visible text before leaving."
+    except Exception:
+        logger.exception("Failed to persist the terminal chat failure")
+        return "turn_save_failed", message + " This notice could not be saved to chat history; copy any visible text before leaving."
+    return failure_state, message
 
 
 class _PreferredFlowContextResolutionError(RuntimeError):
@@ -157,6 +195,10 @@ async def chat_endpoint(
         assistant_turn = prepared_turn.replay_assistant_turn
 
         if assistant_turn is not None:
+            saved_payload = getattr(assistant_turn, "payload_json", None)
+            if isinstance(saved_payload, dict) and saved_payload.get("terminal_state") in {"turn_failed", "turn_interrupted"}:
+                await _release_non_stream_turn_claim()
+                raise HTTPException(status_code=500, detail=saved_payload.get("terminal_message") or assistant_turn.content)
             _queue_chat_title_backfill(
                 background_tasks,
                 session_id=session_id,
@@ -333,10 +375,10 @@ async def chat_endpoint(
                     continue
                 elif event_type == "RUN_ERROR":
                     # Capture error and stop processing
-                    error_message = event_data.get("message", "Unknown error")
+                    error_message = failure_for_event(event_data).message
                     logger.error(
                         "Agent error during non-streaming chat: %s",
-                        error_message,
+                        event_data.get("message", event_data.get("error_type")),
                         extra={
                             "session_id": session_id,
                             "user_id": user_id,
@@ -354,7 +396,14 @@ async def chat_endpoint(
             # If we got an error, raise it
             if error_message:
                 set_sentry_span_status(sentry_transaction, "internal_error")
-                raise HTTPException(status_code=500, detail="Failed to process chat request")
+                _, error_message = _persist_failure_notice(
+                    session_id=session_id, user_id=user_id, turn_id=turn_id,
+                    user_message=effective_user_message, message=error_message,
+                    partial_response=full_response, trace_id=trace_id, document_id=document_id,
+                    persisted_extraction_refs=persisted_extraction_refs,
+                    flow_terminal_events=flow_terminal_events,
+                )
+                raise HTTPException(status_code=500, detail=error_message)
 
             if run_finished:
                 set_sentry_span_status(sentry_transaction, "ok")
@@ -470,17 +519,32 @@ async def chat_endpoint(
                     )
             else:
                 set_sentry_span_status(sentry_transaction, "internal_error")
-                raise HTTPException(status_code=500, detail="Chat run did not complete")
+                _, error_message = _persist_failure_notice(
+                    session_id=session_id, user_id=user_id, turn_id=turn_id,
+                    user_message=effective_user_message,
+                    message="The request ended before completion. You can restore it and try again later.",
+                    partial_response=full_response, trace_id=trace_id, document_id=document_id,
+                    persisted_extraction_refs=persisted_extraction_refs,
+                    flow_terminal_events=flow_terminal_events,
+                )
+                raise HTTPException(status_code=500, detail=error_message)
 
         return ChatResponse(response=full_response, session_id=session_id)
 
     except HTTPException:
         raise
     except Exception as e:
+        _, error_message = _persist_failure_notice(
+            session_id=session_id, user_id=user_id, turn_id=turn_id,
+            user_message=effective_user_message, message=classify_failure(e).message,
+            partial_response=full_response, trace_id=trace_id, document_id=document_id,
+            persisted_extraction_refs=persisted_extraction_refs,
+            flow_terminal_events=flow_terminal_events,
+        )
         raise_sanitized_http_exception(
             logger,
             status_code=500,
-            detail="Failed to process chat request",
+            detail=error_message,
             log_message="Chat error while processing non-stream request",
             exc=e,
         )
@@ -662,10 +726,11 @@ async def chat_stream_endpoint(
                     )
                 )
             saved_payload = prepared_turn.replay_assistant_turn.payload_json
-            failed_summary = isinstance(saved_payload, dict) and saved_payload.get("terminal_state") == "turn_failed"
+            saved_terminal = saved_payload.get("terminal_state") if isinstance(saved_payload, dict) else None
+            failed_summary = saved_terminal in {"turn_failed", "turn_interrupted"}
             yield _stream_event_sse(
                 _build_terminal_turn_event(
-                    "turn_failed" if failed_summary else "turn_completed",
+                    saved_terminal if failed_summary else "turn_completed",
                     session_id=session_id,
                     turn_id=prepared_turn.turn_id,
                     trace_id=prepared_turn.replay_assistant_turn.trace_id,
@@ -939,20 +1004,25 @@ async def chat_stream_endpoint(
                             "sentry_skip_event": resolved_route.mode == "flow",
                         },
                     )
-                    runner_error_message = curator_facing_run_error_message(event_data) or (
-                        "An error occurred. Please provide feedback using the ⋮ menu on this message, "
-                        "then try your query again."
-                    )
+                    runner_error_message = failure_for_event(event_data).message
                     break
 
                 yield _stream_event_sse(flat_event)
 
             if interrupted_message:
+                terminal_type, interrupted_message = _persist_failure_notice(
+                    session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
+                    user_message=prepared_turn.effective_user_message,
+                    message=interrupted_message, partial_response=full_response,
+                    trace_id=trace_id, document_id=document_id,
+                    persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted",
+                )
                 sentry_terminal_status = "cancelled"
                 set_sentry_span_status(sentry_transaction, "cancelled")
                 yield _stream_event_sse(
                     _build_terminal_turn_event(
-                        "turn_interrupted",
+                        terminal_type,
+                    assistant_rescue_allowed=False,
                         session_id=current_session_id,
                         turn_id=current_turn_id,
                         trace_id=trace_id,
@@ -962,42 +1032,24 @@ async def chat_stream_endpoint(
                 return
 
             if runner_error_message:
-                if persisted_extraction_refs:
-                    saved_notice = (
-                        "Extraction results were saved, but the final summary failed. "
-                        "Use Review & Curate to open the saved results. "
-                        "Any unresolved findings still need review."
-                    )
-                    try:
-                        _persist_completed_chat_stream_turn(
-                            session_id=current_session_id, user_id=user_id,
-                            turn_id=current_turn_id,
-                            user_message=prepared_turn.effective_user_message,
-                            assistant_message=saved_notice, trace_id=trace_id,
-                            extraction_candidates=[],
-                            persisted_extraction_refs=persisted_extraction_refs,
-                            document_id=document_id,
-                            failure_message=saved_notice,
-                        )
-                    except ChatHistorySessionNotFoundError:
-                        yield _stream_event_sse(_build_terminal_turn_event(
-                            "session_gone", session_id=current_session_id,
-                            turn_id=current_turn_id, trace_id=trace_id,
-                            message="Chat session is no longer available.",
-                        ))
-                        return
-                    except Exception:
-                        logger.exception("Failed to preserve saved extraction access after chat error")
-                        runner_error_message = (
-                            "The response failed and links to saved results could not be saved to chat history."
-                        )
-                    else:
-                        runner_error_message = saved_notice
+                terminal_type, runner_error_message = _persist_failure_notice(
+                    session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
+                    user_message=prepared_turn.effective_user_message,
+                    message=runner_error_message, partial_response=full_response,
+                    trace_id=trace_id, document_id=document_id,
+                    persisted_extraction_refs=persisted_extraction_refs,
+                    flow_terminal_events=flow_terminal_events,
+                )
+                if terminal_type == "turn_failed":
+                    for saved_event in flow_terminal_events:
+                        if saved_event.get("type") == "FILE_READY":
+                            yield _stream_event_sse({**saved_event, "session_id": current_session_id, "turn_id": current_turn_id, "trace_id": trace_id})
                 sentry_terminal_status = "error"
                 set_sentry_span_status(sentry_transaction, "internal_error")
                 yield _stream_event_sse(
                     _build_terminal_turn_event(
-                        "turn_failed",
+                        terminal_type,
+                    assistant_rescue_allowed=False,
                         session_id=current_session_id,
                         turn_id=current_turn_id,
                         trace_id=trace_id,
@@ -1187,13 +1239,21 @@ async def chat_stream_endpoint(
 
             sentry_terminal_status = "incomplete"
             set_sentry_span_status(sentry_transaction, "internal_error")
+            terminal_type, incomplete_message = _persist_failure_notice(
+                session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
+                user_message=prepared_turn.effective_user_message,
+                message="The request ended before completion. You can restore it and try again later.",
+                partial_response=full_response, trace_id=trace_id, document_id=document_id,
+                persisted_extraction_refs=persisted_extraction_refs,
+            )
             yield _stream_event_sse(
                 _build_terminal_turn_event(
-                    "turn_failed",
+                    terminal_type,
+                    assistant_rescue_allowed=False,
                     session_id=current_session_id,
                     turn_id=current_turn_id,
                     trace_id=trace_id,
-                    message="Chat run did not complete.",
+                    message=incomplete_message,
                     error_type="IncompleteRun",
                 )
             )
@@ -1209,6 +1269,13 @@ async def chat_stream_endpoint(
                     "trace_id": trace_id,
                     "turn_id": current_turn_id,
                 },
+            )
+            terminal_type, interruption_notice = _persist_failure_notice(
+                session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
+                user_message=prepared_turn.effective_user_message,
+                message="The connection was interrupted before the request finished. You can restore it and try again later.",
+                partial_response=full_response, trace_id=trace_id, document_id=document_id,
+                persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted",
             )
             yield _stream_event_sse(
                 _stream_event_payload(
@@ -1228,13 +1295,12 @@ async def chat_stream_endpoint(
             )
             yield _stream_event_sse(
                 _build_terminal_turn_event(
-                    "turn_interrupted",
+                    terminal_type,
+                    assistant_rescue_allowed=False,
                     session_id=current_session_id,
                     turn_id=current_turn_id,
                     trace_id=trace_id,
-                    message=(
-                        "The request was interrupted unexpectedly. Please provide feedback using the ⋮ menu on this message, then try your query again."
-                    ),
+                    message=interruption_notice,
                     error_type="StreamCancelled",
                 )
             )
@@ -1252,6 +1318,13 @@ async def chat_stream_endpoint(
                 },
                 exc_info=True,
             )
+            terminal_type, safe_message = _persist_failure_notice(
+                session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
+                user_message=prepared_turn.effective_user_message,
+                message=classify_failure(exc).message, partial_response=full_response,
+                trace_id=trace_id, document_id=document_id,
+                persisted_extraction_refs=persisted_extraction_refs,
+            )
             yield _stream_event_sse(
                 _stream_event_payload(
                     "SUPERVISOR_ERROR",
@@ -1260,21 +1333,20 @@ async def chat_stream_endpoint(
                     trace_id=trace_id,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                     details=_stream_error_details(
-                        error="Chat stream failed unexpectedly.",
+                        error=safe_message,
                         exc=exc,
-                        message="An error occurred. Please provide feedback using the ⋮ menu, then try your query again.",
+                        message=safe_message,
                     ),
                 )
             )
             yield _stream_event_sse(
                 _build_terminal_turn_event(
-                    "turn_failed",
+                    terminal_type,
+                    assistant_rescue_allowed=False,
                     session_id=current_session_id,
                     turn_id=current_turn_id,
                     trace_id=trace_id,
-                    message=(
-                        "An error occurred. Please provide feedback using the ⋮ menu on this message, then try your query again."
-                    ),
+                    message=safe_message,
                     error_type=type(exc).__name__,
                 )
             )
@@ -1301,8 +1373,7 @@ async def chat_stream_endpoint(
     run_id = f"assistant_chat_turn:{session_id}:{prepared_turn.turn_id}"
 
     def terminal_error_event(exc: Exception) -> str:
-        detail = getattr(exc, "detail", None)
-        message = str(detail or exc or "Chat turn failed to start.")
+        message = classify_failure(exc).message
         return _stream_event_sse(
             _build_terminal_turn_event(
                 "turn_failed",

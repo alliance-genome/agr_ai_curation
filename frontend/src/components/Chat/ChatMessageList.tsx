@@ -23,6 +23,8 @@ interface ChatMessageListProps {
   chatCssVariables: ChatCssVariables
   sessionId: string | null
   onCopyMessage: (text: string) => void
+  onRestoreRequest: (text: string) => void
+  canRestoreRequest: boolean
   onFeedbackClick: (messageContent: string, messageTraceIds?: string[]) => void
   onOpenCurationWorkspace: (
     target: CurationWorkspaceLaunchTarget,
@@ -41,6 +43,8 @@ function ChatMessageList({
   chatCssVariables,
   sessionId,
   onCopyMessage,
+  onRestoreRequest,
+  canRestoreRequest,
   onFeedbackClick,
   onOpenCurationWorkspace,
   onReviewAndCurateOpened,
@@ -175,6 +179,18 @@ function ChatMessageList({
               <div className="message-content">
                 {message.content}
               </div>
+              {message.role === 'user' && (
+                <button
+                  type="button"
+                  onClick={() => onRestoreRequest(message.content)}
+                  disabled={!canRestoreRequest}
+                  title={canRestoreRequest
+                    ? 'Copy this request into the composer. Review the current document and flow before sending; this does not run anything.'
+                    : 'Finish the current run and clear the composer before restoring a request.'}
+                >
+                  Restore request
+                </button>
+              )}
               <button
                 className="copy-button"
                 onClick={() => onCopyMessage(message.content)}

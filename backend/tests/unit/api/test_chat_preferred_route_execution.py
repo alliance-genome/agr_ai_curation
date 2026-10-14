@@ -484,8 +484,8 @@ async def test_failed_preferred_flow_reports_one_sanitized_terminal_failure(monk
         "provider": "openai",
         "tool_name": None,
     }
-    assert [event["type"] for event in events] == ["RUN_ERROR"]
-    assert events[0]["data"]["message"] == (
+    assert [event["type"] for event in events] == [chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE, "RUN_ERROR"]
+    assert events[-1]["data"]["message"] == (
         "provider payload that must not enter Sentry"
     )
 
@@ -547,7 +547,7 @@ async def test_preferred_flow_does_not_recapture_upstream_persistence_failure(mo
     ]
 
     assert captures == []
-    assert [event["type"] for event in events] == ["FLOW_ERROR", "RUN_ERROR"]
+    assert [event["type"] for event in events] == ["FLOW_ERROR", chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE, "RUN_ERROR"]
 
 
 @pytest.mark.asyncio

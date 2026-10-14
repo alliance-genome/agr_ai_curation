@@ -56,6 +56,7 @@ from .langfuse_client import (
 )
 from .agents.supervisor_agent import create_supervisor_agent
 from .chat_compaction_session import build_standard_chat_compaction_session
+from .curator_errors import classify_failure
 from .audit_labels import (
     BUILTIN_SPECIALIST_DISPLAY_NAMES,
     resolve_tool_display_name as _shared_resolve_tool_display_name,
@@ -66,6 +67,8 @@ from src.lib.config.providers_loader import get_default_runner_provider
 from src.lib.curation_workspace.execution_provenance import capture_source_document
 from src.lib.curation_workspace.extraction_results import persist_inline_validated_extraction_result
 from src.schemas.curation_workspace import CurationExtractionSourceKind
+from src.schemas.domain_validator import is_domain_validator_result_schema
+from src.lib.domain_packs.validator_result_storage import persist_validator_result
 from src.schemas.execution_provenance import ExtractionExecutionContext
 from .config import (
     get_api_key,
@@ -143,6 +146,7 @@ from .streaming_tools import (
     _tool_output_payload_for_finalization,
     _output_type_name,
     is_builder_materializer_agent,
+    _with_builder_finalization_guidance,
     _validator_runtime_context_for_chat,
 )
 from .curation_context_registry import clear_current_turn_curation_context
@@ -1304,6 +1308,8 @@ async def _run_agent_with_owned_resources(
     builder_materializer_agent = generic_profile is not None or is_builder_materializer_agent(agent)
     if builder_materializer_agent and getattr(agent, "output_type", None) is not None:
         raise ValueError("Builder agents must use backend finalization, not an output schema")
+    if builder_materializer_agent:
+        agent = _with_builder_finalization_guidance(agent)
     direct_execution_context = None
     direct_agent_key = ""
     direct_adapter_key = ""
@@ -2179,6 +2185,18 @@ async def _run_agent_with_owned_resources(
 
     raise_if_provider_budget_exhausted()
 
+    # Save the typed validator original before builder/evidence normalization.
+    # Directly selected validators have the same durable inspection path as tools.
+    original_validator_payload = None
+    validator_result_ref = None
+    if is_domain_validator_result_schema(expected_output_type):
+        original_validator_payload = structured_finalization_state.accepted_payload
+        if original_validator_payload is None:
+            original_validator_payload = getattr(result, "final_output", None)
+        if hasattr(original_validator_payload, "model_dump"):
+            original_validator_payload = original_validator_payload.model_dump(mode="json")
+        original_validator_payload = deepcopy(original_validator_payload)
+
     # Get final output if not captured from streaming
     if builder_materializer_agent:
         finalization = builder_workspace.finalization
@@ -2306,7 +2324,6 @@ async def _run_agent_with_owned_resources(
 
     # Run robust uncited-negative guardrail using actual tool calls (if structured Answer)
     if structured_result is not None:
-        expected_output_type = getattr(agent, "output_type", None)
         if not builder_materializer_agent and _looks_like_curation_shaped_payload(structured_result):
             output_type_name = _output_type_name(expected_output_type)
             logger.warning(
@@ -2477,10 +2494,19 @@ async def _run_agent_with_owned_resources(
             write_stream_event(internal_event, trace_id=trace_id)
             yield internal_event
 
+        if original_validator_payload is not None:
+            validator_result_ref = await asyncio.to_thread(
+                persist_validator_result, original_validator_payload,
+                user_id=user_id, session_id=(direct_chat_context.session_id if direct_chat_context else None) or chat_session_id or sentry_conversation_id,
+                invocation_id=builder_workspace.builder_invocation_id,
+                agent_key=canonical_agent_key,
+            )
+
         structured_event = {
             "type": "STRUCTURED_RESULT",
             "data": {
                 "result": structured_result,
+                "validator_result_ref": validator_result_ref,
                 "trace_id": trace_id
             }
         }
@@ -2995,13 +3021,8 @@ async def run_agent_streamed(
                         "details": {
                             "specialist": e.specialist_name,
                             "output_type": e.output_type_name,
-                            "error": str(e),
-                            "message": (
-                                f"The {e.specialist_name} was unable to produce a response. "
-                                f"Please report this failure using the feedback option (⋮ menu on messages) "
-                                f"so we can investigate. You can also try rephrasing your question or "
-                                f"breaking it into smaller parts."
-                            )
+                            "error": classify_failure(e).message,
+                            **classify_failure(e).event_fields(),
                         }
                     }
                     write_stream_event(specialist_error_event, trace_id=trace_id)
@@ -3010,10 +3031,7 @@ async def run_agent_streamed(
                     run_error_event = {
                         "type": "RUN_ERROR",
                         "data": {
-                            "message": (
-                                f"The {e.specialist_name} encountered an issue. "
-                                f"Please report this using the feedback option (⋮ menu), then try your query again."
-                            ),
+                            **classify_failure(e).event_fields(),
                             "error_type": "SpecialistOutputError",
                             "trace_id": trace_id
                         }
@@ -3097,7 +3115,8 @@ async def run_agent_streamed(
                         "type": "SUPERVISOR_ERROR",
                         "timestamp": _now_iso(),
                         "details": {
-                            "error": str(e),
+                            "error": classify_failure(e).message,
+                            **classify_failure(e).event_fields(),
                             "context": type(e).__name__
                         }
                     }
@@ -3107,7 +3126,7 @@ async def run_agent_streamed(
                     run_error_event = {
                         "type": "RUN_ERROR",
                         "data": {
-                            "message": str(e),
+                            **classify_failure(e).event_fields(),
                             "error_type": type(e).__name__,
                             "trace_id": trace_id
                         }

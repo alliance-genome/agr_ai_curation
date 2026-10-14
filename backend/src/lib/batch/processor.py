@@ -40,6 +40,8 @@ from .events import get_batch_broadcaster
 from .service import BatchService
 from .status import require_batch_document_status_transition
 
+from src.lib.openai_agents.curator_errors import classify_failure
+
 logger = logging.getLogger(__name__)
 _BACKEND_ONLY_EVENT_FIELDS = {"internal"}
 
@@ -57,6 +59,15 @@ class BatchFlowExecutionError(RuntimeError):
         super().__init__(message)
         self.sentry_already_reported = sentry_already_reported
         self.output_branches = list(output_branches or [])
+
+
+def _batch_failure_message(error: Exception) -> str:
+    if isinstance(error, BatchFlowExecutionError):
+        return str(error)[:500]
+    failure = classify_failure(error)
+    if failure.category == "unknown":
+        return "This batch document could not be completed. Review the batch results before submitting a new run later. Report repeated failures using the feedback menu."
+    return failure.message
 
 
 class BatchCancelled(RuntimeError):
@@ -282,7 +293,7 @@ def _process_claimed_batch(
                     batch_doc.status, BatchDocumentStatus.FAILED
                 )
                 batch_doc.status = BatchDocumentStatus.FAILED
-                batch_doc.error_message = str(error)[:500]
+                batch_doc.error_message = _batch_failure_message(error)
                 batch_doc.processed_at = datetime.now(timezone.utc)
                 service.recompute_batch_counters(batch)
                 db.commit()
@@ -392,7 +403,7 @@ def _process_single_document(
         )
 
         if not result_files and not review_session_ids:
-            raise RuntimeError("Flow completed without FILE_READY or curation handoff output")
+            raise BatchFlowExecutionError("The flow finished without a saved file or curation output. Review the flow configuration before trying again.")
 
         # Calculate processing time
         processing_time_ms = int((time.time() - start_time) * 1000)
@@ -439,7 +450,7 @@ def _process_single_document(
             failure_output_branches if isinstance(failure_output_branches, list) else None
         )
         batch_doc.review_session_ids = None
-        batch_doc.error_message = str(e)[:500]
+        batch_doc.error_message = _batch_failure_message(e)
         batch_doc.processing_time_ms = processing_time_ms
         batch_doc.processed_at = datetime.now(timezone.utc)
         BatchService(db).recompute_batch_counters(batch)

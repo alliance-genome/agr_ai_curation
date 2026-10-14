@@ -571,6 +571,14 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
         default_factory=list,
         description="Validation findings attached to the envelope",
     )
+    validator_results: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description=(
+            "Complete original validator request/result snapshots, stored once per "
+            "content-addressed validation_result_ref. Finding details are display "
+            "projections. Historical findings without a reference have no saved original."
+        ),
+    )
     history: list[HistoryEvent] = Field(
         default_factory=list,
         description="Provider-neutral envelope history events",

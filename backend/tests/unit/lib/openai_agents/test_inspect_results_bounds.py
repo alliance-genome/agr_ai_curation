@@ -696,3 +696,57 @@ async def test_help_documents_single_record_reads(monkeypatch):
                for example in help_response["examples"])
     assert any("validator_result_key=" in example for example in help_response["examples"])
     assert "result_sha256" in text
+
+
+async def test_complete_original_unicode_chunks_and_historical_unavailability(monkeypatch):
+    from src.lib.domain_packs.validator_result_records import validator_result_snapshot
+
+    payload = _payload(1)
+    raw = {"status": "resolved", "request_id": "request-long", "explanation": UNICODE * 2000,
+           "lookup_attempts": [{"query": {str(i): [UNICODE] * 30 for i in range(60)}}]}
+    key, original = validator_result_snapshot(raw, request={"input": UNICODE}, source_envelope_revision=1)
+    original["recorded_order"] = 0
+    payload["validator_results"] = {key: original}
+    record = _Record(payload)
+    _install(monkeypatch, record)
+    page = await _call(action="validator_results", result_ref=RESULT_REF,
+                       validator_result_key=key, detail_path="original.result")
+    text, last = await _read_all(page)
+    assert json.loads(text) == raw
+    assert last["detail"]["value_sha256"] == tool_result_bounds.content_sha256(raw)
+    # Availability refers to complete historical data, never a reconstructed projection.
+    record.payload_json = _payload(1)
+    record.payload_json["validation_findings"] = [_finding(0, details={"validation_result": raw})]
+    missing = await _call(action="validator_results", result_ref=RESULT_REF,
+                          validator_result_key="request:request-long", detail_path="original.result")
+    assert missing["error_code"] == "original_unavailable"
+
+
+async def test_direct_validator_reads_are_owner_scoped_and_exact(monkeypatch):
+    from src.lib.domain_packs import validator_result_storage
+    from src.lib.domain_packs.validator_result_records import validator_result_snapshot
+
+    ref = "validator-result:5d7728da-cd28-4aeb-865d-6be07c2b16cd"
+    raw = {"status": "unresolved", "explanation": UNICODE * 2000, "unknown_provider_field": {"a": [1, 2, 3]}}
+    _, original = validator_result_snapshot(raw)
+    calls = []
+
+    def read(result_id, **scope):
+        calls.append(scope)
+        if scope["user_id"] != "user-bounds" or scope["session_id"] not in {"session-bounds", None}:
+            return None
+        return {"result_ref": ref, "agent_key": "validator", "original": original,
+                "original_sha256": tool_result_bounds.content_sha256(original)}
+
+    monkeypatch.setattr(validator_result_storage, "read_validator_result", read)
+    first = await _call(action="validator_results", result_ref=ref,
+                        validator_result_key=ref, detail_path="original.result")
+    full, _ = await _read_all(first)
+    assert json.loads(full) == raw
+    assert all(scope == {"user_id": "user-bounds", "session_id": "session-bounds"} for scope in calls)
+    monkeypatch.setattr(inspect_results_module, "get_current_user_id", lambda: "another-owner")
+    denied = await _call(action="summary", result_ref=ref, target="all_authorized")
+    assert denied["error_code"] == "result_not_found"
+    # Arguments cannot silently select unrelated extraction context or ignore cursors.
+    invalid = await _call(action="validator_results", result_ref=ref, cursor="1")
+    assert invalid["error_code"] == "invalid_request"

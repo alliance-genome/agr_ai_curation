@@ -223,7 +223,7 @@ async def test_inspect_results_help_uses_canonical_result_refs_only():
     payload = json.loads(await inspect_results_module.inspect_results(action="help"))
 
     assert payload["status"] == "ok"
-    assert payload["result_ref_format"] == "extraction-result:<uuid>"
+    assert payload["result_ref_format"] == "extraction-result:<uuid> or validator-result:<uuid>"
     assert "current-turn" not in json.dumps(payload)
     assert "current_chat" not in json.dumps(payload)
 

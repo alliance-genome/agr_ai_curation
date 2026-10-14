@@ -1,6 +1,7 @@
 # ruff: noqa: F403,F405
 """Execute-flow chat streaming endpoint."""
 
+from src.lib.openai_agents.curator_errors import classify_failure, failure_for_event
 from uuid import UUID
 from typing import Annotated
 from contextlib import aclosing
@@ -70,38 +71,11 @@ def _extract_execute_flow_runtime_identifiers(
     return flow_run_id, trace_id
 
 
-_PROVIDER_CONTENT_POLICY_MESSAGE = (
-    "The AI provider's automatic safety check flagged this request as possible "
-    "biological risk and stopped the flow. This check is run by the provider, "
-    "not by AI Curation, and it can flag routine research content. Please report "
-    "the paper using the feedback button so we can follow up."
-)
-
 
 def _flow_execution_error_message(exc: Exception) -> tuple[str, str | None]:
-    """Describe typed provider failures without exposing provider payloads."""
-    from agents.models.openai_responses import ResponsesWebSocketError
-
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, ResponsesWebSocketError):
-            if is_provider_content_policy_refusal(current):
-                return _PROVIDER_CONTENT_POLICY_MESSAGE, "openai"
-            if current.error_type in {"server_error", "service_unavailable_error"}:
-                return (
-                    "The AI service interrupted this run before it finished. "
-                    "Please try running the flow again. If this keeps happening, "
-                    "report the problem using the feedback button.",
-                    "openai",
-                )
-            return "The AI service could not complete this run.", "openai"
-        current = current.__cause__ or current.__context__
-    return (
-        str(exc) if isinstance(exc, ValueError) else "Flow execution failed unexpectedly.",
-        None,
-    )
+    """Describe typed failures with the same safe message as standard chat."""
+    failure = classify_failure(exc)
+    return failure.message, failure.provider
 
 
 def _flow_failure_tags(
@@ -477,6 +451,7 @@ def _build_execute_flow_summary_row(
         "status": status,
         "trace_id": trace_id,
         "failure_reason": failure_reason,
+        "output_status": next((event.get("output_status") for event in reversed(terminal_events) if event.get("type") == "FLOW_FINISHED"), None),
         "final_user_output": str(final_user_output or "").strip() or None,
         # Safe per-step codes from the terminal event. New records always carry
         # a list; records written before ALL-1244 lack the key.
@@ -1171,10 +1146,10 @@ async def execute_flow_endpoint(
                                     "sentry_skip_event": True,
                                 },
                             )
-                        flat_event["message"] = "Flow execution failed unexpectedly."
+                        flat_event.update(failure_for_event(flat_event).event_fields())
                         details = flat_event.get("details")
                         if isinstance(details, dict) and "error" in details:
-                            flat_event["details"] = {**details, "error": "Flow execution failed unexpectedly."}
+                            flat_event["details"] = {**details, "error": flat_event["message"]}
 
                     outcome.observe(flat_event)
 
@@ -1230,7 +1205,7 @@ async def execute_flow_endpoint(
                     review_session_ids=review_session_ids,
                     adapter_keys=adapter_keys,
                     domain_warning_count=domain_warning_count,
-                    file_outputs=file_outputs if outcome.status == "completed" else [],
+                    file_outputs=file_outputs,
                     failure_reason=outcome.failure_reason,
                 )
                 summary_row = _build_execute_flow_summary_row(
@@ -1375,6 +1350,12 @@ async def execute_flow_endpoint(
             await executable_run_manager.set_outcome_status(run_id, "failed")
 
             failure_terminal_events = outcome.events_for_persistence()
+            for saved_event in failure_terminal_events:
+                if saved_event.get("type") != "FILE_READY":
+                    continue
+                row = _build_execute_flow_transcript_row_from_event(saved_event)
+                if row is not None and not any(existing.payload_json == row.payload_json for existing in transcript_rows):
+                    transcript_rows.append(row)
             failure_assistant_message = _build_flow_memory_assistant_message(
                 flow_name=flow.name,
                 flow_id=str(flow.id),
@@ -1389,7 +1370,7 @@ async def execute_flow_endpoint(
                 review_session_ids=review_session_ids,
                 adapter_keys=adapter_keys,
                 domain_warning_count=domain_warning_count,
-                file_outputs=file_outputs if outcome.status == "completed" else [],
+                file_outputs=file_outputs,
                 failure_reason=outcome.failure_reason,
             )
             failure_summary_row = _build_execute_flow_summary_row(

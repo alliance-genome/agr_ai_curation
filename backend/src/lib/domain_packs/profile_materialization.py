@@ -26,6 +26,7 @@ from src.lib.domain_packs.resolvable_values import (
 )
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_result_classification import validator_failure_classification
+from src.lib.domain_packs.validator_result_records import retain_validator_original
 from src.lib.domain_packs.value_presence import missing_resolved_value
 from src.schemas.agent_execution_revision import GenericProfilePin
 from src.schemas.domain_envelope import (
@@ -50,7 +51,12 @@ def materialize_profile_validator_results(
         _match_key(match): match for match in context.registry.match_bindings(envelope)
     }
     grouped = defaultdict(list)
+    original_refs = {}
     for item in items:
+        envelope, original_refs[id(item)] = retain_validator_original(
+            envelope, result=item.result, request=item.request,
+            source_envelope_revision=source_envelope_revision,
+        )
         grouped[_object_key(item.match.object_envelope)].append(item)
     objects = {_object_key(obj): obj for obj in envelope.extracted_objects}
     replacements, findings = {}, []
@@ -108,9 +114,11 @@ def materialize_profile_validator_results(
             if overrides and len(overrides) == len(item.request.expected_result_fields):
                 # Every value this result writes is a curator override, which stands.
                 finding = _as_curator_override_finding(finding)
-            findings.append(finding)
-            findings.extend(_override_disagreements(
-                item, overrides, target, source_envelope_revision=source_envelope_revision))
+            item_findings = [finding, *_override_disagreements(
+                item, overrides, target, source_envelope_revision=source_envelope_revision)]
+            findings.extend(item_finding.model_copy(update={
+                "details": {**item_finding.details, "validation_result_ref": original_refs[id(item)]},
+            }) for item_finding in item_findings)
     updated = envelope.model_copy(update={"extracted_objects": [
         replacements.get(_object_key(obj), obj) for obj in envelope.extracted_objects
     ]})

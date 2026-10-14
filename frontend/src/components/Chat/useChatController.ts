@@ -722,10 +722,10 @@ export function useChatController({
             traceId: parsed.trace_id,
             terminalState: 'turn_save_failed',
             terminalMessage: terminalMessage,
-            rescueState: 'pending',
+            rescueState: parsed.assistant_rescue_allowed === false ? 'failed' : 'pending',
           }))
           const activeSessionId = eventSessionId ?? propSessionId
-          if (activeSessionId) {
+          if (activeSessionId && parsed.assistant_rescue_allowed !== false) {
             void handleAssistantRescue(activeSessionId, turnId, parsed.trace_id)
           } else {
             setMessages((prev) => upsertAssistantTurnMessage(prev, {
@@ -1701,6 +1701,12 @@ export function useChatController({
     }
   }
 
+  const handleRestoreRequest = (text: string) => {
+    if (isLoading || inputMessage.trim() || !text.trim()) return
+    setInputMessage(text)
+    textareaRef.current?.focus()
+  }
+
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value
     setInputMessage(value)
@@ -1819,6 +1825,8 @@ export function useChatController({
     handleFeedbackDialogClose,
     handleFeedbackSubmit,
     handleInputChange,
+    handleRestoreRequest,
+    canRestoreRequest: !isLoading && !inputMessage.trim(),
     handleKeyPress,
     handleOpenCurationWorkspace,
     handleOpenPrepDialog,

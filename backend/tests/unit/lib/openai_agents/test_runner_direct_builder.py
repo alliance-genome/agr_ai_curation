@@ -468,3 +468,52 @@ async def test_direct_expression_stage_preserves_unresolved_mentions_without_res
         assert agent.tools == [stage]
     finally:
         builder.reset_active_extraction_builder_workspace(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("save_fails", [False, True])
+async def test_direct_validator_original_precedes_success_and_is_not_an_extraction(runtime, monkeypatch, save_fails):
+    from tests.unit.lib.openai_agents.test_streaming_tools_helpers import _package_schema, _validator_result_payload
+
+    schema = _package_schema("GeneResultEnvelope")
+    payload = _validator_result_payload(agent_id="gene_validation", gene_candidates=[])
+    payload["explanation"] = "Exact β original " * 1000
+    typed = schema.model_validate(payload)
+    agent = Agent(name="Direct gene validator", model="gpt-5.6-sol", output_type=schema)
+    agent.agent_key = "gene_validation"
+    # The fixture delivers an already typed final output, bypassing only the model.
+    monkeypatch.setattr(runner, "_structured_specialist_finalization_required", lambda *a, **k: False)
+    calls = []
+    def persist(original, **scope):
+        calls.append((original, scope))
+        assert original == typed.model_dump(mode="json")
+        assert scope["user_id"] == "synthetic-owner"
+        assert scope["session_id"] == "synthetic-session"
+        if save_fails:
+            raise RuntimeError("synthetic SQL failure")
+        return "validator-result:5d7728da-cd28-4aeb-865d-6be07c2b16cd"
+    class Result:
+        final_output = typed
+        async def stream_events(self):
+            if False:
+                yield None
+    monkeypatch.setattr(runner, "persist_validator_result", persist)
+    monkeypatch.setattr(runner.Runner, "run_streamed", lambda *a, **k: Result())
+    events = []
+    async def consume():
+        async for event in runner._run_agent_with_owned_resources(
+            owned_openai_resources=runtime, agent=agent, input_items=[], user_id="synthetic-owner",
+            document_id=None, document_name=None, user_message="Validate", trace_id="validator-trace",
+            direct_chat_context=runner._DirectBuilderChatContext("synthetic-session", "turn-1"),
+        ):
+            if event["type"] in {"STRUCTURED_RESULT", "RUN_FINISHED"}:
+                assert len(calls) == 1
+            events.append(event)
+    if save_fails:
+        with pytest.raises(RuntimeError, match="synthetic SQL failure"):
+            await consume()
+        assert not any(event["type"] == "RUN_FINISHED" for event in events)
+    else:
+        await consume()
+        assert next(event for event in events if event["type"] == "STRUCTURED_RESULT")["data"]["validator_result_ref"].startswith("validator-result:")
+        assert not any(event["type"] == "INTERNAL_EXTRACTION_RESULT" for event in events)

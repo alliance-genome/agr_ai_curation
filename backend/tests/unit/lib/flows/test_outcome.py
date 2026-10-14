@@ -42,7 +42,7 @@ def test_file_without_substantive_answer_keeps_no_visible_text(response):
 
 
 @pytest.mark.parametrize("persistence_failure", [False, True])
-def test_failed_file_and_answer_candidates_never_publish(persistence_failure):
+def test_failure_preserves_generated_file_only_after_terminal_commit(persistence_failure):
     outcome = FlowRunOutcome()
     outcome.observe({"type": "FILE_READY", "details": {"file_id": "one"}})
     outcome.observe({"type": "RUN_FINISHED", "response": "Do not publish."})
@@ -55,8 +55,8 @@ def test_failed_file_and_answer_candidates_never_publish(persistence_failure):
     assert outcome.final_user_visible_text is None
     assert outcome.publishable_terminal_events() == []
     outcome.mark_persisted(transcript=True)
-    assert all(event["type"] not in {"FILE_READY", "RUN_FINISHED"}
-               for event in outcome.publishable_terminal_events())
+    assert all(event["type"] != "RUN_FINISHED" for event in outcome.publishable_terminal_events())
+    assert any(event["type"] == "FILE_READY" for event in outcome.publishable_terminal_events())
 
 
 def test_failed_outcome_discards_earlier_success_candidate():
@@ -367,3 +367,23 @@ def test_execution_failure_replaces_stale_success_and_preserves_cause():
         "SUPERVISOR_ERROR",
         "RUN_ERROR",
     ]
+
+
+@pytest.mark.parametrize("chat_output", [True, False])
+def test_partial_output_notice_is_durable_and_identical_on_replay(chat_output):
+    outcome = FlowRunOutcome()
+    saved_file = {"type": "FILE_READY", "details": {"file_id": "durable-csv", "filename": "saved.csv"}}
+    outcome.observe(saved_file)
+    if chat_output:
+        outcome.observe({"type": "CHAT_OUTPUT_READY", "details": {"output": "Exact saved table."}})
+    outcome.observe({"type": "FLOW_FINISHED", "status": "completed", "output_status": "partial"})
+    before = outcome.events_for_persistence()
+    assert before[0] == saved_file
+    assert outcome.final_user_visible_text.startswith("Partial result:")
+    assert outcome.publishable_terminal_events() == []
+    outcome.mark_persisted(transcript=True)
+    assert outcome.publishable_terminal_events() == before
+    text = outcome._combined_visible_text(before)
+    assert text == outcome.final_user_visible_text
+    if chat_output:
+        assert text.endswith("Exact saved table.")

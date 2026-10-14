@@ -1730,6 +1730,40 @@ describe('Chat turn reconciliation', () => {
     mockChatFetch()
   })
 
+  it('restores the original request as an editable draft without replaying it or replacing another draft', async () => {
+    const sendMessage = vi.fn()
+    renderChat({
+      sendMessage,
+      restoredTranscript: {
+        sessionId: 'session-1',
+        messages: [
+          { role: 'user', content: 'Extract β expression with supporting quotes.', timestamp: '2026-10-13T20:00:00Z', id: 'original-request' },
+          { role: 'assistant', content: 'The AI service is busy. Try later.', timestamp: '2026-10-13T20:01:00Z', id: 'failure-notice' },
+        ],
+      },
+    })
+    const restore = await screen.findByRole('button', { name: 'Restore request' })
+    fireEvent.click(restore)
+    const composer = screen.getByPlaceholderText('Type your message...')
+    expect(composer).toHaveValue('Extract β expression with supporting quotes.')
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(restore).toBeDisabled()
+    fireEvent.change(composer, { target: { value: 'My new draft' } })
+    fireEvent.click(restore)
+    expect(composer).toHaveValue('My new draft')
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('shows a partial flow outcome rather than hiding the finished progress notice', async () => {
+    renderChat({ events: [
+      { type: 'FLOW_STARTED', session_id: 'session-1', timestamp: '2026-10-13T20:00:00Z', flow_name: 'Expression flow', total_steps: 3 },
+      { type: 'FLOW_STEP_STARTED', session_id: 'session-1', step: 3, step_name: 'Format results' },
+      { type: 'FLOW_FINISHED', session_id: 'session-1', status: 'completed', output_status: 'partial' },
+    ] })
+    expect(await screen.findByText('"Expression flow" produced a partial result')).toBeInTheDocument()
+    expect(screen.getByTestId('flow-run-progress')).toHaveAttribute('data-status', 'partial')
+  })
+
   it('shows the latest activity immediately without replaying a burst of old statuses', async () => {
     renderChat({
       isLoading: true,
@@ -1972,6 +2006,17 @@ describe('Chat turn reconciliation', () => {
     expect(
       await screen.findByText('The flow runner reported a timeout.'),
     ).toBeInTheDocument()
+  })
+
+  it('does not rescue an unfinished request as a completed response when saving its failure notice fails', async () => {
+    renderChat({ sessionId: 'session-1', events: [
+      { type: 'TEXT_MESSAGE_CONTENT', session_id: 'session-1', turn_id: 'failed-save', content: 'Partial work' },
+      { type: 'turn_save_failed', session_id: 'session-1', turn_id: 'failed-save',
+        message: 'Provider busy. This notice could not be saved.', assistant_rescue_allowed: false },
+    ] })
+    expect(await screen.findByText('Provider busy. This notice could not be saved.')).toBeInTheDocument()
+    expect(screen.getByText('Partial work')).toBeInTheDocument()
+    expect(vi.mocked(global.fetch).mock.calls.some(([url]) => String(url).includes('/assistant-rescue'))).toBe(false)
   })
 
   it('rescues turn_save_failed output exactly once per turn and preserves the streamed content', async () => {

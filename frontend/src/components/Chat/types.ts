@@ -70,7 +70,7 @@ export interface Message {
   evidenceCurationAdapterKey?: string | null
 }
 
-export interface SerializedMessage extends RestorableChatMessage {
+export interface SerializedMessage extends Omit<RestorableChatMessage, 'terminalState' | 'terminalMessage'> {
   terminalState?: TerminalTurnState | null
   terminalMessage?: string | null
   rescueState?: RescueState

@@ -878,6 +878,28 @@ def is_builder_materializer_agent(agent: Agent) -> bool:
     )
 
 
+
+def _with_builder_finalization_guidance(agent: Agent) -> Agent:
+    """Current runtime contract also applies to immutable curator prompt snapshots."""
+    known = tool_roles.builder_finalization_tool_names()
+    names = sorted({_extract_tool_name(tool) for tool in (getattr(agent, "tools", None) or [])} & known)
+    if not names:
+        return agent
+    return _append_agent_runtime_instruction(
+        agent, agent,
+        instruction=(
+            "EXTRACTION COMPLETION: Before your final explanation, call the applicable builder "
+            "finalization tool from this run: " + ", ".join(names) + ". Pass the exact staged "
+            "candidate IDs you intend to retain. If the paper contains no eligible objects, "
+            "explicitly finalize with candidate_ids=[] and explain the empty result and exclusions. "
+            "An empty extraction is a valid completed result; prose alone does not finalize it. "
+            "Never invent a candidate to make the extraction nonempty."
+        ),
+        layer_id_suffix="builder_completion", title="Builder completion contract",
+        source_ref="src.lib.openai_agents.streaming_tools:builder_completion",
+    )
+
+
 def _import_callable(import_path: str) -> Any:
     module_name, attr_name = import_path.split(":", 1)
     module = importlib.import_module(module_name)
@@ -2982,6 +3004,7 @@ def _reduce_specialist_output_for_supervisor(
     finalized_domain_envelope: bool = False,
     extraction_result_id: str | None = None,
     result_ref: str | None = None,
+    validator_result_ref: str | None = None,
 ) -> str:
     """Return a supervisor-safe handoff without replaying raw structured JSON."""
 
@@ -3018,6 +3041,7 @@ def _reduce_specialist_output_for_supervisor(
         validator_summary = _domain_validator_supervisor_summary(
             payload,
             expected_output_type=expected_output_type,
+            result_ref=validator_result_ref,
         )
         if validator_summary:
             return validator_summary
@@ -3172,20 +3196,11 @@ def _persist_builder_finalization_for_supervisor(
         ) from exc
 
 
-def _first_scalar_value(source: Dict[str, Any], keys: tuple[str, ...]) -> str:
-    for key in keys:
-        value = source.get(key)
-        if _is_supervisor_summary_scalar(value):
-            text = str(value).strip()
-            if text:
-                return text
-    return ""
-
-
 def _domain_validator_supervisor_summary(
     payload: Dict[str, Any],
     *,
     expected_output_type: Any,
+    result_ref: str | None = None,
 ) -> str:
     """Build a compact supervisor handoff for finalized validator results."""
 
@@ -3196,67 +3211,22 @@ def _domain_validator_supervisor_summary(
         return ""
 
     output_type_name = _output_type_name(expected_output_type)
-    status = str(payload.get("status") or "unknown").strip() or "unknown"
-    binding_id = str(payload.get("validator_binding_id") or "").strip()
-    target = payload.get("target")
-    target_label = _domain_validator_target_label(target)
-    label_parts = [f"{output_type_name} validator result: status={status}."]
-    if binding_id:
-        label_parts.append(f"binding={binding_id}.")
-    if target_label:
-        label_parts.append(f"target={target_label}.")
-
-    lines = [
-        " ".join(label_parts)
-        + " Full validated payload is retained by the specialist runtime."
-    ]
-
-    resolved_values = _compact_supervisor_mapping_fields(
-        payload.get("resolved_values"),
-        limit=12,
-    )
-    if resolved_values:
-        lines.append(f"Resolved values: {resolved_values}")
-
-    curator_message = str(payload.get("curator_message") or "").strip()
-    explanation = str(payload.get("explanation") or "").strip()
-    if curator_message:
-        lines.append(
-            "Curator message: "
-            + _truncate_for_supervisor_summary(curator_message, limit=220)
-        )
-    elif explanation:
-        lines.append(
-            "Explanation: "
-            + _truncate_for_supervisor_summary(explanation, limit=220)
-        )
-
-    candidates = payload.get("candidates")
-    if isinstance(candidates, list) and candidates:
-        candidate_text = _domain_validator_candidate_summary(candidates)
-        lines.append(
-            f"Candidates: {len(candidates)}"
-            + (f" ({candidate_text})" if candidate_text else "")
-            + "."
-        )
-
-    missing = payload.get("missing_expected_fields")
-    if isinstance(missing, list) and missing:
-        lines.append(
-            "Missing expected fields: "
-            + ", ".join(
-                _truncate_for_supervisor_summary(str(item), limit=80)
-                for item in missing[:8]
-            )
-            + ("." if len(missing) <= 8 else f", +{len(missing) - 8} more.")
-        )
-
-    lookup_attempts = payload.get("lookup_attempts")
-    lookup_summary = _domain_validator_lookup_attempt_summary(lookup_attempts)
-    if lookup_summary:
-        lines.append(f"Lookup attempts: {lookup_summary}")
-
-    return "\n".join(lines)
+    status = payload.get("status", "unknown")
+    preview = {
+        "unit": "validator_decision", "status": status,
+        "output_complete": not bool(payload.get("output_issues")),
+        "original_available": result_ref is not None,
+        "result_ref": result_ref,
+        "candidate_count": len(payload.get("candidates") or []),
+        "lookup_attempt_count": len(payload.get("lookup_attempts") or []),
+        "missing_expected_field_count": len(payload.get("missing_expected_fields") or []),
+    }
+    if result_ref:
+        preview["read"] = {"action": "validator_results", "result_ref": result_ref,
+                           "validator_result_key": result_ref, "detail_path": "original.result"}
+    # No clipped identifiers or replacement explanation: exact fields are read
+    # from the persisted original, using the same tool as automatic validation.
+    return f"{output_type_name} validator result: status={status}.\n" + json.dumps(preview)
 
 
 def _structured_specialist_supervisor_summary(
@@ -3311,19 +3281,6 @@ def _looks_like_domain_validator_result_payload(payload: Dict[str, Any]) -> bool
     }.issubset(payload)
 
 
-def _domain_validator_target_label(target: Any) -> str:
-    if not isinstance(target, dict):
-        return ""
-    parts: list[str] = []
-    for key in ("object_type", "object_id", "object_role", "field_path"):
-        value = target.get(key)
-        if _is_supervisor_summary_scalar(value):
-            parts.append(
-                f"{key}={_truncate_for_supervisor_summary(str(value), limit=80)}"
-            )
-    return "; ".join(parts)
-
-
 def _compact_supervisor_mapping_fields(
     value: Any,
     *,
@@ -3346,34 +3303,6 @@ def _compact_supervisor_mapping_fields(
             f"{key}={_truncate_for_supervisor_summary(str(item), limit=120)}"
         )
     return "; ".join(selected)
-
-
-def _domain_validator_candidate_summary(candidates: list[Any]) -> str:
-    summaries: list[str] = []
-    for candidate in candidates[:3]:
-        if not isinstance(candidate, dict):
-            continue
-        value = _first_scalar_value(candidate, ("value", "label", "object_type"))
-        if value:
-            summaries.append(_truncate_for_supervisor_summary(value, limit=80))
-    return ", ".join(summaries)
-
-
-def _domain_validator_lookup_attempt_summary(lookup_attempts: Any) -> str:
-    if not isinstance(lookup_attempts, list) or not lookup_attempts:
-        return ""
-    outcome_counts: dict[str, int] = {}
-    for attempt in lookup_attempts:
-        if not isinstance(attempt, dict):
-            continue
-        outcome = str(attempt.get("outcome") or "unknown").strip() or "unknown"
-        outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
-    if not outcome_counts:
-        return f"{len(lookup_attempts)} total."
-    counts = ", ".join(
-        f"{outcome}={count}" for outcome, count in sorted(outcome_counts.items())
-    )
-    return f"{len(lookup_attempts)} total ({counts})."
 
 
 def _is_supervisor_summary_scalar(value: Any) -> bool:
@@ -4959,6 +4888,8 @@ async def run_specialist_with_events(
                 }
             ],
         )
+    if builder_materializer_agent:
+        agent = _with_builder_finalization_guidance(agent)
     finalization_config = _agent_structured_finalization_config(
         agent,
         tool_name=tool_name,
@@ -6863,6 +6794,23 @@ async def run_specialist_with_events(
     )
 
     supervisor_reduction_started_at = time.monotonic()
+    validator_result_ref = None
+    if is_domain_validator_result_schema(expected_output_type):
+        from src.lib.domain_packs.validator_result_storage import persist_validator_result
+
+        try:
+            validator_result_ref = await asyncio.to_thread(
+                persist_validator_result, json.loads(final_output),
+                user_id=get_current_user_id(), session_id=get_current_session_id(),
+                invocation_id=builder_workspace.builder_invocation_id,
+                agent_key=runtime_canonical_agent_key or specialist_name,
+            )
+        except Exception as exc:
+            raise SpecialistOutputError(
+                specialist_name=specialist_name, output_type_name=_output_type_name(expected_output_type),
+                message="The validator finished, but its complete result could not be saved.",
+                details=[{"reason": "validator_result_persistence_failed"}],
+            ) from exc
     final_output = _reduce_specialist_output_for_supervisor(
         final_output,
         expected_output_type=expected_output_type,
@@ -6873,6 +6821,7 @@ async def run_specialist_with_events(
             else None
         ),
         result_ref=inline_persistence.result_ref if inline_persistence is not None else None,
+        validator_result_ref=validator_result_ref,
     )
     phase_timings_ms["supervisor_output_reduction_ms"] = _elapsed_ms(
         supervisor_reduction_started_at

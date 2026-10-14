@@ -106,7 +106,7 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
         ),
     )
 
-    with pytest.raises(RuntimeError, match="FILE_READY"):
+    with pytest.raises(RuntimeError, match="flow finished without a saved file"):
         processor._process_single_document(
             db=db,
             batch=batch,
@@ -132,7 +132,7 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
             "output_status": "failed",
             "output_branches": [],
             "review_session_ids": None,
-            "error_message": "Flow completed without FILE_READY or curation handoff output",
+            "error_message": "The flow finished without a saved file or curation output. Review the flow configuration before trying again.",
             "processing_time_ms": batch_doc.processing_time_ms,
             "timestamp": batch_doc.processed_at.isoformat(),
         }
@@ -1127,3 +1127,10 @@ def test_validate_file_ownership_fails_closed_on_session_error(monkeypatch):
     monkeypatch.setattr(processor, "SessionLocal", _raise_session_local)
 
     assert processor._validate_file_ownership("file-id", "auth-sub") is False
+
+
+def test_unexpected_batch_failure_is_safe_and_has_batch_recovery_guidance():
+    message = processor._batch_failure_message(RuntimeError("private provider exception payload"))
+    assert "private provider" not in message
+    assert "batch results" in message
+    assert "restore" not in message.lower()

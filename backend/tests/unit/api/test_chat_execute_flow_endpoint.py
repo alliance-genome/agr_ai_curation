@@ -15,6 +15,8 @@ from fastapi.responses import StreamingResponse
 import pytest
 
 from src.lib import http_errors
+from src.lib.openai_agents.provider_errors import PROVIDER_POLICY_CHAT_MESSAGE
+from src.lib.openai_agents.curator_errors import failure_for_event
 from src.lib.executable_runs import ExecutableRun
 from src.lib.persistence_sanitization import sanitize_persisted_json_value
 from tests.chat_api_test_support import patch_chat_impl_for
@@ -54,12 +56,7 @@ def test_flow_failure_tags_terminate_on_cyclic_unknown_cause():
 
 
 _PROVIDER_REFUSAL_SENTINEL = "PROVIDER-REFUSAL-SENTINEL-4c1e"
-_BIO_POLICY_FLOW_MESSAGE = (
-    "The AI provider's automatic safety check flagged this request as possible "
-    "biological risk and stopped the flow. This check is run by the provider, "
-    "not by AI Curation, and it can flag routine research content. Please report "
-    "the paper using the feedback button so we can follow up."
-)
+_BIO_POLICY_FLOW_MESSAGE = PROVIDER_POLICY_CHAT_MESSAGE
 
 
 def _sdk_wrapped_provider_error(error_type, code):
@@ -88,13 +85,11 @@ def _sdk_wrapped_provider_error(error_type, code):
         ("invalid_request_error", "bio_policy", _BIO_POLICY_FLOW_MESSAGE, "provider_content_policy"),
         (
             "server_error", None,
-            "The AI service interrupted this run before it finished. "
-            "Please try running the flow again. If this keeps happening, "
-            "report the problem using the feedback button.",
+            failure_for_event({"failure_category": "provider_unavailable"}).message,
             None,
         ),
         ("invalid_request_error", "context_length_exceeded",
-         "The AI service could not complete this run.", None),
+         failure_for_event({"failure_category": "context_limit"}).message, None),
     ],
 )
 def test_flow_provider_policy_refusal_message_and_tag(
@@ -1096,7 +1091,7 @@ def test_execute_flow_endpoint_persists_full_rendered_chat_table_once(monkeypatc
     )
 
 
-def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(monkeypatch):
+def test_execute_flow_endpoint_failure_keeps_saved_files_but_discards_unfinalized_success_text(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(
         flow_id=flow_id,
@@ -1177,6 +1172,7 @@ def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
         "FLOW_ERROR",
+        "FILE_READY",
         "FLOW_FINISHED",
     ]
     assert all(
@@ -1203,13 +1199,13 @@ def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(
     assert "declared completion prematurely" not in summary.payload_json[
         chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ].lower()
-    assert "stale-result.tsv" not in summary.payload_json[
+    assert "stale-result.tsv" in summary.payload_json[
         chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ]
-    assert "- File refs: none recorded" in summary.payload_json[
+    assert "- File refs: none recorded" not in summary.payload_json[
         chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ]
-    assert not any(message.message_type == "file_download" for message in stored_messages)
+    assert any(message.message_type == "file_download" for message in stored_messages)
     assert runtime_reports == []
 
 
@@ -1441,7 +1437,8 @@ async def test_interrupted_producer_persists_without_observer(monkeypatch, save_
                                                  user={"sub": "auth-sub", "cognito:groups": []})
         events = await _consume_stream(replay)
         assert sum(e["type"] == "RUN_ERROR" for e in events) == 1
-        assert not any(e["type"] in {"FILE_READY", "RUN_FINISHED"} for e in events)
+        assert not any(e["type"] == "RUN_FINISHED" for e in events)
+        assert any(e["type"] == "FILE_READY" for e in events)
 
 
 def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
@@ -2456,8 +2453,8 @@ def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(mon
 
     assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
     assert events[0]["details"]["context"] == "RuntimeError"
-    assert events[0]["details"]["error"] == "Flow execution failed unexpectedly."
-    assert events[1]["message"] == "Flow execution failed unexpectedly."
+    assert events[0]["details"]["error"] == failure_for_event({}).message
+    assert events[1]["message"] == failure_for_event({}).message
     assert "checkpoint write failed" not in json.dumps(events)
     assert "checkpoint write failed" in caplog.text
     assert calls["unregister"] == [("session-trace-checkpoint-failure", "auth-sub", ANY)]
@@ -2550,8 +2547,8 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
     assert all(event["type"] != "CURATION_HANDOFF_READY" for event in events)
     assert "output should be discarded" not in json.dumps(events).lower()
     assert events[2]["details"]["context"] == "RuntimeError"
-    assert events[2]["details"]["error"] == "Flow execution failed unexpectedly."
-    assert events[3]["message"] == "Flow execution failed unexpectedly."
+    assert events[2]["details"]["error"] == failure_for_event({}).message
+    assert events[3]["message"] == failure_for_event({}).message
     assert "completion transcript write failed" not in json.dumps(events)
     assert "completion transcript write failed" in caplog.text
     turn_messages = calls["repository"].list_messages_for_turn(
@@ -3036,10 +3033,8 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     events = asyncio.run(_consume_stream(response))
     assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
     expected_message = (
-        "The AI service interrupted this run before it finished. "
-        "Please try running the flow again. If this keeps happening, "
-        "report the problem using the feedback button."
-        if websocket_failure else "Flow execution failed unexpectedly."
+        failure_for_event({"failure_category": "provider_unavailable"}).message
+        if websocket_failure else failure_for_event({"error_type": "SpecialistOutputError"} if specialist_failure else {}).message
     )
     assert events[0]["details"]["error"] == expected_message
     assert events[1]["message"] == expected_message
@@ -3193,8 +3188,8 @@ def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, cap
     events = asyncio.run(_consume_stream(response))
 
     assert [event["type"] for event in events] == ["RUN_ERROR"]
-    assert events[0]["message"] == "Flow execution failed unexpectedly."
-    assert events[0]["details"]["error"] == "Flow execution failed unexpectedly."
+    assert events[0]["message"] == failure_for_event({}).message
+    assert events[0]["details"]["error"] == failure_for_event({}).message
     assert "runner exploded" not in json.dumps(events)
     assert "runner exploded" in caplog.text
     assert len(runtime_reports) == 1
@@ -3451,11 +3446,11 @@ def test_flow_provider_failure_description_handles_context_and_cycles(error_type
     message, provider = chat._flow_execution_error_message(wrapper)
     assert provider == "openai"
     assert "private" not in message
-    assert ("try running" in message) == (error_type == "server_error")
+    assert ("try again later" in message) == (error_type == "server_error")
     cyclic = RuntimeError("private cycle")
     cyclic.__cause__ = cyclic
     assert chat._flow_execution_error_message(cyclic) == (
-        "Flow execution failed unexpectedly.", None,
+        failure_for_event({}).message, None,
     )
 
 

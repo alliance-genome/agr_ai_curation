@@ -478,6 +478,12 @@ def materialize_validator_results_into_envelope(
     }
 
     for item in items:
+        from .validator_result_records import retain_validator_original
+
+        working_envelope, original_ref = retain_validator_original(
+            working_envelope, result=item.result, request=item.request,
+            source_envelope_revision=source_envelope_revision,
+        )
         try:
             working_envelope, item_findings, linked_objects = _materialize_one_result(
                 working_envelope,
@@ -498,7 +504,12 @@ def materialize_validator_results_into_envelope(
                 )
             ]
             linked_objects = ()
-        findings.extend(item_findings)
+        findings.extend(
+            finding.model_copy(update={
+                "details": {**finding.details, "validation_result_ref": original_ref},
+            })
+            for finding in item_findings
+        )
         materialized_objects.extend(linked_objects)
 
     from .validation_findings import append_validation_findings_to_envelope
@@ -2951,7 +2962,7 @@ def _validator_result_finding_details(
             ),
         },
         "validation_request": _validation_request_finding_payload(item.request),
-        "validation_result": _validation_result_finding_payload(item.result),
+        "validation_result": _validation_result_finding_projection(item.result),
         "lookup_attempts": _lookup_attempt_details(item),
         "candidate_matches": _candidate_matches(item.result),
     }
@@ -3028,9 +3039,10 @@ def _validation_request_finding_payload(
     return _compact_validation_detail_value(payload)
 
 
-def _validation_result_finding_payload(
+def _validation_result_finding_projection(
     result: DomainValidatorResultBase,
 ) -> dict[str, Any]:
+    """Display/patch-lifecycle projection; the complete original is saved separately."""
     payload = result.model_dump(mode="json", exclude_none=True)
     if not result.is_complete:
         return result.model_dump(mode="json")

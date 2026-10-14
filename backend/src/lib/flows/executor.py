@@ -856,6 +856,8 @@ def _build_flow_formatter_runtime_context(
     output_filename_descriptor: str | None,
     source_node_ids: Sequence[str] | None,
 ) -> str:
+    from src.lib.flows.output_projection import SOURCE_LINKED_EVIDENCE_GUIDANCE
+
     raw_projection_plan = node_data.get("projection_plan")
     projection_plan = dict(raw_projection_plan) if isinstance(raw_projection_plan, Mapping) else None
     payload = {
@@ -893,6 +895,7 @@ def _build_flow_formatter_runtime_context(
             "delivery. If configured_projection_plan has selection_mode=selected_fields, keep it "
             "exactly. If the saved bundle cannot support the requested output, call "
             "formatter_cannot_complete.\n"
+            + SOURCE_LINKED_EVIDENCE_GUIDANCE + "\n"
             + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
         )
     return (
@@ -908,6 +911,7 @@ def _build_flow_formatter_runtime_context(
         "and do not call "
         "formatter_cannot_complete merely because those runtime-owned filename values are absent from the bundle. "
         "If the saved bundle cannot support the requested output, call formatter_cannot_complete.\n"
+        + SOURCE_LINKED_EVIDENCE_GUIDANCE + "\n"
         + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
     )
 
