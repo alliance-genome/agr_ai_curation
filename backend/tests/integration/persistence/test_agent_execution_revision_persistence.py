@@ -1263,7 +1263,8 @@ def test_shared_agent_grants_only_pinned_private_profile_and_clones_independentl
     definition=FlowDefinition.model_validate(definition).model_dump(mode='json')
     flow=CurationFlow(user_id=1,name='Shared extraction',visibility='project',project_id=project_id,
         shared_at=datetime.now(timezone.utc),flow_definition=definition)
-    db.add(flow);db.commit()
+    db.add(flow)
+    db.commit()
     monkeypatch.setattr(database,'SessionLocal',lambda: nullcontext(db))
     monkeypatch.setattr(flows,'set_global_user_from_cognito',lambda *_:SimpleNamespace(id=2))
     monkeypatch.setattr(flows,'get_groups_from_provider_groups',lambda _:['FB'])

@@ -254,17 +254,23 @@ def test_multiturn_custom_record_fixture_preserves_pairing_and_explicit_unknowns
     db.commit.assert_not_called()
 
 
-def test_select_saved_profile_uses_exact_authorized_revision_without_persistence(db, base, monkeypatch):
+@pytest.mark.parametrize("clone_source", [False, True])
+def test_select_saved_profile_uses_exact_authorized_revision_without_persistence(db, base, monkeypatch, clone_source):
     from uuid import uuid4
     from src.lib.agent_studio import generic_profile_service
     from src.schemas.generic_extraction_profile import GenericProfileContract
+    if clone_source:
+        source, _ = _saved_agent_with_head(monkeypatch, {"output_state": "none"})
+        base.clone_source_agent_id = f"ca_{source.id}"
+        base.clone_source_updated_at = source.updated_at.isoformat()
+        base.draft_fingerprint = workshop_draft_fingerprint(base)
     profile_id, revision_id = uuid4(), uuid4()
     contract = GenericProfileContract(name="Shared structure", semantic_class="item", fields=[])
     saved = SimpleNamespace(profile_id=profile_id, id=revision_id, revision=3,
                             fingerprint=contract.fingerprint(), contract=contract.model_dump(mode="json"))
     read = Mock(return_value=saved)
     monkeypatch.setattr(generic_profile_service, "get_profile_revision", read)
-    result = propose(db, base, [{"operation": "select_output", "resource_id": f"profile:{profile_id}:3"}])
+    result = propose(db, base, [{"operation": "select_output", "resource_id": f"profile:{profile_id}:3"}], active_group_ids=[])
     assert result["valid"], result["findings"]
     output = result["candidate"]["draft_output"]
     assert output["profilePin"] == {"profile_id": str(profile_id), "profile_revision_id": str(revision_id),
@@ -803,3 +809,27 @@ def test_a_copy_of_a_non_flexible_agent_is_unaffected(db, base, monkeypatch):
     result = validate_workshop_context(db, workshop=base, user_id=1, active_group_ids=[])
     assert result.valid
     assert not _flexible_findings(result)
+
+
+@pytest.mark.parametrize('mismatch', [None, 'revision', 'fingerprint'])
+def test_clone_source_private_profile_requires_exact_pin(db, base, monkeypatch, mismatch):
+    from uuid import uuid4
+    from src.lib.agent_studio import generic_profile_service, execution_revision_service
+    from src.schemas.generic_extraction_profile import GenericProfileContract
+    contract=GenericProfileContract(name='Source structure',semantic_class='item',fields=[])
+    profile_id,revision_id=uuid4(),uuid4()
+    pin={'profile_id':str(profile_id),'profile_revision_id':str(revision_id),'revision':2,'fingerprint':contract.fingerprint()}
+    source,_=_saved_agent_with_head(monkeypatch,{'output_state':'structured_extraction','output_mode':'profile_bound_generic','generic_profile_ref':pin})
+    base.clone_source_agent_id=f'ca_{source.id}'
+    base.clone_source_updated_at=source.updated_at.isoformat()
+    base.draft_output={'mode':'profile_bound_generic','schemaKey':'','profilePin':dict(pin),'profileContract':contract.model_dump(mode='json')}
+    if mismatch=='revision': base.draft_output['profilePin']['revision']=3
+    if mismatch=='fingerprint': base.draft_output['profilePin']['fingerprint']='sha256:'+'0'*64
+    monkeypatch.setattr(generic_profile_service,'get_profile_revision',Mock(side_effect=generic_profile_service.ProfileNotFoundError('Private')))
+    dependency=Mock(return_value=SimpleNamespace(profile_id=profile_id,id=revision_id,revision=2,fingerprint=contract.fingerprint(),contract=contract.model_dump(mode='json')))
+    monkeypatch.setattr(execution_revision_service,'get_execution_profile_revision',dependency)
+    result=validate_workshop_context(db,workshop=base,user_id=1,active_group_ids=[])
+    assert result.valid is (mismatch is None), result.findings
+    dependency.assert_called_once_with(db,source.id,source.execution_revision_id,1,active_group_ids=[])
+    if mismatch:
+        assert any('pin does not match' in f.message for f in result.findings)

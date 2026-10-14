@@ -2016,6 +2016,22 @@ describe('PromptWorkshop', () => {
     expect(serviceMocks.getAgentExecutionProfileRevision).toHaveBeenCalledWith(agent.id, agent.execution_revision_id)
     expect(profileMocks.getGenericProfile).not.toHaveBeenCalled()
     expect(profileMocks.getGenericProfileRevision).not.toHaveBeenCalled()
+    // A different library-authorized profile must remain selectable in a clone draft.
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    serviceMocks.validateWorkshopDraft.mockResolvedValue({ valid: true, findings: [] })
+    const otherPin = { ...pin, profile_id: 'my-profile', profile_revision_id: 'my-revision' }
+    const otherRevision = { ...revision, id: otherPin.profile_revision_id, profile_id: otherPin.profile_id }
+    profileMocks.getGenericProfile.mockResolvedValue({ profile: { id: otherPin.profile_id }, revision: otherRevision, can_edit: true })
+    profileMocks.getGenericProfileRevision.mockResolvedValue(otherRevision)
+    const base = ref.current!.captureAuthoringContext()
+    const candidate = structuredClone(base)
+    candidate.draft_output = { mode: 'profile_bound_generic', schemaKey: '', profilePin: otherPin, profileContract: contract }
+    const result = await act(async () => ref.current!.applyAuthoringProposal({
+      contract_version: 'workshop_authoring_proposal.v1', candidate, change_summary: 'Use my saved structure', diff: [], findings: [],
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base), candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+    }))
+    expect(result.applied).toBe(true)
+    expect(profileMocks.getGenericProfileRevision).toHaveBeenCalledWith(otherPin.profile_id, otherPin.revision)
   })
 
   it.each([true, false])('saves a loaded profile as an exact revision edit only when editable (%s)', async (canEdit) => {

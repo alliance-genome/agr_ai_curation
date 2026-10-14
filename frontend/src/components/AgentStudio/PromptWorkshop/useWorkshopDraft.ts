@@ -1013,7 +1013,9 @@ export function useWorkshopDraft({
       let nextProfileSource: GenericProfileDetail | null = null
       const selectedPin = candidate.draft_output.profilePin
       if (selectedPin) {
-        if (!selectedCustomAgentId && selectedCloneSource?.execution_revision_id) {
+        const sourcePin = savedExecutionRevision?.snapshot.output_contract.generic_profile_ref
+        if (!selectedCustomAgentId && selectedCloneSource?.execution_revision_id
+          && selectedPin.profile_revision_id === sourcePin?.profile_revision_id) {
           const revision = await getAgentExecutionProfileRevision(selectedCloneSource.id, selectedCloneSource.execution_revision_id)
           hydrateProfileOutput(candidate.draft_output, revision)
         } else {
@@ -1091,7 +1093,7 @@ export function useWorkshopDraft({
       applyingAuthoringRef.current = false
       setAuthoringBusy(false)
     }
-  }, [applyDraft, profileSource])
+  }, [applyDraft, profileSource, savedExecutionRevision, selectedCustomAgentId, selectedCloneSource])
 
   const canUndoAuthoringProposal = Boolean(authoringUndo
     && authoringUndo.applied === workshopDraftKey(captureAuthoringContext()))
