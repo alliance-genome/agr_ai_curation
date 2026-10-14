@@ -1982,4 +1982,49 @@ describe('flow document selection', () => {
     expect(chatStreamStub.executeFlow).toHaveBeenCalledWith('flow-1', 'session-b', 'next-paper')
   })
 
+  it('preserves the selected paper when reset supersedes pending document hydration', async () => {
+    localStorage.setItem(keys.sessionId, 'session-a')
+    const pendingDocument = deferred<Response>()
+    const original = vi.mocked(global.fetch).getMockImplementation()!
+    vi.mocked(global.fetch).mockImplementation((input, init) => String(input) === '/api/chat/document' && init?.method !== 'DELETE'
+      ? pendingDocument.promise.then(response => response.clone()) : original(input, init))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderHomePage('/')
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset Chat' }))
+    await waitFor(() => expect(rightPanelRenderSpy.mock.calls.at(-1)![0].sessionId).toBe('session-new'))
+    await expect(runFlow()).rejects.toThrow(/document selection/i)
+    await act(async () => { pendingDocument.resolve(jsonResponse({ active: true, document: selectedDocument })) })
+    await act(async () => { await runFlow() })
+    expect(chatStreamStub.executeFlow).toHaveBeenCalledWith('flow-1', 'session-new', 'selected-paper')
+    await waitFor(() => expect(localStorage.getItem(keys.pdfViewerSession)).toContain('selected-paper'))
+  })
+
+  it('keeps flow launches blocked when reset cannot verify the document selection', async () => {
+    await openChat()
+    const original = vi.mocked(global.fetch).getMockImplementation()!
+    vi.mocked(global.fetch).mockImplementation((input, init) => String(input) === '/api/chat/document'
+      ? Promise.resolve(jsonResponse({ detail: 'unavailable' }, 503)) : original(input, init))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Chat' }))
+    await waitFor(() => expect(alert).toHaveBeenCalled())
+    await expect(runFlow()).rejects.toThrow(/document selection/i)
+    expect(chatStreamStub.executeFlow).not.toHaveBeenCalled()
+  })
+
+  it('does not republish a reset document lookup after a newer unload', async () => {
+    await openChat()
+    const pendingDocument = deferred<Response>()
+    const original = vi.mocked(global.fetch).getMockImplementation()!
+    vi.mocked(global.fetch).mockImplementation((input, init) => String(input) === '/api/chat/document'
+      ? pendingDocument.promise.then(response => response.clone()) : original(input, init))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Chat' }))
+    await waitFor(() => expect(rightPanelRenderSpy.mock.calls.at(-1)![0].sessionId).toBe('session-new'))
+    act(() => { dispatchChatDocumentChanged({ active: false, document: null }) })
+    await act(async () => { pendingDocument.resolve(jsonResponse({ active: true, document: selectedDocument })) })
+    await act(async () => { await runFlow() })
+    expect(chatStreamStub.executeFlow).toHaveBeenCalledWith('flow-1', 'session-new', undefined)
+  })
+
 })

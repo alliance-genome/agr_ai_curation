@@ -1516,7 +1516,6 @@ export function useChatController({
           debug.log('[Session Reset] Propagating new session ID to HomePage:', nextSessionId)
           onSessionChange(nextSessionId)
         }
-        publishDocumentContext(activeDocument, operation, nextSessionId)
 
         // Clear messages from UI and localStorage
         latestMessagesRef.current = []
@@ -1526,6 +1525,31 @@ export function useChatController({
         setRefinePrompt(null)
         setRefineText('')
         clearProgressState()
+        // Reset preserves the server's document selection. The initial lookup may
+        // still be pending, so activeDocument can be unresolved rather than empty.
+        const documentResponse = await fetch('/api/chat/document', { signal: operation.signal })
+        if (!operation.ownsLatest()) return
+        if (!documentResponse.ok) {
+          throw new Error('Could not verify the selected document after resetting chat.')
+        }
+        const documentData = await documentResponse.json()
+        if (!operation.ownsLatest()) return
+        const resetDocument = documentData?.active && documentData.document
+          ? documentData.document as ActiveDocument
+          : null
+        setActiveDocument(resetDocument)
+        publishDocumentContext(resetDocument, operation, nextSessionId)
+        if (resetDocument) {
+          try {
+            await restoreDocumentToPdfViewer(resetDocument, operation)
+          } catch (error) {
+            if (operation.ownsLatest()) console.warn('Could not restore document viewer after reset:', error)
+          }
+        } else {
+          clearStoredActiveDocument()
+        }
+        if (!operation.ownsLatest()) return
+
         // Update conversation status
         const statusResponse = await fetch('/api/chat/conversation')
         if (statusResponse.ok) {
