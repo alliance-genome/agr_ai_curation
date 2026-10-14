@@ -2495,12 +2495,20 @@ async def _run_agent_with_owned_resources(
             yield internal_event
 
         if original_validator_payload is not None:
-            validator_result_ref = await asyncio.to_thread(
-                persist_validator_result, original_validator_payload,
-                user_id=user_id, session_id=(direct_chat_context.session_id if direct_chat_context else None) or chat_session_id or sentry_conversation_id,
-                invocation_id=builder_workspace.builder_invocation_id,
-                agent_key=canonical_agent_key,
-            )
+            try:
+                validator_result_ref = await asyncio.to_thread(
+                    persist_validator_result, original_validator_payload,
+                    user_id=user_id, session_id=(direct_chat_context.session_id if direct_chat_context else None) or chat_session_id or sentry_conversation_id,
+                    invocation_id=builder_workspace.builder_invocation_id,
+                    agent_key=canonical_agent_key,
+                )
+            except Exception as exc:
+                raise SpecialistOutputError(
+                    specialist_name=current_agent,
+                    output_type_name=getattr(expected_output_type, "__name__", "validator_result"),
+                    message="The validator finished, but its complete result could not be saved.",
+                    details=[{"reason": "validator_result_persistence_failed"}],
+                ) from exc
 
         structured_event = {
             "type": "STRUCTURED_RESULT",

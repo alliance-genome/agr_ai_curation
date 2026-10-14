@@ -5385,6 +5385,9 @@ async def execute_flow(
                     "timestamp": _now_iso(),
                     "details": {
                         "reason": "specialist_step_failed",
+                        "failure_category": details.get("failure_category"),
+                        "provider": details.get("provider"),
+                        "error_type": details.get("error_type"),
                         "message": (
                             f"Flow '{flow.name}' stopped because a specialist step failed. "
                             f"{failure_reason}"

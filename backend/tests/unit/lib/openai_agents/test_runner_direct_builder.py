@@ -510,9 +510,13 @@ async def test_direct_validator_original_precedes_success_and_is_not_an_extracti
                 assert len(calls) == 1
             events.append(event)
     if save_fails:
-        with pytest.raises(RuntimeError, match="synthetic SQL failure"):
+        from src.lib.openai_agents.curator_errors import classify_failure
+        with pytest.raises(runner.SpecialistOutputError, match="could not be saved") as failure:
             await consume()
-        assert not any(event["type"] == "RUN_FINISHED" for event in events)
+        classified = classify_failure(failure.value)
+        assert classified.category == "persistence_failed"
+        assert classified.retryable is False
+        assert not any(event["type"] in {"RUN_FINISHED", "STRUCTURED_RESULT"} for event in events)
     else:
         await consume()
         assert next(event for event in events if event["type"] == "STRUCTURED_RESULT")["data"]["validator_result_ref"].startswith("validator-result:")

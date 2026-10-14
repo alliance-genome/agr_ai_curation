@@ -2735,3 +2735,63 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
     assert len(calls) == 1
     assert calls[0][1]["component"] == "api"
     assert calls[0][1]["operation"] == "sanitized_http_exception"
+
+
+@pytest.mark.parametrize("ending", ["error", "eof", "exception", "cancel"])
+def test_visible_partial_text_survives_failed_turn_and_replay(monkeypatch, ending):
+    saved, executions = [], []
+    for name in ("set_current_session_id", "set_current_user_id"):
+        _patch_chat_impl(monkeypatch, name, lambda *_: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda *_: {})
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _: SimpleNamespace(
+        list_recent_messages=lambda **_: [], get_message_by_turn_id=lambda **_: saved[0] if saved else None))
+    _patch_chat_impl(monkeypatch, "_prepare_chat_stream_turn", lambda **_: chat.PreparedChatStreamTurn(
+        turn_id="partial-turn", effective_user_message="extract", route=chat.ResolvedChatRoute(mode="automatic"),
+        user_turn_created=not saved, replay_assistant_turn=saved[0] if saved else None))
+
+    async def noop(*_args, **_kwargs):
+        return None
+    async def register(*_args, **_kwargs):
+        return True
+    async def not_cancelled(*_args, **_kwargs):
+        return False
+    for name in ("unregister_active_stream", "clear_cancel_signal"):
+        _patch_chat_impl(monkeypatch, name, noop)
+    _patch_chat_impl(monkeypatch, "register_active_stream", register)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", not_cancelled)
+
+    async def execute(**_kwargs):
+        executions.append(True)
+        yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "Partial "}}
+        yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"content": "work β"}}
+        if ending == "error":
+            yield {"type": "RUN_ERROR", "data": {"error_type": "server_is_overloaded", "message": "private"}}
+        elif ending == "exception":
+            raise ConnectionError("private connection details")
+        elif ending == "cancel":
+            raise asyncio.CancelledError()
+
+    def persist(**kwargs):
+        record = _assistant_record(session_id=kwargs["session_id"], turn_id=kwargs["turn_id"],
+            content=kwargs["assistant_message"], payload_json={
+                "terminal_state": kwargs["failure_state"], "terminal_message": kwargs["failure_message"]})
+        saved.append(record)
+        return record
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", execute)
+    _patch_chat_impl(monkeypatch, "_persist_completed_chat_stream_turn", persist)
+    def consume():
+        response = asyncio.run(chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="extract", session_id="partial-session", turn_id="partial-turn"),
+            user={"sub": "auth-sub", "cognito:groups": []}))
+        return asyncio.run(_consume_stream(response))
+    live = consume()
+    assert len(saved) == 1
+    assert "Partial response (the request did not finish):\nPartial work β" in saved[0].content
+    assert saved[0].payload_json["terminal_state"] in {"turn_failed", "turn_interrupted"}
+    assert not any(item["type"] == "turn_completed" for item in live)
+    replay = consume()
+    assert next(item["content"] for item in replay if item["type"] == "TEXT_MESSAGE_CONTENT") == saved[0].content
+    assert replay[-1]["type"] == saved[0].payload_json["terminal_state"]
+    assert len(executions) == 1

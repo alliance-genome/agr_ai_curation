@@ -1205,6 +1205,8 @@ async def test_chat_endpoint_replays_failed_turn_without_rerunning_then_allows_a
         run_attempt += 1
         streamed_context_messages.append(kwargs["context_messages"])
         if run_attempt == 1:
+            yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "Partial "}}
+            yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"content": "work"}}
             yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
             return
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-retry"}}
@@ -1235,6 +1237,7 @@ async def test_chat_endpoint_replays_failed_turn_without_rerunning_then_allows_a
     assert replay_error.value.detail == exc.value.detail
     assert run_attempt == 1
     assert repository.append_calls[-1]["payload_json"]["terminal_state"] == "turn_failed"
+    assert "Partial response (the request did not finish):\nPartial work" in repository.append_calls[-1]["content"]
     result = await chat.chat_endpoint(
         chat.ChatMessage(message="hello", session_id="session-retry", turn_id="turn-new-request"),
         {"sub": "user-1", "cognito:groups": []}, db=_db_stub(commits=commits),

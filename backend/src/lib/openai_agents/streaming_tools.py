@@ -6421,6 +6421,14 @@ async def run_specialist_with_events(
                         message=error_message,
                     )
 
+    # Validator queries/results may contain arbitrary evidence-shaped keys. Keep
+    # the accepted typed result before extraction-oriented canonicalization can
+    # rewrite those nested values; the durable original is not a projection.
+    validator_original_payload = (
+        json.loads(final_output)
+        if is_domain_validator_result_schema(expected_output_type)
+        else None
+    )
     authored_evidence_record_ids = _evidence_reference_ids_from_payload(final_output)
     final_output = _canonicalize_structured_output_text(
         final_output,
@@ -6800,7 +6808,7 @@ async def run_specialist_with_events(
 
         try:
             validator_result_ref = await asyncio.to_thread(
-                persist_validator_result, json.loads(final_output),
+                persist_validator_result, validator_original_payload,
                 user_id=get_current_user_id(), session_id=get_current_session_id(),
                 invocation_id=builder_workspace.builder_invocation_id,
                 agent_key=runtime_canonical_agent_key or specialist_name,

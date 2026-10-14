@@ -157,6 +157,9 @@ class FlowRunOutcome:
             self.failure_provider = (
                 self.failure_provider or self._machine_failure_value(event, "provider")
             )
+            self.failure_category = (
+                self.failure_category or self._machine_failure_value(event, "failure_category")
+            )
             return
 
         if event_type != "FLOW_FINISHED":
@@ -186,6 +189,7 @@ class FlowRunOutcome:
             self.status = "completed"
             self.failure_reason = None
             self.failure_type = None
+            self.failure_category = None
             self.failure_phase = None
             self.failure_tool = None
             self.failure_provider = None

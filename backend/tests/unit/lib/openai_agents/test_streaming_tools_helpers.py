@@ -4151,7 +4151,10 @@ async def test_nested_validator_original_is_durable_before_compact_handoff(monke
     from src.lib.domain_packs import validator_result_storage
     payload = _validator_result_payload(status="unresolved", missing_expected_fields=["results"])
     payload["explanation"] = "Complete lookup explanation β😀 " * 500
-    payload["lookup_attempts"] = [{"provider": "fixture", "method": "lookup", "query": {"nested": {"original": "kept"}}, "outcome": "not_found"}]
+    payload["lookup_attempts"] = [{"provider": "fixture", "method": "lookup", "query": {
+        "evidence": {"literal": "keep exactly"},
+        "nested": {"original": "kept", "evidence_record_ids": ["ev2", "ev1", "ev2"]},
+    }, "outcome": "not_found"}]
     typed = DomainValidatorResultBase.model_validate(payload)
     calls = []
     def persist(original, **identity):

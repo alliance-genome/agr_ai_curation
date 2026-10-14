@@ -369,6 +369,13 @@ async def chat_endpoint(
                 if candidate:
                     extraction_candidates.append(candidate)
 
+                if event_type == "TEXT_MESSAGE_CONTENT" and not run_finished:
+                    # Match the visible turn buffer. On failure no RUN_FINISHED
+                    # arrives, so these deltas are the only recoverable text.
+                    delta = event_data.get("content") or event_data.get("delta")
+                    if isinstance(delta, str):
+                        full_response = delta if event_data.get("observer_reconcile") else full_response + delta
+
                 if event_type == "RUN_FINISHED":
                     full_response = event_data.get("response", "")
                     run_finished = True
@@ -973,6 +980,13 @@ async def chat_stream_endpoint(
                     evidence_record = _build_evidence_record_from_tool_event(event)
                     if evidence_record:
                         evidence_records.append(evidence_record)
+
+                if event_type == "TEXT_MESSAGE_CONTENT" and not run_finished:
+                    # Match the visible turn buffer. On failure no RUN_FINISHED
+                    # arrives, so these deltas are the only recoverable text.
+                    delta = event_data.get("content") or event_data.get("delta")
+                    if isinstance(delta, str):
+                        full_response = delta if event_data.get("observer_reconcile") else full_response + delta
 
                 if event_type == "RUN_FINISHED":
                     full_response = event_data.get("response", "")
