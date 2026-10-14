@@ -76,6 +76,27 @@ def _stub_non_stream_turn_claims(monkeypatch):
     chat._LOCAL_NON_STREAM_TURN_OWNERS.clear()
 
 
+
+@pytest.fixture
+def failure_notice_database(monkeypatch):
+    """Exercise real recovery logic without a network database in unit tests.
+
+    These cases have no saved extraction references; the owner-scope query
+    therefore returns no rows. Persistence with real rows is covered by the
+    chat-stream integration tests and the dedicated partial-recovery tests.
+    """
+    completion_db = SimpleNamespace(
+        execute=lambda _statement: SimpleNamespace(
+            scalars=lambda: SimpleNamespace(all=lambda: [])
+        ),
+        commit=lambda: None,
+        rollback=lambda: None,
+        close=lambda: None,
+    )
+    _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
+    return completion_db
+
+
 def _session_record(
     *,
     session_id: str,
@@ -1166,7 +1187,7 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_replays_failed_turn_without_rerunning_then_allows_a_new_request(monkeypatch, caplog):
+async def test_chat_endpoint_replays_failed_turn_without_rerunning_then_allows_a_new_request(monkeypatch, caplog, failure_notice_database):
     commits: list[str] = []
     register_calls = []
     unregister_calls = []
@@ -1781,7 +1802,7 @@ async def test_chat_endpoint_raises_http_401_without_user_id():
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch, caplog):
+async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch, caplog, failure_notice_database):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
@@ -1987,7 +2008,7 @@ async def test_chat_endpoint_sanitizes_non_stream_validation_error(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog):
+async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog, failure_notice_database):
     calls = []
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
