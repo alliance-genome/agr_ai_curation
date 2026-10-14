@@ -29,6 +29,27 @@ ACTIVE_HISTORY: ContextVar["RunHistory | None"] = ContextVar("active_run_history
 HISTORY_TOOL_NAMES = frozenset({"search_run_history", "read_run_history"})
 
 
+class HistoryRequestError(ValueError):
+    """Expected missing, inaccessible or malformed history requests."""
+
+
+def _report_history_failure(operation: str, exc: Exception) -> None:
+    """Report storage/serialization failures without SQL, payloads or chains."""
+    message = {
+        "write_failed": "Agent history write failed; active context will be retained",
+        "search_failed": "Agent history search failed",
+        "read_failed": "Agent history read failed",
+    }[operation]
+    try:
+        from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+        report_runtime_exception(sanitized_runtime_error(message), component="agent_history",
+            operation=operation, context={"error_type": type(exc).__name__})
+    except Exception:
+        # Optional diagnostics must not turn a completed mutation into a failure.
+        pass
+    logger.warning(message, extra={"sentry_skip_event": True})
+
+
 def exact_json(value: Any) -> str:
     """Explicit lossless JSON representation. Never stringify an unknown object."""
     def encode(item):
@@ -123,15 +144,15 @@ class HistoryStore:
                 .join(AgentHistoryPayload)
                 .where(self._authorized(scope), AgentHistoryEvent.event_id == event_id)).first()
             if row is None:
-                raise ValueError("History event unavailable in this authorized scope.")
+                raise HistoryRequestError("History event unavailable in this authorized scope.")
             event, content = row
             if hashlib.sha256(content.encode("utf-8")).hexdigest() != event.payload_sha256:
-                raise ValueError("History payload integrity check failed.")
+                raise RuntimeError("History payload integrity check failed.")
             return {"event": self.metadata(event), "payload": json.loads(content)}
 
     def search(self, scope: HistoryScope, query: str, *, after: int, limit: int, tool_name: str | None = None) -> list[dict]:
         if after < 0 or limit < 1:
-            raise ValueError("after must be non-negative and limit positive")
+            raise HistoryRequestError("after must be non-negative and limit positive")
         stmt = select(AgentHistoryEvent).join(AgentHistoryPayload).where(
             self._authorized(scope), AgentHistoryEvent.sequence > after)
         if query:
@@ -166,7 +187,17 @@ class RunHistory:
         if (get_current_user_id() != self.scope.owner_id
                 or get_current_trace_id() != self.scope.run_id
                 or get_current_session_id() != self.scope.session_id):
-            raise ValueError("History instance is not authorized for this request.")
+            raise HistoryRequestError("History instance is not authorized for this request.")
+
+    def _write_failed(self, exc: Exception) -> None:
+        with self._metrics_lock:
+            first_failure = self.healthy
+            self.healthy = False
+            self.write_failures += 1
+        # Concurrent writes already in flight may also fail. Alert once per
+        # invocation while counting every failed write/serialization attempt.
+        if first_failure:
+            _report_history_failure("write_failed", exc)
 
     def record_sync(self, kind: str, value: Any, **metadata) -> str | None:
         if not self.healthy:
@@ -179,13 +210,8 @@ class RunHistory:
                 self.events_written += 1
                 self.submitted_payload_bytes += len(content.encode("utf-8"))
             return ref
-        except Exception:
-            with self._metrics_lock:
-                self.healthy = False
-                self.write_failures += 1
-            logger.exception("Agent history write failed; active context will be retained",
-                extra={"operation": "agent_history_write_failed", "run_id": self.scope.run_id,
-                       "invocation_id": self.scope.invocation_id, "history_kind": kind})
+        except Exception as exc:
+            self._write_failed(exc)
             return None
         finally:
             with self._metrics_lock:
@@ -200,8 +226,8 @@ class RunHistory:
         for index, item in enumerate(items):
             try:
                 digest = hashlib.sha256(exact_json(item).encode("utf-8")).hexdigest()
-            except Exception:
-                self.healthy = False
+            except Exception as exc:
+                self._write_failed(exc)
                 continue
             occurrence = occurrences.get(digest, 0)
             occurrences[digest] = occurrence + 1
@@ -268,8 +294,10 @@ def history_tools(history: RunHistory) -> list[Any]:
                         "has_more": more, "coverage": "Recorded events since durable history was deployed. Older runs are not backfilled; interrupted runs or storage failures can leave gaps. No match does not prove an action did not occur."}
             page, _ = fit_page(rows, start=0, limit=cap, render=render, budget=tool_result_budget())
             return page
-        except Exception:
-            logger.warning("History search unavailable", exc_info=True)
+        except HistoryRequestError:
+            return invalid_cursor("History search unavailable. Keep current evidence; do not infer missing results.")
+        except Exception as exc:
+            _report_history_failure("search_failed", exc)
             return invalid_cursor("History search unavailable. Keep current evidence; do not infer missing results.")
 
     @function_tool
@@ -282,10 +310,15 @@ def history_tools(history: RunHistory) -> list[Any]:
         try:
             history.assert_current_scope()
             result = await asyncio.to_thread(history.store.read, history.scope, event_id)
-            return detail_chunk(result, path=detail_path, cursor=detail_cursor,
-                expected_sha256=result_sha256, budget=tool_result_budget(), extra={"event_id": event_id})
-        except Exception:
-            logger.warning("History read unavailable", exc_info=True)
+            try:
+                return detail_chunk(result, path=detail_path, cursor=detail_cursor,
+                    expected_sha256=result_sha256, budget=tool_result_budget(), extra={"event_id": event_id})
+            except (ValueError, KeyError, IndexError):
+                return invalid_cursor("History event or path unavailable in this scope. Do not infer its contents.")
+        except HistoryRequestError:
+            return invalid_cursor("History event or path unavailable in this scope. Do not infer its contents.")
+        except Exception as exc:
+            _report_history_failure("read_failed", exc)
             return invalid_cursor("History event or path unavailable in this scope. Do not infer its contents.")
     for tool in (search_run_history, read_run_history):
         tool._runtime_history_tool = True

@@ -216,11 +216,18 @@ async def test_large_nested_exact_read_pages_and_search_are_bounded(store, scope
 
 
 @pytest.mark.asyncio
-async def test_failed_archive_write_does_not_retry_or_hide_a_completed_mutation(scope):
+@pytest.mark.parametrize("reporting_fails", [False, True])
+async def test_failed_archive_write_does_not_retry_or_hide_a_completed_mutation(scope, monkeypatch, caplog, reporting_fails):
     from agents import function_tool
+    reports = []
+    def report(exc, **kwargs):
+        reports.append((exc, kwargs))
+        if reporting_fails:
+            raise RuntimeError("reporting offline")
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
     class BrokenStore:
         def append(self, *args, **kwargs):
-            raise OSError("database unavailable")
+            raise OSError("SQL INSERT private-payload-secret")
     history = RunHistory(scope, BrokenStore())
     calls = []
     @function_tool
@@ -234,6 +241,14 @@ async def test_failed_archive_write_does_not_retry_or_hide_a_completed_mutation(
     assert result == {"saved": True, "id": "saved-1"}
     assert not history.healthy
     assert ACTIVE_HISTORY.get() is None
+    assert history.write_failures == 1
+    assert len(reports) == 1
+    exc, metadata = reports[0]
+    assert exc.__context__ is exc.__cause__ is None
+    assert metadata == {"component": "agent_history", "operation": "write_failed", "context": {"error_type": "OSError"}}
+    assert "private-payload-secret" not in str(reports) + caplog.text
+    log = next(record for record in caplog.records if record.name.endswith("run_history"))
+    assert log.sentry_skip_event is True and log.exc_info is None
 
 
 @pytest.mark.asyncio
@@ -254,3 +269,90 @@ async def test_reused_history_tool_checks_request_identity_again(store, scope, m
     result = await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name, tool_call_id="read", run_config=None), json.dumps({"event_id": ref}))
     assert "alice only" not in str(result)
     assert result["status"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["read", "search"])
+async def test_history_storage_read_failures_report_sanitized_errors(scope, monkeypatch, caplog, operation):
+    reports = []
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", lambda exc, **kw: reports.append((exc, kw)))
+    class BrokenStore:
+        def read(self, *args, **kwargs):
+            raise ValueError("SQL private-payload-secret")
+        search = read
+    tool = next(t for t in history_tools(RunHistory(scope, BrokenStore())) if t.name == operation + "_run_history")
+    result = await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name, tool_call_id="call", run_config=None),
+        json.dumps({"event_id": "missing"} if operation == "read" else {"query": "private-query"}))
+    assert result["status"] == "invalid_request"
+    assert len(reports) == 1
+    exc, metadata = reports[0]
+    assert exc.__context__ is exc.__cause__ is None
+    assert metadata == {"component": "agent_history", "operation": operation + "_failed", "context": {"error_type": "ValueError"}}
+    assert "private-payload-secret" not in str(reports) + caplog.text + str(result)
+    assert "private-query" not in str(reports) + caplog.text
+    log = next(record for record in caplog.records if record.name.endswith("run_history"))
+    assert log.sentry_skip_event is True and log.exc_info is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_request", ["missing", "path", "cursor", "scope", "search_cursor"])
+async def test_expected_history_request_failures_do_not_report(store, scope, monkeypatch, bad_request):
+    reports = []
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", lambda *a, **kw: reports.append(kw))
+    ref = store.append(scope, "output", exact_json({"text": "value"}))
+    name, arguments = "read_run_history", {"event_id": ref}
+    if bad_request == "missing":
+        arguments["event_id"] = "missing"
+    elif bad_request == "path":
+        arguments["detail_path"] = "payload.missing"
+    elif bad_request == "cursor":
+        arguments["detail_cursor"] = -1
+    elif bad_request == "scope":
+        monkeypatch.setattr("src.lib.context.get_current_user_id", lambda: "bob")
+    else:
+        name, arguments = "search_run_history", {"after": -1}
+    tool = next(t for t in history_tools(RunHistory(scope, store)) if t.name == name)
+    result = await tool.on_invoke_tool(SimpleNamespace(tool_name=name, tool_call_id="call", run_config=None), json.dumps(arguments))
+    assert result["status"] == "invalid_request"
+    assert reports == []
+
+
+@pytest.mark.asyncio
+async def test_input_serialization_failure_disables_eviction_and_reports_once(store, scope, monkeypatch):
+    reports = []
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", lambda exc, **kw: reports.append((exc, kw)))
+    history = RunHistory(scope, store)
+    assert await history.capture_input([object(), object()], "instructions") == {}
+    assert not history.healthy and history.write_failures == 2
+    assert len(reports) == 1 and reports[0][1]["operation"] == "write_failed"
+
+
+def test_concurrent_archive_failures_alert_once_per_invocation(scope, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    reports, barrier = [], Barrier(2)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", lambda exc, **kw: reports.append((exc, kw)))
+    class BrokenStore:
+        def append(self, *args, **kwargs):
+            barrier.wait(timeout=5)
+            raise OSError("private SQL")
+    history = RunHistory(scope, BrokenStore())
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(history.record_sync, "output", {"value": i}) for i in range(2)]
+        assert [future.result(timeout=5) for future in futures] == [None, None]
+    assert not history.healthy and history.write_failures == 2
+    assert len(reports) == 1
+
+
+@pytest.mark.asyncio
+async def test_corrupt_canonical_history_reports_integrity_failure(store, scope, monkeypatch):
+    reports = []
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", lambda exc, **kw: reports.append((exc, kw)))
+    ref = store.append(scope, "output", exact_json({"value": "original"}))
+    with store.session_factory() as db, db.begin():
+        payload = db.scalar(select(AgentHistoryPayload))
+        payload.content = exact_json({"value": "corrupt"})
+    tool = next(t for t in history_tools(RunHistory(scope, store)) if t.name == "read_run_history")
+    result = await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name, tool_call_id="read", run_config=None), json.dumps({"event_id": ref}))
+    assert result["status"] == "invalid_request"
+    assert len(reports) == 1 and reports[0][1]["operation"] == "read_failed"
