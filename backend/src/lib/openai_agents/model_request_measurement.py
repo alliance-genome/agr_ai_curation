@@ -524,6 +524,7 @@ def build_measurement(
     identity: Mapping[str, Any] | None = None,
     prompt_cache_key: str | None = None,
     prompt_cache_tool_surface: str | None = None,
+    output_reserve_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Measure one outbound model request without copying its content."""
 
@@ -563,6 +564,7 @@ def build_measurement(
     return {
         "measurement_id": uuid.uuid4().hex,
         "measurement_scope": "model_request",
+        "output_reserve_tokens": output_reserve_tokens,
         "measurement_basis": (
             "agents_sdk_model_call" if runtime == "agents_sdk" else "direct_client_kwargs"
         ),
@@ -1196,6 +1198,7 @@ class MeasuredModel(Model):
             identity=identity,
             prompt_cache_key=_prompt_cache_key_from_settings(model_settings),
             prompt_cache_tool_surface=prompt_cache_tool_surface,
+            output_reserve_tokens=getattr(model_settings, "max_tokens", None),
         )
         enforce_and_announce(measurement)
         from src.lib.cost_ledger.runtime_writes import reserve_runtime_request
@@ -1470,7 +1473,8 @@ def measure_direct_request(
     identity["attempt"] = 1
     # The OpenAI client merges extra_body after ordinary request parameters.
     extra_body = kwargs.get("extra_body")
-    tier_source = extra_body if isinstance(extra_body, Mapping) and "service_tier" in extra_body else kwargs
+    effective_kwargs = {**kwargs, **extra_body} if isinstance(extra_body, Mapping) else kwargs
+    tier_source = effective_kwargs
     identity["requested_service_tier"] = _tier(tier_source.get("service_tier"))
     if api == "chat_completions":
         instructions = None
@@ -1499,6 +1503,7 @@ def measure_direct_request(
         previous_response_id=kwargs.get("previous_response_id"),
         identity=identity,
         prompt_cache_key=kwargs.get("prompt_cache_key"),
+        output_reserve_tokens=effective_kwargs.get("max_output_tokens", effective_kwargs.get("max_completion_tokens", effective_kwargs.get("max_tokens"))),
     )
     measurement["operation"] = api
     tools = kwargs.get("tools")

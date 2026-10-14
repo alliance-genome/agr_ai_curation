@@ -619,8 +619,12 @@ tools:
       audit:
         display_name: Stage Gene Expression Observation
       documentation:
-        summary: 'Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain "where expressed" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value is the paper''s own wording and stays UNRESOLVED until a specialist looks it up; the agent never searches the database itself. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage.'
+        summary: 'Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain "where expressed" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Each value needing a database lookup is the paper''s own wording and stays UNRESOLVED until a specialist looks it up; the agent never searches the database itself. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage.'
         parameters:
+          - name: negated
+            type: boolean
+            required: true
+            description: True only when the paper explicitly reports no expression was detected at the stated location or stage; false for a positive observation. Missing discussion is not a negative result. Preserve the supporting wording in the linked evidence.
           - name: pending_ref_id
             type: string
             required: true
@@ -685,7 +689,7 @@ tools:
           - name: updates
             type: array
             required: true
-            description: The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording; a standard-term field takes its paper wording plus, only when the paper prints one, the term's ID. Every corrected value stays UNRESOLVED until a specialist looks it up. A `rationale` update must be non-empty; it cannot be cleared.
+            description: The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording; a standard-term field takes its paper wording plus, only when the paper prints one, the term's ID. These lookup-dependent values stay UNRESOLVED until a specialist looks them up. To correct polarity, use field_path negated with bool_value true or false and all other value slots null; bool_value must be null for other fields. A `rationale` update must be non-empty; it cannot be cleared.
   - tool_id: discard_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:discard_gene_expression_observation

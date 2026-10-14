@@ -50,7 +50,8 @@ async def test_sdk_caught_policy_result_is_safe_and_reported_once(monkeypatch, w
     assert payload == provider_errors.chat_policy_failure()
     assert payload["retryable"] is False
     assert "safety check" in payload["message"]
-    assert "No finalized extraction or TSV" in payload["message"]
+    assert "incomplete" in payload["message"]
+    assert "saved results" in payload["message"]
     assert "Please try again" not in output
     assert "PRIVATE" not in output
     assert not classify_tool_result(output).success

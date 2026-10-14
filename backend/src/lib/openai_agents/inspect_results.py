@@ -92,6 +92,7 @@ _ACTIONS = frozenset(
         "list",
         "search",
         "summary",
+        "explanation",
         "objects",
         "object",
         "field",
@@ -99,6 +100,7 @@ _ACTIONS = frozenset(
         "evidence",
         "validation",
         "validator_results",
+        "validator_runs",
     }
 )
 _TARGETS = frozenset(
@@ -161,9 +163,11 @@ _EVIDENCE_CONTEXT_KEYS = (
 # cursor, limit and result_sha256 only by views that continue (see
 # _continuation_arguments).
 _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
+    "validator_runs": frozenset(),
     "list": frozenset(),
     "search": frozenset({"query"}),
     "summary": frozenset(),
+    "explanation": frozenset(),
     "objects": frozenset(
         {"object_type", "status", "validation_state", "severity", "query", "field_path", "fields"}
     ),
@@ -394,23 +398,6 @@ def _inspect(
             action=action,
         )
 
-    parsed_ref, ref_error = _parse_result_ref(result_ref)
-    if ref_error:
-        raise _RequestError(
-            ref_error,
-            "result_ref must use the canonical extraction-result:<uuid> form.",
-            action=action,
-            result_ref=_echo(result_ref),
-        )
-
-    normalized_target = _normalize_target(target)
-    if normalized_target not in _TARGETS:
-        raise _RequestError(
-            "invalid_target",
-            "Unsupported target. Use latest, this_chat, current_document, flow_run, or all_authorized.",
-            action=action,
-            target=_echo(normalized_target),
-        )
     # Model-supplied text is echoed into filters, next_call or head: an over-long
     # value is a caller error, never a tool result budget escape.
     _check_argument_lengths(
@@ -430,6 +417,48 @@ def _inspect(
         },
         lists={"fields": fields, "adapter_keys": adapter_keys},
     )
+    if action == "validator_runs":
+        from src.lib.domain_packs.validator_result_storage import list_validator_results
+
+        if target not in {"latest", "this_chat"} or result_ref or adapter_keys or flow_run_id:
+            raise _RequestError("invalid_request", "validator_runs lists this chat's saved direct validator runs.")
+        rows = list_validator_results(user_id=user_id, session_id=session_id)
+        return _page(
+            rows, view=lambda row, _index: {**row, "read": {
+                "action": "validator_results", "result_ref": row["result_ref"],
+                "validator_result_key": row["result_ref"],
+            }}, rows_key="validator_runs", head={"action": action, "target": "this_chat"},
+            call={"action": action}, sha=content_sha256(rows), expected_sha=result_sha256,
+            cursor=cursor, limit=limit, default_limit=_RESULT_LIST_PAGE_SIZE,
+            max_limit=_MAX_LIST_LIMIT, message="Saved direct validator runs; exact originals are available through each read call.",
+        )
+
+    if isinstance(result_ref, str) and result_ref.startswith("validator-result:"):
+        if adapter_keys or flow_run_id or limit is not None or (not detail_path and (cursor is not None or result_sha256 is not None)):
+            raise _RequestError("invalid_request", "Direct validator reads do not accept extraction filters or page arguments; follow exact-value next_call arguments.")
+        return _standalone_validator_response(
+            result_ref=result_ref, action=action, target=target, key=validator_result_key,
+            detail_path=detail_path, cursor=cursor, expected_sha=result_sha256,
+            user_id=user_id, session_id=session_id, supplied=supplied,
+        )
+
+    parsed_ref, ref_error = _parse_result_ref(result_ref)
+    if ref_error:
+        raise _RequestError(
+            ref_error,
+            "result_ref must use the canonical extraction-result:<uuid> form.",
+            action=action,
+            result_ref=_echo(result_ref),
+        )
+
+    normalized_target = _normalize_target(target)
+    if normalized_target not in _TARGETS:
+        raise _RequestError(
+            "invalid_target",
+            "Unsupported target. Use latest, this_chat, current_document, flow_run, or all_authorized.",
+            action=action,
+            target=_echo(normalized_target),
+        )
     normalized_query = _optional_text(query)
 
     records, resolve_error = _authorized_records(
@@ -514,6 +543,13 @@ def _inspect(
     normalized_path = _optional_text(field_path)
     normalized_detail = _optional_text(detail_path)
 
+    if action == "explanation":
+        return _exact_value(
+            result.envelope.specialist_explanation,
+            head=result.head("explanation"), call=result.call("explanation"),
+            sha=result.sha(action="explanation"), expected_sha=result_sha256, cursor=cursor,
+            message="Complete specialist-authored explanation; saved objects and findings determine persisted state.",
+        )
     if action == "summary":
         return _summary_response(result)
     if action == "objects":
@@ -610,7 +646,7 @@ def _continuation_arguments(
 
     if action in {"summary", "object"}:
         return frozenset()
-    if action == "field":
+    if action in {"field", "explanation"}:
         return _CHUNK_ARGUMENTS
     if (action == "validation" and finding_ref) or (
         action == "validator_results" and validator_result_key
@@ -673,13 +709,15 @@ def _help_response() -> dict[str, Any]:
         "status": "ok",
         "message": (
             "inspect_results browses persisted canonical extraction results without "
-            "rerunning specialists. Start with summary (counts), then filter pages."
+            "rerunning specialists. Start with summary (counts), read explanation for the "
+            "complete specialist conclusion, then filter pages."
         ),
         "action": "help",
         "actions": sorted(_ACTIONS),
         "targets": sorted(_TARGETS),
-        "result_ref_format": "extraction-result:<uuid>",
+        "result_ref_format": "extraction-result:<uuid> or validator-result:<uuid>",
         "filters": {
+            "validator_runs": "Lists saved direct validator runs in this chat. Read each reference with validator_results.",
             "objects": "object_type, status, validation_state (open|resolved|none|any), "
             "severity, query (all terms), field_path (scope query or require a value), "
             "fields (select summary fields)",
@@ -688,7 +726,8 @@ def _help_response() -> dict[str, Any]:
             "detail_path (with finding_ref) one exact value inside it",
             "validator_results": "status (validator decision), validation_state, "
             "object_ref, object_type, field_path; validator_result_key reads one "
-            "result and detail_path (with validator_result_key) one exact value inside it",
+            "result and detail_path (with validator_result_key) one exact value inside it. "
+            "original.result and original.request expose complete saved originals; historical projections report original_unavailable.",
             "evidence": "object_ref for its evidence records; detail_path "
             "(<index>.<key>, with object_ref) reads one exact evidence value",
         },
@@ -1341,6 +1380,9 @@ def _summary_response(result: _Result) -> dict[str, Any]:
         **result.head("summary"),
         "summary": _record_summary(result.record),
         "domain_pack_id": result.envelope.domain_pack_id,
+        "specialist_explanation": _descriptor(
+            result.envelope.specialist_explanation, read=result.call("explanation")
+        ) if result.envelope.specialist_explanation is not None else None,
         "inventory": inventory,
         "filterable_fields": {
             object_type: list(policy.field_paths)
@@ -2150,6 +2192,49 @@ def _validation_response(
     )
 
 
+def _standalone_validator_response(
+    *, result_ref: str, action: str, target: str, key: str | None,
+    detail_path: str | None, cursor: Any, expected_sha: str | None,
+    user_id: str, session_id: str, supplied: set[str],
+) -> dict[str, Any]:
+    from src.lib.domain_packs.validator_result_storage import read_validator_result
+
+    if action not in {"summary", "validator_results"} or target not in {"latest", "this_chat", "all_authorized"}:
+        raise _RequestError("invalid_request", "A direct validator result supports summary or validator_results in this_chat or all_authorized.")
+    if supplied - {"validator_result_key", "detail_path"} or key not in {None, result_ref}:
+        raise _RequestError("invalid_request", "Use this direct result's reference as validator_result_key; extraction-object filters do not apply.")
+    try:
+        result_id = str(UUID(result_ref.removeprefix("validator-result:")))
+    except ValueError as exc:
+        raise _RequestError("invalid_result_ref", "A direct validator reference must contain a UUID.") from exc
+    record = read_validator_result(result_id, user_id=user_id, session_id=None if target == "all_authorized" else session_id)
+    if record is None:
+        raise _RequestError("result_not_found", "No authorized saved validator result matched this reference.")
+    original = record["original"]
+    full = {**record, "validator_result_key": result_ref, "original_available": True,
+            "decision_status": original["result"]["status"],
+            "output_complete": not bool(original["result"].get("output_issues"))}
+    carry = {"action": "validator_results", "result_ref": result_ref,
+             "validator_result_key": result_ref, "target": target}
+    head = {"action": action, "result_ref": result_ref, "validator_result_key": result_ref}
+    sha = content_sha256({"original": record["original_sha256"], "detail_path": detail_path})
+    if detail_path:
+        return _exact_value(
+            _resolve_detail(full, detail_path), head={**head, "detail_path": detail_path},
+            call={**carry, "detail_path": detail_path}, sha=sha, expected_sha=expected_sha,
+            cursor=cursor, message="Exact saved validator value; completeness applies to this value only.",
+        )
+    if action == "summary":
+        return {"status": "ok", **head, "original_available": True,
+                "decision_status": full["decision_status"], "output_complete": full["output_complete"],
+                "read": {**carry, "detail_path": "original.result"}}
+    return _fit_record(
+        full, render=lambda shown: {"status": "ok", **head, "validator_result": shown, "result_sha256": sha},
+        read_for=lambda name: {**carry, "detail_path": name},
+        protected=frozenset({"result_ref", "validator_result_key", "decision_status", "original_available", "output_complete"}),
+    )
+
+
 def _validator_results_response(
     result: _Result,
     *,
@@ -2164,7 +2249,7 @@ def _validator_results_response(
     limit: Any,
     expected_sha: str | None,
 ) -> dict[str, Any]:
-    entries = validator_result_entries(result.envelope.validation_findings)
+    entries = validator_result_entries(result.envelope.validation_findings, result.envelope.validator_results)
     if key:
         entry = next((value for entry_key, value in entries if entry_key == key), None)
         if entry is None:
@@ -2176,6 +2261,14 @@ def _validator_results_response(
                 validator_result_key=_echo(key),
             )
         full = {"validator_result_key": key, **entry}
+        original = result.envelope.validator_results.get(entry.get("original_ref"))
+        full["original"] = original
+        if detail_path and detail_path.startswith("original") and original is None:
+            raise _RequestError(
+                "original_unavailable",
+                "This historical decision has only a saved projection; its complete original was not saved.",
+                action="validator_results", result_ref=result.result_ref, validator_result_key=key,
+            )
         head = {**result.head("validator_results"), "validator_result_key": key}
         sha = result.sha(action="validator_results", key=key, detail_path=detail_path)
         if detail_path:

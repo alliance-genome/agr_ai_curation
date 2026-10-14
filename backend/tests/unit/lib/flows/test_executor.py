@@ -6760,7 +6760,8 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["failure_reason"] is None
 
     @pytest.mark.asyncio
-    async def test_fatal_specialist_error_still_fails_flow(self, monkeypatch):
+    @pytest.mark.parametrize("category,retryable", [("persistence_failed", False), ("context_limit", False), ("provider_unavailable", True)])
+    async def test_fatal_specialist_error_still_fails_flow(self, monkeypatch, category, retryable):
         """A genuinely-fatal specialist error (no fatal:False / warning) must fail."""
         flow = _make_flow([
             _task_input_node(),
@@ -6783,6 +6784,9 @@ class TestExecuteFlowTermination:
                 "details": {
                     "error": "Gene Validation did not call required AGR DB tools",
                     "severity": "error",
+                    "failure_category": category,
+                    "provider": "openai",
+                    "error_type": "SpecialistOutputError",
                 },
             }
             # Must NOT leak through: a fatal error aborts the flow before this.
@@ -6805,6 +6809,16 @@ class TestExecuteFlowTermination:
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "failed"
         assert flow_finished["data"]["failure_reason"] is not None
+
+        from src.lib.flows.outcome import FlowRunOutcome
+        from src.lib.openai_agents.curator_errors import failure_for_event
+        outcome = FlowRunOutcome()
+        for event in events:
+            outcome.observe({**event, **(event.get("data") or {})})
+        assert outcome.failure_category == category
+        assert outcome.failure_provider == "openai"
+        failure = failure_for_event({"failure_category": outcome.failure_category, "provider": outcome.failure_provider})
+        assert failure.retryable is retryable
 
     @pytest.mark.asyncio
     async def test_defers_file_ready_until_terminal_step_state_is_recorded(

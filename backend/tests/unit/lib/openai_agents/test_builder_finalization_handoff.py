@@ -1166,7 +1166,9 @@ async def test_specialist_validation_consumes_builder_finalized_payload(monkeypa
         for event in captured_events
         if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
     )
-    assert captured["validator_payload"] == internal_event["internal"]["canonical_payload"]
+    assert internal_event["internal"]["canonical_payload"] == {
+        **captured["validator_payload"], "specialist_explanation": run_result.final_output,
+    }
     assert internal_event["internal"]["builder_finalization"]["status"] == "finalized"
     assert run_result.workspace is not None
     assert run_result.workspace.finalization is not None
@@ -1639,7 +1641,8 @@ def _spy_inline_persistence(monkeypatch):
         ("go", "go_builder_tools", "rgd_go_paper_curator"),
     ],
 )
-async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain, tools_module, agent_key):
+@pytest.mark.parametrize("text_source", ["final_output", "new_items", "stream"])
+async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain, tools_module, agent_key, text_source):
     from datetime import datetime, timezone
     from importlib import import_module
     from src.lib.curation_workspace.domain_envelope_normalization import (
@@ -1653,13 +1656,18 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
     specialist_name = f"{domain.replace('_', ' ').title()} Extractor"
     tool_name = f"ask_{domain}_extractor_specialist"
 
+    explanation = "  No eligible findings: enzyme activity does not identify LPCAT1.\nUncertainty retained.  "
+
     class EmptyRun(_FakeRunResult):
+        new_items = [SimpleNamespace(type="message_output_item")] if text_source == "new_items" else []
         async def stream_events(self):
             workspace = builder.get_active_extraction_builder_workspace()
             monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
             monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: [])
             result = finalize([])
             assert result.status == "ok"
+            if text_source == "stream":
+                self._accumulated_text = explanation
             if False:
                 yield
 
@@ -1675,13 +1683,15 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
         envelope = domain_envelope_from_extraction_result(record, stored=False)
         return envelope.model_dump_json()
 
+    from agents.items import ItemHelpers
+    monkeypatch.setattr(ItemHelpers, "text_message_output", lambda item: explanation)
     events, handoffs = [], []
     _disable_package_tool_rebinding(monkeypatch)
     calls = _spy_inline_persistence(monkeypatch)
     monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _name: None)
     monkeypatch.setattr(streaming_tools, "RunConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", lambda *args, **kwargs: EmptyRun(final_output="Finalized."))
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", lambda *args, **kwargs: EmptyRun(final_output=explanation if text_source == "final_output" else None))
     monkeypatch.setattr(streaming_tools, "_dispatch_domain_envelope_validators_for_chat", materialize)
     expected = streaming_tools.SupervisorExtractionHandoff(
         tool_name=tool_name, specialist_name=specialist_name,
@@ -1691,7 +1701,7 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
         agent_key=agent_key, created_new=True,
     )
     monkeypatch.setattr(streaming_tools, "_build_supervisor_extraction_handoff", lambda **kwargs: expected)
-    await streaming_tools.run_specialist_with_events(
+    handoff_text = await streaming_tools.run_specialist_with_events(
         agent=SimpleNamespace(name=specialist_name, tools=[_builder_finalizer_tool(f"finalize_{domain}_extraction")],
                               output_type=None, instructions="", model="gpt-4o"),
         input_text=f"Extract {domain}", specialist_name=specialist_name, max_turns=3,
@@ -1705,6 +1715,10 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
     assert finalization.payload["extracted_objects"] == []
     event = next(event for event in events if event.get("type") == "INTERNAL_EXTRACTION_RESULT")
     assert event["internal"]["extraction_result_id"] == expected.extraction_result_id
+
+    assert explanation in handoff_text
+    assert finalization.payload["specialist_explanation"] == explanation
+    assert event["internal"]["canonical_payload"]["specialist_explanation"] == explanation
 
 
 @pytest.mark.asyncio

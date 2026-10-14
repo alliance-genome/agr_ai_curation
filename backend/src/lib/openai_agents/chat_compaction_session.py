@@ -22,6 +22,7 @@ from src.lib.chat_history_repository import (
 from src.lib.chat_transcript import extract_flow_assistant_message
 from src.lib.openai_agents.config import get_standard_chat_compaction_token_threshold
 from src.lib.runtime_payload_budget import json_size
+from src.lib.openai_agents.extraction_trace_events import write_extraction_trace_event
 from src.models.sql.chat_message import ChatMessage as ChatMessageModel
 from src.models.sql.database import SessionLocal
 
@@ -395,6 +396,63 @@ class DurableChatHistorySession(Session):
         )
 
 
+def _compaction_sizes(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    calls = {item.get("call_id") for item in items if item.get("type") == "function_call"}
+    outputs = {item.get("call_id") for item in items if item.get("type") == "function_call_output"}
+    size = json_size(list(items))
+    return {"item_count": len(items), "json_chars": size.json_chars,
+            "estimated_tokens": size.estimated_tokens,
+            "estimate_basis": "serialized_characters_divided_by_four",
+            "visible_unpaired_tool_calls": len((calls - outputs) - {None})}
+
+
+def _record_compaction_observation(**event: Any) -> None:
+    # Measurements never contain messages, tool arguments, encrypted content,
+    # response IDs or user/session identifiers; the trace owns correlation.
+    try:
+        logger.info("Standard chat context compaction", extra={"chat_context_compaction": event})
+        write_extraction_trace_event(
+            event_type="runtime.chat_context_compaction", output_summary=event,
+            metadata={"scope": "standard_chat", "semantic_fidelity": "not_measured"},
+        )
+    except Exception:
+        logger.warning("Could not record chat compaction observation", exc_info=True)
+
+
+class ObservedChatCompactionSession(OpenAIResponsesCompactionSession):
+    """Observe SDK compaction/deferral without changing its context policy.
+
+    The SDK's deferred hooks are covered by executable tests against the pinned
+    SDK. Actual compact-request usage is recorded by SafeAsyncOpenAI separately.
+    Neither size reduction nor completion claims semantic fidelity.
+    """
+
+    async def run_compaction(self, args=None) -> None:
+        _, before_items = await self._ensure_compaction_candidates()
+        before = _compaction_sizes(before_items)
+        outcome = "failed"
+        try:
+            await super().run_compaction(args)
+            outcome = "projection_replaced" if before_items != self._session_items else "unchanged"
+        finally:
+            _record_compaction_observation(
+                phase="compaction_check", outcome=outcome, model=self.model,
+                before=before,
+                after=_compaction_sizes(self._session_items) if self._session_items is not None else None,
+                provider_held_continuation=bool((args or {}).get("response_id") or self._response_id),
+                semantic_fidelity="not_measured",
+            )
+
+    async def _defer_compaction(self, response_id: str, store: bool | None = None) -> None:
+        await super()._defer_compaction(response_id, store)
+        _record_compaction_observation(
+            phase="deferred_check", model=self.model,
+            deferred=bool(self._get_deferred_compaction_response_id()),
+            before=_compaction_sizes(self._session_items or []),
+            after=None, semantic_fidelity="not_measured",
+        )
+
+
 def build_standard_chat_compaction_session(
     *,
     session_id: str,
@@ -410,7 +468,7 @@ def build_standard_chat_compaction_session(
         user_id=user_id,
         current_turn_id=current_turn_id,
     )
-    return OpenAIResponsesCompactionSession(
+    return ObservedChatCompactionSession(
         session_id=session_id,
         underlying_session=durable_session,
         client=client,

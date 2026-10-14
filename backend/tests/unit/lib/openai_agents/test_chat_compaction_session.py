@@ -442,3 +442,46 @@ def test_standard_chat_compaction_trigger_uses_env_threshold(monkeypatch):
 def test_standard_chat_compaction_trigger_rejects_malformed_sdk_context():
     with pytest.raises(TypeError, match="session_items"):
         module.should_compact_standard_chat_context({"session_items": {"role": "user"}})
+
+
+@pytest.mark.asyncio
+async def test_sdk_compaction_observes_pending_tools_without_rewriting_canonical_history(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    class Memory:
+        def __init__(self):
+            self.items = [{"role": "user", "content": "Exact earlier rule: preserve β."},
+                          {"type": "function_call", "call_id": "pending", "name": "inspect_results", "arguments": "{}"}]
+            self.transcript = [dict(item) for item in self.items]
+
+        async def get_items(self, limit=None):
+            return list(self.items)
+
+        async def clear_session(self):
+            self.items = []
+
+        async def add_items(self, items):
+            self.items.extend(items)
+
+    memory = Memory()
+    observations = []
+    monkeypatch.setattr(module, "_record_compaction_observation", lambda **data: observations.append(data))
+    compact = AsyncMock(return_value=SimpleNamespace(output=[{"role": "assistant", "content": "A compact projection."}]))
+    session = module.ObservedChatCompactionSession(
+        "session", memory, model="gpt-5", client=SimpleNamespace(responses=SimpleNamespace(compact=compact)),
+        should_trigger_compaction=lambda context: True,
+    )
+    await session._defer_compaction("response-1")
+    assert compact.await_count == 0
+    assert observations[-1]["deferred"] is True
+    assert observations[-1]["before"]["visible_unpaired_tool_calls"] == 1
+    await session.add_items([{"type": "function_call_output", "call_id": "pending", "output": "Saved result reference."}])
+    await session.run_compaction({"force": True, "compaction_mode": "input"})
+    assert compact.await_count == 1
+    observation = observations[-1]
+    assert observation["outcome"] == "projection_replaced"
+    assert observation["before"]["visible_unpaired_tool_calls"] == 0
+    assert observation["before"]["estimated_tokens"] > observation["after"]["estimated_tokens"]
+    assert observation["semantic_fidelity"] == "not_measured"
+    assert "Exact earlier rule" not in str(observations)
+    assert memory.transcript[0]["content"] == "Exact earlier rule: preserve β."

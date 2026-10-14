@@ -8,8 +8,8 @@ from src.lib.observability.sentry import hash_sentry_identifier
 
 PROVIDER_POLICY_CHAT_MESSAGE = (
     "The AI provider's automatic safety check flagged this request as possible "
-    "biological risk and stopped this extraction run. No finalized extraction "
-    "or TSV was produced by the stopped run; internal staging may have occurred. "
+    "biological risk and stopped this request before completion. "
+    "Check any previously saved results separately; this run is incomplete. "
     "Please report the paper using the feedback button so we can follow up. "
     "Do not retry this blocked request."
 )

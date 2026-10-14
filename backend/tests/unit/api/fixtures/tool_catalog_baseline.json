@@ -3816,7 +3816,7 @@
           "type": "string"
         },
         {
-          "description": "The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording; a standard-term field takes its paper wording plus, only when the paper prints one, the term's ID. Every corrected value stays UNRESOLVED until a specialist looks it up. A `rationale` update must be non-empty; it cannot be cleared.",
+          "description": "The specific fields to correct on the draft, each paired with its new value. The gene, reference and data provider take new paper wording; a standard-term field takes its paper wording plus, only when the paper prints one, the term's ID. These lookup-dependent values stay UNRESOLVED until a specialist looks them up. To correct polarity, use field_path negated with bool_value true or false and all other value slots null; bool_value must be null for other fields. A `rationale` update must be non-empty; it cannot be cleared.",
           "name": "updates",
           "required": true,
           "type": "array"
@@ -5251,6 +5251,12 @@
     "documentation": {
       "parameters": [
         {
+          "description": "True only when the paper explicitly reports no expression was detected at the stated location or stage; false for a positive observation. Missing discussion is not a negative result. Preserve the supporting wording in the linked evidence.",
+          "name": "negated",
+          "required": true,
+          "type": "boolean"
+        },
+        {
           "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
@@ -5305,7 +5311,7 @@
           "type": "any"
         }
       ],
-      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Every value is the paper's own wording and stays UNRESOLVED until a specialist looks it up; the agent never searches the database itself. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage."
+      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, the data provider, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms. Each value needing a database lookup is the paper's own wording and stays UNRESOLVED until a specialist looks it up; the agent never searches the database itself. The stage name is filled in when the stage term is confirmed, or by a curator when the paper states no stage."
     },
     "methods": null,
     "name": "Stage Gene Expression Observation",

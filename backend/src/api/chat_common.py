@@ -1102,6 +1102,7 @@ def _build_terminal_turn_event(
     trace_id: Optional[str] = None,
     message: Optional[str] = None,
     error_type: Optional[str] = None,
+    assistant_rescue_allowed: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Build one closed terminal stream event."""
 
@@ -1115,6 +1116,8 @@ def _build_terminal_turn_event(
         payload["message"] = message
     if error_type:
         payload["error_type"] = error_type
+    if assistant_rescue_allowed is not None:
+        payload["assistant_rescue_allowed"] = assistant_rescue_allowed
     return payload
 
 
@@ -1351,6 +1354,11 @@ async def _run_resolved_chat_route(
         finally:
             await flow_stream.aclose()
 
+        terminal_events = outcome.events_for_persistence()
+        yield {
+            "type": _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE,
+            "internal": {"events": terminal_events},
+        }
         if outcome.status != "completed":
             if not outcome.failure_already_reported:
                 report_runtime_exception(
@@ -1377,15 +1385,12 @@ async def _run_resolved_chat_route(
                 "type": "RUN_ERROR",
                 "data": {
                     "message": failure_reason,
-                    "error_type": "PreferredFlowFailed",
+                    "error_type": outcome.failure_type or "PreferredFlowFailed",
+                    "failure_category": outcome.failure_category,
+                    "provider": outcome.failure_provider,
                 },
             }
             return
-        terminal_events = outcome.events_for_persistence()
-        yield {
-            "type": _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE,
-            "internal": {"events": terminal_events},
-        }
         response = outcome.final_user_visible_text or (
             f"Flow '{flow.name}' completed. Review the generated results above."
         )
@@ -1574,6 +1579,7 @@ def _persist_completed_chat_stream_turn(
     document_id: Optional[str],
     flow_terminal_events: Sequence[Dict[str, Any]] | None = None,
     failure_message: str | None = None,
+    failure_state: str = "turn_failed",
 ) -> ChatMessageRecord:
     """Persist an assistant outcome and link existing extraction without revalidation."""
 
@@ -1590,9 +1596,11 @@ def _persist_completed_chat_stream_turn(
         if failure_message:
             # Only already durable results from this owner's session may be recovered.
             # Do not materialize in-memory candidates or rerun scientific validation.
-            if extraction_candidates or not persisted_extraction_refs:
+            if extraction_candidates:
                 raise ValueError("Partial recovery requires durable extraction references only")
-            ids = {UUID(str(ref.extraction_result_id)) for ref in persisted_extraction_refs}
+            if failure_state not in {"turn_failed", "turn_interrupted"}:
+                raise ValueError("Unsupported failed-turn state")
+            ids = {UUID(str(ref.extraction_result_id)) for ref in (persisted_extraction_refs or [])}
             owned = completion_db.execute(
                 select(CurationExtractionResultRecordModel.id).where(
                     CurationExtractionResultRecordModel.id.in_(ids),
@@ -1650,10 +1658,10 @@ def _persist_completed_chat_stream_turn(
                 turn_id=turn_id,
                 trace_id=trace_id,
                 payload_json=(
-                    {"terminal_state": "turn_failed", "terminal_message": failure_message}
-                    if failure_message else
-                    {_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: list(flow_terminal_events)}
-                    if flow_terminal_events else None
+                    {
+                        **({"terminal_state": failure_state, "terminal_message": failure_message} if failure_message else {}),
+                        **({_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: list(flow_terminal_events)} if flow_terminal_events else {}),
+                    } if failure_message or flow_terminal_events else None
                 ),
             )
             _link_persisted_extraction_results_to_chat_turn(

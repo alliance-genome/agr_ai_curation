@@ -141,6 +141,7 @@ class DomainEnvelopeTraceAnalyzer:
             "validator_group_scope_audits": list(
                 summary.get("validator_group_scope_audits") or []
             ),
+            "validator_results": list(summary.get("validator_results") or []),
             "suppressed_upstream_validators": list(summary.get("suppressed_upstream_validators") or []),
             "validation_state_counts": dict(summary.get("validation_state_counts") or {}),
             "definition_state_counts": dict(summary.get("definition_state_counts") or {}),
@@ -176,6 +177,7 @@ class DomainEnvelopeTraceAnalyzer:
             "envelopes": [],
             "objects": [],
             "validation_findings": [],
+            "validator_results": [],
             "validator_group_scope_audits": [],
             "suppressed_upstream_validators": [],
             "definition_state_flags": [],
@@ -505,6 +507,12 @@ class DomainEnvelopeTraceAnalyzer:
         object_items = list(_iter_mappings(objects))
 
         findings = list(_iter_mappings(envelope.get("validation_findings")))
+        originals = envelope.get("validator_results")
+        originals = originals if isinstance(originals, Mapping) else {}
+        original_items = {
+            ref: snapshot for ref, snapshot in originals.items()
+            if isinstance(snapshot, Mapping) and isinstance(snapshot.get("result"), Mapping)
+        }
         history = list(_iter_mappings(envelope.get("history")))
         metadata = envelope.get("metadata")
         binding_audit = (
@@ -532,6 +540,7 @@ class DomainEnvelopeTraceAnalyzer:
                 "status": _state_value(envelope.get("status")),
                 "object_count": len(object_items),
                 "validation_finding_count": len(findings),
+                "validator_result_count": len(original_items),
                 "history_event_count": len(history),
                 "source_path": source_path,
             },
@@ -564,6 +573,24 @@ class DomainEnvelopeTraceAnalyzer:
                 envelope_id=envelope_id,
             )
 
+        for ref, snapshot in original_items.items():
+            result = snapshot["result"]
+            cls._add_detail(
+                accumulator, "validator_results", (envelope_id, str(ref)),
+                {
+                    "envelope_id": envelope_id,
+                    "ref": _short_value(ref),
+                    "status": _short_value(result.get("status")),
+                    "validator_binding_id": _short_value(result.get("validator_binding_id")),
+                    "target": _short_value(result.get("target")),
+                    "source_envelope_revision": _short_value(snapshot.get("source_envelope_revision")),
+                    "recorded_order": _short_value(snapshot.get("recorded_order")),
+                    "output_complete": not bool(result["output_issues"]) if isinstance(result.get("output_issues"), list) else None,
+                    "original_available": True,
+                    "source_path": source_path + ".validator_results",
+                },
+            )
+
         for index, finding in enumerate(findings):
             finding_path = f"{source_path}.validation_findings[{index}]"
             accumulator["_nested_envelope_finding_paths"].add(finding_path)
@@ -572,6 +599,7 @@ class DomainEnvelopeTraceAnalyzer:
                 finding,
                 source_path=finding_path,
                 envelope_id=envelope_id,
+                original_refs=original_items,
             )
 
         for index, audit in enumerate(_iter_mappings(binding_audit)):
@@ -678,6 +706,7 @@ class DomainEnvelopeTraceAnalyzer:
         *,
         source_path: str,
         envelope_id: Optional[str],
+        original_refs: Mapping[str, Any] | None = None,
     ) -> None:
         finding_id = _as_string(finding.get("finding_id"))
         object_id, pending_ref_id, object_type = cls._object_reference(finding)
@@ -690,6 +719,8 @@ class DomainEnvelopeTraceAnalyzer:
         cls._add_unique(accumulator, "pending_ref_ids", pending_ref_id)
         cls._add_unique(accumulator, "field_paths", field_path)
 
+        details = finding.get("details")
+        original_ref = details.get("validation_result_ref") if isinstance(details, Mapping) else None
         detail = {
             "envelope_id": envelope_id or _as_string(finding.get("envelope_id")),
             "finding_id": finding_id,
@@ -701,6 +732,8 @@ class DomainEnvelopeTraceAnalyzer:
             "pending_ref_id": pending_ref_id,
             "object_type": object_type,
             "field_path": field_path,
+            "validation_result_ref": _short_value(original_ref),
+            "original_available": isinstance(original_ref, str) and original_refs is not None and original_ref in original_refs,
             "source_path": source_path,
         }
         cls._add_detail(
@@ -1038,6 +1071,7 @@ class DomainEnvelopeTraceAnalyzer:
             "envelope_count": len(accumulator["envelope_ids"]),
             "object_count": len(accumulator["objects"]),
             "finding_count": len(accumulator["validation_findings"]),
+            "validator_result_count": len(accumulator["validator_results"]),
             "validator_group_scope_audit_count": len(
                 accumulator["validator_group_scope_audits"]
             ),

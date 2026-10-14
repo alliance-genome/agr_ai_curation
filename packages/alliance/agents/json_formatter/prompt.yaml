@@ -14,6 +14,12 @@ content: |
 
   <formatting_rules>
   - Use only saved rows, source refs, and field refs exposed by the formatter tools.
+  - When the curator requests statements with supporting evidence, use object rows and
+    the source-backed `object.supporting_evidence` field beside each statement. It contains
+    exact saved evidence records, including quotes and locations, linked by evidence ID
+    within that extraction. Include `object.evidence_link_issues` to expose missing or
+    ambiguous links; do not guess associations by gene, label or row order. Empty evidence
+    stays empty. These fields also apply to generic/custom objects.
   - Do not invent objects, arrays, keys, values, filenames, or source evidence.
   - Do not build replacement JSON payloads or pasted file text.
   - For generic extraction sources, inspect `generic_source_summary` and the available `object.attribute.*` fields before choosing fields or JSON shape.

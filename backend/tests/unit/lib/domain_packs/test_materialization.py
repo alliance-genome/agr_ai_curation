@@ -612,12 +612,28 @@ def test_validator_result_materialization_creates_reference_object_and_finding()
         "discovery_capped": False, "display_capped": True, "database_total": None,
     }
 
+    # Canonical originals must survive beyond every former finding-preview cap.
+    item.result.explanation = "β original 😀 " * 1000
+    item.result.lookup_attempts[0].query = {
+        f"key-{index}": ["exact " + str(n) for n in range(30)] for index in range(60)
+    }
+
     result = materialize_validator_results_into_envelope(
         envelope,
         metadata,
         [item],
         source_envelope_revision=7,
     )
+
+    originals = result.envelope.validator_results
+    assert len(originals) == 1
+    original_ref, original = next(iter(originals.items()))
+    assert original["result"] == item.result.model_dump(mode="json")
+    assert original["request"] == item.request.model_dump(mode="json")
+    assert original["source_envelope_revision"] == 7
+    reloaded = DomainEnvelope.model_validate_json(result.envelope.model_dump_json())
+    assert reloaded.validator_results == originals
+    assert all(f.details["validation_result_ref"] == original_ref for f in result.appended_findings)
 
     assert len(result.materialized_objects) == 1
     reference = result.materialized_objects[0]

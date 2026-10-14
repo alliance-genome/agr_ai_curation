@@ -1166,7 +1166,7 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(monkeypatch, caplog):
+async def test_chat_endpoint_replays_failed_turn_without_rerunning_then_allows_a_new_request(monkeypatch, caplog):
     commits: list[str] = []
     register_calls = []
     unregister_calls = []
@@ -1205,6 +1205,8 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
         run_attempt += 1
         streamed_context_messages.append(kwargs["context_messages"])
         if run_attempt == 1:
+            yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "Partial "}}
+            yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"content": "work"}}
             yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
             return
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-retry"}}
@@ -1220,36 +1222,32 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
         )
 
     assert exc.value.status_code == 500
-    assert exc.value.detail == "Failed to process chat request"
+    assert "You can restore the request" in exc.value.detail
     assert "model exploded" not in str(exc.value.detail)
     assert "model exploded" in caplog.text
     assert commits == ["commit"]
-    assert [call["role"] for call in repository.append_calls] == ["user"]
-    assert "non-stream-turn:session-retry:turn-retry" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
-
-    result = await chat.chat_endpoint(
-        chat.ChatMessage(
-            message="different retry body should be ignored",
-            session_id="session-retry",
-            turn_id="turn-retry",
-        ),
-        {"sub": "user-1", "cognito:groups": []},
-        db=_db_stub(commits=commits),
-    )
-
-    assert result.response == "recovered answer"
-    assert result.session_id == "session-retry"
-    assert commits == ["commit", "commit", "commit"]
-    assert streamed_context_messages == [
-        [{"role": "user", "content": "hello"}],
-        [{"role": "user", "content": "hello"}],
-    ]
     assert [call["role"] for call in repository.append_calls] == ["user", "assistant"]
-    assert register_calls[0][0] == "non-stream-turn:session-retry:turn-retry"
-    assert register_calls[1][0] == "non-stream-turn:session-retry:turn-retry"
-    assert unregister_calls[0][0] == "non-stream-turn:session-retry:turn-retry"
-    assert unregister_calls[1][0] == "non-stream-turn:session-retry:turn-retry"
     assert "non-stream-turn:session-retry:turn-retry" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
+
+    with pytest.raises(HTTPException) as replay_error:
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="ignored duplicate body", session_id="session-retry", turn_id="turn-retry"),
+            {"sub": "user-1", "cognito:groups": []}, db=_db_stub(commits=commits),
+        )
+    assert replay_error.value.detail == exc.value.detail
+    assert run_attempt == 1
+    assert repository.append_calls[-1]["payload_json"]["terminal_state"] == "turn_failed"
+    assert "Partial response (the request did not finish):\nPartial work" in repository.append_calls[-1]["content"]
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(message="hello", session_id="session-retry", turn_id="turn-new-request"),
+        {"sub": "user-1", "cognito:groups": []}, db=_db_stub(commits=commits),
+    )
+    assert result.response == "recovered answer"
+    assert run_attempt == 2
+    assert streamed_context_messages == [[{"role": "user", "content": "hello"}]] * 2
+    assert [call["role"] for call in repository.append_calls] == ["user", "assistant", "user", "assistant"]
+    assert len(register_calls) == len(unregister_calls) == 3
+    assert not chat._LOCAL_NON_STREAM_TURN_OWNERS
 
 
 @pytest.mark.asyncio
@@ -1806,12 +1804,14 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch, caplog):
             db=_db_stub(commits=commits),
         )
     assert exc.value.status_code == 500
-    assert exc.value.detail == "Failed to process chat request"
+    assert "You can restore the request" in exc.value.detail
     assert "model exploded" not in str(exc.value.detail)
     assert "model exploded" in caplog.text
     assert commits == ["commit"]
-    assert [call["role"] for call in repository.append_calls] == ["user"]
+    assert [call["role"] for call in repository.append_calls] == ["user", "assistant"]
 
+
+    assert repository.append_calls[-1]["payload_json"]["terminal_state"] == "turn_failed"
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkeypatch):
@@ -2018,14 +2018,16 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog):
             db=_db_stub(commits=commits),
         )
     assert exc.value.status_code == 500
-    assert exc.value.detail == "Failed to process chat request"
+    assert "You can restore the request" in exc.value.detail
     assert commits == ["commit"]
-    assert [call["role"] for call in repository.append_calls] == ["user"]
+    assert [call["role"] for call in repository.append_calls] == ["user", "assistant"]
     assert "boom" in caplog.text
     assert len(calls) == 1
     assert calls[0][1]["component"] == "api"
     assert calls[0][1]["operation"] == "sanitized_http_exception"
 
+
+    assert repository.append_calls[-1]["payload_json"]["terminal_state"] == "turn_failed"
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_reports_tool_map_resolution_failure(monkeypatch):

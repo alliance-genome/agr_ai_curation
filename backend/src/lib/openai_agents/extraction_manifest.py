@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 from typing import Any, Mapping
 
 from pydantic import ValidationError
@@ -32,6 +31,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingStatus,
 )
 from src.schemas.domain_pack_metadata import DomainPackMetadata, DomainPackObjectDefinition
+from src.lib.openai_agents.tool_result_bounds import content_sha256, serialized_size, tool_result_budget
 
 
 class ExtractionManifestError(ValueError):
@@ -63,7 +63,7 @@ def build_extraction_manifest_page(
     )
     manifest_result_ref = result_ref or _result_ref(extraction_result_id)
 
-    return {
+    page = {
         "result_ref": manifest_result_ref,
         "extraction_result_id": extraction_result_id,
         "domain_pack_id": envelope.domain_pack_id,
@@ -74,13 +74,13 @@ def build_extraction_manifest_page(
             if manifest_objects
             else "empty_extraction"
         ),
+        "specialist_explanation": envelope.specialist_explanation,
         "object_count": len(manifest_objects),
         "page": {
             "cursor": cursor,
             "limit": page_limit,
             "next_cursor": next_cursor,
-            "page_number": (offset // page_limit) + 1,
-            "page_count": max(1, math.ceil(len(manifest_objects) / page_limit)),
+            "offset": offset,
         },
         "objects": [
             _manifest_object(
@@ -91,13 +91,34 @@ def build_extraction_manifest_page(
             for domain_object in page_objects
         ],
         "validation": _validation_counts(envelope.validation_findings),
-        "validator_results": _validator_results_summary(envelope.validation_findings),
+        "validator_results": _validator_results_summary(
+            envelope.validation_findings, envelope.validator_results, result_ref=manifest_result_ref,
+        ),
         "next_actions": _next_actions(
             result_ref=manifest_result_ref,
             has_objects=bool(manifest_objects),
             next_cursor=next_cursor,
         ),
     }
+    page["page"]["returned"] = len(page["objects"])
+    # Authored prose is deliberately full-upfront (ALL-1377), measured separately.
+    # Everything in the structured preview shares one serialized byte budget.
+    while serialized_size({key: value for key, value in page.items() if key != "specialist_explanation"}) > tool_result_budget():
+        if page["objects"]:
+            page["objects"].pop()
+            page["page"]["returned"] = len(page["objects"])
+            page["page"]["next_cursor"] = str(offset + len(page["objects"]))
+            page["next_actions"] = _next_actions(
+                result_ref=manifest_result_ref, has_objects=bool(manifest_objects),
+                next_cursor=page["page"]["next_cursor"],
+            )
+        elif page["validator_results"]["results"]:
+            page["validator_results"]["results"].pop()
+            _update_decision_coverage(page["validator_results"])
+        else:
+            raise ExtractionManifestError("Result metadata exceeds the configured tool-result budget; inspect the saved result.")
+    page["page"]["returned"] = len(page["objects"])
+    return page
 
 
 def build_extraction_manifest_object(
@@ -163,8 +184,8 @@ def render_extraction_manifest_page(page: Mapping[str, Any]) -> str:
     page_info: Mapping[str, Any] = (
         raw_page_info if isinstance(raw_page_info, Mapping) else {}
     )
-    page_number = int(page_info.get("page_number") or 1)
-    page_count = int(page_info.get("page_count") or 1)
+    page_offset = int(page_info.get("offset") or 0)
+    page_returned = int(page_info.get("returned") or 0)
     page_limit = int(page_info.get("limit") or get_supervisor_manifest_page_size())
     next_cursor = page_info.get("next_cursor")
 
@@ -177,8 +198,17 @@ def render_extraction_manifest_page(page: Mapping[str, Any]) -> str:
         ),
         f"Objects found: {object_count}",
         f"Result status: {result_status}",
-        f"Manifest page: {page_number} of {page_count}, page_size={page_limit}",
+        f"Object preview: {page_returned} returned from offset {page_offset}; row ceiling={page_limit}",
     ]
+
+    explanation = page.get("specialist_explanation")
+    if isinstance(explanation, str) and explanation:
+        lines.extend([
+            "Specialist explanation (complete authored text; saved objects and "
+            "validation findings determine persisted state):",
+            explanation,
+            "End specialist explanation.",
+        ])
 
     if result_status == "non_empty_extraction_ready":
         lines.extend(
@@ -229,14 +259,14 @@ def render_extraction_manifest_page(page: Mapping[str, Any]) -> str:
                 details.append(f"{label_text}={value_text}")
         validation = item.get("validation")
         if isinstance(validation, Mapping):
-            warning_count = int(validation.get("warning_count") or 0)
-            error_count = int(validation.get("error_count") or 0)
+            warning_count = int(validation.get("open_warning_count") or 0)
+            error_count = int(validation.get("open_error_count") or 0)
             unresolved_count = int(validation.get("unresolved_count") or 0)
             if warning_count or error_count or unresolved_count:
                 details.append(
-                    "validation="
+                    "open_findings="
                     f"errors:{error_count}, warnings:{warning_count}, "
-                    f"unresolved:{unresolved_count}"
+                    f"total:{unresolved_count}"
                 )
         evidence_count = int(item.get("evidence_count") or 0)
         details.append(f"evidence_count={evidence_count}")
@@ -250,13 +280,13 @@ def render_extraction_manifest_page(page: Mapping[str, Any]) -> str:
         lines.append(
             "Validation findings: "
             f"total={int(validation.get('total') or 0)}, "
-            f"errors={int(validation.get('error_count') or 0)}, "
-            f"warnings={int(validation.get('warning_count') or 0)}, "
-            f"unresolved={int(validation.get('unresolved_count') or 0)}."
+            f"open_errors={int(validation.get('open_error_count') or 0)}, "
+            f"open_warnings={int(validation.get('open_warning_count') or 0)}, "
+            f"statuses={json.dumps(validation.get('status_counts') or {}, sort_keys=True)}."
         )
 
     results = page.get("validator_results")
-    if isinstance(results, Mapping):
+    if isinstance(results, Mapping) and results.get("total"):
         lines.append(
             "Automatic validator results (target-level, not submission readiness): "
             + json.dumps(results, ensure_ascii=False, separators=(",", ":"))
@@ -473,6 +503,7 @@ def _parse_path(field_path: str) -> tuple[str | int, ...]:
 
 def validator_result_entries(
     findings: list[ValidationFinding],
+    originals: Mapping[str, dict[str, Any]] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
     """Complete canonical validator decisions keyed by request (or finding index).
 
@@ -480,18 +511,41 @@ def validator_result_entries(
     callers decide how to present large ones.
     """
     decisions: dict[str, dict[str, Any]] = {}
+    originals = originals or {}
+    for ref, snapshot in sorted(originals.items(), key=lambda item: item[1]["recorded_order"]):
+        result = snapshot["result"]
+        decisions[ref] = {
+            name: result[name] for name in (
+                "status", "request_id", "validator_binding_id", "target", "resolved_values",
+                "missing_expected_fields",
+            ) if name in result
+        }
+        decisions[ref].update({
+            "original_available": True,
+            "original_ref": ref,
+            "source_envelope_revision": snapshot.get("source_envelope_revision"),
+            "output_complete": not bool(result.get("output_issues")),
+        })
+        if isinstance(result.get("target"), Mapping):
+            decisions[ref]["target"] = {name: result["target"][name] for name in (
+                "object_type", "object_id", "pending_ref_id", "field_path",
+            ) if result["target"].get(name) is not None}
     for index, finding in enumerate(findings):
         details = finding.details or {}
-        result = details.get("validation_result")
+        original_ref = details.get("validation_result_ref")
+        snapshot = originals.get(original_ref) if isinstance(original_ref, str) else None
+        result = snapshot["result"] if snapshot is not None else details.get("validation_result")
         if not isinstance(result, Mapping) or not isinstance(result.get("status"), str):
             continue
         request_id = result.get("request_id")
-        key = f"request:{request_id}" if request_id else f"finding:{index}"
+        key = original_ref if isinstance(original_ref, str) and original_ref in originals else ((f"request:{request_id}" if len(str(request_id)) < get_supervisor_field_text_limit() - len("request:") else f"request-sha256:{content_sha256(request_id)}") if request_id else f"finding:{index}")
         entry = decisions.setdefault(key, {
             name: result[name]
             for name in ("status", "request_id", "validator_binding_id", "resolved_values", "missing_expected_fields")
             if name in result
         })
+        entry.setdefault("original_available", False)
+        entry.setdefault("output_complete", None)  # Unknown for historical projections.
         target = result.get("target")
         if isinstance(target, Mapping):
             entry["target"] = {
@@ -503,40 +557,89 @@ def validator_result_entries(
         # hide a failed writeback or an associated open finding.
         if finding.status is ValidationFindingStatus.OPEN:
             entry["open_finding"] = True
+            entry["open_finding_count"] = entry.get("open_finding_count", 0) + 1
+            if finding.severity in {ValidationFindingSeverity.BLOCKER, ValidationFindingSeverity.ERROR}:
+                entry["open_error_count"] = entry.get("open_error_count", 0) + 1
         if (details.get("materialization") == "rejected"
                 or details.get("failure_classification") == "invalid_materialization_input"
                 or finding.code == "domain_pack.validator_materialization_invalid"):
             entry["writeback_rejected"] = True
-    return list(decisions.items())
+    # Source revision and append order distinguish revalidation from per-field
+    # copies. Historical records remain inspectable, never counted as current
+    # solely because they used the same target in an earlier round.
+    latest: dict[str, str] = {}
+    for key, entry in decisions.items():
+        target_key = json.dumps([entry.get("validator_binding_id"), entry.get("target")], sort_keys=True) if entry.get("validator_binding_id") and entry.get("target") else key
+        entry["_target_key"] = target_key
+        previous = decisions.get(latest.get(target_key, ""), {})
+        if (entry.get("source_envelope_revision") or 0) >= (previous.get("source_envelope_revision") or 0):
+            latest[target_key] = key
+    for key, entry in decisions.items():
+        entry["is_current"] = latest[entry.pop("_target_key")] == key
+        entry["outstanding"] = bool(entry.get("open_finding") or (
+            entry["is_current"] and (entry.get("writeback_rejected") or entry.get("status") != "resolved" or entry.get("output_complete") is False)
+        ))
+    return sorted(decisions.items(), key=lambda item: (
+        not bool(item[1]["outstanding"] and item[1].get("writeback_rejected")),
+        not bool(item[1].get("open_error_count")),
+        not item[1]["outstanding"],
+        not item[1]["is_current"],
+    ))
 
 
-def _validator_results_summary(findings: list[ValidationFinding]) -> dict[str, Any]:
+def _validator_results_summary(
+    findings: list[ValidationFinding], originals: Mapping[str, dict[str, Any]] | None = None,
+    *, result_ref: str | None = None,
+) -> dict[str, Any]:
     """Expose canonical validator decisions, including targets hidden by object policy."""
-    decisions = dict(validator_result_entries(findings))
+    decisions = dict(validator_result_entries(findings, originals))
     counts: dict[str, int] = {}
+    current_counts: dict[str, int] = {}
     entries: list[dict[str, Any]] = []
-    for entry in decisions.values():
+    for key, original_entry in decisions.items():
+        entry = dict(original_entry)
         status = entry["status"]
         counts[status] = counts.get(status, 0) + 1
+        if entry["is_current"]:
+            current_counts[status] = current_counts.get(status, 0) + 1
         if len(entries) >= get_supervisor_manifest_page_size():
             continue
-        # Keep complete identifiers; never render a truncated CURIE as a resolved value.
-        if len(json.dumps(entry, ensure_ascii=False)) > get_supervisor_field_text_limit():
+        entry["validator_result_key"] = key
+        entry["read"] = {"action": "validator_results", "result_ref": result_ref, "validator_result_key": key}
+        # Keep stable complete identities; large values remain exact saved reads.
+        if len(json.dumps({name: entry.get(name) for name in ("resolved_values", "missing_expected_fields")}, ensure_ascii=False)) > get_supervisor_field_text_limit():
             entry = {key: value for key, value in entry.items()
-                     if key in {"status", "open_finding", "writeback_rejected"}}
+                     if key not in {"resolved_values", "missing_expected_fields"}}
             entry["details_omitted"] = True
         entries.append(entry)
-    return {
+    summary = {
         "total": len(decisions),
+        "unit": "validator_decisions",
         "status_counts": counts,
+        "current_status_counts": current_counts,
+        "historical_total": sum(not entry["is_current"] for entry in decisions.values()),
+        "incomplete_total": sum(entry.get("output_complete") is False for entry in decisions.values()),
+        "original_unavailable_total": sum(not entry["original_available"] for entry in decisions.values()),
+        "outstanding_total": sum(entry["outstanding"] for entry in decisions.values()),
+        "ordering": "outstanding_writeback_rejected,open_errors,outstanding,current,stored_order",
         "results": entries,
-        "details_complete": len(decisions) == len(entries) and not any(
-            entry.get("details_omitted") for entry in entries
-        ),
+        "inspect": {"action": "validator_results", "result_ref": result_ref},
+        "snapshot_sha256": content_sha256(decisions),
     }
+    _update_decision_coverage(summary)
+    return summary
 
 
-def _validation_counts(findings: list[ValidationFinding]) -> dict[str, int]:
+def _update_decision_coverage(summary: dict[str, Any]) -> None:
+    summary["returned"] = len(summary["results"])
+    summary["outstanding_returned"] = sum(entry["outstanding"] for entry in summary["results"])
+    summary["outstanding_remaining"] = summary["outstanding_total"] - summary["outstanding_returned"]
+    summary["details_complete"] = summary["total"] == summary["returned"] and not any(
+        entry.get("details_omitted") for entry in summary["results"]
+    )
+
+
+def _validation_counts(findings: list[ValidationFinding]) -> dict[str, Any]:
     error_count = 0
     warning_count = 0
     unresolved_count = 0
@@ -552,6 +655,10 @@ def _validation_counts(findings: list[ValidationFinding]) -> dict[str, int]:
             unresolved_count += 1
     return {
         "total": len(findings),
+        "unit": "validation_findings",
+        "status_counts": {status.value: sum(f.status is status for f in findings) for status in ValidationFindingStatus},
+        "open_error_count": sum(f.status is ValidationFindingStatus.OPEN and f.severity in {ValidationFindingSeverity.ERROR, ValidationFindingSeverity.BLOCKER} for f in findings),
+        "open_warning_count": sum(f.status is ValidationFindingStatus.OPEN and f.severity is ValidationFindingSeverity.WARNING for f in findings),
         "error_count": error_count,
         "warning_count": warning_count,
         "unresolved_count": unresolved_count,
@@ -577,7 +684,7 @@ def _next_actions(
 ) -> list[str]:
     if not has_objects:
         return [
-            "Report that the extractor returned zero retained objects.",
+            "Report that the extractor returned zero retained objects and preserve its explanation. An explained empty result can fully answer the request.",
             "Ask for clarification or make one better-scoped retry only when the missing scope is clear.",
         ]
 

@@ -548,6 +548,14 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
         default=None,
         description="Domain pack version used to produce or interpret this envelope",
     )
+    specialist_explanation: Optional[str] = Field(
+        default=None,
+        description=(
+            "Complete specialist-authored final explanation, including conclusions, "
+            "exclusions and uncertainty. Saved objects and validation findings remain "
+            "authoritative for persisted state; this text is not a validation decision."
+        ),
+    )
     status: DomainEnvelopeStatus = Field(default=DomainEnvelopeStatus.EXTRACTED)
     schema_ref: Optional[SchemaRef] = Field(
         default=None,
@@ -562,6 +570,14 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
     validation_findings: list[ValidationFinding] = Field(
         default_factory=list,
         description="Validation findings attached to the envelope",
+    )
+    validator_results: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description=(
+            "Complete original validator request/result snapshots, stored once per "
+            "content-addressed validation_result_ref. Finding details are display "
+            "projections. Historical findings without a reference have no saved original."
+        ),
     )
     history: list[HistoryEvent] = Field(
         default_factory=list,

@@ -1442,3 +1442,24 @@ def test_direct_request_without_key_records_not_set(published):
         "tool_surface": None,
         "cached_input_share": None,
     }
+
+
+@pytest.mark.parametrize("reserve", [None, 8192])
+def test_output_reserve_is_separate_from_estimates_and_actual_usage(published, reserve):
+    model = FakeResponsesHTTPModel([_final()])
+    _run(Agent(name="validator", model=model, model_settings=ModelSettings(max_tokens=reserve)))
+    [record] = published
+    assert record["output_reserve_tokens"] == reserve
+    assert record["provider_usage"]["output_tokens"] == 80
+    assert record["model_visible"]["estimate_basis"]
+
+
+@pytest.mark.parametrize("api,key", [("responses", "max_output_tokens"), ("chat_completions", "max_completion_tokens"), ("chat_completions", "max_tokens")])
+def test_direct_output_reserve_uses_final_extra_body_override(published, api, key):
+    async def call(**_kwargs):
+        return SimpleNamespace(usage=None, id="result", _request_id=None)
+    asyncio.run(call_measured_direct_request(
+        surface="fixture", provider="openai", api=api,
+        kwargs={"model": "gpt-test", key: 100, "extra_body": {key: 200}, "input": "hello", "messages": []}, call=call,
+    ))
+    assert published[0]["output_reserve_tokens"] == 200

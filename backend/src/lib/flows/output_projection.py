@@ -40,6 +40,15 @@ from src.lib.flows.value_display import (
 )
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 
+SOURCE_LINKED_EVIDENCE_GUIDANCE = (
+    "When the curator requests statements with supporting evidence, select the statement fields "
+    "and object.supporting_evidence. That field joins every cited evidence record by exact ID "
+    "within its source artifact; keep all statements and all linked quotes. Include "
+    "object.evidence_link_issues when present and report unavailable or ambiguous links. "
+    "Do not infer evidence associations from labels, order or another artifact. "
+    "Preserve explicitly saved selected-fields layouts."
+)
+
 ProfileResolver = Callable[[AgentExecutionReceipt], ResolvedGenericProfile | None]
 
 
@@ -165,6 +174,8 @@ _FIELD_LABEL_OVERRIDES = {
     "object.status": "Status",
     "object.evidence_count": "Evidence Count",
     "object.evidence_record_ids": "Evidence IDs",
+    "object.supporting_evidence": "Supporting evidence (saved quotes and locations)",
+    "object.evidence_link_issues": "Evidence linkage issues",
     "object.validation_status": "Validation Status",
     "evidence.evidence_record_id": "Evidence ID",
     "evidence.quote": "Quote",
@@ -993,6 +1004,47 @@ def _explicit_evidence_records(item: Mapping[str, Any]) -> list[Mapping[str, Any
     return records
 
 
+def _attach_source_linked_evidence(
+    rows: list[dict[str, Any]], items: Sequence[Mapping[str, Any]], payload: Any,
+) -> None:
+    """Expose exact saved quote/location records beside each source statement.
+
+    Joins are scoped to this artifact and explicit evidence IDs. Never join on
+    labels, genes, row position, or a different extraction's evidence inventory.
+    Conflicting duplicate IDs and missing references stay visible as issues.
+    """
+    from copy import deepcopy
+
+    records = _explicit_evidence_records(payload) if isinstance(payload, Mapping) else []
+    metadata = payload.get("metadata") if isinstance(payload, Mapping) else None
+    if isinstance(metadata, Mapping):
+        records += _explicit_evidence_records(metadata)
+        extraction_metadata = metadata.get("extraction_metadata")
+        if isinstance(extraction_metadata, Mapping):
+            records += _explicit_evidence_records(extraction_metadata)
+    for item in items:
+        records += _explicit_evidence_records(item)
+        body = _object_payload(item)
+        if body.get("evidence_record_id") and body.get("verified_quote"):
+            records.append(body)
+    by_id: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for record in records:
+        identity = record.get("evidence_record_id")
+        if isinstance(identity, str) and identity and record not in by_id[identity]:
+            by_id[identity].append(record)
+    for row, item in zip(rows, items):
+        evidence, issues = [], []
+        for identity in _object_evidence_record_ids(item):
+            matches = by_id.get(identity, [])
+            if len(matches) == 1:
+                evidence.append(deepcopy(dict(matches[0])))
+            else:
+                issues.append({"evidence_record_id": identity,
+                               "status": "missing" if not matches else "ambiguous"})
+        row["object.supporting_evidence"] = evidence
+        row["object.evidence_link_issues"] = issues
+
+
 def _evidence_rows_from_records(
     *,
     artifact_context: Mapping[str, Any],
@@ -1648,6 +1700,7 @@ def _build_artifact_from_step(
         profile_fields=profile_fields,
     )
     rows_by_source["object"] = object_rows
+    _attach_source_linked_evidence(object_rows, object_items, payload)
     # Derive review status from findings, including older persisted envelopes
     # whose lifecycle status was promoted by one successful field lookup.
     if isinstance(payload, Mapping):
