@@ -11,6 +11,7 @@ from src.lib.executable_runs import (
 )
 from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
 from src.lib.openai_agents.curator_errors import classify_failure, failure_for_event
+from src.lib.observability.runtime import sanitized_runtime_error
 from src.lib.observability.sentry import (
     gen_ai_workflow_transaction,
     hash_sentry_identifier,
@@ -54,8 +55,21 @@ def _persist_failure_notice(
         )
     except ChatHistorySessionNotFoundError:
         return "session_gone", "Chat session is no longer available. Copy any visible text before leaving."
-    except Exception:
-        logger.exception("Failed to persist the terminal chat failure")
+    except Exception as exc:
+        try:
+            report_runtime_exception(
+                sanitized_runtime_error("Chat partial-result recovery persistence failed"),
+                component="chat_stream",
+                operation="partial_result_recovery_persistence_failed",
+                context={"exception_type": type(exc).__name__},
+            )
+        except Exception:
+            # Reporting cannot interrupt the terminal failure response.
+            pass
+        logger.error(
+            "Failed to preserve saved extraction access after chat error (%s)",
+            type(exc).__name__, extra={"sentry_skip_event": True},
+        )
         return "turn_save_failed", message + " This notice could not be saved to chat history; copy any visible text before leaving."
     return failure_state, message
 
@@ -846,8 +860,22 @@ async def chat_stream_endpoint(
                 specialist_reasoning=chat_message.specialist_reasoning,
                 inspection_context=inspection_context,
             ):
+                # The runtime may have committed this result before cancellation.
+                # Retain its reference even when this is the first event we stop on.
+                persisted_ref = _build_persisted_extraction_result_ref_from_tool_event(
+                    event,
+                    tool_agent_map=tool_agent_map,
+                    fallback_agent_key=(
+                        resolved_route.target_id
+                        if resolved_route.mode == "agent"
+                        else None
+                    ),
+                )
+                if persisted_ref:
+                    persisted_extraction_refs.append(persisted_ref)
+
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):
-                    interrupted_message = "Run cancelled by user"
+                    interrupted_message = "The request was stopped. You can restore it and try again later."
                     logger.info(
                         "Chat stream cancelled for session %s",
                         current_session_id,
@@ -946,18 +974,6 @@ async def chat_stream_endpoint(
                         flat_event[key] = value
                     yield _stream_event_sse(flat_event)
                     continue
-
-                persisted_ref = _build_persisted_extraction_result_ref_from_tool_event(
-                    event,
-                    tool_agent_map=tool_agent_map,
-                    fallback_agent_key=(
-                        resolved_route.target_id
-                        if resolved_route.mode == "agent"
-                        else None
-                    ),
-                )
-                if persisted_ref:
-                    persisted_extraction_refs.append(persisted_ref)
 
                 candidate = _build_extraction_candidate_from_tool_event(
                     event,

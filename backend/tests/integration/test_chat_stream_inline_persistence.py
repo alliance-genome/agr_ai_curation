@@ -359,7 +359,8 @@ def test_cancel_after_inline_persistence_leaves_inspectable_row(
     check_calls = {"count": 0}
 
     async def _check_cancel_signal(_session_id) -> bool:
-        # Allow the extraction event through, then cancel before RUN_FINISHED.
+        # Cancel as the already-persisted extraction event arrives. Its reference
+        # must still be attached to the interrupted turn.
         check_calls["count"] += 1
         return check_calls["count"] > 1
 
