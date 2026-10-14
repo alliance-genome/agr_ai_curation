@@ -823,8 +823,10 @@ def test_clone_source_private_profile_requires_exact_pin(db, base, monkeypatch, 
     base.clone_source_agent_id=f'ca_{source.id}'
     base.clone_source_updated_at=source.updated_at.isoformat()
     base.draft_output={'mode':'profile_bound_generic','schemaKey':'','profilePin':dict(pin),'profileContract':contract.model_dump(mode='json')}
-    if mismatch=='revision': base.draft_output['profilePin']['revision']=3
-    if mismatch=='fingerprint': base.draft_output['profilePin']['fingerprint']='sha256:'+'0'*64
+    if mismatch == 'revision':
+        base.draft_output['profilePin']['revision'] = 3
+    if mismatch == 'fingerprint':
+        base.draft_output['profilePin']['fingerprint'] = 'sha256:' + '0' * 64
     monkeypatch.setattr(generic_profile_service,'get_profile_revision',Mock(side_effect=generic_profile_service.ProfileNotFoundError('Private')))
     dependency=Mock(return_value=SimpleNamespace(profile_id=profile_id,id=revision_id,revision=2,fingerprint=contract.fingerprint(),contract=contract.model_dump(mode='json')))
     monkeypatch.setattr(execution_revision_service,'get_execution_profile_revision',dependency)
