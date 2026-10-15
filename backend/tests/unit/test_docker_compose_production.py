@@ -494,6 +494,18 @@ def test_pdf_extraction_timeout_is_shared_by_backend_env_templates():
     )
 
 
+def test_native_compaction_controls_reach_standalone_backend():
+    for name, default in (
+        ("AGENT_CONTEXT_COMPACTION_ENABLED", "true"),
+        ("AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD", "60000"),
+    ):
+        for service in ("backend", "benchmark_worker"):
+            environment = _load_compose()["services"][service]["environment"]
+            assert environment[name] == "${" + name + ":-" + default + "}"
+        assert f"{name}={default}" in ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
+        assert f"{name}={default}" in ENV_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+
 def test_document_intake_vite_limits_reach_standard_frontend_builds():
     frontend_build_args = _load_dev_compose()["services"]["frontend"]["build"]["args"]
     expected = {

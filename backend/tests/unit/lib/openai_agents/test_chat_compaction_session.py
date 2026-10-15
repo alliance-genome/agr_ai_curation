@@ -7,8 +7,6 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
-
 from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatMessageRecord
 from src.lib.chat_transcript import FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
 from src.lib.openai_agents import chat_compaction_session as module
@@ -205,11 +203,9 @@ def test_durable_session_get_items_fetches_only_rows_after_projection(monkeypatc
     ]
 
 
-def test_standard_chat_long_session_replay_stays_under_budget_and_keeps_flow_refs(
+def test_standard_chat_replay_keeps_flow_refs_without_raw_trace_payloads(
     monkeypatch,
 ):
-    monkeypatch.setenv("STANDARD_CHAT_CONTEXT_TOKEN_BUDGET", "2000")
-    monkeypatch.setenv("STANDARD_CHAT_COMPACTION_THRESHOLD_PERCENT", "70")
 
     projection_created_at = datetime(2026, 6, 15, 12, 20, tzinfo=timezone.utc)
     projection = SimpleNamespace(
@@ -278,10 +274,6 @@ def test_standard_chat_long_session_replay_stays_under_budget_and_keeps_flow_ref
     assert "lookup_ref=extraction-result:abc123" in replay_text
     assert "raw observability payload" not in replay_text
     assert "Current prompt that is already persisted." not in replay_text
-    assert (
-        module.estimate_standard_chat_context_tokens(replay_items)
-        < module.get_standard_chat_compaction_token_threshold()
-    )
 
 
 def test_durable_session_recreates_projection_so_replay_cutoff_advances(monkeypatch):
@@ -427,61 +419,22 @@ def test_durable_session_add_items_writes_projection_without_double_writing_curr
     ]
 
 
-def test_standard_chat_compaction_trigger_uses_env_threshold(monkeypatch):
-    monkeypatch.setenv("STANDARD_CHAT_CONTEXT_TOKEN_BUDGET", "100")
-    monkeypatch.setenv("STANDARD_CHAT_COMPACTION_THRESHOLD_PERCENT", "50")
-
-    assert not module.should_compact_standard_chat_context(
-        {"session_items": [{"role": "user", "content": "tiny"}]}
-    )
-    assert module.should_compact_standard_chat_context(
-        {"session_items": [{"role": "user", "content": "x" * 300}]}
-    )
 
 
-def test_standard_chat_compaction_trigger_rejects_malformed_sdk_context():
-    with pytest.raises(TypeError, match="session_items"):
-        module.should_compact_standard_chat_context({"session_items": {"role": "user"}})
-
-
-@pytest.mark.asyncio
-async def test_sdk_compaction_observes_pending_tools_without_rewriting_canonical_history(monkeypatch):
-    from unittest.mock import AsyncMock
-
-    class Memory:
-        def __init__(self):
-            self.items = [{"role": "user", "content": "Exact earlier rule: preserve β."},
-                          {"type": "function_call", "call_id": "pending", "name": "inspect_results", "arguments": "{}"}]
-            self.transcript = [dict(item) for item in self.items]
-
-        async def get_items(self, limit=None):
-            return list(self.items)
-
-        async def clear_session(self):
-            self.items = []
-
-        async def add_items(self, items):
-            self.items.extend(items)
-
-    memory = Memory()
-    observations = []
-    monkeypatch.setattr(module, "_record_compaction_observation", lambda **data: observations.append(data))
-    compact = AsyncMock(return_value=SimpleNamespace(output=[{"role": "assistant", "content": "A compact projection."}]))
-    session = module.ObservedChatCompactionSession(
-        "session", memory, model="gpt-5", client=SimpleNamespace(responses=SimpleNamespace(compact=compact)),
-        should_trigger_compaction=lambda context: True,
-    )
-    await session._defer_compaction("response-1")
-    assert compact.await_count == 0
-    assert observations[-1]["deferred"] is True
-    assert observations[-1]["before"]["visible_unpaired_tool_calls"] == 1
-    await session.add_items([{"type": "function_call_output", "call_id": "pending", "output": "Saved result reference."}])
-    await session.run_compaction({"force": True, "compaction_mode": "input"})
-    assert compact.await_count == 1
-    observation = observations[-1]
-    assert observation["outcome"] == "projection_replaced"
-    assert observation["before"]["visible_unpaired_tool_calls"] == 0
-    assert observation["before"]["estimated_tokens"] > observation["after"]["estimated_tokens"]
-    assert observation["semantic_fidelity"] == "not_measured"
-    assert "Exact earlier rule" not in str(observations)
-    assert memory.transcript[0]["content"] == "Exact earlier rule: preserve β."
+def test_native_compaction_projection_preserves_opaque_state_and_following_tool_results(monkeypatch):
+    db = _FakeDb()
+    appended = []
+    monkeypatch.setattr(module, "SessionLocal", lambda: db)
+    monkeypatch.setattr(module, "ChatHistoryRepository", lambda fake_db: _FakeRepository(fake_db, [], appended))
+    session = module.DurableChatHistorySession(session_id="session-1", user_id="user-1", current_turn_id="turn-1")
+    opaque = {"type": "compaction", "id": "cmp1", "encrypted_content": "opaque-state"}
+    call = {"type": "function_call", "call_id": "saved", "name": "save_record", "arguments": "{}"}
+    output = {"type": "function_call_output", "call_id": "saved", "output": "saved-id-1"}
+    asyncio.run(session.add_items([{"role": "user", "content": "original"}, opaque, call, output]))
+    payload = appended[-1]["payload_json"]
+    assert payload["items"] == [opaque, call, output]
+    db.projection = SimpleNamespace(payload_json=payload, created_at=datetime.now(timezone.utc))
+    restarted = module.DurableChatHistorySession(session_id="session-1", user_id="user-1", current_turn_id="turn-2")
+    assert asyncio.run(restarted.get_items()) == [opaque, call, output]
+    asyncio.run(restarted.add_items([{"role": "user", "content": "Continue."}]))
+    assert appended[-1]["payload_json"]["items"] == [opaque, call, output, {"role": "user", "content": "Continue."}]

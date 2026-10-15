@@ -46,6 +46,28 @@ logger = logging.getLogger(__name__)
 _BACKEND_ONLY_EVENT_FIELDS = {"internal"}
 
 
+def _has_completed_empty_output(output_status: str | None, branches: list[dict[str, Any]]) -> bool:
+    """Accept only the executor's completed, explicit empty formatter outcomes.
+
+    A missing file, an assistant explanation, or one empty branch alongside a
+    missing branch is not evidence of a successfully finalized empty extraction.
+    """
+    if output_status != "complete" or not branches:
+        return False
+    for branch in branches:
+        output = branch.get("output")
+        if (
+            branch.get("status") != "completed"
+            or not branch.get("output_node_id")
+            or not isinstance(output, dict)
+            or output.get("type") != "CHAT_OUTPUT_READY"
+            or output.get("extraction_outcome") != "no_results"
+            or output.get("formatter_node_id") != branch["output_node_id"]
+        ):
+            return False
+    return True
+
+
 class BatchFlowExecutionError(RuntimeError):
     """Raised when a flow emits a terminal failure during batch processing."""
 
@@ -402,7 +424,11 @@ def _process_single_document(
             )
         )
 
-        if not result_files and not review_session_ids:
+        if (
+            not result_files
+            and not review_session_ids
+            and not _has_completed_empty_output(output_status, output_branches)
+        ):
             raise BatchFlowExecutionError("The flow finished without a saved file or curation output. Review the flow configuration before trying again.")
 
         # Calculate processing time
@@ -607,7 +633,10 @@ async def _execute_flow_for_document(
             if event_type == "FLOW_FINISHED":
                 finished_data = event.get("data", {}) or {}
                 raw_output_status = finished_data.get("output_status")
-                if raw_output_status in {"complete", "partial", "none"}:
+                if (
+                    finished_data.get("status") == "completed"
+                    and raw_output_status in {"complete", "partial", "none"}
+                ):
                     flow_output_status = raw_output_status
                 raw_output_branches = finished_data.get("output_branches")
                 if isinstance(raw_output_branches, list):
@@ -714,7 +743,11 @@ async def _execute_flow_for_document(
             output_branches=flow_output_branches,
         )
 
-    if not result_files and not review_session_ids:
+    if (
+        not result_files
+        and not review_session_ids
+        and not _has_completed_empty_output(flow_output_status, flow_output_branches)
+    ):
         logger.warning(
             "No batch success output found from flow '%s' for document %s",
             flow.name, document_id

@@ -356,3 +356,18 @@ async def test_corrupt_canonical_history_reports_integrity_failure(store, scope,
     result = await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name, tool_call_id="read", run_config=None), json.dumps({"event_id": ref}))
     assert result["status"] == "invalid_request"
     assert len(reports) == 1 and reports[0][1]["operation"] == "read_failed"
+
+
+@pytest.mark.asyncio
+async def test_model_checkpoint_survives_storage_restart_without_mutating_actions(store, scope):
+    history = RunHistory(scope, store)
+    items = [{"type": "compaction", "encrypted_content": "opaque-state"},
+             {"type": "function_call", "call_id": "saved", "name": "save_record", "arguments": "{}"},
+             {"type": "function_call_output", "call_id": "saved", "output": '{"id":"A","negated":true}'}]
+    ref = await history.checkpoint(items, "Preserve negation.", {"completed_tool_call_ids": ["saved"]})
+    restarted = HistoryStore(store.session_factory)
+    checkpoint = restarted.read(scope, ref)["payload"]
+    recovered = [restarted.read(scope, item_ref)["payload"] for item_ref in checkpoint["items"]]
+    assert recovered == items and checkpoint["instructions"] == "Preserve negation."
+    with pytest.raises(ValueError, match="unavailable"):
+        restarted.read(replace(scope, owner_id="other"), ref)

@@ -1,8 +1,10 @@
 # Exact history and bounded model input
 
 This policy separates stored information from the information repeated to a model.
-It does not generate natural-language summaries, rewrite scientific decisions,
-infer that a disagreement is unresolved, or remove canonical conversation items.
+Mechanical output references do not rewrite scientific decisions, infer that a
+disagreement is unresolved, or remove canonical conversation items. Native OpenAI
+working-context compaction complements those references; its opaque state never
+replaces the exact archive. See [context continuation](AGENT_CONTEXT_CONTINUATION.md).
 It applies at runtime to packaged agents, saved custom agents, flow invocations,
 batch invocations, validators and authoring assistants.
 
@@ -68,22 +70,24 @@ batch invocations, validators and authoring assistants.
    Original requests, instructions, tool-call arguments, opaque reasoning,
    pending calls and recent results are retained. Error/warning records are
    protected; source continuation fields are copied mechanically into refs.
-   No model-authored summary or scientific interpretation is introduced.
+   This mechanical step introduces no scientific interpretation. Native Responses
+   compaction can separately reduce the working context during the same SDK run.
 
    The provisional trigger is 60,000 estimated total tokens, target 40,000,
    with four recent tool outputs retained. Instructions, schemas, tools (including
    deferred definitions) and output allowance count toward that estimate.
    An explicit agent/run `max_tokens` supplies the allowance; otherwise the
    provisional allowance is 16,000. These estimates are not provider usage.
-   A checkpoint remains stable until another threshold crossing. Two runtime
-   read tools are added; specialist domain tools remain scoped as before.
+   These are soft optimization targets and never cause a context-size rejection.
+   Two runtime read tools are added; specialist domain tools remain scoped as before.
 
    Failed persistence disables eviction for that invocation. A completed tool is
-   not retried because its archive write failed. If the protected/full context
-   cannot fit, a typed curator-facing error stops the run. A structured-output
-   retry that deliberately has no tools is archived but cannot externalize data:
-   it retains the complete input or stops at the same budget. Standard chat's
-   between-turn compaction remains separate and retains its canonical chat rows.
+   not retried because its archive write failed. A history-storage failure during
+   a required reduction is visible to the curator. A structured-output retry that
+   deliberately has no tools is archived but cannot externalize data; native
+   compaction can still operate. Standard chat persists native compaction state
+   between turns while retaining its canonical chat rows. The former separate
+   between-turn compact-session policy has been removed.
    Studio no longer asks the provider to truncate automatically. Explicit
    provider-managed conversation IDs are rejected with this policy enabled,
    because their unseen history cannot be measured or recovered by this layer.
@@ -108,9 +112,9 @@ batch invocations, validators and authoring assistants.
 | Single/batch/profile validators | Existing compiled surface plus owned runner config |
 | Other owned async/sync SDK utility runs | Shared history preparation |
 | Studio and benchmark assistant | Authenticated request scope; preserve existing deferred namespaces |
-| Tool-less structured retry | Same journal and budget; no unreadable refs are inserted |
+| Tool-less structured retry | Same journal and native compaction; no unreadable refs are inserted |
 
-The new migration only adds the two history tables and indexes. It does not
+The original history migration only adds the two history tables and indexes. It does not
 rewrite saved prompts, agent revisions, profiles, flows or historical results.
 The runtime infrastructure tools are attached after domain authorization. The
 saved-agent/flow release inventory must still verify effective tool contracts

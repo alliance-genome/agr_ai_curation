@@ -177,6 +177,7 @@ class RunHistory:
     # Item hash + occurrence index avoids collapsing repeated identical messages.
     item_refs: dict[tuple[str, int], str] = field(default_factory=dict)
     model_view: Any = None
+    native_compaction_keys: set[str] = field(default_factory=set)
     tool_output_metadata: dict[str, dict] = field(default_factory=dict)
     builder_revisions: dict[str, dict[str, int]] = field(default_factory=dict)
     builder_previous_events: dict[str, str] = field(default_factory=dict)
@@ -241,6 +242,33 @@ class RunHistory:
         await self.record("model_input_manifest", {"instructions": instructions,
             "items": [refs.get(i) for i in range(len(items))], "complete": len(refs) == len(items)})
         return refs
+
+    async def checkpoint(self, items: list[Any], instructions: str | None, metadata: dict) -> str | None:
+        """Persist a model-ready window by immutable item references.
+
+        Exact original inputs and builder revisions remain separate. Recovering
+        this window is data restoration; it never invokes the tools it describes.
+        """
+        if not self.healthy:
+            return None
+        occurrences: dict[str, int] = {}
+        refs = []
+        for item in items:
+            content = exact_json(item)
+            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            occurrence = occurrences.get(digest, 0)
+            occurrences[digest] = occurrence + 1
+            key = (digest, occurrence)
+            ref = self.item_refs.get(key)
+            if ref is None:
+                ref = await self.record("context_item", item)
+                if ref:
+                    self.item_refs[key] = ref
+            refs.append(ref)
+        return await self.record("model_context_checkpoint", {
+            "items": refs, "instructions": instructions,
+            "complete": all(refs), **metadata,
+        })
 
 
 def new_history(agent: Any, *, agent_key: str, runtime: str) -> RunHistory | None:
@@ -322,6 +350,22 @@ def history_tools(history: RunHistory) -> list[Any]:
             return invalid_cursor("History event or path unavailable in this scope. Do not infer its contents.")
     for tool in (search_run_history, read_run_history):
         tool._runtime_history_tool = True
+        invoke = tool.on_invoke_tool
+
+        async def history_result(ctx, arguments, _invoke=invoke):
+            # The SDK may stringify this dict with Python repr. Capture status
+            # and pagination from the structured result before that conversion.
+            value = await _invoke(ctx, arguments)
+            call_id = getattr(ctx, "tool_call_id", None)
+            if call_id:
+                from .model_context_view import _attention, _continuations
+                history.tool_output_metadata[call_id] = {
+                    "attention": not isinstance(value, dict) or _attention(value),
+                    "continuations": _continuations(value),
+                }
+            return value
+
+        tool.on_invoke_tool = history_result
     return [search_run_history, read_run_history]
 
 
@@ -417,6 +461,13 @@ async def record_model_history(agent: Any, kind: str, value: Any, **metadata) ->
     history = getattr(agent, "run_history", None)
     if history:
         await history.record(kind, value, **metadata)
+        if kind == "model_output" and isinstance(value, list) and history.healthy:
+            from .context_compaction import compaction_key
+            for item in value:
+                item = item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+                key = compaction_key(item) if isinstance(item, dict) else None
+                if key:
+                    history.native_compaction_keys.add(key)
 
 
 def record_builder_history(kind: str, workspace: Any, *, output: Any, validation: Any) -> None:

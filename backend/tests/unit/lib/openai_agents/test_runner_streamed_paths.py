@@ -358,7 +358,7 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_run_agent_with_tracing_compacts_standard_chat_session_before_provider_call(monkeypatch):
+async def test_run_agent_with_tracing_attaches_durable_session_without_separate_compactor(monkeypatch):
     captured = {}
     order = []
 
@@ -387,7 +387,7 @@ async def test_run_agent_with_tracing_compacts_standard_chat_session_before_prov
         captured["session_kwargs"] = kwargs
         return _FakeCompactionSession()
 
-    monkeypatch.setattr(runner, "build_standard_chat_compaction_session", _build_session)
+    monkeypatch.setattr(runner, "build_standard_chat_session", _build_session)
 
     def _run_streamed(*args, **kwargs):
         order.append("run")
@@ -413,8 +413,8 @@ async def test_run_agent_with_tracing_compacts_standard_chat_session_before_prov
         )
     )
 
-    assert order == ["compact", "run"]
-    assert captured["compaction_args"] == {"compaction_mode": "input"}
+    assert order == ["run"]
+    assert "compaction_args" not in captured
     assert captured["session_kwargs"]["session_id"] == "session-1"
     assert captured["session_kwargs"]["current_turn_id"] == "turn-1"
     assert captured["runner_kwargs"]["session"].__class__.__name__ == "_FakeCompactionSession"
@@ -428,16 +428,15 @@ async def test_run_agent_with_tracing_compacts_standard_chat_session_before_prov
     ids=["failure", "cancellation"],
 )
 @pytest.mark.asyncio
-async def test_run_agent_with_tracing_closes_owned_resources_after_compaction_error(
+async def test_run_agent_with_tracing_closes_owned_resources_after_session_creation_error(
     monkeypatch,
     compaction_error,
 ):
     captured = {}
     lifecycle_order = []
 
-    class _FakeCompactionSession:
-        async def run_compaction(self, _args):
-            raise compaction_error
+    def broken_session(**_kwargs):
+        raise compaction_error
 
     class _FakeClient:
         async def close(self):
@@ -458,8 +457,8 @@ async def test_run_agent_with_tracing_closes_owned_resources_after_compaction_er
     monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         runner,
-        "build_standard_chat_compaction_session",
-        lambda **_kwargs: _FakeCompactionSession(),
+        "build_standard_chat_session",
+        broken_session,
     )
 
     with pytest.raises(type(compaction_error)) as exc_info:

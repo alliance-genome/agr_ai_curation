@@ -882,6 +882,11 @@ async def test_flow_preserves_finalized_empty_and_sibling_output(monkeypatch, mi
     if attached:
         assert finished["output_status"] == "complete"
         assert finished["output_branches"][0]["output"]["type"] == "CHAT_OUTPUT_READY"
+        from src.lib.batch.processor import _has_completed_empty_output
+
+        assert _has_completed_empty_output(
+            finished["output_status"], finished["output_branches"]
+        )
         assert not any(event["type"] == "FILE_READY" for event in events)
     assert not any(event["type"] == "FLOW_ERROR" for event in events)
 
