@@ -400,8 +400,12 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
 
 @pytest.fixture(autouse=True)
 def _reset_runtime_caches():
+    """Keep synthetic package state from crossing test boundaries."""
     from src.lib.openai_agents import streaming_tools
 
+    # One test replaces the loader itself, so retain the real cache cleanup.
+    clear_adapter_cache = adapter_registry_module.load_curation_adapter_registry.cache_clear
+    clear_adapter_cache()
     agent_loader.reset_cache()
     models_loader.reset_cache()
     prompt_loader.reset_cache()
@@ -410,6 +414,7 @@ def _reset_runtime_caches():
     _reset_streaming_tool_caches(streaming_tools)
     runtime_validation.reset_startup_agent_validation_report()
     yield
+    clear_adapter_cache()
     agent_loader.reset_cache()
     models_loader.reset_cache()
     prompt_loader.reset_cache()
