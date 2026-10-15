@@ -219,6 +219,11 @@ interface BatchOutputBranch {
   source_label?: string;
   status: 'completed' | 'missing';
   failure_reason?: string;
+  output?: {
+    type?: string;
+    extraction_outcome?: string;
+    formatter_node_id?: string;
+  } | null;
 }
 
 export interface BatchDocument {
@@ -927,6 +932,18 @@ const BatchPage: React.FC = () => {
       .join(' · ');
   };
 
+  const getEmptyOutputSummary = (doc: BatchDocument): string => {
+    const hasEmptyOutput = doc.output_branches?.some(branch => (
+      branch.status === 'completed'
+      && branch.output?.type === 'CHAT_OUTPUT_READY'
+      && branch.output.extraction_outcome === 'no_results'
+      && branch.output.formatter_node_id === branch.output_node_id
+    ));
+    return hasEmptyOutput
+      ? 'An extraction finished with zero objects; no file was created for that result. This does not establish that the source has no relevant findings.'
+      : '';
+  };
+
   // Download one formatter branch result.
   const handleDownloadFile = (resultFile: BatchResultFile) => {
     window.open(resultFile.download_url, '_blank');
@@ -1478,8 +1495,8 @@ const BatchPage: React.FC = () => {
                     : doc.result_files.length
                       ? `${doc.output_status === 'partial' ? 'Partial output · ' : ''}${doc.result_files
                         .map((resultFile) => `${resultFile.filename}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`)
-                        .join(' · ')}${getMissingOutputSummary(doc) ? ` · Missing: ${getMissingOutputSummary(doc)}` : ''}`
-                      : undefined
+                        .join(' · ')}${getMissingOutputSummary(doc) ? ` · Missing: ${getMissingOutputSummary(doc)}` : ''}${getEmptyOutputSummary(doc) ? ` · ${getEmptyOutputSummary(doc)}` : ''}`
+                      : getEmptyOutputSummary(doc) || undefined
                 }
                 sx={{ pr: 2 }}
                 slotProps={{
@@ -1496,7 +1513,7 @@ const BatchPage: React.FC = () => {
         <Button
           variant="contained"
           startIcon={<DownloadIcon />}
-          disabled={batchState.completedCount === 0}
+          disabled={!batchState.documents.some(doc => doc.status === 'completed' && doc.result_files.length > 0)}
           onClick={handleDownloadZip}
           fullWidth
         >

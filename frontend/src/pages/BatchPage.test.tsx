@@ -417,6 +417,59 @@ describe('BatchPage', () => {
     expect(await screen.findByText('Please log in to view your flows')).toBeInTheDocument()
   })
 
+  it.each(['history', 'live'] as const)('shows explicit empty extraction outcomes from %s without a ZIP download', async (mode) => {
+    const outputs = [{
+      source_node_id: 'extract', output_node_id: 'format', status: 'completed',
+      output: { type: 'CHAT_OUTPUT_READY', formatter_node_id: 'format', extraction_outcome: 'no_results' },
+    }]
+    const status = mode === 'live' ? 'running' : 'completed'
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.startsWith('/api/flows?')) {
+        return Promise.resolve(jsonResponse({ flows: [], total: 0, page: 1, page_size: DEFAULT_FLOW_LIST_PAGE_SIZE }))
+      }
+      if (url === '/api/batches') {
+        return Promise.resolve(jsonResponse({ batches: [{
+          id: 'batch-empty', flow_id: 'flow-1', flow_name: 'Empty extraction flow', status,
+          total_documents: 1, completed_documents: mode === 'history' ? 1 : 0,
+          failed_documents: 0, created_at: '2026-04-03T00:00:00Z',
+        }] }))
+      }
+      if (url === '/api/batches/batch-empty') {
+        return Promise.resolve(jsonResponse({
+          id: 'batch-empty', flow_id: 'flow-1', status, total_documents: 1,
+          completed_documents: mode === 'history' ? 1 : 0, failed_documents: 0,
+          documents: [{
+            id: 'batch-doc-1', document_id: 'doc-1', document_title: 'Source document', position: 0,
+            status: mode === 'history' ? 'completed' : 'pending', result_files: [],
+            output_status: mode === 'history' ? 'complete' : undefined,
+            output_branches: mode === 'history' ? outputs : [],
+          }],
+        }))
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+    renderPage()
+    if (mode === 'history') {
+      fireEvent.click(await screen.findByText('Empty extraction flow'))
+    } else {
+      await waitFor(() => expect(MockEventSource.instances).toHaveLength(1))
+      MockEventSource.instances[0].emit({
+        type: 'DOCUMENT_STATUS', batch_id: 'batch-empty', document_id: 'doc-1', batch_document_id: 'batch-doc-1',
+        position: 0, status: 'completed', result_files: [], output_status: 'complete', output_branches: outputs,
+      })
+      MockEventSource.instances[0].emit({
+        type: 'BATCH_COMPLETE', status: 'completed', completed_documents: 1,
+        failed_documents: 0, partial_documents: 0, total_documents: 1,
+      })
+    }
+    expect(await screen.findByText(/An extraction finished with zero objects/)).toHaveTextContent(
+      'This does not establish that the source has no relevant findings.'
+    )
+    expect(screen.getByRole('button', { name: 'Download ZIP' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: /Download .*\.(csv|tsv|json)/ })).not.toBeInTheDocument()
+  })
+
   it('opens completed document feedback modeless with the active batch session and trace id', async () => {
     vi.mocked(submitFeedback).mockResolvedValue({
       status: 'success',

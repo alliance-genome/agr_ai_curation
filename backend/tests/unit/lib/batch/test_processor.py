@@ -139,6 +139,80 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize("case", [
+    "empty", "missing_branch", "partial", "ordinary_text", "wrong_formatter",
+    "missing_output", "late_failure", "not_completed", "no_terminal_event",
+])
+def test_batch_finalized_empty_outcome_requires_successful_terminal_contract(monkeypatch, case):
+    """Drive the real batch event consumer and persistence path, not just a predicate."""
+    db = Mock()
+    batch, batch_doc, flow = _build_batch_context()
+    published = []
+    branch = {
+        "source_node_id": "extract",
+        "output_node_id": "format",
+        "status": "completed",
+        "output": {
+            "type": "CHAT_OUTPUT_READY",
+            "formatter_node_id": "format",
+            "extraction_outcome": "no_results",
+            "output": "Extraction finalized with zero objects; the empty outcome was saved.",
+        },
+    }
+    branches = [branch]
+    if case == "ordinary_text":
+        branch["output"].pop("extraction_outcome")
+    elif case == "wrong_formatter":
+        branch["output"]["formatter_node_id"] = "other"
+    elif case == "missing_output":
+        branch["output"] = None
+    elif case == "missing_branch":
+        branches.append({"source_node_id": "other", "output_node_id": "other-format",
+                         "status": "missing", "output": None})
+
+    async def fake_flow(**_kwargs):
+        yield {"type": "CHAT_OUTPUT_READY", "details": branch["output"] or {}}
+        if case != "no_terminal_event":
+            yield {"type": "FLOW_FINISHED", "data": {
+                "status": "cancelled" if case == "not_completed" else "completed",
+                "output_status": "partial" if case == "partial" else "complete",
+                "output_branches": branches,
+            }}
+        if case == "late_failure":
+            yield {"type": "FLOW_ERROR", "details": {"message": "Late persistence failure"}}
+
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", fake_flow)
+    monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _: None)
+    monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _: None)
+    monkeypatch.setattr(processor, "get_batch_broadcaster", lambda: SimpleNamespace(
+        publish_sync=lambda _batch_id, event: published.append(event)))
+
+    if case == "empty":
+        processor._process_single_document(db, batch, batch_doc, flow, "auth-sub")
+        assert batch_doc.status == BatchDocumentStatus.COMPLETED
+        assert batch.completed_documents == 1
+        assert batch.failed_documents == 0
+        assert batch_doc.result_files is None
+        assert batch_doc.review_session_ids is None
+        assert batch_doc.output_status == "complete"
+        assert batch_doc.output_branches == branches
+        assert batch_doc.error_message is None
+        # Successful status events are built by the API from committed rows.
+        from src.api.batch import _batch_document_status_event
+
+        status = _batch_document_status_event(batch, batch_doc)
+        assert status["status"] == "completed"
+        assert status["result_files"] == []
+        assert status["output_branches"] == branches
+        db.commit.assert_called()
+    else:
+        with pytest.raises(processor.BatchFlowExecutionError):
+            processor._process_single_document(db, batch, batch_doc, flow, "auth-sub")
+        assert batch_doc.status == BatchDocumentStatus.FAILED
+        assert batch.failed_documents == 1
+        assert batch.completed_documents == 0
+
+
 def test_batch_processor_rechecks_agents_against_trusted_group_snapshot(monkeypatch):
     db = Mock()
     batch, batch_doc, flow = _build_batch_context()

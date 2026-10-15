@@ -1,15 +1,13 @@
-"""Standard-chat OpenAI Responses compaction over durable chat history."""
+"""Durable chat working context; shared runtime owns native compaction."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from datetime import datetime
 from typing import Any, Iterable, Sequence
 
-from agents.memory import OpenAIResponsesCompactionSession, Session
-from openai import AsyncOpenAI
+from agents.memory import Session
 from sqlalchemy import delete, select
 
 from src.lib.chat_history_repository import (
@@ -20,14 +18,9 @@ from src.lib.chat_history_repository import (
     MAX_MESSAGE_PAGE_SIZE,
 )
 from src.lib.chat_transcript import extract_flow_assistant_message
-from src.lib.openai_agents.config import get_standard_chat_compaction_token_threshold
-from src.lib.runtime_payload_budget import json_size
-from src.lib.openai_agents.extraction_trace_events import write_extraction_trace_event
 from src.models.sql.chat_message import ChatMessage as ChatMessageModel
 from src.models.sql.database import SessionLocal
 
-
-logger = logging.getLogger(__name__)
 
 CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE = "context_compaction"
 _PROJECTION_SCHEMA = "standard_chat_context_projection.v1"
@@ -121,33 +114,6 @@ def _completed_exchange_items(
     return items
 
 
-def estimate_standard_chat_context_tokens(items: Sequence[dict[str, Any]]) -> int:
-    """Estimate standard-chat model-live token usage from response input items."""
-
-    return json_size(list(items)).estimated_tokens
-
-
-def should_compact_standard_chat_context(context: dict[str, Any]) -> bool:
-    """Return whether the SDK compaction hook should compact this chat session."""
-
-    session_items = context.get("session_items")
-    if not isinstance(session_items, list):
-        raise TypeError("SDK compaction context must include list session_items")
-    estimated_tokens = estimate_standard_chat_context_tokens(session_items)
-    threshold = get_standard_chat_compaction_token_threshold()
-    should_compact = estimated_tokens >= threshold
-    if should_compact:
-        logger.info(
-            "Standard chat context compaction threshold reached",
-            extra={
-                "estimated_tokens": estimated_tokens,
-                "threshold": threshold,
-                "item_count": len(session_items),
-            },
-        )
-    return should_compact
-
-
 class DurableChatHistorySession(Session):
     """Agents SDK session backed by chat_messages context projection rows.
 
@@ -229,9 +195,9 @@ class DurableChatHistorySession(Session):
                 base_items: list[dict[str, Any]] = []
                 covered_turn_ids = self._current_turn_ids()
             else:
-                projection_items = _chat_replay_items(items)
-                if not projection_items:
-                    return
+                # SDK items are already provider input items. Keep compaction,
+                # reasoning and complete tool exchanges, not only visible text.
+                projection_items = items
                 if projection is not None:
                     base_items = self._projection_items(projection)
                     covered_turn_ids = self._projection_covered_turn_ids(projection)
@@ -244,7 +210,15 @@ class DurableChatHistorySession(Session):
                     covered_turn_ids = set()
 
             covered_turn_ids |= self._current_turn_ids()
-            projected_items = _dedupe_items_preserving_latest([*base_items, *projection_items])
+            from .context_compaction import compacted_window, compaction_key
+            native_keys = {key for item in items if (key := compaction_key(item))}
+            if not native_keys and not any(compaction_key(item) for item in base_items):
+                # Before native compaction there is no opaque state depending
+                # on tool exchanges; replay completed conversational messages.
+                projection_items = _chat_replay_items(projection_items)
+            projected_items = compacted_window(
+                _dedupe_items_preserving_latest([*base_items, *projection_items]), native_keys,
+            )
             self._upsert_projection(
                 db=db,
                 repository=repository,
@@ -396,91 +370,9 @@ class DurableChatHistorySession(Session):
         )
 
 
-def _compaction_sizes(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    calls = {item.get("call_id") for item in items if item.get("type") == "function_call"}
-    outputs = {item.get("call_id") for item in items if item.get("type") == "function_call_output"}
-    size = json_size(list(items))
-    return {"item_count": len(items), "json_chars": size.json_chars,
-            "estimated_tokens": size.estimated_tokens,
-            "estimate_basis": "serialized_characters_divided_by_four",
-            "visible_unpaired_tool_calls": len((calls - outputs) - {None})}
-
-
-def _record_compaction_observation(**event: Any) -> None:
-    # Measurements never contain messages, tool arguments, encrypted content,
-    # response IDs or user/session identifiers; the trace owns correlation.
-    try:
-        logger.info("Standard chat context compaction", extra={"chat_context_compaction": event})
-        write_extraction_trace_event(
-            event_type="runtime.chat_context_compaction", output_summary=event,
-            metadata={"scope": "standard_chat", "semantic_fidelity": "not_measured"},
-        )
-    except Exception:
-        logger.warning("Could not record chat compaction observation", exc_info=True)
-
-
-class ObservedChatCompactionSession(OpenAIResponsesCompactionSession):
-    """Observe SDK compaction/deferral without changing its context policy.
-
-    The SDK's deferred hooks are covered by executable tests against the pinned
-    SDK. Actual compact-request usage is recorded by SafeAsyncOpenAI separately.
-    Neither size reduction nor completion claims semantic fidelity.
-    """
-
-    async def run_compaction(self, args=None) -> None:
-        _, before_items = await self._ensure_compaction_candidates()
-        before = _compaction_sizes(before_items)
-        outcome = "failed"
-        try:
-            await super().run_compaction(args)
-            outcome = "projection_replaced" if before_items != self._session_items else "unchanged"
-        finally:
-            _record_compaction_observation(
-                phase="compaction_check", outcome=outcome, model=self.model,
-                before=before,
-                after=_compaction_sizes(self._session_items) if self._session_items is not None else None,
-                provider_held_continuation=bool((args or {}).get("response_id") or self._response_id),
-                semantic_fidelity="not_measured",
-            )
-
-    async def _defer_compaction(self, response_id: str, store: bool | None = None) -> None:
-        await super()._defer_compaction(response_id, store)
-        _record_compaction_observation(
-            phase="deferred_check", model=self.model,
-            deferred=bool(self._get_deferred_compaction_response_id()),
-            before=_compaction_sizes(self._session_items or []),
-            after=None, semantic_fidelity="not_measured",
-        )
-
-
-def build_standard_chat_compaction_session(
-    *,
-    session_id: str,
-    user_id: str,
-    current_turn_id: str,
-    model: str,
-    client: AsyncOpenAI | None = None,
-) -> OpenAIResponsesCompactionSession:
-    """Build the SDK compaction wrapper for one standard-chat supervisor turn."""
-
-    durable_session = DurableChatHistorySession(
-        session_id=session_id,
-        user_id=user_id,
-        current_turn_id=current_turn_id,
+def build_standard_chat_session(
+    *, session_id: str, user_id: str, current_turn_id: str,
+) -> DurableChatHistorySession:
+    return DurableChatHistorySession(
+        session_id=session_id, user_id=user_id, current_turn_id=current_turn_id,
     )
-    return ObservedChatCompactionSession(
-        session_id=session_id,
-        underlying_session=durable_session,
-        client=client,
-        model=model,
-        should_trigger_compaction=should_compact_standard_chat_context,
-    )
-
-
-__all__ = [
-    "CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE",
-    "DurableChatHistorySession",
-    "build_standard_chat_compaction_session",
-    "estimate_standard_chat_context_tokens",
-    "should_compact_standard_chat_context",
-]
