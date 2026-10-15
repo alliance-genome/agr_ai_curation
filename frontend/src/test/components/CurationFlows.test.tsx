@@ -108,7 +108,6 @@ const renderComponent = (sseEvents: SSEEvent[]) => render(
       sseEvents={sseEvents}
       onExecuteFlow={vi.fn(async () => {})}
       isExecuting={false}
-      currentDocumentId="document-123"
     />
   </MemoryRouter>,
 )
@@ -427,16 +426,16 @@ describe('project-shared flows in Home Tools', () => {
     created_at: '2026-09-09', updated_at: '2026-09-09',
   }
 
-  it('runs a teammate flow with the current curator document and hides delete', async () => {
+  it('delegates teammate flow execution to the current chat context and hides delete', async () => {
     const user = userEvent.setup()
     mockFetch.mockResolvedValueOnce(flowListResponse([shared]))
     const execute = vi.fn().mockResolvedValue(undefined)
-    render(<MemoryRouter><CurationFlows sessionId="teammate-session" currentDocumentId="my-document" sseEvents={[]} onExecuteFlow={execute} /></MemoryRouter>)
+    render(<MemoryRouter><CurationFlows sessionId="teammate-session" sseEvents={[]} onExecuteFlow={execute} /></MemoryRouter>)
     await screen.findByText(/Teammate Flow/)
     expect(screen.getByText(/Shared · Owner #8/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Delete this flow' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Run' }))
-    expect(execute).toHaveBeenCalledWith('shared-flow', 'my-document')
+    expect(execute).toHaveBeenCalledWith('shared-flow')
   })
 
   it('shows actionable run errors', async () => {
@@ -472,7 +471,7 @@ describe('project-shared flows in Home Tools', () => {
     expect(screen.queryByText(/Teammate Flow/)).not.toBeInTheDocument()
     expect(screen.getByText(/Available Flow/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Run' }))
-    expect(execute).toHaveBeenCalledWith('available-flow', undefined)
+    expect(execute).toHaveBeenCalledWith('available-flow')
   })
 
   it('ignores a stale routed failure after a newer refresh succeeds', async () => {

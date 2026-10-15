@@ -4688,90 +4688,6 @@ def _emit_builder_finalization_state(
     return diagnostics
 
 
-def _emit_chunk_provenance_from_output(tool_name: str, output: str):
-    """
-    Parse PDF tool output and emit CHUNK_PROVENANCE events for PDF highlighting.
-
-    This enables the frontend PDF viewer to highlight relevant sections based
-    on what the agent read/searched.
-
-    Args:
-        tool_name: Name of the tool (search_document or read_section)
-        output: JSON string output from the tool
-    """
-    try:
-        # Parse the tool output JSON
-        if isinstance(output, str):
-            data = json.loads(output)
-        elif hasattr(output, "model_dump"):
-            data = output.model_dump()
-        else:
-            data = output if isinstance(output, dict) else {}
-
-        if tool_name == "search_document":
-            # ChunkSearchResult: {"summary": "...", "hits": [...]}
-            hits = data.get("hits", [])
-            for hit in hits:
-                chunk_id = hit.get("chunk_id")
-                if not chunk_id:
-                    continue
-
-                # Get doc_items with bounding boxes from the chunk (from PDFX)
-                # These contain page, bbox coordinates for PDF highlighting
-                doc_items = hit.get("doc_items") or []
-
-                if not doc_items:
-                    # Fallback: create minimal doc_items if none available
-                    page_number = hit.get("page_number")
-                    if page_number:
-                        doc_items = [{"page": page_number}]
-                    else:
-                        logger.debug("Chunk %s has no doc_items or page_number, skipping", chunk_id)
-                        continue
-
-                # Emit CHUNK_PROVENANCE event
-                event_payload = {
-                    "type": "CHUNK_PROVENANCE",
-                    "message_id": str(uuid.uuid4()),
-                    "chunk_id": chunk_id,
-                    "doc_items": doc_items,
-                    "source_tool": tool_name,
-                }
-                add_specialist_event(event_payload)
-
-        elif tool_name == "read_section":
-            # SectionReadResult: {"summary": "...", "section": {...}}
-            section = data.get("section")
-            if section:
-                section_title = section.get("section_title")
-
-                # Get doc_items with bounding boxes from all chunks in the section
-                doc_items = section.get("doc_items") or []
-
-                if not doc_items:
-                    logger.debug("Section '%s' has no doc_items, skipping provenance", section_title)
-                    return
-
-                # Emit CHUNK_PROVENANCE event with the section's doc_items
-                add_specialist_event({
-                    "type": "CHUNK_PROVENANCE",
-                    "message_id": str(uuid.uuid4()),
-                    "chunk_id": f"section:{section_title}",
-                    "doc_items": doc_items,
-                    "source_tool": tool_name,
-                })
-                logger.debug(
-                    "Emitted CHUNK_PROVENANCE for section '%s' with %s doc_items",
-                    section_title,
-                    len(doc_items),
-                )
-
-    except json.JSONDecodeError as e:
-        logger.warning("Failed to parse %s output for chunk provenance: %s", tool_name, e)
-    except Exception as e:
-        logger.warning("Error extracting chunk provenance from %s: %s", tool_name, e)
-
-
 def _formatter_saved_file_handoff(output: Any) -> Optional[Dict[str, Any]]:
     """Project authoritative finalize_and_save output, never model-authored prose."""
     payload = coerce_tool_event_dict(output)
@@ -5708,10 +5624,6 @@ async def run_specialist_with_events(
                                 live_evidence_records, evidence_record
                             )
 
-                        # Extract chunk provenance from PDF tool outputs for highlighting
-                        if current_tool_name in ("search_document", "read_section"):
-                            _emit_chunk_provenance_from_output(current_tool_name, output)
-
                         # Emit event for real-time visibility
                         # Use standard TOOL_COMPLETE type so frontend can display it
                         completed_tool_id = completed_tool.get("tool_id")
@@ -6279,6 +6191,10 @@ async def run_specialist_with_events(
                     )
 
                     retry_start_time = datetime.now(timezone.utc)
+                    from .model_context_view import run_config_with_history
+                    retry_agent.run_history = getattr(runtime_agent, "run_history", None)
+                    retry_config = run_config_with_history(effective_config, retry_agent.run_history,
+                                                           allow_projection=False)
                     retry_route_token = set_benchmark_invocation_route(retry_agent)
                     try:
                         retry_result = Runner.run_streamed(
@@ -6287,7 +6203,7 @@ async def run_specialist_with_events(
                             # Reduced turns - just need output synthesis.
                             # Env-configurable via STRUCTURED_FINALIZATION_RETRY_MAX_TURNS.
                             max_turns=get_structured_finalization_retry_max_turns(),
-                            run_config=effective_config
+                            run_config=retry_config
                         )
 
                         # Consume the retry stream with debug logging

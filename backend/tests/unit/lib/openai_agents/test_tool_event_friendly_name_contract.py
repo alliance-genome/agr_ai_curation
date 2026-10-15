@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 from typing import Any
+from agents import RunConfig as SDKRunConfig
+
 import json
 
 import pytest
@@ -204,7 +206,7 @@ async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch, loo
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
@@ -274,7 +276,7 @@ async def test_runner_emits_evidence_summary_for_record_evidence_tool_calls(monk
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
@@ -359,7 +361,7 @@ async def test_runner_matches_concurrent_record_evidence_outputs_by_call_id(monk
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
@@ -432,7 +434,7 @@ async def test_runner_emits_evidence_summary_from_structured_extraction_result(m
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
@@ -534,7 +536,7 @@ async def test_runner_fails_fast_when_structured_extraction_result_is_missing_ev
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
@@ -600,7 +602,7 @@ async def test_runner_buffers_live_specialist_evidence_until_completion(monkeypa
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda events: live_event_list_ref.__setitem__("value", events))
@@ -648,7 +650,7 @@ async def test_runner_fails_fast_without_structured_evidence_even_when_live_ment
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda events: live_event_list_ref.__setitem__("value", events))
@@ -731,7 +733,7 @@ async def test_runner_fails_fast_when_kept_count_is_positive_but_items_are_missi
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
@@ -807,7 +809,7 @@ async def test_runner_accepts_schema_defined_retained_collection_without_items(m
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
@@ -900,7 +902,7 @@ async def test_runner_emits_reasoning_file_ready_and_handoff_events_without_chat
     monkeypatch.setattr(runner, "ResponseReasoningSummaryTextDeltaEvent", _FakeReasoningDelta)
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
@@ -958,7 +960,7 @@ async def test_runner_emits_reasoning_file_ready_and_handoff_events_without_chat
 async def test_runner_guardrail_yields_run_error_and_skips_completion(monkeypatch):
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
@@ -1013,7 +1015,7 @@ async def test_specialist_tool_events_emit_humanized_internal_labels(monkeypatch
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -1057,7 +1059,7 @@ async def test_specialist_required_tool_enforcement_raises_when_search_not_calle
     captured_events = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -1116,7 +1118,7 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools,
         "_dispatch_domain_envelope_validators_for_chat",
@@ -1234,7 +1236,7 @@ async def test_specialist_rejects_structured_evidence_without_live_records(monke
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -1352,7 +1354,7 @@ async def test_specialist_rejects_duplicate_structured_alias_without_live_id_ref
     captured_events = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -1433,7 +1435,7 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -1546,7 +1548,7 @@ async def test_pdf_specialist_returns_plain_answer_from_structured_output_and_em
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -1634,7 +1636,7 @@ async def test_specialist_fails_fast_when_structured_extraction_output_is_missin
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -1694,7 +1696,7 @@ async def test_specialist_fails_fast_when_live_evidence_exists_but_item_refs_are
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -1755,7 +1757,7 @@ async def test_allele_specialist_rejects_empty_evidence_after_section_label_reco
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -1856,7 +1858,7 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -1945,7 +1947,7 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_identity
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -2049,7 +2051,7 @@ async def test_specialist_emits_file_ready_for_fileinfo_output(monkeypatch):
     captured_events = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -2089,7 +2091,7 @@ async def test_specialist_emits_file_ready_for_fileinfo_output(monkeypatch):
 async def test_specialist_appends_batching_nudge_at_threshold(monkeypatch):
     monkeypatch.setattr(streaming_tools, "add_specialist_event", lambda _event: None)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",

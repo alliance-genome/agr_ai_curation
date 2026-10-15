@@ -1,5 +1,7 @@
 """Coverage tests for streaming_tools retry and text-fallback paths."""
 
+from agents import RunConfig as SDKRunConfig
+
 import asyncio
 import json
 import sys
@@ -74,7 +76,7 @@ async def test_run_specialist_uses_streaming_text_fallback_when_final_output_mis
     captured_events = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -158,7 +160,7 @@ async def test_run_specialist_rejects_domain_envelope_text_after_stream_validati
         lambda **event: captured_builder_events.append(event) or event,
     )
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -212,7 +214,7 @@ async def test_run_specialist_does_not_recover_non_domain_stream_errors(monkeypa
         lambda **event: captured_builder_events.append(event) or event,
     )
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -308,7 +310,7 @@ async def test_run_specialist_rejects_structured_json_from_new_items_without_fin
         lambda **event: captured_builder_events.append(event) or event,
     )
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
     monkeypatch.setattr(
         streaming_tools,
@@ -364,7 +366,7 @@ async def test_run_specialist_marks_builder_cancelled_on_stream_cancellation(mon
         lambda **event: captured_builder_events.append(event) or event,
     )
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -415,7 +417,7 @@ async def _run_with_closing_text(monkeypatch, caplog, agent):
         lambda runtime_agent, **_kwargs: runtime_agent,
     )
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -479,7 +481,7 @@ async def test_run_specialist_resets_evidence_workspace_after_stream_error(monke
             raise RuntimeError("stream exploded")
 
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -599,7 +601,7 @@ async def test_run_specialist_retry_succeeds_when_initial_output_missing(monkeyp
     captured_events = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
 
     agent = SimpleNamespace(
@@ -639,7 +641,7 @@ async def test_run_specialist_retry_raises_when_retry_also_missing_output(monkey
     captured_events = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
 
     agent = SimpleNamespace(
@@ -701,7 +703,7 @@ async def test_structured_retry_request_replays_deferred_history_without_tool_se
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", lambda _event: None)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
 
     await streaming_tools.run_specialist_with_events(
@@ -902,7 +904,7 @@ async def test_streamed_turn_exhaustion_retains_incomplete_validator_judgment(mo
         return state
     monkeypatch.setattr(streaming_tools, "_StructuredSpecialistFinalizationState", state_factory)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     calls = []
     def run(*args, **kwargs):
         calls.append(kwargs)

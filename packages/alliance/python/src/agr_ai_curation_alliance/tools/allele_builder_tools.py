@@ -526,6 +526,7 @@ def _list_staged_allele_observations_impl(
     include_discarded: bool,
     limit: int = 50,
     offset: int = 0,
+    workspace_revision: Optional[int] = None,
 ) -> AgrQueryResult:
     """List compact summaries for staged allele mention candidates, one page at a time."""
 
@@ -555,6 +556,7 @@ def _list_staged_allele_observations_impl(
         include_discarded=list_input.include_discarded,
         limit=list_input.limit,
         offset=list_input.offset,
+        workspace_revision=workspace_revision,
     )
     _emit_allele_builder_event(
         "allele_builder.list_completed",
@@ -577,11 +579,14 @@ def _find_staged_allele_observations_impl(
     detail_path: Optional[str] = None,
     detail_cursor: Optional[int] = None,
     result_sha256: Optional[str] = None,
+    workspace_revision: Optional[int] = None,
 ) -> AgrQueryResult:
-    """Find specific staged allele drafts by content or id, one page at a time.
-
-    Use a withheld summary's detail_read arguments with this tool to read its
-    exact JSON in chunks; retain result_sha256 and advance detail_cursor."""
+    """Search drafts and return a versioned index. For complete original fields,
+    refs and errors, pass a row's detail_read arguments. For a nested value use
+    detail_path='candidate.staged_fields.<field>' and result_sha256=null on the
+    first chunk, then retain the returned detail.sha256 and advance detail_cursor.
+    Retain workspace_revision across list pages and detail reads; restart if stale.
+    """
 
     attempted_query = _attempt_query(
         "find_staged_allele_observations",
@@ -629,6 +634,7 @@ def _find_staged_allele_observations_impl(
         detail_path=detail_path,
         detail_cursor=detail_cursor,
         result_sha256=result_sha256,
+        workspace_revision=workspace_revision,
     )
     _emit_allele_builder_event(
         "allele_builder.find_completed",

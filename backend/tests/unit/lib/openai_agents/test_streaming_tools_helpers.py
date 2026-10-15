@@ -3135,45 +3135,6 @@ def test_collected_events_and_live_list_modes():
     streaming_tools.set_live_event_list(None)
 
 
-def test_emit_chunk_provenance_from_search_document_emits_events(monkeypatch):
-    emitted = []
-    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
-
-    output = {
-        "hits": [
-            {"chunk_id": "chunk-1", "doc_items": [{"page": 1}]},
-            {"chunk_id": "chunk-2", "page_number": 2},
-        ]
-    }
-    streaming_tools._emit_chunk_provenance_from_output("search_document", output)
-
-    assert len(emitted) == 2
-    assert emitted[0]["type"] == "CHUNK_PROVENANCE"
-    assert emitted[0]["chunk_id"] == "chunk-1"
-    assert emitted[1]["doc_items"] == [{"page": 2}]
-
-
-def test_emit_chunk_provenance_from_read_section_emits_when_doc_items_present(monkeypatch):
-    emitted = []
-    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
-
-    output = {
-        "section": {
-            "section_title": "Methods",
-            "doc_items": [{"page": 3, "bbox": [0, 0, 1, 1]}],
-        }
-    }
-    streaming_tools._emit_chunk_provenance_from_output("read_section", output)
-
-    assert len(emitted) == 1
-    assert emitted[0]["chunk_id"] == "section:Methods"
-
-
-def test_emit_chunk_provenance_handles_invalid_json_string_gracefully():
-    # Should not raise
-    streaming_tools._emit_chunk_provenance_from_output("search_document", "{bad json")
-
-
 def test_required_tool_failure_message_for_document_tools():
     agent = SimpleNamespace(tools=[SimpleNamespace(name="search_document")])
     msg = streaming_tools._required_tool_failure_message(

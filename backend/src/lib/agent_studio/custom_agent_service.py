@@ -1455,9 +1455,25 @@ def clone_saved_custom_agent(
     data = saved.model_dump(mode="json")
     data["allowed_group_ids"] = allowed
     data["inherited_allowed_group_ids"] = list(saved.allowed_group_ids)
-    cloned_snapshot = AgentExecutionSnapshot.model_validate(data)
     if custom_agent_name_exists(db, user_id, name):
         raise ValueError("A custom agent with this name already exists")
+    if saved.output_contract.generic_profile_ref is not None and source.user_id != user_id:
+        from src.lib.agent_studio.execution_revision_service import get_execution_profile_revision
+        from src.lib.agent_studio.generic_profile_service import create_profile
+
+        profile_revision = get_execution_profile_revision(
+            db, source.id, source.execution_revision_id, user_id,
+            active_group_ids=list(active_group_ids or []),
+        )
+        profile, revision = create_profile(
+            db, user_id, profile_revision.contract,
+            active_group_ids=list(active_group_ids or []),
+        )
+        data["output_contract"]["generic_profile_ref"] = {
+            "profile_id": str(profile.id), "profile_revision_id": str(revision.id),
+            "revision": revision.revision, "fingerprint": revision.fingerprint,
+        }
+    cloned_snapshot = AgentExecutionSnapshot.model_validate(data)
     clone_id = uuid.uuid4()
     clone = CustomAgent(
         id=clone_id, agent_key=make_custom_agent_id(clone_id), user_id=user_id,
@@ -1479,7 +1495,7 @@ def clone_saved_custom_agent(
     db.add(clone)
     db.flush()
     # Keep original prompt manifests/provenance and full resolved contracts. No
-    # parent lookup, prompt normalization, or second editable profile copy.
+    # parent lookup or prompt normalization. Cross-owner copies own their profile.
     append_execution_revision(
         db, clone, cloned_snapshot, user_id=user_id, expected_revision_id=None,
     )

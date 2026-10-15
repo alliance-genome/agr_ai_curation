@@ -681,6 +681,12 @@ async def run_agent_with_owned_openai_resources(
 ) -> Any:
     """Run one non-streaming agent with provider cleanup before loop shutdown."""
 
+    from src.lib.openai_agents.run_history import prepare_history_run
+    # Validators may already have a compiled surface; retain its exact tool policy.
+    surface = getattr(agent, "tool_surface", None)
+    supplied_config = run_kwargs.get("run_config") or RunConfig()
+    run_kwargs["run_config"] = (run_config_for_tool_surface(supplied_config, surface)
+                                if surface is not None else prepare_history_run(agent, supplied_config))
     agent_model = getattr(agent, "model", None)
     from src.lib.openai_agents.benchmark_routing import (
         reset_benchmark_invocation_route,
@@ -739,6 +745,11 @@ def run_agent_sync_with_owned_openai_resources(
         and not _uses_openai_http_model(agent_model)
     ):
         # Do not impose SDK HTTP ownership on opaque/custom model lifecycles.
+        from src.lib.openai_agents.run_history import prepare_history_run
+        supplied_config = run_kwargs.get("run_config") or RunConfig()
+        surface = getattr(agent, "tool_surface", None)
+        run_kwargs["run_config"] = (run_config_for_tool_surface(supplied_config, surface)
+                                    if surface is not None else prepare_history_run(agent, supplied_config))
         return Runner.run_sync(
             agent,
             input=input,

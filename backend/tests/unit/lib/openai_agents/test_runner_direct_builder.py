@@ -1,5 +1,7 @@
 """Direct builder runs use real package tools/state, without model or SQL calls."""
 
+from agents import RunConfig as SDKRunConfig
+
 import asyncio
 from contextvars import Context
 import json
@@ -23,7 +25,7 @@ def runtime(monkeypatch):
     monkeypatch.setattr(runner, "write_stream_event", lambda *a, **k: None)
     monkeypatch.setattr(runner, "write_extraction_trace_event", lambda **k: k)
     monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **k: k)
-    monkeypatch.setattr(runner, "_build_agents_run_config", lambda **k: SimpleNamespace())
+    monkeypatch.setattr(runner, "_build_agents_run_config", lambda **kwargs: SDKRunConfig())
     return SimpleNamespace(client=None, provider=None)
 
 

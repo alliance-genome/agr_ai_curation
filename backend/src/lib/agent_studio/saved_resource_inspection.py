@@ -17,7 +17,7 @@ from sqlalchemy import select
 from src.lib.agent_studio.execution_revision_service import (
     get_execution_revision, list_execution_revisions,
 )
-from src.lib.agent_studio.generic_profile_service import get_profile_revision
+from src.lib.agent_studio.execution_revision_service import get_execution_profile_revision
 from src.lib.chat_transcript import FLOW_SUMMARY_MESSAGE_TYPE
 from src.lib.flows.unavailable_steps import stored_flow_step_reason_codes
 from src.lib.openai_agents.config import (
@@ -228,7 +228,9 @@ def _read_saved_resource(db, *, user_id: int, active_group_ids: list[str], reque
     if pin is not None:
         # get_execution_revision has already verified this exact profile pin and
         # the caller's access. Use the same authorized read for its field details.
-        profile = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+        profile = get_execution_profile_revision(
+            db, agent_id, row.id, user_id, active_group_ids=active_group_ids,
+        )
         output_profile = {"profile_id": str(pin.profile_id), "revision_id": str(profile.id),
                           "revision": profile.revision, "fingerprint": profile.fingerprint,
                           "contract": profile.contract}

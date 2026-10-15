@@ -21,13 +21,11 @@ export interface ToolsPanelProps {
   /** Shared SSE events from the chat stream */
   sseEvents: SSEEvent[]
   /** Callback to execute a flow */
-  onExecuteFlow: (flowId: string, documentId?: string, userQuery?: string) => Promise<void>
+  onExecuteFlow: (flowId: string) => Promise<void>
   /** Callback to stop currently executing flow/chat stream */
   onStopFlow?: () => void | Promise<void>
   /** Whether a flow is currently executing */
   isExecuting?: boolean
-  /** Current document loaded in PDF viewer */
-  currentDocumentId?: string
 }
 
 /**
@@ -43,7 +41,6 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({
   onExecuteFlow,
   onStopFlow,
   isExecuting = false,
-  currentDocumentId,
 }) => {
   const theme = useTheme()
 
@@ -91,7 +88,6 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({
             onExecuteFlow={onExecuteFlow}
             onStopFlow={onStopFlow}
             isExecuting={isExecuting}
-            currentDocumentId={currentDocumentId}
           />
         </Stack>
       </Box>

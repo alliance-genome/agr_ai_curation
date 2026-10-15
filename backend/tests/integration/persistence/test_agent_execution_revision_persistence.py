@@ -1207,3 +1207,97 @@ def test_service_profile_pin_uses_exact_revision_and_historical_access(
     db.flush()
     with pytest.raises(ExecutionRevisionNotFoundError):
         get_execution_revision(db, agent_id, revision.id, 1, active_group_ids=[])
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_shared_agent_grants_only_pinned_private_profile_and_clones_independently(execution_db, builder_policies, monkeypatch, archived):
+    from src.models.sql.agent import ProjectMember
+    from src.models.sql.generic_extraction_profile import GenericExtractionProfile
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision, get_execution_revision, ExecutionRevisionNotFoundError
+    from src.lib.agent_studio.custom_agent_service import clone_saved_custom_agent
+    from src.schemas.agent_execution_revision import AgentOutputContract, GenericProfilePin
+
+    db, agent_id, _, profile_revision = execution_db
+    ProjectMember.__table__.create(db.connection())
+    project_id = db.scalar(sa.text('SELECT id FROM projects LIMIT 1'))
+    db.add_all([ProjectMember(project_id=project_id,user_id=uid) for uid in (1,2)])
+    head = db.get(Agent,agent_id)
+    head.visibility,head.project_id = 'project',project_id
+    head.allowed_group_ids=['FB']
+    from src.lib.agent_studio.profile_builder_contract import profile_builder_tool_ids
+    head.tool_ids=profile_builder_tool_ids([])
+    pin=GenericProfilePin(profile_id=profile_revision.profile_id,profile_revision_id=profile_revision.id,revision=1,fingerprint=profile_revision.fingerprint)
+    saved=capture_execution_snapshot(db,head,AgentOutputContract(output_state='structured_extraction',output_mode='profile_bound_generic',generic_profile_ref=pin))
+    revision=append_execution_revision(db,head,saved,user_id=1,expected_revision_id=None)
+    original=revision.snapshot.copy()
+    db.get(GenericExtractionProfile,pin.profile_id).archived=archived
+    db.flush()
+    _,loaded=get_execution_revision(db,head.id,revision.id,2,active_group_ids=['FB'])
+    assert loaded.output_contract.generic_profile_ref==pin
+    with pytest.raises(generic_profile_service.ProfileNotFoundError):
+        generic_profile_service.get_profile_revision(db,pin.profile_id,1,2,include_archived=True)
+    for uid,groups in [(3,['FB']),(2,['WB'])]:
+        with pytest.raises(ExecutionRevisionNotFoundError):
+            get_execution_revision(db,head.id,revision.id,uid,active_group_ids=groups)
+    clone=clone_saved_custom_agent(db,2,head,name='My extraction',active_group_ids=['FB'])
+    _,copied=get_execution_revision(db,clone.id,clone.execution_revision_id,2,active_group_ids=['FB'])
+    copied_pin=copied.output_contract.generic_profile_ref
+    assert copied_pin.profile_id!=pin.profile_id
+    owned=db.get(GenericExtractionProfile,copied_pin.profile_id)
+    assert owned.owner_id==2 and owned.visibility=='private'
+    assert generic_profile_service.get_profile_revision(db,copied_pin.profile_id,1,2).contract==profile_revision.contract
+    assert revision.snapshot==original
+    # Real flow read/clone/save, shared by both UI clone entry points.
+    import asyncio
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from datetime import datetime, timezone
+    from src.api import flows, agent_studio_custom
+    from src.models.sql import CurationFlow, database
+    from src.schemas.flows import CloneFlowRequest, FlowDefinition
+    from tests.unit.api.test_flows_api import _minimal_flow_definition_payload
+    CurationFlow.__table__.create(db.connection())
+    definition=_minimal_flow_definition_payload()
+    definition['nodes'][1]['data'].update(agent_id=head.agent_key,agent_revision_id=str(revision.id))
+    definition=FlowDefinition.model_validate(definition).model_dump(mode='json')
+    flow=CurationFlow(user_id=1,name='Shared extraction',visibility='project',project_id=project_id,
+        shared_at=datetime.now(timezone.utc),flow_definition=definition)
+    db.add(flow)
+    db.commit()
+    monkeypatch.setattr(database,'SessionLocal',lambda: nullcontext(db))
+    monkeypatch.setattr(flows,'set_global_user_from_cognito',lambda *_:SimpleNamespace(id=2))
+    monkeypatch.setattr(flows,'get_groups_from_provider_groups',lambda _:['FB'])
+    read_only=flows._flow_to_response(flow,viewer_user_id=2,active_group_ids=['FB'],db=db)
+    assert not read_only.has_critical_issues
+    flow_clone=asyncio.run(flows.clone_flow(flow.id,CloneFlowRequest(),{'id':2},db))
+    assert flow_clone.is_owner and flow_clone.visibility=='private'
+    assert not flow_clone.has_critical_issues
+    assert flow_clone.flow_definition.nodes[1].data.agent_revision_id==revision.id
+    monkeypatch.setattr(agent_studio_custom,'set_global_user_from_cognito',lambda *_:SimpleNamespace(id=2))
+    monkeypatch.setattr(agent_studio_custom,'_authenticated_group_ids',lambda _:['FB'])
+    scoped_profile=asyncio.run(agent_studio_custom.get_execution_profile_endpoint(head.id,revision.id,user={},db=db))
+    assert scoped_profile.id==pin.profile_revision_id
+    head.visibility,head.project_id='private',None
+    db.flush()
+    with pytest.raises(ExecutionRevisionNotFoundError):
+        get_execution_revision(db,head.id,revision.id,2,active_group_ids=['FB'])
+    get_execution_revision(db,clone.id,clone.execution_revision_id,2,active_group_ids=['FB'])
+
+
+def test_agent_dependency_does_not_grant_another_owners_private_profile(execution_db, builder_policies):
+    from src.models.sql.generic_extraction_profile import GenericExtractionProfile
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision, get_execution_revision, ExecutionRevisionNotFoundError
+    from src.lib.agent_studio.profile_builder_contract import profile_builder_tool_ids
+    from src.schemas.agent_execution_revision import AgentOutputContract, GenericProfilePin
+    db,agent_id,_,profile_revision=execution_db
+    head=db.get(Agent,agent_id)
+    head.tool_ids=profile_builder_tool_ids([])
+    pin=GenericProfilePin(profile_id=profile_revision.profile_id,profile_revision_id=profile_revision.id,revision=1,fingerprint=profile_revision.fingerprint)
+    saved=capture_execution_snapshot(db,head,AgentOutputContract(output_state='structured_extraction',output_mode='profile_bound_generic',generic_profile_ref=pin))
+    revision=append_execution_revision(db,head,saved,user_id=1,expected_revision_id=None)
+    db.get(GenericExtractionProfile,pin.profile_id).owner_id=3
+    db.flush()
+    with pytest.raises(ExecutionRevisionNotFoundError):
+        get_execution_revision(db,head.id,revision.id,1,active_group_ids=[])

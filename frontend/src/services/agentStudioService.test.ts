@@ -776,9 +776,14 @@ describe('shared Workshop contracts', () => {
     expect(result.tool_ideas[1]).not.toHaveProperty('resulting_tool_key')
   })
   it.each([403, 404])('surfaces denied or inaccessible clone responses (%s)', async (status) => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status })
-    await expect(cloneAgentToWorkshop('ca_inaccessible')).rejects.toThrow(`Failed to clone agent: ${status}`)
+    mockFetch.mockResolvedValueOnce({ ok: false, status, json: async () => ({ detail: 'Access denied to agent' }) })
+    await expect(cloneAgentToWorkshop('ca_inaccessible')).rejects.toThrow('Access denied to agent')
     expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 
 })
+
+ it('gives clone recovery guidance when the server response is not JSON', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 502, json: async () => { throw new Error('HTML') } })
+    await expect(cloneAgentToWorkshop('ca_shared')).rejects.toThrow('Refresh the library and try again')
+  })

@@ -515,6 +515,15 @@ report_runtime_exception(
 )
 ```
 
+Canonical agent history reports failed writes, searches, reads and integrity
+checks with component `agent_history` and operations `write_failed`,
+`search_failed` or `read_failed`. Reports use fixed, chain-free exceptions and
+only the original exception class; SQL, prompts and stored payloads are omitted.
+Companion logs skip Sentry event promotion. A write failure disables context
+eviction and reports once per invocation, including concurrent failures, without
+retrying a completed tool mutation. Expected missing/out-of-scope events and
+invalid paths or cursors remain quiet. Reporting failures cannot interrupt work.
+
 Hierarchy resolution reports caught setup and provider failures with component
 `hierarchy_resolution` and operation `resolve_hierarchy`. The report contains a
 fixed, chain-free error and the original exception class, without provider text

@@ -18,13 +18,11 @@ export interface CurationFlowsProps {
   /** Shared SSE event stream for reacting to flow completion */
   sseEvents: SSEEvent[]
   /** Callback to execute a flow */
-  onExecuteFlow: (flowId: string, documentId?: string, userQuery?: string) => Promise<void>
+  onExecuteFlow: (flowId: string) => Promise<void>
   /** Callback to stop currently executing flow/chat stream */
   onStopFlow?: () => void | Promise<void>
   /** Whether a flow is currently executing */
   isExecuting?: boolean
-  /** Current document loaded in PDF viewer */
-  currentDocumentId?: string
 }
 
 export function mapFlowFinishedEvent(
@@ -81,7 +79,7 @@ export function mapFlowFinishedEvent(
 }
 
 
-export default function CurationFlows({ sessionId, sseEvents, onExecuteFlow, onStopFlow, isExecuting = false, currentDocumentId }: CurationFlowsProps) {
+export default function CurationFlows({ sessionId, sseEvents, onExecuteFlow, onStopFlow, isExecuting = false }: CurationFlowsProps) {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedFlowId = searchParams.get('flow')
@@ -155,7 +153,7 @@ export default function CurationFlows({ sessionId, sseEvents, onExecuteFlow, onS
     if (!sessionId || isExecuting) return
     setRunError(null)
     setRunningId(flow.id)
-    try { await onExecuteFlow(flow.id, currentDocumentId) }
+    try { await onExecuteFlow(flow.id) }
     catch (err) {
       logger.error('Flow execution failed', err as Error, { component: 'CurationFlows' })
       setRunError(err instanceof Error ? err.message : 'Failed to run flow')

@@ -323,13 +323,24 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
             from src.lib.agent_studio.profile_mapping_service import validate_profile_mappings
             from src.schemas.generic_extraction_profile import GenericProfileContract
             from src.schemas.agent_execution_revision import GenericProfilePin
-            from src.lib.agent_studio.generic_profile_service import get_profile_revision
+            from src.lib.agent_studio.generic_profile_service import get_profile_revision, ProfileNotFoundError
             if candidate["output_schema_key"] or draft_output.get("schemaKey") or draft_output.get("domainExtractionRef"):
                 raise ValueError("Custom profiles cannot select a packaged schema or builder")
             if draft_output.get("profilePin"):
                 output_validation_path = "custom_agent.output_contract.profilePin"
                 pin = GenericProfilePin.model_validate(draft_output["profilePin"])
-                saved = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+                try:
+                    saved = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+                except ProfileNotFoundError:
+                    if not workshop.clone_source_agent_id or source is None:
+                        raise
+                    from src.lib.agent_studio.execution_revision_service import get_execution_profile_revision
+                    saved = get_execution_profile_revision(
+                        db, source.id, source.execution_revision_id, user_id,
+                        active_group_ids=active_group_ids,
+                    )
+                    if saved is None or saved.profile_id != pin.profile_id or saved.revision != pin.revision:
+                        raise ValueError("The source profile revision pin does not match")
                 if saved.id != pin.profile_revision_id or saved.fingerprint != pin.fingerprint:
                     raise ValueError("The source profile revision pin does not match")
             output_validation_path = "custom_agent.output_contract.profileContract"

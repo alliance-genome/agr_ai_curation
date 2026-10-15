@@ -1200,6 +1200,14 @@ class MeasuredModel(Model):
             prompt_cache_tool_surface=prompt_cache_tool_surface,
             output_reserve_tokens=getattr(model_settings, "max_tokens", None),
         )
+        history = getattr(self._agent, "run_history", None)
+        if history is not None and history.model_view is not None:
+            if (previous_response_id or conversation_id) and history.model_view.last_metrics.get("enabled"):
+                from .model_context_view import ContextRecoveryError
+                raise ContextRecoveryError("Server-managed conversation history is not visible to the exact context policy.")
+            measurement["context_view"] = history.model_view.last_metrics
+        elif getattr(self._agent, "run_history_unavailable_reason", None):
+            measurement["context_view"] = {"enabled": False, "reason": self._agent.run_history_unavailable_reason}
         enforce_and_announce(measurement)
         from src.lib.cost_ledger.runtime_writes import reserve_runtime_request
         measurement["_runtime_accounting"] = reserve_runtime_request(measurement)
@@ -1260,9 +1268,13 @@ class MeasuredModel(Model):
                     prompt=prompt,
                 )
         except BaseException as exc:
+            from .run_history import record_model_history
+            await record_model_history(self._agent, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
             self._observe_tool_surface(measurement, None)
             record_outcome(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
             raise
+        from .run_history import record_model_history
+        await record_model_history(self._agent, "model_output", getattr(response, "output", None), outcome="completed")
         self._observe_tool_surface(measurement, response)
         record_outcome(
             measurement,
@@ -1328,12 +1340,16 @@ class MeasuredModel(Model):
                 if event_type in {"response.completed", "response.incomplete", "response.failed"}:
                     terminal_response = getattr(event, "response", None)
                     terminal_type = event_type
+                    from .run_history import record_model_history
+                    await record_model_history(self._agent, "model_output", getattr(terminal_response, "output", None), outcome=event_type)
                     if measurement.get("api") == "responses":
                         _observe_service_tier(measurement, event)
                 yield event
                 with runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
                     event = await anext(stream, _STREAM_END)
         except BaseException as exc:
+            from .run_history import record_model_history
+            await record_model_history(self._agent, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
             if terminal_response is None:
                 self._observe_tool_surface(measurement, None)
                 record_outcome(

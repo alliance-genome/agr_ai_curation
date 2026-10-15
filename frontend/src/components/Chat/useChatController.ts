@@ -31,7 +31,6 @@ import type { SSEEvent } from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
 import type { LatestIntentOperation } from '@/lib/latestIntent'
 import {
-  safeGetItem,
   safeRemoveItem,
   safeSetJson,
 } from '@/lib/browserStorage'
@@ -100,6 +99,7 @@ function toRestoredMessages(transcript: RestoredChatTranscript): Message[] {
 export function useChatController({
   sessionId: propSessionId,
   onSessionChange,
+  onDocumentContextChange,
   restoredTranscript = null,
   events,
   eventStreamVersion,
@@ -179,8 +179,23 @@ export function useChatController({
   const beginDocumentOperation = useCallback(() => {
     const operation = beginChatDocumentIntent()
     documentOperationRef.current = operation
+    onDocumentContextChange?.(null)
     return operation
-  }, [])
+  }, [onDocumentContextChange])
+
+  const publishDocumentContext = useCallback((
+    document: ActiveDocument | null,
+    operation: LatestIntentOperation,
+    sessionId: string | null = latestSessionIdRef.current,
+  ) => {
+    if (!operation.ownsLatest()) return
+    onDocumentContextChange?.({
+      userId: storageUserId,
+      sessionId,
+      documentId: document?.id,
+      operation,
+    })
+  }, [onDocumentContextChange, storageUserId])
   const normalizedSessionId = normalizeOptionalText(propSessionId)
   const [sessionIdCopied, setSessionIdCopied] = useState(false)
 
@@ -230,17 +245,6 @@ export function useChatController({
       console.warn('Failed to persist messages to localStorage:', error)
     }
   }, [chatStorageKeys, storageUserId])
-
-  const getStoredActiveDocument = useCallback(() => {
-    if (!chatStorageKeys) {
-      return null
-    }
-    const stored = safeGetItem(() => window.localStorage, chatStorageKeys.activeDocument, {
-      owner: 'chat',
-      workflowCritical: true,
-    })
-    return stored.ok ? stored.value : null
-  }, [chatStorageKeys])
 
   const clearStoredActiveDocument = useCallback(() => {
     if (!chatStorageKeys) {
@@ -1109,23 +1113,17 @@ export function useChatController({
               activeDocument.filename || activeDocument.id,
             )
             setActiveDocument(activeDocument)
+            publishDocumentContext(activeDocument, operation)
             debug.log('[PDF RESTORE] Restoring active document to PDF viewer:', activeDocument.filename)
           },
           onMissingDocument: async () => {
             if (!isActive || !operation.ownsLatest()) {
               return
             }
-            // CRITICAL: Check if the event handler has already set a document in localStorage
-            // This prevents a race condition where fetchActiveDocument() completes after
-            // the user loads a document from DocumentsPage
-            const localDoc = getStoredActiveDocument()
-            if (localDoc) {
-              debug.log('[Chat] fetchActiveDocument: But localStorage has a document, not clearing (event handler won)')
-              return
-            }
-
-            debug.log('[Chat] fetchActiveDocument: No document in localStorage either, clearing state')
+            // The latest-intent check above protects newer selections. A browser
+            // cache must never override an authoritative empty selection.
             setActiveDocument(null)
+            publishDocumentContext(null, operation)
             clearStoredActiveDocument()
           },
         })
@@ -1164,27 +1162,33 @@ export function useChatController({
             headers: { 'Content-Type': 'application/json' },
             signal: operation.signal,
           })
-          if (resetResponse.ok) {
-            const resetData = await resetResponse.json()
-            if (!isActive || !operation.ownsLatest()) {
-              return
-            }
-            debug.log('[Chat] Conversation reset for new document:', resetData)
-            // Propagate new session ID
-            if (resetData.session_id && onSessionChange) {
-              onSessionChange(resetData.session_id)
-            }
-            // Clear messages from UI and localStorage
-            latestMessagesRef.current = []
-            setMessages([])
-            clearStoredMessages()
-            sessionTraceIds.current = []
+          if (!resetResponse.ok) throw new Error('Could not prepare a new chat for this document.')
+          const resetData = await resetResponse.json()
+          if (!isActive || !operation.ownsLatest()) {
+            return
           }
+          debug.log('[Chat] Conversation reset for new document:', resetData)
+          // Propagate new session ID
+          const nextSessionId = normalizeOptionalText(resetData.session_id)
+          if (!nextSessionId) throw new Error('Document load did not return a chat session.')
+          onSessionChange?.(nextSessionId)
+          publishDocumentContext(detail.document, operation, nextSessionId)
+          // Clear messages from UI and localStorage
+          latestMessagesRef.current = []
+          setMessages([])
+          clearStoredMessages()
+          sessionTraceIds.current = []
         } catch (resetError) {
           if (!operation.ownsLatest()) {
             return
           }
           console.error('[Chat] Failed to reset conversation for new document:', resetError)
+          failDocumentLoad({
+            documentId: detail.document.id,
+            filename: detail.document.filename,
+            message: 'The paper could not be connected to a new chat. Please load it again from Documents.',
+          })
+          return
         }
 
         // Load the PDF in the viewer when document changes
@@ -1213,6 +1217,7 @@ export function useChatController({
       } else {
         debug.log('[Chat] Clearing active document')
         setActiveDocument(null)
+        publishDocumentContext(null, operation)
         clearStoredActiveDocument()
       }
     }
@@ -1231,7 +1236,7 @@ export function useChatController({
     clearStoredActiveDocument,
     clearStoredMessages,
     beginDocumentOperation,
-    getStoredActiveDocument,
+    publishDocumentContext,
     onSessionChange,
     restoreDocumentToPdfViewer,
   ])
@@ -1477,6 +1482,7 @@ export function useChatController({
       return
     }
 
+    const operation = beginDocumentOperation()
     setIsResetting(true)
     setLimitNotices([])
     try {
@@ -1489,6 +1495,7 @@ export function useChatController({
 
       if (response.ok) {
         const data = await response.json()
+        if (!operation.ownsLatest()) return
         debug.log('Conversation reset:', data)
         const nextSessionId = normalizeOptionalText(data.session_id)
 
@@ -1518,6 +1525,31 @@ export function useChatController({
         setRefinePrompt(null)
         setRefineText('')
         clearProgressState()
+        // Reset preserves the server's document selection. The initial lookup may
+        // still be pending, so activeDocument can be unresolved rather than empty.
+        const documentResponse = await fetch('/api/chat/document', { signal: operation.signal })
+        if (!operation.ownsLatest()) return
+        if (!documentResponse.ok) {
+          throw new Error('Could not verify the selected document after resetting chat.')
+        }
+        const documentData = await documentResponse.json()
+        if (!operation.ownsLatest()) return
+        const resetDocument = documentData?.active && documentData.document
+          ? documentData.document as ActiveDocument
+          : null
+        setActiveDocument(resetDocument)
+        publishDocumentContext(resetDocument, operation, nextSessionId)
+        if (resetDocument) {
+          try {
+            await restoreDocumentToPdfViewer(resetDocument, operation)
+          } catch (error) {
+            if (operation.ownsLatest()) console.warn('Could not restore document viewer after reset:', error)
+          }
+        } else {
+          clearStoredActiveDocument()
+        }
+        if (!operation.ownsLatest()) return
+
         // Update conversation status
         const statusResponse = await fetch('/api/chat/conversation')
         if (statusResponse.ok) {

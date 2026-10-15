@@ -68,9 +68,8 @@ interface ExtendedRightPanelProps extends RightPanelProps {
   /** Durable current-turn transcript replacement identity. */
   durableReconciliationVersion: number
   /** Callback to execute a curation flow */
-  onExecuteFlow?: (flowId: string, documentId?: string, userQuery?: string) => Promise<void>
+  onExecuteFlow?: (flowId: string) => Promise<void>
   /** Current document ID loaded in PDF viewer */
-  currentDocumentId?: string
   /** Controlled active tab index (for persistence) */
   activeTabIndex?: number
   /** Callback when tab changes (for persistence) */
@@ -86,7 +85,6 @@ const RightPanel: React.FC<ExtendedRightPanelProps> = ({
   onStop,
   isStreaming,
   onExecuteFlow,
-  currentDocumentId,
   activeTabIndex: controlledTabIndex,
   onTabChange,
 }) => {
@@ -199,7 +197,6 @@ const RightPanel: React.FC<ExtendedRightPanelProps> = ({
               onExecuteFlow={onExecuteFlow || (async () => {})}
               onStopFlow={onStop}
               isExecuting={isStreaming}
-              currentDocumentId={currentDocumentId}
             />
           )}
         </Box>

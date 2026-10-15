@@ -18,6 +18,7 @@ from .benchmark import (
 from .benchmark_flow_import import BenchmarkFlowImport
 from .agent import Agent, Project, ProjectMember
 from .agent_execution_revision import AgentExecutionRevision
+from .agent_run_history import AgentHistoryEvent, AgentHistoryPayload
 from .chat_message import ChatMessage
 from .chat_session import ChatSession
 from .validator_result import ValidatorResultRecord
@@ -44,6 +45,8 @@ from .term_synonym import TermSynonym
 from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 
 __all__ = [
+    "AgentHistoryEvent",
+    "AgentHistoryPayload",
     "ValidatorResultRecord",
     "CostAttempt",
     "CostFactRevision",

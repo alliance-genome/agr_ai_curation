@@ -172,7 +172,7 @@ def get_current_extraction_trace_run() -> ExtractionTraceRun | None:
 
 def _is_secret_key(key: str) -> bool:
     normalized = key.lower().replace("-", "_")
-    if normalized in {"tokens", "token_count", "estimated_tokens"}:
+    if normalized in {"tokens", "token_count", "estimated_tokens", "output_reserve_tokens"}:
         return False
     if any(
         normalized == f"{prefix}_tokens"

@@ -168,3 +168,26 @@ and prompt pins. Do not rewrite old scientific results to match this contract.
 Private release records contain exact counts, affected IDs, mechanical migration
 plans, checksums and test logs; this public document intentionally contains no
 curator data or production identifiers.
+
+## Flow launch document identity
+
+Home's explicit flow launcher consumes the document selection published by the
+chat controller, paired with its authenticated user, chat session, and current
+`LatestIntentOperation`. It does not read the PDF viewer's `localStorage` restore
+cache. A text-only document or failed browser cache write must not turn a valid
+chat selection into a missing document, and an old viewer cache must not select a
+different paper.
+
+Document loads publish the new pair only after the replacement chat session is
+ready. Loads, unloads, resets, and session navigation invalidate the previous
+selection. The launcher checks ownership and identity both before and after
+awaiting session initialization, and reports an actionable error if superseded.
+An explicitly committed empty selection remains valid: document-free flows may
+run, while the backend retains its existing missing-document refusal for flows
+that require a paper. These refusals remain visible in Sentry.
+
+The Tools/shortcut components pass only the chosen flow ID to Home; they do not
+capture a document ID in a render-time callback. Studio's Run in workspace action
+uses this same Home path. Preferred-flow chat routing and batch execution do not
+read the viewer cache and retain their existing document-selection contracts.
+No agent, profile, prompt, saved flow, or database schema migration is involved.
