@@ -135,7 +135,7 @@ def test_saved_revision_includes_only_its_authorized_pinned_structure(monkeypatc
                               contract={"description": "Only experimental genes", "fields": [{"key": "gene"}]})
     read_profile = MagicMock(return_value=profile)
     monkeypatch.setattr(inspection, "get_execution_revision", read)
-    monkeypatch.setattr(inspection, "get_profile_revision", read_profile)
+    monkeypatch.setattr(inspection, "get_execution_profile_revision", read_profile)
     request = inspection.SavedResourceInspection(action="agent_revision", agent_id=str(agent), revision_id=str(revision))
     if not authorized:
         read.side_effect = ValueError("Unavailable saved revision")
@@ -144,7 +144,7 @@ def test_saved_revision_includes_only_its_authorized_pinned_structure(monkeypatc
         read_profile.assert_not_called()
         return
     result = inspection.inspect_saved_resource(db, user_id=7, active_group_ids=[], request=request)
-    read_profile.assert_called_once_with(db, profile_id, 3, 7, include_archived=True)
+    read_profile.assert_called_once_with(db, agent, revision, 7, active_group_ids=[])
     assert result["output_profile"] == {"profile_id": str(profile_id), "revision_id": str(profile_revision),
                                         "revision": 3, "fingerprint": "profile-pin", "contract": profile.contract}
     assert result["loaded_in_editor"] is False

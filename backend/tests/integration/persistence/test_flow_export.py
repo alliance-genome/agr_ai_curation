@@ -148,12 +148,20 @@ def test_a_pinned_output_structure_exports_its_exact_revision(world, builder_pol
 
 
 
-def test_a_shared_agent_pinning_its_owners_private_structure_is_not_importable(
+def test_a_shared_agent_exports_only_its_exact_owner_private_structure(
         world, builder_policies):  # noqa: F811
-    # AI Curation won't run this step for the teammate, so it is not importable either.
+    # Shared-agent authorization includes its exact owner-private output dependency.
     db = world
     agent = profile_bound(db, "Structured finder")
     flow = make_flow(db, [(agent, head(db, agent))])
     share(db, agent, flow)
     evaluated = evaluate(db, flow, user_id=2)
-    assert evaluated.reason == "step_unavailable" and evaluated.bundle is None
+    assert evaluated.reason is None and not evaluated.owned
+    checked = check_bundle(evaluated.bundle)
+    ref = checked.snapshots[head(db, agent).id].output_contract.generic_profile_ref
+    [profile] = checked.bundle.profiles
+    assert profile.source_profile_id == ref.profile_id
+    assert [revision.source_revision_id for revision in profile.revisions] == [ref.profile_revision_id]
+    agent.visibility = "private"
+    db.flush()
+    assert evaluate(db, flow, user_id=2).reason == "step_unavailable"

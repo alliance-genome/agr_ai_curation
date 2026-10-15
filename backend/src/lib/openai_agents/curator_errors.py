@@ -23,6 +23,8 @@ class CuratorFailure:
 
 
 _FAILURES = {
+    "history_unavailable": CuratorFailure("history_unavailable", "This run stopped because the request grew too large while its history could not be saved. Completed actions were not repeated. You can restore your request and try again later.", True),
+    "protected_context_limit": CuratorFailure("protected_context_limit", "This run stopped before required context would be lost. Please split the task into smaller requests. Completed actions were not repeated.", False),
     "provider_unavailable": CuratorFailure("provider_unavailable", "The AI service is temporarily unavailable or busy. This request did not finish. You can restore your request and try again later. If it keeps happening, report it using the feedback menu.", True),
     "provider_connection": CuratorFailure("provider_connection", "The connection to the AI service was interrupted before this request finished. You can restore your request and try again later.", True),
     "provider_configuration": CuratorFailure("provider_configuration", "The AI service could not accept this request because of a request, access, quota or configuration problem. Please report it using the feedback menu. Repeating the same request will not fix this problem.", False),
@@ -33,6 +35,8 @@ _FAILURES = {
     "provider_content_policy": CuratorFailure("provider_content_policy", PROVIDER_POLICY_CHAT_MESSAGE, False, "openai"),
 }
 _EVENT_CATEGORIES = {
+    "HistoryStorageUnavailable": "history_unavailable",
+    "ContextRecoveryError": "protected_context_limit",
     "ModelRequestBlockedError": "context_limit",
     "PayloadContractViolation": "context_limit",
     "SpecialistOutputError": "invalid_result",

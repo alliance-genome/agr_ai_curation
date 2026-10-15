@@ -4068,3 +4068,33 @@ def get_studio_reminder_context_chars() -> int:
 
 def get_studio_reminder_context_messages() -> int:
     return max(0, _get_env_int_with_fallback("STUDIO_REMINDER_CONTEXT_MESSAGES", 2))
+
+
+# Durable history and the separate model input view (ALL-1395 / ALL-1396).
+def get_agent_history_enabled() -> bool:
+    return _get_env_bool("AGENT_HISTORY_ENABLED", True)
+
+
+def get_agent_history_search_max_results() -> int:
+    return max(1, _get_env_int_with_fallback("AGENT_HISTORY_SEARCH_MAX_RESULTS", 20))
+
+
+def get_agent_context_view_enabled() -> bool:
+    return _get_env_bool("AGENT_CONTEXT_VIEW_ENABLED", True)
+
+
+def get_agent_context_trigger_estimated_tokens() -> int:
+    return max(1, _get_env_int_with_fallback("AGENT_CONTEXT_TRIGGER_ESTIMATED_TOKENS", 60000))
+
+
+def get_agent_context_target_estimated_tokens() -> int:
+    return min(get_agent_context_trigger_estimated_tokens(),
+               max(1, _get_env_int_with_fallback("AGENT_CONTEXT_TARGET_ESTIMATED_TOKENS", 40000)))
+
+
+def get_agent_context_recent_tool_results() -> int:
+    return max(1, _get_env_int_with_fallback("AGENT_CONTEXT_RECENT_TOOL_RESULTS", 4))
+
+
+def get_agent_context_output_reserve_tokens() -> int:
+    return max(0, _get_env_int_with_fallback("AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS", 16000))

@@ -2361,6 +2361,12 @@
           "name": "result_sha256",
           "required": false,
           "type": "any"
+        },
+        {
+          "default": null,
+          "name": "workspace_revision",
+          "required": false,
+          "type": "any"
         }
       ],
       "summary": "Searches the current builder workspace without relisting the full recommendation manifest."
@@ -3536,6 +3542,12 @@
           "name": "offset",
           "required": false,
           "type": "integer"
+        },
+        {
+          "default": null,
+          "name": "workspace_revision",
+          "required": false,
+          "type": "any"
         }
       ],
       "summary": "Lists compact staged-candidate summaries so the specialist can stop once the requested and discovered manifest is complete."

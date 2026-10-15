@@ -18,7 +18,6 @@ import {
 } from '@/lib/chatCacheKeys'
 import {
   safeGetItem,
-  safeGetJson,
   safeRemoveItem,
   safeSetItem,
   safeSetJson,
@@ -27,6 +26,7 @@ import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 import { LatestIntent, type LatestIntentOperation } from '@/lib/latestIntent'
 import {
   beginChatDocumentIntent,
+  type ChatDocumentContext,
   invalidateChatDocumentIntent,
 } from '@/features/documents/chatDocumentIntent'
 import {
@@ -167,6 +167,13 @@ function HomePage() {
   const [isStartingNewChat, setIsStartingNewChat] = useState(false)
   const [restoredTranscript, setRestoredTranscript] = useState<RestoredChatTranscript | null>(null)
 
+  const documentContextRef = useRef<ChatDocumentContext | null>(null)
+  const currentUserIdRef = useRef(user?.uid)
+  currentUserIdRef.current = user?.uid
+  const handleDocumentContextChange = useCallback((context: ChatDocumentContext | null) => {
+    documentContextRef.current = context
+  }, [])
+
   // Document loading overlay state
   const [loadingDocument, setLoadingDocument] = useState(false)
   const [loadingError, setLoadingError] = useState<string | null>(null)
@@ -174,8 +181,9 @@ function HomePage() {
   const beginDocumentOperation = useCallback(() => {
     const operation = beginChatDocumentIntent()
     documentOperationRef.current = operation
+    handleDocumentContextChange(null)
     return operation
-  }, [])
+  }, [handleDocumentContextChange])
 
   useEffect(() => () => {
     invalidateChatDocumentIntent(documentOperationRef.current)
@@ -465,40 +473,27 @@ function HomePage() {
     return activeSessionId
   }, [chatStorageKeys, clearPersistedMessages, createSession, persistSessionId])
 
-  /**
-   * Get current document ID from PDF viewer localStorage session
-   */
-  const getCurrentDocumentId = useCallback((): string | undefined => {
-    if (!chatStorageKeys) {
-      return undefined
-    }
-
-    const session = safeGetJson<{ documentId?: unknown }>(
-      () => window.localStorage,
-      chatStorageKeys.pdfViewerSession,
-      {
-        owner: 'pdf-viewer',
-        workflowCritical: true,
-      },
+  // Read the committed Chat selection, never the PDF viewer's restoration cache.
+  // Recheck after awaiting the session: a load/unload/navigation can supersede it.
+  const handleExecuteFlow = useCallback(async (flowId: string) => {
+    const selection = documentContextRef.current
+    const isCurrent = () => Boolean(
+      selection
+      && selection === documentContextRef.current
+      && selection.userId === currentUserIdRef.current
+      && selection.sessionId === sessionIdRef.current
+      && selection.operation.ownsLatest(),
     )
-    return session.ok && typeof session.value?.documentId === 'string'
-      ? session.value.documentId
-      : undefined
-  }, [chatStorageKeys])
-
-  /**
-   * Execute a curation flow with current session and document context
-   */
-  const handleExecuteFlow = useCallback(async (
-    flowId: string,
-    documentId?: string,
-    userQuery?: string
-  ) => {
+    const requireCurrent = () => {
+      if (!isCurrent()) throw new Error(
+        'Document selection is not ready. Wait for the paper to finish loading, or load it again from Documents.',
+      )
+    }
+    requireCurrent()
     const currentSessionId = await ensureSession()
-    // Use provided documentId or get from PDF viewer
-    const docId = documentId || getCurrentDocumentId()
-    await executeFlow(flowId, currentSessionId, docId, userQuery)
-  }, [ensureSession, executeFlow, getCurrentDocumentId])
+    requireCurrent()
+    await executeFlow(flowId, currentSessionId, selection!.documentId)
+  }, [ensureSession, executeFlow])
 
   useEffect(() => {
     if (!user?.uid) {
@@ -727,6 +722,7 @@ function HomePage() {
 
     const handleLoadStart = () => {
       debug.log('[HomePage] Document load started')
+      handleDocumentContextChange(null)
       setLoadingDocument(true)
       setLoadingError(null)
     }
@@ -756,7 +752,7 @@ function HomePage() {
       window.removeEventListener(DOCUMENT_LOAD_COMPLETE_EVENT, handleLoadComplete)
       window.removeEventListener(DOCUMENT_LOAD_ERROR_EVENT, handleLoadError)
     }
-  }, [clearDocumentLoadingTimeout])
+  }, [clearDocumentLoadingTimeout, handleDocumentContextChange])
 
   // Timeout safety net: if loading takes too long, show an error
   useEffect(() => {
@@ -920,6 +916,7 @@ function HomePage() {
             <Chat
               sessionId={sessionId}
               onSessionChange={handleSessionChange}
+              onDocumentContextChange={handleDocumentContextChange}
               restoredTranscript={restoredTranscript}
               events={events}
               eventStreamVersion={eventStreamVersion}
@@ -948,7 +945,6 @@ function HomePage() {
               onStop={() => sessionId && stopStream(sessionId)}
               isStreaming={isLoading}
               onExecuteFlow={handleExecuteFlow}
-              currentDocumentId={getCurrentDocumentId()}
               activeTabIndex={rightPanelTab}
               onTabChange={handleRightPanelTabChange}
             />

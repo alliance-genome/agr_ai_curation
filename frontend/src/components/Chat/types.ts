@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react'
+import type { ChatDocumentContext } from '@/features/documents/chatDocumentIntent'
 
 import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigation/openCurationWorkspace'
 import type { EvidenceRecord } from '@/features/curation/types'
@@ -117,6 +118,9 @@ export interface ChatProps {
    * Parent (HomePage) must update its session state when this is called.
    */
   onSessionChange?: (newSessionId: string) => void
+
+  /** Publish committed selection/session pairs; null blocks launches during changes. */
+  onDocumentContextChange?: (context: ChatDocumentContext | null) => void
 
   /**
    * Durable transcript fetched by the parent when resuming a chat session.

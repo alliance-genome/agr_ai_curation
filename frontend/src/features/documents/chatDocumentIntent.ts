@@ -13,3 +13,11 @@ export const invalidateChatDocumentIntent = (operation: LatestIntentOperation | 
     latestChatDocumentIntent.invalidate()
   }
 }
+
+/** A committed chat selection, independent of PDF viewer persistence. */
+export interface ChatDocumentContext {
+  userId: string | null
+  sessionId: string | null
+  documentId: string | undefined
+  operation: LatestIntentOperation
+}

@@ -848,6 +848,10 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             result = base_on_invoke_tool(inline_ctx, input_str)
             if inspect.isawaitable(result):
                 result = await result
+            from src.lib.openai_agents.run_history import record_runtime_payload
+            await record_runtime_payload("canonical_tool_result", result, tool_name=tool_id,
+                                         call_id=getattr(ctx, "tool_call_id", None))
+            result = _document_model_result(tool_id, result)
             _report_inline_package_result(tool_id, result)
             return result
 
@@ -912,15 +916,19 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             raise RuntimeError(
                 f"Package tool '{tool_id}' execution failed: {error_message}"
             )
+        from src.lib.openai_agents.run_history import record_runtime_payload
+        await record_runtime_payload("canonical_tool_result", result.result, tool_name=tool_id,
+                                     call_id=getattr(ctx, "tool_call_id", None))
+        model_result = _document_model_result(tool_id, result.result)
         if not requery_pages:
-            _report_inline_package_result(tool_id, result.result)
-            return result.result
+            _report_inline_package_result(tool_id, model_result)
+            return model_result
         if is_write and not full_tool_results_are_requested() and serialized_size(result.result) > tool_result_budget():
             result_ref = str(uuid4())
             captured_writes[result_ref] = (scope, request_identity, result.result)
         return _bounded_package_result(
             tool_id,
-            result.result,
+            model_result,
             view_arguments,
             result_ref=result_ref,
         )
@@ -932,6 +940,21 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
         on_invoke_tool=_runner_invoke,
         params_json_schema=_with_result_view_arguments(base_tool),
     )
+
+
+def _document_model_result(tool_id: str, result: Any) -> Any:
+    from src.lib.openai_agents.document_result_view import DOCUMENT_READ_TOOLS, document_result_view
+
+    if tool_id not in DOCUMENT_READ_TOOLS or full_tool_results_are_requested():
+        return result
+
+    view, events = document_result_view(tool_id, result)
+    if events:
+        from src.lib.openai_agents.streaming_tools import add_specialist_event
+
+        for event in events:
+            add_specialist_event(event)
+    return view
 
 
 def _with_result_view_arguments(tool: Any) -> Dict[str, Any]:
@@ -2621,12 +2644,15 @@ def _get_pinned_agent_by_id(agent_id: str, *, _benchmark_slot: str | None = None
                 raise ValueError("A saved tool is no longer available for execution")
         resolved_profile = None
         if saved.output_contract.generic_profile_ref is not None:
-            from src.lib.agent_studio.generic_profile_service import get_profile_revision
+            from src.lib.agent_studio.execution_revision_service import get_execution_profile_revision
             from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile
             from src.schemas.generic_extraction_profile import normalize_profile_contract
 
             pin = saved.output_contract.generic_profile_ref
-            profile_revision = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+            profile_revision = get_execution_profile_revision(
+                db, head.id, revision.id, user_id,
+                active_group_ids=list(kwargs.get("authenticated_groups") or []),
+            )
             resolved_profile = ResolvedGenericProfile(pin, normalize_profile_contract(profile_revision.contract))
         built = _create_db_agent(head, execution_snapshot=saved, resolved_profile=resolved_profile,
                                  _benchmark_slot=_benchmark_slot, **kwargs)

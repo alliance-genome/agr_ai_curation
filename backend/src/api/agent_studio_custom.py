@@ -349,6 +349,29 @@ async def list_execution_revisions_endpoint(
         raise HTTPException(status_code=404, detail="Executable revision not found") from exc
 
 
+@router.get("/{custom_agent_id}/execution-revisions/{revision_id}/output-profile")
+async def get_execution_profile_endpoint(
+    custom_agent_id: UUID, revision_id: UUID,
+    user: Dict[str, Any] = get_auth_dependency(), db: Session = Depends(get_db),
+):
+    """Read only the output structure pinned by an authorized agent revision."""
+    from src.api.generic_profiles import ProfileRevisionResponse
+    from src.lib.agent_studio.execution_revision_service import (
+        get_execution_profile_revision, ExecutionRevisionNotFoundError,
+    )
+    user_id = set_global_user_from_cognito(db, user).id
+    try:
+        profile = get_execution_profile_revision(
+            db, custom_agent_id, revision_id, user_id,
+            active_group_ids=_authenticated_group_ids(user),
+        )
+        if profile is None:
+            raise ExecutionRevisionNotFoundError("No pinned output structure")
+        return ProfileRevisionResponse.model_validate(profile)
+    except ExecutionRevisionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Saved output structure is unavailable. Reopen the agent or ask its owner to check sharing.") from exc
+
+
 @router.get("/{custom_agent_id}/execution-revisions/{revision_id}", response_model=ExecutionRevisionResponse)
 async def get_execution_revision_endpoint(
     custom_agent_id: UUID, revision_id: UUID,

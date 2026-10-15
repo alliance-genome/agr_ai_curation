@@ -94,7 +94,7 @@ def baseline_current_execution_heads(db: Session) -> int:
 
 
 def _validated_snapshot(
-    db: Session, row: AgentExecutionRevision, user_id: int
+    db: Session, row: AgentExecutionRevision, user_id: int, agent: Agent
 ) -> AgentExecutionSnapshot:
     saved = AgentExecutionSnapshot.model_validate(row.snapshot)
     if saved.fingerprint() != row.fingerprint:
@@ -102,9 +102,7 @@ def _validated_snapshot(
     pin = saved.output_contract.generic_profile_ref
     if pin is not None:
         try:
-            profile = get_profile_revision(
-                db, pin.profile_id, pin.revision, user_id, include_archived=True
-            )
+            profile = _get_pinned_profile_revision(db, pin, agent, user_id)
         except ProfileNotFoundError as exc:
             raise ExecutionRevisionNotFoundError("Executable agent revision not found") from exc
         if (
@@ -113,6 +111,47 @@ def _validated_snapshot(
         ):
             raise ValueError("Executable revision profile identity mismatch")
     return saved
+
+
+def _get_pinned_profile_revision(db, pin, agent: Agent, user_id: int):
+    """Exact dependency of an already-authorized agent, not profile-library access.
+
+    Sharing an agent includes its owner's pinned private output structure. It
+    never grants another owner's private structure or an unpinned revision.
+    """
+    from src.models.sql.generic_extraction_profile import (
+        GenericExtractionProfile as Profile, GenericExtractionProfileRevision as Revision,
+    )
+    from src.schemas.generic_extraction_profile import normalize_profile_contract
+
+    try:
+        return get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+    except ProfileNotFoundError:
+        profile = db.get(Profile, pin.profile_id)
+        if profile is None or profile.visibility != "private" or profile.owner_id != agent.user_id:
+            raise
+        revision = db.execute(select(Revision).where(
+            Revision.id == pin.profile_revision_id,
+            Revision.profile_id == pin.profile_id,
+            Revision.revision == pin.revision,
+            Revision.fingerprint == pin.fingerprint,
+        )).scalar_one_or_none()
+        if revision is None:
+            raise ProfileNotFoundError("Pinned output structure is unavailable")
+        if normalize_profile_contract(revision.contract).fingerprint() != pin.fingerprint:
+            raise ValueError("Stored profile revision fingerprint mismatch")
+        return revision
+
+
+def get_execution_profile_revision(
+    db: Session, agent_id: UUID, revision_id: UUID, user_id: int, *, active_group_ids: list[str],
+):
+    """Authorize the agent and its saved group bounds before reading its exact profile."""
+    _, saved = get_execution_revision(db, agent_id, revision_id, user_id, active_group_ids=active_group_ids)
+    pin = saved.output_contract.generic_profile_ref
+    if pin is None:
+        return None
+    return _get_pinned_profile_revision(db, pin, _get_visible_agent(db, agent_id, user_id), user_id)
 
 
 def get_execution_revision(
@@ -124,7 +163,7 @@ def get_execution_revision(
     active_group_ids: list[str],
 ) -> tuple[AgentExecutionRevision, AgentExecutionSnapshot]:
     """Current visibility + saved access bounds; archived pins remain usable."""
-    _get_visible_agent(db, agent_id, user_id)
+    agent = _get_visible_agent(db, agent_id, user_id)
     row = db.execute(
         select(AgentExecutionRevision).where(
             AgentExecutionRevision.id == revision_id,
@@ -133,7 +172,7 @@ def get_execution_revision(
     ).scalar_one_or_none()
     if row is None:
         raise ExecutionRevisionNotFoundError("Executable agent revision not found")
-    saved = _validated_snapshot(db, row, user_id)
+    saved = AgentExecutionSnapshot.model_validate(row.snapshot)
     if not is_resource_access_allowed(
         visibility_allowed=True,
         allowed_group_ids=saved.allowed_group_ids,
@@ -141,7 +180,7 @@ def get_execution_revision(
         resource_kind="custom_agent_revision",
     ):
         raise ExecutionRevisionNotFoundError("Executable agent revision not found")
-    return row, saved
+    return row, _validated_snapshot(db, row, user_id, agent)
 
 
 def _get_visible_agent(db: Session, agent_id: UUID, user_id: int) -> Agent:
@@ -163,7 +202,7 @@ def list_execution_revisions(
 ) -> tuple[list[tuple[AgentExecutionRevision, AgentExecutionSnapshot]], int | None]:
     from src.lib.openai_agents.config import get_generic_profile_list_page_size
 
-    _get_visible_agent(db, agent_id, user_id)
+    agent = _get_visible_agent(db, agent_id, user_id)
     query = select(AgentExecutionRevision).where(AgentExecutionRevision.agent_id == agent_id)
     if before_revision is not None:
         query = query.where(AgentExecutionRevision.revision < before_revision)
@@ -180,7 +219,7 @@ def list_execution_revisions(
             active_group_ids=active_group_ids, resource_kind="custom_agent_revision",
         ):
             continue
-        results.append((row, _validated_snapshot(db, row, user_id)))
+        results.append((row, _validated_snapshot(db, row, user_id, agent)))
     return results, next_revision
 
 

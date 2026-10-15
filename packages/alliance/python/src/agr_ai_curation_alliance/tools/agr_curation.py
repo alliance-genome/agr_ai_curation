@@ -3789,6 +3789,7 @@ def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict
     counted = all_candidates if include_discarded else active
     return {
         "builder_run_id": snapshot.get("run_id"),
+        "workspace_revision": snapshot.get("workspace_revision"),
         "state": snapshot.get("state"),
         "candidate_count": len(counted),
         "discarded_candidate_count": len(discarded),
@@ -3796,20 +3797,28 @@ def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict
         "evidence_record_count": len(snapshot["evidence_record_ids"]),
         "finalization": _builder_finalization_summary(snapshot.get("finalization")),
         "reference_access": (
-            "Page candidate ids and each candidate's pending refs and evidence ids "
-            "with this builder's list_staged_* or find_staged_* tool."
+            "Use list_staged_* for the versioned index. Use find_staged_* with the "
+            "row's detail_read arguments for exact fields, refs, evidence and validation errors. "
+            "Retain workspace_revision when paging; restart the index if it changes."
         ),
     }
 
 
-def _oversized_builder_candidate(candidate: Mapping[str, Any]) -> Dict[str, Any]:
-    """Identity and counts for a candidate summary too large for one page."""
-    staged_fields = candidate.get("staged_fields") or {}
+def _builder_candidate_index(candidate: Mapping[str, Any]) -> Dict[str, Any]:
+    """Small index; all scientific fields and validation records remain readable."""
+    fields = candidate.get("staged_fields") or {}
     return {
         "candidate_id": candidate.get("candidate_id"),
+        "revision": candidate.get("revision"),
         "status": candidate.get("status"),
-        "withheld": True,
-        "summary_bytes": serialized_size(candidate),
+        "label": fields.get("label") or fields.get("where_expressed_statement"),
+        "class_key": fields.get("class_key"),
+        "semantic_class": fields.get("semantic_class"),
+        "staged_field_count": len(fields),
+        "pending_ref_count": len(candidate.get("pending_ref_ids") or []),
+        "evidence_record_count": len(candidate.get("evidence_record_ids") or []),
+        "validation_error_count": len(candidate.get("validation_errors") or []),
+        **{key: candidate[key] for key in ("attribute_keys", "attribute_key_notices") if key in candidate},
         "detail_read": {
             "candidate_id": candidate.get("candidate_id"),
             "detail_path": "candidate",
@@ -3817,13 +3826,13 @@ def _oversized_builder_candidate(candidate: Mapping[str, Any]) -> Dict[str, Any]
             "result_sha256": content_sha256(candidate),
             "include_discarded": candidate.get("status") == "discarded",
         },
-        "pending_ref_count": len(candidate.get("pending_ref_ids") or []),
-        "evidence_record_count": len(candidate.get("evidence_record_ids") or []),
-        "validation_error_count": len(candidate.get("validation_errors") or []),
-        "staged_field_count": (
-            staged_fields.get("field_count") if isinstance(staged_fields, Mapping) else None
-        ),
     }
+
+
+def _oversized_builder_candidate(candidate: Mapping[str, Any]) -> Dict[str, Any]:
+    # A label itself can be arbitrarily large. Keep its exact read address.
+    return {key: value for key, value in candidate.items()
+            if key not in {"label", "class_key", "semantic_class", "attribute_keys", "attribute_key_notices"}} | {"withheld": True}
 
 
 def _builder_page(
@@ -3836,7 +3845,7 @@ def _builder_page(
     total_key: str,
     decorate: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Render one size- and count-bounded page of redacted candidate summaries.
+    """Render one size- and count-bounded page of candidate indexes.
 
     Requested limits above BUILDER_LIST_MAX_LIMIT clamp (reported, not an
     error); the page also ends before TOOL_RESULT_MAX_BYTES. A malformed or
@@ -3866,7 +3875,12 @@ def _builder_page(
     budget = tool_result_max_bytes() - serialized_size(
         _ok(data={}, count=envelope_count, lookup_status=LOOKUP_STATUS_SUCCESS)
     )
-    items = candidates if decorate is None else None
+    items = list(candidates[:start]) + [
+        _builder_candidate_index(candidate if decorate is None else decorate(candidate))
+        for candidate in candidates[start : start + cap]
+    ]
+    for candidate in items[start:]:
+        candidate["detail_read"]["workspace_revision"] = workspace.revision
 
     def render(page: List[Dict[str, Any]], returned: int) -> Dict[str, Any]:
         next_offset = start + returned
@@ -3884,17 +3898,13 @@ def _builder_page(
             "returned_candidate_count": returned,
             "offset": start,
             "next_offset": next_offset if has_more else None,
+            "next_page": {"offset": next_offset, "workspace_revision": workspace.revision} if has_more else None,
             "truncated": has_more,
             "page_ended_by": ended_by,
             **limit_metadata,
             "budget_bytes": budget,
         }
 
-    if items is None:
-        # Decorate only the rows that can appear on this page.
-        items = list(candidates[:start]) + [
-            decorate(candidate) for candidate in candidates[start : start + cap]
-        ]
     try:
         page, _ = fit_page(
             items,
@@ -3918,6 +3928,22 @@ def _builder_page(
     return page
 
 
+def _builder_revision_error(workspace: Any, revision: Any, offset: Any) -> Optional[Dict[str, Any]]:
+    message = None
+    if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0):
+        message = "workspace_revision must be a non-negative integer."
+    elif isinstance(offset, int) and offset > 0 and revision is None:
+        message = "Continue with both offset and workspace_revision from next_page."
+    elif revision is not None and revision != workspace.revision:
+        return {**invalid_cursor("Workspace changed; restart listing at offset 0.", error_code="stale_result_cursor"),
+                "workspace_revision": workspace.revision, "candidates": [],
+                "candidate_count": len(workspace.candidates), "matched_candidate_count": 0}
+    if message:
+        return {**invalid_cursor(message), "candidates": [],
+                "candidate_count": len(workspace.candidates), "matched_candidate_count": 0}
+    return None
+
+
 def _builder_candidate_list(
     workspace: Any,
     *,
@@ -3925,18 +3951,23 @@ def _builder_candidate_list(
     limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
     decorate: Optional[Any] = None,
+    workspace_revision: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Bounded, pageable per-candidate listing for the ``list_staged_*`` tools.
 
-    Returns the compact builder ack plus one page of redacted candidate
-    snapshots, with ``truncated`` / ``total_listed_candidate_count`` so the
+    Returns the compact builder ack plus one page of versioned candidate
+    indexes, with ``truncated`` / ``total_listed_candidate_count`` so the
     model knows more exist. Pass ``offset`` to step past earlier candidates and
     read ``next_offset`` to continue. Pages are bounded by
     BUILDER_LIST_MAX_LIMIT and by the serialized TOOL_RESULT_MAX_BYTES budget,
     including any per-candidate ``decorate`` additions, so hundreds of staged
     observations never produce an oversized result.
     """
-    snapshot = workspace.snapshot(redact_payload=True)
+    revision_error = _builder_revision_error(workspace, workspace_revision, offset)
+    if revision_error:
+        return revision_error
+
+    snapshot = workspace.snapshot(redact_payload=False)
     candidates = snapshot["candidates"]
     if not include_discarded:
         candidates = [c for c in candidates if c.get("status") != "discarded"]
@@ -3966,29 +3997,19 @@ def _search_builder_candidates(
     detail_path: Optional[str] = None,
     detail_cursor: Optional[int] = None,
     result_sha256: Optional[str] = None,
+    workspace_revision: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Pageable search over staged candidates for the ``find_staged_*`` tools.
+    """Search complete staged values and return compact versioned indexes.
 
-    Searches the UN-redacted staged-field values internally so the model can
-    find a specific draft by what it contains, but RETURNS only redacted,
-    compact candidate summaries (``staged_fields`` collapsed to
-    ``{keys, field_count}``) so raw field values are never echoed back into the
-    model context. All supplied filters must match (AND semantics):
-
-      * ``candidate_id`` — exact candidate id match.
-      * ``pending_ref_id`` — the id appears in the candidate's pending refs.
-      * ``evidence_record_id`` — the id appears in the candidate's evidence refs.
-      * ``has_validation_errors`` — keep drafts that do (True) or do not (False)
-        carry validation errors.
-      * ``field_value_contains`` — case-insensitive substring match anywhere in
-        the JSON-serialized staged-field values.
-
-    Discarded drafts are skipped unless ``include_discarded`` is set. Matches are
-    paged with ``offset`` / ``limit`` (bounded by BUILDER_LIST_MAX_LIMIT and the
-    TOOL_RESULT_MAX_BYTES budget) and the result carries
-    ``matched_candidate_count`` (total before paging), ``offset``,
-    ``next_offset`` and ``truncated``.
+    Filters use AND semantics. Discarded drafts require include_discarded.
+    Exact reads use detail_path='candidate' or a nested path such as
+    'candidate.staged_fields.attributes'. Retain that detail's sha256 on
+    subsequent chunks; a changed value returns stale_result_cursor.
     """
+    revision_error = _builder_revision_error(workspace, workspace_revision, offset)
+    if revision_error:
+        return revision_error
+
     needle = field_value_contains.lower() if field_value_contains else None
     unredacted = workspace.snapshot(redact_payload=False)["candidates"]
     matched: List[Dict[str, Any]] = []
@@ -4018,37 +4039,29 @@ def _search_builder_candidates(
             )
             if needle not in serialized.lower():
                 continue
-        # RETURN redacted summaries only: collapse staged-field values to keys/count
-        # so the searched field text is never echoed back to the model.
-        matched.append(
-            {
-                **candidate,
-                "staged_fields": {
-                    "keys": sorted((candidate.get("staged_fields") or {}).keys()),
-                    "field_count": len(candidate.get("staged_fields") or {}),
-                },
-            }
-        )
+        matched.append(candidate)
 
     if detail_path is not None or detail_cursor is not None or result_sha256 is not None:
-        # Resolve only through this invocation's workspace and the same filters
-        # as the list. Read the exact summary (including decorations), never
-        # expose the intentionally redacted staged scientific fields.
-        if not candidate_id or detail_path != "candidate" or len(matched) != 1:
+        # Resolve only through this invocation's workspace and the same filters.
+        if not candidate_id or not detail_path or not (detail_path == "candidate" or detail_path.startswith("candidate.")) or len(matched) != 1:
             return {
-                **invalid_cursor("Detail reads require one matching candidate_id and detail_path='candidate'."),
+                **invalid_cursor("Detail reads require one matching candidate_id and a path rooted at candidate."),
                 "matched_candidate_count": len(matched),
             }
+        if isinstance(detail_cursor, int) and detail_cursor > 0 and not result_sha256:
+            return {**invalid_cursor("Continue detail reads with the returned detail.sha256."),
+                    "matched_candidate_count": 1}
         candidate = matched[0] if decorate is None else decorate(matched[0])
         wrapper_bytes = serialized_size(_ok(data={}, count=1, lookup_status=LOOKUP_STATUS_SUCCESS))
         try:
             detail = detail_chunk(
                 {"candidate": candidate},
-                path="candidate",
+                path=detail_path,
                 cursor=detail_cursor,
                 expected_sha256=result_sha256,
                 budget=tool_result_max_bytes() - wrapper_bytes,
-                extra={"matched_candidate_count": 1},
+                extra={"matched_candidate_count": 1, "candidate_revision": candidate.get("revision"),
+                       "workspace_revision": workspace.revision},
             )
             return {**detail, "matched_candidate_count": 1}
         except ValueError as exc:
@@ -4416,6 +4429,7 @@ def _list_staged_gene_expression_observations_impl(
     include_discarded: bool,
     limit: int = 50,
     offset: int = 0,
+    workspace_revision: Optional[int] = None,
 ) -> AgrQueryResult:
     """List compact summaries for staged gene-expression observations, one page at a time."""
 
@@ -4449,6 +4463,7 @@ def _list_staged_gene_expression_observations_impl(
         include_discarded=list_input.include_discarded,
         limit=list_input.limit,
         offset=list_input.offset,
+        workspace_revision=workspace_revision,
     )
     _emit_gene_expression_builder_event(
         "gene_expression_builder.list_completed",
@@ -4471,11 +4486,14 @@ def _find_staged_gene_expression_observations_impl(
     detail_path: Optional[str] = None,
     detail_cursor: Optional[int] = None,
     result_sha256: Optional[str] = None,
+    workspace_revision: Optional[int] = None,
 ) -> AgrQueryResult:
-    """Find specific staged gene-expression observation drafts by content or id, one page at a time.
-
-    Use a withheld summary's detail_read arguments with this tool to read its
-    exact JSON in chunks; retain result_sha256 and advance detail_cursor."""
+    """Search drafts and return a versioned index. For complete original fields,
+    refs and errors, pass a row's detail_read arguments. For a nested value use
+    detail_path='candidate.staged_fields.<field>' and result_sha256=null on the
+    first chunk, then retain the returned detail.sha256 and advance detail_cursor.
+    Retain workspace_revision across list pages and detail reads; restart if stale.
+    """
 
     attempted_query = _attempt_query(
         "find_staged_gene_expression_observations",
@@ -4525,6 +4543,7 @@ def _find_staged_gene_expression_observations_impl(
         detail_path=detail_path,
         detail_cursor=detail_cursor,
         result_sha256=result_sha256,
+        workspace_revision=workspace_revision,
     )
     _emit_gene_expression_builder_event(
         "gene_expression_builder.find_completed",

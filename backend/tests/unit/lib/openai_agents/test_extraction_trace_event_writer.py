@@ -38,6 +38,7 @@ def test_writer_persists_versioned_redacted_bounded_events(tmp_path, monkeypatch
                     "estimated_tokens": 123,
                     "input_tokens": 45,
                     "total_token_count": 168,
+                    "output_reserve_tokens": 16000,
                     "access_token": "secret-access-token",
                 }
             },
@@ -68,6 +69,7 @@ def test_writer_persists_versioned_redacted_bounded_events(tmp_path, monkeypatch
     assert metric_summary["estimated_tokens"] == 123
     assert metric_summary["input_tokens"] == 45
     assert metric_summary["total_token_count"] == 168
+    assert metric_summary["output_reserve_tokens"] == 16000
     assert metric_summary["access_token"] == "<redacted>"
 
     lines = events.trace_event_path("trace-123").read_text(encoding="utf-8").splitlines()

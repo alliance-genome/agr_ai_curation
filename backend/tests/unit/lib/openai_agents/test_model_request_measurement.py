@@ -1152,7 +1152,7 @@ def test_agent_studio_run_measures_visible_and_deferred_tools(monkeypatch, publi
     [record] = published
     measured_tools = record["outbound"]["tools"]
     assert measured_tools["deferred"]["count"] == 2
-    assert measured_tools["initially_visible"]["count"] == 2  # tool_search + eager search tool
+    assert measured_tools["initially_visible"]["count"] == 4  # tool_search + eager search + two runtime history reads
     assert measured_tools["deferred"]["chars"] > 6000
     assert record["model_visible"]["json_chars"] < record["outbound"]["json_chars"]
     assert record["agent_id"] == "agent_studio_authoring"

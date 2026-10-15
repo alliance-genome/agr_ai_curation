@@ -19,6 +19,8 @@ mocks; these tests use real DB sessions only.
 
 from __future__ import annotations
 
+from agents import RunConfig as SDKRunConfig
+
 import copy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -180,7 +182,7 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
         monkeypatch.setattr(runner, name, lambda *a, **k: None)
     monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **k: None)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
-    monkeypatch.setattr(runner, "_build_agents_run_config", lambda **k: SimpleNamespace())
+    monkeypatch.setattr(runner, "_build_agents_run_config", lambda **kwargs: SDKRunConfig())
     monkeypatch.setattr(runner, "get_langfuse", lambda: None)
     for name in ("commit_pending_prompts", "_log_used_prompts_to_db", "provider_context_preflight",
                  "start_extraction_trace_run", "clear_extraction_trace_run"):

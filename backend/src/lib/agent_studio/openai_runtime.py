@@ -185,6 +185,7 @@ def _execution_for_call(
         for execution in reversed(state.executed_tools):
             if execution.call_id == call_id:
                 return execution
+        return None
     return state.executed_tools[-1] if state.executed_tools else None
 
 
@@ -210,6 +211,8 @@ def _build_function_tool(
         call_id_value = getattr(context, "tool_call_id", None)
         call_id = str(call_id_value) if call_id_value is not None else None
         result = await executor(name, parsed, call_id)
+        from src.lib.openai_agents.run_history import record_runtime_payload
+        await record_runtime_payload("canonical_tool_result", result.full_output, tool_name=name, call_id=call_id)
         state.executed_tools.append(
             ExecutedTool(
                 tool_name=name,
@@ -305,7 +308,7 @@ def build_agent_studio_model_settings(
     )
     return replace(
         shared_settings,
-        truncation="auto",
+        truncation="disabled",
         max_tokens=max_output_tokens,
         store=True,
     )
@@ -315,7 +318,8 @@ def build_agent_studio_model_settings(
 def _studio_trace_scope(*, state: AgentStudioRunState, session_id: str, user_id: str,
                         surface: ChatSurface = "agent_studio"):
     """Parent SDK observations with the same identity exposed to the curator."""
-    with cost_scope(execution_context(activity="authoring", run_id=state.cost_run_id)):
+    from src.lib.context import agent_request_scope
+    with agent_request_scope(user_id=user_id, session_id=session_id, trace_id=state.trace_id), cost_scope(execution_context(activity="authoring", run_id=state.cost_run_id)):
         with _studio_langfuse_scope(state=state, session_id=session_id, user_id=user_id, surface=surface):
             yield
 
@@ -511,6 +515,10 @@ async def stream_agent_studio_run(
                     f"ai_curation.{surface}.tool_count": len(tools),
                 },
             ):
+                from src.lib.openai_agents.run_history import prepare_history_run
+                agent.tool_surface_runtime = surface
+                run_config = prepare_history_run(agent, run_config)
+                state.tool_surface = getattr(agent, "tool_surface", state.tool_surface)
                 result = Runner.run_streamed(
                     agent,
                     input=input_items,
@@ -672,6 +680,10 @@ async def run_forced_agent_studio_tool(
                     "ai_curation.agent_studio.tool_count": len(tools),
                 },
             ):
+                from src.lib.openai_agents.run_history import prepare_history_run
+                agent.tool_surface_runtime = "agent_studio"
+                run_config = prepare_history_run(agent, run_config)
+                state.tool_surface = getattr(agent, "tool_surface", state.tool_surface)
                 result = await Runner.run(
                     agent,
                     input=input_items,

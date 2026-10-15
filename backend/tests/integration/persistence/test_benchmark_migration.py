@@ -77,7 +77,12 @@ def test_benchmark_migration_upgrade_indexes_and_downgrade():
         column["name"] for column in inspector.get_columns("benchmark_invocations")
     }
     with pytest.raises(RuntimeError, match="Runtime job attribution requires a forward migration"):
-        command.downgrade(ALEMBIC_CONFIG, "d1e2f3a4b5c6")
+        # Exercise this guard directly; newer retained-data migrations can reject
+        # a global downgrade before it ever reaches the benchmark migration.
+        migration = ScriptDirectory.from_config(ALEMBIC_CONFIG).get_revision("b08d16f1037b").module
+        with engine.begin() as connection:
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.downgrade()
 
     command.upgrade(ALEMBIC_CONFIG, "head")
     assert TABLES <= set(inspect(engine).get_table_names())

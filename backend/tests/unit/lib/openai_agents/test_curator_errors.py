@@ -52,3 +52,16 @@ def test_connection_and_unknown_errors_are_sanitized():
     assert classify_failure(error).category == "provider_connection"
     assert "PRIVATE" not in classify_failure(ValueError("PRIVATE")).message
     assert failure_for_event({"error_type": "BuilderFinalizationMissing", "message": "PRIVATE"}).retryable is False
+
+
+def test_history_checkpoint_failure_survives_sdk_wrapping_without_exposing_payload():
+    from src.lib.openai_agents.model_context_view import HistoryStorageUnavailable, ContextRecoveryError
+    for error, expected, retryable in ((HistoryStorageUnavailable("private database detail"), "history_unavailable", True),
+                                      (ContextRecoveryError("private content"), "protected_context_limit", False)):
+        wrapper = RuntimeError("SDK tool error")
+        wrapper.__cause__ = error
+        failure = classify_failure(wrapper)
+        assert failure.category == expected
+        assert failure.retryable is retryable
+        assert "private" not in failure.message
+        assert "Completed actions were not repeated" in failure.message

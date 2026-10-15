@@ -4,7 +4,7 @@ import asyncio
 import logging
 from types import SimpleNamespace
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
@@ -521,7 +521,9 @@ def test_sync_owned_runner_preserves_opaque_model_lifecycle(monkeypatch):
         input="input",
         max_turns=3,
         context={"trace_id": "trace-1"},
+        run_config=ANY,
     )
+    assert run_sync.call_args.kwargs["run_config"].call_model_input_filter is None
     build_resources.assert_not_called()
 
 

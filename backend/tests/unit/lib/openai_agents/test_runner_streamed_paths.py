@@ -1,5 +1,7 @@
 """Branch tests for run_agent_streamed orchestration paths."""
 
+from agents import RunConfig as SDKRunConfig
+
 import asyncio
 import logging
 import uuid
@@ -114,7 +116,7 @@ async def test_nested_runner_drains_real_sdk_before_provider_close(monkeypatch, 
     _patch_common_runtime(monkeypatch, {})
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", Client)
     monkeypatch.setattr(runner, "_build_request_openai_provider", lambda client: Provider())
-    monkeypatch.setattr(runner, "RunConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
     monkeypatch.setattr(runner.Runner, "run_streamed", start_sdk)
@@ -373,7 +375,7 @@ async def test_run_agent_with_tracing_compacts_standard_chat_session_before_prov
     monkeypatch.setattr(runner, "get_max_turns", lambda: 4)
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "_build_request_openai_provider", lambda _client: _FakeProvider())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
     monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
@@ -453,7 +455,7 @@ async def test_run_agent_with_tracing_closes_owned_resources_after_compaction_er
         "_build_request_openai_provider",
         lambda _client: _FakeProvider(),
     )
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(
         runner,
         "build_standard_chat_compaction_session",
@@ -1140,7 +1142,7 @@ async def test_run_agent_streamed_core_only_round_trip_does_not_require_speciali
     monkeypatch.setattr(runner, "get_max_turns", lambda: 4)
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
     monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
@@ -1187,7 +1189,7 @@ async def test_runner_traces_impossible_top_level_curation_shaped_output(monkeyp
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
@@ -1258,7 +1260,7 @@ async def test_runner_traces_impossible_top_level_curation_shaped_output(monkeyp
 async def test_run_agent_with_tracing_skips_sentry_span_for_unlabeled_custom_agent(monkeypatch):
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
@@ -1313,7 +1315,7 @@ async def test_run_agent_with_tracing_starts_sentry_span_for_explicit_workflow(m
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
@@ -1385,7 +1387,7 @@ async def test_runner_propagates_sdk_stream_errors(monkeypatch):
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
@@ -1687,7 +1689,7 @@ async def test_provided_builder_agent_without_profile_binds_run_state_tools(monk
     monkeypatch.setattr(runner, "get_max_turns", lambda: 4)
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
-    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
     monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
@@ -1770,7 +1772,7 @@ async def test_chat_propagated_provider_failure(monkeypatch, caplog, error_type,
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda: SimpleNamespace(close=close))
     monkeypatch.setattr(runner, "_build_request_openai_provider", lambda client: SimpleNamespace(aclose=close))
-    monkeypatch.setattr(runner, "RunConfig", lambda **kw: SimpleNamespace(**kw))
+    monkeypatch.setattr(runner, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner.Runner, "run_streamed", lambda *a, **kw: SimpleNamespace(stream_events=fail))
     monkeypatch.setattr(runner, "notify_tool_failure", notify)

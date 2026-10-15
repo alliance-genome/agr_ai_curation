@@ -1,0 +1,10 @@
+{
+  "description": "Synthetic shapes for exact recovery; no rule infers final resolution from extractor/validator disagreement.",
+  "events": [
+    {"kind": "candidate_revision", "candidate_id": "candidate-A", "revision": 1, "status": "draft", "staged_fields": {"label": "source A", "negated": true, "quote": "A was not observed in adults. β 😀"}},
+    {"kind": "validator_result", "validator_id": "identity-1", "request_id": "request-A", "decision_status": "rejected", "proposed": "A", "matched": "B", "findings": [{"field_path": "subject", "original_field": null, "future_field": {"nested": [false, 0, "β"]}}]},
+    {"kind": "candidate_revision", "candidate_id": "candidate-B", "revision": 2, "status": "valid", "staged_fields": {"label": "accepted B", "negated": true, "subject": "B"}},
+    {"kind": "validator_result", "validator_id": "evidence-2", "request_id": "request-B", "decision_status": "accepted", "findings": [{"evidence_record_ids": ["evidence-1", "evidence-2"], "quote": "B is the accepted object."}]},
+    {"kind": "candidate_revision", "candidate_id": "candidate-A", "revision": 2, "status": "discarded", "reason": "superseded by candidate-B"}
+  ]
+}

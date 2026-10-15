@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agents import RunConfig as SDKRunConfig
+
 import json
 from types import SimpleNamespace
 from uuid import uuid4
@@ -626,7 +628,7 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools.Runner,
@@ -756,7 +758,7 @@ async def test_builder_materializer_missing_finalization_fails_with_diagnostics(
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools.Runner,
@@ -838,7 +840,7 @@ async def test_builder_materializer_ack_json_without_finalize_fails(monkeypatch)
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools.Runner,
@@ -895,7 +897,7 @@ async def test_builder_materializer_requires_tool_name_for_internal_event(monkey
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools.Runner,
@@ -960,7 +962,7 @@ async def test_specialist_does_not_replay_prior_finalization_in_same_trace(
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools,
@@ -1045,7 +1047,7 @@ async def test_builder_finalized_specialist_emits_evidence_summary_from_recorded
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools.Runner,
@@ -1132,7 +1134,7 @@ async def test_specialist_validation_consumes_builder_finalized_payload(monkeypa
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools,
@@ -1240,7 +1242,7 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools,
@@ -1350,7 +1352,7 @@ async def test_specialist_builder_events_track_document_and_domain(monkeypatch):
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools,
@@ -1464,7 +1466,7 @@ async def test_specialist_validator_dispatch_failure_records_builder_validation_
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools,
@@ -1553,7 +1555,7 @@ async def test_specialist_retry_failure_records_builder_validation_failure(
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools,
@@ -1690,7 +1692,7 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
     calls = _spy_inline_persistence(monkeypatch)
     monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools, "RunConfig", SDKRunConfig)
     monkeypatch.setattr(streaming_tools.Runner, "run_streamed", lambda *args, **kwargs: EmptyRun(final_output=explanation if text_source == "final_output" else None))
     monkeypatch.setattr(streaming_tools, "_dispatch_domain_envelope_validators_for_chat", materialize)
     expected = streaming_tools.SupervisorExtractionHandoff(
@@ -1772,7 +1774,7 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools.Runner,
@@ -1868,7 +1870,7 @@ async def test_flow_path_skips_inline_chat_persistence_and_emits_event_without_i
     monkeypatch.setattr(
         streaming_tools,
         "RunConfig",
-        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+        SDKRunConfig,
     )
     monkeypatch.setattr(
         streaming_tools.Runner,
