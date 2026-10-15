@@ -35,6 +35,8 @@ Choose **Cancel Batch** to stop the batch. Results already completed remain avai
 
 The completion view summarizes successful and failed documents. For file-producing flows, use a completed document's download action or **Download ZIP** for the available results together.
 
+A completed extraction can report **zero objects**. Its empty outcome is saved, but there are no rows to export and no file is created for that output. This does not establish that the paper contains no relevant findings: review the source text and extraction instructions, particularly if the document has little readable content. A batch with no generated files has **Download ZIP** disabled. A flow that fails to produce its required output without an explicit finalized empty outcome still reports a failure.
+
 Review missing values, evidence associations, and unresolved validation findings before using the files. The output format follows your flow's formatter settings. A spreadsheet export does not establish that the records meet a database's submission requirements.
 
 **Recent Batches** lets you reopen prior work and available results. Returning while a batch is running can resume its progress display. **Start New Batch** returns to setup for another batch.
