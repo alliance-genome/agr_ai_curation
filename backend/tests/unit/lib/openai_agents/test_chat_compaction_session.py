@@ -7,8 +7,6 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
-
 from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatMessageRecord
 from src.lib.chat_transcript import FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
 from src.lib.openai_agents import chat_compaction_session as module

@@ -1324,7 +1324,6 @@ async def _run_agent_with_owned_resources(
     is_generating = False  # Track if we've emitted AGENT_GENERATING for current generation phase
     reasoning_summary_chunks: List[str] = []
 
-    openai_client = owned_openai_resources.client
     openai_provider = owned_openai_resources.provider
     run_config = _build_agents_run_config(
         model_provider=openai_provider,

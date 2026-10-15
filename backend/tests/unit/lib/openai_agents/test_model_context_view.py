@@ -87,6 +87,32 @@ async def test_small_runs_are_unchanged_and_budget_counts_instructions_tools_and
 
 
 @pytest.mark.asyncio
+async def test_toolless_retry_restores_exact_bodies_before_new_native_compaction(setup):
+    from src.lib.openai_agents.context_compaction import compaction_key
+
+    history, agent = setup
+    early = {"content": "NOT present α😀. " * 1400, "next_span_offset": 4}
+    foreign = {"type": "compaction", "encrypted_content": "standalone-canonical-state"}
+    items = [foreign, {"role": "user", "content": "Extract only negatives."},
+             *exchange(1, early), *exchange(2, {"status": "ok"})]
+    projected = await ModelContextView(history).filter(call(agent, items))
+    assert json.loads(projected.input[3]["output"])["content_externalized"]
+    native = {"type": "compaction", "encrypted_content": "summary-of-externalized-ref"}
+    history.native_compaction_keys.add(compaction_key(native))
+    canonical = items + [native, {"role": "user", "content": "Return the final object."}]
+    original = deepcopy(canonical)
+    retry = ModelContextView(history, allow_projection=False)
+    result = await retry.filter(call(agent, canonical))
+    assert agent.tools == []
+    assert canonical == original
+    assert result.input == items + [canonical[-1]]
+    assert json.loads(result.input[3]["output"]) == early
+    assert retry.last_metrics["compacted_prefix_items"] == 0
+    assert retry.last_metrics["reset_native_compaction_items"] == 1
+    assert retry.last_metrics["externalized_output_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_actionable_errors_are_not_summarized_away(setup):
     history, agent = setup
     items = [*exchange(1, {"status": "error", "errors": ["negative evidence missing"] * 1500}),

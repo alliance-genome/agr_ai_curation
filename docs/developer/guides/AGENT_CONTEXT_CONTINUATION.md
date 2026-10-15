@@ -18,6 +18,10 @@ an individual agent run. No new agent runner or workflow framework is involved.
   the pinned SDK. Subsequent stateless inputs can omit the prefix covered by a
   **native response** compaction item. Standalone `/responses/compact` windows
   are not pruned. A call/result crossing a boundary prevents prefix removal.
+- Tool-less synthesis retries retain the SDK's available canonical bodies and
+  remove prior native compaction items from that invocation: those items may
+  summarize references that a tool-less model cannot retrieve. Any new native
+  compaction sees the restored bodies. Foreign/standalone opaque state is preserved.
 - Model-context checkpoints contain immutable item references, instructions and
   completed tool-call identities. These are recoverable independently of worker
   memory. The archive is never replaced by an opaque summary.

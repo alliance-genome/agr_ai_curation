@@ -11,7 +11,6 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import inspect
 import json
-import logging
 from typing import Any
 
 from agents.exceptions import UserError
@@ -19,10 +18,7 @@ from agents.run import ModelInputData
 
 from . import config
 from .run_history import RunHistory, exact_json
-from .context_compaction import compacted_window
-
-logger = logging.getLogger(__name__)
-
+from .context_compaction import compacted_window, compaction_key
 
 class ContextRecoveryError(UserError):
     """A visible failure instead of silently losing required context."""
@@ -107,10 +103,24 @@ class ModelContextView:
         before = _estimate(call.agent, original, self.run_config)
         items = deepcopy(original.input)
         enabled = config.get_agent_context_view_enabled()
+        offset = 0
+        reset_compactions = 0
         if self.history.healthy and enabled:
-            items = compacted_window(items, self.history.native_compaction_keys)
-        offset = len(original.input) - len(items)
-        refs = {index - offset: ref for index, ref in refs.items() if index >= offset}
+            if self.allow_projection:
+                items = compacted_window(items, self.history.native_compaction_keys)
+                offset = len(original.input) - len(items)
+                refs = {index - offset: ref for index, ref in refs.items() if index >= offset}
+            else:
+                # A tool-less synthesis retry starts from the SDK's complete
+                # canonical history. Earlier native state may summarize history
+                # references that this retry cannot read. Remove only our own
+                # native items, preserving exact bodies and foreign/standalone
+                # opaque state. Any new compaction now sees the available originals.
+                indexes = [index for index, item in enumerate(items)
+                           if compaction_key(item) not in self.history.native_compaction_keys]
+                reset_compactions = len(items) - len(indexes)
+                items = [items[index] for index in indexes]
+                refs = {new: refs[old] for new, old in enumerate(indexes) if old in refs}
         # A fresh canonical source is used on every request. Never overwrite SDK state.
         if self.history.healthy and enabled and self.allow_projection:
             for index, ref in refs.items():
@@ -174,6 +184,7 @@ class ModelContextView:
         self.last_metrics = {"policy": "exact_history_native_compaction_v2", "enabled": enabled, "retrieval_available": self.allow_projection,
             "native_compactions": len(self.history.native_compaction_keys),
             "compacted_prefix_items": offset,
+            "reset_native_compaction_items": reset_compactions,
             "above_soft_target": size["estimated_total_tokens"] > trigger,
             "checkpoint": self.checkpoint, "archive_healthy": self.history.healthy,
             "archive_events_written": self.history.events_written,
@@ -190,12 +201,9 @@ class ModelContextView:
                                           and item.get("type") == "function_call_output"
                                           and item.get("call_id") in retrieval_ids)}
         await self.history.record("context_view", self.last_metrics)
-        try:
-            from .extraction_trace_events import write_extraction_trace_event
-            write_extraction_trace_event(event_type="runtime.context_view", output_summary=self.last_metrics,
-                                         metadata={"agent": getattr(call.agent, "name", None)})
-        except Exception:
-            logger.warning("Could not record context view measurements", exc_info=True)
+        from .extraction_trace_events import write_extraction_trace_event
+        write_extraction_trace_event(event_type="runtime.context_view", output_summary=self.last_metrics,
+                                     metadata={"agent": getattr(call.agent, "name", None)})
         # This is working state, not a replacement for canonical inputs, builder
         # revisions, action receipts or exact scientific results in the archive.
         await self.history.checkpoint(current.input, current.instructions, {
