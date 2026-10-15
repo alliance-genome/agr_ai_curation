@@ -1201,6 +1201,7 @@ class MeasuredModel(Model):
             output_reserve_tokens=getattr(model_settings, "max_tokens", None),
         )
         history = getattr(self._agent, "run_history", None)
+        measurement["context_management"] = getattr(model_settings, "context_management", None)
         if history is not None and history.model_view is not None:
             if (previous_response_id or conversation_id) and history.model_view.last_metrics.get("enabled"):
                 from .model_context_view import ContextRecoveryError
@@ -1216,6 +1217,11 @@ class MeasuredModel(Model):
     def _observe_tool_surface(self, measurement: dict[str, Any], response: Any) -> None:
         """Fold this response into the run's tool surface and record it (ALL-1280)."""
 
+        output = getattr(response, "output", None) or []
+        measurement["compaction_output_count"] = sum(
+            (item.get("type") if isinstance(item, dict) else getattr(item, "type", None)) == "compaction"
+            for item in output
+        )
         surface = getattr(self._agent, "tool_surface", None)
         if not isinstance(surface, ToolSurface):
             return
@@ -1237,6 +1243,8 @@ class MeasuredModel(Model):
         conversation_id=None,
         prompt=None,
     ):
+        from .context_compaction import native_compaction_settings
+        model_settings = native_compaction_settings(self._inner, self._agent, model_settings)
         model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
             model_settings, tools, handoffs
         )
@@ -1301,6 +1309,8 @@ class MeasuredModel(Model):
         conversation_id=None,
         prompt=None,
     ) -> AsyncIterator[Any]:
+        from .context_compaction import native_compaction_settings
+        model_settings = native_compaction_settings(self._inner, self._agent, model_settings)
         model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
             model_settings, tools, handoffs
         )

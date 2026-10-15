@@ -5250,6 +5250,9 @@ async def run_specialist_with_events(
             if event_type == "raw_response_event":
                 data = getattr(event, "data", None)
                 if data:
+                    from .context_compaction import compaction_progress_event
+                    if progress := compaction_progress_event(data, specialist_name):
+                        add_specialist_event(progress)
                     # Log response metadata
                     response_type = type(data).__name__
 

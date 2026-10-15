@@ -958,28 +958,6 @@ def test_direct_chat_completion_measured_with_usage(published):
     assert record["provider_usage"]["cached_input_tokens"] == 0
 
 
-def test_safe_client_compaction_request_is_measured(monkeypatch, published):
-    from openai.resources.responses import AsyncResponses
-
-    from src.lib.openai_agents.runner import SafeAsyncOpenAI
-
-    sent = []
-
-    async def fake_compact(self, **kwargs):
-        sent.append(kwargs)
-        return SimpleNamespace(id="cmp_1", output=[], usage=None)
-
-    monkeypatch.setattr(AsyncResponses, "compact", fake_compact, raising=False)
-    client = SafeAsyncOpenAI(api_key="test-key")
-    asyncio.run(client.responses.compact(model="gpt-test", input=[{"role": "user", "content": "history"}]))
-
-    assert len(sent) == 1
-    [record] = published
-    assert record["operation"] == "responses.compact"
-    assert record["agent_name"] == "standard_chat_compaction"
-    assert record["provider_usage"] == {"status": "not_reported"}
-
-
 # ---------------------------------------------------------------------------
 # Sentry: once per failure, wrappers, unavailability
 # ---------------------------------------------------------------------------

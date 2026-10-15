@@ -563,3 +563,16 @@ def test_evidence_revisions_summarizes_history_and_scope_refusals():
     )
     assert "supplied target scope" in refusal["diagnostic"]
     assert "evidence_revision_history" not in json.dumps(revisions)
+
+
+def test_context_compaction_measurements_survive_timeline_extraction(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    metrics = {"policy": "exact_history_native_compaction_v2", "native_compactions": 2,
+               "compacted_prefix_items": 40, "above_soft_target": False,
+               "archive_healthy": True, "retrieval_call_count": 12,
+               "before": {"estimated_total_tokens": 61052}, "after": {"estimated_total_tokens": 39797}}
+    _write_event(tmp_path, "trace-context", _event("trace-context", 1, "runtime.context_view",
+                 output_summary={"preview": metrics}, metadata={"agent": "extractor"}))
+    timeline = ExtractionTimelineAnalyzer.analyze(trace_id="trace-context", raw_trace={}, observations=[], include_raw_outputs=True)
+    assert timeline["event_type_counts"] == {"runtime.context_view": 1}
+    assert timeline["timeline"][0]["output"]["preview"] == metrics

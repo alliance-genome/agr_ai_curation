@@ -2,7 +2,8 @@
 
 Only completed successful tool-output bodies are replaced, never the original
 request, instructions, tool-call arguments, opaque reasoning or pending calls.
-This is mechanical projection, not an LLM-written summary or session compaction.
+Mechanical output references complement native Responses compaction. The soft
+projection target is never a reason to reject an otherwise valid request.
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import inspect
 import json
+import logging
 from typing import Any
 
 from agents.exceptions import UserError
@@ -17,6 +19,9 @@ from agents.run import ModelInputData
 
 from . import config
 from .run_history import RunHistory, exact_json
+from .context_compaction import compacted_window
+
+logger = logging.getLogger(__name__)
 
 
 class ContextRecoveryError(UserError):
@@ -102,6 +107,10 @@ class ModelContextView:
         before = _estimate(call.agent, original, self.run_config)
         items = deepcopy(original.input)
         enabled = config.get_agent_context_view_enabled()
+        if self.history.healthy and enabled:
+            items = compacted_window(items, self.history.native_compaction_keys)
+        offset = len(original.input) - len(items)
+        refs = {index - offset: ref for index, ref in refs.items() if index >= offset}
         # A fresh canonical source is used on every request. Never overwrite SDK state.
         if self.history.healthy and enabled and self.allow_projection:
             for index, ref in refs.items():
@@ -111,15 +120,12 @@ class ModelContextView:
         size = _estimate(call.agent, current, self.run_config)
         trigger = config.get_agent_context_trigger_estimated_tokens()
         if enabled and size["estimated_total_tokens"] > trigger:
-            if not self.history.healthy:
-                raise HistoryStorageUnavailable(
-                    "This request has become too large to continue safely, and its history could not be saved. "
-                    "Completed actions have not been repeated. Please try again later.")
             call_ids = {item.get("call_id") for item in items
                         if isinstance(item, dict) and item.get("type") == "function_call"}
             outputs = [i for i, item in enumerate(items) if isinstance(item, dict)
                        and item.get("type") == "function_call_output" and item.get("call_id") in call_ids]
-            eligible = outputs[:-config.get_agent_context_recent_tool_results()] if self.allow_projection else []
+            eligible = (outputs[:-config.get_agent_context_recent_tool_results()]
+                        if self.allow_projection and self.history.healthy else [])
             changed = False
             for index in eligible:
                 ref = refs.get(index)
@@ -139,9 +145,17 @@ class ModelContextView:
                     metadata = {"attention": _attention(value), "continuations": _continuations(value)}
                 if metadata["attention"]:
                     continue
+                read = {"event_id": ref, "detail_path": "payload.output", "detail_cursor": 0}
+                source_call = next((item for item in items if isinstance(item, dict)
+                                    and item.get("type") == "function_call"
+                                    and item.get("call_id") == items[index].get("call_id")), None)
+                if source_call and source_call.get("name", "").rsplit(".", 1)[-1] == "read_run_history":
+                    # Point back to the original read, not a wrapper around a
+                    # wrapper. The exact returned page also remains archived.
+                    read = json.loads(source_call["arguments"])
                 descriptor = exact_json({"history_event_id": ref,
                     "content_externalized": True,
-                    "read": {"event_id": ref, "detail_path": "payload.output", "detail_cursor": 0},
+                    "read": read,
                     "continuation_fields": metadata["continuations"],
                     "instruction": "Original output retained exactly. Use read_run_history before relying on its details; do not rerun the original tool to recover it."})
                 if len(descriptor.encode("utf-8")) >= len(exact_json(output).encode("utf-8")):
@@ -154,14 +168,13 @@ class ModelContextView:
                     break
             if changed:
                 self.checkpoint += 1
-            if size["estimated_total_tokens"] > trigger:
-                raise ContextRecoveryError(
-                    "This request still needs more context than can be kept safely. Its available history is preserved. "
-                    "Please split the task into smaller requests; completed actions have not been repeated.")
         retrieval_ids = {item.get("call_id") for item in items if isinstance(item, dict)
                          and item.get("type") == "function_call"
                          and item.get("name", "").rsplit(".", 1)[-1] in {"read_run_history", "search_run_history"}}
-        self.last_metrics = {"policy": "exact_history_tool_outputs_v1", "enabled": enabled, "retrieval_available": self.allow_projection,
+        self.last_metrics = {"policy": "exact_history_native_compaction_v2", "enabled": enabled, "retrieval_available": self.allow_projection,
+            "native_compactions": len(self.history.native_compaction_keys),
+            "compacted_prefix_items": offset,
+            "above_soft_target": size["estimated_total_tokens"] > trigger,
             "checkpoint": self.checkpoint, "archive_healthy": self.history.healthy,
             "archive_events_written": self.history.events_written,
             "archive_submitted_payload_bytes": self.history.submitted_payload_bytes,
@@ -177,9 +190,22 @@ class ModelContextView:
                                           and item.get("type") == "function_call_output"
                                           and item.get("call_id") in retrieval_ids)}
         await self.history.record("context_view", self.last_metrics)
+        try:
+            from .extraction_trace_events import write_extraction_trace_event
+            write_extraction_trace_event(event_type="runtime.context_view", output_summary=self.last_metrics,
+                                         metadata={"agent": getattr(call.agent, "name", None)})
+        except Exception:
+            logger.warning("Could not record context view measurements", exc_info=True)
+        # This is working state, not a replacement for canonical inputs, builder
+        # revisions, action receipts or exact scientific results in the archive.
+        await self.history.checkpoint(current.input, current.instructions, {
+            "native_compactions": len(self.history.native_compaction_keys),
+            "completed_tool_call_ids": [item.get("call_id") for item in original.input
+                                        if isinstance(item, dict) and item.get("type") == "function_call_output"],
+        })
         # If even the final manifest write failed, return the original full input.
         if not self.history.healthy and enabled and before["estimated_total_tokens"] > trigger:
-            raise HistoryStorageUnavailable("History storage became unavailable while preparing this request. "
+            raise HistoryStorageUnavailable("Working history could not be saved while preparing this request. "
                                        "Completed actions have not been repeated. Please try again later.")
         return current if self.history.healthy else original
 

@@ -91,8 +91,10 @@ async def test_actionable_errors_are_not_summarized_away(setup):
     history, agent = setup
     items = [*exchange(1, {"status": "error", "errors": ["negative evidence missing"] * 1500}),
              *exchange(2, {"status": "ok"})]
-    with pytest.raises(ContextRecoveryError, match="split the task"):
-        await ModelContextView(history).filter(call(agent, items))
+    view = ModelContextView(history)
+    result = await view.filter(call(agent, items))
+    assert result.input == items
+    assert view.last_metrics["above_soft_target"]
     assert history.healthy
 
 
@@ -207,13 +209,13 @@ async def test_native_multimodal_outputs_are_protected_and_toolless_retry_never_
     image_output = [{"type": "input_image", "image_url": "data:image/png;base64," + "a" * 30000}]
     items = [*exchange(1, {}), *exchange(2, {"ok": True})]
     items[1]["output"] = image_output
-    with pytest.raises(ContextRecoveryError):
-        await ModelContextView(history).filter(call(agent, items))
+    result = await ModelContextView(history).filter(call(agent, items))
+    assert result.input == items
     assert items[1]["output"] == image_output
     text_items = [*exchange(1, {"text": "old evidence " * 3000}), *exchange(2, {"ok": True})]
     view = ModelContextView(history, allow_projection=False)
-    with pytest.raises(ContextRecoveryError):
-        await view.filter(call(agent, text_items))
+    result = await view.filter(call(agent, text_items))
+    assert result.input == text_items
     assert not view.retired
 
 
@@ -248,3 +250,39 @@ def test_child_without_history_does_not_borrow_parent_filter(setup):
     parent = run_config_with_history(original, history)
     child = run_config_with_history(parent, None)
     assert child.call_model_input_filter is None
+
+
+@pytest.mark.asyncio
+async def test_thirteen_results_then_two_six_read_bursts_keep_original_event_identity(setup, monkeypatch):
+    """October 15 regression: SDK repr reads must not become unreducible copies."""
+    from types import SimpleNamespace
+    from src.lib.openai_agents.run_history import history_tools
+    history, agent = setup
+    history.store.read = lambda scope, ref: {"event": {"event_id": ref}, "payload": history.store.rows[ref]}
+    original = {"content": "Critical NOT present evidence. " * 400, "next_span_offset": 20}
+    ref = await history.record("tool_result", original)
+    items = [{"role": "user", "content": "Compare all sections, retaining negatives."}]
+    for n in range(13):
+        items.extend(exchange(n, original))
+    view = ModelContextView(history)
+    await view.filter(call(agent, items))
+    reader = next(tool for tool in history_tools(history) if tool.name == "read_run_history")
+    for burst in range(2):
+        for n in range(6):
+            call_id = f"read-{burst}-{n}"
+            arguments = json.dumps({"event_id": ref, "detail_path": "payload.content", "detail_cursor": 0})
+            result = await reader.on_invoke_tool(SimpleNamespace(tool_name=reader.name, tool_call_id=call_id, run_config=None), arguments)
+            items.extend([
+                {"type": "function_call", "call_id": call_id, "name": reader.name, "arguments": arguments},
+                {"type": "function_call_output", "call_id": call_id, "output": str(result)},
+            ])
+        projected = await view.filter(call(agent, items))
+        retired_reads = [json.loads(item["output"]) for item in projected.input
+                         if item.get("type") == "function_call_output" and item["call_id"].startswith("read-")
+                         and item["output"].startswith('{"content_externalized"')]
+        assert retired_reads
+        assert all(item["read"]["event_id"] == ref for item in retired_reads)
+        assert all(item["read"]["detail_path"] == "payload.content" for item in retired_reads)
+    assert view.last_metrics["retrieval_call_count"] == 12
+    assert view.last_metrics["externalized_output_count"] >= 13
+    assert history.store.rows[ref] == original

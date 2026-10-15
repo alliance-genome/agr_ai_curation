@@ -55,7 +55,7 @@ from .langfuse_client import (
     is_openai_agents_tracing_enabled,
 )
 from .agents.supervisor_agent import create_supervisor_agent
-from .chat_compaction_session import build_standard_chat_compaction_session
+from .chat_compaction_session import build_standard_chat_session
 from .curator_errors import classify_failure
 from .audit_labels import (
     BUILTIN_SPECIALIST_DISPLAY_NAMES,
@@ -85,7 +85,6 @@ from .config import (
 )
 from src.lib.runtime_payload_budget import provider_context_preflight
 from .model_request_measurement import (
-    call_measured_direct_request,
     install_model_request_measurement,
 )
 from .extraction_trace_events import (
@@ -480,7 +479,6 @@ class SafeAsyncOpenAI(AsyncOpenAI):
         super().__init__(*args, **merged_kwargs)
         self._wrap_responses_api()
         self._wrap_chat_api()
-        self._wrap_responses_compact()
 
     def _wrap_responses_api(self):
         """Wrap responses.create to sanitize metadata."""
@@ -494,26 +492,6 @@ class SafeAsyncOpenAI(AsyncOpenAI):
                 return await original_create(*args, **kwargs)
 
             self.responses.create = safe_create
-
-    def _wrap_responses_compact(self):
-        """Measure SDK context-compaction requests sent through this client.
-
-        Agents SDK model calls are measured at model resolution; compaction is a
-        separate ``responses.compact`` request the SDK sends directly.
-        """
-        if hasattr(self, 'responses') and hasattr(self.responses, 'compact'):
-            original_compact = self.responses.compact
-
-            async def measured_compact(**kwargs):
-                return await call_measured_direct_request(
-                    surface="standard_chat_compaction",
-                    provider=get_default_runner_provider().provider_id,
-                    api="responses.compact",
-                    kwargs=kwargs,
-                    call=original_compact,
-                )
-
-            self.responses.compact = measured_compact
 
     def _wrap_chat_api(self):
         """Wrap chat.completions.create to sanitize metadata."""
@@ -1423,14 +1401,11 @@ async def _run_agent_with_owned_resources(
         )
     sdk_session = None
     if chat_session_id and chat_turn_id:
-        sdk_session = build_standard_chat_compaction_session(
+        sdk_session = build_standard_chat_session(
             session_id=chat_session_id,
             user_id=user_id,
             current_turn_id=chat_turn_id,
-            model=str(getattr(agent, "model", "") or ""),
-            client=openai_client,
         )
-        await sdk_session.run_compaction({"compaction_mode": "input"})
     llm_run_start = time.monotonic()
     current_trace_run = get_current_extraction_trace_run()
     sentry_conversation_id = chat_session_id or getattr(
@@ -1739,6 +1714,9 @@ async def _run_agent_with_owned_resources(
                 # Handle raw LLM response events
                 data = getattr(event, "data", None)
                 if data is not None:
+                    from .context_compaction import compaction_progress_event
+                    if progress := compaction_progress_event(data, current_agent):
+                        yield progress
                     # Only stream TEXT deltas to chat (not function call arguments)
                     if isinstance(data, ResponseTextDeltaEvent):
                         delta = getattr(data, "delta", None)
