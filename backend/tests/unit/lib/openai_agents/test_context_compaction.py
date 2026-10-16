@@ -280,7 +280,7 @@ async def test_archive_write_failure_cannot_publish_compaction_or_execute_tools(
         async def get_response(self, *args, **kwargs):
             return ModelResponse(output=[ResponseCompactionItem(type="compaction", id="cmp", encrypted_content="opaque"),
                 ResponseFunctionToolCall(type="function_call", name="save", call_id="save", arguments="{}")],
-                usage=Usage(input_tokens=123, output_tokens=17, total_tokens=140), response_id="fixture")
+                usage=Usage(requests=1, input_tokens=123, output_tokens=17, total_tokens=140), response_id="fixture")
     client = AsyncOpenAI(api_key="fixture")
     model = Model(model="gpt-test", openai_client=client)
     agent = Agent(name="failure fixture", model=model, tools=[save])
