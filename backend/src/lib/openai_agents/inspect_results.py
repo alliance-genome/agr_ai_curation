@@ -68,7 +68,6 @@ from src.schemas.domain_pack_metadata import DomainPackMetadata
 
 
 _TOOL_NAME = "inspect_results"
-_COMPONENT = "supervisor_inspect_results"
 _RESULT_REF_PREFIX = "extraction-result:"
 _FINDING_INDEX_PREFIX = "finding-index:"
 _ACTIONS = frozenset(

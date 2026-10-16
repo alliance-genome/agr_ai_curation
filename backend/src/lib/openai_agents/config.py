@@ -3469,19 +3469,6 @@ def log_agent_config(agent_name: str, config: AgentConfig) -> None:
 
 
 # =============================================================================
-# ALL-1277: Agent contract discovery bounds
-# =============================================================================
-
-_AGENT_CONTRACT_CLAMP_WARNINGS: set[tuple[str, str]] = set()
-
-
-
-
-
-
-
-
-# =============================================================================
 # ALL-1278: Bounded tool results
 # =============================================================================
 # Isolated package tools read these same variables directly (without importing
@@ -3747,7 +3734,7 @@ def get_agent_model_capacity_overrides() -> dict:
     tool quota or a replacement compaction trigger.
     """
     import json
-    value = json.loads(os.getenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", "{}"))
+    value = json.loads(os.getenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", "").strip() or "{}")
     names = {"context_window_tokens", "max_input_tokens", "max_output_tokens"}
     if not isinstance(value, dict) or any(not isinstance(item, dict) or
             any(key not in names or type(limit) is not int or limit < 1 for key, limit in item.items())

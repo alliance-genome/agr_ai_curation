@@ -75,9 +75,7 @@ _CUSTOM_AGENT_NOT_VISIBLE_HINT = (
 _CURSOR_PATTERN = re.compile(r"^(0|[1-9][0-9]*):([0-9a-f]{12})$")
 _LIST_INDEX_PATTERN = re.compile(r"0|[1-9][0-9]*")
 # Room kept for the page envelope, continuation cursor and drilldown hint.
-_PAGE_ENVELOPE_RESERVE_CHARS = 700
 # Room kept per omitted-value stub when an oversized item is outlined.
-_OUTLINE_STUB_RESERVE_CHARS = 160
 _MAX_SUGGESTIONS = 5
 _MAX_LISTED_NAMES = 50
 _BINDING_SUMMARY_KEYS = (

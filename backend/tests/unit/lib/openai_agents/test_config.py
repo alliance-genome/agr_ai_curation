@@ -1670,3 +1670,21 @@ async def test_overload_policy_obeys_real_sdk_provider_advice(
     else:
         assert await consume() == [{'type': 'response.completed'}]
     assert attempts == expected_attempts
+
+
+@pytest.mark.parametrize("raw", [None, "", "  ", "{}"])
+def test_capacity_overrides_unset_or_empty_uses_catalog(monkeypatch, raw):
+    from src.lib.openai_agents.config import get_agent_model_capacity_overrides
+    if raw is None:
+        monkeypatch.delenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", raising=False)
+    else:
+        monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", raw)
+    assert get_agent_model_capacity_overrides() == {}
+
+
+@pytest.mark.parametrize("raw", ["not-json", "[]", '{"gpt-test":{"max_input_tokens":0}}'])
+def test_capacity_overrides_malformed_nonempty_is_rejected(monkeypatch, raw):
+    from src.lib.openai_agents.config import get_agent_model_capacity_overrides
+    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", raw)
+    with pytest.raises(ValueError):
+        get_agent_model_capacity_overrides()

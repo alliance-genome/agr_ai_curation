@@ -135,13 +135,6 @@ def _serialize_chat_message_summary(record: ChatMessageRecord) -> Dict[str, Any]
     }
 
 
-def _cursor_for_message(message: ChatMessageRecord) -> ChatMessageCursor:
-    return ChatMessageCursor(
-        created_at=message.created_at,
-        message_id=message.message_id,
-    )
-
-
 def _selected_page_result(*, items, repository_next_cursor, build_result):
     """Return the complete caller-selected repository page."""
     return build_result(items, repository_next_cursor)

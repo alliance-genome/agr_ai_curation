@@ -79,7 +79,6 @@ ChatDeliveryCallback = Callable[[str, Mapping[str, Any]], Awaitable[Mapping[str,
 
 _SUPPORTED_FILE_FORMATS = {"csv", "tsv", "json"}
 _CHAT_FORMAT = "chat"
-_CURSOR_PLACEHOLDER = "9" * 12
 _FORBIDDEN_CONTENT_KEYS = {
     "content",
     "csv",

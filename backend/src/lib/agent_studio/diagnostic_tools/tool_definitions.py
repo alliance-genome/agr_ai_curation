@@ -987,17 +987,6 @@ def _create_get_tool_details_handler():
         sections = [{"section": str(key),
                      "sha256": hashlib.sha256(_canonical_json(metadata[key]).encode("utf-8")).hexdigest(),
                      "total_chars": len(_canonical_json(metadata[key]))} for key in sorted(metadata)]
-        if section is None:
-            result = {"success": True, "tool_id": normalized_tool_id,
-                      "agent_id": normalized_agent_id, "detail_mode": "sections",
-                      "tool_sha256": metadata_hash, "tool_total_chars": len(metadata_json),
-                      "sections": sections,
-                      "instruction": "Call get_tool_details again with one returned section. Follow next_call until complete; concatenate content in range order and verify sha256.",
-                      "next_call": ({"tool": "get_tool_details", "arguments": {
-                          "tool_id": normalized_tool_id,
-                          **({"agent_id": normalized_agent_id} if normalized_agent_id else {}),
-                          "section": sections[0]["section"]}} if sections else None)}
-            return result
         if section not in metadata:
             return {"success": False, "error": f"Unknown section {section}.",
                     "available_sections": [item["section"] for item in sections]}

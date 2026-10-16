@@ -1014,3 +1014,15 @@ def test_standalone_tracereview_forwards_auth_settings_from_environment():
     assert environment["OIDC_CLIENT_ID"] == "${OIDC_CLIENT_ID:-}"
     assert environment["OIDC_REDIRECT_URI"] == "${OIDC_REDIRECT_URI:-http://localhost:${TRACE_REVIEW_FRONTEND_HOST_PORT:-3001}/api/auth/callback}"
     assert environment["COGNITO_REDIRECT_URI"] == "${COGNITO_REDIRECT_URI:-http://localhost:${TRACE_REVIEW_FRONTEND_HOST_PORT:-3001}/api/auth/callback}"
+
+
+def test_optional_capacity_override_accepts_effective_compose_empty_default(monkeypatch):
+    from src.lib.openai_agents.config import get_agent_model_capacity_overrides
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    for service in ("backend", "benchmark_worker"):
+        env = compose["services"][service]["environment"]
+        value = env["AGENT_MODEL_CAPACITY_OVERRIDES_JSON"] if isinstance(env, dict) else next(
+            item.split("=", 1)[1] for item in env if item.startswith("AGENT_MODEL_CAPACITY_OVERRIDES_JSON="))
+        assert value == "${AGENT_MODEL_CAPACITY_OVERRIDES_JSON:-}"
+        monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", "")
+        assert get_agent_model_capacity_overrides() == {}
