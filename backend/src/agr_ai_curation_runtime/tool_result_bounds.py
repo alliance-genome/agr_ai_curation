@@ -421,9 +421,8 @@ def bounded_json_result(
     start = parse_offset(offset, total=len(items), name="result_offset")
     first_page = start == 0
 
-    # Fields outside the paged collection: shown on the first page, deferred
-    # largest-first only as far as needed for the page frame to fit, and named
-    # (never silently dropped) on continuation pages.
+    # Fields outside the selected collection are shown at offset zero and named
+    # for exact detail reads when the caller explicitly starts later.
     outer: list[tuple[str, Any]] = [
         (key, value)
         for key, value in full.items()
@@ -454,8 +453,6 @@ def bounded_json_result(
                 body[keys[0]] = page_value
         if page_extras is not None:
             body.update(page_extras(keys or None, mode, start, returned))
-        next_offset = start + returned
-        more = next_offset < len(items)
         body["result_page"] = {
             "bounded": True,
             "primary_path": ".".join(keys) or None,
@@ -463,13 +460,13 @@ def bounded_json_result(
             "total_items": len(items),
             "offset": start,
             "returned_items": returned,
-            "next_offset": next_offset if more else None,
-            "complete": not more,
+            "next_offset": None,
+            "complete": True,
             "omitted_fields": omitted,
-            "next_call": {**carry, "result_offset": next_offset} if more else None,
+            "next_call": None,
             "detail_call": {**carry, "detail_path": "<detail_path>", "detail_cursor": 0},
             "instructions": (
-                "This is the requested result page. Continue with next_call. "
+                "This is the complete requested result suffix. "
                 "Fields listed in omitted_fields are read exactly with "
                 "detail_call using their detail_path; follow each chunk's next_cursor."
             ),

@@ -423,18 +423,13 @@ def test_agent_studio_flow_step_limit_respects_canonical_node_capacity(monkeypat
 
 def test_agent_studio_chat_recall_limits_are_environment_configurable(monkeypatch):
     monkeypatch.delenv("AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE", raising=False)
-    monkeypatch.delenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", raising=False)
     assert get_agent_studio_chat_recall_page_size() == 10
 
     monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE", "4")
-    monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", "900")
     assert get_agent_studio_chat_recall_page_size() == 4
 
     monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE", "0")
-    monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", "0")
     assert get_agent_studio_chat_recall_page_size() == 1
-
-
 
 
 def test_agent_studio_flow_limit_clamps_are_reported(monkeypatch, caplog):

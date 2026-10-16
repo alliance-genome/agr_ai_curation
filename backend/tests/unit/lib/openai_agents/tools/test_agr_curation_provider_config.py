@@ -627,7 +627,6 @@ def test_search_genes_uses_batched_detail_lookup(monkeypatch):
 def test_groq_wrapper_pages_unicode_and_preserves_full_capture(monkeypatch):
     from src.lib.openai_agents.tool_result_bounds import full_tool_results_requested
 
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")
     data = [{"id": i, "text": "β😀表达" * 10} for i in range(30)]
     complete = agr_curation.AgrQueryResult(status="ok", data=data)
     monkeypatch.setattr(agr_curation, "_AGR_QUERY_CALLABLE", lambda **kwargs: complete)
@@ -647,7 +646,6 @@ def test_groq_wrapper_reads_oversized_record_exactly_and_checks_hash(monkeypatch
     import hashlib
     from agr_ai_curation_runtime.tool_result_bounds import canonical_json
 
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")
     data = [{"id": "gene", "text": "β😀表达" * 1000}]
     complete = agr_curation.AgrQueryResult(status="ok", data=data)
     monkeypatch.setattr(agr_curation, "_AGR_QUERY_CALLABLE", lambda **kwargs: complete)

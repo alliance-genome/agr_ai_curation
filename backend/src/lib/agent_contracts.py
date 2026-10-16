@@ -352,7 +352,6 @@ def get_agent_contract(
                 items,
                 item_ref=normalized_item_ref,
                 detail_pointer=detail_pointer or "",
-                limit=limit,
                 cursor=cursor,
                 fingerprint=fingerprint,
             )
@@ -1263,7 +1262,6 @@ def _page_response(
         limit=limit,
         cursor=cursor,
         fingerprint=fingerprint,
-        present=lambda item: item,
     )
     result = {**response, "items": page, "page": envelope}
     return result
@@ -1275,7 +1273,6 @@ def _item_detail_response(
     *,
     item_ref: str,
     detail_pointer: str,
-    limit: int | None,
     cursor: str | None,
     fingerprint: str,
 ) -> dict[str, Any]:
@@ -1305,7 +1302,6 @@ def _bounded_page(
     limit: int | None,
     cursor: str | None,
     fingerprint: str,
-    present: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     bounded_limit = normalize_page_limit(
         limit,
@@ -1313,7 +1309,7 @@ def _bounded_page(
         maximum=get_tool_page_max_limit(),
     )
     offset = _cursor_offset(cursor, fingerprint=fingerprint, total=len(items))
-    page = [present(item) for item in items[offset : offset + bounded_limit]]
+    page = list(items[offset : offset + bounded_limit])
     next_offset = offset + len(page)
     has_more = next_offset < len(items)
     envelope = bounded_envelope(
@@ -1399,10 +1395,6 @@ def _request_fingerprint(
         parts.append(request.custom_agent.revision_fingerprint)
     material = json.dumps(parts)
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
-
-
-
-
 
 
 def _resolve_pointer(document: Any, pointer: str) -> Any:

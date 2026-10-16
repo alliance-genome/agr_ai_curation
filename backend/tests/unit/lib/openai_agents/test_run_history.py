@@ -197,7 +197,6 @@ def test_concurrent_builder_writers_cannot_publish_a_broken_history_chain(scope,
 
 @pytest.mark.asyncio
 async def test_large_nested_exact_read_pages_and_search_are_bounded(store, scope, monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")
     value = {"findings": [{"quote": "NOT observed α😀 " * 500, "negated": True}]}
     ref = store.append(scope, "output", exact_json(value))
     tools = {tool.name: tool for tool in history_tools(RunHistory(scope, store))}

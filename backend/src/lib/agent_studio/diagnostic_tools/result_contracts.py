@@ -189,13 +189,6 @@ def _summary(
         "field_cursor": cursor,
         "returned_field_count": 0,
         "next_field_cursor": None,
-        # Reserve the largest cursor representation while fitting fields so the
-        # final provider-visible continuation cannot push the summary over budget.
-        "next_call": {
-            "result_view": "summary",
-            "result_cursor": len(field_items),
-            "result_limit": limit,
-        },
         "fields_complete": False,
         "fields_truncated": True,
         "available_page_paths": sorted(available_page_paths),

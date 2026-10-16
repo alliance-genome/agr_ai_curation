@@ -492,8 +492,6 @@ def _aggregate_token_info(data: Mapping[str, Any]) -> Dict[str, Any]:
     return create_token_info_dict(data)
 
 
-
-
 def _aggregate_response_data(
     *,
     source: str,
@@ -1043,8 +1041,6 @@ def _ensure_search_scope(
         )
 
 
-
-
 def _cache_schema_is_current(cache_data: Dict[str, Any]) -> bool:
     return cache_data.get("analyzer_schema_version") == EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION
 
@@ -1275,7 +1271,7 @@ async def search_traces(
         default=TRACE_SEARCH_DEFAULT_LIMIT,
         ge=1,
         le=TRACE_SEARCH_MAX_LIMIT,
-        description="Maximum source matches requested before provider-envelope fitting",
+        description="Maximum source matches selected for this page",
     ),
     item_start: Annotated[
         int,
@@ -1530,8 +1526,8 @@ async def get_langfuse_payloads(
     summary="Get one exact Langfuse payload",
     description="""
     Return one exact trace or observation payload by payload_id, or by
-    scope/observation_id/field. Exact chunks are environment-bounded below the
-    provider inline-result envelope.
+    scope/observation_id/field. Return the complete selected payload, or an
+    explicit exact character slice when requested.
     """
 )
 async def get_langfuse_payload(
@@ -2020,8 +2016,8 @@ async def get_tool_calls_paginated(
     if item_offset >= page_size:
         raise HTTPException(status_code=400, detail="item_offset must be smaller than page_size")
 
-    # Get the logical page slice and fit as many bounded records as the full
-    # provider wrapper can carry. item_offset resumes within this same slice.
+    # Return the complete selected page slice. item_offset selects a suffix
+    # within this same logical page.
     page_start_idx = (page - 1) * page_size
     start_idx = page_start_idx + item_offset
     end_idx = min(page_start_idx + page_size, total_items)
@@ -2064,14 +2060,6 @@ async def get_tool_calls_paginated(
         next_index = start_idx + len(items)
         if next_index >= total_items:
             next_call = None
-        elif next_index < end_idx:
-            next_call = {
-                "trace_id": trace_id,
-                "page": page,
-                "page_size": page_size,
-                "item_offset": item_offset + len(items),
-                **({"tool_name": tool_name} if tool_name else {}),
-            }
         else:
             next_call = {
                 "trace_id": trace_id,

@@ -230,7 +230,6 @@ def _read_topic(template: str, topic_id: str) -> str:
 
 
 def test_guide_reads_are_bounded_and_hash_pinned(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS", "1000")
     template = _alliance_template()
     text = _read_topic(template, "trace_investigation")
     assert len(text) > 1000

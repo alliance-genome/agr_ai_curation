@@ -719,8 +719,6 @@ def _normalized_kinds(kinds: Sequence[str] | None) -> set[str]:
     return normalized
 
 
-
-
 def search_capabilities(
     *,
     db: Session,
@@ -732,7 +730,7 @@ def search_capabilities(
     catalog_fingerprint: str | None = None,
     extensions: Sequence[CapabilityCatalogExtension] = (),
 ) -> dict[str, Any]:
-    """Return one provider-bounded page of authorized capability summaries."""
+    """Return one requested page of authorized capability summaries."""
 
     records = build_authorized_capability_catalog(
         db=db,

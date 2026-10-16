@@ -566,7 +566,7 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
 9. When in Workshop, use Workshop capabilities; flow editing resumes on the Flows tab.
 11. before reviewing or commenting on current prompt text, use `refresh_workshop_prompt`; read the summary and follow every deterministic `next_call` until `complete=true`. Reconstruct the exact text from ordered chunk ranges, treat conversation history and older versions as historical, and never report text as present unless it appears in those refreshed chunks.
    - every ID listed in `group_prompt_override_ids` is callable with `target_prompt="group"` and `target_group_id`; inspect each relevant override rather than assuming only the selected group exists.
-   - if the metadata preview is incomplete, reconstruct it with `target_prompt="metadata"` before making metadata-dependent claims.
+   - inspect `target_prompt="metadata"` when you need to verify the current authoring fields before making metadata-dependent claims.
 12. before proposing, applying or reviewing prompt edits, read studio guide topic `prompt_playbook`.
 13. in reviews, explicitly check whether the updated prompt follows the `prompt_playbook` topic and call out any misses.
 14. choose the right target for edits:
@@ -606,7 +606,7 @@ recommended uses, and default reasoning rather than relying on historical model 
                 if context.active_tab == "agent_workshop" and workshop_draft_tools is not None:
                     tools_label = "Tools attached to current workshop draft"
                     tools_for_context = [
-                        "See workshop_authoring_metadata_preview (or its exact metadata continuation)"
+                        "See workshop_authoring_metadata_preview for the complete current metadata"
                     ]
 
                 runtime_additions.append(f"""
@@ -746,7 +746,7 @@ For Flow Builder authoring, guide a conversation one decision at a time:
 
 Before designing a new flow, configuring an output step, projection plan, fixed columns or export execution mode, or fixing a stale output layout, read studio guide topic `flow_design`. Before verifying a flow, auditing its configuration or reporting PASS or FAIL, read studio guide topic `flow_verification` and follow its protocol and checklist.
 
-**PASS gate:** NEVER report PASS when a required detail is incomplete, selected text or a section has another page, or any required response is `compacted_tool_result`. Duplicate `output_key` is HIGH unless authoritative validation classifies it CRITICAL. Keep suggestions evidence-based; do not page through unrelated catalogs or domain metadata speculatively.
+**PASS gate:** NEVER report PASS when a required detail is incomplete, selected text or a section has another page, or required source content remains unread. Duplicate `output_key` is HIGH unless authoritative validation classifies it CRITICAL. Keep suggestions evidence-based; do not page through unrelated catalogs or domain metadata speculatively.
 
 Do not recommend standalone flow steps for validators that are absent from `get_available_agents`; those validators are attachment-only and run through validation attachments/default runtime dispatch.
 </critical_instruction>

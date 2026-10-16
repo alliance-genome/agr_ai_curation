@@ -266,8 +266,6 @@ def _base_wide_registries() -> dict[str, DomainPackValidationRegistry]:
     }
 
 
-
-
 def _wide_registries(**expression_overrides) -> dict[str, DomainPackValidationRegistry]:
     registries = _base_wide_registries()
     if expression_overrides:
@@ -359,8 +357,6 @@ def _chars(value) -> int:
     return len(json.dumps(value))
 
 
-
-
 @pytest.fixture
 def reported(monkeypatch):
     calls: list = []
@@ -439,7 +435,6 @@ def test_page_size_changes_default_summary_page():
 
 def test_following_cursors_returns_complete_stable_sequence(monkeypatch):
     _, paged = _all_pages(**RECORDED_CALL, limit=7)
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "80000")
     whole = _call(**RECORDED_CALL, limit=50)
 
     assert [item["ref"] for item in paged] == [item["ref"] for item in whole["items"]]
@@ -589,7 +584,6 @@ def test_duplicate_field_names_across_packs_are_pack_qualified_and_selectable():
 
 
 def test_custom_and_packaged_bindings_keep_origin_and_pack_ownership(monkeypatch):
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "80000")
     validator = _call(
         **RECORDED_CALL,
         limit=50,
@@ -820,8 +814,6 @@ async def test_mocked_validator_run_uses_scoped_contract_without_registry_payloa
         "expected": {"curie": STAGE_FIELD},
     }
     assert reported == []
-
-
 
 
 @pytest.mark.parametrize("pointer", ["/validator_bindings/²", "/validator_bindings/00", "field"])

@@ -211,7 +211,7 @@ GET_STUDIO_CAPABILITY_DETAIL_TOOL = {
     "name": "get_studio_capability_detail",
     "description": (
         "Reauthorize one catalog result and retrieve its exact hash-addressed "
-        "detail inline when it fits, otherwise in bounded chunks. Follow next_call only when detail is incomplete."
+        "complete selected detail. Follow next_call only when the selected result has further pages."
     ),
     "input_schema": {
         "type": "object",
@@ -301,8 +301,8 @@ prompt-quality concern is fixed. Treat older chat history and version snapshots
 as historical after this tool returns. Omit start for a content-free identity,
 hash, length, and freshness summary. Then follow next_call with its prompt_hash,
 start, and max_chars until complete=true to reconstruct the exact prompt. Pair
-Use target_prompt="metadata" to reconstruct exact authoring fields when the
-system-context metadata preview is incomplete. Pair this with get_tool_inventory and get_tool_details before advising on
+Use target_prompt="metadata" to inspect exact current authoring fields. Pair this
+with get_tool_inventory and get_tool_details before advising on
 document/evidence tool instructions.
 """,
     "input_schema": {
@@ -411,7 +411,7 @@ LIST_RECENT_CHATS_TOOL = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum sessions requested before provider-envelope fitting.",
+                "description": "Maximum sessions selected for this page.",
                 "default": min(10, _CHAT_HISTORY_PAGE_SIZE),
                 "minimum": 1,
                 "maximum": _CHAT_HISTORY_PAGE_SIZE,
@@ -451,7 +451,7 @@ SEARCH_CHAT_HISTORY_TOOL = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum matches requested before provider-envelope fitting.",
+                "description": "Maximum matches selected for this page.",
                 "default": min(10, _CHAT_HISTORY_PAGE_SIZE),
                 "minimum": 1,
                 "maximum": _CHAT_HISTORY_PAGE_SIZE,
@@ -754,7 +754,7 @@ SEARCH_TRACES_TOOL = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum source matches requested before provider-envelope fitting.",
+                "description": "Maximum source matches selected for this page.",
                 "default": _TRACE_SEARCH_DEFAULT_LIMIT,
                 "minimum": 1,
                 "maximum": _TRACE_SEARCH_MAX_LIMIT,
@@ -1451,8 +1451,6 @@ _BUILTIN_OPUS_TOOLS = (
     GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL,
     GET_EXPORT_SUBMISSION_READINESS_TOOL,
 )
-
-
 
 
 @lru_cache(maxsize=1)

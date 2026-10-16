@@ -226,8 +226,6 @@ _RECALL_TOOL_NAME = "recall_chat_history"
 _RECALL_MESSAGE_FIELDS = ("content", "flow_assistant_message")
 
 
-
-
 def _recall_cursor(cursor: str | int | None, *, total: int) -> int:
     """Parse a recall page cursor strictly.
 
@@ -257,8 +255,6 @@ def _echo(value: Any) -> str:
     return _preview_text(value, limit=_TEXT_PREVIEW_LIMIT)
 
 
-
-
 def _fit_recall_messages(
     payloads: list[dict[str, Any]],
     *,
@@ -285,7 +281,7 @@ async def _recall_message_detail(
     message_field: str,
     content_cursor: int | None,
 ) -> str:
-    """Exact bounded chunks of one message in the active chat session."""
+    """Exact selected message content in the active chat session."""
 
     parsed_id = _uuid_ref(str(message_id or "").strip())
     if parsed_id is None:
@@ -423,7 +419,7 @@ async def recall_chat_history(
         except ValueError as exc:
             return _recall_response("invalid_cursor", str(exc), detail="recent")
         end = total_count - served
-        # Newest first while fitting, so a size-ended page keeps the latest turns.
+        # Select the newest requested rows before restoring chronological order.
         newest_first = list(reversed(payloads[max(0, end - bounded_limit):end]))
 
         def render_recent(page: list[dict[str, Any]], returned: int) -> dict[str, Any]:
@@ -496,7 +492,7 @@ async def recall_chat_history(
                 detail="search",
             )
         if len(normalized_query) > _FIELD_TEXT_LIMIT:
-            # A caller input error, not a result-budget escape.
+            # Reject an invalid caller query before searching.
             return _recall_response(
                 "invalid_request",
                 f"Search query is longer than {_FIELD_TEXT_LIMIT} characters; "
@@ -545,7 +541,7 @@ def _forward_recall_page(
     message: str,
     extra: Mapping[str, Any],
 ) -> str:
-    """One size-fitted forward page of turn or search results."""
+    """Return complete turn or search results from the requested offset."""
 
     total = len(payloads)
     try:
@@ -553,27 +549,20 @@ def _forward_recall_page(
     except ValueError as exc:
         return _recall_response("invalid_cursor", str(exc), detail=detail)
 
-    def render(page: list[dict[str, Any]], returned: int) -> dict[str, Any]:
-        next_offset = start + returned
-        truncated = next_offset < total
-        ended_by = "limit" if truncated else "end"
-        response = {
-            "status": "ok",
-            "message": message,
-            "detail": detail,
-            **extra,
-            "messages": page,
-        }
-        if truncated or start:
-            response.update(
-                total_count=total,
-                truncated=truncated,
-                next_cursor=str(next_offset) if truncated else None,
-                page_ended_by=ended_by,
-            )
-        return response
-
-    response = _fit_recall_messages(payloads, start=start, limit=total - start, render=render)
+    response = {
+        "status": "ok",
+        "message": message,
+        "detail": detail,
+        **extra,
+        "messages": payloads[start:],
+    }
+    if start:
+        response.update(
+            total_count=total,
+            truncated=False,
+            next_cursor=None,
+            page_ended_by="end",
+        )
     return json.dumps(response, ensure_ascii=True, default=str)
 
 

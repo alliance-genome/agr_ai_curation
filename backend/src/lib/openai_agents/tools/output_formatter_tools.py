@@ -1,8 +1,7 @@
 """Runtime-bound formatter tools for structure-owned CSV/TSV/JSON and chat outputs.
 
-The saved artifact bundle stays application-held. Tools return bounded
-inventories, pages and exact value slices; every response obeys the total
-``OUTPUT_TOOL_MAX_RESPONSE_CHARS`` budget with explicit continuation. The model
+The saved artifact bundle stays application-held. Tools return selected
+inventories, pages and exact value slices under the shared context policy. The model
 chooses projection operations and application code renders all rows.
 """
 
@@ -1534,7 +1533,7 @@ def build_output_formatter_tools(
         name_override="explain_formatter_capabilities",
         description_override=(
             "Return the structure-owned formatter capabilities, constraints, row "
-            "sources, transforms, overrides, response budgets, and no-raw-rows invariant."
+            "sources, transforms, overrides, and no-raw-rows invariant."
         ),
         strict_mode=False,
     )

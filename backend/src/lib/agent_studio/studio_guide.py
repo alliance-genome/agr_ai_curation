@@ -5,7 +5,7 @@ tool catalogs, flow verification protocols, profile-editing references) is
 kept out of the always-sent system prompt. The package Agent Studio prompt and
 the backend core guide mark those sections as ``<studio_guide_topic>`` blocks;
 the prompt builder sends only a short topic index, and ``read_studio_guide``
-returns exact topic text in bounded chunks.
+returns complete selected topic text.
 """
 
 from __future__ import annotations
@@ -162,7 +162,7 @@ def read_studio_guide(
     start: int | None = None,
     content_hash: str | None = None,
 ) -> dict[str, Any]:
-    """List, search, or read one exact guide topic in bounded chunks."""
+    """List, search, or read one complete exact guide topic."""
 
     topics = studio_guide_topics(template)
     rendered: dict[str, str] = {}

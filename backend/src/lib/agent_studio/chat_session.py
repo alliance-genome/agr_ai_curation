@@ -185,7 +185,7 @@ def get_chat_session_page_payload(
         serialize_chat_history_session_summary
     ),
 ) -> Dict[str, Any]:
-    """Return a keyset-paged session list fitted to the provider-visible JSON."""
+    """Return the complete keyset-paged session selection."""
 
     session_cursor = decode_chat_session_cursor(cursor)
     if query is None:

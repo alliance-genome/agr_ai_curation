@@ -185,7 +185,6 @@ _GENE_EXPRESSION_MENTION_PATCH_TARGETS = {
 }
 
 
-
 class _StrictToolModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1583,7 +1582,6 @@ def _ensure_provider_mappings(method: str) -> Optional[AgrQueryResult]:
         attempted_query=_attempt_query(method),
         failure_classification=LOOKUP_STATUS_BLOCKED,
     )
-
 
 
 @function_tool(strict_mode=False)
@@ -3356,8 +3354,6 @@ def agr_curation_query(
         )
 
 
-
-
 def _unwrap_function_tool_callable(tool: Any, target_name: str) -> Any:
     """Extract original callable from a FunctionTool wrapper."""
     visited_ids = set()
@@ -3815,8 +3811,6 @@ def _builder_candidate_index(candidate: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
-
-
 def _builder_page(
     workspace: Any,
     candidates: List[Dict[str, Any]],
@@ -3859,12 +3853,7 @@ def _builder_page(
     def render(page: List[Dict[str, Any]], returned: int) -> Dict[str, Any]:
         next_offset = start + returned
         has_more = total > next_offset
-        if not has_more:
-            ended_by = "end"
-        elif returned >= cap:
-            ended_by = "limit"
-        else:
-            ended_by = "size_budget"
+        ended_by = "limit" if has_more else "end"
         return {
             **base,
             "candidates": page,

@@ -47,7 +47,6 @@ def _raise_document_read_error(ctx: Any, error: Exception) -> str:
     raise DocumentReadError(getattr(ctx, "tool_name", "document_read")) from error
 
 
-
 def _env_int(key: str, default: int, *, minimum: int = 0) -> int:
     """Read an int env var with a resilient fallback.
 
@@ -336,7 +335,6 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
     return scoped_document_tool(search_document, document_id=document_id, user_id=user_id)
 
 
-
 def _search_summary(hits: List[ChunkHit]) -> str:
     return f"Found {len(hits)} chunks"
 
@@ -353,46 +351,16 @@ def _chunk_window(
     span_offset: int,
     render: Any,
 ) -> Any:
-    """Exact slice of an oversized chunk covering whole evidence spans.
-
-    ``render(content_slice, content_range, span_page_spans, span_page)`` builds
-    the complete result. Spans are added in order from ``span_offset`` while the
-    result fits; the slice starts where the previous window ended so that every
-    character of the chunk appears in exactly one window.
-    """
+    """Return all exact text and spans from an explicitly requested span offset."""
     total = len(spans)
-    if total == 0:
-        # Windows are span-aligned; text without spans cannot be windowed.
-        return render(content, {"start": 0, "end": len(content), "total_chars": len(content)}, [], {"span_offset": 0, "returned_spans": 0, "total_spans": 0, "next_span_offset": None, "complete": True})
     start_char = 0 if span_offset == 0 else spans[span_offset].char_start
-
-    def build(page: List[EvidenceSpanResult], returned: int) -> Any:
-        next_offset = span_offset + returned
-        more = next_offset < total
-        end_char = spans[next_offset].char_start if more else len(content)
-        if returned == 0:
-            end_char = start_char
-        return render(
-            content[start_char:end_char],
-            {"start": start_char, "end": end_char, "total_chars": len(content)},
-            page,
-            {
-                "span_offset": span_offset,
-                "returned_spans": returned,
-                "total_spans": total,
-                "next_span_offset": next_offset if more else None,
-                "complete": not more,
-            },
-        )
-
-    result, returned = fit_page(
-        spans,
-        start=span_offset,
-        limit=total - span_offset,
-        render=build,
-
+    return render(
+        content[start_char:],
+        {"start": start_char, "end": len(content), "total_chars": len(content)},
+        spans[span_offset:],
+        {"span_offset": span_offset, "returned_spans": total - span_offset,
+         "total_spans": total, "next_span_offset": None, "complete": True},
     )
-    return result
 
 
 def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
@@ -413,14 +381,13 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
         record_evidence(selections=[...]); the backend copies the exact source text into
         verified_quote. Do not write evidence quote text yourself.
 
-        A chunk too large for one response (for example a very long table) is
-        returned in consecutive exact windows: chunk.content_range gives the
-        character range shown, and chunk.span_page.next_span_offset continues with
-        the following spans until span_page.complete is true.
+        The default call returns the whole chunk. An explicit span_offset reads
+        every remaining span and exact source character from that offset onward.
+        Shared context compaction and exact ingestion handle model capacity.
 
         Args:
             chunk_index: Zero-based document-local index returned by search_document or section source chunks.
-            span_offset: Only for a chunk returned in windows: the next_span_offset from the previous window.
+            span_offset: Optional starting span index for an explicit suffix read; defaults to the whole chunk.
         """
         if tracker:
             tracker.record_call("read_chunk")
@@ -482,14 +449,9 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
             window_note = ""
             if span_page is not None:
                 window_note = (
-                    f" This chunk is shown in windows: characters {content_range['start']}"
-                    f"-{content_range['end']} of {content_range['total_chars']}."
+                    f" Showing the suffix from span {span_page['span_offset']}, characters "
+                    f"{content_range['start']}-{content_range['end']} of {content_range['total_chars']}."
                 )
-                if span_page["next_span_offset"] is not None:
-                    window_note += (
-                        " Continue with read_chunk(chunk_index, "
-                        f"span_offset={span_page['next_span_offset']})."
-                    )
             return ChunkReadResult(
                 summary=(
                     f"Read chunk {chunk_index}{page_text}.{window_note} "
@@ -554,8 +516,6 @@ class SectionChunkSource(BaseModel):
     subsection: Optional[str] = None
     char_count: int
     snippet: Optional[str] = None  # Only populated when text_contains matched this chunk
-    # Set when this passage alone exceeds the result budget; its text is not in
-    # ``content``. Read it with read_chunk.
 
 
 class SectionContent(BaseModel):
@@ -641,7 +601,6 @@ def _build_snippet(text: str, needle_lower: str) -> str:
     return excerpt
 
 
-
 def _section_entries(
     chunks: List[dict],
     *,
@@ -649,7 +608,7 @@ def _section_entries(
     section_fallback: Optional[str],
     subsection_fallback: Optional[str],
 ) -> List[dict]:
-    """Per-passage pieces of one section page, in order, before size fitting."""
+    """Per-passage pieces of one section page, in order, for the selected section."""
     entries: List[dict] = []
     for chunk in chunks:
         text = _chunk_text(chunk)
@@ -680,8 +639,6 @@ def _section_entries(
             }
         )
     return entries
-
-
 
 
 def _assemble_section_entries(entries: List[dict]) -> dict:

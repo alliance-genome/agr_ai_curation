@@ -132,7 +132,6 @@ async def test_refresh_workshop_prompt_rejects_invalid_target_prompt():
 
 @pytest.mark.asyncio
 async def test_refresh_workshop_metadata_chunks_exact_oversized_values(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_PROMPT_CHUNK_MAX_CHARS", "31")
     description = "Exact oversized description 🧬 " * 30
     context = ChatContext(
         active_tab="agent_workshop",
@@ -357,8 +356,6 @@ async def test_refresh_workshop_prompt_chunks_reconstruct_long_dirty_draft(
     monkeypatch,
     prompt,
 ):
-    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_PROMPT_CHUNK_MAX_CHARS", "8000")
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     context = ChatContext(
         active_tab="agent_workshop",
         agent_workshop=AgentWorkshopContext(
@@ -447,7 +444,6 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     captured: dict[str, Any] = {}
 
     monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(api_module, "_load_agent_studio_system_prompt_template", lambda: "system prompt template")
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)

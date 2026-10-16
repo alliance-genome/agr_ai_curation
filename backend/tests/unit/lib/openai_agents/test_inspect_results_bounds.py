@@ -19,7 +19,6 @@ from src.schemas.domain_pack_metadata import (
     DomainPackObjectDefinition,
 )
 
-BUDGET = 8192
 RESULT_ID = "77777777-7777-7777-7777-777777777777"
 RESULT_REF = f"extraction-result:{RESULT_ID}"
 UNICODE = "β-catenin 表达 im Flügel 😀 "
@@ -143,7 +142,6 @@ class _Record:
 
 @pytest.fixture(autouse=True)
 def active_chat(monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", str(BUDGET))
     monkeypatch.setattr(inspect_results_module, "get_current_session_id", lambda: "session-bounds")
     monkeypatch.setattr(inspect_results_module, "get_current_user_id", lambda: "user-bounds")
     monkeypatch.setattr(

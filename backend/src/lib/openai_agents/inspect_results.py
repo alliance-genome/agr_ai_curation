@@ -702,7 +702,7 @@ def _help_response() -> dict[str, Any]:
             "(<index>.<key>, with object_ref) reads one exact evidence value",
         },
         "boundaries": [
-            "Every response fits the tool result budget. Continue pages and chunks by "
+            "Explicit selection controls determine each result view. Continue pages and chunks by "
             "passing next_call exactly; a changed result returns stale_result_cursor.",
             "cursor, limit and result_sha256 come from next_call: pages take all three, "
             "exact detail_path/field chunks take cursor and result_sha256, and single "
@@ -734,8 +734,6 @@ def _help_response() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Paging, exact reads and descriptors
 # ---------------------------------------------------------------------------
-
-
 
 
 def _check_sha(expected: str | None, actual: str) -> None:
@@ -852,10 +850,10 @@ def _exact_value(
     cursor: Any,
     message: str,
 ) -> dict[str, Any]:
-    """Return a value whole when it fits, otherwise exact contiguous chunks.
+    """Return the complete exact value remainder from the requested cursor.
 
-    Strings are chunked as text and anything else as canonical JSON; joining
-    every chunk's content reproduces the value whose ``value_sha256`` is shown.
+    Strings use text and anything else uses canonical JSON. The source
+    ``value_sha256`` identifies the complete value before cursor selection.
     """
 
     _check_sha(expected_sha, sha)
@@ -910,8 +908,6 @@ def _render_record(
     """Render the complete selected record."""
 
     return render(dict(record))
-
-
 
 
 def _descriptor(value: Any, *, read: Mapping[str, Any]) -> dict[str, Any]:

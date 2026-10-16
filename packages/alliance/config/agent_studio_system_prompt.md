@@ -326,10 +326,10 @@ Use these when the user refers to prior conversations, recent sessions, or asks 
   - Do not use for user input mistakes (bad IDs, invalid symbols)
 </tools>
 </studio_guide_topic>
-<studio_guide_topic id="trace_and_log_tools" title="TraceReview and service-log tool reference" read_when="Read before choosing among trace tools or service logs, or when a trace response is over budget or incomplete.">
+<studio_guide_topic id="trace_and_log_tools" title="TraceReview and service-log tool reference" read_when="Read before choosing among trace tools or service logs, or when a selected trace section needs further inspection.">
 <tools>
 ### Token-Aware Trace Analysis Tools (RECOMMENDED)
-Include `token_info` in responses for budget management:
+Use advisory `token_info` to understand response size:
 
 - **`get_trace_summary(trace_id)`** - Start here for the bounded summary. Returns timing, cost, tool counts and errors; size depends on the trace, so follow any continuation rather than assuming a fixed token size.
 - **`search_traces(session_id, user_id, name, document_id, run_id, extraction_id, from_timestamp, to_timestamp, limit)`** - Find trace IDs when the curator gives a session, document, run, extraction, name, or time window instead of a trace ID.
@@ -349,7 +349,7 @@ Include `token_info` in responses for budget management:
 - **`get_trace_view(trace_id, view_name, section, offset, limit, item_start)`** - Specialized summary/inventory views. Request one inventory-named section and follow `next_call`. When `item_chunk` is present, concatenate its JSON `content` in `start` order and verify `sha256` before decoding the item.
 
 ### System Tools
-- **`get_service_logs(container, lines, level, since, line_cursor, line_cursor_offset, char_cursor)`** - Summary-first Loki log pages. Use only for failed calls or reported errors. Preserve narrowing filters and follow `next_call`; the timestamp offset retains equal-timestamp entries and the exact character cursor reconstructs an oversized line without exceeding the provider boundary.
+- **`get_service_logs(container, lines, level, since, line_cursor, line_cursor_offset, char_cursor)`** - Summary-first Loki log pages. Use only for failed calls or reported errors. Preserve narrowing filters and follow `next_call`; the timestamp offset retains equal-timestamp entries and the exact character cursor reconstructs the exact selected line.
 
 </tools>
 </studio_guide_topic>

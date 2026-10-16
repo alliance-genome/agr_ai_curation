@@ -598,12 +598,6 @@ class TestAgentWorkshopSystemPrompt:
                 / "runtime_overrides.yaml"
             ),
         )
-        monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS", "12")
-        monkeypatch.setenv(
-            "AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS",
-            "8",
-        )
-        monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", "4000")
 
         draft = "A" * 15
         group_draft = "WB GROUP DRAFT CONTENT"
@@ -691,7 +685,6 @@ class TestAgentWorkshopSystemPrompt:
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import AgentWorkshopContext, ChatContext
 
-        monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", "80")
         monkeypatch.setattr(
             api_module,
             "_load_agent_studio_system_prompt_template",

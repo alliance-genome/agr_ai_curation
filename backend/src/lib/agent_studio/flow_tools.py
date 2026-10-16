@@ -95,7 +95,6 @@ def _flow_catalog_json(value: Any) -> str:
     )
 
 
-
 if TYPE_CHECKING:
     from src.schemas.flows import FlowDefinition
 
@@ -2313,8 +2312,6 @@ def _get_flow_templates_handler():
             kind: Literal["template", "agent"],
             next_offset: Optional[str],
             other_next_offset: Optional[str],
-            record_was_attempted: bool,
-            returned_count: int,
         ) -> Optional[Dict[str, Any]]:
             if next_offset is None:
                 return None
@@ -2331,15 +2328,7 @@ def _get_flow_templates_handler():
                     if kind == "template"
                     else "pending_template_cursor"
                 ] = other_next_offset
-            if returned_count or not record_was_attempted:
-                arguments["template_cursor" if kind == "template" else "cursor"] = next_offset
-            else:
-                arguments.update(
-                    {
-                        "detail_kind": kind,
-                        "detail_index": int(next_offset),
-                    }
-                )
+            arguments["template_cursor" if kind == "template" else "cursor"] = next_offset
             return {"tool": "get_flow_templates", "arguments": arguments}
 
         def build_response() -> Dict[str, Any]:
@@ -2366,15 +2355,11 @@ def _get_flow_templates_handler():
                 kind="template",
                 next_offset=actual_template_next,
                 other_next_offset=actual_agent_next,
-                record_was_attempted=section != "agents",
-                returned_count=len(template_page),
             )
             agent_call = continuation_call(
                 kind="agent",
                 next_offset=actual_agent_next,
                 other_next_offset=actual_template_next,
-                record_was_attempted=section != "templates",
-                returned_count=len(page),
             )
             return {
                 "templates": template_page,
@@ -3687,9 +3672,8 @@ continuation calls so paging one collection does not repeat the other.
 Pass query to search agents by id, name, or description, category to keep
 one kind (Extraction, Validation, Output), and limit/cursor to page through
 large agent catalogs. Use template_query and template_limit/template_cursor to
-search and page compatible templates independently. When a single template or
-agent is too large for an inline page, follow the returned detail call and its
-hash-addressed character chunks, then follow its final next_call to resume paging.
+search and page compatible templates independently. Detail calls read the exact
+selected template or agent, retaining its source hash for consistency checks.
 Always copy returned next_call arguments exactly; pending cursors retain the other
 collection's frontier while a section-specific page or detail chunk is retrieved.
 

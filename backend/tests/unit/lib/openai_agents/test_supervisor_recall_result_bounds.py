@@ -13,7 +13,6 @@ import pytest
 from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatMessageRecord
 from src.lib.openai_agents import supervisor_context_tools as module
 
-BUDGET = 8192
 UNICODE = "β-catenin 表达 im Flügel 😀 "
 
 
@@ -34,7 +33,6 @@ def _message(content: str, *, index: int, role: str = "assistant", turn_id: str 
 
 @pytest.fixture(autouse=True)
 def active_chat(monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", str(BUDGET))
     monkeypatch.setattr(module, "get_current_session_id", lambda: "session-recall")
     monkeypatch.setattr(module, "get_current_user_id", lambda: "user-recall")
 

@@ -134,7 +134,6 @@ def test_handle_tool_call_dispatches_domain_plan_section_inputs(monkeypatch):
 
 
 def test_realistic_disease_plan_pages_remain_provider_visible(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     results = [
         domain_tools.get_domain_pack_validation_plan(
             agent_id="disease_extractor"
@@ -170,7 +169,6 @@ def test_realistic_disease_plan_pages_remain_provider_visible(monkeypatch):
 
 
 def test_realistic_multi_record_runtime_pages_remain_provider_visible(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     fixtures = [
         (
             "get_domain_envelope_state",
@@ -483,7 +481,6 @@ def test_domain_reference_summary_merges_stable_tool_refs_without_prompt_text():
     assert "Raw message should not become a reference." not in str(merged)
 
 
-
 def _validation_plan_pack_ids():
     from src.lib.flows.validation_attachments import domain_pack_validation_registries
 
@@ -494,7 +491,6 @@ def _validation_plan_pack_ids():
 def test_every_pack_plan_page_remains_provider_visible(monkeypatch, domain_pack_id):
     """Object definitions report field counts; the fields section pages the paths (ALL-1283)."""
 
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     for section in domain_tools._DOMAIN_PLAN_SECTIONS:
         cursor = None
         while True:

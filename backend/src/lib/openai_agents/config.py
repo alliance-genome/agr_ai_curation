@@ -2418,8 +2418,6 @@ def get_agent_studio_capability_catalog_max_records() -> int:
     )
 
 
-
-
 def get_agent_studio_chat_history_page_size() -> int:
     """Maximum sessions requested by one Agent Studio list/search call.
 
@@ -2437,7 +2435,7 @@ def get_agent_studio_chat_history_page_size() -> int:
 def get_agent_studio_chat_recall_page_size() -> int:
     """Maximum durable chat rows returned by one Agent Studio recall page.
 
-    Metadata-only pages remain bounded beneath the provider result envelope.
+    Controls the number of selected transcript rows per explicit page.
     Default 10.
     """
     return max(
@@ -2447,8 +2445,6 @@ def get_agent_studio_chat_recall_page_size() -> int:
             10,
         ),
     )
-
-
 
 
 def get_agent_studio_workshop_prompt_max_chars() -> int:
@@ -2481,12 +2477,6 @@ def get_agent_studio_tool_inventory_summary_max_chars() -> int:
     return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_INVENTORY_SUMMARY_MAX_CHARS", 300))
 
 
-
-
-
-
-
-
 def get_agent_studio_flow_template_default_items() -> int:
     """Default compatible templates returned by one independent page."""
     return max(1, _get_env_int_with_fallback("AGENT_STUDIO_FLOW_TEMPLATE_DEFAULT_ITEMS", 5))
@@ -2495,10 +2485,6 @@ def get_agent_studio_flow_template_default_items() -> int:
 def get_agent_studio_flow_template_max_items() -> int:
     """Maximum compatible templates accepted by one page request."""
     return max(1, _get_env_int_with_fallback("AGENT_STUDIO_FLOW_TEMPLATE_MAX_ITEMS", 20))
-
-
-
-
 
 
 def get_agent_studio_trace_review_page_size() -> int:
@@ -2655,12 +2641,6 @@ def get_agent_studio_package_diagnostic_page_max_items() -> int:
     )
 
 
-
-
-
-
-
-
 def get_agent_studio_package_diagnostic_scalar_preview_max_chars() -> int:
     """Maximum inline preview characters for an oversized diagnostic scalar."""
     return max(
@@ -2799,8 +2779,6 @@ def get_agent_studio_flow_proposal_max_operations() -> int:
     )
 
 
-
-
 def get_trace_review_export_timeout_seconds() -> float:
     """HTTP timeout for the TraceReview export call (TRACE_REVIEW_EXPORT_TIMEOUT_SECONDS).
 
@@ -2917,8 +2895,8 @@ def get_domain_envelope_max_limit() -> int:
 def get_domain_pack_validation_plan_default_limit() -> int:
     """Default detail page size for domain-pack validation plans.
 
-    ``DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT`` defaults to 3 so verbose
-    disease-pack records remain below the provider's inline result budget.
+    ``DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT`` defaults to 3 selected
+    records per explicit detail page.
     """
     return max(
         1,
@@ -3476,7 +3454,6 @@ def log_agent_config(agent_name: str, config: AgentConfig) -> None:
 # modules; keep names and defaults aligned.
 
 
-
 def get_evidence_list_max_limit() -> int:
     """Largest page list_recorded_evidence serves (EVIDENCE_LIST_MAX_LIMIT).
 
@@ -3492,12 +3469,10 @@ def get_builder_list_max_limit() -> int:
 
     Read directly by the isolated alliance package builder tools. Larger
     requested limits are clamped with requested/effective counts and next
-    offset; the byte budget can end a page earlier. Default 100 (twice the
+    offset. Default 100 (twice the
     BUILDER_LIST_DEFAULT_LIMIT default page of 50).
     """
     return max(1, _get_env_int_with_fallback("BUILDER_LIST_MAX_LIMIT", 100))
-
-
 
 
 # =============================================================================
@@ -3534,9 +3509,9 @@ def get_model_request_warning_estimated_tokens() -> int:
 def get_model_request_tool_result_warning_chars() -> int:
     """Characters in one tool result that trigger a request-size warning (MODEL_REQUEST_TOOL_RESULT_WARNING_CHARS).
 
-    Warning only: the request is still sent unchanged. Bounded tool responses
-    should stay far below this; a larger single result usually means a tool
-    returned a full dataset instead of a bounded inspection. Default 200000
+    Advisory only: complete selected datasets may legitimately exceed this.
+    The shared context policy handles model capacity before dispatch; this
+    warning imposes no result quota. Default 200000 characters
     (about 50k estimated tokens).
     """
     return max(1, _get_env_int_with_fallback("MODEL_REQUEST_TOOL_RESULT_WARNING_CHARS", 200_000))
@@ -3547,17 +3522,14 @@ def get_model_request_tool_result_warning_chars() -> int:
 # =============================================================================
 
 
-
 def get_output_tool_catalog_page_size() -> int:
     """Field-catalog entries per output-formatter inventory page (OUTPUT_TOOL_CATALOG_PAGE_SIZE).
 
-    Upper bound on catalog entries returned per page before the response budget
-    applies; later entries are reached through the returned cursor or a
+    Upper bound on catalog entries selected per page; later entries are
+    reached through the returned cursor or a
     catalog search. Default 40.
     """
     return max(1, _get_env_int_with_fallback("OUTPUT_TOOL_CATALOG_PAGE_SIZE", 40))
-
-
 
 
 def get_flow_output_chat_max_chars() -> int:
@@ -3632,7 +3604,6 @@ def get_inspect_results_object_max_page_size() -> int:
 # =============================================================================
 # ALL-1292: Agent Studio on-demand reference guide
 # =============================================================================
-
 
 
 # =============================================================================

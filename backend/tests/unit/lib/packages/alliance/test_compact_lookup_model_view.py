@@ -269,7 +269,6 @@ async def test_assembled_results_are_identical_to_assembly_from_the_captured_rec
 
 @pytest.mark.asyncio
 async def test_paged_lean_view_keeps_refs_with_rows_and_exact_detail_reads(schemas, query, monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
     payload = query(method="search_alleles", allele_symbol="H2-Ab1", data_provider="MGI", limit=20)
     runtime = _runtime(schemas, [_request("allele-1", "H2-Ab1")])
     first, wrapped = await _call(runtime, payload, {"method": "search_alleles", "allele_symbol": "H2-Ab1"})
@@ -373,7 +372,6 @@ async def test_bulk_lookup_lists_available_fields_once_across_requests(schemas, 
 
 @pytest.mark.asyncio
 async def test_every_paged_lookup_page_carries_the_shared_field_list(schemas, query, monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
     payload = query(method="search_alleles", allele_symbol="H2-Ab1", data_provider="MGI", limit=20)
     del payload["data"][5]["mutation_types"]
     arguments = {"method": "search_alleles", "allele_symbol": "H2-Ab1"}

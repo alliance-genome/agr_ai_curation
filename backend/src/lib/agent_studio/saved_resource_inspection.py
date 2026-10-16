@@ -106,7 +106,7 @@ def _flow_run_record(row) -> dict:
 
 
 def _fit_run_page(build, records: list[dict], *, has_more: bool, offset: int, next_arguments: dict):
-    """Return the largest newest-first page whose result fits the provider cap."""
+    """Return the complete requested newest-first page and its row continuation."""
     return build(records, complete=not has_more, next_call={
         "tool": "inspect_saved_studio_resource",
         "arguments": {**next_arguments, "offset": offset + len(records)},
@@ -237,7 +237,7 @@ def _serialized(value) -> str:
 
 
 def _bounded_saved_record(record: dict, request: SavedResourceInspection) -> dict:
-    """Keep every page, including its continuation metadata, inside the provider cap."""
+    """Return the authorized selected section or exact requested detail view."""
     if request.group_id is not None and request.section != "group_prompts":
         raise ValueError("Choose group_prompts before selecting a group")
     selected = record

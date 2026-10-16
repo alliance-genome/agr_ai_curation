@@ -99,7 +99,6 @@ def test_large_tool_result_reaches_shared_context_boundary_complete(monkeypatch)
     assert result["data"]["next_start"] is None
 
 
-
 def test_small_tool_result_stays_inline_for_provider_continuation(monkeypatch):
 
     tool_result = {"success": True, "current_prompt": "Small refreshed prompt."}
@@ -113,8 +112,6 @@ def test_small_tool_result_stays_inline_for_provider_continuation(monkeypatch):
     )
 
     assert json.loads(content) == tool_result
-
-
 
 
 @pytest.mark.parametrize("artifact", ["flow", "workshop"])
@@ -166,8 +163,6 @@ def test_flow_proposal_provider_projection_excludes_candidate_and_diff(monkeypat
     elif artifact == "flow":
         assert "draft='candidate'" in provider_result["instruction"]
         assert "without reset_candidate" in provider_result["instruction"]
-
-
 
 
 def test_default_exact_trace_chunk_stays_inline_with_metadata_headroom(monkeypatch):
@@ -270,18 +265,7 @@ def test_json_escape_aware_exact_trace_chunks_stay_inline(monkeypatch, serialize
     assert json.loads(content) == tool_result
 
 
-
-
-
-
-
-
-
-
-
-
 def test_current_flow_manifest_and_bounded_details_stay_under_provider_cap(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "1000")
     flow_tools.set_current_flow_context(
         {
             "flow_name": "Disease Extraction and Export",
@@ -531,7 +515,6 @@ def test_streaming_tool_loop_sends_complete_large_result_to_provider(monkeypatch
     assert compact == tool_result_events[0]["result"]
 
 
-
 def test_repeated_tool_loop_continuations_keep_exact_results(
     monkeypatch, authorized_compaction_tools,
 ):
@@ -690,7 +673,6 @@ def test_repeated_tool_loop_continuations_keep_exact_results(
 
     assert first_compact["data"]["payloads"][0]["preview"] == inventory_value
     assert second_compact["data"]["value"] == exact_payload_value
-
 
 
 def test_exact_results_and_authorized_history_recall_agree(

@@ -529,17 +529,15 @@ def create_get_recorded_evidence_tool(
     ) -> dict[str, Any]:
         """Fetch one active-run evidence record for detailed review.
 
-        The whole record is returned when it fits one response. A record too
-        large for that comes back with its long values withheld and a
-        result_page describing them; read each withheld value exactly with
-        detail_path, continuing from each chunk's next_cursor until complete,
-        and continue paged lists with the arguments in result_page.next_call.
+        The default call returns the complete record. Explicit detail_path and
+        detail_cursor select an exact field suffix; result_offset selects a
+        collection suffix. Shared context policy handles model capacity.
 
         Args:
             evidence_record_id: Evidence record ID returned by record_evidence or list_recorded_evidence.
-            detail_path: Only for a withheld value: its detail_path from result_page.
+            detail_path: Optional exact field path within the record.
             detail_cursor: Character cursor for detail_path; use the previous chunk's next_cursor.
-            result_offset: Only when continuing a paged record: result_page.next_offset.
+            result_offset: Optional starting position within the primary collection.
             result_sha256: Only when continuing: result_page.result_sha256, so a changed record is reported.
         """
 

@@ -34,7 +34,6 @@ def _isolate_flow_tool_state(monkeypatch):
         "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
         "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
         "AGENT_STUDIO_FLOW_INSPECTION_PAGE_LIMIT",
-        "AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS",
     ):
         monkeypatch.delenv(environment_name, raising=False)
     flow_tools.clear_workflow_user_context()
@@ -260,7 +259,6 @@ def test_validate_flow_handler_returns_structured_safe_reference_finding(monkeyp
     finding = next(item for item in result["findings"] if item["code"] == "unavailable_agent")
     assert finding["path"] == "flow_definition.nodes.extract.data.agent_id"
     assert "private_other_user_agent" not in finding["message"]
-
 
 
 def test_get_flow_templates_handler_uses_registry(monkeypatch):
@@ -737,8 +735,6 @@ def test_startup_validation_rejects_invalid_group_restricted_recipe(
     assert "org.invalid" in message
     assert str(source_path) in message
     assert "source_steps must reference earlier steps" in message
-
-
 
 
 def test_get_flow_templates_handler_reports_core_only_install(monkeypatch):
@@ -1259,7 +1255,6 @@ def test_manifest_keeps_critical_topology_and_task_findings_in_first_call():
 
 
 def test_instruction_chunks_reconstruct_exact_text(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "4")
     flow_tools.set_current_flow_context(_inspection_flow())
     handler = flow_tools._get_current_flow_instructions_handler()
 
@@ -1276,11 +1271,6 @@ def test_instruction_chunks_reconstruct_exact_text(monkeypatch):
 
 
 def test_escape_heavy_flow_details_fit_provider_envelope_and_reconstruct(monkeypatch):
-    provider_limit = 700
-    monkeypatch.setenv(
-        "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", str(provider_limit)
-    )
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "4000")
     flow = _inspection_flow()
     instruction = ('🧬é"\\\n\t\x01' * 600) + "tail"
     projection_value = {
@@ -1342,7 +1332,6 @@ def test_escape_heavy_flow_details_fit_provider_envelope_and_reconstruct(monkeyp
 
 
 def test_flow_detail_reports_provider_safe_configuration_error(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "240")
     flow_tools.set_current_flow_context(_inspection_flow())
 
     result = flow_tools._get_current_flow_instructions_handler()(
@@ -1357,7 +1346,6 @@ def test_flow_detail_reports_provider_safe_configuration_error(monkeypatch):
 def test_projection_plan_inventory_and_chunks_are_bounded_and_reconstructable(
     monkeypatch,
 ):
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "8")
     flow_tools.set_current_flow_context(_inspection_flow())
 
     node = flow_tools._get_current_flow_node_handler()(node_id="csv")
@@ -2016,7 +2004,6 @@ def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch
             "last_agent": normal_agents["last_agent"],
         },
     )
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "700")
     handler = flow_tools._get_available_agents_handler()
 
     page = handler(limit=2)
@@ -2303,7 +2290,6 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
         "60",
     )
     monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_PAGE_LIMIT", "6")
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "900")
     monkeypatch.setenv("AGENT_STUDIO_FLOW_PROPOSAL_MAX_OPERATIONS", "7")
     monkeypatch.setenv("TOOL_PAGE_DEFAULT_LIMIT", "17")
     monkeypatch.setenv("TOOL_PAGE_MAX_LIMIT", "13")

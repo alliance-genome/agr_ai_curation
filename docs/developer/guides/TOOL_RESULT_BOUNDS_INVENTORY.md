@@ -14,7 +14,7 @@ compaction, exact durable ingestion and failure behavior.
 | Package queries | Complete selected result; explicit row/field views preserve hash and authorization. |
 | Package writes | Capture once, return complete data plus result_ref; exact reads never execute the write again. |
 | Evidence/builders | Explicit list filters/row pages and typed mutation/finalization receipts remain business contracts. Exact record/source content is available through the authorized read tools. |
-| Supervisor inspection | Explicit summary/index/preview projections help locate results. Selected detail records and fields are returned whole; no response-size eviction. |
+| Supervisor inspection | Explicit summary/index/preview projections help locate results. The single-object preview may use SUPERVISOR_FIELD_TEXT_LIMIT to describe long fields behind exact read calls. Explicit field/validation detail reads return selected content whole; no response-size eviction. |
 | Studio/Workshop | Full selected prompts, metadata, guides and tool results. Main and Studio histories are separately owner-scoped and durable. |
 | TraceReview | Advisory serialized-character/token metadata, explicit named sections/record pages and exact payload reads. No Studio provider-envelope quota. |
 | Formatters/exports | Curator field selection, row/column projections, previews and finalized artifact receipts remain explicit output contracts. They do not truncate scientific text to fit model context. |

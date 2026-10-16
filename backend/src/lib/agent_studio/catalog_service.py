@@ -126,7 +126,7 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
         "name": "Explain Formatter Capabilities",
         "description": (
             "Explain the bound CSV/TSV/JSON or chat formatter workflow, available saved "
-            "row sources, supported plan operations, response budgets, and completion rules."
+            "row sources, supported plan operations, and completion rules."
         ),
         "parameters": [],
     },
@@ -1814,7 +1814,6 @@ def get_prompt_catalog() -> PromptCatalogService:
 # =============================================================================
 # Agent Factory Functions (for Flow Execution)
 # =============================================================================
-
 
 
 def _coerce_db_user_id(raw_user_id: Any) -> Optional[int]:

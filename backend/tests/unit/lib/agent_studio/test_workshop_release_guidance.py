@@ -25,7 +25,6 @@ ROOT = Path(__file__).resolve().parents[5]
 ])
 def test_curator_question_finds_complete_relevant_guidance(monkeypatch, query, topic, requirements):
     template = (ROOT / "packages/alliance/config/agent_studio_system_prompt.md").read_text()
-    monkeypatch.setenv("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS", "1000")
     index = read_studio_guide(template=template, render_diagnostic_tools=str, query=query)
     assert topic in {item["topic"] for item in index["topics"]}
     arguments = {"topic": topic}

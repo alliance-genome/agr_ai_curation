@@ -9,7 +9,7 @@ Budget-aware inspection: use get_current_flow_topology(section="all") for all to
 6. For document/PDF capability claims about custom agents, use the exact saved revision tools section above. For built-in agents, use `get_tool_inventory(agent_id=<node agent>)` or another focused query and follow `next_cursor` until `truncated=false` and no `next_cursor` remains before judging capability or reporting PASS. Then use method/PDF-level `get_tool_details(tool_id, agent_id)`; never use the unsafe global inventory or oversized parent-tool metadata.
 7. For domain or validator claims, call `get_domain_pack_validation_plan(agent_id=<node agent> or domain_pack_id=<id>)` for its compact summary, then retrieve only evidence-relevant section pages from `object_definitions`, `fields`, `validators`, `validator_bindings`, `field_policies`, or `validation_attachments` until complete.
 
-**PASS gate:** NEVER report PASS when a required detail is incomplete, selected text or a section has another page, or any required response is `compacted_tool_result`. Duplicate `output_key` is HIGH unless authoritative validation classifies it CRITICAL. Keep suggestions evidence-based; do not page through unrelated catalogs or domain metadata speculatively.
+**PASS gate:** NEVER report PASS when a required detail is incomplete, selected text or a section has another page, or required source content remains unread. Duplicate `output_key` is HIGH unless authoritative validation classifies it CRITICAL. Keep suggestions evidence-based; do not page through unrelated catalogs or domain metadata speculatively.
 
 <validation_checklist>
 **When asked to verify, check for:**

@@ -17,7 +17,7 @@ Budget-aware inspection: use get_current_flow_topology(section="all") for all to
 7. For domain or validator claims, call get_domain_pack_validation_plan(agent_id=<node agent> or domain_pack_id=<id>) for its summary, then fetch only evidence-relevant section pages from object_definitions, fields, validators, validator_bindings, field_policies, or validation_attachments until complete.
 
 PASS GATE:
-- Never report PASS if any required detail is incomplete, a selected text/section has another page, or any required response is compacted_tool_result.
+- Never report PASS if any required detail is incomplete, a selected text/section has another page, or required source content remains unread.
 - Duplicate output_key is HIGH unless authoritative validation classifies it CRITICAL.
 - Suggestions must be supported by exact instructions or inspected metadata. Do not page through unrelated catalogs or domain metadata speculatively.
 

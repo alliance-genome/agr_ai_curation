@@ -110,7 +110,6 @@ def test_default_prompt_view_is_content_free_manifest(prompt_handler):
 
 
 def test_effective_prompt_chunks_reconstruct_exact_group_render(monkeypatch, prompt_handler):
-    monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "7")
     expected = _bundle(group_id="test_group")
     summary = prompt_handler(agent_id="demo_agent", group_id="test_group")
     chunks = []
@@ -215,8 +214,6 @@ def test_escape_heavy_effective_and_group_layer_chunks_fit_provider_envelope(
         catalog=SimpleNamespace(categories=[]),
     )
     monkeypatch.setattr(catalog_service, "get_prompt_catalog", lambda: service)
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "1000")
-    monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "8000")
     handler = tool_definitions._create_get_prompt_handler()
 
     for initial_arguments, expected, expected_hash in (
@@ -270,7 +267,6 @@ def test_escape_heavy_effective_and_group_layer_chunks_fit_provider_envelope(
 def test_prompt_detail_reports_provider_safe_configuration_error(
     monkeypatch, prompt_handler
 ):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "240")
 
     result = prompt_handler(agent_id="demo_agent", view="effective_prompt")
 
@@ -305,7 +301,6 @@ def test_prompt_schema_advertises_only_summary_and_bounded_detail_views(
     from src.lib.prompts import cache as prompt_cache
 
     monkeypatch.setattr(prompt_cache, "is_initialized", lambda: False)
-    monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "4321")
 
     description, schema = tool_definitions._get_prompt_diagnostic_contract()
 
@@ -406,8 +401,6 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
         catalog=SimpleNamespace(categories=[]),
     )
     monkeypatch.setattr(catalog_service, "get_prompt_catalog", lambda: service)
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "8000")
     prompt_handler = tool_definitions._create_get_prompt_handler()
 
     prompt_summary = prompt_handler(
