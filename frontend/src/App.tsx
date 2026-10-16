@@ -22,7 +22,6 @@ import ThemeModeToggle from './components/ThemeModeToggle'
 import WeaviateNavIcon from './components/weaviate/WeaviateNavIcon'
 import WeaviateLayout from './components/weaviate/WeaviateLayout'
 import BatchNavIcon from './components/BatchNavIcon'
-import ForceScrollFix from './components/ForceScrollFix'
 import MaintenanceBanner from './components/MaintenanceBanner'
 import ConnectionsHealthBanner from './components/ConnectionsHealthBanner'
 import { GLOBAL_TOAST_EVENT, GlobalToastEventDetail } from './lib/globalNotifications'
@@ -976,7 +975,6 @@ function App() {
     <ThemeModeProvider>
       <CssBaseline enableColorScheme />
       <AppThemeGlobalStyles />
-      <ForceScrollFix />
       <MaintenanceBanner />
       <QueryClientProvider client={queryClient}>
         <ConnectionsHealthBanner />
