@@ -106,21 +106,26 @@ class HistoryStore:
         self.session_factory = session_factory
 
     def append(self, scope: HistoryScope, kind: str, content: str, *, tool_name=None, call_id=None, outcome=None) -> str:
+        with self.session_factory() as db, db.begin():
+            return self.append_in_transaction(db, scope, kind, content,
+                tool_name=tool_name, call_id=call_id, outcome=outcome)
+
+    @staticmethod
+    def append_in_transaction(db, scope: HistoryScope, kind: str, content: str, *, tool_name=None, call_id=None, outcome=None) -> str:
+        """Append canonical provenance inside an already-owned atomic operation."""
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         event_id = str(uuid4())
-        with self.session_factory() as db, db.begin():
-            # PostgreSQL and SQLite both support conflict-safe content-addressed insertion.
-            if db.bind.dialect.name == "postgresql":
-                from sqlalchemy.dialects.postgresql import insert
-            else:
-                from sqlalchemy.dialects.sqlite import insert
-            db.execute(insert(AgentHistoryPayload).values(sha256=digest, content=content,
-                search_text=searchable_text(content)).on_conflict_do_nothing(index_elements=["sha256"]))
-            db.add(AgentHistoryEvent(event_id=event_id, owner_id=scope.owner_id,
-                session_id=scope.session_id, run_id=scope.run_id,
-                invocation_id=scope.invocation_id, parent_invocation_id=scope.parent_invocation_id,
-                lineage=scope.lineage, agent_key=scope.agent_key, kind=kind,
-                tool_name=tool_name, call_id=call_id, outcome=outcome, payload_sha256=digest))
+        if db.bind.dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        db.execute(insert(AgentHistoryPayload).values(sha256=digest, content=content,
+            search_text=searchable_text(content)).on_conflict_do_nothing(index_elements=["sha256"]))
+        db.add(AgentHistoryEvent(event_id=event_id, owner_id=scope.owner_id,
+            session_id=scope.session_id, run_id=scope.run_id,
+            invocation_id=scope.invocation_id, parent_invocation_id=scope.parent_invocation_id,
+            lineage=scope.lineage, agent_key=scope.agent_key, kind=kind,
+            tool_name=tool_name, call_id=call_id, outcome=outcome, payload_sha256=digest))
         return event_id
 
     @staticmethod
@@ -338,6 +343,8 @@ def history_tools(history: RunHistory) -> list[Any]:
         try:
             history.assert_current_scope()
             result = await asyncio.to_thread(history.store.read, history.scope, event_id)
+            from .document_references import project_history_source_result
+            result = await project_history_source_result(result, user_id=history.scope.owner_id)
             try:
                 return detail_chunk(result, path=detail_path, cursor=detail_cursor,
                     expected_sha256=result_sha256, budget=tool_result_budget(), extra={"event_id": event_id})

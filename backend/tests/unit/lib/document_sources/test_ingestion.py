@@ -676,7 +676,7 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
         if "wg expression" in candidate.text
     )
 
-    evidence = await record_evidence.create_record_evidence_tool(
+    evidence = await record_evidence._create_canonical_evidence_recorder(
         "doc-1",
         "user-1",
     )(entity="wg", span_ids=[span.span_id])

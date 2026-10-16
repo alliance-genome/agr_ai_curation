@@ -2082,8 +2082,8 @@ tools:
       documentation:
         summary: Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence. This is the step where evidence is chosen, since the snippets selected here become the exact verified quote on a saved piece of evidence. A passage too long for one reply, such as a very long table, is shown in consecutive exact windows so every character and snippet is still reachable.
         parameters:
-        - name: chunk_id
-          type: string
+        - name: chunk_index
+          type: integer
           required: true
           description: Which passage to read, taken from a search result or a section's list of passages.
         - name: span_offset
@@ -2175,10 +2175,10 @@ tools:
           type: string
           required: true
           description: The thing this evidence is about (for example, the gene or allele name).
-        - name: span_ids
-          type: array[string]
+        - name: selections
+          type: array[object]
           required: true
-          description: The snippets to save, picked from a passage that was read.
+          description: Pairs of chunk_index and span_index from passages read in this conversation.
         - name: evidence_record_id
           type: string
           required: false
@@ -2270,7 +2270,7 @@ tools:
       name: Attach Evidence To Object
       category: PDF Extraction
       documentation:
-        summary: Connects a saved piece of evidence to a concrete field on a finding. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current span IDs.
+        summary: Connects a saved piece of evidence to a concrete field on a finding. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current chunk_index/span_index selections.
         parameters:
         - name: evidence_record_id
           type: string
@@ -2355,7 +2355,7 @@ tools:
       name: Update Evidence Metadata
       category: PDF Extraction
       documentation:
-        summary: Changes the editable details on a piece of evidence -- what it is about, which field it supports, and the agent's note. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current span IDs.
+        summary: Changes the editable details on a piece of evidence -- what it is about, which field it supports, and the agent's note. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current chunk_index/span_index selections.
         parameters:
         - name: evidence_record_id
           type: string

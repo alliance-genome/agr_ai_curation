@@ -589,7 +589,7 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
      already available; skip fetching a prompt whose reported length is zero,
    - use `get_prompt` for the effective template/source prompt when it is not already in context,
    - inspect runtime tool schemas only when the requested change depends on their arguments; ordinary custom-field design does not require this.
-6. for PDF evidence extraction prompts, preserve the span workflow: `search_document` finds candidate chunks, `read_chunk` exposes deterministic `evidence_spans[].span_id`, and `record_evidence(span_ids=[...])` creates backend-copied evidence. Do not propose instructions that ask agents to generate quote strings, fuzzy-repair quotes, or confirm claims with a separate LLM.
+6. for PDF evidence extraction prompts, preserve the span workflow: `search_document` finds candidate chunks, `read_chunk` exposes deterministic `evidence_spans[].span_index`, and `record_evidence(selections=[{chunk_index, span_index}, ...])` creates backend-copied evidence. Do not propose instructions that ask agents to generate quote strings, fuzzy-repair quotes, or confirm claims with a separate LLM.
 7. For clear build/configure/edit requests, call `propose_workshop_draft_update` directly with
    the exact draft fingerprint and bounded semantic operations. Discover authorized capabilities
    through the live catalog. Include every required setting for new drafts, preserve unrelated

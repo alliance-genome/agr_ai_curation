@@ -16,6 +16,7 @@ from typing import Optional, List, TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel
 from agents import function_tool
 from agr_ai_curation_runtime.document_errors import DocumentReadError
+from agr_ai_curation_runtime.document_references import LocalIndex, scoped_document_tool, retain_issued_spans
 from agr_ai_curation_runtime.evidence_spans import (
     EVIDENCE_SPANIZER_VERSION,
     build_evidence_spans,
@@ -33,7 +34,7 @@ from agr_ai_curation_runtime.tool_result_bounds import (
 )
 from agr_ai_curation_runtime.weaviate_chunks import (
     hybrid_search_chunks,
-    get_chunk_by_id,
+    get_chunk_by_index,
     get_chunk_neighbor_ids,
     get_chunks_by_parent_section,  # Uses LLM-resolved parentSection for accurate boundaries
     get_chunks_by_subsection,
@@ -161,6 +162,7 @@ def _strategy_for_search_mode(search_mode: str) -> str:
 
 class ChunkHit(BaseModel):
     chunk_id: Optional[str]
+    chunk_index: LocalIndex
     section_title: Optional[str]
     page_number: Optional[int]
     score: Optional[float]
@@ -196,6 +198,8 @@ class ChunkReadContent(BaseModel):
     chunk_number: Optional[int] = None
     previous_chunk_id: Optional[str] = None
     next_chunk_id: Optional[str] = None
+    previous_chunk_index: Optional[int] = None
+    next_chunk_index: Optional[int] = None
     page_number: Optional[int] = None
     section_title: Optional[str] = None
     subsection: Optional[str] = None
@@ -217,9 +221,9 @@ class ChunkReadResult(BaseModel):
 
 
 def _coerce_chunk_index(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    return int(value)
+    if type(value) is not int or value < 0:
+        raise ValueError("Stored document chunk_index must be a non-negative integer")
+    return value
 
 
 def _read_chunk_metadata(chunk_id: str, raw_metadata: Any) -> dict:
@@ -269,7 +273,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
     ) -> ChunkSearchResult:
         """Discovery tool: search the loaded PDF for relevant chunks.
 
-        Use returned chunk_id values with read_chunk for final evidence selection.
+        Use returned chunk_index values with read_chunk for final evidence selection.
         Do not use search snippets as retained evidence.
         The default search_mode='auto' runs hybrid search (semantic similarity plus
         BM25 keyword matching), so it bridges paraphrases like "expressed in" vs
@@ -348,6 +352,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
             hits.append(
                 ChunkHit(
                     chunk_id=resolve_chunk_identifier(chunk, metadata),
+                    chunk_index=_coerce_chunk_index(chunk.get("chunk_index")),
                     section_title=section,
                     page_number=page,
                     score=score,
@@ -360,17 +365,17 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         return _bounded_search_result(hits)
 
 
-    return search_document
+    return scoped_document_tool(search_document, document_id=document_id, user_id=user_id)
 
 
 
 def _search_summary(hits: List[ChunkHit]) -> str:
-    withheld = [hit.chunk_id or "" for hit in hits if hit.content_withheld]
+    withheld = [hit.chunk_index for hit in hits if hit.content_withheld]
     summary = f"Found {len(hits)} chunks"
     if withheld:
         summary += (
             f"; {len(withheld)} too long to include in full here "
-            f"(content_withheld): {', '.join(withheld)}. Read them with read_chunk"
+            f"(content_withheld): {', '.join(map(str, withheld))}. Read them with read_chunk"
         )
     return summary
 
@@ -473,13 +478,13 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
     """
 
     @function_tool(failure_error_function=_raise_document_read_error)
-    async def read_chunk(chunk_id: str, span_offset: int = 0) -> ChunkReadResult:
+    async def read_chunk(chunk_index: LocalIndex, span_offset: int = 0) -> ChunkReadResult:
         """Read one PDF chunk and return its full text plus selectable evidence_spans.
 
         This is the evidence-selection step: it returns the complete chunk text and
-        deterministic evidence_spans, each carrying a span_id. For retained evidence,
-        choose evidence_spans[].span_id values and pass them to
-        record_evidence(span_ids=[...]); the backend copies the exact source text into
+        deterministic evidence_spans, each carrying a span_index. For retained evidence,
+        choose chunk_index and evidence_spans[].span_index pairs and pass them to
+        record_evidence(selections=[...]); the backend copies the exact source text into
         verified_quote. Do not write evidence quote text yourself.
 
         A chunk too large for one response (for example a very long table) is
@@ -488,7 +493,7 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
         the following spans until span_page.complete is true.
 
         Args:
-            chunk_id: Chunk identifier returned by search_document or section source chunks.
+            chunk_index: Zero-based document-local index returned by search_document or section source chunks.
             span_offset: Only for a chunk returned in windows: the next_span_offset from the previous window.
         """
         if tracker:
@@ -496,28 +501,28 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
 
         logger.info(
             "Reading chunk '%s' from document %s...",
-            chunk_id,
+            chunk_index,
             document_id[:8],
         )
 
-        chunk = await get_chunk_by_id(
-            chunk_id=chunk_id,
+        chunk = await get_chunk_by_index(
+            chunk_index=chunk_index,
             user_id=user_id,
             document_id=document_id,
         )
         if not chunk:
             raise DocumentReadError("read_chunk")
 
+        chunk_id = _read_actual_chunk_id(str(chunk_index), chunk)
         content = chunk.get("text")
         if not isinstance(content, str):
             raise ValueError(f"Chunk '{chunk_id}' is missing exact raw text content")
 
         metadata = _read_chunk_metadata(chunk_id, chunk.get("metadata"))
 
-        actual_chunk_id = _read_actual_chunk_id(chunk_id, chunk)
-        chunk_index = _coerce_chunk_index(chunk.get("chunk_index"))
-        if chunk_index is None:
-            chunk_index = _coerce_chunk_index(metadata.get("chunk_index"))
+        actual_chunk_id = chunk_id
+        if _coerce_chunk_index(chunk.get("chunk_index")) != chunk_index:
+            raise ValueError("Resolved chunk index differs from the selected source")
         page_number = chunk.get("page_number") or metadata.get("page_number")
         section_title = (
             chunk.get("section_title")
@@ -556,13 +561,13 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
                 )
                 if span_page["next_span_offset"] is not None:
                     window_note += (
-                        " Continue with read_chunk(chunk_id, "
+                        " Continue with read_chunk(chunk_index, "
                         f"span_offset={span_page['next_span_offset']})."
                     )
             return ChunkReadResult(
                 summary=(
-                    f"Read chunk '{actual_chunk_id}'{page_text}.{window_note} "
-                    "Select evidence_spans[].span_id for record_evidence."
+                    f"Read chunk {chunk_index}{page_text}.{window_note} "
+                    "Select chunk_index/span_index pairs for record_evidence."
                 ),
                 chunk=ChunkReadContent(
                     chunk_id=actual_chunk_id,
@@ -570,6 +575,8 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
                     chunk_number=chunk_index + 1 if chunk_index is not None else None,
                     previous_chunk_id=neighbor_ids.get("previous_chunk_id"),
                     next_chunk_id=neighbor_ids.get("next_chunk_id"),
+                    previous_chunk_index=chunk_index - 1 if neighbor_ids.get("previous_chunk_id") else None,
+                    next_chunk_index=chunk_index + 1 if neighbor_ids.get("next_chunk_id") else None,
                     page_number=page_number,
                     section_title=section_title,
                     subsection=chunk.get("subsection") or metadata.get("subsection"),
@@ -585,10 +592,11 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
         if span_offset in (0, None):
             whole = render(content, None, spans, None)
             if serialized_size(whole) <= budget:
+                await retain_issued_spans(chunk, [span.model_dump() for span in spans], [span.span_index for span in spans])
                 return whole
         try:
             window_start = parse_offset(span_offset, total=max(0, len(spans) - 1), name="span_offset")
-            return _chunk_window(
+            window_result = _chunk_window(
                 content=content,
                 spans=spans,
                 span_offset=window_start,
@@ -609,7 +617,11 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
                 result_bounds=_budget_unmet_bounds(exc),
             )
 
-    return read_chunk
+        await retain_issued_spans(chunk, [span.model_dump() for span in spans],
+            [span.span_index for span in window_result.chunk.evidence_spans])
+        return window_result
+
+    return scoped_document_tool(read_chunk, document_id=document_id, user_id=user_id)
 
 
 class SectionChunkSource(BaseModel):
@@ -617,7 +629,7 @@ class SectionChunkSource(BaseModel):
     # assembled section ``content`` (or ``snippet`` when text_contains is set), so it
     # must NOT be repeated here; duplicating it doubled the payload of every section
     # read. To read a single passage's raw text and its selectable evidence spans,
-    # call read_chunk with this chunk_id.
+    # call read_chunk with this chunk_index.
     chunk_id: str
     chunk_index: Optional[int] = None
     page_number: Optional[int] = None
@@ -719,14 +731,13 @@ def _build_snippet(text: str, needle_lower: str) -> str:
 def _section_entries(
     chunks: List[dict],
     *,
-    start: int,
     needle: Optional[str],
     section_fallback: Optional[str],
     subsection_fallback: Optional[str],
 ) -> List[dict]:
     """Per-passage pieces of one section page, in order, before size fitting."""
     entries: List[dict] = []
-    for index, chunk in enumerate(chunks, start=start):
+    for chunk in chunks:
         text = _chunk_text(chunk)
         metadata = _best_effort_metadata(chunk)
         page_number = _chunk_page(chunk, metadata)
@@ -744,7 +755,7 @@ def _section_entries(
                 "part": snippet if snippet is not None else text,
                 "source": SectionChunkSource(
                     chunk_id=chunk_id,
-                    chunk_index=index,
+                    chunk_index=_coerce_chunk_index(chunk.get("chunk_index")),
                     page_number=page_number,
                     section_title=_chunk_section_title(chunk, metadata, section_fallback),
                     subsection=_chunk_subsection(chunk, metadata, subsection_fallback),
@@ -779,7 +790,7 @@ def _assemble_section_entries(entries: List[dict]) -> dict:
         ),
         "source_chunks": sources,
         "doc_items": [item for entry in entries for item in entry.get("doc_items") or []],
-        "withheld": [source.chunk_id for source in sources if source.content_withheld],
+        "withheld": [source.chunk_index for source in sources if source.content_withheld],
     }
 
 
@@ -832,7 +843,6 @@ def _bounded_section_read(
     budget = tool_result_max_bytes()
     entries = _section_entries(
         selected[start : start + cap],
-        start=start,
         needle=needle,
         section_fallback=section_fallback,
         subsection_fallback=subsection_fallback,
@@ -921,8 +931,8 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
         instead of the whole section.
 
         section.source_chunks lists the passages on this page as lightweight pointers
-        (chunk_id, location, size) without repeating their text. Read one passage in full
-        with read_chunk using its chunk_id for final evidence selection; read_section
+        (chunk_index, location, size) without repeating their text. Read one passage in full
+        with read_chunk using its chunk_index for final evidence selection; read_section
         content is survey context, not retained evidence.
 
         Args:
@@ -991,8 +1001,8 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                 summary=(
                     f"Read {meta['returned']} of {meta['total']} chunks{filter_note} from "
                     f"'{resolved_section_title}'.{note} "
-                    "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
-                    "evidence_spans[].span_id values to record_evidence."
+                    "Use section.source_chunks[].chunk_index with read_chunk, then pass selected "
+                    "evidence_spans[].span_index values to record_evidence."
                 ),
                 section=SectionContent(
                     section_title=resolved_section_title,
@@ -1047,7 +1057,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
         return result
 
 
-    return read_section
+    return scoped_document_tool(read_section, document_id=document_id, user_id=user_id)
 
 
 # =============================================================================
@@ -1112,8 +1122,8 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
         term, each with a short excerpt around the match, instead of the whole subsection.
 
         subsection.source_chunks lists the passages on this page as lightweight pointers
-        (chunk_id, location, size) without repeating their text. For retained evidence,
-        call read_chunk on a relevant chunk_id and select evidence_spans[].span_id values
+        (chunk_index, location, size) without repeating their text. For retained evidence,
+        call read_chunk on a relevant chunk_index and select evidence_spans[].span_index values
         before record_evidence.
 
         Examples:
@@ -1179,7 +1189,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                 summary=(
                     f"Read {meta['returned']} of {meta['total']} chunks{filter_note} from "
                     f"'{parent_section} > {subsection}'.{note} "
-                    "Use subsection.source_chunks[].chunk_id with read_chunk for final evidence span selection."
+                    "Use subsection.source_chunks[].chunk_index with read_chunk for final evidence span selection."
                 ),
                 subsection=SubsectionContent(
                     parent_section=parent_section,
@@ -1235,4 +1245,4 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
         return result
 
 
-    return read_subsection
+    return scoped_document_tool(read_subsection, document_id=document_id, user_id=user_id)

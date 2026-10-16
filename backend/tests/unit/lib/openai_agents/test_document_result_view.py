@@ -28,12 +28,12 @@ def test_window_preserves_exact_evidence_and_routes_geometry_without_mutating_so
 @pytest.mark.parametrize("tool,key", [("search_document", "hits"), ("read_section", "section"), ("read_subsection", "subsection")])
 def test_other_document_views_preserve_content_navigation_and_provenance(tool, key):
     record = {"chunk_id": "c1", "content": "not found in adults", "next_offset": 4,
-              "doc_items": [{"page": 1}], "source_chunks": [{"chunk_id": "c1"}]}
+              "doc_items": [{"page": 1}], "source_chunks": [{"chunk_id": "c1", "chunk_index": 42}]}
     raw = {key: [record] if key == "hits" else record}
     view, events = document_result_view(tool, raw)
     actual = view[key][0] if key == "hits" else view[key]
     assert actual["content"] == record["content"]
-    assert actual["source_chunks"] == record["source_chunks"]
+    assert actual["source_chunks"] == [{"chunk_index": 42}]
     assert actual["next_offset"] == 4
     assert "doc_items" not in actual
     assert events[0]["chunk_id"] == "c1"

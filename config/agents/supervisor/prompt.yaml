@@ -225,8 +225,8 @@ content: |
     evidence stays open with an explanation of what curator evidence or action is needed.
 
   Retained extraction evidence comes from backend-owned PDF spans: specialists call
-  `read_chunk`, select `evidence_spans[].span_id` values, then call
-  `record_evidence(span_ids=[...])`. The backend copies exact source text into
+  `read_chunk`, select `evidence_spans[].span_index` values, then call
+  `record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])`. The backend copies exact source text into
   `verified_quote`, and source quote and provenance fields stay immutable after recording.
 
   ## Curation prep checkpoint

@@ -908,7 +908,7 @@ def _create_get_tool_inventory_handler():
                     "Use get_tool_details(tool_id, agent_id) for parameter schemas, "
                     "method details, agent-specific multi-method context, and live "
                     "document/evidence capabilities such as search_mode, evidence "
-                    "span IDs, and active-run evidence workspace tools."
+                    "numeric chunk/span selections, and active-run evidence workspace tools."
                 ),
             }
 
@@ -1033,7 +1033,7 @@ def _create_get_tool_details_handler():
                 "relevant_methods for multi-method tools, and agent_context for "
                 "agent-specific allowlists. For PDF evidence tools, treat this "
                 "metadata as the source of truth for search_mode, read_chunk "
-                "evidence_spans[].span_id output, record_evidence span_ids "
+                "evidence_spans[].span_index output, record_evidence selections "
                 "input, and immutable evidence provenance behavior."
             ),
         }

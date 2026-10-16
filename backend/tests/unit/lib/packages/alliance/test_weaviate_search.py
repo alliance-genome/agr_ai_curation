@@ -1,6 +1,7 @@
 """Unit tests for the Alliance package's canonical Weaviate search tools."""
 
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -28,6 +29,10 @@ def identity_function_tool(monkeypatch):
         return lambda wrapped: wrapped
 
     monkeypatch.setattr(weaviate_search, "function_tool", _identity_function_tool)
+    # Formatting/selection tests isolate the source scope; SDK lifecycle and
+    # durable source binding are covered in test_document_references.py.
+    monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
+    monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
 
 
 def test_search_tool_schema_exposes_search_mode_enum(monkeypatch):
@@ -126,7 +131,7 @@ async def test_search_tool_maps_hits_and_returns_full_content(monkeypatch):
     async def _fake_hybrid(**_kwargs):
         return [
             {
-                "id": "chunk-1",
+                "chunk_index": 0, "id": "chunk-1",
                 "metadata": {
                     "chunk_id": "chunk-meta-1",
                     "section_title": "Results",
@@ -137,7 +142,7 @@ async def test_search_tool_maps_hits_and_returns_full_content(monkeypatch):
                 "text": long_text,
             },
             {
-                "id": "chunk-2",
+                "chunk_index": 1, "id": "chunk-2",
                 "metadata": {"sectionTitle": "Discussion", "pageNumber": 8},
                 "content": "Short content",
                 "doc_items": [{"id": "bbox-2"}],
@@ -186,9 +191,9 @@ async def test_search_tool_propagates_dependency_exception(monkeypatch):
 async def test_read_chunk_tool_returns_raw_content_neighbors_and_deterministic_spans(monkeypatch):
     text = "Alpha sentence. Beta sentence supports evidence."
 
-    async def _fake_get_chunk_by_id(**kwargs):
+    async def _fake_get_chunk_by_index(**kwargs):
         assert kwargs == {
-            "chunk_id": "chunk-2",
+            "chunk_index": 1,
             "user_id": "user-1",
             "document_id": "doc-12345678",
         }
@@ -214,12 +219,12 @@ async def test_read_chunk_tool_returns_raw_content_neighbors_and_deterministic_s
         }
 
     tracker = _Tracker()
-    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
     monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids", _fake_get_chunk_neighbor_ids)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1", tracker=tracker)
 
-    first = await tool("chunk-2")
-    second = await tool("chunk-2")
+    first = await tool(1)
+    second = await tool(1)
 
     assert first.chunk is not None
     assert first.chunk.chunk_id == "chunk-2"
@@ -248,9 +253,9 @@ async def test_read_chunk_tool_returns_raw_content_neighbors_and_deterministic_s
 
 @pytest.mark.asyncio
 async def test_read_chunk_tool_parses_json_metadata_for_locator_fields(monkeypatch):
-    async def _fake_get_chunk_by_id(**_kwargs):
+    async def _fake_get_chunk_by_index(**_kwargs):
         return {
-            "id": "chunk-2",
+            "chunk_index": 6, "id": "chunk-2",
             "text": "Exact raw chunk text.",
             "metadata": (
                 '{"chunk_index": 6, "page_number": 11, '
@@ -265,11 +270,11 @@ async def test_read_chunk_tool_parses_json_metadata_for_locator_fields(monkeypat
             "next_chunk_id": "chunk-3",
         }
 
-    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
     monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids", _fake_get_chunk_neighbor_ids)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
 
-    result = await tool("chunk-2")
+    result = await tool(6)
 
     assert result.chunk is not None
     assert result.chunk.chunk_index == 6
@@ -283,78 +288,78 @@ async def test_read_chunk_tool_parses_json_metadata_for_locator_fields(monkeypat
 
 @pytest.mark.asyncio
 async def test_read_chunk_tool_raises_when_metadata_is_not_object(monkeypatch):
-    async def _fake_get_chunk_by_id(**_kwargs):
+    async def _fake_get_chunk_by_index(**_kwargs):
         return {
-            "id": "chunk-2",
+            "chunk_index": 1, "id": "chunk-2",
             "text": "Exact raw chunk text.",
             "metadata": ["not", "metadata"],
         }
 
-    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
 
     with pytest.raises(TypeError, match="metadata must be an object"):
-        await tool("chunk-2")
+        await tool(1)
 
 
 @pytest.mark.asyncio
 async def test_read_chunk_tool_raises_when_backend_chunk_id_missing(monkeypatch):
-    async def _fake_get_chunk_by_id(**_kwargs):
+    async def _fake_get_chunk_by_index(**_kwargs):
         return {
             "text": "Exact raw chunk text.",
             "chunk_index": 1,
         }
 
-    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
 
     with pytest.raises(ValueError, match="returned no concrete backend chunk id"):
-        await tool("chunk-2")
+        await tool(1)
 
 
 @pytest.mark.asyncio
 async def test_read_chunk_tool_handles_missing_chunk(monkeypatch):
-    async def _fake_get_chunk_by_id(**_kwargs):
+    async def _fake_get_chunk_by_index(**_kwargs):
         return None
 
-    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
 
     from agr_ai_curation_runtime.document_errors import DocumentReadError
     with pytest.raises(DocumentReadError):
-        await tool("missing-chunk")
+        await tool(999)
 
 
 @pytest.mark.asyncio
 async def test_read_chunk_tool_raises_when_raw_text_missing(monkeypatch):
-    async def _fake_get_chunk_by_id(**_kwargs):
+    async def _fake_get_chunk_by_index(**_kwargs):
         return {
             "id": "chunk-2",
             "content": "Alias content is not the exact read_chunk source field.",
             "chunk_index": 1,
         }
 
-    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
 
     with pytest.raises(ValueError, match="missing exact raw text content"):
-        await tool("chunk-2")
+        await tool(1)
 
 
 @pytest.mark.asyncio
 async def test_read_chunk_tool_raises_on_malformed_chunk_index(monkeypatch):
-    async def _fake_get_chunk_by_id(**_kwargs):
+    async def _fake_get_chunk_by_index(**_kwargs):
         return {
             "id": "chunk-2",
             "text": "Exact raw chunk text.",
             "chunk_index": "not-an-index",
         }
 
-    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
 
-    with pytest.raises(ValueError, match="invalid literal"):
-        await tool("chunk-2")
+    with pytest.raises(ValueError, match="non-negative integer"):
+        await tool(1)
 
 
 @pytest.mark.asyncio
@@ -383,7 +388,7 @@ async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatc
     async def _chunks(**_kwargs):
         return [
             {
-                "id": "chunk-methods-1",
+                "chunk_index": 17, "id": "chunk-methods-1",
                 "text": "Paragraph one",
                 "page_number": 2,
                 "section_title": "Materials and Methods",
@@ -391,7 +396,7 @@ async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatc
                 "metadata": '{"doc_items":[{"id":"bbox-1"}]}',
             },
             {
-                "id": "chunk-methods-2",
+                "chunk_index": 19, "id": "chunk-methods-2",
                 "content": "Paragraph two",
                 "pageNumber": 3,
                 "sectionTitle": "Materials and Methods",
@@ -423,8 +428,8 @@ async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatc
     # section.content and must not be echoed per-chunk.
     assert result.section.source_chunks[0].char_count == len("Paragraph one")
     assert result.section.source_chunks[1].char_count == len("Paragraph two")
-    assert result.section.source_chunks[0].chunk_index == 0
-    assert result.section.source_chunks[1].chunk_index == 1
+    assert result.section.source_chunks[0].chunk_index == 17
+    assert result.section.source_chunks[1].chunk_index == 19
     assert result.section.source_chunks[0].snippet is None
     assert not hasattr(result.section.source_chunks[0], "content")
     assert not hasattr(result.section.source_chunks[0], "content_preview")
@@ -438,7 +443,7 @@ async def test_read_section_tool_retrieves_provider_figure_metadata(monkeypatch)
         assert kwargs["parent_section"] == PROVIDER_FIGURE_METADATA_SECTION
         return [
             {
-                "id": "chunk-provider-figure-1",
+                "chunk_index": 0, "id": "chunk-provider-figure-1",
                 "text": (
                     "Figure label: Figure 1\n\n"
                     "Legend:\n"
@@ -501,7 +506,7 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
     async def _chunks(**_kwargs):
         return [
             {
-                "id": "chunk-subsection-1",
+                "chunk_index": 0, "id": "chunk-subsection-1",
                 "text": "Line one",
                 "page_number": 9,
                 "section_title": "Methods",
@@ -509,7 +514,7 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
                 "doc_items": [{"id": "bbox-1"}],
             },
             {
-                "id": "chunk-subsection-2",
+                "chunk_index": 1, "id": "chunk-subsection-2",
                 "content": "Line two",
                 "metadata": {
                     "pageNumber": 10,
@@ -556,7 +561,7 @@ async def test_read_subsection_tool_retrieves_provider_figure_entry(monkeypatch)
         assert kwargs["subsection"] == provider_subsection
         return [
             {
-                "id": "chunk-provider-figure-2",
+                "chunk_index": 1, "id": "chunk-provider-figure-2",
                 "text": (
                     "Figure label: Figure 2\n\n"
                     "Legend:\n"
@@ -606,7 +611,7 @@ def _numbered_chunks(count: int, *, prefix: str = "chunk", text_for=None):
         text = text_for(i) if text_for else f"Chunk text {i} " + ("z" * 50)
         chunks.append(
             {
-                "id": f"{prefix}-{i}",
+                "chunk_index": i, "id": f"{prefix}-{i}",
                 "text": text,
                 "page_number": i + 1,
                 "section_title": "Results",
@@ -623,8 +628,8 @@ async def test_read_section_source_chunks_do_not_echo_full_content(monkeypatch):
 
     async def _chunks(**_kwargs):
         return [
-            {"id": "chunk-1", "text": body_one, "page_number": 1, "section_title": "Results"},
-            {"id": "chunk-2", "text": body_two, "page_number": 2, "section_title": "Results"},
+            {"chunk_index": 0, "id": "chunk-1", "text": body_one, "page_number": 1, "section_title": "Results"},
+            {"chunk_index": 1, "id": "chunk-2", "text": body_two, "page_number": 2, "section_title": "Results"},
         ]
 
     monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
@@ -705,9 +710,9 @@ async def test_read_section_text_contains_filters_and_returns_snippet(monkeypatc
 
     async def _chunks(**_kwargs):
         return [
-            {"id": "chunk-0", "text": "no match here", "page_number": 1, "section_title": "Results"},
-            {"id": "chunk-1", "text": target_text, "page_number": 2, "section_title": "Results"},
-            {"id": "chunk-2", "text": "still nothing", "page_number": 3, "section_title": "Results"},
+            {"chunk_index": 0, "id": "chunk-0", "text": "no match here", "page_number": 1, "section_title": "Results"},
+            {"chunk_index": 0, "id": "chunk-1", "text": target_text, "page_number": 2, "section_title": "Results"},
+            {"chunk_index": 1, "id": "chunk-2", "text": "still nothing", "page_number": 3, "section_title": "Results"},
         ]
 
     monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
@@ -736,9 +741,9 @@ async def test_read_section_text_contains_filters_and_returns_snippet(monkeypatc
 async def test_read_subsection_bounds_pages_and_filters(monkeypatch):
     async def _chunks(**_kwargs):
         return [
-            {"id": "sub-0", "text": "alpha mention", "page_number": 1, "subsection": "Fly Strains"},
-            {"id": "sub-1", "text": "beta mention", "page_number": 2, "subsection": "Fly Strains"},
-            {"id": "sub-2", "text": "gamma mention", "page_number": 3, "subsection": "Fly Strains"},
+            {"chunk_index": 0, "id": "sub-0", "text": "alpha mention", "page_number": 1, "subsection": "Fly Strains"},
+            {"chunk_index": 0, "id": "sub-1", "text": "beta mention", "page_number": 2, "subsection": "Fly Strains"},
+            {"chunk_index": 1, "id": "sub-2", "text": "gamma mention", "page_number": 3, "subsection": "Fly Strains"},
         ]
 
     monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", _chunks)
@@ -876,11 +881,11 @@ async def test_real_sdk_preserves_required_pdf_read_failure(monkeypatch):
     cause = ValueError("Not valid uuid: PRIVATE DOCUMENT VALUE")
     async def fail(**kwargs):
         raise cause
-    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", fail)
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", fail)
     tool = weaviate_search.create_read_chunk_tool("document", "owner")
     with pytest.raises(DocumentReadError) as caught:
         await tool.on_invoke_tool(_build_tool_context(tool.name, {}), json.dumps({
-            "chunk_id": "89220bef-62f7-0440-12bb-1d34e1f98ce", "span_offset": 0,
+            "chunk_index": 42, "span_offset": 0,
         }))
     assert document_read_failure(caught.value).__cause__ is cause
     failure = classify_failure(caught.value)

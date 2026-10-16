@@ -267,7 +267,8 @@ def test_pdf_evidence_tools_document_span_contract():
     ]["summary"]
 
     assert "snippets" in read_chunk_summary
-    assert "span_ids" in record_parameters
+    assert "selections" in record_parameters
+    assert "span_ids" not in record_parameters
     assert "claimed_quote" not in record_parameters
     assert "to correct the quote or source provenance" in workspace_summary.lower()
 
@@ -875,7 +876,7 @@ async def test_resolve_package_tool_falls_back_when_thread_creation_is_unavailab
     "tool_id,input_payload",
     [
         ("search_document", '{"query":"genes"}'),
-        ("read_chunk", '{"chunk_id":"chunk-1"}'),
+        ("read_chunk", '{"chunk_index":42}'),
         ("read_section", '{"section_title":"Results"}'),
         ("read_subsection", '{"section_title":"Results","subsection":"Expression"}'),
     ],
@@ -895,7 +896,7 @@ async def test_resolve_package_tool_executes_document_tools_inline(
         calls.append(("invoke", input_str))
         return {
             "summary": "Found 1 chunks",
-            "chunk": {"chunk_id": "chunk-1"},
+            "chunk": {"chunk_id": "chunk-1", "chunk_index": 42},
             "input": input_str,
         }
 
@@ -935,7 +936,7 @@ async def test_resolve_package_tool_executes_document_tools_inline(
 
     assert result == {
         "summary": "Found 1 chunks",
-        "chunk": {"chunk_id": "chunk-1"},
+        "chunk": {"chunk_index": 42} if tool_id == "read_chunk" else {"chunk_id": "chunk-1", "chunk_index": 42},
         "input": input_payload,
     }
     assert calls == [

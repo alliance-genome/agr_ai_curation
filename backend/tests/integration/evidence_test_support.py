@@ -337,7 +337,13 @@ def make_fixture_runner(evidence_fixture: dict[str, object]):
                 "entity": evidence_record["entity"],
             }
             if source_span_ids:
-                tool_input["span_ids"] = source_span_ids
+                chunk_indexes = {chunk["id"]: chunk["chunk_index"] for chunk in evidence_fixture["chunks"]}
+                from agr_ai_curation_runtime.evidence_spans import parse_evidence_span_id
+                tool_input["selections"] = [
+                    {"chunk_index": chunk_indexes[parsed.chunk_id], "span_index": parsed.span_index}
+                    for parsed in map(parse_evidence_span_id, source_span_ids)
+                ]
+                tool_output["selections"] = tool_input["selections"]
 
             yield {
                 "type": "TOOL_COMPLETE",

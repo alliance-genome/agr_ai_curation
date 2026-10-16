@@ -30,7 +30,7 @@ Budget-aware inspection: use get_current_flow_topology(section="all") for all to
 **CRITICAL for item 4:** This applies only to prompts that execute; direct-export output-node prompts are inactive. You MUST actually complete the targeted instruction and prompt calls for each agent with custom instructions. Do NOT skip this step or guess based on agent name alone.
 **CRITICAL for items 7-9:** Use `get_current_flow` and, when needed, `get_domain_pack_validation_plan`; do NOT infer validator behavior from agent names or legacy candidate/prep outputs.
 **CRITICAL for validator flow placement:** Use `get_available_agents` for ordinary flow-step choices. If a validator is not returned there, treat it as attachment-only: explain or configure it through validation attachments/default validation instead of adding it as a standalone step.
-**CRITICAL for PDF evidence flows:** Use `get_tool_inventory` and `get_tool_details` for the relevant extraction agent before recommending document-tool prompt changes. Preserve the `search_document` -> `read_chunk` -> `record_evidence(span_ids=[...])` workflow and the active-run evidence workspace tools; do not suggest quote-generation or fuzzy quote repair instructions.
+**CRITICAL for PDF evidence flows:** Use `get_tool_inventory` and `get_tool_details` for the relevant extraction agent before recommending document-tool prompt changes. Preserve the `search_document` -> `read_chunk` -> `record_evidence(selections=[{chunk_index, span_index}, ...])` workflow and the active-run evidence workspace tools; do not suggest quote-generation or fuzzy quote repair instructions.
 </validation_checklist>
 </studio_guide_topic>
 

@@ -536,17 +536,12 @@ def _extract_stream_tool_call_tracking_id(item: Any) -> Optional[str]:
     return None
 
 
-def _normalize_record_evidence_span_ids(value: Any) -> List[str]:
-    """Return clean span IDs from a record_evidence payload."""
-
+def _normalize_record_evidence_selections(value: Any) -> list[tuple[int, int]]:
     if not isinstance(value, list):
         return []
-
-    return [
-        span_id
-        for span_id in (str(raw_span_id or "").strip() for raw_span_id in value)
-        if span_id
-    ]
+    return [(item["chunk_index"], item["span_index"]) for item in value
+            if isinstance(item, dict) and type(item.get("chunk_index")) is int
+            and type(item.get("span_index")) is int]
 
 
 def _pop_matching_pending_tool_call(
@@ -569,18 +564,18 @@ def _pop_matching_pending_tool_call(
     output_payload = coerce_tool_event_dict(getattr(output_item, "output", None))
     if isinstance(output_payload, dict):
         output_entity = str(output_payload.get("entity") or "").strip()
-        output_span_ids = _normalize_record_evidence_span_ids(output_payload.get("span_ids"))
-        if output_entity and output_span_ids:
+        output_selections = _normalize_record_evidence_selections(output_payload.get("selections"))
+        if output_entity and output_selections:
             for candidate_tool in list(pending_tool_calls):
                 if str(candidate_tool.get("tool_name") or "").strip() != "record_evidence":
                     continue
                 candidate_args = candidate_tool.get("tool_args")
                 if not isinstance(candidate_args, dict):
                     continue
-                candidate_span_ids = _normalize_record_evidence_span_ids(candidate_args.get("span_ids"))
+                candidate_selections = _normalize_record_evidence_selections(candidate_args.get("selections"))
                 if (
                     str(candidate_args.get("entity") or "").strip() == output_entity
-                    and candidate_span_ids == output_span_ids
+                    and candidate_selections == output_selections
                 ):
                     pending_tool_calls.remove(candidate_tool)
                     return candidate_tool

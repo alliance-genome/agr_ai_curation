@@ -12,7 +12,8 @@
       "page_number": 5,
       "parent_section": "Results",
       "subsection": "Fertility defects",
-      "metadata": {}
+      "metadata": {},
+      "chunk_index": 0
     },
     {
       "id": "chunk-phenotype-supporting",
@@ -20,7 +21,8 @@
       "page_number": 6,
       "parent_section": "Results",
       "subsection": "Quantification",
-      "metadata": {}
+      "metadata": {},
+      "chunk_index": 1
     },
     {
       "id": "chunk-phenotype-heading",
@@ -28,7 +30,8 @@
       "page_number": 2,
       "parent_section": "Introduction",
       "subsection": "Background",
-      "metadata": {}
+      "metadata": {},
+      "chunk_index": 2
     }
   ],
   "tool_cases": [
@@ -36,8 +39,11 @@
       "case_id": "verified_exact",
       "tool_input": {
         "entity": "reduced brood size",
-        "span_ids": [
-          "chunk-phenotype-count:s0001:c0011-c0073:c0baf604"
+        "selections": [
+          {
+            "chunk_index": 0,
+            "span_index": 1
+          }
         ]
       },
       "expected_tool_result": {
@@ -52,14 +58,20 @@
         "source_span_ids": [
           "chunk-phenotype-count:s0001:c0011-c0073:c0baf604"
         ]
-      }
+      },
+      "canonical_source_span_ids": [
+        "chunk-phenotype-count:s0001:c0011-c0073:c0baf604"
+      ]
     },
     {
       "case_id": "verified_supporting",
       "tool_input": {
         "entity": "reduced brood size",
-        "span_ids": [
-          "chunk-phenotype-supporting:s0001:c0000-c0105:99a6d857"
+        "selections": [
+          {
+            "chunk_index": 1,
+            "span_index": 1
+          }
         ]
       },
       "expected_tool_result": {
@@ -73,14 +85,20 @@
         "source_span_ids": [
           "chunk-phenotype-supporting:s0001:c0000-c0105:99a6d857"
         ]
-      }
+      },
+      "canonical_source_span_ids": [
+        "chunk-phenotype-supporting:s0001:c0000-c0105:99a6d857"
+      ]
     },
     {
       "case_id": "not_found_absent_span",
       "tool_input": {
         "entity": "developmental defects",
-        "span_ids": [
-          "chunk-phenotype-heading:s0001:c0000-c0062:6c2b34ef"
+        "selections": [
+          {
+            "chunk_index": 2,
+            "span_index": 1
+          }
         ]
       },
       "expected_tool_result": {
@@ -92,14 +110,20 @@
         "chunk_content_preview": "Developmental defects have been reported for unc-40.",
         "retry_instructions": "Call read_chunk on the current supporting chunk and retry with current span_ids, or drop this evidence.",
         "chunk_id": "chunk-phenotype-heading"
-      }
+      },
+      "canonical_source_span_ids": [
+        "chunk-phenotype-heading:s0001:c0000-c0062:6c2b34ef"
+      ]
     },
     {
       "case_id": "not_found_wrong_chunk_id",
       "tool_input": {
         "entity": "reduced brood size",
-        "span_ids": [
-          "chunk-phenotype-missing:s0001:c0000-c0062:90e91d28"
+        "selections": [
+          {
+            "chunk_index": 3,
+            "span_index": 1
+          }
         ]
       },
       "expected_tool_result": {
@@ -108,7 +132,10 @@
         "message": "Selected span ID references a chunk that is not available in the active document. Re-run discovery/read_chunk and choose current span_ids, or drop this evidence.",
         "retry_instructions": "Use search_document or read_section to find the current chunk, call read_chunk, and retry with current span_ids, or drop this evidence.",
         "chunk_id": "chunk-phenotype-missing"
-      }
+      },
+      "canonical_source_span_ids": [
+        "chunk-phenotype-missing:s0001:c0000-c0062:90e91d28"
+      ]
     }
   ],
   "extraction": {

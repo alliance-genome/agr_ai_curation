@@ -516,3 +516,41 @@ async def test_document_hierarchy_fetches_db_metadata(monkeypatch):
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: _Session())
     hierarchy = await chunks.get_document_hierarchy("11111111-1111-1111-1111-111111111111", "user-1")
     assert hierarchy == {"sections": [{"name": "Intro"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index", [True, False, "42", -1, 1.5, None])
+async def test_local_chunk_index_requires_actual_nonnegative_integer(index):
+    with pytest.raises(ValueError, match="non-negative integer"):
+        await chunks.get_chunk_by_index(chunk_index=index, user_id="alice", document_id="doc-a")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [0, 1, 2])
+async def test_local_chunk_index_never_selects_first_duplicate(monkeypatch, count):
+    from unittest.mock import AsyncMock
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value = SimpleNamespace(objects=[
+        SimpleNamespace(uuid=f"chunk-{i}", properties={"documentId": "doc-a", "chunkIndex": 42})
+        for i in range(count)
+    ])
+    monkeypatch.setattr(chunks, "get_connection", lambda: _connection_with_client(MagicMock()))
+    get_collections = MagicMock(return_value=(collection, None))
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", get_collections)
+    fetch = AsyncMock(return_value={"id": "chunk-0", "chunk_index": 42, "text": "Not expressed."})
+    monkeypatch.setattr(chunks, "get_chunk_by_id", fetch)
+    if count == 2:
+        with pytest.raises(ValueError, match="ambiguous"):
+            await chunks.get_chunk_by_index(chunk_index=42, user_id="alice", document_id="doc-a")
+        fetch.assert_not_called()
+    else:
+        result = await chunks.get_chunk_by_index(chunk_index=42, user_id="alice", document_id="doc-a")
+        assert result == (fetch.return_value if count else None)
+        if count:
+            fetch.assert_awaited_once_with(chunk_id="chunk-0", user_id="alice", document_id="doc-a")
+        else:
+            fetch.assert_not_called()
+    assert get_collections.call_args.args[1] == "alice"
+    args = collection.query.fetch_objects.call_args.kwargs
+    assert args["limit"] == 2
+    assert [f.value for f in args["filters"].filters] == ["doc-a", 42]

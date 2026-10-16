@@ -7,7 +7,6 @@ projection target is never a reason to reject an otherwise valid request.
 """
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import inspect
 import json
@@ -96,12 +95,15 @@ class ModelContextView:
     allow_projection: bool = True
     checkpoint: int = 0
     last_metrics: dict = field(default_factory=dict)
+    source_reference_views: dict = field(default_factory=dict)
 
     async def filter(self, call) -> ModelInputData:
         original = call.model_data
         refs = await self.history.capture_input(original.input, original.instructions)
         before = _estimate(call.agent, original, self.run_config)
-        items = deepcopy(original.input)
+        from .document_references import project_model_source_items
+        items = await project_model_source_items(original.input,
+            user_id=self.history.scope.owner_id, cache=self.source_reference_views)
         enabled = config.get_agent_context_view_enabled()
         offset = 0
         reset_compactions = 0
@@ -229,19 +231,26 @@ def run_config_with_history(run_config, history: RunHistory | None, *, allow_pro
     inherited = getattr(previous, "_agent_history_filter", False)
     if inherited:
         previous = previous._previous_filter
-    if history is None:
-        return replace(run_config, call_model_input_filter=previous) if inherited else run_config
-    view = ModelContextView(history, run_config=run_config, allow_projection=allow_projection)
-    history.model_view = view
+    view = ModelContextView(history, run_config=run_config, allow_projection=allow_projection) if history else None
+    source_reference_views = {}
+    if history:
+        history.model_view = view
 
     async def filter_input(call):
-        history.assert_current_scope()
+        if history:
+            history.assert_current_scope()
         if previous:
             data = previous(call)
             if inspect.isawaitable(data):
                 data = await data
             call = replace(call, model_data=data)
-        return await view.filter(call)
+        if view is not None:
+            return await view.filter(call)
+        from .document_references import project_model_source_items
+        from src.lib.context import get_current_user_id
+        data = call.model_data
+        items = await project_model_source_items(data.input, user_id=get_current_user_id(), cache=source_reference_views)
+        return ModelInputData(input=items, instructions=data.instructions)
     setattr(filter_input, "_agent_history_filter", True)
     setattr(filter_input, "_previous_filter", previous)
     return replace(run_config, call_model_input_filter=filter_input)

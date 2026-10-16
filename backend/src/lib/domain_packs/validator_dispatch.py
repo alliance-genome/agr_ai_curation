@@ -2554,7 +2554,7 @@ def _append_validator_source_context_instructions(
         "For single-request validation runs with scoped evidence tools, if you "
         "find a better supporting sentence, update the supplied evidence record "
         "by calling `record_evidence` with the existing `evidence_record_id` "
-        "and improved `span_ids`."
+        "and improved chunk_index/span_index `selections`."
         if not batch
         else (
             "Batch validator runs do not receive scoped evidence mutation tools; "

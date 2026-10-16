@@ -69,6 +69,12 @@ def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]
         if geometry:
             events.append({"type": "CHUNK_PROVENANCE", "message_id": str(uuid4()),
                            "chunk_id": source_id, "doc_items": geometry, "source_tool": tool_name})
+        record.pop("chunk_id", None)
+        record.pop("chunk_number", None)
+        record.pop("previous_chunk_id", None)
+        record.pop("next_chunk_id", None)
+        for source in record.get("source_chunks") or []:
+            source.pop("chunk_id", None)
         text = record.get("content")
         if not isinstance(text, str):
             continue
@@ -79,11 +85,12 @@ def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]
         record["content_start"] = start
         record["span_text_access"] = (
             "Span text is content[char_start-content_start:char_end-content_start]. "
-            "Offsets count Unicode characters, end exclusive. Use span_id with record_evidence."
+            "Offsets count Unicode characters, end exclusive. Use chunk_index and span_index with record_evidence."
         )
         for span in record["evidence_spans"]:
             lo, hi = span["char_start"] - start, span["char_end"] - start
             if lo < 0 or hi > len(text) or hi <= lo or text[lo:hi] != span.get("text"):
                 raise ValueError("Evidence span does not match the exact returned document text")
             del span["text"]
+            span.pop("span_id", None)
     return view, events

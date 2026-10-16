@@ -610,6 +610,8 @@ def create_get_recorded_evidence_tool(
             return _not_found(evidence_record_id)
         record_payload = deepcopy(record)
         record_payload.pop("evidence_revision_history", None)
+        from src.lib.openai_agents.document_references import project_source_references
+        record_payload = await project_source_references(record_payload, user_id=user_id, document_id=document_id)
         response = {
             "status": "ok",
             "evidence_record_id": _optional_string(evidence_record_id),
@@ -677,7 +679,7 @@ def create_attach_evidence_to_object_tool(
 
         This changes only workspace attachment metadata; correct source quote
         and provenance by calling record_evidence with the existing
-        evidence_record_id and current span IDs. New attachments require a
+        evidence_record_id and current chunk_index/span_index selections. New attachments require a
         concrete field_path so finalized extractor output remains field-level.
 
         Args:
@@ -766,7 +768,7 @@ def create_detach_evidence_from_object_tool(
 
         This removes only workspace attachment metadata; correct source quote
         and provenance by calling record_evidence with the existing
-        evidence_record_id and current span IDs.
+        evidence_record_id and current chunk_index/span_index selections.
 
         Args:
             evidence_record_id: Evidence record ID to detach.
@@ -901,7 +903,7 @@ def create_update_recorded_evidence_metadata_tool(
         Editable fields are entity, field_path, and agent_note. Correct source
         quote, source span IDs, source fragments, chunk IDs, page, and section
         provenance by calling record_evidence with the existing evidence_record_id
-        and current span IDs.
+        and current chunk_index/span_index selections.
 
         Args:
             evidence_record_id: Evidence record ID to update.

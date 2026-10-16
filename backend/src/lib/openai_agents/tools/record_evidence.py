@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 from agents import function_tool
+from agr_ai_curation_runtime.document_references import DocumentSelection, resolve_selections, scoped_document_tool
 
 from src.lib.openai_agents.config import get_record_evidence_preview_chars
 from src.lib.document_sources.figure_metadata import (
@@ -30,7 +31,6 @@ from src.lib.openai_agents.tools.evidence_workspace import (
     find_active_evidence_record,
     find_evidence_record_in_records,
 )
-from src.lib.observability.runtime import report_runtime_exception
 from src.lib.weaviate_client.chunks import get_chunk_by_id
 
 if TYPE_CHECKING:
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 _PREVIEW_CHARS = get_record_evidence_preview_chars()
 _SPAN_RETRY_INSTRUCTIONS = (
     "Call read_chunk for the source chunk again and select current "
-    "evidence_spans[].span_id values. Do not provide model-authored source text."
+    "evidence_spans[].span_index values. Do not provide model-authored source text."
 )
 _SOURCE_REVISION_FIELDS = (
     "verified_quote",
@@ -108,21 +108,6 @@ class _ResolvedSpanFragment:
         if self.figure_reference:
             fragment["figure_reference"] = self.figure_reference
         return fragment
-
-
-class _ChunkLookupRuntimeError(RuntimeError):
-    """Sanitized chunk-store failure safe for logs and Sentry."""
-
-
-def _sanitized_chunk_lookup_error(exc: BaseException) -> _ChunkLookupRuntimeError:
-    try:
-        raise _ChunkLookupRuntimeError(
-            f"Evidence chunk lookup failed ({type(exc).__name__})"
-        ) from None
-    except _ChunkLookupRuntimeError as sanitized:
-        sanitized.__context__ = None
-        sanitized.__cause__ = None
-        return sanitized
 
 
 def _build_preview(chunk_text: str) -> str:
@@ -705,11 +690,12 @@ def _preview_for_log(value: Any, *, limit: int = 180) -> str:
     return text[:limit].rstrip() + "..."
 
 
-def create_record_evidence_tool(
+def _create_canonical_evidence_recorder(
     document_id: str,
     user_id: str,
     tracker: Optional["ToolCallTracker"] = None,
     *,
+    defer_source_updates: bool = False,
     workspace_records: list[dict[str, Any]] | None = None,
     allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
     allow_create: bool = True,
@@ -717,7 +703,7 @@ def create_record_evidence_tool(
     required_pending_ref_id: str | None = None,
     required_field_path: str | None = None,
 ):
-    """Create a record_evidence tool bound to one document and user."""
+    """Verify internal canonical span identities for one document and user."""
 
     allowed_ids = {
         normalized
@@ -822,7 +808,6 @@ def create_record_evidence_tool(
             }
         return None
 
-    @function_tool
     async def record_evidence(
         entity: str,
         span_ids: list[str],
@@ -833,10 +818,10 @@ def create_record_evidence_tool(
         object_type: str | None = None,
         validation_finding_id: str | None = None,
     ) -> dict[str, Any]:
-        """Create or replace verified evidence from read_chunk evidence span IDs.
+        """Create or replace verified evidence from document-local chunk/span selections.
 
-        The backend resolves span_ids, copies exact source text into
-        verified_quote, and preserves span provenance. Multiple span_ids in one
+        The backend resolves issued selections, copies exact source text into
+        verified_quote, and preserves span provenance. Multiple selections in one
         call form one evidence unit and one evidence record; use separate calls
         for truly disjoint support. Supplying evidence_record_id replaces the
         source quote/provenance on that active-run record while preserving its
@@ -844,7 +829,7 @@ def create_record_evidence_tool(
 
         Args:
             entity: Entity or object label this evidence supports.
-            span_ids: Non-empty list copied from read_chunk(...).chunk.evidence_spans[].span_id.
+            selections: Non-empty list of chunk_index/span_index pairs from read_chunk evidence_spans.
             evidence_record_id: Existing active-run evidence record ID to update in place.
             object_id: Optional stable curatable object ID to attach this evidence to.
             pending_ref_id: Optional pending object/reference ID to attach this evidence to.
@@ -1044,36 +1029,8 @@ def create_record_evidence_tool(
                     document_id=document_id,
                 )
             except Exception as exc:
-                sanitized_exc = _sanitized_chunk_lookup_error(exc)
-                report_runtime_exception(
-                    sanitized_exc,
-                    component="record_evidence",
-                    operation="evidence_chunk_lookup_failed",
-                    context={"document_id": document_id},
-                )
-                logger.error(
-                    "Evidence chunk lookup failed during record_evidence (%s)",
-                    type(exc).__name__,
-                    extra={"sentry_skip_event": True},
-                )
-                return _log_record_evidence_result(
-                    _build_span_resolution_error_result(
-                        entity=normalized_entity,
-                        span_ids=normalized_span_ids,
-                        failed_span_id=next(
-                            span_id
-                            for span_id, span_chunk_id in chunk_ids_by_span_id.items()
-                            if span_chunk_id == chunk_id
-                        ),
-                        failed_span_error="Chunk could not be loaded for this span ID",
-                        resolution_failure="chunk_load_error",
-                        chunk_id=chunk_id,
-                        extra_fields=error_extra_fields,
-                        retry_instructions=None,
-                    ),
-                    document_id=document_id,
-                    verification_method="chunk_load_error",
-                )
+                from agr_ai_curation_runtime.document_errors import DocumentReadError
+                raise DocumentReadError("record_evidence") from exc
 
             if chunk is None:
                 return _log_record_evidence_result(
@@ -1232,8 +1189,12 @@ def create_record_evidence_tool(
             if revision_history:
                 payload["evidence_revision_history"] = revision_history
             payload["updated_at"] = _now_iso()
-            existing_record.clear()
-            existing_record.update(payload)
+            if defer_source_updates:
+                from src.lib.openai_agents.document_references import stage_evidence_update
+                stage_evidence_update(existing_record, payload)
+            else:
+                existing_record.clear()
+                existing_record.update(payload)
 
         return _log_record_evidence_result(
             _strip_hidden_revision_history(payload),
@@ -1242,6 +1203,65 @@ def create_record_evidence_tool(
         )
 
     return record_evidence
+
+
+
+def create_record_evidence_tool(
+    document_id: str, user_id: str, tracker=None, *, workspace_records=None,
+    allowed_evidence_record_ids=None, allow_create=True, required_object_id=None,
+    required_pending_ref_id=None, required_field_path=None,
+):
+    """The public tool accepts only local selections; canonical IDs stay internal."""
+    recorder = _create_canonical_evidence_recorder(
+        document_id, user_id, tracker, workspace_records=workspace_records, defer_source_updates=True,
+        allowed_evidence_record_ids=allowed_evidence_record_ids, allow_create=allow_create,
+        required_object_id=required_object_id, required_pending_ref_id=required_pending_ref_id,
+        required_field_path=required_field_path,
+    )
+
+    @function_tool(failure_error_function=None)
+    async def record_evidence(
+        entity: str,
+        selections: list[DocumentSelection],
+        evidence_record_id: str | None = None,
+        object_id: str | None = None,
+        pending_ref_id: str | None = None,
+        field_path: str | None = None,
+        object_type: str | None = None,
+        validation_finding_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record exact evidence selected from previously read PDF chunks.
+
+        Backend verification copies exact source text; do not supply quote text.
+        Multiple selections form one evidence record, in the supplied order.
+        Supplying evidence_record_id replaces that active record's source while
+        retaining attachments unless new target arguments are supplied.
+
+        Args:
+            entity: Entity or object label supported by the evidence.
+            selections: Non-empty list of chunk_index/span_index pairs from read_chunk.
+            evidence_record_id: Existing active-run record to update in place.
+            object_id: Optional curatable object to attach to; requires field_path.
+            pending_ref_id: Optional pending target; requires field_path.
+            field_path: Field supported by this evidence.
+            object_type: Optional target object type.
+            validation_finding_id: Optional validation finding being corrected.
+        """
+        span_ids = await resolve_selections(selections)
+        result = await recorder(
+            entity=entity, span_ids=span_ids, evidence_record_id=evidence_record_id,
+            object_id=object_id, pending_ref_id=pending_ref_id, field_path=field_path,
+            object_type=object_type, validation_finding_id=validation_finding_id,
+        )
+        if result.get("resolution_failure"):
+            from agr_ai_curation_runtime.document_errors import DocumentReadError
+            from src.lib.openai_agents.document_references import DocumentReferenceError
+            raise DocumentReadError("record_evidence") from DocumentReferenceError(result["resolution_failure"])
+        if result.get("status") == "verified":
+            result["selections"] = [selection.model_dump() for selection in selections]
+        return result
+
+    return scoped_document_tool(record_evidence, document_id=document_id, user_id=user_id)
 
 
 __all__ = [

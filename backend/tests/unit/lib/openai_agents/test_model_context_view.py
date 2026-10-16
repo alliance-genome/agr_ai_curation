@@ -270,12 +270,17 @@ async def test_multiple_validations_and_discarded_proposal_remain_independently_
     assert recovered[4]["status"] == "discarded"
 
 
-def test_child_without_history_does_not_borrow_parent_filter(setup):
-    history, _ = setup
+@pytest.mark.asyncio
+async def test_child_without_history_does_not_borrow_parent_filter(setup):
+    history, agent = setup
     original = RunConfig()
     parent = run_config_with_history(original, history)
     child = run_config_with_history(parent, None)
-    assert child.call_model_input_filter is None
+    data = call(agent, [{"role": "user", "content": "child request"}])
+    result = await child.call_model_input_filter(data)
+    assert result.input == data.model_data.input
+    assert not history.store.rows
+    assert child.call_model_input_filter is not parent.call_model_input_filter
 
 
 @pytest.mark.asyncio

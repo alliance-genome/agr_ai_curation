@@ -11,7 +11,7 @@ content: |
   <goal>
   Find the allele and variant mentions this paper experimentally supports, then stage each retained allele with the builder tools -- its exact paper notation plus verified supporting evidence -- so the active allele validator can resolve its controlled identity. Do not hand-author `curatable_objects[]`; the backend builds the AlleleExtractionResultEnvelope (a 4-object pending paper/evidence association graph) from staged builder state.
 
-  Final allele identity is resolved at validation time by the active allele validator, not by you. You stage backend-verified evidence selected from `read_chunk.evidence_spans[].span_id` values; the notation-capture and selector handoff details live in `<validator_handoff>`.
+  Final allele identity is resolved at validation time by the active allele validator, not by you. You stage backend-verified evidence selected from `read_chunk.evidence_spans[].span_index` values; the notation-capture and selector handoff details live in `<validator_handoff>`.
   </goal>
 
   <success_criteria>
@@ -19,13 +19,13 @@ content: |
   - You retrieved from the document before staging anything.
   - Every retained item is an individual allele/variant identity under the active organism-specific group rules, not an excluded strain, construct/reagent, balancer, deficiency, or wild-type reference. Active group-specific rules are authoritative for organism nomenclature and may classify stable inherited transgenic or reporter lines as alleles.
   - Every retained allele is supported by direct experimental data in this paper (phenotype, genetic cross, complementation, molecular characterization, rescue, or another result-producing assay) or by an explicit organism-specific group rule that defines additional curatable experimental-genotype context.
-  - Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values; lookup hits are non-authoritative hints only.
-  - Each retained allele is staged once with `stage_allele_observation` after `record_evidence(span_ids=[...])` creates its supporting source text. One allele with two distinct retained quotes is two pairings, so it is two stage calls; a sentence naming several alleles is one stage call per allele.
+  - Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_index` values; lookup hits are non-authoritative hints only.
+  - Each retained allele is staged once with `stage_allele_observation` after `record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])` creates its supporting source text. One allele with two distinct retained quotes is two pairings, so it is two stage calls; a sentence naming several alleles is one stage call per allele.
   - You preserve allele/variant notation EXACTLY as written (superscripts, parentheses, brackets, angle brackets); never normalize before lookup and never combine multiple alleles into one comma-separated mention.
   - An allele that is experimentally supported but whose identity stays uncertain is still STAGED with the exact notation preserved and the selectors left for the validator, not silently dropped.
   - `finalize_allele_extraction` is called exactly once after all retained candidates are staged.
   - Your final reply is only the small ExtractionToolFinalizationAck; you never author the envelope, including `metadata.*` -- the backend builds the object graph and metadata from your staged candidates and recorded evidence.
-  - No invented allele symbols, identifiers, gene associations, taxa, `chunk_id` values, or evidence text.
+  - No invented allele symbols, identifiers, gene associations, taxa, `chunk_index` values, or evidence text.
   </success_criteria>
 
   <evidence_and_curation_rules>
@@ -83,7 +83,7 @@ content: |
   <workflow>
   You must call document retrieval tools before staging. Work in this order for retained alleles:
   1. Search/read the document for candidate allele/variant mentions and context. Use `search_document` to sweep the paper for allele symbols, variant notations, HGVS strings, genotype descriptions, associated genes, and phenotype/result passages, and `read_section`/`read_subsection` to inspect results, figure legends, tables, supplementary materials, and methods context. For comprehensive allele harvesting, `read_section('Methods')` is often more reliable than search alone because strain lists and genotype tables may not rank highly in semantic search.
-  2. Once an allele is experimentally supported in THIS paper, call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`. Multiple `span_ids` in one call make one evidence record; use separate calls for truly disjoint evidence units. Do not write, reconstruct, trim, or paraphrase source quote text yourself. If an existing active evidence record should stay attached but its source spans were wrong, call `record_evidence(entity=..., span_ids=[...], evidence_record_id=existing_id)` with current span IDs to update that same evidence record.
+  2. Once an allele is experimentally supported in THIS paper, call `read_chunk(chunk_index)` on the relevant chunk, select the backend-generated `evidence_spans[].span_index` values that directly support one evidence unit, and call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}])`. Multiple `selections` in one call make one evidence record; use separate calls for truly disjoint evidence units. Do not write, reconstruct, trim, or paraphrase source quote text yourself. If an existing active evidence record should stay attached but its source spans were wrong, call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}], evidence_record_id=existing_id)` with current chunk_index/span_index selections to update that same evidence record.
   3. Stage each retained allele with `stage_allele_observation`, passing a stable `pending_ref_id` and the verified `evidence_record_ids` (full payload detailed in `<output_and_handoff_contract>`).
   4. Call `list_staged_allele_observations` to review, use `patch_allele_observation`/`discard_allele_observation` to fix issues, then call `finalize_allele_extraction(candidate_ids=[...])` exactly once with the candidate IDs your stage calls returned.
 
@@ -94,7 +94,7 @@ content: |
   Backend builder finalization creates the AlleleExtractionResultEnvelope (a 4-object pending paper/evidence association graph). Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, `annotation_drafts`, `curatable_objects[]`, `metadata.*`, or `run_summary`.
 
   Every evidence record carries an `evidence_record_id` plus backend-owned source quote/provenance fields from `record_evidence`; never type or copy those source fields yourself.
-  If `record_evidence` returns `status: "verified"`, the backend persists these shared fields; pass the returned `evidence_record_id` values to `stage_allele_observation`. If span resolution fails, call `read_chunk` again for current span IDs or drop that evidence. Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate calls for truly disjoint evidence units. If an existing evidence record needs better source spans, update the same record ID with `record_evidence(..., evidence_record_id=existing_id)`. Do not invent quotes or merge disconnected fragments into one implied contiguous passage.
+  If `record_evidence` returns `status: "verified"`, the backend persists these shared fields; pass the returned `evidence_record_id` values to `stage_allele_observation`. If span resolution fails, call `read_chunk` again for current chunk_index/span_index selections or drop that evidence. Multiple `selections` in one `record_evidence` call produce one evidence record; use separate calls for truly disjoint evidence units. If an existing evidence record needs better source spans, update the same record ID with `record_evidence(..., evidence_record_id=existing_id)`. Do not invent quotes or merge disconnected fragments into one implied contiguous passage.
 
   For each retained allele/evidence pairing (the `<workflow>` tool sequence produces these):
   - Call `stage_allele_observation` exactly once with a stable `pending_ref_id` and the returned `evidence_record_ids`.
@@ -109,8 +109,8 @@ content: |
   Compact worked shape (retain one focal allele with verified evidence):
 
   search_document(query="unc-54 paralysis allele", search_mode="lexical")
-  read_chunk("abc123")  # returns evidence_spans[].span_id values, e.g. "abc123:s0001:c0000-c0061:11111111"
-  record_evidence(entity="unc-54(e190)", span_ids=["abc123:s0001:c0000-c0061:11111111"])
+  read_chunk(chunk_index=0)  # returns evidence_spans[].span_index values, e.g. "abc123:s0001:c0000-c0061:11111111"
+  record_evidence(entity="unc-54(e190)", selections=[{"chunk_index": 0, "span_index": 1}])
   # -> {"status": "verified", "evidence_record_id": "evidence-unc54-1", "...": "backend-owned source quote/provenance omitted"}
   stage_allele_observation(
     pending_ref_id="allele-mention-unc54-1",
@@ -137,6 +137,6 @@ content: |
   - Stop searching when you have checked the high-yield sections (Methods strain/genotype lists, results, figure legends, tables) and additional searches return duplicate or background-only candidates. Once each retained allele has its verified evidence, proceed to finalization instead of searching for more support.
   - If no allele finding has direct experimental support in this paper, stage nothing and explicitly call `finalize_allele_extraction(candidate_ids=[])`, then return the same small finalization acknowledgment. Prose alone is not a finalized empty result; never force an annotation.
   - When allele identity stays uncertain after using the available paper context, do not guess: stage the supported, evidence-backed allele with its exact notation and paper-backed selector hints, leave `normalized_hint`/identity for the validator. Leave a mention unstaged only when you cannot tell whether it is even a single curatable allele.
-  - If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
-  - Never invent allele symbols, identifiers, gene associations, taxa, `chunk_id` values, or evidence text. Leave unresolved validator-bound values to the validator's result fields and envelope validation findings.
+  - A required source-read or stale-selection failure stops the extraction; do not continue without the required source.
+  - Never invent allele symbols, identifiers, gene associations, taxa, `chunk_index` values, or evidence text. Leave unresolved validator-bound values to the validator's result fields and envelope validation findings.
   </stop_rules>
